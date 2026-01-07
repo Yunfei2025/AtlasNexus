@@ -1,0 +1,10 @@
+# Development requirements
+-r base.txt
+-r production.txt
+pytest>=6.0.0
+pytest-cov>=2.12.0
+black>=21.0.0
+flake8>=3.9.0
+mypy>=0.910
+jupyter>=1.0.0
+ipython>=7.0.0

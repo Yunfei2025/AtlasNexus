@@ -1,0 +1,43 @@
+.dash-tabs .tab,
+.dash-tabs .tab *,
+.dash-tabs .tab--selected,
+.dash-tabs .tab:focus,
+.dash-tabs .tab:active,
+.dash-tabs .tab .tab-label {
+  color: #ffffff !important;
+}
+
+/* Ensure the tabs container uses the AtlasNexus dark blue background when needed */
+.dash-tabs {
+  background: #082255 !important;
+}
+
+/* Selected tab high-contrast */
+.dash-tabs .tab--selected {
+  background-color: #082255 !important;
+  color: #ffffff !important;
+}
+
+/* Fallback for other dash versions that use .react-tabs__tab--selected */
+.dash-tabs .react-tabs__tab--selected {
+  color: #ffffff !important;
+}
+
+/* Tab content readability
+   We scope to the AtlasNexus app container classes used by our new apps.
+   This avoids unintentionally changing legacy apps that share the same assets folder. */
+.app__container .tab__title,
+.app__container .tab__title * {
+  color: #ffffff;
+}
+
+/* Keep links readable */
+.app__container .tab__title a {
+  color: #7cc7ff;
+}
+
+/* Make code/log blocks readable while still distinct */
+.app__container .tab__title pre,
+.app__container .tab__title code {
+  color: #e8eef8;
+}

@@ -1,0 +1,259 @@
+body {
+    font-family: "Open Sans", sans-serif;
+    background-color: #061E44;
+}
+
+h6 {
+    margin-top: 0;
+}
+
+.app__container {
+    margin: 3% 5%;
+}
+
+.app__header {
+    display: flex;
+    justify-content: space-between;
+    color: #fff;
+}
+
+.app__header__title {
+    letter-spacing: 0.23rem;
+}
+
+.app__header__title--grey {
+    color: #C4CDD5;
+}
+
+.cRfgdB .needle {
+    stroke: #fff;
+    stroke-width: 3;
+}
+
+div.Select-value, .Select-control,div.period, .Select-input{
+  justify-content: space-between;
+  align-items: right;
+}
+
+.Select-control{
+  background-color: inherit;
+  color:#fff;
+  border-color: rgba(180, 180, 180, 0.4);
+}
+
+.Select-value-label{
+  position: relative;
+}
+
+.has-value.Select--single>.Select-control .Select-value .Select-value-label, .has-value.is-pseudo-focused.Select--single>.Select-control .Select-value .Select-value-label{
+  color:#fff;
+}
+
+.Select.is-open> .Select-control{
+  background-color: inherit;
+}
+
+.Select-menu-outer {
+  margin-top: 5px;
+  background-color: #082255;
+}
+
+.app__menu__img {
+    height: 50px;
+    width: auto;
+}
+
+.app__content {
+    display: flex;
+    margin-top: 20px;
+}
+
+.futures__price__container {
+    display: flex;
+    flex-direction: column;
+    background-color: #082255;
+    border-radius: 0.55rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+}
+
+.graph__title {
+    color: #fff !important;
+    letter-spacing: 0.3rem !important;
+    padding: 25px 25px 25px 25px;
+    margin-bottom: 0px !important;
+    font-size: 1em;
+}
+
+.slider {
+    padding: 15px;
+}
+
+.auto__checkbox {
+    margin-right: 10px;
+}
+
+.auto__label {
+    color: #DFE3E8;
+}
+
+.auto__container {
+    display: flex;
+    justify-content: space-between;
+    color: #DFE3E8;
+    padding: 0px 15px;
+}
+
+.auto__p {
+    margin-bottom: 0;
+}
+
+.graph__container {
+    background-color: #082255;
+    border-radius: 0.55rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+}
+
+.first {
+    margin-bottom: 15px;
+}
+
+.second {
+    margin-top: 15px;
+}
+
+.histogram__container {
+    display: flex;
+    flex-direction: column;
+    background-color: #082255;
+    border-radius: 0.55rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+    margin-left: 15px;
+}
+
+#wind-direction {
+    display: flex;
+    justify-content: center;
+}
+
+@media only screen and (max-width: 600px) {
+    .histogram__direction {
+        margin: 15px 0px 20px 0px;
+    }
+    .app__content {
+        display: block;
+    }    
+    .app__menu__img {
+        height: 30px;
+        width: auto;
+    }
+    .app__header {
+        display: flex;
+        flex-direction: column;
+    }
+    .app__header__desc {
+        order: 1;
+        text-align: center;
+    }
+    .app__header__logo {
+        order: 0;
+        align-items:right;
+    }
+    .app__header__title {
+        font-size: 1.5em;
+        padding-top: 15px;
+    }
+}
+.button, button, 
+input[type="submit"], 
+input[type="reset"], 
+input[type="button"] {
+    display: inline-block;
+    color:#fff;
+    align-items:right;
+}
+    
+#spread-type label:nth-child(1) {
+  flex: 5;
+}
+
+#spread-type label:nth-child(4) {
+  flex: 2;
+}
+
+#spread-type > div {
+  display: flex;
+}
+
+/* Custom dropdown styling for curve selection */
+.custom-dropdown .Select-control {
+    background-color: #082255 !important;
+    border-color: rgba(180, 180, 180, 0.4) !important;
+}
+
+.custom-dropdown .Select-value-label {
+    color: #FFFFFF !important;
+}
+
+.custom-dropdown .Select-placeholder {
+    color: #FFFFFF !important;
+}
+
+.custom-dropdown .Select-menu-outer {
+    background-color: #FFFFFF !important;
+}
+
+.custom-dropdown .Select-option {
+    background-color: #FFFFFF !important;
+    color: #000000 !important;
+}
+
+.custom-dropdown .Select-option.is-focused {
+    background-color: #E8F4F8 !important;
+    color: #000000 !important;
+}
+
+.custom-dropdown .Select-option.is-selected {
+    background-color: #007ACE !important;
+    color: #FFFFFF !important;
+}
+
+/* React-Select v2+ dropdown styling - comprehensive coverage */
+#curve-selection .Select-value-label,
+#curve-selection .css-1uccc91-singleValue,
+#curve-selection div[class*="singleValue"] {
+    color: #FFFFFF !important;
+}
+
+#curve-selection .css-yk16xz-control,
+#curve-selection .css-1pahdxg-control,
+#curve-selection div[class*="control"] {
+    background-color: #082255 !important;
+    border-color: rgba(180, 180, 180, 0.4) !important;
+}
+
+#curve-selection .css-26l3qy-menu,
+#curve-selection div[class*="menu"] {
+    background-color: #FFFFFF !important;
+}
+
+/* All dropdown options - BLACK text */
+#curve-selection .css-1n7v3ny-option,
+#curve-selection .css-9gakcf-option,
+#curve-selection .css-1gl4k7y,
+#curve-selection div[class*="option"] {
+    color: #000000 !important;
+    background-color: #FFFFFF !important;
+}
+
+/* Hovered/focused option */
+#curve-selection div[class*="option"][class*="focused"],
+#curve-selection .css-9gakcf-option {
+    background-color: #E8F4F8 !important;
+    color: #000000 !important;
+}
+
+/* Selected option in dropdown */
+#curve-selection div[class*="option"][class*="selected"] {
+    background-color: #007ACE !important;
+    color: #FFFFFF !important;
+}

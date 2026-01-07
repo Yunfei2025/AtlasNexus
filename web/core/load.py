@@ -1,0 +1,202 @@
+"""Data loading utilities and cached datasets used by the Dash applications."""
+
+from __future__ import annotations
+
+import os
+import pathlib
+import pickle
+import sys
+from pathlib import Path
+import pandas as pd
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Enable timing logs for heavy loads when set: WEB_LOG_TIMINGS=1
+WEB_LOG_TIMINGS = os.environ.get("WEB_LOG_TIMINGS", "0") == "1"
+
+# Add project root to Python path
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from settings.fixed_income import BondConfig
+from settings.general import DateConfig, DIR_INPUT
+from settings.futures import FuturesConfig
+
+# Setup the app
+# Use integer milliseconds and coerce env overrides to int for consistency
+t_int = int(30 * 60e3)  # unit ms, min*60*1e3 sec
+GRAPH_INTERVAL = int(os.environ.get("GRAPH_INTERVAL", t_int))
+t_int1 = int(120 * 60e3)  # unit ms, min*60*1e3 sec
+GRAPH_INTERVAL1 = int(os.environ.get("GRAPH_INTERVAL", t_int1))
+
+# get relative data folder
+PATH = pathlib.Path(__file__).resolve().parent.parent.parent
+DATA_PATH = PATH.joinpath("input").resolve()
+
+
+def _load_pickle(path: pathlib.Path):
+    """Load pickle while being tolerant to legacy formats and corruption."""
+    start = time.time()
+    try:
+        return pd.read_pickle(path)
+    except Exception as e:
+        print(f"Warning: Error loading {path} with pd.read_pickle: {e}")
+        try:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except Exception as pickle_error:
+            error_str = str(pickle_error).lower()
+            corruption_indicators = ["invalid load key", "\x00", "unexpected end of file"]
+            if any(indicator in error_str for indicator in corruption_indicators):
+                print(f"Error: Pickle file {path} appears to be corrupted: {pickle_error}")
+                print("You may need to regenerate this data file.")
+                backup_path = str(path) + ".corrupted.bak"
+                if not os.path.exists(backup_path):
+                    import shutil
+
+                    shutil.copy2(path, backup_path)
+                    print(f"Corrupted file backed up to: {backup_path}")
+            raise pickle_error
+    finally:
+        if WEB_LOG_TIMINGS:
+            elapsed = time.time() - start
+            logger.info('Loaded %s in %.3fs', path, elapsed)
+
+
+# Toggle heavy tick loading via env (default on for backward compatibility)
+LOAD_TICKS = os.environ.get("LOAD_TICKS", "1") == "1"
+
+# Allow skipping expensive preload during development/startup by setting
+# WEB_PRELOAD=0 in the environment. This speeds up Dash import/startup and
+# defers data loading until callbacks request it.
+WEB_PRELOAD = os.environ.get("WEB_PRELOAD", "1") == "1"
+
+def _build_spread_ts() -> dict:
+    out = {}
+    # bond types
+    for btype in ["TBond", "CBond"]:
+        spreads = _load_pickle(os.path.join(DIR_INPUT,f"{btype}-spds.pkl"))
+        out[f"{btype}Curve"] = spreads["BondCurve"]
+        out[f"{btype}Swap"] = spreads["BondSwap"]
+
+    # IRS
+    irs_data = _load_pickle(os.path.join(DIR_INPUT,"IRS-pxspds.pkl"))
+    out["SwapSpread"] = irs_data
+
+    # spread categories
+    for btype in BondConfig.INCLUDE_FILTERS.keys():
+        ltbspds = _load_pickle(os.path.join(DIR_INPUT,f"{btype}-spds.pkl"))
+        out[f"{btype}Spread"] = ltbspds[f"{btype}Spread"]
+
+    miscspds = _load_pickle(os.path.join(DIR_INPUT,"Misc-spds.pkl"))
+    portspds = _load_pickle(os.path.join(DIR_INPUT,"Portfolio-spds.pkl"))
+    out["SectorPCASpread"] = miscspds["PCASpread"]
+    out["BinarySpread"] = miscspds["BinarySpread"]
+    out["AssetPCASpread"] = portspds
+
+    positions = _load_pickle(os.path.join(DIR_INPUT,"positions.pkl"))
+    out["InsPos"] = positions
+
+    # futures
+    futspds = _load_pickle(os.path.join(DIR_INPUT,"futures-spds.pkl"))
+    out["NetBasis"] = futspds["NetBasis"]
+    out["NetIRR"] = futspds["NetIRR"]
+    out["TermBasis"] = futspds["TermBasis"]
+    return out
+
+def _load_bond_refs(btypes):
+    bond_ref = {}
+    term_ref = {}
+    factors = {}
+    for btype in btypes:
+        ref = _load_pickle(os.path.join(DIR_INPUT,f"{btype}-cvref.pkl"))
+        bond_ref[btype] = ref["RefBond"].iloc[-1]
+        term_ref[btype] = round(ref["RefTerm"].iloc[-1], 2)
+        factors[btype] = ref["Factors"]
+    return bond_ref, term_ref, factors
+
+def _load_fixing_ts(spread_ts):
+    fixing_ts_all = _load_pickle(os.path.join(DIR_INPUT,"database-px.pkl"))["IRS"]
+    datelist = spread_ts["SwapSpread"]["Spread"].index.intersection(fixing_ts_all.index)
+    fixing_ts = fixing_ts_all.loc[datelist, ["FR007.IR", "SHIBOR3M.IR"]]
+    fixing_ts["S-R.IR"] = fixing_ts["SHIBOR3M.IR"] - fixing_ts["FR007.IR"]
+    return fixing_ts
+
+def _load_fut_ticks(tickers):
+    fut_tick = {}
+    for ticker in tickers:
+        try:
+            fname = f"{ticker.split('.')[0]}.pkl"
+            fpath = DATA_PATH.parent.joinpath("database", "futures", fname)
+            if not fpath.exists():
+                continue
+            fut_tick[ticker] = _load_pickle(fpath)
+        except Exception:
+            continue
+    return fut_tick
+
+def _build_day_list():
+    dates = DateConfig.get_date_strings()
+    day_list = pd.bdate_range(dates["d2d"], dates["dp"])
+    day_list = [d.date() for d in day_list]
+    if len(day_list) == 0:
+        day_list = [DateConfig.get_date_mappings()["dp"].date()]
+    return day_list
+
+def _build_tick_dfp(fut_tick, tickers, day_list):
+    tick_dfp = {}
+    try:
+        for f in tickers:
+            tick_p = {d: fut_tick[f][d] for d in day_list if d in fut_tick.get(f, {}).keys()}
+            if not tick_p:
+                continue
+            tick_dfp[f] = pd.concat(tick_p).droplevel(0).sort_index()
+    except Exception:
+        pass
+    return tick_dfp
+
+
+# If WEB_PRELOAD is disabled, expose lightweight placeholders and avoid
+# loading large pickles during module import. Callers may still call the
+# helper functions later to load data on demand.
+btypes = ["TBond", "CBond"]
+if WEB_PRELOAD:
+    spread_ts = _build_spread_ts()
+    bond_ref, term_ref, factors = _load_bond_refs(btypes)
+    fixing_ts = _load_fixing_ts(spread_ts)
+
+    if LOAD_TICKS:
+        tickers = list(FuturesConfig.get_ticker_list())
+        fut_tick = _load_fut_ticks(tickers)
+        day_list = _build_day_list()
+        tick_dfp = _build_tick_dfp(fut_tick, tickers, day_list)
+    else:
+        tick_dfp = {}
+        fut_tick = {}
+        day_list = []
+else:
+    # Lightweight defaults used when preloading is turned off
+    spread_ts = {}
+    bond_ref = {}
+    term_ref = {}
+    factors = {}
+    fixing_ts = pd.DataFrame()
+    tick_dfp = {}
+    fut_tick = {}
+    day_list = []
+
+__all__ = [
+    "GRAPH_INTERVAL",
+    "GRAPH_INTERVAL1",
+    "DATA_PATH",
+    "spread_ts",
+    "bond_ref",
+    "term_ref",
+    "factors",
+    "fixing_ts",
+    "tick_dfp",
+    "LOAD_TICKS",
+]
