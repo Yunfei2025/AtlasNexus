@@ -1,0 +1,14 @@
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+
+# Cache and Database
+cache/
+web/apps/cache/
+*.db
+*.db-shm
+*.db-wal
