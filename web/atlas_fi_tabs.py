@@ -52,6 +52,8 @@ def build_spreads_layout():
 
     return html.Div(
         [
+            # Hidden store for realtime data
+            dcc.Store(id="realtime-data"),
             html.Div(
                 [
                     _interval_block(include_long=True),
@@ -170,11 +172,8 @@ def build_curves_layout():
                                 ],
                                 value="TBond",
                                 id="curve-selection",
-                                style={
-                                    "backgroundColor": "#082255",
-                                    "color": "#FFFFFF",
-                                },
                                 className="custom-dropdown",
+                                style={'color': '#000'}
                             ),
                             dcc.Interval(id="data-refresh", interval=int(GRAPH_INTERVAL), n_intervals=0),
                         ],
@@ -322,17 +321,76 @@ def build_pairs_layout():
     )
 
 
+def build_surface_layout():
+    """Build the legacy 'SURFACE' (Yield Surface) layout."""
+    # Import locally from the surface package in root
+    from surface.layout import create_layout
+    
+    return create_layout()
+
+
 def register_callbacks(app) -> None:
     """Register the callbacks required by the migrated layouts onto `app`."""
+    # --- Register Surface callbacks ---
+    try:
+        from surface.callbacks import register_callbacks as register_surface_callbacks
+        register_surface_callbacks(app)
+    except Exception as e:
+        print(f"Failed to register surface callbacks: {e}")
+
+    from dash import callback_context
+    import datetime
+    import json
+    import os
+    import pickle
+    import pandas as pd
+    from settings.general import DIR_INPUT
+    from settings.fixed_income import BondConfig
+
+    # Pickle cache to avoid redundant file loads
+    _PICKLE_CACHE: dict[str, tuple[float, object]] = {}
+
+    def _load_pickle_cached(path_obj):
+        """Load pickle with caching based on file mtime."""
+        path = str(path_obj)
+        try:
+            mtime = os.path.getmtime(path)
+        except FileNotFoundError:
+            return None
+
+        cached = _PICKLE_CACHE.get(path)
+        if cached and cached[0] == mtime:
+            return cached[1]
+
+        try:
+            with open(path, "rb") as f:
+                obj = pickle.load(f)
+            _PICKLE_CACHE[path] = (mtime, obj)
+            return obj
+        except Exception as e:
+            print(f"Error loading {path}: {e}")
+            return None
+
+    # Realtime data refresh callback
+    @app.callback(
+        Output("realtime-data", "data"),
+        Input("data-refresh", "n_intervals"),
+    )
+    def _refresh_realtime_data(interval):
+        """Load realtime spread data using the core script."""
+        try:
+            # Reuse the original data loading logic to ensure consistency
+            from web.core.scripts import refresh as orig_refresh
+            return orig_refresh(interval)
+        except Exception as e:
+            print(f"Error refreshing realtime data via core script: {e}")
+            return "{}"
 
     @app.callback(
         [Output("pairs-plots-container", "children"), Output("pairs-last-updated", "children")],
         [Input("pairs-content-loader", "children"), Input("pairs-refresh-btn", "n_clicks")],
     )
     def _load_pairs_content(_, n_clicks):
-        import datetime
-        from dash import callback_context
-
         # Optional: re-run pairs analysis when refresh clicked
         if callback_context.triggered:
             trigger_id = callback_context.triggered[0]["prop_id"]
@@ -401,3 +459,108 @@ def register_callbacks(app) -> None:
             )
 
         return iframe_content, last_updated
+
+    # Spreads callbacks
+    @app.callback(
+        Output("graph-spread-bar", "figure"),
+        Input("data-refresh", "n_intervals"),
+        Input("realtime-data", "data"),
+        Input("spread-type", "value"),
+        Input("select-inst", "value"),
+        Input("select-season", "value"),
+    )
+    def _update_spread_bar(interval, data_rt_js, stype, inst, season):
+        """Update the spread bar chart."""
+        try:
+            from web.core.graphs import statistics as orig_statistics
+            
+            # Check if key exists in data to avoid KeyError
+            if data_rt_js:
+                data_rt = json.loads(data_rt_js)
+                # Handle special cases consistent with web.core.graphs.statistics
+                if stype == 'InsPos':
+                    if 'InsPos' not in data_rt:
+                        raise KeyError(f"Data not available for {stype}")
+                elif stype == 'NetBasis':
+                    if 'NetBasis' not in data_rt:
+                        raise KeyError(f"Data not available for {stype}")
+                elif stype not in data_rt:
+                    # Return a friendly empty chart instead of crashing
+                    from web.core.styles import app_color
+                    import plotly.graph_objs as go
+                    return go.Figure(data=[], layout=dict(
+                        plot_bgcolor=app_color["graph_bg"],
+                        paper_bgcolor=app_color["graph_bg"],
+                        title=f"Waiting for data: {stype}..."
+                    ))
+
+            # Forward real data to original implementation
+            return orig_statistics(interval, data_rt_js, stype, inst, season)
+        except Exception as e:
+            from web.core.styles import app_color
+            import plotly.graph_objs as go
+            empty_figure = go.Figure(data=[], layout=dict(
+                plot_bgcolor=app_color["graph_bg"],
+                paper_bgcolor=app_color["graph_bg"],
+                title=f"Error: {str(e)[:100]}"
+            ))
+            return empty_figure
+
+    @app.callback(
+        Output("ticker", "children", allow_duplicate=True),
+        Input("graph-spread-bar", "clickData"),
+        prevent_initial_call=True,
+    )
+    def _display_click_data(clickData):
+        """Handle click events on spread bar chart."""
+        from dash.exceptions import PreventUpdate
+        if not clickData or "points" not in clickData or not clickData["points"]:
+            raise PreventUpdate
+        return clickData["points"][0]["label"]
+
+    @app.callback(
+        Output("graph-spread", "figure"),
+        Input("spread-type", "value"),
+        Input("select-inst", "value"),
+        Input("select-season", "value"),
+        Input("ticker", "children"),
+    )
+    def _update_spread_ts(stype, inst, season, ticker):
+        """Update the spread time series chart."""
+        try:
+            from web.core.graphs import spreadts as orig_spreadts
+            return orig_spreadts(stype, inst, season, ticker)
+        except Exception as e:
+            from web.core.styles import app_color
+            import plotly.graph_objs as go
+            empty_figure = go.Figure(data=[], layout=dict(
+                plot_bgcolor=app_color["graph_bg"],
+                paper_bgcolor=app_color["graph_bg"],
+                title=f"Error: {str(e)[:100]}"
+            ))
+            return empty_figure
+
+    # Curves callbacks
+    @app.callback(
+        [
+            Output("curves-graph", "figure"),
+            Output("curves-title", "children"),
+            Output("ref-bonds-container", "style"),
+        ],
+        Input("data-refresh", "n_intervals"),
+        Input("curve-selection", "value"),
+    )
+    def _update_curves(interval, curve_type):
+        """Update the curves chart."""
+        try:
+            from web.core.graphs import curves_graph as orig_curves
+            return orig_curves(interval, curve_type)
+        except Exception as e:
+            from web.core.styles import app_color
+            import plotly.graph_objs as go
+            empty_figure = go.Figure(data=[], layout=dict(
+                plot_bgcolor=app_color["graph_bg"],
+                paper_bgcolor=app_color["graph_bg"],
+                title=f"Error: {str(e)[:100]}"
+            ))
+            return empty_figure, "Error Loading Curves", {"display": "none"}

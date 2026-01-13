@@ -21,9 +21,10 @@ def retrieveFXIRCurves():
     from settings.paths import DIR_INPUT
     file_path = os.path.join(DIR_INPUT, "curve_ts.pkl")
     t = datetime.datetime.today()
-    if t.date() != get_mtime_date(file_path):
+    if t.date() != get_mtime_date(pathlib.Path(file_path)):
         from settings.general import DateConfig
-        from multiasset.utils import ticker_dict, tenorlist, updatePKL 
+        from multiasset.config import ticker_dict, tenorlist
+        from multiasset.utils import updatePKL 
         from WindPy import w
         w.start()
         _dates_strs = DateConfig.get_date_mappings()

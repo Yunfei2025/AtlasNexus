@@ -31,7 +31,16 @@ from web.atlas_fi_tabs import (
     build_curves_layout,
     build_pairs_layout,
     build_spreads_layout,
+    build_surface_layout,
     register_callbacks as register_fi_callbacks,
+)
+
+from web.atlas_multiasset_tabs import (
+    build_multiasset_factor_layout,
+    build_multiasset_portfolio_layout,
+    build_multiasset_risk_layout,
+    build_multiasset_backtest_layout,
+    register_multiasset_callbacks,
 )
 
 
@@ -47,8 +56,23 @@ app = _Dash(
 
 app.title = "AtlasNexus Daily Console"
 
+# Serve the pairs regression plots HTML as a static-like endpoint so iframes
+# can access it from the Dash app (matches web/core/server.py behavior).
+@app.server.route("/pairs/regression_plots.html")
+def _serve_pairs_regression():
+    try:
+        from flask import send_file, abort
+        pairs_file = project_root / "pairs" / "regression_plots.html"
+        if pairs_file.exists():
+            return send_file(str(pairs_file))
+        else:
+            abort(404)
+    except Exception:
+        pass  # abort(500) not available or simple pass to avoid crash
+
 # Register callbacks for migrated legacy FI layouts (Pairs tab refresh callback).
 register_fi_callbacks(app)
+register_multiasset_callbacks(app)
 
 
 def build_header():
@@ -90,6 +114,7 @@ def build_tabs_panel():
                             dcc.Tab(label="Beta Book", value="beta", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="Alpha Book", value="alpha", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="Risk", value="risk", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Backtest", value="backtest", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="Tickets", value="tickets", style=tab_style, selected_style=tab_selected_style),
                             # Spreads tab moved into the Alpha Book content (bottom-up signals / pair screens)
                         ],
@@ -164,55 +189,16 @@ def _start_jobs(n_update, n_eod, n_eod_update):
 @app.callback(
     Output("an-tabs-content", "children"),
     Input("an-tabs", "value"),
-    State("an-job-id", "data"),
-    Input("an-interval", "n_intervals"),
 )
-def _render_tab(tab, job_id, n):
+def _render_tab(tab):
     if tab == "run-center":
-        meta = find_latest_run(mode="eod")
-        # Job info
-        status = get_job_status(job_id) if job_id else None
-        if status:
-            state = status.get("state", "UNKNOWN")
-            pid = status.get("pid")
-            started = status.get("started_at")
-            ended = status.get("ended_at")
-            cmd = status.get("cmd")
-            return html.Div(
-                [
-                    html.H5("Run Center"),
-                    html.P("Use the buttons in the header to run engine jobs."),
-                    html.P(f"Latest EOD run: {format_run_meta(meta)}"),
-                    html.Hr(),
-                    html.Div(
-                        [
-                            html.H6("Job status"),
-                            html.Div([
-                                html.Strong("Job ID: "), html.Span(job_id), html.Br(),
-                                html.Strong("State: "), html.Span(state), html.Br(),
-                                html.Strong("PID: "), html.Span(str(pid)), html.Br(),
-                                html.Strong("Started: "), html.Span(str(started)), html.Br(),
-                                html.Strong("Ended: "), html.Span(str(ended)), html.Br(),
-                                html.Strong("Cmd: "), html.Code(str(cmd)),
-                            ], style={"lineHeight": "1.6em"}),
-                        ],
-                        style={"marginBottom": "12px"},
-                    ),
-                    html.H6("Job log (tail)"),
-                    html.Pre(tail_log(job_id, max_lines=200), style={"whiteSpace": "pre-wrap", "maxHeight": "360px", "overflowY": "auto"}),
-                ]
-            )
-        else:
-            # No active job selected: show latest run meta and a helpful hint
-            return html.Div(
-                [
-                    html.H5("Run Center"),
-                    html.P("Use the buttons in the header to run engine jobs."),
-                    html.P(f"Latest EOD run: {format_run_meta(meta)}"),
-                    html.Hr(),
-                    html.P("No active job selected. Start a job using the header buttons to see live logs and status."),
-                ]
-            )
+        # Return a container with a dynamic updating section
+        return html.Div(
+            [
+                html.Div(id="an-run-center-content"),
+                dcc.Interval(id="an-run-center-interval", interval=5_000, n_intervals=0),
+            ]
+        )
 
     if tab == "beta":
         return html.Div(
@@ -248,10 +234,12 @@ def _render_tab(tab, job_id, n):
                     [
                         dcc.Tabs(
                             id="an-alpha-subtabs",
-                            value="spreads",
+                            value="candidates",
                             vertical=True,
                             children=[
-                                dcc.Tab(label="SPREADS", value="spreads", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="CANDIDATES", value="candidates", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="SCORING", value="scoring", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="SPREAD INFO", value="spreads", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="PAIRS", value="pairs", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="CURVES", value="curves", style=tab_style, selected_style=tab_selected_style),
                             ],
@@ -265,10 +253,10 @@ def _render_tab(tab, job_id, n):
         )
 
     if tab == "risk":
-        return html.Div([
-            html.H5("Risk Nexus"),
-            html.P("Planned: DV01 buckets / FX exposure / beta, cross-book limits and netting."),
-        ])
+        return build_multiasset_risk_layout()
+
+    if tab == "backtest":
+        return build_multiasset_backtest_layout()
 
     if tab == "tickets":
         return html.Div([
@@ -280,33 +268,88 @@ def _render_tab(tab, job_id, n):
 
 
 @app.callback(
+    Output("an-run-center-content", "children"),
+    Input("an-run-center-interval", "n_intervals"),
+    State("an-job-id", "data"),
+)
+def _update_run_center(n, job_id):
+    """Update Run Center content on interval - only when Run Center tab is active."""
+    meta = find_latest_run(mode="eod")
+    # Job info
+    status = get_job_status(job_id) if job_id else None
+    if status:
+        state = status.get("state", "UNKNOWN")
+        pid = status.get("pid")
+        started = status.get("started_at")
+        ended = status.get("ended_at")
+        cmd = status.get("cmd")
+        return html.Div(
+            [
+                html.H5("Run Center"),
+                html.P("Use the buttons in the header to run engine jobs."),
+                html.P(f"Latest EOD run: {format_run_meta(meta)}"),
+                html.Hr(),
+                html.Div(
+                    [
+                        html.H6("Job status"),
+                        html.Div(
+                            [
+                                html.Strong("Job ID: "),
+                                html.Span(job_id),
+                                html.Br(),
+                                html.Strong("State: "),
+                                html.Span(state),
+                                html.Br(),
+                                html.Strong("PID: "),
+                                html.Span(str(pid)),
+                                html.Br(),
+                                html.Strong("Started: "),
+                                html.Span(str(started)),
+                                html.Br(),
+                                html.Strong("Ended: "),
+                                html.Span(str(ended)),
+                                html.Br(),
+                                html.Strong("Cmd: "),
+                                html.Code(str(cmd)),
+                            ],
+                            style={"lineHeight": "1.6em"},
+                        ),
+                    ],
+                    style={"marginBottom": "12px"},
+                ),
+                html.H6("Job log (tail)"),
+                html.Pre(
+                    tail_log(job_id, max_lines=200),
+                    style={"whiteSpace": "pre-wrap", "maxHeight": "360px", "overflowY": "auto"},
+                ),
+            ]
+        )
+    else:
+        # No active job selected: show latest run meta and a helpful hint
+        return html.Div(
+            [
+                html.H5("Run Center"),
+                html.P("Use the buttons in the header to run engine jobs."),
+                html.P(f"Latest EOD run: {format_run_meta(meta)}"),
+                html.Hr(),
+                html.P("No active job selected. Start a job using the header buttons to see live logs and status."),
+            ]
+        )
+
+
+@app.callback(
     Output("an-beta-subtabs-content", "children"),
     Input("an-beta-subtabs", "value"),
 )
 def _render_beta_subtabs(subtab: str):
     if subtab == "factor":
-        return html.Div(
-            [
-                html.H6("FACTOR"),
-                html.P("Placeholder: factor/regime dashboards and Beta factor budgets."),
-            ]
-        )
+        return build_multiasset_factor_layout()
 
     if subtab == "portfolio":
-        return html.Div(
-            [
-                html.H6("PORTFOLIO"),
-                html.P("Placeholder: strategic allocations, risk budgets, and holdings summary."),
-            ]
-        )
+        return build_multiasset_portfolio_layout()
 
     if subtab == "surface":
-        return html.Div(
-            [
-                html.H6("SURFACE"),
-                html.P("Placeholder for future development."),
-            ]
-        )
+        return build_surface_layout()
 
     return html.Div([html.P(f"Unknown Beta subtab: {subtab}")])
 
@@ -316,6 +359,20 @@ def _render_beta_subtabs(subtab: str):
     Input("an-alpha-subtabs", "value"),
 )
 def _render_alpha_subtabs(subtab: str):
+    if subtab == "candidates":
+        return html.Div(
+            [
+                html.H6("CANDIDATES"),
+                html.P("Placeholder: Scan for potential alpha candidates based on spread deviations and technical signals."),
+            ]
+        )
+    if subtab == "scoring":
+        return html.Div(
+            [
+                html.H6("SCORING"),
+                html.P("Placeholder: Score and rank candidates using multi-factor models and risk metrics."),
+            ]
+        )
     if subtab == "spreads":
         return build_spreads_layout()
     if subtab == "pairs":

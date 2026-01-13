@@ -9,7 +9,8 @@ import pandas as pd
 import numpy as np
 from typing import Optional, Tuple, Dict
 from scipy.optimize import minimize
-from multiasset.portfolio import Portfolio, PCARiskFactorAnalyzer
+from multiasset.portfolio import Portfolio
+from multiasset.pca_analyzer import PCARiskFactorAnalyzer
 from dateutil.relativedelta import relativedelta
 # Prefer local config in multiasset; fallback to settings if not available
 from .config import RiskModelConfig  # type: ignore
@@ -48,12 +49,16 @@ class PCAFactorRiskParityOptimizer:
         self._weights: Optional[pd.Series] = None
         self._pca_factor_vols: Optional[pd.Series] = None
     
-    def fit_and_calculate(self, rebalance_date: pd.Timestamp) -> Tuple[pd.Series, pd.Series]:
+    def fit_and_calculate(self, rebalance_date: pd.Timestamp,
+                          risk_budgets: Optional[Dict[str, float]] = None,
+                          total_capital: float = 1.0) -> Tuple[pd.Series, pd.Series]:
         """
         Fit PCA and calculate optimal weights for a given rebalance date.
         
         Args:
             rebalance_date: Date at which to rebalance
+            risk_budgets: Optional dictionary mapping factor names to risk budgets
+            total_capital: Total capital for absolute risk budget calculation
             
         Returns:
             Tuple of (weights Series, factor volatilities Series)
@@ -73,7 +78,7 @@ class PCAFactorRiskParityOptimizer:
         self._pca_factor_vols = factor_vols
         
         # 4. Build exposure matrix and optimize
-        weights = self._optimize_weights(factor_vols)
+        weights = self._optimize_weights(factor_vols, risk_budgets=risk_budgets, total_capital=total_capital)
         self._weights = weights
         
         return weights, factor_vols
@@ -107,12 +112,16 @@ class PCAFactorRiskParityOptimizer:
         
         return pd.Series(factor_vols)
     
-    def _optimize_weights(self, factor_vols: pd.Series) -> pd.Series:
+    def _optimize_weights(self, factor_vols: pd.Series,
+                          risk_budgets: Optional[Dict[str, float]] = None,
+                          total_capital: float = 1.0) -> pd.Series:
         """
-        Optimize portfolio weights using factor risk parity.
+        Optimize portfolio weights using factor risk parity or risk budgeting.
         
         Args:
             factor_vols: Series of factor volatilities
+            risk_budgets: Optional dictionary of risk budgets per factor (in million CNY units)
+            total_capital: Total capital to allocate (absolute units)
             
         Returns:
             Series of optimal weights
@@ -135,17 +144,73 @@ class PCAFactorRiskParityOptimizer:
         
         if len(sigma_f) == 0:
             return pd.Series(1.0/len(asset_names), index=asset_names)
-        
+            
+        filtered_factor_names = [f for i, f in enumerate(factor_names) if valid_mask[i]]
         n_assets = len(asset_names)
         
-        def objective(w):
-            # Factor risk contributions
-            factor_exposures = B.T @ w
-            factor_risks = np.abs(factor_exposures * sigma_f)
-            target_risk = factor_risks.mean()
-            return np.sum((factor_risks - target_risk) ** 2)
-        
+        # --- Define Risk Budgets ---
         constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
+        
+        if risk_budgets:
+            # Absolute Risk Budgeting logic:
+            # 1. Convert budgets (inputs in Millions) to fractional risk of portfolio capital
+            #    BudgetFraction = (Value_Million * 1e6) / Total_Capital
+            #    If Capital=100M, Budget=1M -> Fraction = 0.01 (1%)
+            #    This compares directly with Factor Risk Contribution (approx Factor Vol * Exposure)
+        
+            # Default to very small budget (effectively zero) if factor present but not budgeted?
+            # Or very large (unconstrained)? "Risk Budgeting" implies explicit allocation.
+            # We'll use 0.0001 (small non-zero) for missing, assuming user intended to exclude.
+            
+            budget_targets = []
+            for f in filtered_factor_names:
+                user_val = risk_budgets.get(f, 0.0) 
+                # Convert '1 unit is million' -> absolute value -> fraction of capital
+                # Note: Factor Risk Contribution here is in Volatility units (e.g. 0.05).
+                # User budget = 1M (VaR/Vol?).
+                # If User budget is 1M (Absolute Volatility in Currency), and Capital is 100M.
+                # Target Vol = 1M/100M = 0.01 (1%).
+                
+                # Check for zero capital edge case
+                if total_capital > 1e-6:
+                    target_vol = (user_val * 1_000_000.0) / total_capital
+                else:
+                    target_vol = 1.0 # Fallback
+                
+                budget_targets.append(target_vol)
+            
+            budget_targets = np.array(budget_targets)
+            
+            # Objective: Minimize squared distance between Risk Contribution and Target
+            # Also enforces 'risk_budgets should be a maximum' via inequality constraint
+            
+            def objective(w):
+                # RC = Factor Vol * Exposure = sigma * (B.T @ w)
+                factor_exposures = B.T @ w
+                factor_risks = np.abs(factor_exposures * sigma_f)
+                
+                # Minimize deviation from max budget
+                # We want to be "close to this value as much as possible"
+                return np.sum((factor_risks - budget_targets) ** 2)
+
+            # Max constraint: RC <= Budget
+            # Form: Budget - RC >= 0
+            def max_budget_constraint(w):
+                factor_exposures = B.T @ w
+                factor_risks = np.abs(factor_exposures * sigma_f)
+                return budget_targets - factor_risks
+            
+            constraints.append({'type': 'ineq', 'fun': max_budget_constraint})
+
+        else:
+            # Legacy/Default Equal Risk Contribution logic
+            # Target = Mean Risk Contribution
+            def objective(w):
+                factor_exposures = B.T @ w
+                factor_risks = np.abs(factor_exposures * sigma_f)
+                target_risk = factor_risks.mean()
+                return np.sum((factor_risks - target_risk) ** 2)
+
         bounds = [(0, 1) for _ in range(n_assets)]
         w0 = np.ones(n_assets) / n_assets
         
@@ -222,344 +287,53 @@ class PCAFactorRiskParityOptimizer:
         self._pca_factor_vols = None
         self.pca_analyzer.clear_cache()
 
-
-class FactorRiskParityOptimizer:
-    """
-    Optimizer that allocates capital using factor-level risk parity.
-    
-    Instead of making each asset contribute equal risk, this ensures
-    each risk factor contributes equally to total portfolio risk.
-    """
-    
-    def __init__(self, portfolio: Portfolio, lookback_months: Optional[int] = None, ewma_lambda: Optional[float] = None):
+    def optimize(self, total_capital: float, use_cache: bool = True, risk_budgets: Dict[str, float] = None):
         """
-        Initialize the optimizer.
-        
-        Args:
-            portfolio: Portfolio instance
-        """
-        self.portfolio = portfolio
-        self._weights: Optional[pd.Series] = None
-        self._allocations: Optional[pd.Series] = None
-        # Volatility model configuration (defaults pulled from config if not provided)
-        self.lookback_months = lookback_months if lookback_months is not None else getattr(
-            RiskModelConfig, 'FACTOR_VOL_LOOKBACK_MONTHS', 3
-        )
-        self.ewma_lambda = ewma_lambda if ewma_lambda is not None else getattr(
-            RiskModelConfig, 'FACTOR_VOL_EWMA_LAMBDA', 0.94
-        )
-    
-    def _build_factor_exposure_matrix(self, use_cache: bool = True) -> Tuple[pd.DataFrame, list, list]:
-        """
-        Build matrix of asset exposures to risk factors.
-        
-        Returns:
-            Tuple of (exposure_matrix, asset_names, factor_names)
-            exposure_matrix[i, j] = sensitivity of asset i to factor j
-        """
-        risk_factors_df = self.portfolio.get_risk_factors(use_cache=use_cache)
-        
-        # Get all unique factors from all assets
-        all_factors = set()
-        for asset in self.portfolio.assets.values():
-            for factor_name in asset.factors.keys():
-                if factor_name in risk_factors_df.columns:
-                    all_factors.add(factor_name)
-        
-        factor_names = sorted(list(all_factors))
-        asset_names = list(self.portfolio.assets.keys())
-        
-        # Build exposure matrix
-        exposure_matrix = np.zeros((len(asset_names), len(factor_names)))
-        
-        for i, asset_name in enumerate(asset_names):
-            asset = self.portfolio.assets[asset_name]
-            for j, factor_name in enumerate(factor_names):
-                if factor_name in asset.factors:
-                    exposure_matrix[i, j] = asset.factors[factor_name]
-        
-        return pd.DataFrame(exposure_matrix, index=asset_names, columns=factor_names), asset_names, factor_names
-    
-    def _calculate_factor_volatilities(self, use_cache: bool = True) -> pd.Series:
-        """
-        Calculate volatility of each risk factor using a 3-month lookback and EWMA.
-        
-        Returns:
-            Series of factor volatilities
-        """
-        risk_factors_df = self.portfolio.get_risk_factors(use_cache=use_cache)
-        factor_vols: dict[str, float] = {}
-
-        # Determine the lookback start date using relativedelta in calendar months
-        window_df = risk_factors_df
-        if len(risk_factors_df.index) > 0:
-            idx = risk_factors_df.index
-            if not isinstance(idx, pd.DatetimeIndex):
-                # attempt conversion
-                try:
-                    idx_dt = pd.to_datetime(idx)
-                    risk_factors_df = risk_factors_df.copy()
-                    risk_factors_df.index = idx_dt
-                except Exception:
-                    pass  # keep as-is if conversion fails
-            if isinstance(risk_factors_df.index, pd.DatetimeIndex):
-                end_date = risk_factors_df.index.max()
-                start_date = end_date - relativedelta(months=self.lookback_months)
-                window_df = risk_factors_df.loc[risk_factors_df.index > start_date]
-
-        for factor_name in window_df.columns:
-            # Build daily return series in percent for the factor
-            if 'IRDL' in factor_name or 'IRSL' in factor_name or 'IRCV' in factor_name:
-                # Interest rate factors: these are PCA scores (cumulative), take diff
-                # The diff gives daily PC score changes
-                returns_pct = window_df[factor_name].diff()
-            else:
-                # FX and Commodity (and others): percent change
-                returns_pct = window_df[factor_name].pct_change() * 100.0
-
-            # Drop NaNs produced by diff/pct_change
-            returns_pct = returns_pct.dropna()
-
-            if returns_pct.empty:
-                factor_vols[factor_name] = float('nan')
-                continue
-
-            # EWMA variance with decay λ: use pandas ewm with alpha = 1-λ
-            # sigma_t^2 = (1-λ) * Σ λ^i * r_{t-i}^2
-            alpha = 1.0 - self.ewma_lambda
-            ewma_var = returns_pct.pow(2).ewm(alpha=alpha, adjust=False).mean()
-
-            # Use the latest EWMA variance as estimate; annualize volatility
-            latest_var = ewma_var.iloc[-1]
-            vol_ann = np.sqrt(latest_var) * np.sqrt(252)
-            factor_vols[factor_name] = float(vol_ann)
-
-        return pd.Series(factor_vols)
-    
-    def calculate_weights(self, use_cache: bool = True) -> pd.Series:
-        """
-        Calculate factor risk parity weights.
-        
-        This uses optimization to find weights such that each factor
-        contributes equally to total portfolio risk.
-        
-        Args:
-            use_cache: Whether to use cached calculations
-            
-        Returns:
-            Series of portfolio weights
-        """
-        if use_cache and self._weights is not None:
-            return self._weights
-        
-        # Build factor exposure matrix
-        exposure_matrix, asset_names, factor_names = self._build_factor_exposure_matrix(use_cache)
-        
-        # Get factor volatilities
-        factor_vols = self._calculate_factor_volatilities(use_cache)
-        
-        # Extract matrices for optimization
-        B = exposure_matrix.values  # N_assets x N_factors
-        sigma_f = np.array([factor_vols[f] for f in factor_names])  # N_factors
-        
-        n_assets = len(asset_names)
-        
-        # Objective function: minimize sum of squared differences in factor risk contributions
-        def objective(w):
-            # Factor exposures: f_i = sum_j(w_j * B_ji)
-            factor_exposures = B.T @ w  # N_factors
-            
-            # Factor risk contributions: RC_i = |f_i * sigma_i|
-            factor_risks = np.abs(factor_exposures * sigma_f)
-            
-            # Target: equal risk contribution
-            target_risk = factor_risks.mean()
-            
-            # Minimize sum of squared deviations
-            return np.sum((factor_risks - target_risk) ** 2)
-        
-        # Constraints
-        constraints = [
-            {'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}  # weights sum to 1
-        ]
-        
-        # Bounds: all weights between 0 and 1
-        bounds = [(0, 1) for _ in range(n_assets)]
-        
-        # Initial guess: equal weights
-        w0 = np.ones(n_assets) / n_assets
-        
-        # Optimize
-        result = minimize(
-            objective,
-            w0,
-            method='SLSQP',
-            bounds=bounds,
-            constraints=constraints,
-            options={'maxiter': 1000, 'ftol': 1e-9}
-        )
-        
-        if not result.success:
-            print(f"Warning: Optimization did not converge. Message: {result.message}")
-        
-        # Create weights series
-        weights = pd.Series(result.x, index=asset_names)
-        
-        self._weights = weights
-        return weights
-    
-    def allocate_capital(self, total_capital: float, 
-                         use_cache: bool = True) -> pd.Series:
-        """
-        Allocate capital using factor risk parity.
+        Run the optimization and return detailed results.
         
         Args:
             total_capital: Total capital to allocate
-            use_cache: Whether to use cached calculations
+            use_cache: Whether to use cached data
+            risk_budgets: Optional risk budgets per factor
             
         Returns:
-            Series of capital allocations by asset
+            Tuple of (summary, asset_returns, volatilities, factor_exposures, factor_risk_contributions)
         """
-        weights = self.calculate_weights(use_cache=use_cache)
-        allocations = weights * total_capital
+        # Load data to find latest date
+        self.portfolio.risk_factor_loader.load_risk_factors(use_cache=use_cache)
+        # Need to ensure PCA is initialized/data loaded
+        if self.portfolio.risk_factor_loader._risk_factors_cache is None:
+             self.portfolio.risk_factor_loader.load_risk_factors(use_cache=False)
+             
+        rebalance_date = self.portfolio.risk_factor_loader._risk_factors_cache.index.max()
         
-        self._allocations = allocations
-        return allocations
-    
-    def calculate_risk_contributions(self, use_cache: bool = True) -> pd.Series:
-        """
-        Calculate risk contribution of each asset.
+        # Fit and Calculate
+        weights, factor_vols = self.fit_and_calculate(rebalance_date, risk_budgets=risk_budgets, total_capital=total_capital)
         
-        Args:
-            use_cache: Whether to use cached calculations
-            
-        Returns:
-            Series of risk contributions (in %)
-        """
-        weights = self.calculate_weights(use_cache=use_cache)
-        volatilities = self.portfolio.calculate_volatilities(use_cache=use_cache)
-        
-        risk_contributions = weights * volatilities
-        risk_contributions_pct = (risk_contributions / risk_contributions.sum()) * 100
-        
-        return risk_contributions_pct
-    
-    def calculate_factor_risk_contributions(self, use_cache: bool = True) -> pd.DataFrame:
-        """
-        Calculate risk contribution of each factor.
-        
-        Args:
-            use_cache: Whether to use cached calculations
-            
-        Returns:
-            DataFrame with factor risk contributions
-        """
-        weights = self.calculate_weights(use_cache=use_cache)
-        
-        # Build factor exposure matrix
-        exposure_matrix, asset_names, factor_names = self._build_factor_exposure_matrix(use_cache)
-        
-        # Get factor volatilities
-        factor_vols = self._calculate_factor_volatilities(use_cache)
-        
-        # Calculate factor exposures
-        B = exposure_matrix.values
-        w = weights.values
-        factor_exposures = B.T @ w
-        
-        # Calculate factor risk contributions
-        factor_risks = []
-        for i, factor_name in enumerate(factor_names):
-            exposure = factor_exposures[i]
-            vol = factor_vols[factor_name]
-            risk = abs(exposure * vol)
-            factor_risks.append({
-                'Risk Factor': factor_name,
-                'Exposure': exposure,
-                'Volatility (% ann.)': vol,
-                'Risk Contribution': risk
-            })
-        
-        factor_df = pd.DataFrame(factor_risks)
-        total_risk = factor_df['Risk Contribution'].sum()
-        factor_df['Risk Contribution (%)'] = (factor_df['Risk Contribution'] / total_risk) * 100
-        
-        return factor_df.sort_values('Risk Contribution (%)', ascending=False)
-    
-    def optimize(self, total_capital: float, 
-                 use_cache: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.DataFrame, pd.DataFrame]:
-        """
-        Run full optimization and return comprehensive results.
-        
-        Args:
-            total_capital: Total capital to allocate
-            use_cache: Whether to use cached calculations
-            
-        Returns:
-            Tuple of (summary DataFrame, asset returns DataFrame, volatilities Series,
-                     factor exposures DataFrame, factor risk contributions DataFrame)
-        """
-        # Calculate all metrics
-        weights = self.calculate_weights(use_cache=use_cache)
-        allocations = self.allocate_capital(total_capital, use_cache=use_cache)
-        volatilities = self.portfolio.calculate_volatilities(use_cache=use_cache)
-        risk_contributions = self.calculate_risk_contributions(use_cache=use_cache)
-        asset_returns = self.portfolio.calculate_asset_returns(use_cache=use_cache)
-        
-        # Calculate factor-level exposures and risk contributions
-        factor_exposures = self.portfolio.calculate_factor_exposures(weights)
-        factor_risk_contributions = self.calculate_factor_risk_contributions(use_cache=use_cache)
-        
-        # Create summary DataFrame
+        # Construct summary
+        allocation = weights * total_capital
         summary = pd.DataFrame({
-            'Asset': allocations.index,
+            'Asset': weights.index,
+            'Allocation (CNY)': allocation.values,
             'Weight (%)': weights.values * 100,
-            'Allocation (CNY)': allocations.values,
-            'Volatility (% ann.)': volatilities.values,
-            'Risk Contribution (%)': risk_contributions.values
+            'Asset Type': [self.portfolio.assets[a].__class__.__name__ for a in weights.index] # Approx type
         })
         
-        return summary, asset_returns, volatilities, factor_exposures, factor_risk_contributions
-    
-    def print_summary(self, summary: pd.DataFrame, total_capital: float,
-                     factor_exposures: Optional[pd.DataFrame] = None,
-                     factor_risk_contributions: Optional[pd.DataFrame] = None):
-        """
-        Print allocation summary with factor exposures.
+        # Compute Risk Contributions
+        factor_risk_contributions = self.portfolio.calculate_factor_risk_contributions(weights, use_cache=use_cache)
         
-        Args:
-            summary: Summary DataFrame from optimize()
-            total_capital: Total capital allocated
-            factor_exposures: DataFrame of factor exposures
-            factor_risk_contributions: DataFrame of factor risk contributions
-        """
-        print("\n" + "="*80)
-        print(f"FACTOR RISK PARITY ALLOCATION - Total Capital: {total_capital:,.0f} CNY")
-        print("="*80)
-        print(summary.to_string(index=False))
-        print("="*80)
-        print(f"\nVerification - Total Allocated: {summary['Allocation (CNY)'].sum():,.0f} CNY")
-        print("="*80)
+        # Compute Factor Exposures (Long Format)
+        exposure_matrix, asset_names, factor_names = self._build_exposure_matrix(factor_vols)
+        factor_exposures_df = pd.DataFrame(exposure_matrix, index=weights.index, columns=factor_names)
+        factor_exp_long = factor_exposures_df.reset_index().melt(id_vars='index', var_name='Risk Factor', value_name='Exposure')
+        factor_exp_long.rename(columns={'index': 'Asset'}, inplace=True)
         
-        if factor_exposures is not None:
-            print("\n" + "="*80)
-            print("PORTFOLIO FACTOR EXPOSURES (Weighted Sensitivities)")
-            print("="*80)
-            print(factor_exposures.to_string(index=False))
-            print("="*80)
+        # Dummy asset returns (not calculated here usually, but required by signature)
+        asset_returns = pd.DataFrame() 
         
-        if factor_risk_contributions is not None:
-            print("\n" + "="*80)
-            print("RISK CONTRIBUTION BY FACTOR (Should be Equal)")
-            print("="*80)
-            print(factor_risk_contributions.to_string(index=False))
-            print("="*80)
-            print(f"\nTarget equal risk: {100/len(factor_risk_contributions):.2f}% per factor")
-            print(f"Actual range: {factor_risk_contributions['Risk Contribution (%)'].min():.2f}% - {factor_risk_contributions['Risk Contribution (%)'].max():.2f}%")
-            print("="*80)
-    
-    def clear_cache(self):
-        """Clear cached optimization results."""
-        self._weights = None
-        self._allocations = None
-        self.portfolio.clear_cache()
+        return summary, asset_returns, factor_vols, factor_exp_long, factor_risk_contributions
+
+    def print_summary(self, summary, total_capital, factor_exposures, factor_risk_contributions):
+        """Print summary of optimization results."""
+        print(f"Total Capital: {total_capital:,.2f}")
+        print(summary)

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Optional
 import os
 import multiprocessing
+import sys
 
 try:
     import tkinter as tk
@@ -252,23 +253,26 @@ def setup_logging(show_window: bool = True, level: int = logging.INFO):
     is_main_process = (multiprocessing.current_process().name == 'MainProcess')
 
     if show_window and tk is not None and is_main_process:
-        log_q: queue.Queue[str] = queue.Queue(maxsize=10000)
-        gui_handler = QueueHandler(log_q)
-        gui_handler.setLevel(level)
-        gui_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-        logger.addHandler(gui_handler)
+        if sys.platform == 'darwin':
+            logger.warning("GUI Log Window disabled on macOS due to threading restrictions. Output will be shown in console.")
+        else:
+            log_q: queue.Queue[str] = queue.Queue(maxsize=10000)
+            gui_handler = QueueHandler(log_q)
+            gui_handler.setLevel(level)
+            gui_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+            logger.addHandler(gui_handler)
 
-        _gui_window = GuiLoggerWindow(log_q)
-        _gui_window.start()
-        _creator_pid = current_pid
+            _gui_window = GuiLoggerWindow(log_q)
+            _gui_window.start()
+            _creator_pid = current_pid
 
-        # Redirect stdout/stderr so print() also goes through logger
-        import sys as _sys
-        _sys.stdout = _BufferedRedirect(logger, logging.INFO)  # type: ignore
-        _sys.stderr = _BufferedRedirect(logger, logging.ERROR)  # type: ignore
+            # Redirect stdout/stderr so print() also goes through logger
+            import sys as _sys
+            _sys.stdout = _BufferedRedirect(logger, logging.INFO)  # type: ignore
+            _sys.stderr = _BufferedRedirect(logger, logging.ERROR)  # type: ignore
 
-        # Small banner so the window isn't empty
-        logger.info("Log window started at %s", time.strftime('%H:%M:%S'))
+            # Small banner so the window isn't empty
+            logger.info("Log window started at %s", time.strftime('%H:%M:%S'))
     else:
         # If Tk isn't available, or not main process, still ensure console logging works
         if tk is None:
