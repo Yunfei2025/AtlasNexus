@@ -352,11 +352,11 @@ def build_multiasset_portfolio_layout():
                             'RUN ANALYSIS',
                             id='run-button',
                             n_clicks=initial_n_clicks,
-                            style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '12px', 'width': '100%', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold', 'boxShadow': '0 2px 5px rgba(0,0,0,0.3)'}
+                            style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '12px', 'width': '80%', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold', 'boxShadow': '0 2px 5px rgba(0,0,0,0.3)', 'margin': '0 auto', 'display': 'block'}
                         ),
                         html.Div(id='status-message', style={'marginTop': '15px', 'fontSize': '13px', 'textAlign': 'center', 'minHeight': '20px', 'color': THEME['text_main']}),
                         html.Div(id='timestamp-display', style={'color': THEME['text_sub'], 'fontSize': '11px', 'textAlign': 'center', 'marginTop': '10px'})
-                    ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'height': '80%'})
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'height': '80%', 'alignItems': 'center'})
                 ], style={'width': '30%', 'padding': '20px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '0 0 8px 0'}),
             ], style={'display': 'flex'}),
             
@@ -784,8 +784,9 @@ def register_multiasset_callbacks(app):
             corr_stacked = corr_matrix.where(mask).stack().reset_index()
             corr_stacked.columns = ['Factor A', 'Factor B', 'Correlation']
             
-            # Sort by correlation ascending (lowest first)
-            bottom_10 = corr_stacked.sort_values('Correlation', ascending=True).head(10)
+            # Sort by absolute correlation ascending (closest to 0 first)
+            corr_stacked['AbsCorrelation'] = corr_stacked['Correlation'].abs()
+            bottom_10 = corr_stacked.sort_values('AbsCorrelation', ascending=True).head(10)
 
             # Get unique factors from the bottom 10 pairs
             top_factors = set(bottom_10['Factor A']).union(set(bottom_10['Factor B']))
@@ -819,7 +820,7 @@ def register_multiasset_callbacks(app):
             ))
             
             heatmap_fig.update_layout(
-                title=f"Correlation Matrix (Lower Triangle) - Factors from Top 10 Lowest Pairs - {period}",
+                title=f"Correlation Matrix (Lower Triangle) - Factors from Lowest Abs Correlation Pairs - {period}",
                 height=600,
                 template=THEME['chart_template'],
                 paper_bgcolor=THEME['bg_card'],
@@ -836,9 +837,9 @@ def register_multiasset_callbacks(app):
                     dcc.Graph(figure=heatmap_fig)
                 ], style={'marginBottom': '30px'}),
 
-                html.H6(f"Lowest Correlations (Diversification Opportunities) - Top 10 Pairs", style={'color': THEME['text_main']}),
+                html.H6(f"Lowest Absolute Correlations (Diversification Opportunities) - Top 10 Pairs", style={'color': THEME['text_main']}),
                 dash_table.DataTable(
-                    data=bottom_10.to_dict('records'),
+                    data=bottom_10.drop(columns=['AbsCorrelation']).to_dict('records'),
                     columns=[
                         {'name': 'Factor A', 'id': 'Factor A'},
                         {'name': 'Factor B', 'id': 'Factor B'},
@@ -959,7 +960,7 @@ def register_multiasset_callbacks(app):
                     {'name': 'Weight', 'id': 'Weight (%)'},
                 ],
                 style_cell={
-                    'textAlign': 'left', 
+                    'textAlign': 'center', 
                     'padding': '10px', 
                     'fontFamily': 'Arial, sans-serif',
                     'backgroundColor': THEME['table_row_odd'],
@@ -1006,57 +1007,132 @@ def register_multiasset_callbacks(app):
                         bond_data = None
                     
                     if bond_data is not None and not bond_data.empty:
-                        # Ensure columns exist (case insensitive check usually safer but let's stick to user specs first)
-                        # User described: ttm < 1, sort by z-score.
-                        # Assuming columns 'ttm', 'z-score' exist.
+                        # The bond code is in the index. promote it to a column 'Code'
+                        bond_data = bond_data.copy()
+                        bond_data['Code'] = bond_data.index
+
+                        # Ensure columns exist (case insensitive check)
                         cols = {c.lower(): c for c in bond_data.columns}
                         
                         col_ttm = cols.get('ttm')
-                        col_z = cols.get('z-score') or cols.get('zscore')
-                        col_name = cols.get('name') or cols.get('wind_code') or cols.get('code') # Identifier
-                        
-                        if col_ttm and col_z:
-                            # Filter: ttm < 1
-                            target = bond_data[bond_data[col_ttm] < 1].copy()
+                        col_z = cols.get('zscore') or cols.get('z-score')
+                        col_id = cols.get('code') # Should resolve to 'Code'
+                        col_name = cols.get('name') or cols.get('wind_code') or col_id # Fallback to Code if Name missing
+
+                        if col_ttm and col_z and col_id:
+                            # User Logic:
+                            # CN1Y: 0 < ttm <= 1
+                            # CN2Y: 1 < ttm <= 2
+                            # CN5Y: 2 < ttm <= 5
+                            # CN10Y: 5 < ttm <= 10
                             
-                            if not target.empty:
-                                # Sorting Rule:
-                                # Negative z-score (larger magnitude) -> Buy (Rank High)
-                                # Positive z-score (larger magnitude) -> Sell (Rank High)
+                            # Identify which "Rates" assets are in the selected pool to decide which buckets to show
+                            # OR just show all relevant signals for buckets that have data and signals.
+                            # User requested logic maps asset names to TTM buckets.
+                            
+                            pool_asset_sectors = []
+                            for asset in asset_pool:
+                                if asset.get('type') == 'Rates' and asset.get('universe') in ['China Gov Bond', 'CN']:
+                                     sec = asset.get('sector', '')
+                                     if sec: pool_asset_sectors.append(sec.strip())
+                            
+                            # Define buckets
+                            buckets = {
+                                '1Y': (0, 1),
+                                '2Y': (1, 2),
+                                '5Y': (2, 5),
+                                '10Y': (5, 10),
+                                '30Y': (10, 30) # Added 30Y just in case, though user didn't explicitly ask for signal logic yet.
+                            }
+                            
+                            # If no specific Rates assets selected, maybe show nothing or just 1Y? 
+                            # User context: "When asset allocation HAS other term treasuries..." -> implies filtering by pool.
+                            # If pool is empty of CN Rates, we might default to showing nothing or just 1Y as before?
+                            # Let's show buckets present in the pool.
+                            
+                            target_sectors = [s for s in pool_asset_sectors if s in buckets]
+                            # If user manually added "CN1Y" (which is 'Rates' 'China Gov Bond' '1Y'), we process '1Y'.
+                            
+                            signal_tables = []
+                            
+                            for sector in target_sectors:
+                                min_t, max_t = buckets[sector]
+                                # Filter data for this bucket
+                                # Assuming bond_data has all bonds.
+                                df_bucket = bond_data[(bond_data[col_ttm] > min_t) & (bond_data[col_ttm] <= max_t)].copy()
                                 
+                                if df_bucket.empty: continue
+
                                 # Buy Candidates: Lowest z-score (most negative)
                                 # Sell Candidates: Highest z-score (most positive)
-                                
-                                buy_list = target.sort_values(col_z, ascending=True).head(5)
-                                sell_list = target.sort_values(col_z, ascending=False).head(5)
+                                buy_list = df_bucket.sort_values(col_z, ascending=True).head(5)
+                                sell_list = df_bucket.sort_values(col_z, ascending=False).head(5)
                                 
                                 # Helper to format a table
                                 def make_mini_table(df, title, color):
                                     if df.empty: return html.Div()
-                                    display_cols = [c for c in [col_name, col_ttm, col_z] if c]
-                                    records = df[display_cols].to_dict('records')
-                                    # Format
-                                    for r in records:
-                                         if col_ttm in r: r[col_ttm] = f"{r[col_ttm]:.2f}Y"
-                                         if col_z in r: r[col_z] = f"{r[col_z]:.2f}"
                                     
+                                    # Define target columns, avoiding duplicates if Name fallback calls to Code
+                                    target_cols = [col_id]
+                                    if col_name != col_id:
+                                        target_cols.append(col_name)
+                                    target_cols.extend([col_ttm, col_z])
+                                    
+                                    # Ensure columns exist
+                                    valid_cols = [c for c in target_cols if c in df.columns]
+                                    
+                                    # Map to display names
+                                    display_cols_map = {col_id: 'Code', col_name: 'Name', col_ttm: 'TTM', col_z: 'Z-Score'}
+                                    
+                                    records = df[valid_cols].to_dict('records')
+                                    
+                                    formatted_records = []
+                                    for r in records:
+                                        # Data Formatting
+                                        if col_ttm in r: r[col_ttm] = f"{r[col_ttm]:.2f}Y"
+                                        if col_z in r: r[col_z] = f"{r[col_z]:.2f}"
+                                        
+                                        # Rename keys
+                                        new_r = {}
+                                        for c in valid_cols:
+                                            d_name = display_cols_map.get(c, c)
+                                            new_r[d_name] = r[c]
+                                        formatted_records.append(new_r)
+                                    
+                                    final_cols = [{'name': display_cols_map.get(c, c), 'id': display_cols_map.get(c, c)} for c in valid_cols]
+
                                     return html.Div([
-                                        html.H6(title, style={'color': color, 'marginBottom': '5px', 'textAlign': 'center'}),
+                                        html.H6(title, style={'color': color, 'marginBottom': '5px', 'textAlign': 'center', 'fontSize': '11px'}),
                                         dash_table.DataTable(
-                                            data=records,
-                                            columns=[{'name': c, 'id': c} for c in display_cols],
-                                            style_cell={'textAlign': 'center', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': 'none', 'fontSize': '12px'},
+                                            data=formatted_records,
+                                            columns=final_cols,
+                                            style_cell={'textAlign': 'center', 'padding': '4px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': 'none', 'fontSize': '11px'},
                                             style_header={'backgroundColor': THEME['bg_card'], 'fontWeight': 'bold', 'color': color, 'border': 'none'}
                                         )
-                                    ], style={'flex': '1', 'margin': '5px'})
+                                    ], style={'flex': '1', 'margin': '2px'})
 
-                                bond_signal_table = html.Div([
-                                    html.H5("Short-Term Bond (CN1Y / <1Y) Signal Monitor", style={'color': THEME['text_main'], 'marginTop': '20px', 'borderTop': f'1px dashed {THEME["text_sub"]}', 'paddingTop': '10px'}),
+                                sector_div = html.Div([
+                                    html.H5(f"CN {sector} ({min_t}-{max_t}Y) Signals", style={'color': THEME['text_main'], 'marginTop': '10px', 'fontSize': '13px', 'borderBottom': f'1px dashed {THEME["text_sub"]}'}),
                                     html.Div([
-                                        make_mini_table(buy_list, "BUY Candidates (Low Z-Score)", THEME['success']),
-                                        make_mini_table(sell_list, "SELL Candidates (High Z-Score)", THEME['danger'])
-                                    ], style={'display': 'flex', 'gap': '10px'})
+                                        make_mini_table(buy_list, "BUY (Low Z)", THEME['success']),
+                                        make_mini_table(sell_list, "SELL (High Z)", THEME['danger'])
+                                    ], style={'display': 'flex', 'gap': '5px'})
+                                ], style={'marginBottom': '10px', 'backgroundColor': 'rgba(255,255,255,0.03)', 'padding': '5px', 'borderRadius': '5px', 'flex': '1 1 30%', 'minWidth': '300px'})
+                                
+                                signal_tables.append(sector_div)
+
+                            if signal_tables:
+                                bond_signal_table = html.Div([
+                                    html.H5("Bond Trading Signals (Z-Score)", style={'color': THEME['text_main'], 'marginTop': '20px', 'borderTop': f'1px solid {THEME["text_sub"]}', 'paddingTop': '10px'}),
+                                    html.Div(signal_tables, style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'justifyContent': 'flex-start'})
                                 ])
+                            else:
+                                bond_signal_table = None
+
+                        else:
+                            print("Missing required columns for bond signals (ttm, z-score, code)")
+                            bond_signal_table = None
+
 
             except Exception as e:
                 print(f"Error generating bond signals: {e}")
