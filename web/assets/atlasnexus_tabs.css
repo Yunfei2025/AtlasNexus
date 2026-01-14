@@ -41,3 +41,64 @@
 .app__container .tab__title code {
   color: #e8eef8;
 }
+
+/* -------------------------------------------------------------------------- */
+/* React-Select (dcc.Dropdown) Dark Mode Overrides for AtlasNexus             */
+/* -------------------------------------------------------------------------- */
+
+/* Target the container of the dropdown */
+.Select-control {
+    background-color: #112e66 !important;
+    border: 1px solid #0c2b64 !important;
+}
+
+/* The text value of the selected item */
+.Select-value-label,
+.Select-placeholder,
+.Select--single > .Select-control .Select-value {
+    color: #ffffff !important;
+}
+
+/* The dropdown menu outer container */
+.Select-menu-outer {
+    background-color: #0c2b64 !important;
+    border: 1px solid #3498db !important;
+}
+
+/* Individual options in the menu */
+.Select-option {
+    background-color: #0c2b64 !important;
+    color: #ffffff !important;
+}
+
+/* Hover/Focus state for options */
+.Select-option.is-focused,
+.Select-option:hover {
+    background-color: #3498db !important;
+    color: #ffffff !important;
+}
+
+/* Selected option styling */
+.Select-option.is-selected {
+    background-color: #112e66 !important;
+    color: #3498db !important;
+    font-weight: bold;
+}
+
+/* Input text (when typing to search) */
+.Select-input > input {
+    color: #ffffff !important;
+}
+
+/* Arrow and Close icons */
+.Select-clear {
+    color: #ffffff !important;
+}
+
+.Select-arrow-zone .Select-arrow {
+    border-top-color: #ffffff !important;
+}
+
+.Select-arrow-zone:hover > .Select-arrow {
+    border-top-color: #3498db !important;
+}

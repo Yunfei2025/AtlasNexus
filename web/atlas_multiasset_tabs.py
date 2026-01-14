@@ -12,6 +12,7 @@ from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
+import os
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import traceback
@@ -775,8 +776,9 @@ def register_multiasset_callbacks(app):
                  return html.Div("Insufficient data points for correlation.", style={'color': THEME['warning']})
 
             corr_matrix = df_changes.corr()
-            
-            # Stack and sort
+
+            # Identify the unique factors involved in the top 10 lowest correlations
+            # Stack and sort for bottom 10 table
             # Mask the upper triangle to avoid duplicates and self-correlation = 1
             mask = np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
             corr_stacked = corr_matrix.where(mask).stack().reset_index()
@@ -784,10 +786,57 @@ def register_multiasset_callbacks(app):
             
             # Sort by correlation ascending (lowest first)
             bottom_10 = corr_stacked.sort_values('Correlation', ascending=True).head(10)
+
+            # Get unique factors from the bottom 10 pairs
+            top_factors = set(bottom_10['Factor A']).union(set(bottom_10['Factor B']))
+            
+            # If we ended up with more than 10 factors (which is likely if pairs are disjoint),
+            # we might want to just pick the factors from the very top few pairs to limit to ~10 factors max 
+            # for a 10x10 matrix, OR just show all factors involved in the top 10 pairs.
+            # Usually top 10 pairs involve at most 20 factors. Let's filter the matrix to these factors.
+            top_factors_list = sorted(list(top_factors))
+            
+            # Filter the correlation matrix
+            filtered_corr_matrix = corr_matrix.loc[top_factors_list, top_factors_list]
+            
+            # Mask upper triangle (show lower only)
+            corr_values = filtered_corr_matrix.values.copy()
+            # Set upper triangle to NaN (keep diagonal? np.triu k=1 masks strict upper. k=0 masks diagonal too.)
+            # Usually diagonal is 1. User said "avoid repetition". Diagonal is unique.
+            # But normally lower triangle heatmaps include diagonal.
+            mask_upper = np.triu(np.ones(corr_values.shape), k=1).astype(bool)
+            corr_values[mask_upper] = np.nan
+            
+            # --- Heatmap Plot ---
+            heatmap_fig = go.Figure(data=go.Heatmap(
+                z=corr_values,
+                x=filtered_corr_matrix.columns,
+                y=filtered_corr_matrix.index,
+                colorscale='RdBu', 
+                zmin=-1, zmax=1,
+                hovertemplate='Factor A: %{y}<br>Factor B: %{x}<br>Correlation: %{z:.3f}<extra></extra>',
+                xgap=1, ygap=1 # Add small gap for better definition
+            ))
+            
+            heatmap_fig.update_layout(
+                title=f"Correlation Matrix (Lower Triangle) - Factors from Top 10 Lowest Pairs - {period}",
+                height=600,
+                template=THEME['chart_template'],
+                paper_bgcolor=THEME['bg_card'],
+                plot_bgcolor=THEME['bg_card'],
+                font={'color': THEME['text_main']},
+                margin=dict(l=150, r=50, t=80, b=100),
+                xaxis={'side': 'bottom', 'tickangle': -45},
+                yaxis={'autorange': 'reversed'} # Standard matrix view
+            )
             
             # Format display
             return html.Div([
-                html.H6(f"Lowest Correlations (Diversification) - Last {period}", style={'color': THEME['text_main']}),
+                html.Div([
+                    dcc.Graph(figure=heatmap_fig)
+                ], style={'marginBottom': '30px'}),
+
+                html.H6(f"Lowest Correlations (Diversification Opportunities) - Top 10 Pairs", style={'color': THEME['text_main']}),
                 dash_table.DataTable(
                     data=bottom_10.to_dict('records'),
                     columns=[
@@ -934,7 +983,91 @@ def register_multiasset_callbacks(app):
             status_msg = html.Span("✓ Analysis completed successfully!", style={'color': THEME['success'], 'fontWeight': 'bold'})
             timestamp_msg = f"Last updated: {ALLOCATION_RESULTS['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"
             
-            return (portfolio_table, status_msg, timestamp_msg, {'status': 'success'})
+            # --- Bond Trading Suggestion List (New Feature) ---
+            # Automatically load specific bond data if present
+            bond_signal_table = None
+            try:
+                signal_file = os.path.join(DIR_INPUT, 'CBond-spdsrt.pkl')
+                
+                # Try to check if "CN1Y" or similar rate asset is in the pool? 
+                # User request: "对于一年期国债CN1Y...生成买卖列表".
+                # It seems he implies this should appear in Portfolio Results context. 
+                # We will check if file exists and try to generate it regardless, or appended to the results section.
+                
+                if os.path.exists(signal_file):
+                    df_signals = pd.read_pickle(signal_file)
+                    # Check if 'BondCurve' key exists (User specified key='BondCurve')
+                    if isinstance(df_signals, dict) and 'BondCurve' in df_signals:
+                        bond_data = df_signals['BondCurve']
+                    elif isinstance(df_signals, pd.DataFrame):
+                        # Maybe the pickle is just the DF?
+                         bond_data = df_signals
+                    else:
+                        bond_data = None
+                    
+                    if bond_data is not None and not bond_data.empty:
+                        # Ensure columns exist (case insensitive check usually safer but let's stick to user specs first)
+                        # User described: ttm < 1, sort by z-score.
+                        # Assuming columns 'ttm', 'z-score' exist.
+                        cols = {c.lower(): c for c in bond_data.columns}
+                        
+                        col_ttm = cols.get('ttm')
+                        col_z = cols.get('z-score') or cols.get('zscore')
+                        col_name = cols.get('name') or cols.get('wind_code') or cols.get('code') # Identifier
+                        
+                        if col_ttm and col_z:
+                            # Filter: ttm < 1
+                            target = bond_data[bond_data[col_ttm] < 1].copy()
+                            
+                            if not target.empty:
+                                # Sorting Rule:
+                                # Negative z-score (larger magnitude) -> Buy (Rank High)
+                                # Positive z-score (larger magnitude) -> Sell (Rank High)
+                                
+                                # Buy Candidates: Lowest z-score (most negative)
+                                # Sell Candidates: Highest z-score (most positive)
+                                
+                                buy_list = target.sort_values(col_z, ascending=True).head(5)
+                                sell_list = target.sort_values(col_z, ascending=False).head(5)
+                                
+                                # Helper to format a table
+                                def make_mini_table(df, title, color):
+                                    if df.empty: return html.Div()
+                                    display_cols = [c for c in [col_name, col_ttm, col_z] if c]
+                                    records = df[display_cols].to_dict('records')
+                                    # Format
+                                    for r in records:
+                                         if col_ttm in r: r[col_ttm] = f"{r[col_ttm]:.2f}Y"
+                                         if col_z in r: r[col_z] = f"{r[col_z]:.2f}"
+                                    
+                                    return html.Div([
+                                        html.H6(title, style={'color': color, 'marginBottom': '5px', 'textAlign': 'center'}),
+                                        dash_table.DataTable(
+                                            data=records,
+                                            columns=[{'name': c, 'id': c} for c in display_cols],
+                                            style_cell={'textAlign': 'center', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': 'none', 'fontSize': '12px'},
+                                            style_header={'backgroundColor': THEME['bg_card'], 'fontWeight': 'bold', 'color': color, 'border': 'none'}
+                                        )
+                                    ], style={'flex': '1', 'margin': '5px'})
+
+                                bond_signal_table = html.Div([
+                                    html.H5("Short-Term Bond (CN1Y / <1Y) Signal Monitor", style={'color': THEME['text_main'], 'marginTop': '20px', 'borderTop': f'1px dashed {THEME["text_sub"]}', 'paddingTop': '10px'}),
+                                    html.Div([
+                                        make_mini_table(buy_list, "BUY Candidates (Low Z-Score)", THEME['success']),
+                                        make_mini_table(sell_list, "SELL Candidates (High Z-Score)", THEME['danger'])
+                                    ], style={'display': 'flex', 'gap': '10px'})
+                                ])
+
+            except Exception as e:
+                print(f"Error generating bond signals: {e}")
+                # Don't fail the whole callback for this optional feature
+            
+            final_output = html.Div([
+                portfolio_table,
+                bond_signal_table if bond_signal_table else html.Div()
+            ])
+            
+            return (final_output, status_msg, timestamp_msg, {'status': 'success'})
             
         except Exception as e:
             # Print full traceback for debugging
