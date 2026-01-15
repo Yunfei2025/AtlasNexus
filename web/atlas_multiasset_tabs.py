@@ -403,22 +403,195 @@ def build_multiasset_portfolio_layout():
 
 
 def build_multiasset_risk_layout():
-    """Build the layout for the Risk tab."""
-    return html.Div([
-        html.H4("Factor Exposures & Volatilities", style={'textAlign': 'center', 'color': THEME['text_main'], 'marginTop': '10px', 'marginBottom': '20px'}),
-        # Side-by-side layout container
-        html.Div([
-            # Left column: Heatmap
-            html.Div([
-                html.H6("Asset Sensitivity to Risk Factors", style={'textAlign': 'center', 'color': THEME['text_main'], 'marginBottom': '15px'}),
-                dcc.Graph(id='sensitivity-heatmap', style={'height': '500px', 'margin': '0'})
-            ], style={'flex': '1', 'minWidth': '0', 'paddingRight': '10px'}),
+    """
+    Build the layout for the Risk/Summary tab.
+    Structure:
+    1. Combination: Beta/Alpha composition (Total = Rf + Beta + Alpha)
+    2. Exposure: Risk Factor sensitivities (Heatmap)
+    3. Ticket: Detailed allocation/trade list
+    """
+    
+    # --- 1. Combination Data (Placeholders as requested) ---
+    # TODO: Connect these to actual backtest/optimization metrics in the future
+    risk_free_rate = 1.5
+    
+    # Beta (Strategic Asset Allocation)
+    beta_vol = 15.0
+    beta_sharpe = 0.4
+    beta_ret = beta_vol * beta_sharpe  # 6.0%
+
+    # Alpha (Tactical Adjustments)
+    alpha_vol = 5.0
+    alpha_ir = 0.5
+    alpha_ret = alpha_vol * alpha_ir   # 2.5%
+    
+    total_ret = risk_free_rate + beta_ret + alpha_ret
+    
+    # Styling helpers
+    def card_style(bg_color=THEME['bg_card']):
+        return {
+            'backgroundColor': bg_color,
+            'padding': '15px',
+            'borderRadius': '6px',
+            'textAlign': 'center',
+            'border': f'1px solid {THEME["table_header"]}',
+            'flex': '1',
+            'margin': '0 5px',
+            'minWidth': '150px'
+        }
+        
+    def value_style(color=THEME['success']):
+        return {'fontSize': '24px', 'fontWeight': 'bold', 'color': color, 'margin': '5px 0'}
+        
+    def label_style():
+        return {'color': THEME['text_sub'], 'fontSize': '12px', 'textTransform': 'uppercase', 'letterSpacing': '1px'}
+
+    # --- Prepare Data for Exposure ---
+    heatmap_fig = go.Figure()
+    vol_table = None
+    
+    if ALLOCATION_RESULTS['portfolio'] is not None and ALLOCATION_RESULTS['factor_exposures'] is not None:
+        try:
+            summary = ALLOCATION_RESULTS['summary']
+            factor_exp = ALLOCATION_RESULTS['factor_exposures']
+            factor_risk = ALLOCATION_RESULTS['factor_risk']
+            portfolio = ALLOCATION_RESULTS['portfolio']
             
-            # Right column: Factor Volatility Table
+            # --- Heatmap Logic ---
+            assets_with_allocation = summary[summary['Allocation (CNY)'] >= 1000].nlargest(15, 'Allocation (CNY)')
+            # Factor filtering
+            factor_names = sorted([f for f in factor_exp['Risk Factor'].unique() if f.startswith(('IRDL', 'IRSL', 'IRCV', 'FXDL', 'CMDL', 'SPDL', 'SPSL'))])
+            asset_names = assets_with_allocation['Asset'].tolist()
+            
+            sensitivity_matrix = []
+            for asset_name in asset_names:
+                if asset_name in portfolio.assets:
+                    asset = portfolio.assets[asset_name]
+                    # Direct dictionary access if available, else 0
+                    row = [asset.factors.get(factor, 0.0) for factor in factor_names]
+                    sensitivity_matrix.append(row)
+                else:
+                    sensitivity_matrix.append([0.0] * len(factor_names))
+            
+            if asset_names and factor_names:
+                heatmap_fig = go.Figure(data=go.Heatmap(
+                    z=sensitivity_matrix, x=factor_names, y=asset_names,
+                    colorscale='RdBu', zmid=0, text=sensitivity_matrix,
+                    texttemplate="%{text:.2f}", textfont={"size": 10}
+                ))
+                heatmap_fig.update_layout(
+                    title=None, height=400, margin=dict(l=10, r=10, t=10, b=10),
+                    xaxis_title="Risk Factor", yaxis_title="Asset",
+                    template=THEME['chart_template'], paper_bgcolor=THEME['bg_card'], plot_bgcolor=THEME['bg_card'], font={'color': THEME['text_main']}
+                )
+            
+            # --- Volatility Table Logic ---
+            factor_vol_df = factor_risk[factor_risk['Risk Factor'].isin(factor_names)].copy()
+            factor_vol_df = factor_vol_df[['Risk Factor', 'Volatility (% ann.)']].copy()
+            # Format
+            factor_vol_df['Volatility (% ann.)'] = factor_vol_df['Volatility (% ann.)'].apply(lambda x: f"{x:.2f}%")
+            factor_vol_df = factor_vol_df.sort_values('Risk Factor')
+            
+            vol_table = dash_table.DataTable(
+                data=factor_vol_df.to_dict('records'),
+                columns=[{'name': 'Risk Factor', 'id': 'Risk Factor'}, {'name': 'Vol', 'id': 'Volatility (% ann.)'}],
+                style_cell={'textAlign': 'center', 'padding': '8px', 'fontSize': '12px', 
+                          'backgroundColor': THEME['table_row_odd'], 'color': THEME['text_main'], 'border': 'none'},
+                style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'], 'fontWeight': 'bold', 'border': 'none'},
+                style_data_conditional=[{'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']}],
+                 style_table={'overflowY': 'auto', 'maxHeight': '400px'}
+            )
+
+        except Exception as e:
+            print(f"Error generating Risk Layout: {e}")
+            heatmap_fig.update_layout(title=f"Error: {e}")
+            vol_table = html.Div(f"Error generating table: {str(e)}", style={'color': THEME['danger'], 'padding': '10px'})
+
+    # --- Assemble Layout ---
+    return html.Div([
+        
+        # 1. Combination Section
+        html.H4("1. Portfolio Combination", style={'color': THEME['text_main'], 'marginBottom': '15px', 'borderBottom': f'2px solid {THEME["accent"]}', 'paddingBottom': '5px'}),
+        html.Div([
+            # Equation Row
             html.Div([
-                html.Div(id='factor-vol-table-container')
-            ], style={'flex': '1', 'minWidth': '0', 'paddingLeft': '10px'})
-        ], style={'display': 'flex', 'gap': '10px', 'justifyContent': 'space-between'})
+                 # Target Return
+                 html.Div([
+                     html.Div("Target Return", style=label_style()),
+                     html.Div(f"{total_ret:.1f}%", style=value_style(THEME['accent'])),
+                     html.Div("Total Portfolio Target", style={'fontSize': '11px', 'color': THEME['text_sub']})
+                 ], style=card_style()),
+                 
+                 html.Div("=", style={'fontSize': '24px', 'color': THEME['text_sub'], 'alignSelf': 'center', 'padding': '0 10px'}),
+                 
+                 # Risk Free
+                 html.Div([
+                     html.Div("Risk Free Rate", style=label_style()),
+                     html.Div(f"{risk_free_rate:.1f}%", style=value_style(THEME['success'])),
+                     html.Div("Cash / Treasury", style={'fontSize': '11px', 'color': THEME['text_sub']})
+                 ], style=card_style()),
+                 
+                 html.Div("+", style={'fontSize': '24px', 'color': THEME['text_sub'], 'alignSelf': 'center', 'padding': '0 10px'}),
+                 
+                 # Beta
+                 html.Div([
+                     html.Div("Beta Allocation", style=label_style()),
+                     html.Div(f"{beta_ret:.1f}%", style=value_style(THEME['warning'])),
+                     html.Div([
+                         html.Span("Strategic Asset Allocation", style={'display': 'block', 'marginBottom': '5px'}),
+                         html.Span(f"{beta_vol}% Vol", style={'fontWeight': 'bold', 'color': THEME['warning']}),
+                         html.Span(" × "),
+                         html.Span(f"{beta_sharpe} Sharpe", style={'fontWeight': 'bold', 'color': THEME['warning']}),
+                     ], style={'fontSize': '11px', 'color': THEME['text_sub'], 'backgroundColor': 'rgba(255,255,255,0.05)', 'padding': '5px', 'borderRadius': '4px'})
+                 ], style=card_style()),
+                 
+                 html.Div("+", style={'fontSize': '24px', 'color': THEME['text_sub'], 'alignSelf': 'center', 'padding': '0 10px'}),
+                 
+                 # Alpha
+                 html.Div([
+                     html.Div("Alpha Overlay", style=label_style()),
+                     html.Div(f"{alpha_ret:.1f}%", style=value_style(THEME['danger'])),
+                     html.Div([
+                         html.Span("Tactical Adjustments", style={'display': 'block', 'marginBottom': '5px'}),
+                         html.Span(f"{alpha_vol}% Vol", style={'fontWeight': 'bold', 'color': THEME['danger']}),
+                         html.Span(" × "),
+                         html.Span(f"{alpha_ir} IR", style={'fontWeight': 'bold', 'color': THEME['danger']}),
+                     ], style={'fontSize': '11px', 'color': THEME['text_sub'], 'backgroundColor': 'rgba(255,255,255,0.05)', 'padding': '5px', 'borderRadius': '4px'})
+                 ], style=card_style()),
+            ], style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'center', 'alignItems': 'stretch'}),
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px', 'marginBottom': '30px'}),
+
+        # 2. Exposure Section
+        html.H4("2. Risk Exposure Analysis", style={'color': THEME['text_main'], 'marginBottom': '15px', 'borderBottom': f'2px solid {THEME["accent"]}', 'paddingBottom': '5px'}),
+        html.Div([
+            # Heatmap
+            html.Div([
+                html.H6("Asset Sensitivity (Beta to Factors)", style={'textAlign': 'center', 'color': THEME['text_main']}),
+                html.Div(
+                    id='risk-heatmap-container',
+                    children=[
+                        dcc.Graph(id='sensitivity-heatmap', figure=heatmap_fig, style={'height': '400px'}) if heatmap_fig and heatmap_fig.data else html.Div("Run Optimization First", style={'padding': '40px', 'textAlign': 'center', 'color': THEME['text_sub']})
+                    ]
+                )
+            ], style={'flex': '3', 'minWidth': '300px', 'backgroundColor': THEME['bg_card'], 'padding': '10px', 'borderRadius': '5px', 'marginRight': '10px'}),
+            
+            # Vol Table
+            html.Div([
+                html.H6("Factor Volatility", style={'textAlign': 'center', 'color': THEME['text_main']}),
+                html.Div(
+                    id='factor-vol-table-container',
+                    children=vol_table if vol_table else html.Div("No Data", style={'color': THEME['text_sub'], 'textAlign': 'center', 'padding': '20px'}),
+                    style={'marginTop': '10px'}
+                )
+            ], style={'flex': '1', 'minWidth': '200px', 'backgroundColor': THEME['bg_card'], 'padding': '10px', 'borderRadius': '5px'})
+        ], style={'display': 'flex', 'flexWrap': 'wrap', 'marginBottom': '30px'}),
+
+        # 3. Ticket Section (Placeholder)
+        html.H4("3. Trade Tickets / Allocation", style={'color': THEME['text_main'], 'marginBottom': '15px', 'borderBottom': f'2px solid {THEME["accent"]}', 'paddingBottom': '5px'}),
+        html.Div([
+            html.Div("Ticket implementation pending...", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'textAlign': 'center', 'padding': '30px'})
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px'})
+
     ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px', 'borderRadius': '5px', 'margin': '10px'})
 
 
@@ -807,6 +980,12 @@ def register_multiasset_callbacks(app):
                 ], style={'padding': '5px', 'marginBottom': '5px', 'backgroundColor': bg_col, 'borderRadius': '3px'}))
             count_text = f"({len(current_pool)})"
         
+        # Save to persistent storage
+        try:
+            save_asset_pool(current_pool)
+        except Exception as e:
+            print(f"Error saving asset pool: {e}")
+
         return current_pool, display, count_text
 
     # 3. Factor Selection Callbacks (Regime Tab)
