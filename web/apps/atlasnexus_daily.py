@@ -40,6 +40,7 @@ from web.atlas_multiasset_tabs import (
     build_multiasset_portfolio_layout,
     build_multiasset_risk_layout,
     build_multiasset_backtest_layout,
+    build_factor_backtest_layout,
     register_multiasset_callbacks,
 )
 
@@ -114,7 +115,6 @@ def build_tabs_panel():
                             dcc.Tab(label="Beta Book", value="beta", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="Alpha Book", value="alpha", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="Risk", value="risk", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Backtest", value="backtest", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="Tickets", value="tickets", style=tab_style, selected_style=tab_selected_style),
                             # Spreads tab moved into the Alpha Book content (bottom-up signals / pair screens)
                         ],
@@ -214,6 +214,8 @@ def _render_tab(tab):
                             children=[
                                 dcc.Tab(label="FACTOR", value="factor", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="BACKTEST-FACTOR", value="backtest-factor", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="BACKTEST-PORTFOLIO", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="SURFACE", value="surface", style=tab_style, selected_style=tab_selected_style),
                             ],
                             style={"height": "520px"},
@@ -254,9 +256,6 @@ def _render_tab(tab):
 
     if tab == "risk":
         return build_multiasset_risk_layout()
-
-    if tab == "backtest":
-        return build_multiasset_backtest_layout()
 
     if tab == "tickets":
         return html.Div([
@@ -347,6 +346,12 @@ def _render_beta_subtabs(subtab: str):
 
     if subtab == "portfolio":
         return build_multiasset_portfolio_layout()
+
+    if subtab == "backtest-factor":
+        return build_factor_backtest_layout()
+
+    if subtab == "backtest-portfolio":
+        return build_multiasset_backtest_layout()
 
     if subtab == "surface":
         return build_surface_layout()

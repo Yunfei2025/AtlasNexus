@@ -7,9 +7,10 @@ for use within the AtlasNexus Daily application.
 from __future__ import annotations
 
 import dash
-from dash import dcc, html, dash_table
+from dash import dcc, html, dash_table, ALL
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 import os
@@ -29,6 +30,25 @@ from multiasset.storage import save_asset_pool
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import PCAFactorRiskParityOptimizer
 from settings.paths import DIR_INPUT
+
+# --- Import from futures.backtest for Backtest-Factor tab ---
+import dash_bootstrap_components as dbc
+try:
+    from futures.backtest.data_loader import (
+        discover_pkl_files, load_wind_data, 
+        load_local_data_processed, resample_data, get_local_file_path
+    )
+    from futures.backtest.strategies import (
+        run_ma_strategy, run_bollinger_strategy, run_vwap_strategy,
+        run_intraday_momentum_strategy, run_atr_band_strategy, run_sar_strategy
+    )
+    from futures.backtest.metrics import calculate_metrics, run_rolling_best_strategy
+    from futures.backtest.regime import RegimeDetector
+    from settings.futures import FuturesConfig
+    FUTURES_AVAILABLE = True
+except ImportError:
+    FUTURES_AVAILABLE = False
+    print("Warning: futures.backtest modules not found.")
 
 # --- Theme Constants (AtlasNexus Dark Blue) ---
 THEME = {
@@ -344,19 +364,15 @@ def build_multiasset_portfolio_layout():
                     ),
                 ], style={'width': '30%', 'padding': '20px', 'borderRight': f'1px solid {THEME["table_header"]}'}),
                 
-                # Column 3: Action
+                # Column 3: Risk Budgets
                 html.Div([
-                    html.H6("Analysis", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '15px'}),
-                    html.Div([
-                        html.Button(
-                            'RUN ANALYSIS',
-                            id='run-button',
-                            n_clicks=initial_n_clicks,
-                            style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '12px', 'width': '80%', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold', 'boxShadow': '0 2px 5px rgba(0,0,0,0.3)', 'margin': '0 auto', 'display': 'block'}
-                        ),
-                        html.Div(id='status-message', style={'marginTop': '15px', 'fontSize': '13px', 'textAlign': 'center', 'minHeight': '20px', 'color': THEME['text_main']}),
-                        html.Div(id='timestamp-display', style={'color': THEME['text_sub'], 'fontSize': '11px', 'textAlign': 'center', 'marginTop': '10px'})
-                    ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'height': '80%', 'alignItems': 'center'})
+                    html.H6("Risk Budgets", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '15px'}),
+                    html.Div(
+                        id='risk-budget-container',
+                        children=[html.Div("Add assets to see risk factors", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px'})] if not initial_pool else [],
+                        style={'height': '150px', 'overflowY': 'auto', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '4px', 'padding': '8px', 'backgroundColor': THEME['bg_input']}
+                    ),
+                    html.Div("Default max risk budget: 1M CNY", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '5px', 'textAlign': 'center'})
                 ], style={'width': '30%', 'padding': '20px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '0 0 8px 0'}),
             ], style={'display': 'flex'}),
             
@@ -364,7 +380,23 @@ def build_multiasset_portfolio_layout():
         
         # Portfolio Table Results
         html.Div([
-            html.H4("Portfolio Allocation Results", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
+            html.Div([
+                 html.H4("Portfolio Allocation Results", style={'color': THEME['text_main'], 'marginBottom': '15px', 'flex': '1'}),
+                 html.Div([
+                        html.Button(
+                            'RUN ANALYSIS',
+                            id='run-button',
+                            n_clicks=initial_n_clicks,
+                            style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '8px 20px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold'}
+                        ),
+                 ], style={'marginLeft': '20px'})
+            ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between'}),
+            
+            html.Div([
+                html.Div(id='status-message', style={'fontSize': '13px', 'color': THEME['text_main'], 'marginRight': '20px'}),
+                html.Div(id='timestamp-display', style={'color': THEME['text_sub'], 'fontSize': '11px'})
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px', 'justifyContent': 'flex-end'}),
+
             html.Div(id='portfolio-table-container')
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'marginBottom': '20px', 'borderRadius': '5px'}),
     ], style={'padding': '10px', 'backgroundColor': THEME['bg_main']})
@@ -447,6 +479,159 @@ def build_multiasset_backtest_layout():
                 ]
             )
         ])
+    ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px', 'borderRadius': '5px', 'margin': '10px'})
+
+
+def build_factor_backtest_layout():
+    """Build the layout for the Futures/Factor Backtest tab."""
+    if not FUTURES_AVAILABLE:
+        return html.Div("Futures backtest modules not available.", style={'color': THEME['danger']})
+
+    try:
+        pkl_options = discover_pkl_files()
+    except Exception as e:
+        pkl_options = []
+        print(f"Error discovering pkl files: {e}")
+
+    return html.Div([
+         html.H4("Futures/Factor Backtest", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
+         html.Div([
+             # Left Column: Configuration
+             html.Div([
+                 html.H6("Configuration", style={'color': THEME['text_main'], 'borderBottom': f"1px solid {THEME['accent']}", 'paddingBottom': '5px'}),
+                 
+                 # Data Settings
+                 html.Label("Data Source", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginTop': '10px'}),
+                 dcc.RadioItems(
+                     id='bf-data-source',
+                     options=[{'label': ' Local', 'value': 'local'}, {'label': ' Wind', 'value': 'wind'}],
+                     value='local',
+                     labelStyle={'color': THEME['text_main'], 'marginRight': '10px', 'display': 'inline-block'},
+                     style={'fontSize': '12px', 'marginBottom': '5px'}
+                 ),
+                 
+                 html.Label("Mode", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginTop': '5px'}),
+                 dcc.RadioItems(
+                     id='bf-trading-mode',
+                     options=[{'label': ' Daily', 'value': 'daily'}, {'label': ' Intraday', 'value': 'intraday'}],
+                     value='daily',
+                     labelStyle={'color': THEME['text_main'], 'marginRight': '10px', 'display': 'inline-block'},
+                     style={'fontSize': '12px', 'marginBottom': '10px'}
+                 ),
+                 
+                 # Inputs (Wind/Local)
+                 html.Div(id='bf-wind-inputs', children=[
+                     html.Label("Wind Code", style={'color': THEME['text_main'], 'fontSize': '12px'}),
+                     dcc.Dropdown(id='bf-wind-code', style={'color': '#000', 'fontSize': '12px'})
+                 ], style={'display': 'none'}),
+                 
+                 html.Div(id='bf-local-inputs', children=[
+                     html.Label("Local File", style={'color': THEME['text_main'], 'fontSize': '12px'}),
+                     dcc.Dropdown(id='bf-local-symbol', options=pkl_options, style={'color': '#000', 'fontSize': '12px'})
+                 ]),
+
+                 # Date Range
+                 html.Label("Date Range", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginTop': '10px'}),
+                 dcc.DatePickerRange(
+                     id='bf-date-range',
+                     min_date_allowed=datetime(2010, 1, 1),
+                     max_date_allowed=datetime.now(),
+                     start_date=datetime(2020, 1, 1).date(),
+                     end_date=datetime.now().date(),
+                     style={'backgroundColor': THEME['bg_input'], 'fontSize': '12px', 'width': '100%'}
+                 ),
+
+                 # Timeframe
+                 html.Div(id='bf-timeframe-container', children=[
+                     html.Label("Timeframe", style={'color': THEME['text_main'], 'fontSize': '12px', 'marginTop': '10px'}),
+                     dcc.Dropdown(
+                         id='bf-timeframe',
+                         options=[
+                             {'label': '1 Minute', 'value': '1T'},
+                             {'label': '5 Minutes', 'value': '5T'},
+                             {'label': '15 Minutes', 'value': '15T'},
+                             {'label': '30 Minutes', 'value': '30T'},
+                             {'label': '1 Hour', 'value': '1H'}
+                         ],
+                         value='15T',
+                         style={'color': '#000', 'fontSize': '12px'}
+                     )
+                 ], style={'display': 'none'}),
+
+                 html.Hr(style={'borderColor': THEME['table_header']}),
+                 
+                 # Strategies
+                 html.Label("Strategies", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px'}),
+                 dcc.Checklist(
+                     id='bf-strategy-selector',
+                     options=[
+                         {'label': ' MA Cross', 'value': 'MA'},
+                         {'label': ' Bollinger', 'value': 'Boll'},
+                         {'label': ' VWAP', 'value': 'VWAP'},
+                         {'label': ' Momentum', 'value': 'Mom'},
+                         {'label': ' ATR Band', 'value': 'ATR'},
+                         {'label': ' Parabolic SAR', 'value': 'SAR'},
+                     ],
+                     value=['MA'],
+                     labelStyle={'color': THEME['text_main'], 'display': 'block'},
+                     style={'fontSize': '12px', 'marginBottom': '10px'}
+                 ),
+
+                 # Parameters
+                 html.Details([
+                     html.Summary("Parameters", style={'color': THEME['accent'], 'cursor': 'pointer', 'fontSize': '12px', 'marginBottom': '5px'}),
+                     html.Div([
+                        # MA
+                        html.Label("MA Short/Long:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                        html.Div([
+                            dcc.Input(id='bf-ma-short', type='number', value=5, style={'width': '45%'}),
+                            dcc.Input(id='bf-ma-long', type='number', value=20, style={'width': '45%'})
+                        ], style={'display':'flex', 'justifyContent':'space-between', 'marginBottom':'5px'}),
+                        
+                        # Boll
+                        html.Label("Boll Window/Std:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                        html.Div([
+                            dcc.Input(id='bf-boll-window', type='number', value=20, style={'width': '45%'}),
+                            dcc.Input(id='bf-boll-std', type='number', value=2.0, style={'width': '45%'})
+                        ], style={'display':'flex', 'justifyContent':'space-between', 'marginBottom':'5px'}),
+                        
+                         dcc.Checklist(id='bf-boll-exit', options=[{'label':' Exit at MA', 'value':'exit'}], value=[], labelStyle={'color':THEME['text_sub'], 'fontSize':'11px'}),
+                         
+                         html.Label("VWAP Window:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                         dcc.Input(id='bf-vwap-window', type='number', value=20, style={'width': '100%', 'marginBottom':'5px'}),
+                         
+                         html.Label("Momentum Window:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                         dcc.Input(id='bf-mom-window', type='number', value=20, style={'width': '100%', 'marginBottom':'5px'}),
+
+                         html.Label("ATR EMA/Mult:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                        html.Div([
+                            dcc.Input(id='bf-atr-ema-window', type='number', value=20, style={'width': '45%'}),
+                            dcc.Input(id='bf-atr-window', type='number', value=2.0, style={'width': '45%'})
+                        ], style={'display':'flex', 'justifyContent':'space-between', 'marginBottom':'5px'}),
+
+                         html.Label("SAR Step/Max:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                        html.Div([
+                            dcc.Input(id='bf-sar-af', type='number', value=0.02, step=0.01, style={'width': '45%'}),
+                            dcc.Input(id='bf-sar-max-af', type='number', value=0.2, step=0.1, style={'width': '45%'})
+                        ], style={'display':'flex', 'justifyContent':'space-between', 'marginBottom':'5px'}),
+
+                     ], style={'padding': '5px', 'backgroundColor': THEME['bg_input']})
+                 ], style={'marginBottom': '15px'}),
+
+                 html.Button("Start Backtest", id='bf-run-button', n_clicks=0, style={'width': '100%', 'backgroundColor': THEME['accent'], 'color': 'white', 'border': 'none', 'padding': '10px', 'borderRadius': '4px', 'fontWeight': 'bold', 'cursor': 'pointer'}),
+
+             ], style={'width': '25%', 'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginRight': '10px'}),
+             
+             # Right Column: Results
+             html.Div([
+                 dcc.Loading(
+                     id="bf-loading-results",
+                     type="default",
+                     children=html.Div(id='bf-results-container')
+                 )
+             ], style={'width': '75%', 'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'})
+
+         ], style={'display': 'flex'})
     ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px', 'borderRadius': '5px', 'margin': '10px'})
 
 
@@ -869,6 +1054,84 @@ def register_multiasset_callbacks(app):
         except Exception as e:
             return html.Div(f"Error calculating correlations: {str(e)}", style={'color': THEME['danger']})
 
+
+    # 3.6 Risk Factor Budget Input Generator
+    @app.callback(
+        Output('risk-budget-container', 'children'),
+        [Input('asset-pool-store', 'data')]
+    )
+    def update_risk_budget_inputs(asset_pool):
+        if not asset_pool:
+             return [html.Div("Add assets to see risk factors", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px', 'textAlign': 'center'})]
+
+        active_factors = set()
+        
+        # Mappings based on MultiAsset logic
+        rates_map = {'CN': 'CN', 'US': 'US', 'EU': 'DE', 'UK': 'UK', 'JP': 'JP'}
+        # comm_map keys should match asset names in pool
+        comm_map = {'Gold': 'AU', 'Aluminium': 'AL', 'Copper': 'CU', 'Crude Oil': 'SC', 'Crude_Oil': 'SC'}
+
+        for asset in asset_pool:
+            a_type = asset.get('type')
+            # Fallback if universe is code not name
+            
+            if a_type == 'Rates':
+                asset_name = asset.get('name', '')
+                prefix = asset_name[:2] # CN1Y -> CN
+                rf_country = rates_map.get(prefix)
+                # Handle EU case: EU->DE explicitly if map didn't catch (EU is in map keys as DE output)
+                
+                if rf_country:
+                    active_factors.add(f"IRDL.{rf_country}")
+                    active_factors.add(f"IRSL.{rf_country}")
+                    active_factors.add(f"IRCV.{rf_country}")
+            
+            elif a_type == 'Spread':
+                 # Name prefixes: IRS, CDB, ICP
+                 asset_name = asset.get('name', '')
+                 if asset_name.startswith('IRS'): code = 'IRS'
+                 elif asset_name.startswith('CDB'): code = 'CDB'
+                 elif asset_name.startswith('ICP'): code = 'ICP'
+                 else: code = None
+                 
+                 if code:
+                     active_factors.add(f"SPDL.{code}")
+                     if code != 'ICP':
+                         active_factors.add(f"SPSL.{code}")
+            
+            elif a_type == 'Commodities':
+                 asset_name = asset.get('name', '')
+                 # Map name to code
+                 code = comm_map.get(asset_name)
+                 if code:
+                     active_factors.add(f"CMDL.{code}")
+
+        if not active_factors:
+             return [html.Div("No risk factors identified.", style={'color': THEME['text_sub'], 'fontSize': '12px'})]
+
+        # Sort factors
+        sorted_factors = sorted(list(active_factors))
+        
+        # Build Inputs
+        inputs = []
+        for factor in sorted_factors:
+            inputs.append(
+                html.Div([
+                    html.Label(factor, style={'color': THEME['text_main'], 'fontSize': '12px', 'width': '80px', 'fontWeight': 'bold'}),
+                    dcc.Input(
+                        id={'type': 'risk-budget-input', 'index': factor},
+                        type='number',
+                        value=1,
+                        min=0,
+                        step=0.1,
+                        style={'width': '60px', 'fontSize': '12px', 'padding': '2px', 'backgroundColor': '#fff', 'color': '#000', 'border': 'none', 'borderRadius': '2px'}
+                    ),
+                    html.Span("M", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '3px'})
+                ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '5px', 'justifyContent': 'space-between'})
+            )
+        
+        return inputs
+
     # 4. Run Analysis (Portfolio Tab -> Results)
     @app.callback(
         [Output('portfolio-table-container', 'children'),
@@ -878,9 +1141,11 @@ def register_multiasset_callbacks(app):
         [Input('run-button', 'n_clicks')],
         [State('capital-input', 'value'),
          State('capital-unit', 'value'),
-         State('asset-pool-store', 'data')]
+         State('asset-pool-store', 'data'),
+         State({'type': 'risk-budget-input', 'index': ALL}, 'value'),
+         State({'type': 'risk-budget-input', 'index': ALL}, 'id')]
     )
-    def run_analysis(n_clicks, total_capital, capital_unit, asset_pool):
+    def run_analysis(n_clicks, total_capital, capital_unit, asset_pool, budget_values, budget_ids):
         if n_clicks == 0:
             return (html.Div("No data available. Click 'Run Analysis' to start.", style={'color': THEME['text_sub']}),
                     "", "", {})
@@ -900,9 +1165,21 @@ def register_multiasset_callbacks(app):
             # Get selected assets
             selected_asset_names = [asset['name'] for asset in asset_pool]
             
+            # Parse Risk Budgets
+            risk_budgets = None
+            if budget_ids and budget_values:
+                risk_budgets = {}
+                for val, id_dict in zip(budget_values, budget_ids):
+                    factor_name = id_dict['index']
+                    try:
+                        risk_budgets[factor_name] = float(val) if val is not None else 1.0
+                    except (ValueError, TypeError):
+                        pass
+
             # Run optimization
             summary, returns, vols, factor_exp, factor_risk, portfolio = run_risk_parity_allocation(
-                total_capital=total_capital_cny, use_cache=True, selected_assets=selected_asset_names
+                total_capital=total_capital_cny, use_cache=True, selected_assets=selected_asset_names,
+                risk_budgets=risk_budgets
             )
             
             if summary.empty:
@@ -1411,3 +1688,208 @@ def register_multiasset_callbacks(app):
             traceback.print_exc()
             err_fig = go.Figure().update_layout(title=f"Error: {str(e)}", template=THEME['chart_template'])
             return err_fig, err_fig, None
+
+    # 6. Futures Backtest Callbacks
+    @app.callback(
+        [Output('bf-wind-inputs', 'style'), Output('bf-local-inputs', 'style')],
+        [Input('bf-data-source', 'value')]
+    )
+    def bf_toggle_inputs(source):
+        if source == 'wind':
+            return {'display': 'block'}, {'display': 'none'}
+        return {'display': 'none'}, {'display': 'block'}
+    
+    @app.callback(
+        Output('bf-timeframe-container', 'style'),
+        [Input('bf-trading-mode', 'value')]
+    )
+    def bf_toggle_timeframe(mode):
+        if mode == 'daily':
+            return {'display': 'none'}
+        return {'display': 'block'}
+    
+    @app.callback(
+        [Output('bf-wind-code', 'options'), Output('bf-wind-code', 'value')],
+        [Input('bf-trading-mode', 'value')]
+    )
+    def bf_update_wind_options(mode):
+        if not FUTURES_AVAILABLE: return [], None
+        try:
+            if mode == 'daily':
+                opts = [{'label': s, 'value': s} for s in FuturesConfig.SYMBOLS]
+                def_val = 'TL.CFE' if 'TL.CFE' in FuturesConfig.SYMBOLS else FuturesConfig.SYMBOLS[0]
+            else:
+                contract_list = FuturesConfig.get_contract_no()
+                opts = [{'label': c, 'value': c} for c in contract_list]
+                def_val = contract_list[0] if contract_list else None
+            return opts, def_val
+        except Exception:
+             return [], None
+
+    @app.callback(
+        Output('bf-results-container', 'children'),
+        [Input('bf-run-button', 'n_clicks')],
+        [State('bf-data-source', 'value'),
+         State('bf-trading-mode', 'value'),
+         State('bf-wind-code', 'value'),
+         State('bf-local-symbol', 'value'),
+         State('bf-date-range', 'start_date'),
+         State('bf-date-range', 'end_date'),
+         State('bf-timeframe', 'value'),
+         State('bf-strategy-selector', 'value'),
+         State('bf-ma-short', 'value'),
+         State('bf-ma-long', 'value'),
+         State('bf-boll-window', 'value'),
+         State('bf-boll-std', 'value'),
+         State('bf-boll-exit', 'value'),
+         State('bf-vwap-window', 'value'),
+         State('bf-mom-window', 'value'),
+         State('bf-atr-ema-window', 'value'),
+         State('bf-atr-window', 'value'),
+         State('bf-sar-af', 'value'),
+         State('bf-sar-max-af', 'value')]
+    )
+    def bf_update_dashboard(n_clicks, source, trading_mode, wind_code, local_symbol, start_date, end_date, tf, 
+                         selected_strategies,
+                         ma_s, ma_l, boll_w, boll_std, boll_exit, vwap_w, mom_w, atr_ema_w, atr_w,
+                         sar_af, sar_max_af):
+        if n_clicks == 0:
+            return html.Div('Please configure parameters and click "Start Backtest"', style={'text-align': 'center', 'marginTop': '50px', 'color': THEME['text_sub']})
+        
+        if not FUTURES_AVAILABLE:
+            return html.Div("Modules not loaded.", style={'color': THEME['danger']})
+
+        selected_strategies = selected_strategies or []
+        effective_tf = '1D' if trading_mode == 'daily' else tf
+        
+        # Load Data
+        df = None
+        err_msg = None
+        
+        try:
+            if source == 'wind':
+                if not wind_code: return html.Div("Please enter Wind symbol", style={'color': THEME['danger']})
+                s_str = f"{start_date} 00:00:00"
+                e_str = f"{end_date} 23:59:59"
+                df, err_msg = load_wind_data(wind_code, s_str, e_str)
+            else:
+                if not local_symbol: return html.Div("Please enter symbol", style={'color': THEME['danger']})
+                file_path = get_local_file_path(local_symbol, effective_tf)
+                if not file_path:
+                    return html.Div("Unable to construct file path", style={'color': THEME['danger']})
+                
+                contract_key = local_symbol if trading_mode == 'daily' else None
+                df, err_msg = load_local_data_processed(file_path, contract_key)
+                if df is not None and not df.empty:
+                    s_ts = pd.to_datetime(start_date)
+                    e_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                    df = df[(df.index >= s_ts) & (df.index <= e_ts)]
+                
+            if err_msg:
+                return html.Div(f"Data loading error: {err_msg}", style={'color': THEME['danger']})
+            if df is None or df.empty:
+                return html.Div("Data is empty (please check date range)", style={'color': THEME['danger']})
+
+            # Resample
+            if effective_tf == '1D':
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    df.index = pd.to_datetime(df.index, errors='coerce')
+                df_resampled = df.copy()
+                df_resampled = df_resampled[~df_resampled.index.duplicated(keep='last')]
+            else:
+                df_resampled = resample_data(df, effective_tf)
+                
+            if df_resampled.empty:
+                return html.Div("Data is empty after resampling", style={'color': THEME['danger']})
+                
+            # Run strategies
+            results = {}
+            if 'MA' in selected_strategies:
+                results['MA'] = run_ma_strategy(df_resampled, ma_s, ma_l)
+            if 'Boll' in selected_strategies:
+                exit_at_ma = 'exit' in (boll_exit or [])
+                results['Boll'] = run_bollinger_strategy(df_resampled, boll_w, boll_std, exit_at_ma)
+            if 'VWAP' in selected_strategies:
+                results['VWAP'] = run_vwap_strategy(df_resampled, vwap_w)
+            if 'Mom' in selected_strategies:
+                results['Mom'] = run_intraday_momentum_strategy(df_resampled, mom_w)
+            if 'ATR' in selected_strategies:
+                results['ATR'] = run_atr_band_strategy(df_resampled, atr_ema_w, atr_w)
+            if 'SAR' in selected_strategies:
+                results['SAR'] = run_sar_strategy(df_resampled, sar_af, sar_max_af)
+
+            # Rolling Best
+            df_equity_best, best_strategy_name, best_metrics = run_rolling_best_strategy(results, df_resampled)
+            
+            # Create Plotly Chart
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                                vertical_spacing=0.03, row_heights=[0.7, 0.3])
+
+            # Candlestick
+            fig.add_trace(go.Candlestick(
+                x=df_resampled.index,
+                open=df_resampled['open'], high=df_resampled['high'],
+                low=df_resampled['low'], close=df_resampled['close'],
+                name='Price'
+            ), row=1, col=1)
+            
+            # Strategy Equity Curves
+            for name, res in results.items():
+                fig.add_trace(go.Scatter(
+                    x=res['equity_curve'].index, 
+                    y=res['equity_curve'],
+                    mode='lines', name=f'{name} Equity'
+                ), row=2, col=1)
+
+            if df_equity_best is not None:
+                 fig.add_trace(go.Scatter(
+                    x=df_equity_best.index, 
+                    y=df_equity_best,
+                    mode='lines', name='Combined Strategy',
+                    line=dict(width=3, color='white', dash='dash')
+                ), row=2, col=1)
+
+            fig.update_layout(
+                height=600, 
+                title=f"Backtest Results (Best: {best_strategy_name})",
+                template=THEME['chart_template'],
+                paper_bgcolor=THEME['bg_card'],
+                plot_bgcolor=THEME['bg_card'],
+                font={'color': THEME['text_main']},
+                margin=dict(l=50, r=50, t=50, b=50),
+                legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center"),
+                xaxis_rangeslider_visible=False
+            )
+            fig.update_xaxes(gridcolor=THEME['table_header'])
+            fig.update_yaxes(gridcolor=THEME['table_header'])
+
+            # Helper for local Metric Card (redefined here or duplicated logic)
+            def create_metric_card_local(title, metrics):
+                return html.Div([
+                    html.H6(title, style={'color': THEME['text_sub'], 'marginBottom': '5px', 'fontSize': '14px'}),
+                    html.Div([
+                        html.Div(f"Ret: {metrics.get('Total Return', 'N/A')}", style={'fontWeight': 'bold', 'color': THEME['success'] if str(metrics.get('Total Return')).startswith('+') else THEME['text_main']}),
+                        html.Div(f"DD: {metrics.get('Max Drawdown', 'N/A')}", style={'color': THEME['danger']}),
+                        html.Div(f"Sharpe: {metrics.get('Sharpe Ratio', 'N/A')}"),
+                        html.Div(f"Trades: {metrics.get('Trades', 'N/A')}"),
+                    ], style={'fontSize': '12px', 'lineHeight': '1.5', 'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '5px'})
+                ], style={'backgroundColor': THEME['bg_input'], 'padding': '10px', 'borderRadius': '4px', 'marginBottom': '10px', 'flex': '1', 'minWidth': '150px'})
+
+            # Card Display
+            cards = []
+            if best_metrics:
+                 cards.append(create_metric_card_local(f"Combined Best ({best_strategy_name})", best_metrics))
+            
+            for name, res in results.items():
+                m = calculate_metrics(res['equity_curve'], res['trades'])
+                cards.append(create_metric_card_local(name, m))
+                
+            return html.Div([
+                html.Div(cards, style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '15px'}),
+                dcc.Graph(figure=fig)
+            ])
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return html.Div(f"Error running backtest: {str(e)}", style={'color': THEME['danger']})
