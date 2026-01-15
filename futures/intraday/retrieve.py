@@ -52,14 +52,18 @@ def retrieveFuturesTick():
         for d in day_list:
             if d not in tick_dict.keys():
                 ds = d.strftime('%Y-%m-%d')
+                print("Updating ", f, ds)
                 temp = _wst(f, "last,ask,bid,volume", ds)
                 if temp.shape[0] > 10:
-                    tick_dict[d.date()] = temp
-        tick_dict = updatePKL(tick_dict, file_path)
-
+                    tick_dict[d] = temp
+        try:
+            print("Saving ", f)
+            tick_dict = updatePKL(tick_dict, file_path)
+        except Exception as e:
+            print(f"Error updating {file_path}: {e}")
 def get_contract_no():
     tlist = [ f+".CFE" for f in FuturesConfig.CONTRACT_TYPES ]
-    flist =  tlist +FuturesConfig.SYMBOLS
+    flist =  FuturesConfig.SYMBOLS
     clist = _wss(flist, "trade_hiscode,", "tradeDate="+_date_strs["d"])
     clist_ = clist.squeeze().tolist()
     return clist_
