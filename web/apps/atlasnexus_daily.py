@@ -114,8 +114,7 @@ def build_tabs_panel():
                             dcc.Tab(label="Run Center", value="run-center", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="Beta Book", value="beta", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="Alpha Book", value="alpha", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Risk", value="risk", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Tickets", value="tickets", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Summary", value="risk", style=tab_style, selected_style=tab_selected_style),
                             # Spreads tab moved into the Alpha Book content (bottom-up signals / pair screens)
                         ],
                         style=tabs_styles,
@@ -256,12 +255,6 @@ def _render_tab(tab):
 
     if tab == "risk":
         return build_multiasset_risk_layout()
-
-    if tab == "tickets":
-        return html.Div([
-            html.H5("Tickets"),
-            html.P("Planned: draft/approve/executed workflow + export."),
-        ])
 
     return html.Div([html.P(f"Unknown tab: {tab}")])
 
