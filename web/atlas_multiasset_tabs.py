@@ -431,15 +431,18 @@ def build_multiasset_backtest_layout():
         html.Div([
             html.Div([
                 html.Label("Backtest Period:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
-                dcc.DatePickerRange(
-                    id='history-date-range',
-                    min_date_allowed=datetime(2015, 1, 1),
-                    max_date_allowed=datetime.now(),
-                    start_date=datetime(datetime.now().year, 1, 1).date(),
-                    end_date=datetime.now().date(),
-                    display_format='YYYY-MM-DD',
-                    style={'backgroundColor': THEME['bg_input'], 'color': '#000'}
-                ),
+                html.Div([
+                    dcc.DatePickerRange(
+                        id='history-date-range',
+                        min_date_allowed=datetime(2015, 1, 1).date(),
+                        max_date_allowed=datetime.now().date(),
+                        start_date=datetime(datetime.now().year, 1, 1).date(),
+                        end_date=datetime.now().date(),
+                        display_format='YYYY-MM-DD',
+                        style={'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
+                        updatemode='bothdates'
+                    )
+                ], style={'display': 'inline-block', 'position': 'relative', 'zIndex': 1000}),
             ], style={'display': 'flex', 'alignItems': 'center'}),
             
             # PCA Factor Risk Parity Option
@@ -483,156 +486,185 @@ def build_multiasset_backtest_layout():
 
 
 def build_factor_backtest_layout():
-    """Build the layout for the Futures/Factor Backtest tab."""
+    """Build the layout for the Futures/Factor Backtest tab - uses futures.backtest.layout."""
+    from datetime import timedelta
     if not FUTURES_AVAILABLE:
         return html.Div("Futures backtest modules not available.", style={'color': THEME['danger']})
 
     try:
+        # Ensure futures/backtest is in sys.path so that internal imports in layout.py (e.g. 'from data_loader ...') work
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # web/ -> ../futures/backtest
+        backtest_dir = os.path.abspath(os.path.join(current_dir, '..', 'futures', 'backtest'))
+        if backtest_dir not in sys.path:
+            sys.path.append(backtest_dir)
+
+        from futures.backtest.layout import DARK_CARD_STYLE, DARK_INPUT_STYLE
         pkl_options = discover_pkl_files()
     except Exception as e:
         pkl_options = []
-        print(f"Error discovering pkl files: {e}")
+        DARK_CARD_STYLE = {'backgroundColor': '#0f3174', 'border': '1px solid #007ACE', 'color': 'white'}
+        DARK_INPUT_STYLE = {'backgroundColor': '#061E44', 'color': 'white', 'border': '1px solid #007ACE'}
+        print(f"Error loading backtest layout: {e}")
 
-    return html.Div([
-         html.H4("Futures/Factor Backtest", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
-         html.Div([
-             # Left Column: Configuration
-             html.Div([
-                 html.H6("Configuration", style={'color': THEME['text_main'], 'borderBottom': f"1px solid {THEME['accent']}", 'paddingBottom': '5px'}),
-                 
-                 # Data Settings
-                 html.Label("Data Source", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginTop': '10px'}),
-                 dcc.RadioItems(
-                     id='bf-data-source',
-                     options=[{'label': ' Local', 'value': 'local'}, {'label': ' Wind', 'value': 'wind'}],
-                     value='local',
-                     labelStyle={'color': THEME['text_main'], 'marginRight': '10px', 'display': 'inline-block'},
-                     style={'fontSize': '12px', 'marginBottom': '5px'}
-                 ),
-                 
-                 html.Label("Mode", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginTop': '5px'}),
-                 dcc.RadioItems(
-                     id='bf-trading-mode',
-                     options=[{'label': ' Daily', 'value': 'daily'}, {'label': ' Intraday', 'value': 'intraday'}],
-                     value='daily',
-                     labelStyle={'color': THEME['text_main'], 'marginRight': '10px', 'display': 'inline-block'},
-                     style={'fontSize': '12px', 'marginBottom': '10px'}
-                 ),
-                 
-                 # Inputs (Wind/Local)
-                 html.Div(id='bf-wind-inputs', children=[
-                     html.Label("Wind Code", style={'color': THEME['text_main'], 'fontSize': '12px'}),
-                     dcc.Dropdown(id='bf-wind-code', style={'color': '#000', 'fontSize': '12px'})
-                 ], style={'display': 'none'}),
-                 
-                 html.Div(id='bf-local-inputs', children=[
-                     html.Label("Local File", style={'color': THEME['text_main'], 'fontSize': '12px'}),
-                     dcc.Dropdown(id='bf-local-symbol', options=pkl_options, style={'color': '#000', 'fontSize': '12px'})
-                 ]),
+    # Sidebar (from futures.backtest.layout.create_sidebar)
+    sidebar = html.Div([
+        html.H4("Strategy Config", style={'textAlign': 'center', 'marginBottom': '20px', 'color': 'white', 'letterSpacing': '0.1rem'}),
+        
+        # Data Settings
+        dbc.Card([
+            dbc.CardHeader("Data Settings", className="fw-bold", style={'padding': '5px 10px', 'backgroundColor': '#007ACE', 'color': 'white'}),
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Source", style={'fontSize': '0.9rem'}),
+                        dcc.RadioItems(
+                            id='bf-data-source',
+                            options=[{'label': ' Local', 'value': 'local'}, {'label': ' Wind', 'value': 'wind'}],
+                            value='local',
+                            labelStyle={'display': 'block', 'fontSize': '0.9rem'},
+                            inputStyle={"marginRight": "5px"}
+                        )
+                    ], width=6),
+                    dbc.Col([
+                        html.Label("Mode", style={'fontSize': '0.9rem'}),
+                        dcc.RadioItems(
+                            id='bf-trading-mode',
+                            options=[{'label': ' Daily', 'value': 'daily'}, {'label': ' Intraday', 'value': 'intraday'}],
+                            value='daily',
+                            labelStyle={'display': 'block', 'fontSize': '0.9rem'},
+                            inputStyle={"marginRight": "5px"}
+                        )
+                    ], width=6),
+                ], className="mb-2"),
+                
+                html.Div(id='bf-wind-inputs', children=[
+                    dcc.Dropdown(id='bf-wind-code', placeholder="Select symbol", style={'fontSize': '0.9rem', 'color': 'black'})
+                ], className="mb-2"),
+                
+                html.Div(id='bf-local-inputs', children=[
+                    dcc.Dropdown(id='bf-local-symbol', options=pkl_options, placeholder="Select symbol", style={'fontSize': '0.9rem', 'color': 'black'})
+                ], style={'display': 'none'}, className="mb-2"),
+                
+                html.Label("Date Range", style={'fontSize': '0.9rem'}),
+                html.Div([
+                    dcc.DatePickerRange(
+                        id='bf-date-range',
+                        start_date=(datetime.now() - timedelta(days=30)).date(),
+                        end_date=datetime.now().date(),
+                        display_format='YYYY-MM-DD',
+                        style={'fontSize': '0.9rem', 'width': '100%', 'zIndex': 1000},
+                        className="mb-2"
+                    )
+                ], style={'position': 'relative', 'zIndex': 1000}),
+                
+                html.Div(id='bf-timeframe-container', children=[
+                    html.Label("Timeframe", style={'fontSize': '0.9rem'}),
+                    dcc.Dropdown(
+                        id='bf-timeframe',
+                        options=[
+                            {'label': '1 Min', 'value': '1T'},
+                            {'label': '5 Min', 'value': '5T'},
+                            {'label': '15 Min', 'value': '15T'},
+                            {'label': '30 Min', 'value': '30T'},
+                            {'label': '1 Hour', 'value': '1H'}
+                        ],
+                        value='5T',
+                        style={'fontSize': '0.9rem', 'color': 'black'}
+                    ),
+                ]),
+            ], style={'padding': '10px'})
+        ], className="mb-3", style=DARK_CARD_STYLE),
 
-                 # Date Range
-                 html.Label("Date Range", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginTop': '10px'}),
-                 dcc.DatePickerRange(
-                     id='bf-date-range',
-                     min_date_allowed=datetime(2010, 1, 1),
-                     max_date_allowed=datetime.now(),
-                     start_date=datetime(2020, 1, 1).date(),
-                     end_date=datetime.now().date(),
-                     style={'backgroundColor': THEME['bg_input'], 'fontSize': '12px', 'width': '100%'}
-                 ),
+        # Strategy Selection
+        dbc.Card([
+            dbc.CardHeader("Strategies", className="fw-bold", style={'padding': '5px 10px', 'backgroundColor': '#007ACE', 'color': 'white'}),
+            dbc.CardBody([
+                dcc.Checklist(
+                    id='bf-strategy-selector',
+                    options=[
+                        {'label': ' MA', 'value': 'MA'},
+                        {'label': ' Bollinger', 'value': 'Boll'},
+                        {'label': ' VWAP', 'value': 'VWAP'},
+                        {'label': ' Momentum', 'value': 'Momentum'},
+                        {'label': ' ATR', 'value': 'ATR'},
+                        {'label': ' SAR', 'value': 'SAR'},
+                        {'label': ' RollingBest', 'value': 'RollingBest'},
+                    ],
+                    value=['MA', 'Boll', 'SAR', 'RollingBest'],
+                    labelStyle={'display': 'inline-block', 'marginRight': '10px', 'fontSize': '0.9rem'},
+                    inputStyle={"marginRight": "3px"}
+                )
+            ], style={'padding': '10px'})
+        ], className="mb-3", style=DARK_CARD_STYLE),
 
-                 # Timeframe
-                 html.Div(id='bf-timeframe-container', children=[
-                     html.Label("Timeframe", style={'color': THEME['text_main'], 'fontSize': '12px', 'marginTop': '10px'}),
-                     dcc.Dropdown(
-                         id='bf-timeframe',
-                         options=[
-                             {'label': '1 Minute', 'value': '1T'},
-                             {'label': '5 Minutes', 'value': '5T'},
-                             {'label': '15 Minutes', 'value': '15T'},
-                             {'label': '30 Minutes', 'value': '30T'},
-                             {'label': '1 Hour', 'value': '1H'}
-                         ],
-                         value='15T',
-                         style={'color': '#000', 'fontSize': '12px'}
-                     )
-                 ], style={'display': 'none'}),
+        # Parameters Accordion
+        dbc.Accordion([
+            dbc.AccordionItem([
+                dbc.Row([
+                    dbc.Col([html.Label("Short", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-ma-short', type='number', value=5, min=2, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
+                    dbc.Col([html.Label("Long", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-ma-long', type='number', value=20, min=5, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                ])
+            ], title="MA Params", style=DARK_CARD_STYLE),
+            
+            dbc.AccordionItem([
+                dbc.Row([
+                    dbc.Col([html.Label("Period", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-boll-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
+                    dbc.Col([html.Label("Std Dev", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-boll-std', type='number', value=1.0, step=0.1, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                ]),
+                html.Div(style={'height': '5px'}),
+                dcc.Checklist(id='bf-boll-exit', options=[{'label': ' Exit at MA', 'value': 'exit'}], value=[], labelStyle={'fontSize': '0.9rem'})
+            ], title="Bollinger Params", style=DARK_CARD_STYLE),
 
-                 html.Hr(style={'borderColor': THEME['table_header']}),
-                 
-                 # Strategies
-                 html.Label("Strategies", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px'}),
-                 dcc.Checklist(
-                     id='bf-strategy-selector',
-                     options=[
-                         {'label': ' MA Cross', 'value': 'MA'},
-                         {'label': ' Bollinger', 'value': 'Boll'},
-                         {'label': ' VWAP', 'value': 'VWAP'},
-                         {'label': ' Momentum', 'value': 'Mom'},
-                         {'label': ' ATR Band', 'value': 'ATR'},
-                         {'label': ' Parabolic SAR', 'value': 'SAR'},
-                     ],
-                     value=['MA'],
-                     labelStyle={'color': THEME['text_main'], 'display': 'block'},
-                     style={'fontSize': '12px', 'marginBottom': '10px'}
-                 ),
+            dbc.AccordionItem([
+                html.Label("Window", style={'fontSize': '0.9rem'}),
+                dcc.Input(id='bf-vwap-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)
+            ], title="VWAP Params", style=DARK_CARD_STYLE),
 
-                 # Parameters
-                 html.Details([
-                     html.Summary("Parameters", style={'color': THEME['accent'], 'cursor': 'pointer', 'fontSize': '12px', 'marginBottom': '5px'}),
-                     html.Div([
-                        # MA
-                        html.Label("MA Short/Long:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-                        html.Div([
-                            dcc.Input(id='bf-ma-short', type='number', value=5, style={'width': '45%'}),
-                            dcc.Input(id='bf-ma-long', type='number', value=20, style={'width': '45%'})
-                        ], style={'display':'flex', 'justifyContent':'space-between', 'marginBottom':'5px'}),
-                        
-                        # Boll
-                        html.Label("Boll Window/Std:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-                        html.Div([
-                            dcc.Input(id='bf-boll-window', type='number', value=20, style={'width': '45%'}),
-                            dcc.Input(id='bf-boll-std', type='number', value=2.0, style={'width': '45%'})
-                        ], style={'display':'flex', 'justifyContent':'space-between', 'marginBottom':'5px'}),
-                        
-                         dcc.Checklist(id='bf-boll-exit', options=[{'label':' Exit at MA', 'value':'exit'}], value=[], labelStyle={'color':THEME['text_sub'], 'fontSize':'11px'}),
-                         
-                         html.Label("VWAP Window:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-                         dcc.Input(id='bf-vwap-window', type='number', value=20, style={'width': '100%', 'marginBottom':'5px'}),
-                         
-                         html.Label("Momentum Window:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-                         dcc.Input(id='bf-mom-window', type='number', value=20, style={'width': '100%', 'marginBottom':'5px'}),
-
-                         html.Label("ATR EMA/Mult:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-                        html.Div([
-                            dcc.Input(id='bf-atr-ema-window', type='number', value=20, style={'width': '45%'}),
-                            dcc.Input(id='bf-atr-window', type='number', value=2.0, style={'width': '45%'})
-                        ], style={'display':'flex', 'justifyContent':'space-between', 'marginBottom':'5px'}),
-
-                         html.Label("SAR Step/Max:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-                        html.Div([
-                            dcc.Input(id='bf-sar-af', type='number', value=0.02, step=0.01, style={'width': '45%'}),
-                            dcc.Input(id='bf-sar-max-af', type='number', value=0.2, step=0.1, style={'width': '45%'})
-                        ], style={'display':'flex', 'justifyContent':'space-between', 'marginBottom':'5px'}),
-
-                     ], style={'padding': '5px', 'backgroundColor': THEME['bg_input']})
-                 ], style={'marginBottom': '15px'}),
-
-                 html.Button("Start Backtest", id='bf-run-button', n_clicks=0, style={'width': '100%', 'backgroundColor': THEME['accent'], 'color': 'white', 'border': 'none', 'padding': '10px', 'borderRadius': '4px', 'fontWeight': 'bold', 'cursor': 'pointer'}),
-
-             ], style={'width': '25%', 'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginRight': '10px'}),
-             
-             # Right Column: Results
-             html.Div([
-                 dcc.Loading(
-                     id="bf-loading-results",
-                     type="default",
-                     children=html.Div(id='bf-results-container')
-                 )
-             ], style={'width': '75%', 'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'})
-
-         ], style={'display': 'flex'})
-    ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px', 'borderRadius': '5px', 'margin': '10px'})
+            dbc.AccordionItem([
+                html.Label("Lookback", style={'fontSize': '0.9rem'}),
+                dcc.Input(id='bf-mom-window', type='number', value=14, className="form-control form-control-sm", style=DARK_INPUT_STYLE)
+            ], title="Momentum Params", style=DARK_CARD_STYLE),
+            
+            dbc.AccordionItem([
+                dbc.Row([
+                    dbc.Col([html.Label("EMA", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-atr-ema-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
+                    dbc.Col([html.Label("ATR", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-atr-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                ])
+            ], title="ATR Params", style=DARK_CARD_STYLE),
+            
+            dbc.AccordionItem([
+                dbc.Row([
+                    dbc.Col([html.Label("AF", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-sar-af', type='number', value=0.02, step=0.01, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
+                    dbc.Col([html.Label("Max AF", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-sar-max-af', type='number', value=0.2, step=0.01, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                ])
+            ], title="SAR Params", style=DARK_CARD_STYLE),
+        ], start_collapsed=True, className="mb-3", flush=True, style={"backgroundColor": "#082255"}),
+        
+        dbc.Button("Run Backtest", id='bf-run-button', style={
+            'width': '100%', 'padding': '12px', 'backgroundColor': '#007ACE', 
+            'color': 'white', 'border': 'none', 'cursor': 'pointer',
+            'fontSize': '1.1rem', 'fontWeight': 'bold', 'letterSpacing': '0.1rem'
+        })
+    ], style={
+        'width': '320px', 'padding': '2rem 1rem', 'backgroundColor': '#082255',
+        'color': 'white', 'overflowY': 'auto', 'fontFamily': '"Open Sans", sans-serif'
+    })
+    
+    # Content area
+    content = html.Div([
+        html.H1("📊 Quantitative Strategy Backtest", style={'textAlign': 'center', 'color': THEME['text_main']}),
+        dcc.Loading(
+            id="bf-loading-results",
+            type="default",
+            children=html.Div(id='bf-results-container')
+        )
+    ], style={'flex': '1', 'padding': '2rem 1rem', 'fontFamily': '"Open Sans", sans-serif', 'minWidth': '0'})
+    
+    return html.Div([sidebar, content], style={'display': 'flex', 'flexDirection': 'row', 'width': '100%', 'minHeight': 'calc(100vh - 150px)', 'backgroundColor': THEME['bg_main']})
+   
 
 
 # --- Callbacks ---
@@ -1727,6 +1759,25 @@ def register_multiasset_callbacks(app):
              return [], None
 
     @app.callback(
+        [Output('bf-local-symbol', 'options'),
+         Output('bf-local-symbol', 'value')],
+        [Input('bf-trading-mode', 'value')]
+    )
+    def bf_update_local_symbol_options(mode):
+        if not FUTURES_AVAILABLE: return [], None
+        try:
+            if mode == 'daily':
+                opts = [{'label': s, 'value': s} for s in FuturesConfig.SYMBOLS]
+                def_val = 'TL.CFE' if 'TL.CFE' in FuturesConfig.SYMBOLS else FuturesConfig.SYMBOLS[0]
+            else:
+                contract_list = FuturesConfig.get_contract_no()
+                opts = [{'label': c, 'value': c} for c in contract_list]
+                def_val = contract_list[0] if contract_list else None
+            return opts, def_val
+        except Exception:
+             return [], None
+
+    @app.callback(
         Output('bf-results-container', 'children'),
         [Input('bf-run-button', 'n_clicks')],
         [State('bf-data-source', 'value'),
@@ -1780,14 +1831,14 @@ def register_multiasset_callbacks(app):
                 
                 contract_key = local_symbol if trading_mode == 'daily' else None
                 df, err_msg = load_local_data_processed(file_path, contract_key)
-                if df is not None and not df.empty:
+                if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
                     s_ts = pd.to_datetime(start_date)
                     e_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
                     df = df[(df.index >= s_ts) & (df.index <= e_ts)]
                 
             if err_msg:
                 return html.Div(f"Data loading error: {err_msg}", style={'color': THEME['danger']})
-            if df is None or df.empty:
+            if df is None or (isinstance(df, pd.DataFrame) and df.empty):
                 return html.Div("Data is empty (please check date range)", style={'color': THEME['danger']})
 
             # Resample
