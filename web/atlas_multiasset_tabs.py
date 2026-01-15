@@ -624,10 +624,9 @@ def build_multiasset_backtest_layout():
                 dcc.RadioItems(
                     id='optimization-method',
                     options=[
-                        {'label': 'Asset Risk Parity (1/Vol)', 'value': 'asset_rp'},
                         {'label': 'PCA Factor Risk Parity', 'value': 'pca_factor_rp'}
                     ],
-                    value='asset_rp',
+                    value='pca_factor_rp',
                     inline=True,
                     labelStyle={'color': THEME['text_main']},
                     style={'fontSize': '13px'}

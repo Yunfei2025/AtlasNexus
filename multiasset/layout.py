@@ -445,10 +445,9 @@ def create_layout():
                             dcc.RadioItems(
                                 id='optimization-method',
                                 options=[
-                                    {'label': 'Asset Risk Parity (1/Vol)', 'value': 'asset_rp'},
                                     {'label': 'PCA Factor Risk Parity', 'value': 'pca_factor_rp'}
                                 ],
-                                value='asset_rp',
+                                value='pca_factor_rp',
                                 inline=True,
                                 style={'fontSize': '13px'}
                             ),
