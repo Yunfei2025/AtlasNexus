@@ -257,3 +257,14 @@ input[type="button"] {
     background-color: #007ACE !important;
     color: #FFFFFF !important;
 }
+
+/* DateInput Background Change */
+.DateInput_input, .DateInput_input_1 {
+    background-color: black !important;
+    color: white !important;
+}
+
+/* Ensure placeholder visibility if needed */
+.DateInput_input::placeholder {
+    color: #aab0c0;
+}

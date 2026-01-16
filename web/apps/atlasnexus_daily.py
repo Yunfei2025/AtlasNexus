@@ -90,10 +90,6 @@ def build_header():
             html.Div(
                 [
                     dcc.Store(id="an-job-id", storage_type="memory"),
-                    html.A(html.Button("Update Data", id="an-btn-update", n_clicks=0)),
-                    html.A(html.Button("Run EOD", id="an-btn-eod", n_clicks=0)),
-                    html.A(html.Button("Run EOD (+update)", id="an-btn-eod-update", n_clicks=0)),
-                    html.Div(id="an-job-status", children="No job running."),
                 ],
                 className="app__dropdown",
             ),
@@ -194,6 +190,12 @@ def _render_tab(tab):
         # Return a container with a dynamic updating section
         return html.Div(
             [
+                html.Div([
+                    html.A(html.Button("Update Data", id="an-btn-update", n_clicks=0, style={'marginRight': '10px'})),
+                    html.A(html.Button("Run EOD", id="an-btn-eod", n_clicks=0, style={'marginRight': '10px'})),
+                    html.A(html.Button("Run EOD (+update)", id="an-btn-eod-update", n_clicks=0)),
+                ], style={'padding': '15px'}),
+                html.Div(id="an-job-status", children="No job running.", style={'padding': '0 15px', 'fontStyle': 'italic'}),
                 html.Div(id="an-run-center-content"),
                 dcc.Interval(id="an-run-center-interval", interval=5_000, n_intervals=0),
             ]
@@ -278,7 +280,7 @@ def _update_run_center(n, job_id):
         return html.Div(
             [
                 html.H5("Run Center"),
-                html.P("Use the buttons in the header to run engine jobs."),
+                html.P("Use the buttons above to run engine jobs."),
                 html.P(f"Latest EOD run: {format_run_meta(meta)}"),
                 html.Hr(),
                 html.Div(
@@ -321,7 +323,7 @@ def _update_run_center(n, job_id):
         return html.Div(
             [
                 html.H5("Run Center"),
-                html.P("Use the buttons in the header to run engine jobs."),
+                html.P("Use the buttons above to run engine jobs."),
                 html.P(f"Latest EOD run: {format_run_meta(meta)}"),
                 html.Hr(),
                 html.P("No active job selected. Start a job using the header buttons to see live logs and status."),

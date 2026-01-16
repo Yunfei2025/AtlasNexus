@@ -42,7 +42,7 @@ try:
         run_ma_strategy, run_bollinger_strategy, run_vwap_strategy,
         run_intraday_momentum_strategy, run_atr_band_strategy, run_sar_strategy
     )
-    from futures.backtest.metrics import calculate_metrics, run_rolling_best_strategy
+    from futures.backtest.metrics import calculate_metrics
     from futures.backtest.regime import RegimeDetector
     from settings.futures import FuturesConfig
     FUTURES_AVAILABLE = True
@@ -575,15 +575,6 @@ def build_multiasset_risk_layout():
                 )
             ], style={'flex': '3', 'minWidth': '300px', 'backgroundColor': THEME['bg_card'], 'padding': '10px', 'borderRadius': '5px', 'marginRight': '10px'}),
             
-            # Vol Table
-            html.Div([
-                html.H6("Factor Volatility", style={'textAlign': 'center', 'color': THEME['text_main']}),
-                html.Div(
-                    id='factor-vol-table-container',
-                    children=vol_table if vol_table else html.Div("No Data", style={'color': THEME['text_sub'], 'textAlign': 'center', 'padding': '20px'}),
-                    style={'marginTop': '10px'}
-                )
-            ], style={'flex': '1', 'minWidth': '200px', 'backgroundColor': THEME['bg_card'], 'padding': '10px', 'borderRadius': '5px'})
         ], style={'display': 'flex', 'flexWrap': 'wrap', 'marginBottom': '30px'}),
 
         # 3. Ticket Section (Placeholder)
@@ -624,9 +615,10 @@ def build_multiasset_backtest_layout():
                 dcc.RadioItems(
                     id='optimization-method',
                     options=[
+                        {'label': 'Asset Risk Parity (1/Vol)', 'value': 'asset_rp'},
                         {'label': 'PCA Factor Risk Parity', 'value': 'pca_factor_rp'}
                     ],
-                    value='pca_factor_rp',
+                    value='asset_rp',
                     inline=True,
                     labelStyle={'color': THEME['text_main']},
                     style={'fontSize': '13px'}
@@ -687,53 +679,58 @@ def build_factor_backtest_layout():
         
         # Data Settings
         dbc.Card([
-            dbc.CardHeader("Data Settings", className="fw-bold", style={'padding': '5px 10px', 'backgroundColor': '#007ACE', 'color': 'white'}),
+            dbc.CardHeader("Data Settings", className="fw-bold", style={'padding': '8px 12px', 'backgroundColor': '#007ACE', 'color': 'white', 'fontSize': '1rem'}),
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Source", style={'fontSize': '0.9rem'}),
+                        html.Label("Source", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '8px'}),
                         dcc.RadioItems(
                             id='bf-data-source',
                             options=[{'label': ' Local', 'value': 'local'}, {'label': ' Wind', 'value': 'wind'}],
                             value='local',
-                            labelStyle={'display': 'block', 'fontSize': '0.9rem'},
-                            inputStyle={"marginRight": "5px"}
+                            labelStyle={'display': 'block', 'fontSize': '1rem', 'marginBottom': '4px'},
+                            inputStyle={"marginRight": "6px"}
                         )
                     ], width=6),
                     dbc.Col([
-                        html.Label("Mode", style={'fontSize': '0.9rem'}),
+                        html.Label("Mode", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '8px'}),
                         dcc.RadioItems(
                             id='bf-trading-mode',
                             options=[{'label': ' Daily', 'value': 'daily'}, {'label': ' Intraday', 'value': 'intraday'}],
                             value='daily',
-                            labelStyle={'display': 'block', 'fontSize': '0.9rem'},
-                            inputStyle={"marginRight": "5px"}
+                            labelStyle={'display': 'block', 'fontSize': '1rem', 'marginBottom': '4px'},
+                            inputStyle={"marginRight": "6px"}
                         )
                     ], width=6),
-                ], className="mb-2"),
+                ], className="mb-3"),
                 
                 html.Div(id='bf-wind-inputs', children=[
-                    dcc.Dropdown(id='bf-wind-code', placeholder="Select symbol", style={'fontSize': '0.9rem', 'color': 'black'})
-                ], className="mb-2"),
+                    html.Label("Symbol", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
+                    dcc.Dropdown(id='bf-wind-code', placeholder="Select symbol", style={'fontSize': '1rem', 'color': 'black'})
+                ], className="mb-3"),
                 
                 html.Div(id='bf-local-inputs', children=[
-                    dcc.Dropdown(id='bf-local-symbol', options=pkl_options, placeholder="Select symbol", style={'fontSize': '0.9rem', 'color': 'black'})
-                ], style={'display': 'none'}, className="mb-2"),
+                    html.Label("Symbol", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
+                    dcc.Dropdown(id='bf-local-symbol', options=pkl_options, placeholder="Select symbol", style={'fontSize': '1rem', 'color': 'black'})
+                ], style={'display': 'none'}, className="mb-3"),
                 
-                html.Label("Date Range", style={'fontSize': '0.9rem'}),
+                html.Label("Date Range", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
                 html.Div([
                     dcc.DatePickerRange(
                         id='bf-date-range',
                         start_date=(datetime.now() - timedelta(days=30)).date(),
                         end_date=datetime.now().date(),
                         display_format='YYYY-MM-DD',
-                        style={'fontSize': '0.9rem', 'width': '100%', 'zIndex': 1000},
-                        className="mb-2"
+                        style={'fontSize': '1rem', 'width': '100%', 'color': 'white'},
+                        className="mb-3",
+                        # Style for better visibility in dark theme
+                        with_portal=True,
+                        day_size=39
                     )
-                ], style={'position': 'relative', 'zIndex': 1000}),
+                ], style={'position': 'relative', 'zIndex': 1000, 'marginBottom': '12px', 'backgroundColor': 'black', 'color': 'white', 'borderRadius': '4px', 'padding': '4px'}),
                 
                 html.Div(id='bf-timeframe-container', children=[
-                    html.Label("Timeframe", style={'fontSize': '0.9rem'}),
+                    html.Label("Timeframe", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
                     dcc.Dropdown(
                         id='bf-timeframe',
                         options=[
@@ -744,15 +741,15 @@ def build_factor_backtest_layout():
                             {'label': '1 Hour', 'value': '1H'}
                         ],
                         value='5T',
-                        style={'fontSize': '0.9rem', 'color': 'black'}
+                        style={'fontSize': '1rem', 'color': 'black'}
                     ),
                 ]),
-            ], style={'padding': '10px'})
+            ], style={'padding': '15px'})
         ], className="mb-3", style=DARK_CARD_STYLE),
 
         # Strategy Selection
         dbc.Card([
-            dbc.CardHeader("Strategies", className="fw-bold", style={'padding': '5px 10px', 'backgroundColor': '#007ACE', 'color': 'white'}),
+            dbc.CardHeader("Strategies", className="fw-bold", style={'padding': '8px 12px', 'backgroundColor': '#007ACE', 'color': 'white', 'fontSize': '1rem'}),
             dbc.CardBody([
                 dcc.Checklist(
                     id='bf-strategy-selector',
@@ -763,54 +760,53 @@ def build_factor_backtest_layout():
                         {'label': ' Momentum', 'value': 'Momentum'},
                         {'label': ' ATR', 'value': 'ATR'},
                         {'label': ' SAR', 'value': 'SAR'},
-                        {'label': ' RollingBest', 'value': 'RollingBest'},
                     ],
-                    value=['MA', 'Boll', 'SAR', 'RollingBest'],
-                    labelStyle={'display': 'inline-block', 'marginRight': '10px', 'fontSize': '0.9rem'},
-                    inputStyle={"marginRight": "3px"}
+                    value=['MA', 'Boll', 'SAR'],
+                    labelStyle={'display': 'inline-block', 'marginRight': '12px', 'fontSize': '1rem', 'marginBottom': '6px'},
+                    inputStyle={"marginRight": "5px"}
                 )
-            ], style={'padding': '10px'})
+            ], style={'padding': '15px'})
         ], className="mb-3", style=DARK_CARD_STYLE),
 
         # Parameters Accordion
         dbc.Accordion([
             dbc.AccordionItem([
                 dbc.Row([
-                    dbc.Col([html.Label("Short", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-ma-short', type='number', value=5, min=2, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                    dbc.Col([html.Label("Long", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-ma-long', type='number', value=20, min=5, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                    dbc.Col([html.Label("Short", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-ma-short', type='number', value=5, min=2, className="form-control", style=DARK_INPUT_STYLE)]),
+                    dbc.Col([html.Label("Long", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-ma-long', type='number', value=20, min=5, className="form-control", style=DARK_INPUT_STYLE)])
                 ])
             ], title="MA Params", style=DARK_CARD_STYLE),
             
             dbc.AccordionItem([
                 dbc.Row([
-                    dbc.Col([html.Label("Period", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-boll-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                    dbc.Col([html.Label("Std Dev", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-boll-std', type='number', value=1.0, step=0.1, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                    dbc.Col([html.Label("Period", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-boll-window', type='number', value=20, className="form-control", style=DARK_INPUT_STYLE)]),
+                    dbc.Col([html.Label("Std Dev", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-boll-std', type='number', value=1.0, step=0.1, className="form-control", style=DARK_INPUT_STYLE)])
                 ]),
-                html.Div(style={'height': '5px'}),
-                dcc.Checklist(id='bf-boll-exit', options=[{'label': ' Exit at MA', 'value': 'exit'}], value=[], labelStyle={'fontSize': '0.9rem'})
+                html.Div(style={'height': '8px'}),
+                dcc.Checklist(id='bf-boll-exit', options=[{'label': ' Exit at MA', 'value': 'exit'}], value=[], labelStyle={'fontSize': '1rem'})
             ], title="Bollinger Params", style=DARK_CARD_STYLE),
 
             dbc.AccordionItem([
-                html.Label("Window", style={'fontSize': '0.9rem'}),
-                dcc.Input(id='bf-vwap-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)
+                html.Label("Window", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
+                dcc.Input(id='bf-vwap-window', type='number', value=20, className="form-control", style=DARK_INPUT_STYLE)
             ], title="VWAP Params", style=DARK_CARD_STYLE),
 
             dbc.AccordionItem([
-                html.Label("Lookback", style={'fontSize': '0.9rem'}),
-                dcc.Input(id='bf-mom-window', type='number', value=14, className="form-control form-control-sm", style=DARK_INPUT_STYLE)
+                html.Label("Lookback", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
+                dcc.Input(id='bf-mom-window', type='number', value=14, className="form-control", style=DARK_INPUT_STYLE)
             ], title="Momentum Params", style=DARK_CARD_STYLE),
             
             dbc.AccordionItem([
                 dbc.Row([
-                    dbc.Col([html.Label("EMA", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-atr-ema-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                    dbc.Col([html.Label("ATR", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-atr-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                    dbc.Col([html.Label("EMA", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-atr-ema-window', type='number', value=20, className="form-control", style=DARK_INPUT_STYLE)]),
+                    dbc.Col([html.Label("ATR", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-atr-window', type='number', value=20, className="form-control", style=DARK_INPUT_STYLE)])
                 ])
             ], title="ATR Params", style=DARK_CARD_STYLE),
             
             dbc.AccordionItem([
                 dbc.Row([
-                    dbc.Col([html.Label("AF", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-sar-af', type='number', value=0.02, step=0.01, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                    dbc.Col([html.Label("Max AF", style={'fontSize': '0.9rem'}), dcc.Input(id='bf-sar-max-af', type='number', value=0.2, step=0.01, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                    dbc.Col([html.Label("AF", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-sar-af', type='number', value=0.02, step=0.01, className="form-control", style=DARK_INPUT_STYLE)]),
+                    dbc.Col([html.Label("Max AF", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-sar-max-af', type='number', value=0.2, step=0.01, className="form-control", style=DARK_INPUT_STYLE)])
                 ])
             ], title="SAR Params", style=DARK_CARD_STYLE),
         ], start_collapsed=True, className="mb-3", flush=True, style={"backgroundColor": "#082255"}),
@@ -827,13 +823,12 @@ def build_factor_backtest_layout():
     
     # Content area
     content = html.Div([
-        html.H1("📊 Quantitative Strategy Backtest", style={'textAlign': 'center', 'color': THEME['text_main']}),
         dcc.Loading(
             id="bf-loading-results",
             type="default",
-            children=html.Div(id='bf-results-container')
+            children=html.Div(id='bf-results-container', style={'minHeight': '400px'})
         )
-    ], style={'flex': '1', 'padding': '2rem 1rem', 'fontFamily': '"Open Sans", sans-serif', 'minWidth': '0'})
+    ], style={'flex': '1', 'padding': '1.5rem 2rem', 'fontFamily': '"Open Sans", sans-serif', 'minWidth': '0'})
     
     return html.Div([sidebar, content], style={'display': 'flex', 'flexDirection': 'row', 'width': '100%', 'minHeight': 'calc(100vh - 150px)', 'backgroundColor': THEME['bg_main']})
    
@@ -2047,9 +2042,6 @@ def register_multiasset_callbacks(app):
             if 'SAR' in selected_strategies:
                 results['SAR'] = run_sar_strategy(df_resampled, sar_af, sar_max_af)
 
-            # Rolling Best
-            df_equity_best, best_strategy_name, best_metrics = run_rolling_best_strategy(results, df_resampled)
-            
             # Create Plotly Chart
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                                 vertical_spacing=0.03, row_heights=[0.7, 0.3])
@@ -2065,22 +2057,14 @@ def register_multiasset_callbacks(app):
             # Strategy Equity Curves
             for name, res in results.items():
                 fig.add_trace(go.Scatter(
-                    x=res['equity_curve'].index, 
-                    y=res['equity_curve'],
+                    x=res.index, 
+                    y=res['cumulative_returns'],
                     mode='lines', name=f'{name} Equity'
-                ), row=2, col=1)
-
-            if df_equity_best is not None:
-                 fig.add_trace(go.Scatter(
-                    x=df_equity_best.index, 
-                    y=df_equity_best,
-                    mode='lines', name='Combined Strategy',
-                    line=dict(width=3, color='white', dash='dash')
                 ), row=2, col=1)
 
             fig.update_layout(
                 height=600, 
-                title=f"Backtest Results (Best: {best_strategy_name})",
+                title="Backtest Results",
                 template=THEME['chart_template'],
                 paper_bgcolor=THEME['bg_card'],
                 plot_bgcolor=THEME['bg_card'],
@@ -2106,11 +2090,9 @@ def register_multiasset_callbacks(app):
 
             # Card Display
             cards = []
-            if best_metrics:
-                 cards.append(create_metric_card_local(f"Combined Best ({best_strategy_name})", best_metrics))
             
             for name, res in results.items():
-                m = calculate_metrics(res['equity_curve'], res['trades'])
+                m = calculate_metrics(res)
                 cards.append(create_metric_card_local(name, m))
                 
             return html.Div([
