@@ -5,8 +5,10 @@ Contains all Dash application callback logic
 
 from dash import Input, Output, State, html, dcc
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from dateutil.relativedelta import relativedelta
 
 from data_loader import (
     get_file_structure, 
@@ -21,6 +23,7 @@ from strategies import (
     run_vwap_strategy,
     run_intraday_momentum_strategy,
     run_atr_band_strategy,
+    run_atr_mean_reversion_strategy,
     run_sar_strategy
 )
 from metrics import calculate_metrics, run_rolling_best_strategy
@@ -55,6 +58,38 @@ def register_callbacks(app):
         if mode == 'daily':
             return {'display': 'none'}
         return {'display': 'block'}
+
+    @app.callback(
+        [Output('oos-split-date', 'date'),
+         Output('insample-lookback', 'options'),
+         Output('insample-lookback', 'value')],
+        [Input('trading-mode', 'value')]
+    )
+    def set_oos_defaults_and_lookback_options(trading_mode):
+        """Set sensible defaults for split date and lookback based on trading mode."""
+        today = pd.Timestamp.now().normalize()
+
+        if trading_mode == 'intraday':
+            # Monday of the present week
+            oos_date = (today - pd.Timedelta(days=today.weekday())).date()
+            options = [
+                {'label': '1 Week', 'value': '1W'},
+                {'label': '2 Weeks', 'value': '2W'},
+                {'label': '1 Month', 'value': '1M'},
+                {'label': '3 Months', 'value': '3M'},
+            ]
+            value = '1M'
+        else:
+            # First day of the present year
+            oos_date = pd.Timestamp(year=today.year, month=1, day=1).date()
+            options = [
+                {'label': '6 Months', 'value': '6M'},
+                {'label': '1 Year', 'value': '1Y'},
+                {'label': '2 Years', 'value': '2Y'},
+            ]
+            value = '1Y'
+
+        return oos_date, options, value
     
     @app.callback(
         [Output('wind-code', 'options'),
@@ -120,13 +155,20 @@ def register_callbacks(app):
          State('mom-window', 'value'),
          State('atr-ema-window', 'value'),
          State('atr-window', 'value'),
+            State('atr-mult', 'value'),
          State('sar-af', 'value'),
-         State('sar-max-af', 'value')]
+         State('sar-max-af', 'value'),
+            State('mr-trending-strategy', 'value'),
+            State('mr-meanrev-strategy', 'value'),
+         State('oos-split-date', 'date'),
+         State('insample-lookback', 'value')]
     )
     def update_dashboard(n_clicks, source, trading_mode, wind_code, local_symbol, start_date, end_date, tf, 
                          selected_strategies,
-                         ma_s, ma_l, boll_w, boll_std, boll_exit, vwap_w, mom_w, atr_ema_w, atr_w,
-                         sar_af, sar_max_af):
+                        ma_s, ma_l, boll_w, boll_std, boll_exit, vwap_w, mom_w, atr_ema_w, atr_w, atr_mult,
+                         sar_af, sar_max_af,
+                        mr_trending_strategy, mr_meanrev_strategy,
+                         oos_split_date, insample_lookback):
         """Main callback function: Update backtest results"""
         if n_clicks == 0:
             return html.Div('Please configure parameters and click "Start Backtest"', style={'text-align': 'center', 'margin-top': '50px', 'color': '#888'})
@@ -185,6 +227,80 @@ def register_callbacks(app):
             
         if df_resampled.empty:
             return html.Div("Data is empty after resampling", style={'color': 'red'})
+
+        # --- User-configurable in-sample / out-of-sample split ---
+        # - Daily default: Jan 1 of current year, lookback 1Y
+        # - Intraday default: Monday of current week, lookback 1M
+        # Defaults are set by set_oos_defaults_and_lookback_options().
+        def _parse_lookback(value: str):
+            if not value:
+                return relativedelta(years=1)
+            s = str(value).strip().upper()
+            try:
+                n = int(s[:-1])
+                unit = s[-1]
+            except Exception:
+                return relativedelta(years=1)
+
+            if unit == 'Y':
+                return relativedelta(years=n)
+            if unit == 'M':
+                return relativedelta(months=n)
+            if unit == 'W':
+                return pd.Timedelta(weeks=n)
+            if unit == 'D':
+                return pd.Timedelta(days=n)
+            return relativedelta(years=1)
+
+        today = pd.Timestamp.now().normalize()
+        oos_start_target = pd.to_datetime(oos_split_date).normalize() if oos_split_date else today
+        lookback_delta = _parse_lookback(insample_lookback)
+
+        if isinstance(lookback_delta, pd.Timedelta):
+            insample_start_target = oos_start_target - lookback_delta
+            rolling_best_lookback_months = max(1, int(round(lookback_delta.days / 30)))
+        else:
+            insample_start_target = oos_start_target - lookback_delta
+            months = int(getattr(lookback_delta, 'months', 0) or 0) + int(getattr(lookback_delta, 'years', 0) or 0) * 12
+            rolling_best_lookback_months = max(1, months if months else (12 if trading_mode == 'daily' else 1))
+
+        # Clamp the in-sample start to available data
+        min_ts = df_resampled.index.min()
+        max_ts = df_resampled.index.max()
+        insample_start_ts = max(insample_start_target, min_ts)
+        # If the desired OOS start is beyond the data, fall back to the last date (still labels it)
+        oos_start_ts = min(oos_start_target, max_ts)
+
+        # Keep only the 1Y/1M window before the split + all data after
+        df_resampled = df_resampled.loc[df_resampled.index >= insample_start_ts].copy()
+
+        # Align OOS start to an actual index point (first timestamp >= target)
+        oos_candidates = df_resampled.index[df_resampled.index >= oos_start_ts]
+        if len(oos_candidates) == 0:
+            return html.Div("No out-of-sample data available after split date", style={'color': 'red'})
+        oos_start_idx = oos_candidates[0]
+
+        # --- Market Regime Detection (fit on in-sample, predict full) ---
+        regime_series = pd.Series(index=df_resampled.index, dtype=float)
+        regime_label_series = pd.Series('trending', index=df_resampled.index, dtype=object)
+        try:
+            detector = RegimeDetector(n_states=2)
+            features_all = detector.calculate_features(df_resampled, window=20)
+
+            features_train = features_all.loc[(features_all.index >= insample_start_ts) & (features_all.index < oos_start_idx)]
+            if len(features_train) < 30:
+                features_train = features_all.loc[features_all.index < oos_start_idx]
+            if len(features_train) < 10:
+                features_train = features_all
+
+            detector.fit(features_train)
+            states, _ = detector.predict(features_all)
+            regime_map = detector.get_state_regime_map()
+
+            regime_series.loc[features_all.index] = states
+            regime_label_series.loc[features_all.index] = [regime_map.get(int(s), 'unknown') for s in states]
+        except Exception as e:
+            print(f"Regime detection error: {e}")
             
         # Run strategies
         results = {}
@@ -192,59 +308,59 @@ def register_callbacks(app):
         if 'MA' in selected_strategies:
             results['MA'] = run_ma_strategy(df_resampled, ma_s, ma_l)
             
-        if 'Boll' in selected_strategies:
+        mr_enabled = 'MarketRegime' in selected_strategies
+        mr_trending = mr_trending_strategy or 'SAR'
+        mr_meanrev = mr_meanrev_strategy or 'Boll'
+
+        need_ma = ('MA' in selected_strategies) or (mr_enabled and mr_trending == 'MA')
+        need_sar = ('SAR' in selected_strategies) or (mr_enabled and mr_trending == 'SAR')
+        need_vwap = ('VWAP' in selected_strategies) or (mr_enabled and mr_trending == 'VWAP')
+        need_mom = ('Momentum' in selected_strategies) or (mr_enabled and mr_trending == 'Momentum')
+        need_boll = ('Boll' in selected_strategies) or (mr_enabled and mr_meanrev == 'Boll')
+        need_atr = ('ATR' in selected_strategies) or (mr_enabled and mr_meanrev == 'ATR')
+
+        if need_ma:
+            results['MA'] = run_ma_strategy(df_resampled, ma_s, ma_l)
+
+        if need_sar:
+            results['SAR'] = run_sar_strategy(df_resampled, sar_af, sar_max_af)
+
+        if need_boll:
             exit_at_ma = 'exit' in (boll_exit or [])
             results['Boll'] = run_bollinger_strategy(df_resampled, boll_w, boll_std, exit_at_ma)
             
-        if 'VWAP' in selected_strategies:
+        if need_vwap:
             results['VWAP'] = run_vwap_strategy(df_resampled, vwap_w)
             
-        if 'Momentum' in selected_strategies:
+        if need_mom:
             results['Momentum'] = run_intraday_momentum_strategy(df_resampled, mom_w, vwap_w)
             
-        if 'ATR' in selected_strategies:
-            results['ATR'] = run_atr_band_strategy(df_resampled, atr_ema_w, atr_w)
-            
-        if 'SAR' in selected_strategies:
-            results['SAR'] = run_sar_strategy(df_resampled, sar_af, sar_max_af)
-        
-        # Run rolling best strategy
-        # Only run when RollingBest is selected
-        # It depends on results from other strategies.
-        # Logic: If RollingBest is selected, it will select the best from already calculated strategies in results.
-        # If results is empty (no other strategies selected), it cannot run.
-        if 'RollingBest' in selected_strategies:
-            # Filter out RollingBest itself, keep only base strategies
-            base_strategies = {k: v for k, v in results.items() if k != 'RollingBest'}
-            if base_strategies:
-                results['RollingBest'] = run_rolling_best_strategy(df_resampled, base_strategies, lookback_months=6)
+        if need_atr:
+            results['ATR'] = run_atr_mean_reversion_strategy(df_resampled, atr_ema_w, atr_w, atr_mult=atr_mult)
 
-        # Unified processing: For all strategies except RollingBest, remove first 6 months of returns for fair comparison
-        # Calculate start trading date (consistent with run_rolling_best_strategy logic)
-        month_starts = df_resampled.resample('MS').first().index
-        lookback_months = 6
-        
-        if len(month_starts) > lookback_months:
-            first_trade_date = month_starts[lookback_months]
-            
-            for name, res_df in results.items():
-                if name == 'RollingBest':
-                    continue
-                    
-                # Set first 6 months signal to 0
-                res_df.loc[res_df.index < first_trade_date, 'signal'] = 0
-                
-                # Recalculate position (optional, mainly for plotting)
-                res_df['position'] = res_df['signal'].diff()
-                
-                # Recalculate strategy_returns
-                res_df['strategy_returns'] = res_df['signal'].shift(1) * res_df['returns']
-                
-                # Force zero again (handle boundary cases)
-                res_df.loc[res_df.index < first_trade_date, 'strategy_returns'] = 0
-                
-                # Recalculate cumulative returns
-                res_df['cumulative_returns'] = (1 + res_df['strategy_returns']).cumprod()
+        # Market Regime Based strategy: SAR in trending regime, Bollinger in mean-reverting
+        if mr_enabled:
+            if mr_trending not in results:
+                return html.Div(f"Market Regime (Trending) strategy '{mr_trending}' is not available.", style={'color': 'red'})
+            if mr_meanrev not in results:
+                return html.Div(f"Market Regime (Mean-reverting) strategy '{mr_meanrev}' is not available.", style={'color': 'red'})
+
+            trending_signal = results[mr_trending]['signal'].reindex(df_resampled.index).fillna(0)
+            meanrev_signal = results[mr_meanrev]['signal'].reindex(df_resampled.index).fillna(0)
+
+            use_trending = regime_label_series.reindex(df_resampled.index).fillna('trending').eq('trending')
+            combined_signal = np.where(use_trending, trending_signal.values, meanrev_signal.values)
+            active_substrategy = np.where(use_trending, mr_trending, mr_meanrev)
+
+            df_mr = df_resampled.copy()
+            df_mr['active_substrategy'] = active_substrategy
+            df_mr['signal'] = combined_signal
+            df_mr['position'] = df_mr['signal'].astype(float).diff()
+            df_mr['returns'] = df_mr['close'].pct_change()
+            df_mr['strategy_returns'] = df_mr['signal'].astype(float).shift(1) * df_mr['returns']
+            df_mr['cumulative_returns'] = (1 + df_mr['strategy_returns'].fillna(0)).cumprod()
+
+            results['MarketRegime'] = df_mr
         
         # Calculate metrics and build cards
         metric_cards = []
@@ -252,17 +368,23 @@ def register_callbacks(app):
         # Define display order and titles
         strategy_meta = [
             ('MA', "MA Crossover"),
+            ('SAR', "SAR"),
             ('Boll', "Bollinger Bands"),
+            ('ATR', "ATR"),
+            ('MarketRegime', "Market Regime Based"),
             ('VWAP', "VWAP"),
             ('Momentum', "Intraday Momentum"),
-            ('ATR', "ATR Bands"),
-            ('SAR', "SAR"),
-            ('RollingBest', "🏆 Rolling Best")
         ]
         
         for key, title in strategy_meta:
-            if key in results:
-                metrics = calculate_metrics(results[key])
+            if key in results and key in selected_strategies:
+                # Out-of-sample metrics: start at OOS split date
+                oos_df = results[key].loc[results[key].index >= oos_start_idx].copy()
+                if not oos_df.empty:
+                    oos_df['cumulative_returns'] = (1 + oos_df['strategy_returns'].fillna(0)).cumprod()
+                    metrics = calculate_metrics(oos_df)
+                else:
+                    metrics = {}
                 metric_cards.append(create_metric_card(title, metrics))
         
         metrics_row = html.Div(metric_cards, style={'display': 'flex', 'flex-wrap': 'wrap'})
@@ -277,6 +399,7 @@ def register_callbacks(app):
         )
         
         x_index = df_resampled.index.strftime('%Y-%m-%d<br>%H:%M')
+        split_label = oos_start_idx.strftime('%Y-%m-%d<br>%H:%M')
         
         # Row 1: Price & Indicators
         fig.add_trace(go.Scatter(x=x_index, y=df_resampled['close'], name='Close Price', line=dict(color='black', width=2)), row=1, col=1)
@@ -285,11 +408,22 @@ def register_callbacks(app):
             df_ma = results['MA']
             fig.add_trace(go.Scatter(x=x_index, y=df_ma['ma_short'], name=f'MA{ma_s}', line=dict(color='orange', width=1), visible='legendonly'), row=1, col=1)
             fig.add_trace(go.Scatter(x=x_index, y=df_ma['ma_long'], name=f'MA{ma_l}', line=dict(color='blue', width=1), visible='legendonly'), row=1, col=1)
+
+        if 'SAR' in results and 'SAR' in selected_strategies:
+            df_sar = results['SAR']
+            fig.add_trace(go.Scatter(x=x_index, y=df_sar['sar'], name='SAR', mode='markers', marker=dict(color='gray', size=3), visible='legendonly'), row=1, col=1)
             
-        if 'Boll' in results:
+        if 'Boll' in results and 'Boll' in selected_strategies:
             df_boll = results['Boll']
             fig.add_trace(go.Scatter(x=x_index, y=df_boll['upper_band'], name='Bollinger Upper', line=dict(color='green', width=1, dash='dot'), visible='legendonly'), row=1, col=1)
             fig.add_trace(go.Scatter(x=x_index, y=df_boll['lower_band'], name='Bollinger Lower', line=dict(color='red', width=1, dash='dot'), visible='legendonly'), row=1, col=1)
+
+        if 'ATR' in results and 'ATR' in selected_strategies:
+            df_atr = results['ATR']
+            if 'atr_upper' in df_atr.columns and 'atr_lower' in df_atr.columns:
+                # Show ATR bands by default (user requested visibility)
+                fig.add_trace(go.Scatter(x=x_index, y=df_atr['atr_upper'], name='ATR Upper', line=dict(color='red', width=1, dash='solid')), row=1, col=1)
+                fig.add_trace(go.Scatter(x=x_index, y=df_atr['atr_lower'], name='ATR Lower', line=dict(color='green', width=1, dash='solid')), row=1, col=1)
             
         if 'VWAP' in results:
             df_vwap = results['VWAP']
@@ -299,67 +433,67 @@ def register_callbacks(app):
             df_mom = results['Momentum']
             fig.add_trace(go.Scatter(x=x_index, y=df_mom['upper_limit'], name='Momentum Upper', line=dict(color='cyan', width=1, dash='dashdot'), visible='legendonly'), row=1, col=1)
             fig.add_trace(go.Scatter(x=x_index, y=df_mom['lower_limit'], name='Momentum Lower', line=dict(color='magenta', width=1, dash='dashdot'), visible='legendonly'), row=1, col=1)
-        
-        if 'ATR' in results:
-            df_atr = results['ATR']
-            fig.add_trace(go.Scatter(x=x_index, y=df_atr['upper_3'], name='ATR Upper 3', line=dict(color='red', width=1, dash='solid'), visible='legendonly'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=x_index, y=df_atr['lower_3'], name='ATR Lower 3', line=dict(color='green', width=1, dash='solid'), visible='legendonly'), row=1, col=1)
-        
-        if 'SAR' in results:
-            df_sar = results['SAR']
-            fig.add_trace(go.Scatter(x=x_index, y=df_sar['sar'], name='SAR', mode='markers', marker=dict(color='gray', size=3), visible='legendonly'), row=1, col=1)
 
-        # Row 2: Market Regime Detection
-        try:
-            detector = RegimeDetector(n_states=2)
-            features = detector.calculate_features(df_resampled, window=20)
-            detector.fit(features)
-            states, probs = detector.predict(features)
-            
-            # Align regime data with full index
-            regime_series = pd.Series(index=df_resampled.index, dtype=float)
-            regime_series.loc[features.index] = states
-            
-            # Plot regime as colored background or line
-            regime_colors = {0: 'rgba(0, 255, 0, 0.3)', 1: 'rgba(255, 0, 0, 0.3)'}  # Green: Low Vol/Mean-Rev, Red: High Vol/Trend
-            
-            # Create regime visualization as a line plot
-            fig.add_trace(go.Scatter(
-                x=x_index, 
-                y=regime_series,
-                name='Regime State',
-                mode='lines',
-                line=dict(color='blue', width=2, shape='hv'),
-                fill='tozeroy',
-                fillcolor='rgba(100, 150, 200, 0.3)'
-            ), row=2, col=1)
-            
-        except Exception as e:
-            # If regime detection fails, add a placeholder
-            print(f"Regime detection error: {e}")
-            fig.add_trace(go.Scatter(
-                x=x_index,
-                y=[0]*len(x_index),
-                name='Regime (unavailable)',
-                mode='lines',
-                line=dict(color='gray', width=1, dash='dot')
-            ), row=2, col=1)
+        # Row 2: Market Regime
+        fig.add_trace(go.Scatter(
+            x=x_index,
+            y=regime_series,
+            name='Regime State',
+            mode='lines',
+            line=dict(color='blue', width=2, shape='hv'),
+            fill='tozeroy',
+            fillcolor='rgba(100, 150, 200, 0.3)',
+            customdata=regime_label_series,
+            hovertemplate='Time: %{x}<br>State: %{y}<br>Regime: %{customdata}<extra></extra>'
+        ), row=2, col=1)
+
+        # Mark OOS split date on the regime subplot
+        fig.add_vline(
+            x=split_label,
+            line_width=2,
+            line_dash='dash',
+            line_color='black',
+            row=2,
+            col=1
+        )
+        fig.add_annotation(
+            x=split_label,
+            y=1,
+            xref='x2',
+            yref='y2',
+            text='OOS Start',
+            showarrow=True,
+            arrowhead=2,
+            ax=20,
+            ay=-30,
+            font=dict(color='black'),
+            bgcolor='rgba(255,255,255,0.7)'
+        )
 
         # Row 3: Cumulative Returns
-        colors = {'MA': 'blue', 'Boll': 'orange', 'VWAP': 'purple', 'Momentum': 'cyan', 'ATR': 'brown', 'SAR': 'pink', 'RollingBest': 'red'}
-        widths = {'RollingBest': 3}
+        colors = {'MA': 'blue', 'Boll': 'orange', 'VWAP': 'purple', 'Momentum': 'cyan', 'ATR': 'brown', 'SAR': 'pink', 'MarketRegime': 'red'}
+        widths = {'MarketRegime': 3}
         
         for key, title in strategy_meta:
-            if key in results:
+            if key in results and key in selected_strategies:
                 df_res = results[key]
                 width = widths.get(key, 1)
-                fig.add_trace(go.Scatter(x=x_index, y=df_res['cumulative_returns'], name=f'{key} Returns', line=dict(color=colors.get(key, 'gray'), width=width)), row=3, col=1)
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_index,
+                        y=df_res['cumulative_returns'],
+                        name=f'{title} Returns',
+                        line=dict(color=colors.get(key, 'gray'), width=width)
+                    ),
+                    row=3,
+                    col=1
+                )
         
         # Row 4: Aggregated Position & Best Strategy Position
         agg_signal = pd.Series(0, index=df_resampled.index)
-        for key in results:
-            if key != 'RollingBest': # Aggregated position typically refers to the sum of base strategies
-                 agg_signal += results[key]['signal']
+        for key in (selected_strategies or []):
+            if key in results and key != 'MarketRegime':
+                agg_signal += results[key]['signal']
                  
         fig.add_trace(go.Scatter(
             x=x_index, y=agg_signal, name='Aggregated Position', 
@@ -367,9 +501,11 @@ def register_callbacks(app):
             fill='tozeroy', fillcolor='rgba(100, 100, 100, 0.2)'
         ), row=4, col=1)
         
-        if 'RollingBest' in results:
+        if 'MarketRegime' in results and 'MarketRegime' in selected_strategies:
             fig.add_trace(go.Scatter(
-                x=x_index, y=results['RollingBest']['signal'], name='Best Strategy Position',
+                x=x_index,
+                y=results['MarketRegime']['signal'],
+                name='Market Regime Based Position',
                 line=dict(color='red', width=1.5, shape='hv', dash='dot')
             ), row=4, col=1)
         

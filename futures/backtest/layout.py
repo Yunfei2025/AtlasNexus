@@ -121,11 +121,33 @@ def create_sidebar():
                     html.Label("Date Range", style={'font-size': '0.9rem'}),
                     dcc.DatePickerRange(
                         id='date-range',
-                        start_date=(datetime.now() - timedelta(days=30)).date(),
-                        end_date=datetime.now().date(),
+                        start_date=(datetime.now() - timedelta(days=30)),
+                        end_date=datetime.now(),
                         display_format='YYYY-MM-DD',
                         style={'font-size': '0.9rem', 'width': '100%'},
                         className="mb-2"
+                    ),
+
+                    html.Label("OOS Split Date", style={'font-size': '0.9rem'}),
+                    dcc.DatePickerSingle(
+                        id='oos-split-date',
+                        date=datetime.now(),
+                        display_format='YYYY-MM-DD',
+                        style={'font-size': '0.9rem', 'width': '100%'},
+                        className="mb-2"
+                    ),
+
+                    html.Label("In-sample Lookback", style={'font-size': '0.9rem'}),
+                    dcc.Dropdown(
+                        id='insample-lookback',
+                        options=[
+                            {'label': '1 Year', 'value': '1Y'},
+                            {'label': '6 Months', 'value': '6M'},
+                            {'label': '2 Years', 'value': '2Y'},
+                        ],
+                        value='1Y',
+                        clearable=False,
+                        style={'font-size': '0.9rem', 'color': 'black'}
                     ),
                     
                     html.Div(id='timeframe-container', children=[
@@ -154,17 +176,49 @@ def create_sidebar():
                         id='strategy-selector',
                         options=[
                             {'label': ' MA', 'value': 'MA'},
+                            {'label': ' SAR', 'value': 'SAR'},
                             {'label': ' Bollinger', 'value': 'Boll'},
+                            {'label': ' ATR', 'value': 'ATR'},
                             {'label': ' VWAP', 'value': 'VWAP'},
                             {'label': ' Momentum', 'value': 'Momentum'},
-                            {'label': ' ATR', 'value': 'ATR'},
-                            {'label': ' SAR', 'value': 'SAR'},
-                            {'label': ' RollingBest', 'value': 'RollingBest'},
+                            {'label': ' Market Regime Based', 'value': 'MarketRegime'},
                         ],
-                        value=['MA', 'Boll', 'SAR', 'RollingBest'],
+                        value=['MA', 'Boll', 'SAR', 'MarketRegime'],
                         labelStyle={'display': 'inline-block', 'margin-right': '10px', 'font-size': '0.9rem'},
                         inputStyle={"margin-right": "3px"}
                     )
+                ], style={'padding': '10px'})
+            ], className="mb-3", style=DARK_CARD_STYLE),
+
+            # Market Regime Based strategy configuration
+            dbc.Card([
+                dbc.CardHeader("Market Regime", className="fw-bold", style={'padding': '5px 10px', 'background-color': '#007ACE', 'color': 'white'}),
+                dbc.CardBody([
+                    html.Label("Trending", style={'font-size': '0.9rem'}),
+                    dcc.Dropdown(
+                        id='mr-trending-strategy',
+                        options=[
+                            {'label': 'MA', 'value': 'MA'},
+                            {'label': 'SAR', 'value': 'SAR'},
+                            {'label': 'VWAP', 'value': 'VWAP'},
+                            {'label': 'Momentum', 'value': 'Momentum'},
+                        ],
+                        value='SAR',
+                        clearable=False,
+                        style={'font-size': '0.9rem', 'color': 'black'}
+                    ),
+                    html.Div(style={'height': '8px'}),
+                    html.Label("Mean-reverting", style={'font-size': '0.9rem'}),
+                    dcc.Dropdown(
+                        id='mr-meanrev-strategy',
+                        options=[
+                            {'label': 'Bollinger', 'value': 'Boll'},
+                            {'label': 'ATR', 'value': 'ATR'},
+                        ],
+                        value='Boll',
+                        clearable=False,
+                        style={'font-size': '0.9rem', 'color': 'black'}
+                    ),
                 ], style={'padding': '10px'})
             ], className="mb-3", style=DARK_CARD_STYLE),
 
@@ -176,6 +230,13 @@ def create_sidebar():
                         dbc.Col([html.Label("Long", style={'font-size': '0.9rem'}), dcc.Input(id='ma-long', type='number', value=20, min=5, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
                     ])
                 ], title="MA Params", style=DARK_CARD_STYLE),
+
+                dbc.AccordionItem([
+                    dbc.Row([
+                        dbc.Col([html.Label("AF", style={'font-size': '0.9rem'}), dcc.Input(id='sar-af', type='number', value=0.02, step=0.01, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
+                        dbc.Col([html.Label("Max AF", style={'font-size': '0.9rem'}), dcc.Input(id='sar-max-af', type='number', value=0.2, step=0.01, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                    ])
+                ], title="SAR Params", style=DARK_CARD_STYLE),
                 
                 dbc.AccordionItem([
                     dbc.Row([
@@ -199,16 +260,10 @@ def create_sidebar():
                 dbc.AccordionItem([
                     dbc.Row([
                         dbc.Col([html.Label("EMA", style={'font-size': '0.9rem'}), dcc.Input(id='atr-ema-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                        dbc.Col([html.Label("ATR", style={'font-size': '0.9rem'}), dcc.Input(id='atr-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                        dbc.Col([html.Label("ATR", style={'font-size': '0.9rem'}), dcc.Input(id='atr-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
+                        dbc.Col([html.Label("Mult", style={'font-size': '0.9rem'}), dcc.Input(id='atr-mult', type='number', value=2.0, step=0.1, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
                     ])
                 ], title="ATR Params", style=DARK_CARD_STYLE),
-
-                dbc.AccordionItem([
-                    dbc.Row([
-                        dbc.Col([html.Label("AF", style={'font-size': '0.9rem'}), dcc.Input(id='sar-af', type='number', value=0.02, step=0.01, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                        dbc.Col([html.Label("Max AF", style={'font-size': '0.9rem'}), dcc.Input(id='sar-max-af', type='number', value=0.2, step=0.01, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
-                    ])
-                ], title="SAR Params", style=DARK_CARD_STYLE),
             ], start_collapsed=True, className="mb-3", flush=True, style={"background-color": "#082255"}), # Accordion container bg
 
             dbc.Button("Run Backtest", id='run-button', style={

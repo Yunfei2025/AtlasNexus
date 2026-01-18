@@ -4,6 +4,7 @@ import pickle
 import os
 from hmmlearn.hmm import GaussianHMM
 from sklearn.preprocessing import StandardScaler
+from typing import Any, Dict, Hashable
 
 class RegimeDetector:
     def __init__(self, n_states=2, covariance_type='full', random_state=42):
@@ -169,6 +170,49 @@ class RegimeDetector:
             else: label.append("Choppy/Mean-Rev")
             
             print(f"  -> Likely: {' + '.join(label)}")
+
+    def get_state_regime_map(self) -> Dict[int, str]:
+        """Return a deterministic mapping from numeric state -> regime label.
+
+        Labels are based on fitted state means (in standardized feature space).
+        We define the most "trending" state as the one with the highest
+        (efficiency_ratio + autocorr) score; all others are labeled
+        "mean_reverting".
+        """
+        if not self.is_fitted or not self.state_stats:
+            raise ValueError("Model not fitted yet.")
+
+        scores: Dict[int, float] = {}
+        for state, stats in self.state_stats.items():
+            eff = float(stats.get('efficiency_ratio', 0.0) or 0.0)
+            ac = float(stats.get('autocorr', 0.0) or 0.0)
+            scores[int(state)] = eff + ac
+
+        trending_state = max(scores.keys(), key=lambda k: scores[k])
+        mapping = {s: 'mean_reverting' for s in scores.keys()}
+        mapping[trending_state] = 'trending'
+        return mapping
+
+    def map_states_to_regime(self, states: Any) -> pd.Series:
+        """Map predicted numeric states to regime labels.
+
+        Args:
+            states: 1D array-like of predicted states.
+
+        Returns:
+            pd.Series of regime labels ("trending" or "mean_reverting").
+        """
+        mapping = self.get_state_regime_map()
+
+        if isinstance(states, pd.Series):
+            index: Any = states.index
+            values = states.values
+        else:
+            index = None
+            values = np.asarray(states)
+
+        labels = [mapping.get(int(x), 'unknown') for x in values]
+        return pd.Series(labels, index=index)
 
 def create_dummy_data():
     """Generate dummy OHLC data for testing."""

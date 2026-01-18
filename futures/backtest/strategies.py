@@ -151,6 +151,66 @@ def run_intraday_momentum_strategy(data, window=14, vwap_window=20):
     return df
 
 
+def run_atr_mean_reversion_strategy(data, ema_window=20, atr_window=20, atr_mult=2.0, exit_at_ema=True):
+    """ATR mean-reversion strategy.
+
+    Bands: EMA(ema_window) ± atr_mult * ATR(atr_window)
+    - Long when close < lower band
+    - Short when close > upper band
+    - Optional exit when price reverts back to EMA
+    """
+    df = data.copy()
+
+    df['ema'] = df['close'].ewm(span=ema_window, adjust=False).mean()
+
+    high_low = df['high'] - df['low']
+    high_close = (df['high'] - df['close'].shift()).abs()
+    low_close = (df['low'] - df['close'].shift()).abs()
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    df['atr'] = true_range.rolling(window=atr_window).mean()
+
+    mult = float(atr_mult) if atr_mult is not None else 2.0
+    df['atr_upper'] = df['ema'] + mult * df['atr']
+    df['atr_lower'] = df['ema'] - mult * df['atr']
+
+    position = 0
+    signals = []
+    close_arr = df['close'].values
+    upper_arr = df['atr_upper'].values
+    lower_arr = df['atr_lower'].values
+    ema_arr = df['ema'].values
+
+    for i in range(len(df)):
+        if np.isnan(upper_arr[i]) or np.isnan(lower_arr[i]) or np.isnan(ema_arr[i]):
+            signals.append(0)
+            continue
+
+        c = close_arr[i]
+        u = upper_arr[i]
+        l = lower_arr[i]
+        m = ema_arr[i]
+
+        if c < l:
+            position = 1
+        elif c > u:
+            position = -1
+        elif exit_at_ema:
+            if position == 1 and c >= m:
+                position = 0
+            elif position == -1 and c <= m:
+                position = 0
+
+        signals.append(position)
+
+    df['signal'] = signals
+    df['position'] = df['signal'].diff()
+    df['returns'] = df['close'].pct_change()
+    df['strategy_returns'] = df['signal'].shift(1) * df['returns']
+    df['cumulative_returns'] = (1 + df['strategy_returns']).cumprod()
+    return df
+
+
 def run_atr_band_strategy(data, ema_window=20, atr_window=20):
     """
     ATR Band Strategy
