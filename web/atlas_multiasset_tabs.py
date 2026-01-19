@@ -76,6 +76,206 @@ ALLOCATION_RESULTS = {
     'timestamp': None
 }
 
+# Global state for low-correlation diversification recommendations
+# This persists across tab switches (unlike dcc.Store which is tab-scoped)
+DIVERSIFICATION_RECOMMENDATIONS = {
+    'factors': [],      # List of factor names from low-correlation analysis
+    'assets': [],       # List of recommended asset dictionaries
+    'timestamp': None   # When the analysis was run
+}
+
+# ============================================================================
+# Factor to Asset Mapping Table
+# ============================================================================
+# This mapping converts risk factors to their corresponding tradable assets.
+# Each factor (e.g., IRDL.US = US Treasury Curve Level) maps to specific assets
+# that are exposed to that factor.
+#
+# Factor Naming Convention:
+#   - IRDL: Interest Rate Delta Level (整条收益率曲线的加权平均变动)
+#   - IRSL: Interest Rate Slope (2Y-10Y spread 斜率)
+#   - IRCV: Interest Rate Curvature (凸度)
+#   - SPDL: Spread Delta Level (利差水平)
+#   - SPSL: Spread Slope (利差斜率)
+#   - FXDL: FX Delta Level (汇率水平)
+#   - CMDL: Commodity Delta Level (商品价格水平)
+# ============================================================================
+FACTOR_TO_ASSET_MAP = {
+    # ==================== Interest Rates (Government Bonds) ====================
+    # China Government Bonds
+    'IRDL.CN': [
+        {'name': 'CN1Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '1Y'},
+        {'name': 'CN2Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '2Y'},
+        {'name': 'CN5Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '5Y'},
+        {'name': 'CN10Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '10Y'},
+        {'name': 'CN30Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '30Y'},
+    ],
+    'IRSL.CN': [
+        {'name': 'CN2Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '2Y'},
+        {'name': 'CN10Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '10Y'},
+    ],
+    'IRCV.CN': [
+        {'name': 'CN2Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '2Y'},
+        {'name': 'CN5Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '5Y'},
+        {'name': 'CN10Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '10Y'},
+    ],
+    
+    # US Government Bonds (Treasury)
+    'IRDL.US': [
+        {'name': 'US1Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '1Y'},
+        {'name': 'US2Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '2Y'},
+        {'name': 'US5Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '5Y'},
+        {'name': 'US10Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '10Y'},
+        {'name': 'US30Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '30Y'},
+    ],
+    'IRSL.US': [
+        {'name': 'US2Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '2Y'},
+        {'name': 'US10Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '10Y'},
+    ],
+    'IRCV.US': [
+        {'name': 'US2Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '2Y'},
+        {'name': 'US5Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '5Y'},
+        {'name': 'US10Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '10Y'},
+    ],
+    
+    # German Government Bonds (Bund) - EU
+    'IRDL.DE': [
+        {'name': 'EU1Y', 'type': 'Rates', 'universe': 'DE Gov Bond', 'sector': '1Y'},
+        {'name': 'EU2Y', 'type': 'Rates', 'universe': 'DE Gov Bond', 'sector': '2Y'},
+        {'name': 'EU5Y', 'type': 'Rates', 'universe': 'DE Gov Bond', 'sector': '5Y'},
+        {'name': 'EU10Y', 'type': 'Rates', 'universe': 'DE Gov Bond', 'sector': '10Y'},
+        {'name': 'EU30Y', 'type': 'Rates', 'universe': 'DE Gov Bond', 'sector': '30Y'},
+    ],
+    'IRSL.DE': [
+        {'name': 'EU2Y', 'type': 'Rates', 'universe': 'DE Gov Bond', 'sector': '2Y'},
+        {'name': 'EU10Y', 'type': 'Rates', 'universe': 'DE Gov Bond', 'sector': '10Y'},
+    ],
+    'IRCV.DE': [
+        {'name': 'EU2Y', 'type': 'Rates', 'universe': 'DE Gov Bond', 'sector': '2Y'},
+        {'name': 'EU5Y', 'type': 'Rates', 'universe': 'DE Gov Bond', 'sector': '5Y'},
+        {'name': 'EU10Y', 'type': 'Rates', 'universe': 'DE Gov Bond', 'sector': '10Y'},
+    ],
+    
+    # UK Government Bonds (Gilt)
+    'IRDL.UK': [
+        {'name': 'UK1Y', 'type': 'Rates', 'universe': 'UK Gov Bond', 'sector': '1Y'},
+        {'name': 'UK2Y', 'type': 'Rates', 'universe': 'UK Gov Bond', 'sector': '2Y'},
+        {'name': 'UK5Y', 'type': 'Rates', 'universe': 'UK Gov Bond', 'sector': '5Y'},
+        {'name': 'UK10Y', 'type': 'Rates', 'universe': 'UK Gov Bond', 'sector': '10Y'},
+        {'name': 'UK30Y', 'type': 'Rates', 'universe': 'UK Gov Bond', 'sector': '30Y'},
+    ],
+    'IRSL.UK': [
+        {'name': 'UK2Y', 'type': 'Rates', 'universe': 'UK Gov Bond', 'sector': '2Y'},
+        {'name': 'UK10Y', 'type': 'Rates', 'universe': 'UK Gov Bond', 'sector': '10Y'},
+    ],
+    'IRCV.UK': [
+        {'name': 'UK2Y', 'type': 'Rates', 'universe': 'UK Gov Bond', 'sector': '2Y'},
+        {'name': 'UK5Y', 'type': 'Rates', 'universe': 'UK Gov Bond', 'sector': '5Y'},
+        {'name': 'UK10Y', 'type': 'Rates', 'universe': 'UK Gov Bond', 'sector': '10Y'},
+    ],
+    
+    # Japan Government Bonds (JGB)
+    'IRDL.JP': [
+        {'name': 'JP1Y', 'type': 'Rates', 'universe': 'Japan Gov Bond', 'sector': '1Y'},
+        {'name': 'JP2Y', 'type': 'Rates', 'universe': 'Japan Gov Bond', 'sector': '2Y'},
+        {'name': 'JP5Y', 'type': 'Rates', 'universe': 'Japan Gov Bond', 'sector': '5Y'},
+        {'name': 'JP10Y', 'type': 'Rates', 'universe': 'Japan Gov Bond', 'sector': '10Y'},
+        {'name': 'JP30Y', 'type': 'Rates', 'universe': 'Japan Gov Bond', 'sector': '30Y'},
+    ],
+    'IRSL.JP': [
+        {'name': 'JP2Y', 'type': 'Rates', 'universe': 'Japan Gov Bond', 'sector': '2Y'},
+        {'name': 'JP10Y', 'type': 'Rates', 'universe': 'Japan Gov Bond', 'sector': '10Y'},
+    ],
+    'IRCV.JP': [
+        {'name': 'JP2Y', 'type': 'Rates', 'universe': 'Japan Gov Bond', 'sector': '2Y'},
+        {'name': 'JP5Y', 'type': 'Rates', 'universe': 'Japan Gov Bond', 'sector': '5Y'},
+        {'name': 'JP10Y', 'type': 'Rates', 'universe': 'Japan Gov Bond', 'sector': '10Y'},
+    ],
+    
+    # ==================== Spread Products ====================
+    # Interest Rate Swap
+    'SPDL.IRS': [
+        {'name': 'IRS1Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '1Y'},
+        {'name': 'IRS2Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '2Y'},
+        {'name': 'IRS5Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '5Y'},
+        {'name': 'IRS10Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '10Y'},
+    ],
+    'SPSL.IRS': [
+        {'name': 'IRS2Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '2Y'},
+        {'name': 'IRS10Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '10Y'},
+    ],
+    
+    # China Development Bond
+    'SPDL.CDB': [
+        {'name': 'CDB1Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '1Y'},
+        {'name': 'CDB2Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '2Y'},
+        {'name': 'CDB5Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '5Y'},
+        {'name': 'CDB10Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '10Y'},
+    ],
+    'SPSL.CDB': [
+        {'name': 'CDB2Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '2Y'},
+        {'name': 'CDB10Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '10Y'},
+    ],
+    
+    # Interbank Commercial Paper (only Level, no Slope)
+    'SPDL.ICP': [
+        {'name': 'ICP3M', 'type': 'Spread', 'universe': 'Interbank Commercial Paper', 'sector': '3M'},
+        {'name': 'ICP6M', 'type': 'Spread', 'universe': 'Interbank Commercial Paper', 'sector': '6M'},
+        {'name': 'ICP1Y', 'type': 'Spread', 'universe': 'Interbank Commercial Paper', 'sector': '1Y'},
+    ],
+    
+    # ==================== FX (Foreign Exchange) ====================
+    'FXDL.USDCNY': [
+        {'name': 'USDCNY', 'type': 'FX', 'universe': 'USD/CNY', 'sector': 'Spot'},
+    ],
+    'FXDL.EURCNY': [
+        {'name': 'EURCNY', 'type': 'FX', 'universe': 'EUR/CNY', 'sector': 'Spot'},
+    ],
+    'FXDL.JPYCNY': [
+        {'name': 'JPYCNY', 'type': 'FX', 'universe': 'JPY/CNY', 'sector': 'Spot'},
+    ],
+    'FXDL.GBPCNY': [
+        {'name': 'GBPCNY', 'type': 'FX', 'universe': 'GBP/CNY', 'sector': 'Spot'},
+    ],
+    
+    # ==================== Commodities ====================
+    'CMDL.AU': [
+        {'name': 'Gold', 'type': 'Commodities', 'universe': 'Gold', 'sector': 'N/A'},
+    ],
+    'CMDL.AL': [
+        {'name': 'Aluminium', 'type': 'Commodities', 'universe': 'Aluminium', 'sector': 'N/A'},
+    ],
+    'CMDL.CU': [
+        {'name': 'Copper', 'type': 'Commodities', 'universe': 'Copper', 'sector': 'N/A'},
+    ],
+    'CMDL.SC': [
+        {'name': 'Crude_Oil', 'type': 'Commodities', 'universe': 'Crude Oil', 'sector': 'N/A'},
+    ],
+}
+
+
+def get_assets_from_factors(factor_list: list) -> list:
+    """
+    Convert a list of factor names to their corresponding tradable assets.
+    
+    Args:
+        factor_list: List of factor names (e.g., ['IRDL.US', 'CMDL.AU'])
+    
+    Returns:
+        List of unique asset dictionaries ready for the asset pool.
+    """
+    assets = []
+    seen_names = set()
+    
+    for factor in factor_list:
+        if factor in FACTOR_TO_ASSET_MAP:
+            for asset in FACTOR_TO_ASSET_MAP[factor]:
+                if asset['name'] not in seen_names:
+                    assets.append(asset.copy())
+                    seen_names.add(asset['name'])
+    
+    return assets
+
 # --- Layout Builders ---
 
 def build_multiasset_factor_layout():
@@ -105,6 +305,9 @@ def build_multiasset_factor_layout():
                     style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '5px 15px', 'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontWeight': 'bold'}
                 ),
              ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px'}),
+             
+             # Store for tracking the lowest correlation factors
+             dcc.Store(id='low-corr-factors-store', data=[]),
              
              dcc.Loading(
                  id="loading-correlations",
@@ -1118,14 +1321,15 @@ def register_multiasset_callbacks(app):
 
     # 3.5 Correlation Rank Callback
     @app.callback(
-        Output('correlation-results-container', 'children'),
+        [Output('correlation-results-container', 'children'),
+         Output('low-corr-factors-store', 'data')],
         Input('rank-correlations-btn', 'n_clicks'),
         State('correlation-period-selector', 'value'),
         prevent_initial_call=True
     )
     def update_correlation_ranks(n_clicks, period):
         if not n_clicks:
-            return html.Div()
+            return html.Div(), []
         
         try:
             loader = RiskFactorLoader(DIR_INPUT)
@@ -1133,7 +1337,7 @@ def register_multiasset_callbacks(app):
             factor_levels = loader.load_risk_factors(use_cache=True)
             
             if factor_levels is None or factor_levels.empty:
-                return html.Div("No factor data available.", style={'color': THEME['warning']})
+                return html.Div("No factor data available.", style={'color': THEME['warning']}), []
 
             # Determine start date based on period
             end_date = factor_levels.index.max()
@@ -1149,7 +1353,7 @@ def register_multiasset_callbacks(app):
             # Filter data
             df_subset = factor_levels.loc[start_date:end_date]
             if df_subset.empty:
-                 return html.Div(f"No data for period {period}", style={'color': THEME['warning']})
+                 return html.Div(f"No data for period {period}", style={'color': THEME['warning']}), []
             
             # Calculate returns for correlation (levels might be non-stationary, but request asked for factors correlation. 
             # Usually we corr changes, but let's stick to simple Correlation of the daily prices/levels if that's what "Factors" implies, 
@@ -1163,7 +1367,7 @@ def register_multiasset_callbacks(app):
             df_changes = df_subset.diff().dropna()
             
             if df_changes.empty:
-                 return html.Div("Insufficient data points for correlation.", style={'color': THEME['warning']})
+                 return html.Div("Insufficient data points for correlation.", style={'color': THEME['warning']}), []
 
             corr_matrix = df_changes.corr()
 
@@ -1221,6 +1425,49 @@ def register_multiasset_callbacks(app):
                 yaxis={'autorange': 'reversed'} # Standard matrix view
             )
             
+            # Get the assets corresponding to these low-correlation factors
+            diversified_assets = get_assets_from_factors(top_factors_list)
+            
+            # Store in global variable for cross-tab access (dcc.Store doesn't persist across tabs)
+            DIVERSIFICATION_RECOMMENDATIONS['factors'] = top_factors_list
+            DIVERSIFICATION_RECOMMENDATIONS['assets'] = diversified_assets
+            DIVERSIFICATION_RECOMMENDATIONS['timestamp'] = datetime.now()
+            
+            # Build complete asset display list (grouped by type)
+            asset_display_items = []
+            if diversified_assets:
+                # Group assets by type
+                assets_by_type = {}
+                for asset in diversified_assets:
+                    a_type = asset.get('type', 'Other')
+                    if a_type not in assets_by_type:
+                        assets_by_type[a_type] = []
+                    assets_by_type[a_type].append(asset)
+                
+                # Create display for each type
+                type_colors = {
+                    'Rates': '#2c5e40',
+                    'Spread': '#2c5e40',
+                    'Commodities': '#b48b32',
+                    'FX': '#6b4b8a'
+                }
+                
+                for a_type, assets_list in assets_by_type.items():
+                    bg_col = type_colors.get(a_type, '#2c5e40')
+                    asset_names = [a['name'] for a in assets_list]
+                    asset_display_items.append(
+                        html.Div([
+                            html.Span(f"{a_type}: ", style={'fontWeight': 'bold', 'color': '#fff', 'marginRight': '5px'}),
+                            html.Span(", ".join(asset_names), style={'color': '#ddd'})
+                        ], style={
+                            'padding': '8px 12px', 
+                            'marginBottom': '5px', 
+                            'backgroundColor': bg_col, 
+                            'borderRadius': '4px',
+                            'fontSize': '12px'
+                        })
+                    )
+            
             # Format display
             return html.Div([
                 html.Div([
@@ -1253,12 +1500,99 @@ def register_multiasset_callbacks(app):
                     style_data_conditional=[
                          {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']}
                     ]
-                )
-            ])
+                ),
+                
+                # Add to Asset Pool Section
+                html.Div([
+                    html.Hr(style={'borderColor': THEME['text_sub'], 'margin': '20px 0'}),
+                    html.H6("📊 Diversified Asset Recommendation", style={'color': THEME['success'], 'marginBottom': '10px'}),
+                    html.P(
+                        f"Based on {len(top_factors_list)} low-correlation factors, {len(diversified_assets)} assets are recommended:",
+                        style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '10px'}
+                    ),
+                    # Complete asset list display
+                    html.Div(
+                        asset_display_items if asset_display_items else html.Div("No mappable assets found.", style={'color': THEME['warning']}),
+                        style={
+                            'backgroundColor': THEME['bg_input'], 
+                            'padding': '10px', 
+                            'borderRadius': '4px',
+                            'marginBottom': '15px',
+                            'maxHeight': '200px',
+                            'overflowY': 'auto'
+                        }
+                    ),
+                    html.Button(
+                        f"🔄 Replace Asset Pool with {len(diversified_assets)} Recommended Assets",
+                        id='add-diversified-assets-btn',
+                        n_clicks=0,
+                        disabled=len(diversified_assets) == 0,
+                        style={
+                            'backgroundColor': THEME['success'] if diversified_assets else THEME['text_sub'],
+                            'color': 'white', 
+                            'padding': '10px 25px', 
+                            'border': 'none', 
+                            'borderRadius': '5px', 
+                            'cursor': 'pointer' if diversified_assets else 'not-allowed',
+                            'fontWeight': 'bold',
+                            'fontSize': '14px'
+                        }
+                    ),
+                    html.Span(
+                        id='add-diversified-status',
+                        style={'marginLeft': '15px', 'color': THEME['text_sub'], 'fontSize': '12px'}
+                    )
+                ], style={'marginTop': '15px'})
+            ]), top_factors_list
             
         except Exception as e:
-            return html.Div(f"Error calculating correlations: {str(e)}", style={'color': THEME['danger']})
+            return html.Div(f"Error calculating correlations: {str(e)}", style={'color': THEME['danger']}), []
 
+
+    # 3.55 Add Diversified Assets to Pool Callback
+    # Uses global variable instead of dcc.Store because dcc.Store data doesn't persist across tab switches
+    @app.callback(
+        Output('add-diversified-status', 'children'),
+        Input('add-diversified-assets-btn', 'n_clicks'),
+        prevent_initial_call=True
+    )
+    def add_diversified_assets_to_pool(n_clicks):
+        """
+        Replace the asset pool with recommended diversified assets.
+        Uses global DIVERSIFICATION_RECOMMENDATIONS instead of dcc.Store.
+        Saves directly to persistent storage file - Portfolio tab will pick up changes on next load.
+        """
+        if not n_clicks or n_clicks == 0:
+            return ""
+        
+        # Get assets from global variable (set by correlation analysis)
+        recommended_assets = DIVERSIFICATION_RECOMMENDATIONS.get('assets', [])
+        
+        if not recommended_assets:
+            return "⚠ No recommended assets available. Please run correlation analysis first."
+        
+        # REPLACE the entire asset pool with recommended assets (as user requested)
+        new_pool = [asset.copy() for asset in recommended_assets]
+        
+        # Save to persistent storage immediately
+        # This will be picked up by Portfolio tab when it loads/refreshes
+        try:
+            save_asset_pool(new_pool)
+            
+            # Count assets by type for status message
+            type_counts = {}
+            for asset in new_pool:
+                a_type = asset.get('type', 'Other')
+                type_counts[a_type] = type_counts.get(a_type, 0) + 1
+            
+            type_summary = ", ".join([f"{count} {t}" for t, count in type_counts.items()])
+            status_msg = f"✓ Saved {len(new_pool)} assets to pool ({type_summary}). Switch to Portfolio tab to view."
+            
+            return status_msg
+            
+        except Exception as e:
+            print(f"Error saving asset pool: {e}")
+            return f"✗ Error saving: {str(e)}"
 
     # 3.6 Risk Factor Budget Input Generator
     @app.callback(
