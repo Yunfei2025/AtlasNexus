@@ -298,6 +298,19 @@ def build_multiasset_factor_layout():
                     clearable=False,
                     style={'width': '150px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'marginRight': '20px'}
                 ),
+                html.Label("Top Pairs:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
+                dcc.Dropdown(
+                    id='correlation-top-pairs-selector',
+                    options=[
+                        {'label': '5', 'value': 5},
+                        {'label': '10', 'value': 10},
+                        {'label': '15', 'value': 15},
+                        {'label': '20', 'value': 20},
+                    ],
+                    value=10,
+                    clearable=False,
+                    style={'width': '100px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'marginRight': '20px'}
+                ),
                 html.Button(
                     "Rank Correlations",
                     id='rank-correlations-btn',
@@ -387,8 +400,9 @@ def build_multiasset_portfolio_layout():
     if last_run_data:
         if 'asset_pool' in last_run_data:
             initial_pool = last_run_data['asset_pool']
-            if initial_pool:
-                initial_n_clicks = 1
+            # Note: Do NOT auto-trigger run_analysis on page load
+            # User should click 'RUN ANALYSIS' manually to ensure Risk Budgets are loaded
+            # initial_n_clicks remains 0
         
         if 'metadata' in last_run_data:
             meta = last_run_data['metadata']
@@ -1377,10 +1391,11 @@ def register_multiasset_callbacks(app):
         [Output('correlation-results-container', 'children'),
          Output('low-corr-factors-store', 'data')],
         Input('rank-correlations-btn', 'n_clicks'),
-        State('correlation-period-selector', 'value'),
+        [State('correlation-period-selector', 'value'),
+         State('correlation-top-pairs-selector', 'value')],
         prevent_initial_call=True
     )
-    def update_correlation_ranks(n_clicks, period):
+    def update_correlation_ranks(n_clicks, period, top_pairs):
         if not n_clicks:
             return html.Div(), []
         
@@ -1408,6 +1423,11 @@ def register_multiasset_callbacks(app):
             if df_subset.empty:
                  return html.Div(f"No data for period {period}", style={'color': THEME['warning']}), []
             
+            # Exclude IRCV (Curvature) factors from correlation analysis
+            # Curvature factors are less meaningful for diversification and can add noise
+            ircv_cols = [col for col in df_subset.columns if col.startswith('IRCV')]
+            df_subset = df_subset.drop(columns=ircv_cols, errors='ignore')
+            
             # Calculate returns for correlation (levels might be non-stationary, but request asked for factors correlation. 
             # Usually we corr changes, but let's stick to simple Correlation of the daily prices/levels if that's what "Factors" implies, 
             # OR better, calculate correlation of daily changes (returns) which is standard for "Correlation". 
@@ -1433,10 +1453,11 @@ def register_multiasset_callbacks(app):
             
             # Sort by absolute correlation ascending (closest to 0 first)
             corr_stacked['AbsCorrelation'] = corr_stacked['Correlation'].abs()
-            bottom_10 = corr_stacked.sort_values('AbsCorrelation', ascending=True).head(10)
+            top_pairs = int(top_pairs) if top_pairs else 10
+            bottom_pairs = corr_stacked.sort_values('AbsCorrelation', ascending=True).head(top_pairs)
 
-            # Get unique factors from the bottom 10 pairs
-            top_factors = set(bottom_10['Factor A']).union(set(bottom_10['Factor B']))
+            # Get unique factors from the lowest correlation pairs
+            top_factors = set(bottom_pairs['Factor A']).union(set(bottom_pairs['Factor B']))
             
             # If we ended up with more than 10 factors (which is likely if pairs are disjoint),
             # we might want to just pick the factors from the very top few pairs to limit to ~10 factors max 
@@ -1527,9 +1548,9 @@ def register_multiasset_callbacks(app):
                     dcc.Graph(figure=heatmap_fig)
                 ], style={'marginBottom': '30px'}),
 
-                html.H6(f"Lowest Absolute Correlations (Diversification Opportunities) - Top 10 Pairs", style={'color': THEME['text_main']}),
+                html.H6(f"Lowest Absolute Correlations (Diversification Opportunities) - Top {top_pairs} Pairs", style={'color': THEME['text_main']}),
                 dash_table.DataTable(
-                    data=bottom_10.drop(columns=['AbsCorrelation']).to_dict('records'),
+                    data=bottom_pairs.drop(columns=['AbsCorrelation']).to_dict('records'),
                     columns=[
                         {'name': 'Factor A', 'id': 'Factor A'},
                         {'name': 'Factor B', 'id': 'Factor B'},
@@ -2131,6 +2152,10 @@ def register_multiasset_callbacks(app):
                     print(f"  {rebalance_date.date()}: Skipped (insufficient data)")
                     continue
                 
+                # Exclude IRCV (Curvature) factors from correlation analysis
+                ircv_cols = [col for col in df_subset.columns if col.startswith('IRCV')]
+                df_subset = df_subset.drop(columns=ircv_cols, errors='ignore')
+                
                 # Calculate daily changes for correlation
                 df_changes = df_subset.diff().dropna()
                 if df_changes.empty:
@@ -2157,10 +2182,9 @@ def register_multiasset_callbacks(app):
                     continue
                 
                 selected_asset_names = [a['name'] for a in selected_assets]
-                asset_pools_by_date[rebalance_date] = selected_assets
                 all_assets_ever.update(selected_asset_names)
                 
-                # --- Step 3: Run Risk Parity Allocation ---
+                # --- Step 3: Run PCA Factor Risk Parity Allocation ---
                 # Create portfolio for these assets
                 try:
                     portfolio = create_custom_portfolio(selected_asset_names)
@@ -2168,31 +2192,38 @@ def register_multiasset_callbacks(app):
                     print(f"  {rebalance_date.date()}: Portfolio creation failed: {e}")
                     continue
                 
-                # Calculate volatilities using lookback
-                vol_lookback_start = rebalance_date - relativedelta(months=3)
-                vol_mask = (risk_factors.index <= rebalance_date) & (risk_factors.index >= vol_lookback_start)
-                filtered_factors = risk_factors.loc[vol_mask]
-                
-                if len(filtered_factors) < 30:
-                    print(f"  {rebalance_date.date()}: Skipped (insufficient vol data)")
+                # Use PCA Factor Risk Parity optimizer
+                try:
+                    pca_optimizer = PCAFactorRiskParityOptimizer(
+                        portfolio=portfolio, 
+                        input_dir=str(DIR_INPUT),
+                        pca_lookback_years=1.0, 
+                        vol_lookback_months=3, 
+                        ewma_lambda=0.94
+                    )
+                    weights_series, _ = pca_optimizer.fit_and_calculate(pd.Timestamp(rebalance_date))
+                    weights = weights_series.to_dict()
+                except Exception as e:
+                    print(f"  {rebalance_date.date()}: PCA optimization failed: {e}")
                     continue
                 
-                volatilities = {}
-                for name, asset in portfolio.assets.items():
-                    try:
-                        vol = asset.get_volatility(filtered_factors, use_cache=False)
-                        volatilities[name] = vol if vol > 0 else 0.01  # Minimum vol
-                    except Exception:
-                        volatilities[name] = 0.01
-                
-                # Risk Parity weights (1/vol)
-                inv_vols = {k: 1.0/v for k, v in volatilities.items() if v > 0}
-                sum_inv_vol = sum(inv_vols.values())
-                
-                if sum_inv_vol == 0:
+                if not weights or sum(weights.values()) == 0:
+                    print(f"  {rebalance_date.date()}: Skipped (invalid weights)")
                     continue
                 
-                weights = {k: v/sum_inv_vol for k, v in inv_vols.items()}
+                # Filter out negligible weights (floating point precision artifacts)
+                weights = {k: v for k, v in weights.items() if abs(v) >= 1e-6}
+                
+                # Renormalize weights after filtering
+                weight_sum = sum(weights.values())
+                if weight_sum > 0:
+                    weights = {k: v / weight_sum for k, v in weights.items()}
+                else:
+                    continue
+                
+                # Store only assets with non-negligible weights in asset pool tracking
+                filtered_assets = [a for a in selected_assets if a['name'] in weights]
+                asset_pools_by_date[rebalance_date] = filtered_assets
                 
                 # Calculate allocations
                 row = {'Date': rebalance_date}
