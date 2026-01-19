@@ -790,12 +790,24 @@ def build_multiasset_risk_layout():
 
 
 def build_multiasset_backtest_layout():
-    """Build the layout for the Backtest tab."""
+    """Build the layout for the Backtest tab.
+    
+    Strategy: 
+    - At the beginning of each month, run Cross-Asset Correlation Analysis
+    - Select assets with lowest correlations for diversification
+    - Run Risk Parity allocation on the selected assets
+    - Track asset pool changes over time
+    """
     return html.Div([
-        html.H4("Historical Allocation Analysis", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
+        html.H4("Historical Allocation Analysis (Correlation-Based)", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
+        html.P(
+            "Strategy: At each month start, run correlation analysis to select diversified assets, then apply risk parity allocation.",
+            style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '15px', 'fontStyle': 'italic'}
+        ),
         
-        # Date Range Selection and Performance Metrics
+        # Row 1: Date Range and Capital
         html.Div([
+            # Backtest Period
             html.Div([
                 html.Label("Backtest Period:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
                 html.Div([
@@ -803,7 +815,7 @@ def build_multiasset_backtest_layout():
                         id='history-date-range',
                         min_date_allowed=datetime(2015, 1, 1).date(),
                         max_date_allowed=datetime.now().date(),
-                        start_date=datetime(datetime.now().year, 1, 1).date(),
+                        start_date=datetime(datetime.now().year - 1, 1, 1).date(),
                         end_date=datetime.now().date(),
                         display_format='YYYY-MM-DD',
                         style={'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
@@ -812,24 +824,62 @@ def build_multiasset_backtest_layout():
                 ], style={'display': 'inline-block', 'position': 'relative', 'zIndex': 1000}),
             ], style={'display': 'flex', 'alignItems': 'center'}),
             
-            # PCA Factor Risk Parity Option
+            # Total Capital (dedicated for backtest)
             html.Div([
-                html.Label("Optimization Method:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
-                dcc.RadioItems(
-                    id='optimization-method',
-                    options=[
-                        {'label': 'Asset Risk Parity (1/Vol)', 'value': 'asset_rp'},
-                        {'label': 'PCA Factor Risk Parity', 'value': 'pca_factor_rp'}
-                    ],
-                    value='asset_rp',
-                    inline=True,
-                    labelStyle={'color': THEME['text_main']},
-                    style={'fontSize': '13px'}
+                html.Label("Capital:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
+                dcc.Input(
+                    id='backtest-capital-input',
+                    type='number',
+                    value=100,
+                    style={'width': '80px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
                 ),
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginLeft': '30px'}),
+                dcc.Dropdown(
+                    id='backtest-capital-unit',
+                    options=[
+                        {"label": "Million", "value": "million"},
+                        {"label": "Billion", "value": "billion"},
+                    ],
+                    value="million",
+                    clearable=False,
+                    style={'width': '100px', 'fontSize': '13px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
+                ),
+                html.Span("CNY", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginLeft': '5px'}),
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginLeft': '20px'}),
+        ], style={'marginBottom': '10px', 'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '10px'}),
+        
+        # Row 2: Correlation Settings
+        html.Div([
+            # Correlation Lookback Period
+            html.Div([
+                html.Label("Correlation Lookback:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
+                dcc.Dropdown(
+                    id='backtest-corr-lookback',
+                    options=[
+                        {'label': '3 Months', 'value': '3M'},
+                        {'label': '6 Months', 'value': '6M'},
+                        {'label': '1 Year', 'value': '1Y'},
+                    ],
+                    value='3M',
+                    clearable=False,
+                    style={'width': '120px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center'}),
+            
+            # Number of low-correlation pairs to use
+            html.Div([
+                html.Label("Top Low-Corr Pairs:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
+                dcc.Input(
+                    id='backtest-top-pairs',
+                    type='number',
+                    value=10,
+                    min=5,
+                    max=20,
+                    style={'width': '60px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginLeft': '20px'}),
             
             # Performance Metrics Table
-            html.Div(id='performance-metrics-container', style={'marginLeft': '30px'}),
+            html.Div(id='performance-metrics-container', style={'marginLeft': '20px'}),
         ], style={'marginBottom': '15px', 'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '10px'}),
 
         html.Div([
@@ -844,8 +894,11 @@ def build_multiasset_backtest_layout():
                 type="default",
                 children=[
                     dcc.Graph(id='historical-allocation-chart'),
-                    html.Div(style={'height': '30px'}),
-                    dcc.Graph(id='pnl-attribution-chart')
+                    html.Div(style={'height': '20px'}),
+                    dcc.Graph(id='pnl-attribution-chart'),
+                    html.Div(style={'height': '20px'}),
+                    # Asset Pool Changes Section
+                    html.Div(id='asset-changes-container')
                 ]
             )
         ])
@@ -1973,134 +2026,212 @@ def register_multiasset_callbacks(app):
             return (html.Div(f"Error: {str(e)}", style={'color': THEME['danger']}),
                     error_msg, "", {})
 
-    # 5. Historical Analysis (Backtest Tab)
+    # 5. Historical Analysis (Backtest Tab) - Correlation-Based Strategy
     @app.callback(
         [Output('historical-allocation-chart', 'figure'),
          Output('pnl-attribution-chart', 'figure'),
-         Output('performance-metrics-container', 'children')],
+         Output('performance-metrics-container', 'children'),
+         Output('asset-changes-container', 'children')],
         [Input('run-history-button', 'n_clicks')],
-        [State('asset-pool-store', 'data'),
-         State('capital-input', 'value'),
-         State('capital-unit', 'value'),
+        [State('backtest-capital-input', 'value'),
+         State('backtest-capital-unit', 'value'),
          State('history-date-range', 'start_date'),
          State('history-date-range', 'end_date'),
-         State('optimization-method', 'value')]
+         State('backtest-corr-lookback', 'value'),
+         State('backtest-top-pairs', 'value')]
     )
-    def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_unit, start_date, end_date, optimization_method):
-        if n_clicks == 0 or not asset_pool:
-            return go.Figure(), go.Figure(), None
+    def update_historical_allocation(n_clicks, total_capital, capital_unit, start_date, end_date, corr_lookback, top_pairs):
+        """
+        Correlation-Based Historical Allocation Strategy:
+        1. At each month start, run correlation analysis on risk factors
+        2. Select assets with lowest correlations for diversification
+        3. Run Risk Parity (1/Vol) allocation on the selected assets
+        4. Track asset pool changes over time
+        """
+        empty_fig = go.Figure()
+        empty_fig.update_layout(
+            title="Click 'Run Historical Analysis' to start",
+            template=THEME['chart_template'],
+            paper_bgcolor=THEME['bg_main'],
+            plot_bgcolor=THEME['bg_main'],
+            font={'color': THEME['text_main']}
+        )
+        
+        if n_clicks == 0:
+            return empty_fig, empty_fig, None, None
         
         try:
             # Parse dates
             start_date = pd.to_datetime(start_date) if start_date else None
             end_date = pd.to_datetime(end_date) if end_date else None
+            top_pairs = int(top_pairs) if top_pairs else 10
             
-            # Load data
+            # Load risk factor data
             loader = RiskFactorLoader(DIR_INPUT)
             risk_factors = loader.load_risk_factors(use_cache=True)
             risk_factors.index = pd.to_datetime(risk_factors.index)
             market_data = load_raw_market_data()
             
             if risk_factors.empty:
-                return go.Figure().update_layout(title="No risk factor data available", template=THEME['chart_template']), go.Figure(), None
+                err_fig = go.Figure().update_layout(title="No risk factor data available", template=THEME['chart_template'])
+                return err_fig, err_fig, None, html.Div("No data", style={'color': THEME['warning']})
             
             # Set date range
             if not end_date:
                 end_date = risk_factors.index.max()
             if not start_date:
-                start_date = end_date - relativedelta(years=2)
+                start_date = end_date - relativedelta(years=1)
             
-            # Generate rebalance dates (monthly)
+            # Determine correlation lookback period
+            if corr_lookback == '3M':
+                corr_lookback_delta = relativedelta(months=3)
+            elif corr_lookback == '6M':
+                corr_lookback_delta = relativedelta(months=6)
+            elif corr_lookback == '1Y':
+                corr_lookback_delta = relativedelta(years=1)
+            else:
+                corr_lookback_delta = relativedelta(months=3)
+            
+            # Generate rebalance dates (beginning of each month)
             rebalance_dates = []
             current_date = start_date.replace(day=1)
             while current_date <= end_date:
-                if current_date >= risk_factors.index.min():
+                if current_date >= risk_factors.index.min() + corr_lookback_delta:
                     rebalance_dates.append(current_date)
                 current_date += relativedelta(months=1)
             
-            # Create portfolio
-            selected_asset_names = [asset['name'] for asset in asset_pool]
-            portfolio = create_custom_portfolio(selected_asset_names)
+            if not rebalance_dates:
+                err_fig = go.Figure().update_layout(title="Not enough historical data for the selected period", template=THEME['chart_template'])
+                return err_fig, err_fig, None, html.Div("Insufficient data", style={'color': THEME['warning']})
             
             # Convert capital
-            total_capital = float(total_capital) if total_capital else 10_000_000_000
+            total_capital_value = float(total_capital) if total_capital else 100
             if capital_unit == 'billion':
-                total_capital *= 1_000
+                total_capital_value *= 1_000
+            total_capital_cny = total_capital_value * 1_000_000  # Convert to CNY
             
-            # Initialize optimizer if needed
-            pca_optimizer = None
-            if optimization_method == 'pca_factor_rp':
-                pca_optimizer = PCAFactorRiskParityOptimizer(
-                    portfolio=portfolio, input_dir=str(DIR_INPUT),
-                    pca_lookback_years=1.0, vol_lookback_months=3, ewma_lambda=0.94
-                )
-            
-            # Calculate allocations for each rebalance date
+            # Track allocations and asset changes
             history_data = []
             allocations_by_date = {}
+            asset_pools_by_date = {}  # Track asset pool changes
+            all_assets_ever = set()
             
-            for date in rebalance_dates:
-                if optimization_method == 'pca_factor_rp' and pca_optimizer is not None:
+            print(f"\n{'='*60}")
+            print(f"Running Correlation-Based Backtest: {start_date.date()} to {end_date.date()}")
+            print(f"Rebalance dates: {len(rebalance_dates)}")
+            print(f"{'='*60}")
+            
+            for rebalance_date in rebalance_dates:
+                # --- Step 1: Run Correlation Analysis ---
+                corr_end = rebalance_date
+                corr_start = rebalance_date - corr_lookback_delta
+                
+                df_subset = risk_factors.loc[corr_start:corr_end]
+                if df_subset.empty or len(df_subset) < 20:
+                    print(f"  {rebalance_date.date()}: Skipped (insufficient data)")
+                    continue
+                
+                # Calculate daily changes for correlation
+                df_changes = df_subset.diff().dropna()
+                if df_changes.empty:
+                    continue
+                
+                corr_matrix = df_changes.corr()
+                
+                # Find lowest correlation pairs
+                mask = np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+                corr_stacked = corr_matrix.where(mask).stack().reset_index()
+                corr_stacked.columns = ['Factor A', 'Factor B', 'Correlation']
+                corr_stacked['AbsCorrelation'] = corr_stacked['Correlation'].abs()
+                bottom_pairs = corr_stacked.sort_values('AbsCorrelation', ascending=True).head(top_pairs)
+                
+                # Get unique factors from lowest correlation pairs
+                low_corr_factors = set(bottom_pairs['Factor A']).union(set(bottom_pairs['Factor B']))
+                low_corr_factors_list = sorted(list(low_corr_factors))
+                
+                # --- Step 2: Map Factors to Assets ---
+                selected_assets = get_assets_from_factors(low_corr_factors_list)
+                
+                if not selected_assets:
+                    print(f"  {rebalance_date.date()}: Skipped (no mappable assets)")
+                    continue
+                
+                selected_asset_names = [a['name'] for a in selected_assets]
+                asset_pools_by_date[rebalance_date] = selected_assets
+                all_assets_ever.update(selected_asset_names)
+                
+                # --- Step 3: Run Risk Parity Allocation ---
+                # Create portfolio for these assets
+                try:
+                    portfolio = create_custom_portfolio(selected_asset_names)
+                except Exception as e:
+                    print(f"  {rebalance_date.date()}: Portfolio creation failed: {e}")
+                    continue
+                
+                # Calculate volatilities using lookback
+                vol_lookback_start = rebalance_date - relativedelta(months=3)
+                vol_mask = (risk_factors.index <= rebalance_date) & (risk_factors.index >= vol_lookback_start)
+                filtered_factors = risk_factors.loc[vol_mask]
+                
+                if len(filtered_factors) < 30:
+                    print(f"  {rebalance_date.date()}: Skipped (insufficient vol data)")
+                    continue
+                
+                volatilities = {}
+                for name, asset in portfolio.assets.items():
                     try:
-                        weights_series, _ = pca_optimizer.fit_and_calculate(pd.Timestamp(date))
-                        weights = weights_series.to_dict()
-                    except Exception as e:
-                        print(f"PCA optimization failed at {date}: {e}")
-                        continue
-                else:
-                    # Traditional Risk Parity
-                    lookback_start = date - relativedelta(months=3)
-                    mask = (risk_factors.index <= date) & (risk_factors.index >= lookback_start)
-                    filtered_factors = risk_factors.loc[mask]
-                    
-                    if len(filtered_factors) < 40:
-                        continue
-                    
-                    volatilities = {}
-                    for name, asset in portfolio.assets.items():
                         vol = asset.get_volatility(filtered_factors, use_cache=False)
-                        volatilities[name] = vol
-                    
-                    inv_vols = {k: 1.0/v if v > 0 else 0 for k, v in volatilities.items()}
-                    sum_inv_vol = sum(inv_vols.values())
-                    
-                    if sum_inv_vol == 0:
-                        continue
-                    
-                    weights = {k: v/sum_inv_vol for k, v in inv_vols.items()}
+                        volatilities[name] = vol if vol > 0 else 0.01  # Minimum vol
+                    except Exception:
+                        volatilities[name] = 0.01
+                
+                # Risk Parity weights (1/vol)
+                inv_vols = {k: 1.0/v for k, v in volatilities.items() if v > 0}
+                sum_inv_vol = sum(inv_vols.values())
+                
+                if sum_inv_vol == 0:
+                    continue
+                
+                weights = {k: v/sum_inv_vol for k, v in inv_vols.items()}
                 
                 # Calculate allocations
-                row = {'Date': date}
+                row = {'Date': rebalance_date}
                 current_allocations = {}
                 for name, weight in weights.items():
-                    alloc = weight * total_capital
-                    row[name] = alloc
-                    current_allocations[name] = alloc * 1_000_000
+                    alloc = weight * total_capital_cny
+                    row[name] = alloc / 1_000_000  # Store in millions for chart
+                    current_allocations[name] = alloc
                 
                 history_data.append(row)
-                allocations_by_date[date] = current_allocations
+                allocations_by_date[rebalance_date] = current_allocations
+                
+                print(f"  {rebalance_date.date()}: {len(selected_asset_names)} assets, {len(low_corr_factors_list)} factors")
             
             if not history_data:
-                return go.Figure().update_layout(title="Insufficient data for historical analysis", template=THEME['chart_template']), go.Figure(), None
+                err_fig = go.Figure().update_layout(title="No valid rebalance periods found", template=THEME['chart_template'])
+                return err_fig, err_fig, None, html.Div("No valid periods", style={'color': THEME['warning']})
             
-            # Calculate daily PnL
+            # --- Calculate Daily PnL ---
             all_dates = sorted(risk_factors.loc[(risk_factors.index >= start_date) & (risk_factors.index <= end_date)].index)
             sorted_rebalance_dates = sorted(allocations_by_date.keys())
             
+            # Pre-compute daily returns for all assets ever held
+            asset_daily_returns = {}
+            for name in all_assets_ever:
+                try:
+                    ret_df = calculate_daily_returns_series(name, market_data, start_date, end_date)
+                    if not ret_df.empty:
+                        ret_df = ret_df.set_index('Date')
+                        asset_daily_returns[name] = ret_df
+                except Exception as e:
+                    print(f"  Warning: Could not load returns for {name}: {e}")
+            
             daily_pnl_records = []
-            cumulative_pnl = {name: 0.0 for name in selected_asset_names}
+            cumulative_pnl = {name: 0.0 for name in all_assets_ever}
             cumulative_pnl['Total'] = 0.0
             
-            # Pre-compute daily returns
-            asset_daily_returns = {}
-            for name in selected_asset_names:
-                ret_df = calculate_daily_returns_series(name, market_data, start_date, end_date)
-                if not ret_df.empty:
-                    ret_df = ret_df.set_index('Date')
-                    asset_daily_returns[name] = ret_df
-            
-            # Calculate daily PnL
             for trading_day in all_dates:
+                # Find applicable allocation (most recent rebalance before this day)
                 applicable_alloc = None
                 for rb_date in sorted_rebalance_dates:
                     if rb_date <= trading_day:
@@ -2114,7 +2245,7 @@ def register_multiasset_callbacks(app):
                 daily_record = {'Date': trading_day}
                 total_daily_pnl = 0.0
                 
-                for name in selected_asset_names:
+                for name in all_assets_ever:
                     if name in applicable_alloc and name in asset_daily_returns:
                         allocation = applicable_alloc[name]
                         ret_df = asset_daily_returns[name]
@@ -2135,55 +2266,64 @@ def register_multiasset_callbacks(app):
             df_history = pd.DataFrame(history_data)
             df_pnl = pd.DataFrame(daily_pnl_records)
             
-            # Create allocation chart
+            # --- Create Allocation Chart ---
             fig_alloc = go.Figure()
-            for asset_name in selected_asset_names:
+            for asset_name in sorted(all_assets_ever):
                 if asset_name in df_history.columns:
                     fig_alloc.add_trace(go.Scatter(
-                        x=df_history['Date'], y=df_history[asset_name],
-                        mode='lines+markers', name=asset_name, stackgroup='one'
+                        x=df_history['Date'], 
+                        y=df_history[asset_name].fillna(0),
+                        mode='lines+markers', 
+                        name=asset_name, 
+                        stackgroup='one'
                     ))
             
             fig_alloc.update_layout(
-                title="Historical Portfolio Allocation (Monthly Rebalancing)",
-                xaxis_title="Date", yaxis_title="Allocation",
-                hovermode='x unified', template=THEME['chart_template'], height=450,
-                paper_bgcolor=THEME['bg_main'], plot_bgcolor=THEME['bg_main'], font={'color': THEME['text_main']},
-                legend=dict(orientation="h", y=1.02, x=1, xanchor="right", font={'color': THEME['text_main']}),
+                title="Historical Portfolio Allocation (Monthly Correlation-Based Rebalancing)",
+                xaxis_title="Date", 
+                yaxis_title="Allocation (Million CNY)",
+                hovermode='x unified', 
+                template=THEME['chart_template'], 
+                height=400,
+                paper_bgcolor=THEME['bg_main'], 
+                plot_bgcolor=THEME['bg_main'], 
+                font={'color': THEME['text_main']},
+                legend=dict(orientation="h", y=1.02, x=1, xanchor="right", font={'color': THEME['text_main'], 'size': 10}),
                 xaxis=dict(gridcolor=THEME['table_header']),
                 yaxis=dict(gridcolor=THEME['table_header'])
             )
             
-            # Create PnL chart
+            # --- Create PnL Chart ---
             fig_pnl = go.Figure()
             if not df_pnl.empty:
-                for asset_name in selected_asset_names:
-                    if asset_name in df_pnl.columns:
-                        fig_pnl.add_trace(go.Scatter(
-                            x=df_pnl['Date'], y=df_pnl[asset_name],
-                            mode='lines', name=asset_name, stackgroup='one'
-                        ))
-                
+                # Add total line prominently
                 fig_pnl.add_trace(go.Scatter(
-                    x=df_pnl['Date'], y=df_pnl['Total'],
-                    mode='lines', name='Total Portfolio PnL',
-                    line=dict(color='white', width=2, dash='dash')
+                    x=df_pnl['Date'], 
+                    y=df_pnl['Total'],
+                    mode='lines', 
+                    name='Total Portfolio',
+                    line=dict(color='#00cc96', width=3)
                 ))
             
             fig_pnl.update_layout(
-                title="Daily Cumulative Profit & Loss Attribution (Million CNY)",
-                xaxis_title="Date", yaxis_title="Cumulative PnL",
-                hovermode='x unified', template=THEME['chart_template'], height=450,
-                paper_bgcolor=THEME['bg_main'], plot_bgcolor=THEME['bg_main'], font={'color': THEME['text_main']},
+                title="Cumulative PnL (Million CNY)",
+                xaxis_title="Date", 
+                yaxis_title="Cumulative PnL",
+                hovermode='x unified', 
+                template=THEME['chart_template'], 
+                height=350,
+                paper_bgcolor=THEME['bg_main'], 
+                plot_bgcolor=THEME['bg_main'], 
+                font={'color': THEME['text_main']},
                 legend=dict(orientation="h", y=1.02, x=1, xanchor="right", font={'color': THEME['text_main']}),
                 xaxis=dict(gridcolor=THEME['table_header']),
                 yaxis=dict(gridcolor=THEME['table_header'])
             )
             
-            # Calculate performance metrics
+            # --- Calculate Performance Metrics ---
             metrics_table = None
             if not df_pnl.empty and len(df_pnl) > 1:
-                initial_capital = total_capital
+                initial_capital = total_capital_cny / 1_000_000
                 portfolio_values = initial_capital + df_pnl['Total']
                 daily_returns = portfolio_values.pct_change().dropna()
                 
@@ -2211,6 +2351,7 @@ def register_multiasset_callbacks(app):
                         html.Th("Annualized Return", style={'padding': '8px 15px', 'backgroundColor': THEME['table_header'], 'color': 'white'}),
                         html.Th("Sharpe Ratio", style={'padding': '8px 15px', 'backgroundColor': THEME['table_header'], 'color': 'white'}),
                         html.Th("Max Drawdown", style={'padding': '8px 15px', 'backgroundColor': THEME['table_header'], 'color': 'white'}),
+                        html.Th("# Rebalances", style={'padding': '8px 15px', 'backgroundColor': THEME['table_header'], 'color': 'white'}),
                     ]),
                     html.Tr([
                         html.Td(f"{annualized_return:.2%}", style={'padding': '8px 15px', 'textAlign': 'center', 'fontWeight': 'bold',
@@ -2218,15 +2359,70 @@ def register_multiasset_callbacks(app):
                         html.Td(f"{sharpe_ratio:.2f}", style={'padding': '8px 15px', 'textAlign': 'center', 'fontWeight': 'bold',
                                                             'color': THEME['success'] if sharpe_ratio >= 1 else THEME['warning'] if sharpe_ratio >= 0 else THEME['danger'], 'backgroundColor': THEME['bg_input']}),
                         html.Td(f"{max_drawdown:.2%}", style={'padding': '8px 15px', 'textAlign': 'center', 'fontWeight': 'bold', 'color': THEME['danger'], 'backgroundColor': THEME['bg_input']}),
+                        html.Td(f"{len(allocations_by_date)}", style={'padding': '8px 15px', 'textAlign': 'center', 'fontWeight': 'bold', 'color': THEME['text_main'], 'backgroundColor': THEME['bg_input']}),
                     ]),
-                ], style={'borderCollapse': 'collapse', 'fontSize': '14px', 'width': '100%'})
+                ], style={'borderCollapse': 'collapse', 'fontSize': '14px'})
             
-            return fig_alloc, fig_pnl, metrics_table
+            # --- Build Monthly Holdings Table ---
+            asset_holdings_rows = []
+            
+            for rb_date in sorted_rebalance_dates:
+                assets = asset_pools_by_date.get(rb_date, [])
+                current_assets = sorted([a['name'] for a in assets])
+                
+                asset_holdings_rows.append({
+                    'Date': rb_date.strftime('%Y-%m'),
+                    'Asset Count': len(current_assets),
+                    'Holdings': ", ".join(current_assets) if current_assets else "-"
+                })
+            
+            asset_holdings_df = pd.DataFrame(asset_holdings_rows)
+            
+            asset_changes_table = html.Div([
+                html.H5("📅 Monthly Asset Holdings", style={'color': THEME['text_main'], 'marginBottom': '10px', 'marginTop': '20px'}),
+                dash_table.DataTable(
+                    data=asset_holdings_df.to_dict('records'),
+                    columns=[
+                        {'name': 'Month', 'id': 'Date'},
+                        {'name': '# Assets', 'id': 'Asset Count'},
+                        {'name': 'Holdings', 'id': 'Holdings'},
+                    ],
+                    style_cell={
+                        'textAlign': 'left', 
+                        'padding': '8px 10px', 
+                        'fontFamily': 'Arial, sans-serif',
+                        'backgroundColor': THEME['table_row_odd'],
+                        'color': THEME['text_main'],
+                        'border': 'none',
+                        'fontSize': '12px',
+                        'whiteSpace': 'normal',
+                        'height': 'auto',
+                    },
+                    style_cell_conditional=[
+                        {'if': {'column_id': 'Date'}, 'width': '80px'},
+                        {'if': {'column_id': 'Asset Count'}, 'width': '80px', 'textAlign': 'center'},
+                        {'if': {'column_id': 'Holdings'}, 'minWidth': '300px'},
+                    ],
+                    style_header={
+                        'backgroundColor': THEME['table_header'], 
+                        'color': THEME['text_main'], 
+                        'fontWeight': 'bold', 
+                        'textAlign': 'left',
+                        'border': 'none'
+                    },
+                    style_data_conditional=[
+                        {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                    ],
+                    style_table={'overflowX': 'auto', 'maxHeight': '400px', 'overflowY': 'auto'}
+                )
+            ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'})
+            
+            return fig_alloc, fig_pnl, metrics_table, asset_changes_table
             
         except Exception as e:
             traceback.print_exc()
             err_fig = go.Figure().update_layout(title=f"Error: {str(e)}", template=THEME['chart_template'])
-            return err_fig, err_fig, None
+            return err_fig, err_fig, None, html.Div(f"Error: {str(e)}", style={'color': THEME['danger']})
 
     # 6. Futures Backtest Callbacks
     @app.callback(
