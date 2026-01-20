@@ -84,6 +84,15 @@ DIVERSIFICATION_RECOMMENDATIONS = {
     'timestamp': None   # When the analysis was run
 }
 
+# Global state for selected factor pool (shared between Factor tab and Backtest tab)
+SELECTED_FACTOR_POOL = {
+    'ir_factors': ['IRDL.CN', 'IRDL.US', 'IRSL.CN', 'IRSL.US'],  # Default selection
+    'sp_factors': ['SPDL.IRS', 'SPDL.CDB'],
+    'fx_factors': ['FXDL.USDCNY'],
+    'cmd_factors': ['CMDL.AU', 'CMDL.CU'],
+    'timestamp': None
+}
+
 # ============================================================================
 # Factor to Asset Mapping Table
 # ============================================================================
@@ -281,6 +290,104 @@ def get_assets_from_factors(factor_list: list) -> list:
 def build_multiasset_factor_layout():
     """Build the layout for the Factor (Regime) tab."""
     return html.Div([
+        
+        # Hidden store to persist factor selections across tab switches
+        dcc.Store(id='factor-selection-store', storage_type='session', data={
+            'ir': SELECTED_FACTOR_POOL['ir_factors'],
+            'sp': SELECTED_FACTOR_POOL['sp_factors'],
+            'fx': SELECTED_FACTOR_POOL['fx_factors'],
+            'cmd': SELECTED_FACTOR_POOL['cmd_factors']
+        }),
+        
+        # Factor Selection Panel at the top
+        html.Div([
+            html.H5("🎯 Factor Selection Pool", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
+            html.P("Select factors to include in correlation analysis:", style={'color': THEME['text_sub'], 'fontSize': '13px', 'marginBottom': '10px'}),
+            
+            # Interest Rate Factors
+            html.Div([
+                html.H6("📊 Interest Rates (IR)", style={'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '14px'}),
+                dcc.Checklist(
+                    id='factor-selection-ir',
+                    options=[
+                        {'label': ' IRDL.CN (China Level)', 'value': 'IRDL.CN'},
+                        {'label': ' IRDL.US (US Level)', 'value': 'IRDL.US'},
+                        {'label': ' IRDL.EU (Europe Level)', 'value': 'IRDL.EU'},
+                        {'label': ' IRDL.JP (Japan Level)', 'value': 'IRDL.JP'},
+                        {'label': ' IRDL.UK (UK Level)', 'value': 'IRDL.UK'},
+                        {'label': ' IRSL.CN (China Slope)', 'value': 'IRSL.CN'},
+                        {'label': ' IRSL.US (US Slope)', 'value': 'IRSL.US'},
+                        {'label': ' IRSL.EU (Europe Slope)', 'value': 'IRSL.EU'},
+                        {'label': ' IRSL.JP (Japan Slope)', 'value': 'IRSL.JP'},
+                        {'label': ' IRSL.UK (UK Slope)', 'value': 'IRSL.UK'},
+                    ],
+                    inline=True,
+                    labelStyle={'color': THEME['text_main'], 'marginRight': '15px', 'fontSize': '12px'},
+                    inputStyle={'marginRight': '5px'},
+                    style={'marginBottom': '12px'}
+                ),
+            ], style={'marginBottom': '15px'}),
+            
+            # Spread Factors
+            html.Div([
+                html.H6("📈 Spreads (SP)", style={'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '14px'}),
+                dcc.Checklist(
+                    id='factor-selection-sp',
+                    options=[
+                        {'label': ' SPDL.IRS (IRS Level)', 'value': 'SPDL.IRS'},
+                        {'label': ' SPSL.IRS (IRS Slope)', 'value': 'SPSL.IRS'},
+                        {'label': ' SPDL.CDB (CDB Level)', 'value': 'SPDL.CDB'},
+                        {'label': ' SPSL.CDB (CDB Slope)', 'value': 'SPSL.CDB'},
+                        {'label': ' SPDL.ICP (ICP Level)', 'value': 'SPDL.ICP'},
+                    ],
+                    inline=True,
+                    labelStyle={'color': THEME['text_main'], 'marginRight': '15px', 'fontSize': '12px'},
+                    inputStyle={'marginRight': '5px'},
+                    style={'marginBottom': '12px'}
+                ),
+            ], style={'marginBottom': '15px'}),
+            
+            # FX Factors
+            html.Div([
+                html.H6("💱 FX", style={'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '14px'}),
+                dcc.Checklist(
+                    id='factor-selection-fx',
+                    options=[
+                        {'label': ' FXDL.USDCNY', 'value': 'FXDL.USDCNY'},
+                        {'label': ' FXDL.EURCNY', 'value': 'FXDL.EURCNY'},
+                        {'label': ' FXDL.JPYCNY', 'value': 'FXDL.JPYCNY'},
+                        {'label': ' FXDL.GBPCNY', 'value': 'FXDL.GBPCNY'},
+                    ],
+                    inline=True,
+                    labelStyle={'color': THEME['text_main'], 'marginRight': '15px', 'fontSize': '12px'},
+                    inputStyle={'marginRight': '5px'},
+                    style={'marginBottom': '12px'}
+                ),
+            ], style={'marginBottom': '15px'}),
+            
+            # Commodity Factors
+            html.Div([
+                html.H6("🪙 Commodities (CMD)", style={'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '14px'}),
+                dcc.Checklist(
+                    id='factor-selection-cmd',
+                    options=[
+                        {'label': ' CMDL.AU (Gold)', 'value': 'CMDL.AU'},
+                        {'label': ' CMDL.AL (Aluminium)', 'value': 'CMDL.AL'},
+                        {'label': ' CMDL.CU (Copper)', 'value': 'CMDL.CU'},
+                        {'label': ' CMDL.SC (Crude Oil)', 'value': 'CMDL.SC'},
+                    ],
+                    inline=True,
+                    labelStyle={'color': THEME['text_main'], 'marginRight': '15px', 'fontSize': '12px'},
+                    inputStyle={'marginRight': '5px'},
+                    style={'marginBottom': '12px'}
+                ),
+            ], style={'marginBottom': '10px'}),
+            
+            html.Div([
+                html.Span(id='factor-pool-count', style={'color': THEME['text_sub'], 'fontSize': '12px', 'fontStyle': 'italic'}),
+            ]),
+            
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px', 'border': f'1px solid {THEME["table_header"]}', 'marginBottom': '20px'}),
 
                 # New Correlation Analysis Section
         html.Div([
@@ -815,9 +922,21 @@ def build_multiasset_backtest_layout():
     return html.Div([
         html.H4("Historical Allocation Analysis (Correlation-Based)", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
         html.P(
-            "Strategy: At each month start, run correlation analysis to select diversified assets, then apply risk parity allocation.",
-            style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '15px', 'fontStyle': 'italic'}
+            "Strategy: At each month start, run correlation analysis to select diversified assets, then apply PCA Factor Risk Parity allocation.",
+            style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '10px', 'fontStyle': 'italic'}
         ),
+        
+        # Factor Pool Info Banner
+        html.Div([
+            html.Span("📊 Using Factor Pool from Factor tab: ", style={'fontWeight': 'bold', 'color': THEME['text_main']}),
+            html.Span(id='backtest-factor-pool-display', style={'color': THEME['accent'], 'fontSize': '12px'}),
+        ], style={'padding': '8px 12px', 'backgroundColor': THEME['bg_input'], 'borderRadius': '4px', 'marginBottom': '10px', 'border': f'1px solid {THEME["accent"]}'}),
+        
+        # Dynamic Data Range Info (will be updated based on selected factors)
+        html.Div([
+            html.Span(id='backtest-min-date-info', children="ℹ️ Calculating minimum supported date...", 
+                     style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'}),
+        ], style={'marginBottom': '15px'}),
         
         # Row 1: Date Range and Capital
         html.Div([
@@ -827,9 +946,9 @@ def build_multiasset_backtest_layout():
                 html.Div([
                     dcc.DatePickerRange(
                         id='history-date-range',
-                        min_date_allowed=datetime(2015, 1, 1).date(),
+                        min_date_allowed=datetime(2019, 1, 1).date(),
                         max_date_allowed=datetime.now().date(),
-                        start_date=datetime(datetime.now().year - 1, 1, 1).date(),
+                        start_date=datetime(2024, 1, 1).date(),
                         end_date=datetime.now().date(),
                         display_format='YYYY-MM-DD',
                         style={'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
@@ -1386,18 +1505,97 @@ def register_multiasset_callbacks(app):
         except Exception as e:
             return go.Figure().update_layout(title=f"Error plotting data: {str(e)}", template=THEME['chart_template'])
 
-    # 3.5 Correlation Rank Callback
+    # 3.4 Factor Selection State Restoration (from Store)
+    @app.callback(
+        [Output('factor-selection-ir', 'value'),
+         Output('factor-selection-sp', 'value'),
+         Output('factor-selection-fx', 'value'),
+         Output('factor-selection-cmd', 'value')],
+        Input('factor-selection-store', 'data')
+    )
+    def restore_factor_selections(stored_data):
+        """Restore factor selections from store when tab is reloaded."""
+        if not stored_data:
+            return (
+                SELECTED_FACTOR_POOL['ir_factors'],
+                SELECTED_FACTOR_POOL['sp_factors'],
+                SELECTED_FACTOR_POOL['fx_factors'],
+                SELECTED_FACTOR_POOL['cmd_factors']
+            )
+        return (
+            stored_data.get('ir', SELECTED_FACTOR_POOL['ir_factors']),
+            stored_data.get('sp', SELECTED_FACTOR_POOL['sp_factors']),
+            stored_data.get('fx', SELECTED_FACTOR_POOL['fx_factors']),
+            stored_data.get('cmd', SELECTED_FACTOR_POOL['cmd_factors'])
+        )
+    
+    # 3.5 Factor Pool Counter and Store Updater
+    @app.callback(
+        [Output('factor-pool-count', 'children'),
+         Output('factor-selection-store', 'data')],
+        [Input('factor-selection-ir', 'value'),
+         Input('factor-selection-sp', 'value'),
+         Input('factor-selection-fx', 'value'),
+         Input('factor-selection-cmd', 'value')],
+        prevent_initial_call=True
+    )
+    def update_factor_pool_count(ir_factors, sp_factors, fx_factors, cmd_factors):
+        # Store selected factors in global state for cross-tab access
+        SELECTED_FACTOR_POOL['ir_factors'] = ir_factors or []
+        SELECTED_FACTOR_POOL['sp_factors'] = sp_factors or []
+        SELECTED_FACTOR_POOL['fx_factors'] = fx_factors or []
+        SELECTED_FACTOR_POOL['cmd_factors'] = cmd_factors or []
+        SELECTED_FACTOR_POOL['timestamp'] = datetime.now()
+        
+        # Prepare data for store
+        store_data = {
+            'ir': ir_factors or [],
+            'sp': sp_factors or [],
+            'fx': fx_factors or [],
+            'cmd': cmd_factors or []
+        }
+        
+        total = len(ir_factors or []) + len(sp_factors or []) + len(fx_factors or []) + len(cmd_factors or [])
+        if total == 0:
+            message = "⚠️ No factors selected. Please select at least 2 factors for correlation analysis."
+        elif total == 1:
+            message = f"ℹ️ {total} factor selected. Need at least 2 for correlation analysis."
+        else:
+            message = f"✅ {total} factors selected in pool (shared with Backtest tab)"
+        
+        return message, store_data
+    
+    # 3.6 Correlation Rank Callback
     @app.callback(
         [Output('correlation-results-container', 'children'),
          Output('low-corr-factors-store', 'data')],
         Input('rank-correlations-btn', 'n_clicks'),
         [State('correlation-period-selector', 'value'),
-         State('correlation-top-pairs-selector', 'value')],
+         State('correlation-top-pairs-selector', 'value'),
+         State('factor-selection-ir', 'value'),
+         State('factor-selection-sp', 'value'),
+         State('factor-selection-fx', 'value'),
+         State('factor-selection-cmd', 'value')],
         prevent_initial_call=True
     )
-    def update_correlation_ranks(n_clicks, period, top_pairs):
+    def update_correlation_ranks(n_clicks, period, top_pairs, ir_factors, sp_factors, fx_factors, cmd_factors):
         if not n_clicks:
             return html.Div(), []
+        
+        # Combine all selected factors
+        selected_factors = []
+        if ir_factors:
+            selected_factors.extend(ir_factors)
+        if sp_factors:
+            selected_factors.extend(sp_factors)
+        if fx_factors:
+            selected_factors.extend(fx_factors)
+        if cmd_factors:
+            selected_factors.extend(cmd_factors)
+        
+        if len(selected_factors) < 2:
+            return html.Div("⚠️ Please select at least 2 factors for correlation analysis.", 
+                          style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}), []
         
         try:
             loader = RiskFactorLoader(DIR_INPUT)
@@ -1406,6 +1604,14 @@ def register_multiasset_callbacks(app):
             
             if factor_levels is None or factor_levels.empty:
                 return html.Div("No factor data available.", style={'color': THEME['warning']}), []
+            
+            # Filter to only selected factors
+            available_factors = [f for f in selected_factors if f in factor_levels.columns]
+            if len(available_factors) < 2:
+                return html.Div(f"⚠️ Only {len(available_factors)} of selected factors have data. Need at least 2.", 
+                              style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}), []
+            
+            factor_levels = factor_levels[available_factors]
 
             # Determine start date based on period
             end_date = factor_levels.index.max()
@@ -2047,6 +2253,69 @@ def register_multiasset_callbacks(app):
             return (html.Div(f"Error: {str(e)}", style={'color': THEME['danger']}),
                     error_msg, "", {})
 
+    # 4.5 Backtest Factor Pool Display and Min Date Info
+    @app.callback(
+        [Output('backtest-factor-pool-display', 'children'),
+         Output('backtest-min-date-info', 'children')],
+        [Input('run-history-button', 'n_clicks')],
+        [State('backtest-corr-lookback', 'value')],
+        prevent_initial_call=False
+    )
+    def update_backtest_factor_pool_display(n_clicks, corr_lookback):
+        """Display the current factor pool from Factor tab and calculate minimum supported date."""
+        all_factors = []
+        all_factors.extend(SELECTED_FACTOR_POOL.get('ir_factors', []))
+        all_factors.extend(SELECTED_FACTOR_POOL.get('sp_factors', []))
+        all_factors.extend(SELECTED_FACTOR_POOL.get('fx_factors', []))
+        all_factors.extend(SELECTED_FACTOR_POOL.get('cmd_factors', []))
+        
+        if not all_factors:
+            return ("⚠️ No factors selected. Go to Factor tab to select factors.",
+                    "ℹ️ Select factors first to see minimum supported date.")
+        
+        # Calculate minimum supported date based on selected factors
+        try:
+            loader = RiskFactorLoader(DIR_INPUT)
+            risk_factors = loader.load_risk_factors(use_cache=True)
+            risk_factors.index = pd.to_datetime(risk_factors.index)
+            
+            available_factors = [f for f in all_factors if f in risk_factors.columns]
+            if len(available_factors) >= 2:
+                # Find the latest start date among selected factors
+                factor_data = risk_factors[available_factors].dropna(how='any')
+                factor_data_start = factor_data.index.min()
+                factor_data_end = factor_data.index.max()
+                
+                # Determine lookback period
+                if corr_lookback == '6M':
+                    lookback_delta = relativedelta(months=6)
+                elif corr_lookback == '1Y':
+                    lookback_delta = relativedelta(years=1)
+                else:
+                    lookback_delta = relativedelta(months=3)
+                
+                earliest_valid_date = factor_data_start + lookback_delta
+                
+                # Find the limiting factor (the one with latest start date)
+                latest_factor = None
+                latest_start = None
+                for f in available_factors:
+                    f_start = risk_factors[f].dropna().index.min()
+                    if latest_start is None or f_start > latest_start:
+                        latest_start = f_start
+                        latest_factor = f
+                
+                min_date_info = (f"ℹ️ Min supported date: {earliest_valid_date.strftime('%Y-%m-%d')} "
+                               f"(Data: {factor_data_start.strftime('%Y-%m-%d')} ~ {factor_data_end.strftime('%Y-%m-%d')}, "
+                               f"limited by {latest_factor})")
+            else:
+                min_date_info = "⚠️ Not enough factors available in data."
+        except Exception as e:
+            min_date_info = f"⚠️ Error calculating date range: {str(e)}"
+        
+        factor_display = f"{len(all_factors)} factors: {', '.join(all_factors)}"
+        return factor_display, min_date_info
+
     # 5. Historical Analysis (Backtest Tab) - Correlation-Based Strategy
     @app.callback(
         [Output('historical-allocation-chart', 'figure'),
@@ -2083,8 +2352,10 @@ def register_multiasset_callbacks(app):
         
         try:
             # Parse dates
+            print(f"\n[DEBUG] Received dates: start_date={start_date}, end_date={end_date}")
             start_date = pd.to_datetime(start_date) if start_date else None
             end_date = pd.to_datetime(end_date) if end_date else None
+            print(f"[DEBUG] Parsed dates: start_date={start_date}, end_date={end_date}")
             top_pairs = int(top_pairs) if top_pairs else 10
             
             # Load risk factor data
@@ -2097,9 +2368,66 @@ def register_multiasset_callbacks(app):
                 err_fig = go.Figure().update_layout(title="No risk factor data available", template=THEME['chart_template'])
                 return err_fig, err_fig, None, html.Div("No data", style={'color': THEME['warning']})
             
+            # Get selected factors from global factor pool (set in Factor tab)
+            selected_factors = []
+            selected_factors.extend(SELECTED_FACTOR_POOL.get('ir_factors', []))
+            selected_factors.extend(SELECTED_FACTOR_POOL.get('sp_factors', []))
+            selected_factors.extend(SELECTED_FACTOR_POOL.get('fx_factors', []))
+            selected_factors.extend(SELECTED_FACTOR_POOL.get('cmd_factors', []))
+            
+            if len(selected_factors) < 2:
+                err_fig = go.Figure().update_layout(
+                    title="⚠️ Please select at least 2 factors in the Factor tab first",
+                    template=THEME['chart_template'],
+                    paper_bgcolor=THEME['bg_main'],
+                    plot_bgcolor=THEME['bg_main'],
+                    font={'color': THEME['text_main']}
+                )
+                return err_fig, err_fig, None, html.Div(
+                    "Go to Factor tab and select factors for the analysis pool.", 
+                    style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}
+                )
+            
+            print(f"Using factor pool from Factor tab: {selected_factors}")
+            
+            # Filter risk_factors to only include selected factors that exist in data
+            available_factors = [f for f in selected_factors if f in risk_factors.columns]
+            if len(available_factors) < 2:
+                err_fig = go.Figure().update_layout(
+                    title=f"⚠️ Only {len(available_factors)} of selected factors found in data",
+                    template=THEME['chart_template'],
+                    paper_bgcolor=THEME['bg_main'],
+                    plot_bgcolor=THEME['bg_main'],
+                    font={'color': THEME['text_main']}
+                )
+                missing = [f for f in selected_factors if f not in risk_factors.columns]
+                return err_fig, err_fig, None, html.Div(
+                    f"Missing factors: {missing}", 
+                    style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}
+                )
+            
+            # Get the actual data range for selected factors
+            # Use dropna(how='any') to ensure ALL selected factors have data
+            selected_factor_data = risk_factors[available_factors].dropna(how='any')
+            factor_data_start = selected_factor_data.index.min()
+            factor_data_end = selected_factor_data.index.max()
+            
+            # Find which factor limits the start date (latest starting factor)
+            limiting_factors = []
+            for f in available_factors:
+                f_start = risk_factors[f].dropna().index.min()
+                if f_start is not None and f_start >= factor_data_start - pd.Timedelta(days=30):
+                    limiting_factors.append((f, f_start.date()))
+            limiting_factors.sort(key=lambda x: x[1], reverse=True)
+            
+            print(f"Available factors in data: {available_factors}")
+            print(f"Selected factor data range (ALL factors): {factor_data_start.date()} to {factor_data_end.date()}")
+            if limiting_factors:
+                print(f"Limiting factors (latest start): {limiting_factors[:3]}")
+            
             # Set date range
             if not end_date:
-                end_date = risk_factors.index.max()
+                end_date = factor_data_end
             if not start_date:
                 start_date = end_date - relativedelta(years=1)
             
@@ -2113,13 +2441,38 @@ def register_multiasset_callbacks(app):
             else:
                 corr_lookback_delta = relativedelta(months=3)
             
-            # Generate rebalance dates (beginning of each month)
+            # Calculate earliest valid rebalance date based on selected factor data
+            earliest_valid_date = factor_data_start + corr_lookback_delta
+            
+            print(f"[DEBUG] factor_data_start={factor_data_start.date()}, lookback={corr_lookback}")
+            print(f"[DEBUG] earliest_valid_date={earliest_valid_date.date()}")
+            print(f"[DEBUG] User start_date={start_date.date()}, end_date={end_date.date()}")
+            
+            # Check if user's selected start date is before minimum supported date
+            if start_date < earliest_valid_date:
+                limiting_factor_info = f" (limited by {limiting_factors[0][0]})" if limiting_factors else ""
+                err_fig = go.Figure().update_layout(
+                    title=f"⚠️ Selected start date {start_date.strftime('%Y-%m-%d')} is before minimum supported date {earliest_valid_date.strftime('%Y-%m-%d')}{limiting_factor_info}",
+                    template=THEME['chart_template'],
+                    paper_bgcolor=THEME['bg_main'],
+                    plot_bgcolor=THEME['bg_main'],
+                    font={'color': THEME['text_main']}
+                )
+                return err_fig, err_fig, None, html.Div(
+                    f"Please select a start date on or after {earliest_valid_date.strftime('%Y-%m-%d')}. "
+                    f"The minimum date is determined by factor data availability (starts {factor_data_start.strftime('%Y-%m-%d')}) "
+                    f"plus the correlation lookback period ({corr_lookback}).",
+                    style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}
+                )
+            
+            # Generate rebalance dates (beginning of each month) - now starting from user's selected date
             rebalance_dates = []
             current_date = start_date.replace(day=1)
             while current_date <= end_date:
-                if current_date >= risk_factors.index.min() + corr_lookback_delta:
-                    rebalance_dates.append(current_date)
+                rebalance_dates.append(current_date)
                 current_date += relativedelta(months=1)
+            
+            print(f"[DEBUG] Rebalance dates: {len(rebalance_dates)} from {rebalance_dates[0].date()} to {rebalance_dates[-1].date()}")
             
             if not rebalance_dates:
                 err_fig = go.Figure().update_layout(title="Not enough historical data for the selected period", template=THEME['chart_template'])
@@ -2140,10 +2493,12 @@ def register_multiasset_callbacks(app):
             print(f"\n{'='*60}")
             print(f"Running Correlation-Based Backtest: {start_date.date()} to {end_date.date()}")
             print(f"Rebalance dates: {len(rebalance_dates)}")
+            print(f"First rebalance: {rebalance_dates[0].date() if rebalance_dates else 'N/A'}")
+            print(f"Last rebalance: {rebalance_dates[-1].date() if rebalance_dates else 'N/A'}")
             print(f"{'='*60}")
             
             for rebalance_date in rebalance_dates:
-                # --- Step 1: Run Correlation Analysis ---
+                # --- Step 1: Run Correlation Analysis on Selected Factor Pool ---
                 corr_end = rebalance_date
                 corr_start = rebalance_date - corr_lookback_delta
                 
@@ -2152,9 +2507,12 @@ def register_multiasset_callbacks(app):
                     print(f"  {rebalance_date.date()}: Skipped (insufficient data)")
                     continue
                 
-                # Exclude IRCV (Curvature) factors from correlation analysis
-                ircv_cols = [col for col in df_subset.columns if col.startswith('IRCV')]
-                df_subset = df_subset.drop(columns=ircv_cols, errors='ignore')
+                # Filter to only selected factors from the Factor tab
+                available_factors = [f for f in selected_factors if f in df_subset.columns]
+                if len(available_factors) < 2:
+                    print(f"  {rebalance_date.date()}: Skipped (not enough factors in data)")
+                    continue
+                df_subset = df_subset[available_factors]
                 
                 # Calculate daily changes for correlation
                 df_changes = df_subset.diff().dropna()
@@ -2242,6 +2600,10 @@ def register_multiasset_callbacks(app):
                 err_fig = go.Figure().update_layout(title="No valid rebalance periods found", template=THEME['chart_template'])
                 return err_fig, err_fig, None, html.Div("No valid periods", style={'color': THEME['warning']})
             
+            # Use user-selected date range for display (we already validated it's valid)
+            display_start = start_date
+            display_end = end_date
+            
             # --- Calculate Daily PnL ---
             all_dates = sorted(risk_factors.loc[(risk_factors.index >= start_date) & (risk_factors.index <= end_date)].index)
             sorted_rebalance_dates = sorted(allocations_by_date.keys())
@@ -2310,7 +2672,7 @@ def register_multiasset_callbacks(app):
                     ))
             
             fig_alloc.update_layout(
-                title="Historical Portfolio Allocation (Monthly Correlation-Based Rebalancing)",
+                title=f"Historical Portfolio Allocation ({display_start.strftime('%Y-%m-%d')} to {display_end.strftime('%Y-%m-%d')})",
                 xaxis_title="Date", 
                 yaxis_title="Allocation (Million CNY)",
                 hovermode='x unified', 
@@ -2337,9 +2699,9 @@ def register_multiasset_callbacks(app):
                 ))
             
             fig_pnl.update_layout(
-                title="Cumulative PnL (Million CNY)",
+                title=f"Cumulative PnL ({display_start.strftime('%Y-%m-%d')} to {display_end.strftime('%Y-%m-%d')})",
                 xaxis_title="Date", 
-                yaxis_title="Cumulative PnL",
+                yaxis_title="Cumulative PnL (Million CNY)",
                 hovermode='x unified', 
                 template=THEME['chart_template'], 
                 height=350,
