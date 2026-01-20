@@ -1,0 +1,15 @@
+{
+  "job_id": "259d0076bafc",
+  "state": "RUNNING",
+  "created_at": "2026-01-19T12:25:51.732389",
+  "started_at": "2026-01-19T12:25:51.732414",
+  "ended_at": null,
+  "cmd": [
+    "C:\\Users\\CMBC\\.conda\\envs\\dev\\python.exe",
+    "D:\\PyProjects\\FIEngine\\bin-v4.0\\main.py",
+    "update-data"
+  ],
+  "returncode": null,
+  "error": null,
+  "pid": 14312
+}
