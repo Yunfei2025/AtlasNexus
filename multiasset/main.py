@@ -37,21 +37,21 @@ from settings.paths import DIR_INPUT
 # Shared risk factor loader to avoid recomputing PCA on every call
 _SHARED_LOADER: RiskFactorLoader | None = None
 
-def _get_shared_loader() -> RiskFactorLoader:
+def _get_shared_loader(use_deterministic: bool = True) -> RiskFactorLoader:
     """Get or create the shared RiskFactorLoader instance."""
     global _SHARED_LOADER
-    if _SHARED_LOADER is None:
-        _SHARED_LOADER = RiskFactorLoader(DIR_INPUT)
+    if _SHARED_LOADER is None or _SHARED_LOADER.use_deterministic != use_deterministic:
+        _SHARED_LOADER = RiskFactorLoader(DIR_INPUT, use_deterministic=use_deterministic)
     return _SHARED_LOADER
 
 
-def create_bond_universe(pca_analyzer=None) -> List[MultiFactorBondAsset]:
+def create_bond_universe(analyzer=None) -> List[MultiFactorBondAsset]:
     """
     Create comprehensive bond universe with multiple tenors.
     
     Args:
-        pca_analyzer: Optional PCARiskFactorAnalyzer for computing PCA-based sensitivities.
-                      If provided, sensitivities will be derived from PCA loadings.
+        analyzer: Optional risk factor analyzer (PCA or deterministic) for computing sensitivities.
+                  If provided, sensitivities will be derived from the analyzer.
     
     Returns:
         List of MultiFactorBondAsset objects for all countries and tenors
@@ -72,18 +72,18 @@ def create_bond_universe(pca_analyzer=None) -> List[MultiFactorBondAsset]:
         for tenor in tenors:
             name = f"{display_country}{tenor}"
             
-            # Get PCA-based sensitivities if analyzer is available
-            pca_sens = None
-            if pca_analyzer is not None:
-                pca_sens = pca_analyzer.get_tenor_sensitivities(rf_country, tenor)
-                if pca_sens:
+            # Get sensitivities if analyzer is available
+            sensitivities = None
+            if analyzer is not None:
+                sensitivities = analyzer.get_tenor_sensitivities(rf_country, tenor)
+                if sensitivities:
                     # Multiply by duration to get value sensitivity
-                    # PCA loading gives yield change per PC unit
+                    # Loading gives yield change per factor unit
                     # Value change = -duration × yield change
                     defaults = get_default_sensitivities(tenor)
                     duration = defaults.get('IRDL', 5.0)
-                    pca_sens = {
-                        k: -duration * v for k, v in pca_sens.items()
+                    sensitivities = {
+                        k: -duration * v for k, v in sensitivities.items()
                     }
             
             bond = MultiFactorBondAsset(
@@ -91,19 +91,19 @@ def create_bond_universe(pca_analyzer=None) -> List[MultiFactorBondAsset]:
                 country=rf_country,  # Use risk factor country code
                 tenor=tenor,
                 sensitivities=None,  # Use defaults for duration
-                pca_sensitivities=pca_sens  # PCA-derived sensitivities
+                pca_sensitivities=sensitivities  # Derived sensitivities
             )
             bonds.append(bond)
     
     return bonds
 
 
-def create_spread_universe(pca_analyzer=None) -> List[Asset]:
+def create_spread_universe(analyzer=None) -> List[Asset]:
     """
     Create spread universe (IRS, CDB, ICP).
     
     Args:
-        pca_analyzer: Optional PCARiskFactorAnalyzer for computing PCA-based sensitivities.
+        analyzer: Optional risk factor analyzer (PCA or deterministic) for computing sensitivities.
     
     Returns:
         List of Asset objects for spread instruments
@@ -167,7 +167,7 @@ def create_commodity_universe() -> List[CommodityAsset]:
     return commodities
 
 
-def create_default_portfolio(use_cache: bool = True) -> Portfolio:
+def create_default_portfolio(use_cache: bool = True, use_deterministic: bool = True) -> Portfolio:
     """
     Create the default multi-asset portfolio with comprehensive bond universe.
     
@@ -178,22 +178,25 @@ def create_default_portfolio(use_cache: bool = True) -> Portfolio:
     
     Args:
         use_cache: Whether to use cached PCA calculations (default: True)
+        use_deterministic: If True, use deterministic factors; if False, use PCA
     
     Returns:
         Portfolio with default assets configured
     """
     # Use shared loader to avoid recomputing PCA
-    loader = _get_shared_loader()
+    loader = _get_shared_loader(use_deterministic=use_deterministic)
     
-    # Trigger PCA calculation to get sensitivities
-    # This calls calculate_full_history_pca_scores which stores loadings
+    # Trigger PCA/deterministic calculation to get sensitivities
     loader.load_risk_factors(use_cache=use_cache)
     
-    # Create comprehensive bond universe with PCA-derived sensitivities
-    bonds = create_bond_universe(pca_analyzer=loader.pca_analyzer)
+    # Select the appropriate analyzer based on configuration
+    analyzer = loader.det_analyzer if loader.use_deterministic else loader.pca_analyzer
+    
+    # Create comprehensive bond universe with derived sensitivities
+    bonds = create_bond_universe(analyzer=analyzer)
     
     # Create spread universe
-    spreads = create_spread_universe(pca_analyzer=loader.pca_analyzer)
+    spreads = create_spread_universe(analyzer=analyzer)
     
     # Create commodity universe
     commodities = create_commodity_universe()
@@ -207,26 +210,30 @@ def create_default_portfolio(use_cache: bool = True) -> Portfolio:
     return portfolio
 
 
-def create_custom_portfolio(selected_asset_names: List[str], use_cache: bool = True) -> Portfolio:
+def create_custom_portfolio(selected_asset_names: List[str], use_cache: bool = True, use_deterministic: bool = True) -> Portfolio:
     """
     Create a custom portfolio based on a list of asset names.
     
     Args:
         selected_asset_names: List of asset names to include
         use_cache: Whether to use cached PCA calculations (default: True)
+        use_deterministic: If True, use deterministic factors; if False, use PCA
         
     Returns:
         Portfolio with only the selected assets
     """
     # Use shared loader to avoid recomputing PCA
-    loader = _get_shared_loader()
+    loader = _get_shared_loader(use_deterministic=use_deterministic)
     
-    # Trigger PCA calculation to get sensitivities
+    # Trigger PCA/deterministic calculation to get sensitivities
     loader.load_risk_factors(use_cache=use_cache)
     
-    # Generate all possible assets with PCA-derived sensitivities
-    all_bonds = create_bond_universe(pca_analyzer=loader.pca_analyzer)
-    all_spreads = create_spread_universe(pca_analyzer=loader.pca_analyzer)
+    # Select the appropriate analyzer based on configuration
+    analyzer = loader.det_analyzer if loader.use_deterministic else loader.pca_analyzer
+    
+    # Generate all possible assets with derived sensitivities
+    all_bonds = create_bond_universe(analyzer=analyzer)
+    all_spreads = create_spread_universe(analyzer=analyzer)
     all_commodities = create_commodity_universe()
     all_possible_assets = all_bonds + all_spreads + all_commodities # type: ignore
     
@@ -249,15 +256,17 @@ def create_custom_portfolio(selected_asset_names: List[str], use_cache: bool = T
 def run_risk_parity_allocation(total_capital: float = 10_000_000_000,
                                 use_cache: bool = True,
                                 selected_assets: List[str] = None,
-                                risk_budgets: Dict[str, float] | None = None) -> tuple:
+                                risk_budgets: Dict[str, float] | None = None,
+                                use_deterministic: bool = True) -> tuple:
     """
-    Run PCA factor-level risk parity allocation using OOP interface.
+    Run factor-level risk parity allocation using OOP interface.
     
     Args:
         total_capital: Total capital to allocate (default: 10 billion CNY)
         use_cache: Whether to use cached calculations for performance
         selected_assets: Optional list of asset names to include in the portfolio.
         risk_budgets: Optional dictionary of risk budgets per factor
+        use_deterministic: If True, use deterministic factors; if False, use PCA
     
     Returns:
         Tuple of (summary DataFrame, asset returns DataFrame, volatilities Series,
@@ -267,10 +276,10 @@ def run_risk_parity_allocation(total_capital: float = 10_000_000_000,
     print(f"[DEBUG] Starting run_risk_parity_allocation with {len(selected_assets) if selected_assets else 0} assets")
     if selected_assets and len(selected_assets) > 0:
         print(f"[DEBUG] Creating custom portfolio for: {selected_assets}")
-        portfolio = create_custom_portfolio(selected_assets, use_cache=use_cache)
+        portfolio = create_custom_portfolio(selected_assets, use_cache=use_cache, use_deterministic=use_deterministic)
     else:
         print("[DEBUG] Creating default portfolio")
-        portfolio = create_default_portfolio(use_cache=use_cache)
+        portfolio = create_default_portfolio(use_cache=use_cache, use_deterministic=use_deterministic)
     
     print(f"[DEBUG] Portfolio created with {len(portfolio.assets)} assets")
     print("[DEBUG] Creating optimizer...")

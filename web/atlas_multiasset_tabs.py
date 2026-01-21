@@ -570,7 +570,22 @@ def build_multiasset_portfolio_layout():
                         clearable=False,
                         style={'width': '100px', 'marginRight': '5px', 'fontSize': '13px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
                     ),
-                    html.Span("CNY", style={'color': THEME['text_sub'], 'fontSize': '14px'}),
+                    html.Span("CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
+                    
+                    # Risk Factor Model Selection
+                    html.Label("Model:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
+                    dcc.RadioItems(
+                        id='risk-model-selector',
+                        options=[
+                            {'label': ' Deterministic', 'value': 'deterministic'},
+                            {'label': ' PCA', 'value': 'pca'},
+                        ],
+                        value='deterministic',
+                        inline=True,
+                        labelStyle={'color': THEME['text_main'], 'marginRight': '15px'},
+                        inputStyle={'marginRight': '5px'},
+                        style={'fontSize': '13px'}
+                    ),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
             ], style={'display': 'flex', 'alignItems': 'center', 'padding': '15px 20px', 'backgroundColor': THEME['bg_input'], 'borderBottom': f'1px solid {THEME["table_header"]}', 'borderRadius': '8px 8px 0 0'}),
             
@@ -1960,11 +1975,12 @@ def register_multiasset_callbacks(app):
         [Input('run-button', 'n_clicks')],
         [State('capital-input', 'value'),
          State('capital-unit', 'value'),
+         State('risk-model-selector', 'value'),
          State('asset-pool-store', 'data'),
          State({'type': 'risk-budget-input', 'index': ALL}, 'value'),
          State({'type': 'risk-budget-input', 'index': ALL}, 'id')]
     )
-    def run_analysis(n_clicks, total_capital, capital_unit, asset_pool, budget_values, budget_ids):
+    def run_analysis(n_clicks, total_capital, capital_unit, risk_model, asset_pool, budget_values, budget_ids):
         if n_clicks == 0:
             return (html.Div("No data available. Click 'Run Analysis' to start.", style={'color': THEME['text_sub']}),
                     "", "", {})
@@ -1995,10 +2011,13 @@ def register_multiasset_callbacks(app):
                     except (ValueError, TypeError):
                         pass
 
+            # Determine use_deterministic flag
+            use_deterministic = (risk_model == 'deterministic')
+
             # Run optimization
             summary, returns, vols, factor_exp, factor_risk, portfolio = run_risk_parity_allocation(
                 total_capital=total_capital_cny, use_cache=True, selected_assets=selected_asset_names,
-                risk_budgets=risk_budgets
+                risk_budgets=risk_budgets, use_deterministic=use_deterministic
             )
             
             if summary.empty:

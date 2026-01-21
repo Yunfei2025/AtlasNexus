@@ -268,6 +268,38 @@ class DeterministicRiskFactorAnalyzer:
             result[spread_type] = pd.DataFrame(weights, index=tenors)
         return result
 
+    def get_tenor_sensitivities(self, country: str, tenor: str) -> Dict[str, float]:
+        """
+        Get deterministic sensitivities for a specific tenor.
+        
+        Returns the sensitivity of this tenor's yield to each deterministic factor.
+        Sensitivity = deterministic weight for that tenor and factor.
+        
+        Args:
+            country: Country code (e.g., 'CN', 'US') - not used for deterministic weights
+            tenor: Tenor string (e.g., '1Y', '10Y')
+            
+        Returns:
+            Dict with IRDL, IRSL, IRCV sensitivities (value change per 1-unit factor change)
+        """
+        tenor_order = ['1Y', '2Y', '5Y', '10Y', '30Y']
+        tenor_idx = tenor_order.index(tenor)
+        
+        sensitivities = {}
+        factor_map = {
+            'Level': 'IRDL',
+            'Slope': 'IRSL',
+            'Curvature': 'IRCV',
+        }
+        
+        for factor_name, ir_factor in factor_map.items():
+            if factor_name in self.weights:
+                weights = self.weights[factor_name]
+                if tenor_idx < len(weights):
+                    sensitivities[ir_factor] = float(weights[tenor_idx])
+        
+        return sensitivities
+
 
 class PCARiskFactorAnalyzer:
     """
