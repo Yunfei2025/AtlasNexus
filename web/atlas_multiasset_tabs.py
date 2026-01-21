@@ -1466,9 +1466,10 @@ def register_multiasset_callbacks(app):
 
     @app.callback(
         Output('factor-history-chart', 'figure'),
-        [Input('factor-type-selector', 'value')]
+        [Input('factor-type-selector', 'value'),
+         Input('factor-history-chart', 'relayoutData')]
     )
-    def update_factor_history_chart(selected_factors):
+    def update_factor_history_chart(selected_factors, relayout_data):
         if not selected_factors:
             empty_fig = go.Figure()
             empty_fig.update_layout(title="Please select factors from the dropdowns above",
@@ -1482,39 +1483,105 @@ def register_multiasset_callbacks(app):
             if factor_levels is None or factor_levels.empty:
                 raise ValueError("Cannot load risk factor data")
             
+            # Ensure index is DatetimeIndex for robust comparison
+            if not isinstance(factor_levels.index, pd.DatetimeIndex):
+                factor_levels.index = pd.to_datetime(factor_levels.index)
+
             fig = go.Figure()
+            
+            # Determine date range from relayoutData
+            start_date = None
+            end_date = None
+            
+            if relayout_data:
+                if 'xaxis.range[0]' in relayout_data:
+                    start_date = relayout_data['xaxis.range[0]']
+                    end_date = relayout_data['xaxis.range[1]']
+                elif 'xaxis.range' in relayout_data:
+                    start_date = relayout_data['xaxis.range'][0]
+                    end_date = relayout_data['xaxis.range'][1]
+            
+            # Calculate dynamic Y-axis range
+            y_min = float('inf')
+            y_max = float('-inf')
+            has_data = False
+            
             for factor in selected_factors:
                 if factor in factor_levels.columns:
                     series = factor_levels[factor].dropna()
                     if not series.empty:
                         fig.add_trace(go.Scatter(x=series.index, y=series.values, mode='lines', name=factor))
+                        
+                        # Filter for min/max calculation
+                        if start_date and end_date:
+                            try:
+                                # Convert strings to compatible timestamps
+                                ts_start = pd.to_datetime(start_date)
+                                ts_end = pd.to_datetime(end_date)
+                                
+                                mask = (series.index >= ts_start) & (series.index <= ts_end)
+                                visible_series = series.loc[mask]
+                            except Exception:
+                                # Fallback if date parsing fails
+                                visible_series = series
+                        else:
+                            visible_series = series
+                            
+                        if not visible_series.empty:
+                            current_min = visible_series.min()
+                            current_max = visible_series.max()
+                            y_min = min(y_min, current_min)
+                            y_max = max(y_max, current_max)
+                            has_data = True
             
+            yaxis_config = dict(gridcolor=THEME['table_header'])
+            
+            if has_data:
+                # Add 5% padding
+                y_range = y_max - y_min
+                if y_range == 0:
+                    y_range = abs(y_min) * 0.1 if y_min != 0 else 1.0
+                
+                # If relayout triggered this, we should enforce the y-range
+                # But if we don't restrict it, autoscale usually works on the full data, not visible data.
+                # Plotly's default autoscale considers all data points unless manually set.
+                # So we must manually set it for "zoom-dependent auto-scale".
+                yaxis_config['range'] = [y_min - y_range * 0.05, y_max + y_range * 0.05]
+                # yaxis_config['autorange'] = False # Implicit if range is set
+            
+            # Persist the x-range if it exists
+            xaxis_config = dict(
+                # Disable rangeslider to allow effective Y-axis auto-scaling on zoom
+                rangeslider=dict(visible=False),
+                rangeselector=dict(
+                    buttons=[
+                        dict(count=1, label="1M", step="month", stepmode="backward"),
+                        dict(count=3, label="3M", step="month", stepmode="backward"),
+                        dict(count=6, label="6M", step="month", stepmode="backward"),
+                        dict(count=1, label="YTD", step="year", stepmode="todate"),
+                        dict(count=1, label="1Y", step="year", stepmode="backward"),
+                        dict(count=3, label="3Y", step="year", stepmode="backward"),
+                        dict(count=5, label="5Y", step="year", stepmode="backward"),
+                        dict(step="all", label="All")
+                    ],
+                    bgcolor=THEME['bg_card'], activecolor=THEME['accent'], font=dict(size=11, color='#000'), x=0, y=1.15
+                ),
+                type="date",
+                gridcolor=THEME['table_header']
+            )
+            
+            if start_date and end_date:
+                 xaxis_config['range'] = [start_date, end_date]
+
             fig.update_layout(
                 xaxis_title="Date", yaxis_title="Value", hovermode='x unified',
                 template=THEME['chart_template'], height=500,
                 paper_bgcolor=THEME['bg_main'], plot_bgcolor=THEME['bg_main'],
                 font={'color': THEME['text_main']},
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font={'color': THEME['text_main']}),
-                xaxis=dict(
-                    rangeslider=dict(visible=True, thickness=0.05),
-                    rangeselector=dict(
-                        buttons=[
-                            dict(count=1, label="1M", step="month", stepmode="backward"),
-                            dict(count=3, label="3M", step="month", stepmode="backward"),
-                            dict(count=6, label="6M", step="month", stepmode="backward"),
-                            dict(count=1, label="YTD", step="year", stepmode="todate"),
-                            dict(count=1, label="1Y", step="year", stepmode="backward"),
-                            dict(count=3, label="3Y", step="year", stepmode="backward"),
-                            dict(count=5, label="5Y", step="year", stepmode="backward"),
-                            dict(step="all", label="All")
-                        ],
-                        bgcolor=THEME['bg_card'], activecolor=THEME['accent'], font=dict(size=11, color='#000'), x=0, y=1.15
-                    ),
-                    type="date",
-                    gridcolor=THEME['table_header']
-                ),
-                yaxis=dict(gridcolor=THEME['table_header']),
-                uirevision='constant'
+                xaxis=xaxis_config,
+                yaxis=yaxis_config,
+                # Removed constant uirevision to allow the Y-axis range update to take precedence
             )
             return fig
         except Exception as e:
