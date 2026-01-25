@@ -35,6 +35,14 @@ from web.atlas_fi_tabs import (
     register_callbacks as register_fi_callbacks,
 )
 
+from web.atlas_alpha_tabs import (
+    build_candidates_layout,
+    build_scoring_layout,
+    build_basket_layout,
+    build_backtest_layout,
+    register_alpha_callbacks,
+)
+
 from web.atlas_multiasset_tabs import (
     build_multiasset_factor_layout,
     build_multiasset_portfolio_layout,
@@ -74,6 +82,7 @@ def _serve_pairs_regression():
 # Register callbacks for migrated legacy FI layouts (Pairs tab refresh callback).
 register_fi_callbacks(app)
 register_multiasset_callbacks(app)
+register_alpha_callbacks(app)
 
 
 def build_header():
@@ -232,7 +241,7 @@ def _render_tab(tab):
         return html.Div(
             [
                 html.H5("Alpha Book (Bottom-up)"),
-                html.P("Planned: candidates → scoring → sizing → draft tickets (manual execution)."),
+                html.P("Relative value alpha: candidates → correlation check → scoring → risk parity sizing → basket."),
                 html.Div(
                     [
                         dcc.Tabs(
@@ -242,6 +251,8 @@ def _render_tab(tab):
                             children=[
                                 dcc.Tab(label="CANDIDATES", value="candidates", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="SCORING", value="scoring", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="BACKTEST", value="backtest", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="BASKET", value="basket", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="SPREAD INFO", value="spreads", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="PAIRS", value="pairs", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="CURVES", value="curves", style=tab_style, selected_style=tab_selected_style),
@@ -360,19 +371,13 @@ def _render_beta_subtabs(subtab: str):
 )
 def _render_alpha_subtabs(subtab: str):
     if subtab == "candidates":
-        return html.Div(
-            [
-                html.H6("CANDIDATES"),
-                html.P("Placeholder: Scan for potential alpha candidates based on spread deviations and technical signals."),
-            ]
-        )
+        return build_candidates_layout()
     if subtab == "scoring":
-        return html.Div(
-            [
-                html.H6("SCORING"),
-                html.P("Placeholder: Score and rank candidates using multi-factor models and risk metrics."),
-            ]
-        )
+        return build_scoring_layout()
+    if subtab == "backtest":
+        return build_backtest_layout()
+    if subtab == "basket":
+        return build_basket_layout()
     if subtab == "spreads":
         return build_spreads_layout()
     if subtab == "pairs":
@@ -381,6 +386,7 @@ def _render_alpha_subtabs(subtab: str):
         return build_curves_layout()
 
     return html.Div([html.P(f"Unknown Alpha subtab: {subtab}")])
+
 
 
 if __name__ == "__main__":
