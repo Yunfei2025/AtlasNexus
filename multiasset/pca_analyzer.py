@@ -12,6 +12,295 @@ from sklearn.decomposition import PCA
 from .config import CURVE_CONFIG, SPREAD_CONFIG
 
 
+# Deterministic factor weights for yield curve analysis
+# Tenors: 1Y, 2Y, 5Y, 10Y, 30Y
+DETERMINISTIC_WEIGHTS = {
+    'Level': np.array([0.2, 0.2, 0.2, 0.2, 0.2]),      # Equal weights (sum=1)
+    'Slope': np.array([-0.4, -0.2, 0.0, 0.2, 0.4]),    # Short negative, long positive (sum=0)
+    'Curvature': np.array([0.25, -0.25, 0.0, -0.25, 0.25])  # Wings vs belly (sum=0)
+}
+
+# Deterministic spread weights
+# CDB: 5 tenors (1Y, 2Y, 5Y, 10Y, 30Y) - Level and Slope
+DETERMINISTIC_SPREAD_WEIGHTS = {
+    'CDB': {
+        'Level': np.array([0.2, 0.2, 0.2, 0.2, 0.2]),     # Equal weights (sum=1)
+        'Slope': np.array([-0.4, -0.2, 0.0, 0.2, 0.4]),   # Short negative, long positive (sum=0)
+    },
+    # IRS: 3 tenors (1Y, 2Y, 5Y) - Level and Slope
+    'IRS': {
+        'Level': np.array([1/3, 1/3, 1/3]),              # Equal weights (sum=1)
+        'Slope': np.array([-0.5, 0.0, 0.5]),             # Short negative, long positive (sum=0)
+    },
+    # ICP: 1 tenor (1Y) - Level only
+    'ICP': {
+        'Level': np.array([1.0]),                        # Single tenor (sum=1)
+    },
+}
+
+
+class DeterministicRiskFactorAnalyzer:
+    """
+    Deterministic (rule-based) risk factor analyzer for yield curves.
+    
+    Uses predefined weights for Level, Slope, Curvature factors instead of PCA.
+    Assumes tenors: 1Y, 2Y, 5Y, 10Y, 30Y
+    """
+    
+    def __init__(self, input_dir: Union[str, Path]):
+        """
+        Initialize the deterministic risk factor analyzer.
+        
+        Args:
+            input_dir: Directory containing curve data files
+        """
+        self.input_dir = str(input_dir)
+        self._full_history_scores_cache: Optional[pd.DataFrame] = None
+        self.weights = DETERMINISTIC_WEIGHTS.copy()
+        
+    def _load_curve_data(self, country: str) -> Optional[pd.DataFrame]:
+        """
+        Load yield curve DataFrame for a given country.
+        
+        Returns None if data is unavailable or insufficient.
+        """
+        try:
+            if country in CURVE_CONFIG:
+                pkl_file, pkl_key, cols = CURVE_CONFIG[country]
+                data = pd.read_pickle(os.path.join(self.input_dir, pkl_file))
+                if pkl_key is not None:
+                    data = data[pkl_key]
+                if cols is not None:
+                    available = [c for c in cols if c in data.columns]
+                    if len(available) < 3:
+                        return None
+                    data = data[available]
+                return data
+            else:
+                # Default: load from fxcurve_ts.pkl
+                curves_ts = pd.read_pickle(os.path.join(self.input_dir, "fxcurve_ts.pkl"))
+                return curves_ts.get(country)
+        except Exception as e:
+            print(f"Warning: Could not load curve data for {country}: {e}")
+            return None
+    
+    def _load_spread_data(self, spread_type: str) -> Optional[pd.DataFrame]:
+        """
+        Load spread curve DataFrame for a given spread type.
+        
+        Returns None if data is unavailable or insufficient.
+        """
+        try:
+            if spread_type not in SPREAD_CONFIG:
+                # Handle ICP separately (from database-px.pkl)
+                if spread_type == 'ICP':
+                    data = pd.read_pickle(os.path.join(self.input_dir, 'database-px.pkl'))
+                    if 'ICP' in data:
+                        icp_col = '中债商业银行同业存单到期收益率(AAA):1年'
+                        if icp_col in data['ICP'].columns:
+                            return data['ICP'][[icp_col]]
+                return None
+            
+            pkl_file, pkl_key, cols = SPREAD_CONFIG[spread_type]
+            data = pd.read_pickle(os.path.join(self.input_dir, pkl_file))
+            data = data[pkl_key]
+            
+            available = [c for c in cols if c in data.columns]
+            if len(available) < 1:
+                return None
+            
+            return data[available]
+        except Exception as e:
+            print(f"Warning: Could not load spread data for {spread_type}: {e}")
+            return None
+    
+    def calculate_full_history_deterministic_scores(
+        self, 
+        countries: Optional[List[str]] = None
+    ) -> pd.DataFrame:
+        """
+        Calculate deterministic factor scores over full available history.
+        
+        Args:
+            countries: List of country codes to analyze. If None, uses all in CURVE_CONFIG.
+            
+        Returns:
+            DataFrame with columns like 'Level.US', 'Slope.US', 'Curvature.US', etc.
+        """
+        if self._full_history_scores_cache is not None:
+            return self._full_history_scores_cache
+        
+        if countries is None:
+            countries = list(CURVE_CONFIG.keys())
+        
+        all_scores = pd.DataFrame()
+        
+        for country in countries:
+            curve_data = self._load_curve_data(country)
+            if curve_data is None or curve_data.empty:
+                print(f"Skipping {country}: no curve data")
+                continue
+            
+            # Calculate yield changes (daily differences in bp)
+            yield_changes = curve_data.diff().dropna()
+            
+            if yield_changes.empty:
+                print(f"Skipping {country}: no yield changes")
+                continue
+            
+            # Apply deterministic weights to yield changes
+            # Each factor is a weighted combination of tenor changes
+            for factor_name, weights in self.weights.items():
+                # Ensure we have the right number of tenors
+                n_tenors = min(len(weights), len(yield_changes.columns))
+                if n_tenors < len(weights):
+                    print(f"Warning: {country} has only {n_tenors} tenors, expected {len(weights)}")
+                    # Use available tenors only
+                    w = weights[:n_tenors]
+                    tenor_changes = yield_changes.iloc[:, :n_tenors]
+                else:
+                    w = weights
+                    tenor_changes = yield_changes.iloc[:, :len(weights)]
+                
+                # Factor return = weighted sum of tenor changes
+                factor_returns = (tenor_changes * w).sum(axis=1)
+                
+                # Cumulative sum to get "level" of the factor
+                factor_level = factor_returns.cumsum()
+                
+                # Store with naming convention: Factor.Country
+                col_name = f"{factor_name}.{country}"
+                all_scores[col_name] = factor_level
+        
+        self._full_history_scores_cache = all_scores
+        return all_scores
+    
+    def calculate_full_history_deterministic_spread_scores(
+        self,
+        spread_types: Optional[List[str]] = None
+    ) -> pd.DataFrame:
+        """
+        Calculate deterministic spread factor scores over full available history.
+        
+        Args:
+            spread_types: List of spread types to analyze. If None, uses all in DETERMINISTIC_SPREAD_WEIGHTS.
+            
+        Returns:
+            DataFrame with columns like 'Level.CDB', 'Slope.CDB', 'Level.IRS', etc.
+        """
+        if spread_types is None:
+            spread_types = list(DETERMINISTIC_SPREAD_WEIGHTS.keys())
+        
+        all_scores = pd.DataFrame()
+        
+        for spread_type in spread_types:
+            spread_data = self._load_spread_data(spread_type)
+            if spread_data is None or spread_data.empty:
+                print(f"Skipping {spread_type}: no spread data")
+                continue
+            
+            # Calculate spread changes (daily differences in bp)
+            spread_changes = spread_data.diff().dropna()
+            
+            if spread_changes.empty:
+                print(f"Skipping {spread_type}: no spread changes")
+                continue
+            
+            # Get weights for this spread type
+            if spread_type not in DETERMINISTIC_SPREAD_WEIGHTS:
+                print(f"Skipping {spread_type}: no weights defined")
+                continue
+            
+            spread_weights = DETERMINISTIC_SPREAD_WEIGHTS[spread_type]
+            
+            # Apply deterministic weights to spread changes
+            for factor_name, weights in spread_weights.items():
+                # Ensure we have the right number of tenors
+                n_tenors = min(len(weights), len(spread_changes.columns))
+                if n_tenors < len(weights):
+                    print(f"Warning: {spread_type} has only {n_tenors} tenors, expected {len(weights)}")
+                    w = weights[:n_tenors]
+                    tenor_changes = spread_changes.iloc[:, :n_tenors]
+                else:
+                    w = weights
+                    tenor_changes = spread_changes.iloc[:, :len(weights)]
+                
+                # Factor return = weighted sum of tenor changes
+                factor_returns = (tenor_changes * w).sum(axis=1)
+                
+                # Cumulative sum to get "level" of the factor
+                factor_level = factor_returns.cumsum()
+                
+                # Store with naming convention: Factor.SpreadType
+                col_name = f"{factor_name}.{spread_type}"
+                all_scores[col_name] = factor_level
+        
+        return all_scores
+    
+    def get_weights_dataframe(self) -> pd.DataFrame:
+        """
+        Return the deterministic weights as a DataFrame for inspection.
+        
+        Returns:
+            DataFrame with factors as columns and tenors as rows
+        """
+        tenors = ['1Y', '2Y', '5Y', '10Y', '30Y']
+        weights_df = pd.DataFrame(self.weights, index=tenors)
+        return weights_df
+    
+    def get_spread_weights_dataframes(self) -> Dict[str, pd.DataFrame]:
+        """
+        Return the deterministic spread weights as DataFrames for inspection.
+        
+        Returns:
+            Dict mapping spread type to DataFrame with factors as columns and tenors as rows
+        """
+        result = {}
+        for spread_type, weights in DETERMINISTIC_SPREAD_WEIGHTS.items():
+            if spread_type == 'CDB':
+                tenors = ['1Y', '2Y', '5Y', '10Y', '30Y']
+            elif spread_type == 'IRS':
+                tenors = ['1Y', '2Y', '5Y']
+            elif spread_type == 'ICP':
+                tenors = ['1Y']
+            else:
+                continue
+            result[spread_type] = pd.DataFrame(weights, index=tenors)
+        return result
+
+    def get_tenor_sensitivities(self, country: str, tenor: str) -> Dict[str, float]:
+        """
+        Get deterministic sensitivities for a specific tenor.
+        
+        Returns the sensitivity of this tenor's yield to each deterministic factor.
+        Sensitivity = deterministic weight for that tenor and factor.
+        
+        Args:
+            country: Country code (e.g., 'CN', 'US') - not used for deterministic weights
+            tenor: Tenor string (e.g., '1Y', '10Y')
+            
+        Returns:
+            Dict with IRDL, IRSL, IRCV sensitivities (value change per 1-unit factor change)
+        """
+        tenor_order = ['1Y', '2Y', '5Y', '10Y', '30Y']
+        tenor_idx = tenor_order.index(tenor)
+        
+        sensitivities = {}
+        factor_map = {
+            'Level': 'IRDL',
+            'Slope': 'IRSL',
+            'Curvature': 'IRCV',
+        }
+        
+        for factor_name, ir_factor in factor_map.items():
+            if factor_name in self.weights:
+                weights = self.weights[factor_name]
+                if tenor_idx < len(weights):
+                    sensitivities[ir_factor] = float(weights[tenor_idx])
+        
+        return sensitivities
+
+
 class PCARiskFactorAnalyzer:
     """
     PCA-based risk factor analyzer for yield curves.

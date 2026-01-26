@@ -130,8 +130,9 @@ def create_layout():
     if last_run_data:
         if 'asset_pool' in last_run_data:
             initial_pool = last_run_data['asset_pool']
-            if initial_pool:
-                initial_n_clicks = 1
+            # Note: Do NOT auto-trigger run_analysis on page load
+            # User should click 'RUN ANALYSIS' manually to ensure Risk Budgets are loaded
+            # initial_n_clicks remains 0
         
         if 'metadata' in last_run_data:
             meta = last_run_data['metadata']
@@ -439,18 +440,10 @@ def create_layout():
                             ),
                         ], style={'display': 'flex', 'alignItems': 'center'}),
                         
-                        # PCA Factor Risk Parity Option
+                        # Method display (fixed to PCA Factor Risk Parity)
                         html.Div([
-                            html.Label("Optimization Method:", style={'fontWeight': 'bold', 'marginRight': '10px'}),
-                            dcc.RadioItems(
-                                id='optimization-method',
-                                options=[
-                                    {'label': 'PCA Factor Risk Parity', 'value': 'pca_factor_rp'}
-                                ],
-                                value='pca_factor_rp',
-                                inline=True,
-                                style={'fontSize': '13px'}
-                            ),
+                            html.Label("Method: ", style={'fontWeight': 'bold', 'marginRight': '5px'}),
+                            html.Span("PCA Factor Risk Parity", style={'color': '#27ae60', 'fontWeight': 'bold'}),
                         ], style={'display': 'flex', 'alignItems': 'center', 'marginLeft': '30px'}),
                         
                         # Performance Metrics Table

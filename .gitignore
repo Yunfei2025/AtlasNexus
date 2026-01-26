@@ -12,3 +12,6 @@ web/apps/cache/
 *.db
 *.db-shm
 *.db-wal
+
+runs/_jobs/*
+runs/*

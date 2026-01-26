@@ -6,23 +6,29 @@ import os
 import pandas as pd
 from typing import Dict, Optional, Union
 from pathlib import Path
-from multiasset.pca_analyzer import PCARiskFactorAnalyzer
+from multiasset.pca_analyzer import PCARiskFactorAnalyzer, DeterministicRiskFactorAnalyzer
 
 
 class RiskFactorLoader:
     """Loads and caches risk factor data."""
     
-    def __init__(self, input_dir: Union[str, Path]):
+    def __init__(self, input_dir: Union[str, Path], use_deterministic: bool = True):
         """
         Initialize the risk factor loader.
         
         Args:
             input_dir: Directory containing curve and database files
+            use_deterministic: If True, use deterministic factors; if False, use PCA
         """
         self.input_dir = str(input_dir)
         self._risk_factors_cache: Optional[pd.DataFrame] = None
-        # Create PCA analyzer for IR factors
-        self.pca_analyzer = PCARiskFactorAnalyzer(input_dir)
+        self.use_deterministic = use_deterministic
+        
+        # Create analyzers for IR factors
+        if use_deterministic:
+            self.det_analyzer = DeterministicRiskFactorAnalyzer(input_dir)
+        else:
+            self.pca_analyzer = PCARiskFactorAnalyzer(input_dir)
     
     def load_risk_factors(self, use_cache: bool = True) -> pd.DataFrame:
         """
@@ -61,34 +67,58 @@ class RiskFactorLoader:
     
     def _load_ir_factors(self, risk_factors: pd.DataFrame) -> pd.DataFrame:
         """
-        Load interest rate level, slope, and curvature factors using full-history PCA.
+        Load interest rate level, slope, and curvature factors.
         
-        Uses PCARiskFactorAnalyzer to compute PC1 (Level), PC2 (Slope), PC3 (Curvature)
-        from yield curve data over the entire history.
+        Uses either deterministic weights or PCA depending on configuration.
         """
-        # Calculate full-history PCA scores for all countries
-        pca_scores = self.pca_analyzer.calculate_full_history_pca_scores(n_components=3)
-        
-        if pca_scores.empty:
-            print("Warning: No PCA scores computed for IR factors")
-            return risk_factors
-        
-        # Map PCA components to IR factor names:
-        # PC1 -> IRDL (Level), PC2 -> IRSL (Slope), PC3 -> IRCV (Curvature)
-        pc_to_ir_map = {
-            'PC1': 'IRDL',
-            'PC2': 'IRSL',
-            'PC3': 'IRCV',
-        }
-        
-        for col in pca_scores.columns:
-            # Column format: PC1.US, PC2.CN, etc.
-            parts = col.split('.')
-            if len(parts) == 2:
-                pc_name, country = parts
-                if pc_name in pc_to_ir_map:
-                    ir_name = f"{pc_to_ir_map[pc_name]}.{country}"
-                    risk_factors[ir_name] = pca_scores[col]
+        if self.use_deterministic:
+            # Use deterministic (rule-based) factors
+            det_scores = self.det_analyzer.calculate_full_history_deterministic_scores()
+            
+            if det_scores.empty:
+                print("Warning: No deterministic scores computed for IR factors")
+                return risk_factors
+            
+            # Map deterministic factor names to IR factor codes:
+            # Level -> IRDL, Slope -> IRSL, Curvature -> IRCV
+            factor_to_ir_map = {
+                'Level': 'IRDL',
+                'Slope': 'IRSL',
+                'Curvature': 'IRCV',
+            }
+            
+            for col in det_scores.columns:
+                # Column format: Level.US, Slope.CN, etc.
+                parts = col.split('.')
+                if len(parts) == 2:
+                    factor_name, country = parts
+                    if factor_name in factor_to_ir_map:
+                        ir_name = f"{factor_to_ir_map[factor_name]}.{country}"
+                        risk_factors[ir_name] = det_scores[col]
+        else:
+            # Use PCA-based factors
+            pca_scores = self.pca_analyzer.calculate_full_history_pca_scores(n_components=3)
+            
+            if pca_scores.empty:
+                print("Warning: No PCA scores computed for IR factors")
+                return risk_factors
+            
+            # Map PCA components to IR factor names:
+            # PC1 -> IRDL (Level), PC2 -> IRSL (Slope), PC3 -> IRCV (Curvature)
+            pc_to_ir_map = {
+                'PC1': 'IRDL',
+                'PC2': 'IRSL',
+                'PC3': 'IRCV',
+            }
+            
+            for col in pca_scores.columns:
+                # Column format: PC1.US, PC2.CN, etc.
+                parts = col.split('.')
+                if len(parts) == 2:
+                    pc_name, country = parts
+                    if pc_name in pc_to_ir_map:
+                        ir_name = f"{pc_to_ir_map[pc_name]}.{country}"
+                        risk_factors[ir_name] = pca_scores[col]
         
         return risk_factors
     
@@ -96,38 +126,63 @@ class RiskFactorLoader:
         """
         Load spread level and slope factors.
         
-        For IRS and CDB: Uses PCA to compute PC1 (SPDL - Level) and PC2 (SPSL - Slope)
-        For ICP: Loads the original series directly as SPDL.ICP (no PCA - single tenor)
+        Uses either deterministic weights or PCA depending on configuration.
+        For IRS and CDB: Level and Slope factors
+        For ICP: Level factor only (single tenor)
         """
-        # Calculate full-history PCA scores for IRS and CDB (2 components)
-        pca_scores = self.pca_analyzer.calculate_full_history_spread_pca_scores(n_components=2)
-        
-        if not pca_scores.empty:
-            # Map PCA components to spread factor names:
-            # PC1 -> SPDL (Level), PC2 -> SPSL (Slope)
-            pc_to_sp_map = {
-                'PC1': 'SPDL',
-                'PC2': 'SPSL',
+        if self.use_deterministic:
+            # Use deterministic (rule-based) spread factors
+            det_scores = self.det_analyzer.calculate_full_history_deterministic_spread_scores()
+            
+            if det_scores.empty:
+                print("Warning: No deterministic spread scores computed")
+                return risk_factors
+            
+            # Map deterministic factor names to spread factor codes:
+            # Level -> SPDL, Slope -> SPSL
+            factor_to_sp_map = {
+                'Level': 'SPDL',
+                'Slope': 'SPSL',
             }
             
-            for col in pca_scores.columns:
-                # Column format: PC1.IRS, PC2.CDB, etc.
+            for col in det_scores.columns:
+                # Column format: Level.CDB, Slope.IRS, Level.ICP, etc.
                 parts = col.split('.')
                 if len(parts) == 2:
-                    pc_name, spread = parts
-                    if pc_name in pc_to_sp_map:
-                        sp_name = f"{pc_to_sp_map[pc_name]}.{spread}"
-                        risk_factors[sp_name] = pca_scores[col]
-        
-        # Load ICP directly (no PCA - single tenor: 1Y)
-        try:
-            cn_data = pd.read_pickle(os.path.join(self.input_dir, 'database-px.pkl'))
-            if 'ICP' in cn_data:
-                icp_col = '中债商业银行同业存单到期收益率(AAA):1年'
-                if icp_col in cn_data['ICP'].columns:
-                    risk_factors['SPDL.ICP'] = cn_data['ICP'][icp_col]
-        except Exception as e:
-            print(f"Warning: Could not load ICP data: {e}")
+                    factor_name, spread = parts
+                    if factor_name in factor_to_sp_map:
+                        sp_name = f"{factor_to_sp_map[factor_name]}.{spread}"
+                        risk_factors[sp_name] = det_scores[col]
+        else:
+            # Use PCA-based spread factors
+            pca_scores = self.pca_analyzer.calculate_full_history_spread_pca_scores(n_components=2)
+            
+            if not pca_scores.empty:
+                # Map PCA components to spread factor names:
+                # PC1 -> SPDL (Level), PC2 -> SPSL (Slope)
+                pc_to_sp_map = {
+                    'PC1': 'SPDL',
+                    'PC2': 'SPSL',
+                }
+                
+                for col in pca_scores.columns:
+                    # Column format: PC1.IRS, PC2.CDB, etc.
+                    parts = col.split('.')
+                    if len(parts) == 2:
+                        pc_name, spread = parts
+                        if pc_name in pc_to_sp_map:
+                            sp_name = f"{pc_to_sp_map[pc_name]}.{spread}"
+                            risk_factors[sp_name] = pca_scores[col]
+            
+            # Load ICP directly (no PCA - single tenor: 1Y)
+            try:
+                cn_data = pd.read_pickle(os.path.join(self.input_dir, 'database-px.pkl'))
+                if 'ICP' in cn_data:
+                    icp_col = '中债商业银行同业存单到期收益率(AAA):1年'
+                    if icp_col in cn_data['ICP'].columns:
+                        risk_factors['SPDL.ICP'] = cn_data['ICP'][icp_col]
+            except Exception as e:
+                print(f"Warning: Could not load ICP data: {e}")
         
         return risk_factors
     

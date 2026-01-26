@@ -531,10 +531,9 @@ def update_factor_history_chart(selected_factors):
      State('capital-input', 'value'),
      State('capital-unit', 'value'),
      State('history-date-range', 'start_date'),
-     State('history-date-range', 'end_date'),
-     State('optimization-method', 'value')]
+     State('history-date-range', 'end_date')]
 )
-def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_unit, start_date, end_date, optimization_method):
+def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_unit, start_date, end_date):
     """Update historical allocation analysis."""
     if n_clicks == 0 or not asset_pool:
         return go.Figure(), go.Figure(), None
@@ -577,46 +576,33 @@ def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_un
             total_capital *= 1_000
         
         # Initialize optimizer if needed
-        pca_optimizer = None
-        if optimization_method == 'pca_factor_rp':
-            pca_optimizer = PCAFactorRiskParityOptimizer(
-                portfolio=portfolio, input_dir=str(DIR_INPUT),
-                pca_lookback_years=1.0, vol_lookback_months=3, ewma_lambda=0.94
-            )
+        # Use PCA Factor Risk Parity for optimization
+        pca_optimizer = PCAFactorRiskParityOptimizer(
+            portfolio=portfolio, input_dir=str(DIR_INPUT),
+            pca_lookback_years=1.0, vol_lookback_months=3, ewma_lambda=0.94
+        )
         
         # Calculate allocations for each rebalance date
         history_data = []
         allocations_by_date = {}
         
         for date in rebalance_dates:
-            if optimization_method == 'pca_factor_rp' and pca_optimizer is not None:
-                try:
-                    weights_series, _ = pca_optimizer.fit_and_calculate(pd.Timestamp(date))
-                    weights = weights_series.to_dict()
-                except Exception as e:
-                    print(f"PCA optimization failed at {date}: {e}")
-                    continue
+            try:
+                weights_series, _ = pca_optimizer.fit_and_calculate(pd.Timestamp(date))
+                weights = weights_series.to_dict()
+            except Exception as e:
+                print(f"PCA optimization failed at {date}: {e}")
+                continue
+            
+            # Filter out negligible weights (floating point precision artifacts)
+            weights = {k: v for k, v in weights.items() if abs(v) >= 1e-6}
+            
+            # Renormalize weights after filtering
+            weight_sum = sum(weights.values())
+            if weight_sum > 0:
+                weights = {k: v / weight_sum for k, v in weights.items()}
             else:
-                # Traditional Risk Parity
-                lookback_start = date - relativedelta(months=3)
-                mask = (risk_factors.index <= date) & (risk_factors.index >= lookback_start)
-                filtered_factors = risk_factors.loc[mask]
-                
-                if len(filtered_factors) < 40:
-                    continue
-                
-                volatilities = {}
-                for name, asset in portfolio.assets.items():
-                    vol = asset.get_volatility(filtered_factors, use_cache=False)
-                    volatilities[name] = vol
-                
-                inv_vols = {k: 1.0/v if v > 0 else 0 for k, v in volatilities.items()}
-                sum_inv_vol = sum(inv_vols.values())
-                
-                if sum_inv_vol == 0:
-                    continue
-                
-                weights = {k: v/sum_inv_vol for k, v in inv_vols.items()}
+                continue
             
             # Calculate allocations
             row = {'Date': date}
