@@ -205,6 +205,10 @@ class SlopeSensitiveBondAsset(BondAsset):
         super().__init__(name, level_factor, duration)
         self.slope_factor = slope_factor
         self.slope_sensitivity = -slope_sensitivity  # Negative like duration
+        
+        # IMPORTANT: Register slope factor in self.factors for exposure matrix building
+        # This allows the optimizer to see the slope exposure and differentiate assets
+        self.factors[slope_factor] = self.slope_sensitivity
 
     def calculate_returns(self, risk_factors: pd.DataFrame) -> pd.Series:
         """
