@@ -778,7 +778,7 @@ def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_un
 # RUN DASHBOARD
 # ============================================================================
 
-def run_dashboard(host='127.0.0.1', port=5003, debug=True):
+def run_dashboard(host='127.0.0.1', port=5010, debug=True):
     """Run the dashboard server."""
     print("\n" + "="*80)
     print("Starting Multi-Asset Portfolio Dashboard (Refactored)")

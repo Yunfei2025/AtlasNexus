@@ -146,6 +146,61 @@ class RegimeDetector:
         
         return states, probs
 
+    def predict_with_confidence(self, features, prob_threshold: float = 0.6, min_run_length: int = 3):
+        """
+        Predict regimes and return labeled regimes with confidence filtering and short-run smoothing.
+
+        Steps:
+        - Predict HMM states and posterior probabilities
+        - Mark positions with max posterior < prob_threshold as 'uncertain'
+        - Short runs of 'uncertain' (length <= min_run_length) are filled by the surrounding labels
+
+        Returns:
+            labels (pd.Series), states (np.ndarray), probs (np.ndarray)
+        """
+        if not self.is_fitted:
+            raise ValueError("Model not fitted yet.")
+
+        states, probs = self.predict(features)
+        max_probs = probs.max(axis=1)
+
+        # Map numeric states to regime labels
+        labels = self.map_states_to_regime(states)
+        labels = labels.astype(object)  # allow assignment of 'uncertain'
+
+        # Mark low-confidence points
+        uncertain_mask = max_probs < float(prob_threshold)
+        labels.iloc[uncertain_mask] = 'uncertain'
+
+        # Short-run smoothing: fill short 'uncertain' runs by neighbouring labels
+        vals = labels.values.tolist()
+        n = len(vals)
+        i = 0
+        while i < n:
+            if vals[i] != 'uncertain':
+                i += 1
+                continue
+
+            # start of an uncertain run
+            j = i
+            while j < n and vals[j] == 'uncertain':
+                j += 1
+            run_len = j - i
+            if run_len <= int(min_run_length):
+                # choose fill value: previous non-uncertain if exists, else next non-uncertain
+                prev_val = vals[i-1] if i-1 >= 0 and vals[i-1] != 'uncertain' else None
+                next_val = vals[j] if j < n and vals[j] != 'uncertain' else None
+                fill_val = prev_val or next_val
+                if fill_val is not None:
+                    for k in range(i, j):
+                        vals[k] = fill_val
+            # move index past this run
+            i = j
+
+        labels = pd.Series(vals, index=labels.index)
+
+        return labels, states, probs
+
     def interpret_states(self):
         """
         Print interpretation of states based on feature means.
