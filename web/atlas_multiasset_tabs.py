@@ -40,7 +40,7 @@ try:
     )
     from futures.backtest.strategies import (
         run_ma_strategy, run_bollinger_strategy, run_vwap_strategy,
-        run_intraday_momentum_strategy, run_atr_band_strategy, run_sar_strategy
+        run_intraday_momentum_strategy, run_atr_band_strategy, run_atr_mean_reversion_strategy, run_sar_strategy
     )
     from futures.backtest.metrics import calculate_metrics
     from futures.backtest.regime import RegimeDetector
@@ -2069,14 +2069,18 @@ def register_multiasset_callbacks(app):
         # Build Inputs
         inputs = []
         for factor in sorted_factors:
+            # Defaults: curvature budget often starts at 0; slope factors can be negative (directional tilt)
+            default_value = 0.0 if factor.startswith('IRCV.') else 1.0
+            min_value = -10.0 if factor.startswith(('IRSL.', 'SPSL.')) else 0.0
+
             inputs.append(
                 html.Div([
                     html.Label(factor, style={'color': THEME['text_main'], 'fontSize': '12px', 'width': '80px', 'fontWeight': 'bold'}),
                     dcc.Input(
                         id={'type': 'risk-budget-input', 'index': factor},
                         type='number',
-                        value=1,
-                        min=0,
+                        value=default_value,
+                        min=min_value,
                         step=0.1,
                         style={'width': '60px', 'fontSize': '12px', 'padding': '2px', 'backgroundColor': '#fff', 'color': '#000', 'border': 'none', 'borderRadius': '2px'}
                     ),

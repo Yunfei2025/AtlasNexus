@@ -124,8 +124,8 @@ def create_layout():
     last_run_data = load_last_asset_pool()
     initial_pool = []
     initial_n_clicks = 0
-    initial_capital = 100
-    initial_unit = 'million'
+    initial_capital = 10
+    initial_unit = 'billion'
     
     if last_run_data:
         if 'asset_pool' in last_run_data:

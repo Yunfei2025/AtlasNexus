@@ -152,55 +152,52 @@ class PCAFactorRiskParityOptimizer:
         constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
         
         if risk_budgets:
-            # Absolute Risk Budgeting logic:
-            # 1. Convert budgets (inputs in Millions) to fractional risk of portfolio capital
-            #    BudgetFraction = (Value_Million * 1e6) / Total_Capital
-            #    If Capital=100M, Budget=1M -> Fraction = 0.01 (1%)
-            #    This compares directly with Factor Risk Contribution (approx Factor Vol * Exposure)
-        
-            # Default to very small budget (effectively zero) if factor present but not budgeted?
-            # Or very large (unconstrained)? "Risk Budgeting" implies explicit allocation.
-            # We'll use 0.0001 (small non-zero) for missing, assuming user intended to exclude.
-            
+            # Two modes:
+            # 1) Legacy (all budgets >= 0): treat inputs as MAX absolute factor-risk budgets.
+            # 2) Directional (any budget < 0): treat inputs as SIGNED factor-risk targets.
+            #    This is useful for expressing slope direction (e.g., IRSL negative).
+
+            has_negative_budget = any(
+                (v is not None) and (float(v) < 0.0) for v in risk_budgets.values()
+            )
+
             budget_targets = []
             for f in filtered_factor_names:
-                user_val = risk_budgets.get(f, 0.0) 
-                # Convert '1 unit is million' -> absolute value -> fraction of capital
-                # Note: Factor Risk Contribution here is in Volatility units (e.g. 0.05).
-                # User budget = 1M (VaR/Vol?).
-                # If User budget is 1M (Absolute Volatility in Currency), and Capital is 100M.
-                # Target Vol = 1M/100M = 0.01 (1%).
-                
-                # Check for zero capital edge case
-                if total_capital > 1e-6:
-                    target_vol = (user_val * 1_000_000.0) / total_capital
-                else:
-                    target_vol = 1.0 # Fallback
-                
-                budget_targets.append(target_vol)
-            
-            budget_targets = np.array(budget_targets)
-            
-            # Objective: Minimize squared distance between Risk Contribution and Target
-            # Also enforces 'risk_budgets should be a maximum' via inequality constraint
-            
-            def objective(w):
-                # RC = Factor Vol * Exposure = sigma * (B.T @ w)
-                factor_exposures = B.T @ w
-                factor_risks = np.abs(factor_exposures * sigma_f)
-                
-                # Minimize deviation from max budget
-                # We want to be "close to this value as much as possible"
-                return np.sum((factor_risks - budget_targets) ** 2)
+                user_val = risk_budgets.get(f, 0.0)
+                try:
+                    user_val_f = float(user_val)
+                except (ValueError, TypeError):
+                    user_val_f = 0.0
 
-            # Max constraint: RC <= Budget
-            # Form: Budget - RC >= 0
-            def max_budget_constraint(w):
-                factor_exposures = B.T @ w
-                factor_risks = np.abs(factor_exposures * sigma_f)
-                return budget_targets - factor_risks
-            
-            constraints.append({'type': 'ineq', 'fun': max_budget_constraint})
+                # Convert '1 unit = 1 million' into fraction of total capital.
+                if total_capital > 1e-6:
+                    target = (user_val_f * 1_000_000.0) / total_capital
+                else:
+                    target = 0.0
+
+                budget_targets.append(target)
+
+            budget_targets = np.array(budget_targets)
+
+            if has_negative_budget:
+                # Signed target matching: factor_risk = sigma * exposure (signed)
+                def objective(w):
+                    factor_exposures = B.T @ w
+                    signed_factor_risks = factor_exposures * sigma_f
+                    return np.sum((signed_factor_risks - budget_targets) ** 2)
+            else:
+                # Legacy max-budget behavior: absolute risks constrained by budgets
+                def objective(w):
+                    factor_exposures = B.T @ w
+                    factor_risks = np.abs(factor_exposures * sigma_f)
+                    return np.sum((factor_risks - budget_targets) ** 2)
+
+                def max_budget_constraint(w):
+                    factor_exposures = B.T @ w
+                    factor_risks = np.abs(factor_exposures * sigma_f)
+                    return budget_targets - factor_risks
+
+                constraints.append({'type': 'ineq', 'fun': max_budget_constraint})
 
         else:
             # Legacy/Default Equal Risk Contribution logic
