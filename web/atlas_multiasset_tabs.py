@@ -3129,6 +3129,18 @@ def register_multiasset_callbacks(app):
             if df_resampled.empty:
                 return html.Div("Data is empty after resampling", style={'color': THEME['danger']})
                 
+            # Out-of-sample split calculation
+            oos_start = pd.to_datetime(start_date)  # Use start_date as OOS boundary by default
+            try:
+                # Use last 20% of data as OOS for daily, last 30 days for intraday
+                if trading_mode == 'daily':
+                    cutoff_days = int(len(df_resampled) * 0.2)
+                    oos_start = df_resampled.index[-cutoff_days] if cutoff_days < len(df_resampled) else df_resampled.index[0]
+                else:
+                    oos_start = df_resampled.index[-1] - pd.Timedelta(days=30)
+            except Exception:
+                oos_start = df_resampled.index[0]
+            
             # Run strategies
             results = {}
             if 'MA' in selected_strategies:
@@ -3139,64 +3151,188 @@ def register_multiasset_callbacks(app):
             if 'VWAP' in selected_strategies:
                 results['VWAP'] = run_vwap_strategy(df_resampled, vwap_w)
             if 'Mom' in selected_strategies:
-                results['Mom'] = run_intraday_momentum_strategy(df_resampled, mom_w)
+                results['Mom'] = run_intraday_momentum_strategy(df_resampled, mom_w, vwap_w if 'VWAP' in results else 20)
             if 'ATR' in selected_strategies:
-                results['ATR'] = run_atr_band_strategy(df_resampled, atr_ema_w, atr_w)
+                results['ATR'] = run_atr_mean_reversion_strategy(df_resampled, atr_ema_w, atr_w, atr_mult=2.0)
             if 'SAR' in selected_strategies:
                 results['SAR'] = run_sar_strategy(df_resampled, sar_af, sar_max_af)
 
-            # Create Plotly Chart
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                                vertical_spacing=0.03, row_heights=[0.7, 0.3])
-
-            # Candlestick
-            fig.add_trace(go.Candlestick(
-                x=df_resampled.index,
-                open=df_resampled['open'], high=df_resampled['high'],
-                low=df_resampled['low'], close=df_resampled['close'],
-                name='Price'
-            ), row=1, col=1)
+            # Create 4-panel chart matching futures/backtest layout
+            fig = make_subplots(
+                rows=4, cols=1, 
+                shared_xaxes=False, 
+                vertical_spacing=0.06,
+                row_heights=[0.4, 0.15, 0.25, 0.2],
+                subplot_titles=("Price & Technical Indicators", "Market Regime (Placeholder)", "Cumulative Returns Comparison", "Position Status")
+            )
             
-            # Strategy Equity Curves
-            for name, res in results.items():
-                fig.add_trace(go.Scatter(
-                    x=res.index, 
-                    y=res['cumulative_returns'],
-                    mode='lines', name=f'{name} Equity'
-                ), row=2, col=1)
+            x_index = df_resampled.index.strftime('%Y-%m-%d<br>%H:%M')
+            split_label = oos_start.strftime('%Y-%m-%d<br>%H:%M')
+            
+            # Row 1: Price & Indicators (高对比度配色)
+            fig.add_trace(go.Scatter(x=x_index, y=df_resampled['close'], name='Close Price', line=dict(color='#FFFFFF', width=2.5)), row=1, col=1)
+            
+            if 'MA' in results:
+                df_ma = results['MA']
+                fig.add_trace(go.Scatter(x=x_index, y=df_ma['ma_short'], name=f'MA{ma_s}', line=dict(color='#FFB74D', width=1.5), visible='legendonly'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=x_index, y=df_ma['ma_long'], name=f'MA{ma_l}', line=dict(color='#64B5F6', width=1.5), visible='legendonly'), row=1, col=1)
 
+            if 'SAR' in results:
+                df_sar = results['SAR']
+                fig.add_trace(go.Scatter(x=x_index, y=df_sar['sar'], name='SAR', mode='markers', marker=dict(color='#BDBDBD', size=4), visible='legendonly'), row=1, col=1)
+                
+            if 'Boll' in results:
+                df_boll = results['Boll']
+                fig.add_trace(go.Scatter(x=x_index, y=df_boll['upper_band'], name='Bollinger Upper', line=dict(color='#81C784', width=1.5, dash='dot'), visible='legendonly'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=x_index, y=df_boll['lower_band'], name='Bollinger Lower', line=dict(color='#E57373', width=1.5, dash='dot'), visible='legendonly'), row=1, col=1)
+
+            if 'ATR' in results:
+                df_atr = results['ATR']
+                if 'atr_upper' in df_atr.columns and 'atr_lower' in df_atr.columns:
+                    fig.add_trace(go.Scatter(x=x_index, y=df_atr['atr_upper'], name='ATR Upper', line=dict(color='#FF6B6B', width=1.5, dash='solid')), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=x_index, y=df_atr['atr_lower'], name='ATR Lower', line=dict(color='#4ECDC4', width=1.5, dash='solid')), row=1, col=1)
+                
+            if 'VWAP' in results:
+                df_vwap = results['VWAP']
+                fig.add_trace(go.Scatter(x=x_index, y=df_vwap['vwap'], name='VWAP', line=dict(color='#BA68C8', width=1.5, dash='dash'), visible='legendonly'), row=1, col=1)
+                
+            if 'Mom' in results:
+                df_mom = results['Mom']
+                if 'upper_limit' in df_mom.columns and 'lower_limit' in df_mom.columns:
+                    fig.add_trace(go.Scatter(x=x_index, y=df_mom['upper_limit'], name='Momentum Upper', line=dict(color='#4DD0E1', width=1.5, dash='dashdot'), visible='legendonly'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=x_index, y=df_mom['lower_limit'], name='Momentum Lower', line=dict(color='#F06292', width=1.5, dash='dashdot'), visible='legendonly'), row=1, col=1)
+
+            # Row 2: Market Regime (placeholder - would need regime detector)
+            regime_series = pd.Series(0, index=df_resampled.index)
+            regime_label_series = pd.Series('unknown', index=df_resampled.index)
+            
+            fig.add_trace(go.Scatter(
+                x=x_index,
+                y=regime_series,
+                name='Regime State',
+                mode='lines',
+                line=dict(color='#42A5F5', width=2, shape='hv'),
+                fill='tozeroy',
+                fillcolor='rgba(66, 165, 245, 0.3)',
+                customdata=regime_label_series,
+                hovertemplate='Time: %{x}<br>State: %{y}<br>Regime: %{customdata}<extra></extra>'
+            ), row=2, col=1)
+
+            # Mark OOS split
+            fig.add_vline(
+                x=split_label,
+                line_width=2,
+                line_dash='dash',
+                line_color='#FFFFFF',
+                row=2,
+                col=1
+            )
+            fig.add_annotation(
+                x=split_label,
+                y=0.5,
+                xref='x2',
+                yref='y2',
+                text='OOS Start',
+                showarrow=True,
+                arrowhead=2,
+                ax=20,
+                ay=-30,
+                font=dict(color='#FFFFFF', size=11),
+                bgcolor='rgba(0, 0, 0, 0.6)',
+                bordercolor='#FFFFFF',
+                borderwidth=1
+            )
+
+            # Row 3: Cumulative Returns (鲜艳配色)
+            colors = {'MA': '#42A5F5', 'Boll': '#FFB74D', 'VWAP': '#BA68C8', 'Mom': '#4DD0E1', 'ATR': '#FF8A65', 'SAR': '#F06292'}
+            strategy_meta = [('MA', 'MA'), ('Boll', 'Boll'), ('VWAP', 'VWAP'), ('Mom', 'Momentum'), ('ATR', 'ATR'), ('SAR', 'SAR')]
+            
+            for key, title in strategy_meta:
+                if key in results:
+                    df_res = results[key]
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_index,
+                            y=df_res['cumulative_returns'],
+                            name=f'{title} Returns',
+                            line=dict(color=colors.get(key, '#BDBDBD'), width=2)
+                        ),
+                        row=3,
+                        col=1
+                    )
+            
+            # Row 4: Aggregated Position (高对比度)
+            agg_signal = pd.Series(0, index=df_resampled.index)
+            for key in results.keys():
+                agg_signal += results[key]['signal']
+                     
+            fig.add_trace(go.Scatter(
+                x=x_index, y=agg_signal, name='Aggregated Position', 
+                line=dict(color='#66BB6A', width=2, shape='hv'),
+                fill='tozeroy', fillcolor='rgba(102, 187, 106, 0.25)'
+            ), row=4, col=1)
+
+            # Layout Config
             fig.update_layout(
-                height=600, 
-                title="Backtest Results",
+                height=1200, 
+                hovermode="x unified",
                 template=THEME['chart_template'],
                 paper_bgcolor=THEME['bg_card'],
                 plot_bgcolor=THEME['bg_card'],
                 font={'color': THEME['text_main']},
-                margin=dict(l=50, r=50, t=50, b=50),
-                legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center"),
-                xaxis_rangeslider_visible=False
+                margin=dict(l=50, r=50, t=80, b=50),
+                legend=dict(orientation="h", y=1.02, x=1, xanchor="right")
             )
-            fig.update_xaxes(gridcolor=THEME['table_header'])
+            common_xaxis = dict(type='category', tickmode='auto', nticks=10, showgrid=True, gridcolor=THEME['table_header'])
+            fig.update_xaxes(row=1, col=1, **common_xaxis)
+            fig.update_xaxes(row=2, col=1, showticklabels=False, **common_xaxis)
+            fig.update_xaxes(row=3, col=1, showticklabels=False, **common_xaxis)
+            fig.update_xaxes(row=4, col=1, matches='x2', **common_xaxis)
             fig.update_yaxes(gridcolor=THEME['table_header'])
+            fig.update_layout(xaxis2=dict(matches='x4'), xaxis3=dict(matches='x4'), xaxis4=dict(matches='x2'))
 
-            # Helper for local Metric Card (redefined here or duplicated logic)
+            # Helper for local Metric Card 
             def create_metric_card_local(title, metrics):
                 return html.Div([
-                    html.H6(title, style={'color': THEME['text_sub'], 'marginBottom': '5px', 'fontSize': '14px'}),
+                    html.H6(title, style={'color': THEME['text_sub'], 'marginBottom': '8px', 'fontSize': '14px', 'fontWeight': 'bold'}),
                     html.Div([
-                        html.Div(f"Ret: {metrics.get('Total Return', 'N/A')}", style={'fontWeight': 'bold', 'color': THEME['success'] if str(metrics.get('Total Return')).startswith('+') else THEME['text_main']}),
-                        html.Div(f"DD: {metrics.get('Max Drawdown', 'N/A')}", style={'color': THEME['danger']}),
-                        html.Div(f"Sharpe: {metrics.get('Sharpe Ratio', 'N/A')}"),
-                        html.Div(f"Trades: {metrics.get('Trades', 'N/A')}"),
-                    ], style={'fontSize': '12px', 'lineHeight': '1.5', 'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '5px'})
-                ], style={'backgroundColor': THEME['bg_input'], 'padding': '10px', 'borderRadius': '4px', 'marginBottom': '10px', 'flex': '1', 'minWidth': '150px'})
+                        html.Div([
+                            html.Span("Total Return: ", style={'color': THEME['text_sub']}),
+                            html.Span(f"{metrics.get('Total Return', 'N/A')}", style={'fontWeight': 'bold', 'color': THEME['success'] if str(metrics.get('Total Return', '')).startswith('+') else THEME['text_main']})
+                        ], style={'marginBottom': '4px'}),
+                        html.Div([
+                            html.Span("Max DD: ", style={'color': THEME['text_sub']}),
+                            html.Span(f"{metrics.get('Max Drawdown', 'N/A')}", style={'color': THEME['danger']})
+                        ], style={'marginBottom': '4px'}),
+                        html.Div([
+                            html.Span("Sharpe: ", style={'color': THEME['text_sub']}),
+                            html.Span(f"{metrics.get('Sharpe Ratio', 'N/A')}")
+                        ], style={'marginBottom': '4px'}),
+                        html.Div([
+                            html.Span("Win Rate: ", style={'color': THEME['text_sub']}),
+                            html.Span(f"{metrics.get('Win Rate', 'N/A')}")
+                        ], style={'marginBottom': '4px'}),
+                        html.Div([
+                            html.Span("Trades: ", style={'color': THEME['text_sub']}),
+                            html.Span(f"{metrics.get('Trades', 'N/A')}")
+                        ]),
+                    ], style={'fontSize': '12px', 'lineHeight': '1.6'})
+                ], style={'backgroundColor': THEME['bg_input'], 'padding': '12px', 'borderRadius': '4px', 'marginBottom': '10px', 'flex': '1', 'minWidth': '180px', 'border': f"1px solid {THEME['table_header']}"})
 
-            # Card Display
+            # Calculate OOS metrics and display cards
             cards = []
+            strategy_meta = [('MA', 'MA Crossover'), ('SAR', 'SAR'), ('Boll', 'Bollinger Bands'), ('ATR', 'ATR'), ('VWAP', 'VWAP'), ('Mom', 'Intraday Momentum')]
             
-            for name, res in results.items():
-                m = calculate_metrics(res)
-                cards.append(create_metric_card_local(name, m))
+            for key, title in strategy_meta:
+                if key in results:
+                    # OOS metrics: start at OOS split date
+                    oos_df = results[key].loc[results[key].index >= oos_start].copy()
+                    if not oos_df.empty:
+                        oos_df['cumulative_returns'] = (1 + oos_df['strategy_returns'].fillna(0)).cumprod()
+                        metrics = calculate_metrics(oos_df)
+                    else:
+                        metrics = {}
+                    cards.append(create_metric_card_local(title, metrics))
                 
             return html.Div([
                 html.Div(cards, style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '15px'}),
