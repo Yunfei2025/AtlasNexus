@@ -1054,28 +1054,28 @@ def build_multiasset_backtest_layout():
 
 
 def build_factor_backtest_layout():
-    """Build the layout for the Futures/Factor Backtest tab - uses futures.backtest.layout."""
+    """Build the layout for the Futures/Factor Backtest tab - migrated from futures.backtest.layout."""
     from datetime import timedelta
     if not FUTURES_AVAILABLE:
         return html.Div("Futures backtest modules not available.", style={'color': THEME['danger']})
 
     try:
-        # Ensure futures/backtest is in sys.path so that internal imports in layout.py (e.g. 'from data_loader ...') work
+        # Ensure futures/backtest is in sys.path
         import sys
         import os
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        # web/ -> ../futures/backtest
         backtest_dir = os.path.abspath(os.path.join(current_dir, '..', 'futures', 'backtest'))
         if backtest_dir not in sys.path:
             sys.path.append(backtest_dir)
 
-        from futures.backtest.layout import DARK_CARD_STYLE, DARK_INPUT_STYLE
+        from futures.backtest.data_loader import discover_pkl_files
         pkl_options = discover_pkl_files()
     except Exception as e:
         pkl_options = []
-        DARK_CARD_STYLE = {'backgroundColor': '#0f3174', 'border': '1px solid #007ACE', 'color': 'white'}
-        DARK_INPUT_STYLE = {'backgroundColor': '#061E44', 'color': 'white', 'border': '1px solid #007ACE'}
-        print(f"Error loading backtest layout: {e}")
+        print(f"Error discovering pkl files: {e}")
+    
+    DARK_CARD_STYLE = {'backgroundColor': '#0f3174', 'border': '1px solid #007ACE', 'color': 'white'}
+    DARK_INPUT_STYLE = {'backgroundColor': '#061E44', 'color': 'white', 'border': '1px solid #007ACE'}
 
     # Sidebar (from futures.backtest.layout.create_sidebar)
     sidebar = html.Div([
@@ -1147,7 +1147,29 @@ def build_factor_backtest_layout():
                         value='5T',
                         style={'fontSize': '1rem', 'color': 'black'}
                     ),
-                ]),
+                ], className="mb-3"),
+                
+                html.Label("OOS Split Date", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
+                dcc.DatePickerSingle(
+                    id='bf-oos-split-date',
+                    date=datetime.now().date(),
+                    display_format='YYYY-MM-DD',
+                    style={'fontSize': '1rem', 'width': '100%'},
+                    className="mb-3"
+                ),
+
+                html.Label("In-sample Lookback", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
+                dcc.Dropdown(
+                    id='bf-insample-lookback',
+                    options=[
+                        {'label': '6 Months', 'value': '6M'},
+                        {'label': '1 Year', 'value': '1Y'},
+                        {'label': '2 Years', 'value': '2Y'},
+                    ],
+                    value='1Y',
+                    clearable=False,
+                    style={'fontSize': '1rem', 'color': 'black'}
+                ),
             ], style={'padding': '15px'})
         ], className="mb-3", style=DARK_CARD_STYLE),
 
@@ -1164,10 +1186,41 @@ def build_factor_backtest_layout():
                         {'label': ' Momentum', 'value': 'Momentum'},
                         {'label': ' ATR', 'value': 'ATR'},
                         {'label': ' SAR', 'value': 'SAR'},
+                        {'label': ' Market Regime Based', 'value': 'MarketRegime'},
                     ],
-                    value=['MA', 'Boll', 'SAR'],
+                    value=['MA', 'Boll', 'SAR', 'MarketRegime'],
                     labelStyle={'display': 'inline-block', 'marginRight': '12px', 'fontSize': '1rem', 'marginBottom': '6px'},
                     inputStyle={"marginRight": "5px"}
+                )
+            ], style={'padding': '15px'})
+        ], className="mb-3", style=DARK_CARD_STYLE),
+
+        # Market Regime Configuration
+        dbc.Card([
+            dbc.CardHeader("Market Regime", className="fw-bold", style={'padding': '8px 12px', 'backgroundColor': '#007ACE', 'color': 'white', 'fontSize': '1rem'}),
+            dbc.CardBody([
+                html.Label("Trending", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
+                dcc.Dropdown(
+                    id='bf-mr-trending-strategy',
+                    options=[
+                        {'label': 'MA', 'value': 'MA'},
+                        {'label': 'SAR', 'value': 'SAR'},
+                        {'label': 'ATR Band', 'value': 'ATR'}
+                    ],
+                    value='SAR',
+                    style={'fontSize': '1rem', 'color': 'black'},
+                    className="mb-3"
+                ),
+                html.Label("Mean-Reverting", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
+                dcc.Dropdown(
+                    id='bf-mr-meanrev-strategy',
+                    options=[
+                        {'label': 'Bollinger', 'value': 'Boll'},
+                        {'label': 'VWAP', 'value': 'VWAP'},
+                        {'label': 'ATR MeanRev', 'value': 'ATRMeanRev'}
+                    ],
+                    value='Boll',
+                    style={'fontSize': '1rem', 'color': 'black'}
                 )
             ], style={'padding': '15px'})
         ], className="mb-3", style=DARK_CARD_STYLE),
@@ -2915,6 +2968,47 @@ def register_multiasset_callbacks(app):
     
     @app.callback(
         Output('bf-timeframe-container', 'style'),
+        [Input('bf-trading-mode', 'value')]
+    )
+    def bf_toggle_timeframe(mode):
+        if mode == 'daily':
+            return {'display': 'none'}
+        return {'display': 'block'}
+    
+    @app.callback(
+        [Output('bf-oos-split-date', 'date'),
+         Output('bf-insample-lookback', 'options'),
+         Output('bf-insample-lookback', 'value')],
+        [Input('bf-trading-mode', 'value')]
+    )
+    def bf_set_oos_defaults_and_lookback_options(trading_mode):
+        """Set sensible defaults for split date and lookback based on trading mode."""
+        import pandas as pd
+        today = pd.Timestamp.now().normalize()
+
+        if trading_mode == 'intraday':
+            # Monday of the present week
+            oos_date = (today - pd.Timedelta(days=today.weekday())).date()
+            options = [
+                {'label': '1 Week', 'value': '1W'},
+                {'label': '2 Weeks', 'value': '2W'},
+                {'label': '1 Month', 'value': '1M'},
+                {'label': '3 Months', 'value': '3M'},
+            ]
+            value = '1M'
+        else:
+            # First day of the present year
+            oos_date = pd.Timestamp(year=today.year, month=1, day=1).date()
+            options = [
+                {'label': '6 Months', 'value': '6M'},
+                {'label': '1 Year', 'value': '1Y'},
+                {'label': '2 Years', 'value': '2Y'},
+            ]
+            value = '1Y'
+
+        return oos_date, options, value
+    
+    @app.callback(
         [Input('bf-trading-mode', 'value')]
     )
     def bf_toggle_timeframe(mode):
