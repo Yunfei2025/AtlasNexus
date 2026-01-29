@@ -290,6 +290,17 @@ class StatRefresher:
         self.refresh_bonds_and_swaps()
         self.refresh_other_bonds()
         self.refresh_misc_spreads()
+
+        # Build normalized alpha snapshot for Atlas UI candidate scanning.
+        # Keep this non-fatal to avoid breaking the refresh pipeline.
+        try:
+            from curves.generators.alpha import save_alpha_spreads_snapshot
+
+            save_alpha_spreads_snapshot(DIR_INPUT, rewrite=True)
+            print('INFO: Saved Alpha-spreadsrt.pkl')
+        except Exception as e:
+            print(f'WARN: Failed to build Alpha-spreadsrt.pkl: {e}')
+
         print('\nFinish refreshing statistics at：', datetime.now().strftime('%H:%M:%S'))
 
     @classmethod

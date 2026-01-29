@@ -68,6 +68,7 @@ def get_contract_no():
     clist = _wss(flist, "trade_hiscode,", "tradeDate="+_date_strs["d"])
     clist_ = clist.squeeze().tolist()
     return clist_
+
 def futuresDailyK():
     # 设置合约代码，例如10年期国债期货主力合约代码
     file_path = os.path.join(DIR_INPUT, 'futures-dailyK_con.pkl')
@@ -80,7 +81,7 @@ def futuresDailyK():
         if file_date == today:
             print(f"{file_path} was updated today, skipping futuresDailyK().")
         else:
-            contract_code = ["TS.CFE","TF.CFE","T.CFE","TL.CFE"]
+            flist = FuturesConfig.SYMBOLS
             # 设置日期范围
             dps = _date_strs['dp']
             if GeneralConfig.DSHIFT == 1:
@@ -89,7 +90,7 @@ def futuresDailyK():
                 starts = _date_strs['d1m']
             data_dict = {}
             # 获取日频历史K线数据
-            for f in contract_code:
+            for f in flist:
                 data = _wsd(f, "open,high,low,close,volume", starts, dps)
                 data.columns = [a.capitalize() for a in data.columns]
                 data_dict[f] = data

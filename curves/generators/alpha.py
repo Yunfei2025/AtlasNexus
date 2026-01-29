@@ -1,0 +1,626 @@
+"""Alpha generator: normalize spread signals for UI scanning.
+
+This module builds a single consistent snapshot for candidate scanning:
+
+- BondCurve (mean-reverting): z-score + stationarity from *-spdsrt.pkl
+  - zscore: tbond_spdrt['BondCurve']['Zscore'] (and CBond equivalent)
+  - stationary: tbond_spdrt['BondCurve']['stationary']
+
+- BondSwap (trend/carry):
+  - stationarity from *-spdsrt.pkl (BondSwap)
+  - carry+roll: stored in *BondSwap* history pickle as tbondswap['BondCarry']
+
+- IRS swap spreads (mixed):
+  - zscore + stationarity from irs_spdrt['spreads']
+  - carry+roll: Carry(3m,bp) + Roll(3m,bp)
+
+The output is a dict of DataFrames saved to DIR_INPUT/Alpha-spreadsrt.pkl.
+Other modules (e.g. web UI) can import and call `get_alpha_spread_table()`.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Optional, Iterable, Tuple
+
+import numpy as np
+import pandas as pd
+
+from curves.utils.file import updatePKL
+from settings.paths import DIR_INPUT
+
+
+ALPHA_SNAPSHOT_FILENAME = "Alpha-spreadsrt.pkl"
+ALPHA_CANDIDATES_FILENAME = "Alpha-candidates.pkl"
+
+
+@dataclass(frozen=True)
+class AlphaSnapshotPaths:
+	dir_input: Path
+
+	@property
+	def out_snapshot(self) -> Path:
+		return self.dir_input / ALPHA_SNAPSHOT_FILENAME
+
+	@property
+	def out_candidates(self) -> Path:
+		return self.dir_input / ALPHA_CANDIDATES_FILENAME
+
+	@property
+	def tbond_spds(self) -> Path:
+		return self.dir_input / "TBond-spds.pkl"
+
+	@property
+	def cbond_spds(self) -> Path:
+		return self.dir_input / "CBond-spds.pkl"
+
+	@property
+	def irs_pxspds(self) -> Path:
+		return self.dir_input / "IRS-pxspds.pkl"
+
+	@property
+	def tbond_spdsrt(self) -> Path:
+		return self.dir_input / "TBond-spdsrt.pkl"
+
+	@property
+	def cbond_spdsrt(self) -> Path:
+		return self.dir_input / "CBond-spdsrt.pkl"
+
+	@property
+	def irs_spdsrt(self) -> Path:
+		return self.dir_input / "IRS-spdsrt.pkl"
+
+
+def _read_pickle(path: Path) -> object:
+	if not path.exists():
+		raise FileNotFoundError(str(path))
+	return pd.read_pickle(path)
+
+
+def _last_values(df: pd.DataFrame) -> pd.Series:
+	"""Return last available value per column, robust to trailing NaNs."""
+	if df.empty:
+		return pd.Series(dtype=float)
+	df2 = df.sort_index().copy()
+	# ffill over time then take last row
+	return df2.ffill().iloc[-1]
+
+
+def _normalize_index(df: pd.DataFrame) -> pd.DataFrame:
+	out = df.copy()
+	out.index.name = "ID"
+	return out
+
+
+def _ensure_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+	out = df.copy()
+	for c in cols:
+		if c in out.columns:
+			out[c] = pd.to_numeric(out[c], errors="coerce")
+	return out
+
+
+def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str, pd.DataFrame]:
+	"""Build normalized snapshot tables keyed by spread type.
+
+	Keys returned (when available):
+	- TBondCurve, CBondCurve
+	- TBondSwap, CBondSwap
+	- SwapSpread
+	"""
+	paths = AlphaSnapshotPaths(Path(dir_input))
+
+	tbond_spd = _read_pickle(paths.tbond_spds)
+	cbond_spd = _read_pickle(paths.cbond_spds)
+	irs_pxspd = _read_pickle(paths.irs_pxspds)
+	tbond_spdrt = _read_pickle(paths.tbond_spdsrt)
+	cbond_spdrt = _read_pickle(paths.cbond_spdsrt)
+	irs_spdrt = _read_pickle(paths.irs_spdsrt)
+
+	if not isinstance(tbond_spd, dict) or not isinstance(cbond_spd, dict):
+		raise TypeError("Bond spread pickles are not dicts")
+	if not isinstance(tbond_spdrt, dict) or not isinstance(cbond_spdrt, dict):
+		raise TypeError("Bond realtime spread pickles are not dicts")
+	if not isinstance(irs_spdrt, dict):
+		raise TypeError("IRS realtime spread pickle is not a dict")
+
+	out: Dict[str, pd.DataFrame] = {}
+
+	# -----------------------
+	# BondCurve (mean reversion)
+	# -----------------------
+	for prefix, spdrt in [("TBond", tbond_spdrt), ("CBond", cbond_spdrt)]:
+		df_bc = spdrt.get("BondCurve")
+		if isinstance(df_bc, pd.DataFrame) and not df_bc.empty:
+			df_bc = _normalize_index(df_bc)
+			df_bc = _ensure_numeric(df_bc, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+			if "Carry(3m,bp)" in df_bc.columns and "Roll(3m,bp)" in df_bc.columns:
+				df_bc["carry_roll"] = df_bc["Carry(3m,bp)"] + df_bc["Roll(3m,bp)"]
+			df_bc["spread_type"] = f"{prefix}Curve"
+			df_bc["category"] = "Bond-Curve"
+			out[f"{prefix}Curve"] = df_bc
+
+	# -----------------------
+	# BondSwap (trend/carry)
+	# -----------------------
+	def _bondswap_with_carry(prefix: str, spd: dict, spdrt: dict) -> Optional[pd.DataFrame]:
+		df_rt = spdrt.get("BondSwap")
+		if not isinstance(df_rt, pd.DataFrame) or df_rt.empty:
+			return None
+		df_rt = _normalize_index(df_rt)
+		df_rt = _ensure_numeric(df_rt, ["Zscore", "spread", "mean", "vol"])
+
+		carry_hist = None
+		bs = spd.get("BondSwap")
+		if isinstance(bs, dict):
+			carry_hist = bs.get("BondCarry")
+		if isinstance(carry_hist, pd.DataFrame) and not carry_hist.empty:
+			carry_latest = _last_values(carry_hist)
+			df_rt["carry_roll"] = carry_latest.reindex(df_rt.index)
+
+		df_rt["spread_type"] = f"{prefix}Swap"
+		df_rt["category"] = "Bond-Swap"
+		return df_rt
+
+	df_tbs = _bondswap_with_carry("TBond", tbond_spd, tbond_spdrt)
+	if df_tbs is not None:
+		out["TBondSwap"] = df_tbs
+	df_cbs = _bondswap_with_carry("CBond", cbond_spd, cbond_spdrt)
+	if df_cbs is not None:
+		out["CBondSwap"] = df_cbs
+
+	# -----------------------
+	# IRS swap spreads (mixed)
+	# -----------------------
+	df_irs = irs_spdrt.get("spreads")
+	if isinstance(df_irs, pd.DataFrame) and not df_irs.empty:
+		df_irs = _normalize_index(df_irs)
+		df_irs = _ensure_numeric(df_irs, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+		if "Carry(3m,bp)" in df_irs.columns and "Roll(3m,bp)" in df_irs.columns:
+			df_irs["carry_roll"] = df_irs["Carry(3m,bp)"] + df_irs["Roll(3m,bp)"]
+		df_irs["spread_type"] = "SwapSpread"
+		df_irs["category"] = "Swap-Spread"
+		out["SwapSpread"] = df_irs
+
+	# Keep reference to IRS historical structure if callers need it later
+	if isinstance(irs_pxspd, dict) and "CarryRoll3m" in irs_pxspd and "SwapSpread" not in out:
+		pass
+
+	return out
+
+
+def save_alpha_spreads_snapshot(
+	dir_input: str | Path = DIR_INPUT,
+	*,
+	rewrite: bool = True,
+) -> Path:
+	"""Build and save snapshot to DIR_INPUT/Alpha-spreadsrt.pkl."""
+	paths = AlphaSnapshotPaths(Path(dir_input))
+	snapshot = build_alpha_spreads_snapshot(dir_input=paths.dir_input)
+	updatePKL(snapshot, str(paths.out_snapshot), rewrite=rewrite)
+	return paths.out_snapshot
+
+
+def load_alpha_spreads_snapshot(
+	dir_input: str | Path = DIR_INPUT,
+	*,
+	refresh: bool = False,
+) -> Dict[str, pd.DataFrame]:
+	"""Load snapshot; optionally rebuild if missing/stale."""
+	paths = AlphaSnapshotPaths(Path(dir_input))
+	if not refresh and paths.out_snapshot.exists():
+		obj = pd.read_pickle(paths.out_snapshot)
+		if isinstance(obj, dict):
+			return obj
+	save_alpha_spreads_snapshot(dir_input=paths.dir_input, rewrite=True)
+	obj = pd.read_pickle(paths.out_snapshot)
+	return obj if isinstance(obj, dict) else {}
+
+
+def get_alpha_spread_table(
+	spread_type: str,
+	dir_input: str | Path = DIR_INPUT,
+	*,
+	refresh: bool = False,
+) -> Optional[pd.DataFrame]:
+	"""Convenience accessor used by UI / other modules."""
+	snap = load_alpha_spreads_snapshot(dir_input=dir_input, refresh=refresh)
+	df = snap.get(spread_type)
+	if isinstance(df, pd.DataFrame):
+		return df
+	return None
+
+
+def _stationary_yes_mask(s: pd.Series) -> pd.Series:
+	"""Case-insensitive YES check; non-strings become False."""
+	return s.astype(str).str.upper().eq("YES")
+
+
+def _rank_score(df: pd.DataFrame, style: str) -> pd.Series:
+	"""Scoring for candidate ranking.
+
+	- MeanReversion: abs(Zscore)
+	- Trend/Carry: abs(carry_roll)/vol if available, else abs(Zscore)
+	"""
+	z_raw = df["Zscore"] if "Zscore" in df.columns else pd.Series(index=df.index, dtype=float)
+	z = pd.to_numeric(z_raw, errors="coerce")
+	abs_z = z.abs()
+	if style.lower() in {"carry", "trend", "trendfollowing"}:
+		cr_raw = df["carry_roll"] if "carry_roll" in df.columns else pd.Series(index=df.index, dtype=float)
+		vol_raw = df["vol"] if "vol" in df.columns else pd.Series(index=df.index, dtype=float)
+		cr = pd.to_numeric(cr_raw, errors="coerce")
+		vol = pd.to_numeric(vol_raw, errors="coerce")
+		with pd.option_context("mode.use_inf_as_na", True):
+			carry_risk = cr.abs() / vol.replace(0, pd.NA)
+		if carry_risk.notna().any():
+			return carry_risk.fillna(-1e9)
+	return abs_z.fillna(-1e9)
+
+
+def load_historical_spread_series(
+	spread_type: str,
+	candidates: Iterable[str],
+	*,
+	dir_input: str | Path = DIR_INPUT,
+	lookback_days: int = 252,
+) -> Dict[str, pd.Series]:
+	"""Load historical spread time series for a set of IDs.
+
+	Returns mapping key -> Series, where key is f"{spread_type}|{ID}".
+	"""
+	paths = AlphaSnapshotPaths(Path(dir_input))
+	candidates = list(candidates)
+	if not candidates:
+		return {}
+
+	key_to_series: Dict[str, pd.Series] = {}
+
+	if spread_type in {"TBondCurve", "TBondSwap"}:
+		obj = _read_pickle(paths.tbond_spds)
+		if not isinstance(obj, dict):
+			return {}
+		root = obj.get("BondCurve" if spread_type == "TBondCurve" else "BondSwap")
+		if not isinstance(root, dict):
+			return {}
+		df = root.get("Spread")
+		if not isinstance(df, pd.DataFrame) or df.empty:
+			return {}
+		df = df.sort_index().tail(int(lookback_days))
+		for cid in candidates:
+			if cid in df.columns:
+				s = pd.to_numeric(df[cid], errors="coerce").dropna()
+				if not s.empty:
+					s.name = f"{spread_type}|{cid}"
+					key_to_series[s.name] = s
+
+	elif spread_type in {"CBondCurve", "CBondSwap"}:
+		obj = _read_pickle(paths.cbond_spds)
+		if not isinstance(obj, dict):
+			return {}
+		root = obj.get("BondCurve" if spread_type == "CBondCurve" else "BondSwap")
+		if not isinstance(root, dict):
+			return {}
+		df = root.get("Spread")
+		if not isinstance(df, pd.DataFrame) or df.empty:
+			return {}
+		df = df.sort_index().tail(int(lookback_days))
+		for cid in candidates:
+			if cid in df.columns:
+				s = pd.to_numeric(df[cid], errors="coerce").dropna()
+				if not s.empty:
+					s.name = f"{spread_type}|{cid}"
+					key_to_series[s.name] = s
+
+	elif spread_type == "SwapSpread":
+		obj = _read_pickle(paths.irs_pxspds)
+		if not isinstance(obj, dict):
+			return {}
+		df = obj.get("Spread")
+		if not isinstance(df, pd.DataFrame) or df.empty:
+			return {}
+		df = df.sort_index().tail(int(lookback_days))
+		for cid in candidates:
+			if cid in df.columns:
+				s = pd.to_numeric(df[cid], errors="coerce").dropna()
+				if not s.empty:
+					s.name = f"{spread_type}|{cid}"
+					key_to_series[s.name] = s
+
+	return key_to_series
+
+
+def compute_candidate_correlation(
+	series_map: Dict[str, pd.Series],
+	*,
+	min_obs: int = 40,
+) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+	"""Compute correlation matrix of daily changes across series_map."""
+	if len(series_map) < 2:
+		return None, None
+
+	df = pd.DataFrame(series_map).sort_index()
+	# use differences for bp spreads
+	df_chg = df.diff().dropna(how="all")
+	if df_chg.shape[0] < min_obs:
+		return None, None
+
+	corr = df_chg.corr()
+	return corr, df_chg
+
+
+def select_low_corr_basket(
+	candidates: pd.DataFrame,
+	corr: pd.DataFrame,
+	*,
+	top_n: int = 10,
+	max_abs_corr: float = 0.6,
+) -> pd.DataFrame:
+	"""Greedy selection: maximize score while keeping correlations low.
+
+	Tie-breaks: higher score wins.
+	"""
+	if candidates.empty or corr is None or corr.empty:
+		return candidates.head(0)
+
+	# Build key column mapping to corr matrix columns
+	work = candidates.copy()
+	if "corr_key" not in work.columns:
+		work["corr_key"] = work.apply(lambda r: f"{r['spread_type']}|{r['ID']}", axis=1)
+
+	work = work[work["corr_key"].isin(corr.columns)].copy()
+	if work.empty:
+		return work
+
+	work = work.sort_values(["score"], ascending=False).reset_index(drop=True)
+	selected_keys: list[str] = []
+	selected_rows: list[int] = []
+
+	for i in range(int(work.shape[0])):
+		row = work.iloc[i]
+		key = str(row["corr_key"])
+		if not selected_keys:
+			selected_keys.append(key)
+			selected_rows.append(i)
+			if len(selected_keys) >= top_n:
+				break
+			continue
+
+		# correlation constraint vs already selected
+		try:
+			arr = corr.loc[key, selected_keys].abs().to_numpy(dtype=float, copy=False)  # type: ignore[index]
+			mx = float(np.nanmax(arr)) if arr.size else 1.0
+		except Exception:
+			mx = 1.0
+		if mx <= float(max_abs_corr):
+			selected_keys.append(key)
+			selected_rows.append(i)
+			if len(selected_keys) >= top_n:
+				break
+
+	# If we couldn't fill to top_n under the strict threshold, fill remaining by “least max corr”
+	if len(selected_keys) < top_n:
+		remaining = work.drop(index=selected_rows)
+		while len(selected_keys) < top_n and not remaining.empty:
+			best_pos = None
+			best_tuple = None
+			for pos in range(int(remaining.shape[0])):
+				row = remaining.iloc[pos]
+				key = str(row["corr_key"])
+				try:
+					arr = corr.loc[key, selected_keys].abs().to_numpy(dtype=float, copy=False)  # type: ignore[index]
+					mx = float(np.nanmax(arr)) if arr.size else 1.0
+				except Exception:
+					mx = 1.0
+				# minimize max corr, then maximize score
+				score = float(row["score"]) if pd.notna(row.get("score")) else -1e9
+				tup = (mx, -score)
+				if best_tuple is None or tup < best_tuple:
+					best_tuple = tup
+					best_pos = pos
+			if best_pos is None:
+				break
+			best_row = remaining.iloc[int(best_pos)]
+			selected_keys.append(str(best_row["corr_key"]))
+			selected_rows.append(int(remaining.index[int(best_pos)]))
+			remaining = remaining.drop(index=int(remaining.index[int(best_pos)]))
+
+	selected = work.iloc[selected_rows].copy()
+	selected["basket_rank"] = range(1, len(selected) + 1)
+	return selected
+
+
+def build_alpha_candidates(
+	*,
+	dir_input: str | Path = DIR_INPUT,
+	allowed_categories: Optional[list[str]] = None,
+	zscore_threshold: float = 2.0,
+	max_per_style: int = 20,
+	lookback_days: int = 252,
+	max_abs_corr: float = 0.6,
+	top_n_low_corr: int = 10,
+) -> Dict[str, object]:
+	"""Select candidates and compute low-correlation basket.
+
+	- Limits to max 40 total (20 MR + 20 Trend/Carry)
+	- MeanReversion requires stationary == "YES" (hard requirement)
+	- Uses historical spread time series to compute correlation (diff-based)
+	"""
+	snap = load_alpha_spreads_snapshot(dir_input=dir_input, refresh=False)
+
+	# Build unified table
+	frames = []
+	for stype, df in snap.items():
+		if isinstance(df, pd.DataFrame) and not df.empty:
+			frames.append(df.copy())
+	if not frames:
+		return {"asof": pd.Timestamp.now(), "candidates": pd.DataFrame(), "selected_lowcorr": pd.DataFrame(), "corr": None}
+
+	df_all = pd.concat(frames, axis=0, ignore_index=False)
+	if "spread_type" not in df_all.columns:
+		# should not happen for our snapshot
+		df_all["spread_type"] = "Unknown"
+	if "category" not in df_all.columns:
+		df_all["category"] = "Unknown"
+
+	# Allowed categories filter
+	if allowed_categories:
+		allowed = set(allowed_categories)
+		df_all = df_all[df_all["category"].isin(allowed)].copy()
+	if df_all.empty:
+		return {"asof": pd.Timestamp.now(), "candidates": pd.DataFrame(), "selected_lowcorr": pd.DataFrame(), "corr": None}
+
+	# Ensure required columns
+	for c in ["Zscore", "spread", "mean", "vol", "halflife", "carry_roll"]:
+		if c in df_all.columns:
+			df_all[c] = pd.to_numeric(df_all[c], errors="coerce")
+
+	# Style mapping: treat Bond-Swap as Trend/Carry, Bond-Curve and Swap-Spread as MeanReversion
+	cat_to_style = {
+		"Bond-Curve": "MeanReversion",
+		"Swap-Spread": "MeanReversion",
+		"Bond-Swap": "Carry",
+	}
+	if "style" not in df_all.columns:
+		df_all["style"] = df_all["category"].map(cat_to_style).fillna("Unknown")
+
+	# Extract ID from index
+	if df_all.index.name != "ID":
+		df_all = df_all.copy()
+		df_all.index.name = "ID"
+	work = df_all.reset_index()
+
+	# Basic validity
+	work = work[pd.to_numeric(work["Zscore"], errors="coerce").notna()].copy()
+	work["abs_zscore"] = work["Zscore"].abs()
+
+	# Split MR vs Trend/Carry
+	mr = work[work["style"].str.lower().eq("meanreversion")].copy()
+	# hard requirement
+	if "stationary" in mr.columns:
+		mr = mr[_stationary_yes_mask(mr["stationary"])].copy()
+	else:
+		mr = mr.iloc[0:0].copy()
+
+	trend = work[work["style"].str.lower().isin({"carry", "trend", "trendfollowing"})].copy()
+
+	# Apply z-score threshold to both buckets (keeps behavior aligned with UI slider)
+	try:
+		z_thd = float(zscore_threshold)
+	except Exception:
+		z_thd = 2.0
+
+	mr = mr[mr["abs_zscore"] >= z_thd].copy()
+	trend = trend[trend["abs_zscore"] >= z_thd].copy()
+
+	# Score + rank
+	mr["score"] = _rank_score(mr, "MeanReversion")
+	trend["score"] = _rank_score(trend, "Carry")
+
+	mr = mr.sort_values(["score"], ascending=False).head(int(max_per_style)).copy()
+	trend = trend.sort_values(["score"], ascending=False).head(int(max_per_style)).copy()
+
+	candidates = pd.concat([mr, trend], axis=0, ignore_index=True)
+	if candidates.empty:
+		return {"asof": pd.Timestamp.now(), "candidates": candidates, "selected_lowcorr": pd.DataFrame(), "corr": None}
+
+	# Compute correlations using historical spread series
+	series_map: Dict[str, pd.Series] = {}
+	for stype in candidates["spread_type"].unique().tolist():
+		ids = candidates.loc[candidates["spread_type"] == stype, "ID"].astype(str).unique().tolist()
+		series_map.update(load_historical_spread_series(stype, ids, dir_input=dir_input, lookback_days=lookback_days))
+
+	corr, _ = compute_candidate_correlation(series_map)
+	# Add correlation key to candidates (even if corr is None)
+	candidates["corr_key"] = candidates.apply(lambda r: f"{r['spread_type']}|{r['ID']}", axis=1)
+
+	selected_lowcorr = pd.DataFrame()
+	if corr is not None and not corr.empty:
+		selected_lowcorr = select_low_corr_basket(
+			candidates,
+			corr,
+			top_n=int(top_n_low_corr),
+			max_abs_corr=float(max_abs_corr),
+		)
+
+	# Mark selected
+	selected_set = set(selected_lowcorr["corr_key"].tolist()) if not selected_lowcorr.empty else set()
+	candidates["selected_lowcorr"] = candidates["corr_key"].isin(selected_set)
+
+	return {
+		"asof": pd.Timestamp.now(),
+		"params": {
+			"allowed_categories": allowed_categories,
+			"zscore_threshold": z_thd,
+			"max_per_style": int(max_per_style),
+			"lookback_days": int(lookback_days),
+			"max_abs_corr": float(max_abs_corr),
+			"top_n_low_corr": int(top_n_low_corr),
+		},
+		"candidates": candidates,
+		"selected_lowcorr": selected_lowcorr,
+		"corr": corr,
+	}
+
+
+def save_alpha_candidates(
+	*,
+	dir_input: str | Path = DIR_INPUT,
+	allowed_categories: Optional[list[str]] = None,
+	zscore_threshold: float = 2.0,
+	max_per_style: int = 20,
+	lookback_days: int = 252,
+	max_abs_corr: float = 0.6,
+	top_n_low_corr: int = 10,
+	rewrite: bool = True,
+) -> Path:
+	"""Build and persist candidate selection to DIR_INPUT/Alpha-candidates.pkl."""
+	paths = AlphaSnapshotPaths(Path(dir_input))
+	obj = build_alpha_candidates(
+		dir_input=paths.dir_input,
+		allowed_categories=allowed_categories,
+		zscore_threshold=zscore_threshold,
+		max_per_style=max_per_style,
+		lookback_days=lookback_days,
+		max_abs_corr=max_abs_corr,
+		top_n_low_corr=top_n_low_corr,
+	)
+	updatePKL(obj, str(paths.out_candidates), rewrite=rewrite)
+	return paths.out_candidates
+
+
+def load_alpha_candidates(
+	*,
+	dir_input: str | Path = DIR_INPUT,
+	refresh: bool = False,
+	allowed_categories: Optional[list[str]] = None,
+	zscore_threshold: float = 2.0,
+	max_per_style: int = 20,
+	lookback_days: int = 252,
+	max_abs_corr: float = 0.6,
+	top_n_low_corr: int = 10,
+) -> Dict[str, object]:
+	"""Load persisted candidates; optionally rebuild."""
+	paths = AlphaSnapshotPaths(Path(dir_input))
+	if not refresh and paths.out_candidates.exists():
+		obj = pd.read_pickle(paths.out_candidates)
+		if isinstance(obj, dict) and "candidates" in obj:
+			return obj
+
+	save_alpha_candidates(
+		dir_input=paths.dir_input,
+		allowed_categories=allowed_categories,
+		zscore_threshold=zscore_threshold,
+		max_per_style=max_per_style,
+		lookback_days=lookback_days,
+		max_abs_corr=max_abs_corr,
+		top_n_low_corr=top_n_low_corr,
+		rewrite=True,
+	)
+	obj = pd.read_pickle(paths.out_candidates)
+	return obj if isinstance(obj, dict) else {}
+
+
+if __name__ == "__main__":
+	out_path = save_alpha_spreads_snapshot(DIR_INPUT, rewrite=True)
+	print(f"Saved alpha snapshot: {out_path}")

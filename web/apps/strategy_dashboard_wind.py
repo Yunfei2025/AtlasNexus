@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
+import re
 from datetime import datetime, timedelta
 
 import sys
@@ -143,6 +144,10 @@ def resample_data(df, rule):
     # 注意：Wind WSI 默认返回的是 1分钟数据 (如果未指定 bar size)
     # 这里假设输入已经是分钟级别的 DataFrame
     
+    # Normalize minute alias: pandas deprecates 'T' in favor of 'min'
+    if isinstance(rule, str) and 'T' in rule:
+        rule = re.sub(r'(?<=\d)T\b', 'min', rule)
+
     df_resampled = df['close'].resample(rule).ohlc()
     df_resampled['volume'] = df['volume'].resample(rule).sum()
     df_resampled = df_resampled.dropna()

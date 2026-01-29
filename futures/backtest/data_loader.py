@@ -5,6 +5,7 @@ Includes Wind data loading, local file loading, and data preprocessing
 
 import pandas as pd
 import os
+import re
 from datetime import datetime
 import functools
 
@@ -315,6 +316,11 @@ def resample_data(df, rule):
         df.index = pd.to_datetime(df.index, errors='coerce')
         df = df[df.index.notna()]
     
+    # Normalize minute alias: pandas deprecates 'T' in favor of 'min'
+    if isinstance(rule, str) and 'T' in rule:
+        # convert patterns like '1T', '5T' -> '1min', '5min'
+        rule = re.sub(r'(?<=\d)T\b', 'min', rule)
+
     df_resampled = df['close'].resample(rule).ohlc()
     df_resampled['volume'] = df['volume'].resample(rule).sum()
     df_resampled = df_resampled.dropna()
