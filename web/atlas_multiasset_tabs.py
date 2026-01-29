@@ -902,6 +902,16 @@ def build_multiasset_risk_layout():
 
         # 2. Exposure Section
         html.H4("2. Risk Exposure Analysis", style={'color': THEME['text_main'], 'marginBottom': '15px', 'borderBottom': f'2px solid {THEME["accent"]}', 'paddingBottom': '5px'}),
+        
+        # Portfolio Risk Exposure Summary (Alpha=0, Beta=1)
+        html.Div([
+            html.H6("Portfolio Risk Exposure (100% Beta Allocation)", 
+                   style={'color': THEME['text_main'], 'marginBottom': '10px', 'fontWeight': 'bold'}),
+            html.Div(id='portfolio-risk-exposure', children=[
+                html.Div("Run Optimization First", style={'padding': '20px', 'textAlign': 'center', 'color': THEME['text_sub'], 'fontStyle': 'italic'})
+            ])
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '20px'}),
+        
         html.Div([
             # Heatmap
             html.Div([
@@ -3347,3 +3357,114 @@ def register_multiasset_callbacks(app):
             import traceback
             traceback.print_exc()
             return html.Div(f"Error running backtest: {str(e)}", style={'color': THEME['danger']})
+
+    # ============================================================================
+    # 7. Risk Exposure Display Callback (Summary Tab)
+    # ============================================================================
+    @app.callback(
+        Output('portfolio-risk-exposure', 'children'),
+        Input('portfolio-summary-container', 'children'),
+        prevent_initial_call=False
+    )
+    def update_portfolio_risk_exposure(trigger):
+        """
+        Calculate and display portfolio risk exposure.
+        Assumes: Alpha book weight = 0, Beta book weight = 1
+        Focus: China Gov Bond 1Y and 10Y exposure to IRDL.CN and IRSL.CN
+        """
+        if ALLOCATION_RESULTS['portfolio'] is None or ALLOCATION_RESULTS['summary'] is None:
+            return html.Div("Run Optimization First", style={'padding': '20px', 'textAlign': 'center', 'color': THEME['text_sub'], 'fontStyle': 'italic'})
+        
+        try:
+            portfolio = ALLOCATION_RESULTS['portfolio']
+            summary = ALLOCATION_RESULTS['summary']
+            
+            # Get weights (assuming 100% beta allocation as requested)
+            weights = summary.set_index('Asset')['Weight (%)'] / 100.0
+            
+            # Focus on CN1Y and CN10Y
+            target_assets = ['CN1Y', 'CN10Y']
+            target_factors = ['IRDL.CN', 'IRSL.CN']
+            
+            exposure_data = []
+            for asset_name in target_assets:
+                if asset_name not in portfolio.assets:
+                    continue
+                
+                asset = portfolio.assets[asset_name]
+                weight = weights.get(asset_name, 0.0)
+                
+                row = {'Asset': asset_name, 'Weight (%)': f"{weight * 100:.2f}%"}
+                
+                for factor in target_factors:
+                    sensitivity = asset.factors.get(factor, 0.0)
+                    # Portfolio exposure = weight × sensitivity
+                    exposure = weight * sensitivity
+                    row[f'{factor} Sensitivity'] = f"{sensitivity:.4f}"
+                    row[f'{factor} Exposure'] = f"{exposure:.4f}"
+                
+                exposure_data.append(row)
+            
+            if not exposure_data:
+                return html.Div("No CN1Y or CN10Y found in portfolio", 
+                              style={'padding': '20px', 'textAlign': 'center', 'color': THEME['warning']})
+            
+            df_exposure = pd.DataFrame(exposure_data)
+            
+            # Create table
+            exposure_table = dash_table.DataTable(
+                data=df_exposure.to_dict('records'),
+                columns=[{'name': col, 'id': col} for col in df_exposure.columns],
+                style_cell={
+                    'textAlign': 'center', 
+                    'padding': '10px', 
+                    'fontFamily': 'Arial, sans-serif',
+                    'backgroundColor': THEME['table_row_odd'],
+                    'color': THEME['text_main'],
+                    'border': 'none',
+                    'fontSize': '12px'
+                },
+                style_header={
+                    'backgroundColor': THEME['table_header'], 
+                    'color': THEME['text_main'], 
+                    'fontWeight': 'bold', 
+                    'textAlign': 'center',
+                    'border': 'none',
+                    'fontSize': '13px'
+                },
+                style_data_conditional=[
+                    {'if': {'row_index': 'even'}, 'backgroundColor': THEME['table_row_even']}
+                ],
+                style_table={'overflowX': 'auto', 'maxWidth': '900px', 'margin': '0 auto'}
+            )
+            
+            # Calculate total portfolio exposure
+            total_irdl = sum([float(row['IRDL.CN Exposure']) for row in exposure_data])
+            total_irsl = sum([float(row['IRSL.CN Exposure']) for row in exposure_data])
+            
+            summary_cards = html.Div([
+                html.Div([
+                    html.Div("Total IRDL.CN Exposure", style={'fontSize': '12px', 'color': THEME['text_sub'], 'marginBottom': '5px'}),
+                    html.Div(f"{total_irdl:.4f}", style={'fontSize': '20px', 'fontWeight': 'bold', 'color': THEME['accent']})
+                ], style={'backgroundColor': THEME['bg_input'], 'padding': '15px', 'borderRadius': '5px', 'flex': '1', 'minWidth': '150px', 'textAlign': 'center'}),
+                
+                html.Div([
+                    html.Div("Total IRSL.CN Exposure", style={'fontSize': '12px', 'color': THEME['text_sub'], 'marginBottom': '5px'}),
+                    html.Div(f"{total_irsl:.4f}", style={'fontSize': '20px', 'fontWeight': 'bold', 'color': THEME['warning']})
+                ], style={'backgroundColor': THEME['bg_input'], 'padding': '15px', 'borderRadius': '5px', 'flex': '1', 'minWidth': '150px', 'textAlign': 'center'}),
+            ], style={'display': 'flex', 'gap': '15px', 'marginBottom': '20px', 'justifyContent': 'center'})
+            
+            return html.Div([
+                summary_cards,
+                exposure_table,
+                html.Div([
+                    html.Span("📊 Exposure = Weight × Sensitivity | ", style={'fontSize': '11px', 'color': THEME['text_sub']}),
+                    html.Span("IRDL.CN: Level Risk | IRSL.CN: Slope Risk (2Y-10Y)", style={'fontSize': '11px', 'color': THEME['text_sub']})
+                ], style={'marginTop': '10px', 'textAlign': 'center', 'fontStyle': 'italic'})
+            ])
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return html.Div(f"Error calculating exposure: {str(e)}", 
+                          style={'color': THEME['danger'], 'padding': '20px'})
