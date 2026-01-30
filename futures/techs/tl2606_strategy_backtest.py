@@ -83,8 +83,8 @@ def resample_to_5min(df):
     print(f"\n[2/5] 重采样为5分钟K线...")
     
     # 重采样为5分钟
-    df_5min = df['last'].resample('5T').ohlc()
-    df_5min['volume'] = df['volume'].resample('5T').sum()
+    df_5min = df['last'].resample('5min').ohlc()
+    df_5min['volume'] = df['volume'].resample('5min').sum()
     
     # 删除缺失值
     df_5min = df_5min.dropna()

@@ -69,6 +69,12 @@ SPREAD_CATEGORIES = {
         'description': 'IRS spread trades (box, basis)',
         'style': 'MeanReversion',
     },
+    'Tenor-Spread': {
+        'label': 'Tenor Spreads',
+        'types': ['TenorSpread'],
+        'description': 'Curve slope / cross-curve spreads (e.g. 5s10s, 10s30s)',
+        'style': 'MeanReversion',
+    },
     'Bond-Futures': {
         'label': 'Bond vs Futures (Net Basis)',
         'types': ['NetBasis'],
@@ -150,6 +156,17 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
     Returns DataFrame with columns: [spread, mean, vol, Zscore, halflife, stationary, ...]
     """
     dir_input = _get_input_dir()
+
+    # Prefer the normalized snapshot generated in curves/refreshers/alpha.py.
+    # This aligns with how realtime z-scores / stationarity / carry+roll are stored.
+    try:
+        from curves.refreshers.alpha import get_alpha_spread_table
+
+        snap_df = get_alpha_spread_table(spread_type, dir_input=dir_input)
+        if snap_df is not None and isinstance(snap_df, pd.DataFrame) and not snap_df.empty:
+            return snap_df
+    except Exception:
+        pass
     
     # Map spread type to file and key
     if spread_type in ['TBondCurve', 'TBondSwap']:
@@ -496,11 +513,12 @@ def build_candidates_layout() -> html.Div:
                         {'label': ' Bond-Curve (MR)', 'value': 'Bond-Curve'},
                         {'label': ' Bond-Swap (Carry)', 'value': 'Bond-Swap'},
                         {'label': ' Swap Spreads (MR)', 'value': 'Swap-Spread'},
+                        {'label': ' Tenor Spreads (MR)', 'value': 'Tenor-Spread'},
                         {'label': ' Net Basis (Carry)', 'value': 'Bond-Futures'},
                         {'label': ' Term Basis (MR)', 'value': 'Futures-Term'},
                         {'label': ' PCA Spread (MR)', 'value': 'PCA-Spread'},
                     ],
-                    value=['Bond-Curve', 'Bond-Swap'],
+                    value=['Bond-Curve', 'Bond-Swap', 'Tenor-Spread'],
                     inline=True,
                     labelStyle={'color': THEME['text_main'], 'marginRight': '15px', 'fontSize': '12px'},
                     inputStyle={'marginRight': '5px'},
@@ -822,77 +840,103 @@ def register_alpha_callbacks(app) -> None:
     def scan_candidates(n_clicks, categories, zscore_thd, direction):
         if not n_clicks or not categories:
             return html.Div("Select spread categories and click Scan.", style={'color': THEME['text_sub']}), "", []
-        
-        all_candidates = []
-        
-        for cat in categories:
-            if cat not in SPREAD_CATEGORIES:
-                continue
-            
-            spread_types = SPREAD_CATEGORIES[cat]['types']
-            style = SPREAD_CATEGORIES[cat]['style']
-            
-            for stype in spread_types:
-                df = load_spread_data(stype)
-                if df is None or df.empty:
-                    continue
-                
-                df = df.copy()
-                df['spread_type'] = stype
-                df['category'] = cat
-                df['style'] = style
-                
-                # Ensure Zscore column exists
-                if 'Zscore' not in df.columns:
-                    if 'spread' in df.columns and 'vol' in df.columns:
-                        mean_col = df['mean'] if 'mean' in df.columns else 0
-                        df['Zscore'] = (df['spread'] - mean_col) / df['vol'].replace(0, np.nan)
-                
-                if 'Zscore' not in df.columns:
-                    continue
-                
-                # Filter by z-score threshold
-                df['abs_zscore'] = df['Zscore'].abs()
-                mask = df['abs_zscore'] >= zscore_thd
-                
-                # Direction filter
-                if direction == 'buy':
-                    mask = mask & (df['Zscore'] <= -zscore_thd)
-                elif direction == 'sell':
-                    mask = mask & (df['Zscore'] >= zscore_thd)
-                
-                filtered = df[mask].copy()
-                if not filtered.empty:
-                    filtered['direction'] = filtered['Zscore'].apply(lambda z: 'BUY' if z < 0 else 'SELL')
-                    all_candidates.append(filtered)
-        
-        if not all_candidates:
-            return html.Div("No candidates found matching criteria.", style={'color': THEME['warning']}), f"Scanned at {datetime.now().strftime('%H:%M:%S')}", []
-        
-        df_all = pd.concat(all_candidates, axis=0)
-        df_all = df_all.sort_values('abs_zscore', ascending=False)
-        
-        # Select display columns
-        display_cols = ['spread_type', 'style', 'direction', 'Zscore', 'spread', 'mean', 'vol', 'halflife', 'stationary']
-        available_cols = [c for c in display_cols if c in df_all.columns]
-        
-        df_display = df_all[available_cols].copy()
-        df_display = df_display.reset_index()
-        df_display.columns = ['ID'] + available_cols
-        
-        # Round numeric columns
-        for col in ['Zscore', 'spread', 'mean', 'vol', 'halflife']:
+
+        try:
+            z_thd = float(zscore_thd) if zscore_thd is not None else float(ZSCORE_ENTRY_THRESHOLD)
+        except Exception:
+            z_thd = float(ZSCORE_ENTRY_THRESHOLD)
+
+        # Use generator-side filtering so we cap to 20 MR + 20 Carry/Trend,
+        # enforce stationary==YES for MeanReversion, and compute correlations.
+        try:
+            from curves.refreshers.alpha import load_alpha_candidates
+
+            obj = load_alpha_candidates(
+                dir_input=_get_input_dir(),
+                refresh=True,
+                allowed_categories=categories,
+                zscore_threshold=z_thd,
+                max_per_style=20,
+                lookback_days=252,
+                max_abs_corr=0.6,
+                top_n_low_corr=10,
+            )
+            df_all = obj.get('candidates')
+            df_low = obj.get('selected_lowcorr')
+            if isinstance(df_all, pd.DataFrame) and not df_all.empty:
+                pass
+            else:
+                df_all = pd.DataFrame()
+            if not isinstance(df_low, pd.DataFrame):
+                df_low = pd.DataFrame()
+        except Exception:
+            df_all = pd.DataFrame()
+            df_low = pd.DataFrame()
+
+        scanned_time = datetime.now().strftime('%H:%M:%S')
+
+        if df_all.empty:
+            return (
+                html.Div(
+                    f"No candidates found (MR requires stationary=YES, zscore≥{z_thd:g}).",
+                    style={'color': THEME['warning']},
+                ),
+                f"Scanned at {scanned_time}",
+                [],
+            )
+
+        # Direction filter (applied after generator selection)
+        if 'Zscore' in df_all.columns:
+            if direction == 'buy':
+                df_all = df_all[df_all['Zscore'] <= -z_thd].copy()
+            elif direction == 'sell':
+                df_all = df_all[df_all['Zscore'] >= z_thd].copy()
+
+        if df_all.empty:
+            return (
+                html.Div(
+                    f"Candidates exist, but none match direction filter at zscore≥{z_thd:g}.",
+                    style={'color': THEME['warning']},
+                ),
+                f"Scanned at {scanned_time}",
+                [],
+            )
+
+        # Add direction label
+        if 'Zscore' in df_all.columns:
+            df_all = df_all.copy()
+            df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) < 0 else 'SELL')
+
+        # Sort by score if present
+        if 'score' in df_all.columns:
+            df_all = df_all.sort_values('score', ascending=False)
+        elif 'abs_zscore' in df_all.columns:
+            df_all = df_all.sort_values('abs_zscore', ascending=False)
+
+        # Display columns
+        display_cols = [
+            'ID', 'spread_type', 'category', 'style', 'direction',
+            'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'stationary',
+            'score', 'selected_lowcorr'
+        ]
+        df_display = df_all.copy()
+        if 'ID' not in df_display.columns and df_display.index.name == 'ID':
+            df_display = df_display.reset_index()
+        available_cols = [c for c in display_cols if c in df_display.columns]
+        df_display = df_display[available_cols].copy()
+
+        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score']:
             if col in df_display.columns:
-                df_display[col] = df_display[col].round(3)
-        
-        # Build DataTable
-        table = dash_table.DataTable(
+                df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(3)
+
+        # Full candidates table
+        table_all = dash_table.DataTable(
             id='alpha-candidates-table',
             columns=[{'name': c, 'id': c} for c in df_display.columns],
-            data=df_display.head(50).to_dict('records'),
+            data=df_display.head(40).to_dict('records'),  # type: ignore[arg-type]
             row_selectable='multi',
             selected_rows=[],
-            style_table={'overflowX': 'auto', 'maxHeight': '400px', 'overflowY': 'auto'},
+            style_table={'overflowX': 'auto', 'maxHeight': '350px', 'overflowY': 'auto'},
             style_header={
                 'backgroundColor': THEME['table_header'],
                 'color': THEME['text_main'],
@@ -906,31 +950,63 @@ def register_alpha_callbacks(app) -> None:
                 'padding': '8px',
                 'fontSize': '12px',
             },
-            style_data_conditional=[
-                {
-                    'if': {'filter_query': '{direction} = "BUY"'},
-                    'backgroundColor': 'rgba(0, 204, 150, 0.15)',
-                },
-                {
-                    'if': {'filter_query': '{direction} = "SELL"'},
-                    'backgroundColor': 'rgba(239, 85, 59, 0.15)',
-                },
-                {
-                    'if': {'row_index': 'odd'},
-                    'backgroundColor': THEME['table_row_odd'],
-                },
+            style_data_conditional=[  # type: ignore[arg-type]
+                {'if': {'filter_query': '{direction} = "BUY"'}, 'backgroundColor': 'rgba(0, 204, 150, 0.15)'},
+                {'if': {'filter_query': '{direction} = "SELL"'}, 'backgroundColor': 'rgba(239, 85, 59, 0.15)'},
+                {'if': {'filter_query': '{selected_lowcorr} = True'}, 'backgroundColor': 'rgba(52, 152, 219, 0.18)'},
+                {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['table_row_odd']},
             ],
             page_size=20,
             sort_action='native',
             filter_action='native',
         )
-        
-        status = f"Found {len(df_all)} candidates at {datetime.now().strftime('%H:%M:%S')}"
-        
-        # Store candidate IDs for correlation/scoring
+
+        # Low-correlation top-10 table (if available)
+        low_corr_div = html.Div()
+        if isinstance(df_low, pd.DataFrame) and not df_low.empty:
+            df_low_disp = df_low.copy()
+            if 'ID' not in df_low_disp.columns and df_low_disp.index.name == 'ID':
+                df_low_disp = df_low_disp.reset_index()
+            low_cols = [c for c in ['basket_rank', 'ID', 'spread_type', 'category', 'style', 'Zscore', 'carry_roll', 'score'] if c in df_low_disp.columns]
+            df_low_disp = df_low_disp[low_cols].copy()
+            for col in ['Zscore', 'carry_roll', 'score']:
+                if col in df_low_disp.columns:
+                    df_low_disp[col] = pd.to_numeric(df_low_disp[col], errors='coerce').round(3)
+
+            low_table = dash_table.DataTable(
+                id='alpha-lowcorr-table',
+                columns=[{'name': c, 'id': c} for c in df_low_disp.columns],
+                data=df_low_disp.to_dict('records'),  # type: ignore[arg-type]
+                style_table={'overflowX': 'auto', 'maxHeight': '220px', 'overflowY': 'auto'},
+                style_header={
+                    'backgroundColor': THEME['table_header'],
+                    'color': THEME['text_main'],
+                    'fontWeight': 'bold',
+                },
+                style_cell={
+                    'backgroundColor': THEME['bg_card'],
+                    'color': THEME['text_main'],
+                    'fontSize': '11px',
+                    'padding': '6px',
+                },
+                page_size=10,
+            )
+            low_corr_div = html.Div([
+                html.H6('Recommended Low-Correlation Top 10', style={'color': THEME['text_main'], 'marginBottom': '8px'}),
+                html.Div('Greedy selection using spread-change correlations (lookback 252d).', style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'}),
+                low_table,
+            ], style={'marginBottom': '15px'})
+
+        table_out = html.Div([
+            low_corr_div,
+            html.H6('Candidates (max 40: 20 MR + 20 Trend/Carry)', style={'color': THEME['text_main'], 'marginBottom': '8px'}),
+            table_all,
+        ])
+
+        status = f"Found {len(df_all)} candidates at {scanned_time}"
+
         candidate_data = df_display.to_dict('records')
-        
-        return table, status, candidate_data
+        return table_out, status, candidate_data
     
     # -------------------------------------------------------------------------
     # CANDIDATES: Correlation Check

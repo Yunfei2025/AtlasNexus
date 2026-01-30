@@ -40,7 +40,7 @@ try:
     )
     from futures.backtest.strategies import (
         run_ma_strategy, run_bollinger_strategy, run_vwap_strategy,
-        run_intraday_momentum_strategy, run_atr_band_strategy, run_sar_strategy
+        run_intraday_momentum_strategy, run_atr_band_strategy, run_atr_mean_reversion_strategy, run_sar_strategy
     )
     from futures.backtest.metrics import calculate_metrics
     from futures.backtest.regime import RegimeDetector
@@ -902,6 +902,16 @@ def build_multiasset_risk_layout():
 
         # 2. Exposure Section
         html.H4("2. Risk Exposure Analysis", style={'color': THEME['text_main'], 'marginBottom': '15px', 'borderBottom': f'2px solid {THEME["accent"]}', 'paddingBottom': '5px'}),
+        
+        # Portfolio Risk Exposure Summary (Alpha=0, Beta=1)
+        html.Div([
+            html.H6("Portfolio Risk Exposure (100% Beta Allocation)", 
+                   style={'color': THEME['text_main'], 'marginBottom': '10px', 'fontWeight': 'bold'}),
+            html.Div(id='portfolio-risk-exposure', children=[
+                html.Div("Run Optimization First", style={'padding': '20px', 'textAlign': 'center', 'color': THEME['text_sub'], 'fontStyle': 'italic'})
+            ])
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '20px'}),
+        
         html.Div([
             # Heatmap
             html.Div([
@@ -1054,175 +1064,409 @@ def build_multiasset_backtest_layout():
 
 
 def build_factor_backtest_layout():
-    """Build the layout for the Futures/Factor Backtest tab - uses futures.backtest.layout."""
+    """Build the layout for the Futures/Factor Backtest tab - migrated from futures.backtest.layout."""
     from datetime import timedelta
     if not FUTURES_AVAILABLE:
         return html.Div("Futures backtest modules not available.", style={'color': THEME['danger']})
 
     try:
-        # Ensure futures/backtest is in sys.path so that internal imports in layout.py (e.g. 'from data_loader ...') work
+        # Ensure futures/backtest is in sys.path
         import sys
         import os
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        # web/ -> ../futures/backtest
         backtest_dir = os.path.abspath(os.path.join(current_dir, '..', 'futures', 'backtest'))
         if backtest_dir not in sys.path:
             sys.path.append(backtest_dir)
 
-        from futures.backtest.layout import DARK_CARD_STYLE, DARK_INPUT_STYLE
+        from futures.backtest.data_loader import discover_pkl_files
         pkl_options = discover_pkl_files()
     except Exception as e:
         pkl_options = []
-        DARK_CARD_STYLE = {'backgroundColor': '#0f3174', 'border': '1px solid #007ACE', 'color': 'white'}
-        DARK_INPUT_STYLE = {'backgroundColor': '#061E44', 'color': 'white', 'border': '1px solid #007ACE'}
-        print(f"Error loading backtest layout: {e}")
+        print(f"Error discovering pkl files: {e}")
+    
+    # Strategy Config sidebar sizing: larger typography for readability
+    DARK_INPUT_STYLE = {
+        'backgroundColor': '#132C56', 
+        'color': '#E2E8F0', 
+        'border': '1px solid #2B4C7E',
+        'fontSize': '1.0rem',
+        'borderRadius': '4px',
+        'padding': '4px 8px'
+    }
+    
+    SECTION_STYLE = {
+        'marginBottom': '25px',
+    }
+    
+    SECTION_TITLE_STYLE = {
+        'color': '#90CDF4', 
+        'fontSize': '1.0rem', 
+        'fontWeight': '700',
+        'textTransform': 'uppercase',
+        'letterSpacing': '0.05em',
+        'borderBottom': '1px solid #2B4C7E',
+        'paddingBottom': '6px',
+        'marginBottom': '12px'
+    }
+
+    LABEL_STYLE = {
+        'fontSize': '0.95rem',
+        'color': '#A0AEC0',
+        'marginBottom': '4px',
+        'fontWeight': '600',
+        'display': 'block'
+    }
 
     # Sidebar (from futures.backtest.layout.create_sidebar)
     sidebar = html.Div([
-        html.H4("Strategy Config", style={'textAlign': 'center', 'marginBottom': '20px', 'color': 'white', 'letterSpacing': '0.1rem'}),
+        html.H4(
+            "Strategy Config",
+            style={
+                'textAlign': 'left',
+                'marginBottom': '22px',
+                'color': 'white',
+                'fontWeight': '600',
+                'fontSize': '1.35rem',
+                'letterSpacing': '0.03rem',
+                'borderBottom': '1px solid #4A5568',
+                'paddingBottom': '12px'
+            }
+        ),
         
         # Data Settings
-        dbc.Card([
-            dbc.CardHeader("Data Settings", className="fw-bold", style={'padding': '8px 12px', 'backgroundColor': '#007ACE', 'color': 'white', 'fontSize': '1rem'}),
-            dbc.CardBody([
-                dbc.Row([
-                    dbc.Col([
-                        html.Label("Source", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '8px'}),
-                        dcc.RadioItems(
-                            id='bf-data-source',
-                            options=[{'label': ' Local', 'value': 'local'}, {'label': ' Wind', 'value': 'wind'}],
-                            value='local',
-                            labelStyle={'display': 'block', 'fontSize': '1rem', 'marginBottom': '4px'},
-                            inputStyle={"marginRight": "6px"}
-                        )
-                    ], width=6),
-                    dbc.Col([
-                        html.Label("Mode", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '8px'}),
-                        dcc.RadioItems(
-                            id='bf-trading-mode',
-                            options=[{'label': ' Daily', 'value': 'daily'}, {'label': ' Intraday', 'value': 'intraday'}],
-                            value='daily',
-                            labelStyle={'display': 'block', 'fontSize': '1rem', 'marginBottom': '4px'},
-                            inputStyle={"marginRight": "6px"}
-                        )
-                    ], width=6),
-                ], className="mb-3"),
-                
-                html.Div(id='bf-wind-inputs', children=[
-                    html.Label("Symbol", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
-                    dcc.Dropdown(id='bf-wind-code', placeholder="Select symbol", style={'fontSize': '1rem', 'color': 'black'})
-                ], className="mb-3"),
-                
-                html.Div(id='bf-local-inputs', children=[
-                    html.Label("Symbol", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
-                    dcc.Dropdown(id='bf-local-symbol', options=pkl_options, placeholder="Select symbol", style={'fontSize': '1rem', 'color': 'black'})
-                ], style={'display': 'none'}, className="mb-3"),
-                
-                html.Label("Date Range", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
-                html.Div([
-                    dcc.DatePickerRange(
-                        id='bf-date-range',
-                        start_date=(datetime.now() - timedelta(days=30)).date(),
-                        end_date=datetime.now().date(),
-                        display_format='YYYY-MM-DD',
-                        style={'fontSize': '1rem', 'width': '100%', 'color': 'white'},
-                        className="mb-3",
-                        # Style for better visibility in dark theme
-                        with_portal=True,
-                        day_size=39
+        html.Div([
+            html.Div("Data Settings", style=SECTION_TITLE_STYLE),
+            dbc.Row([
+                dbc.Col([
+                    html.Label("Source", style=LABEL_STYLE),
+                    dcc.RadioItems(
+                        id='bf-data-source',
+                        options=[{'label': ' Local', 'value': 'local'}, {'label': ' Wind', 'value': 'wind'}],
+                        value='local',
+                        labelStyle={'display': 'inline-block', 'marginRight': '12px', 'fontSize': '1.0rem', 'color': '#CBD5E0', 'cursor': 'pointer'},
+                        inputStyle={"marginRight": "4px", "cursor": 'pointer'}
                     )
-                ], style={'position': 'relative', 'zIndex': 1000, 'marginBottom': '12px', 'backgroundColor': 'black', 'color': 'white', 'borderRadius': '4px', 'padding': '4px'}),
-                
-                html.Div(id='bf-timeframe-container', children=[
-                    html.Label("Timeframe", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
-                    dcc.Dropdown(
-                        id='bf-timeframe',
-                        options=[
-                            {'label': '1 Min', 'value': '1T'},
-                            {'label': '5 Min', 'value': '5T'},
-                            {'label': '15 Min', 'value': '15T'},
-                            {'label': '30 Min', 'value': '30T'},
-                            {'label': '1 Hour', 'value': '1H'}
-                        ],
-                        value='5T',
-                        style={'fontSize': '1rem', 'color': 'black'}
+                ], width=6),
+                dbc.Col([
+                    html.Label("Mode", style=LABEL_STYLE),
+                    dcc.RadioItems(
+                        id='bf-trading-mode',
+                        options=[{'label': ' Daily', 'value': 'daily'}, {'label': ' Intraday', 'value': 'intraday'}],
+                        value='daily',
+                        labelStyle={'display': 'inline-block', 'marginRight': '12px', 'fontSize': '1.0rem', 'color': '#CBD5E0', 'cursor': 'pointer'},
+                        inputStyle={"marginRight": "4px", "cursor": 'pointer'}
+                    )
+                ], width=6),
+            ], className="mb-3"),
+            
+            html.Div(id='bf-wind-inputs', children=[
+                html.Label("Wind Symbol", style=LABEL_STYLE),
+                dcc.Dropdown(
+                    id='bf-wind-code', 
+                    placeholder="Select symbol", 
+                    style={'fontSize': '1.0rem', 'color': 'black'}
+                )
+            ], className="mb-2"),
+            
+            html.Div(id='bf-local-inputs', children=[
+                html.Label("Local Symbol", style=LABEL_STYLE),
+                dcc.Dropdown(
+                    id='bf-local-symbol', 
+                    options=pkl_options, 
+                    placeholder="Select symbol", 
+                    style={'fontSize': '1.0rem', 'color': 'black'}
+                )
+            ], style={'display': 'none'}, className="mb-2"),
+            
+            html.Label("Date Range", style=LABEL_STYLE),
+            html.Div([
+                dcc.DatePickerRange(
+                    id='bf-date-range',
+                    start_date=(datetime.now() - timedelta(days=30)).date(),
+                    end_date=datetime.now().date(),
+                    display_format='YYYY-MM-DD',
+                    style={'fontSize': '1.0rem', 'width': '100%'},
+                    className="mb-2",
+                    with_portal=True,
+                    day_size=39
+                )
+            ], style={'marginBottom': '10px'}),
+            
+            html.Div(id='bf-timeframe-container', children=[
+                html.Label("Timeframe", style=LABEL_STYLE),
+                dcc.Dropdown(
+                    id='bf-timeframe',
+                    options=[
+                        {'label': '1 Min', 'value': '1T'},
+                        {'label': '5 Min', 'value': '5T'},
+                        {'label': '15 Min', 'value': '15T'},
+                        {'label': '30 Min', 'value': '30T'},
+                        {'label': '1 Hour', 'value': '1H'}
+                    ],
+                    value='5T',
+                    style={'fontSize': '1.0rem', 'color': 'black'}
+                ),
+            ], className="mb-2"),
+            
+            dbc.Row([
+                dbc.Col([
+                    html.Label("OOS Split", style=LABEL_STYLE),
+                    dcc.DatePickerSingle(
+                        id='bf-oos-split-date',
+                        date=datetime.now().date(),
+                        display_format='YYYY-MM-DD',
+                        style={'fontSize': '1.0rem', 'width': '100%'},
                     ),
-                ]),
-            ], style={'padding': '15px'})
-        ], className="mb-3", style=DARK_CARD_STYLE),
+                ], width=6),
+                dbc.Col([
+                    html.Label("In-sample", style=LABEL_STYLE),
+                    dcc.Dropdown(
+                        id='bf-insample-lookback',
+                        options=[
+                            {'label': '6 Months', 'value': '6M'},
+                            {'label': '1 Year', 'value': '1Y'},
+                            {'label': '2 Years', 'value': '2Y'},
+                        ],
+                        value='1Y',
+                        clearable=False,
+                        style={'fontSize': '1.0rem', 'color': 'black'}
+                    ),
+                ], width=6)
+            ], className="mb-2"),
+        ], style=SECTION_STYLE),
 
         # Strategy Selection
-        dbc.Card([
-            dbc.CardHeader("Strategies", className="fw-bold", style={'padding': '8px 12px', 'backgroundColor': '#007ACE', 'color': 'white', 'fontSize': '1rem'}),
-            dbc.CardBody([
-                dcc.Checklist(
-                    id='bf-strategy-selector',
-                    options=[
-                        {'label': ' MA', 'value': 'MA'},
-                        {'label': ' Bollinger', 'value': 'Boll'},
-                        {'label': ' VWAP', 'value': 'VWAP'},
-                        {'label': ' Momentum', 'value': 'Momentum'},
-                        {'label': ' ATR', 'value': 'ATR'},
-                        {'label': ' SAR', 'value': 'SAR'},
-                    ],
-                    value=['MA', 'Boll', 'SAR'],
-                    labelStyle={'display': 'inline-block', 'marginRight': '12px', 'fontSize': '1rem', 'marginBottom': '6px'},
-                    inputStyle={"marginRight": "5px"}
-                )
-            ], style={'padding': '15px'})
-        ], className="mb-3", style=DARK_CARD_STYLE),
+        html.Div([
+            html.Div("Strategies", style=SECTION_TITLE_STYLE),
+            dcc.Checklist(
+                id='bf-strategy-selector',
+                options=[
+                    {'label': ' MA', 'value': 'MA'},
+                    {'label': ' Bollinger', 'value': 'Boll'},
+                    {'label': ' VWAP', 'value': 'VWAP'},
+                    {'label': ' Momentum', 'value': 'Momentum'},
+                    {'label': ' ATR', 'value': 'ATR'},
+                    {'label': ' SAR', 'value': 'SAR'},
+                    {'label': ' Market Regime', 'value': 'MarketRegime'},
+                ],
+                value=['MA', 'Boll', 'SAR', 'MarketRegime'],
+                # Force a compact 3-column layout inside the narrow sidebar.
+                labelStyle={
+                    'display': 'inline-block',
+                    'width': '33%',
+                    'marginBottom': '8px',
+                    'fontSize': '1.0rem',
+                    'color': '#E2E8F0',
+                    'cursor': 'pointer',
+                    'verticalAlign': 'top'
+                },
+                inputStyle={"marginRight": "8px", "cursor": 'pointer'},
+                style={'marginTop': '6px'}
+            )
+        ], style=SECTION_STYLE),
 
-        # Parameters Accordion
-        dbc.Accordion([
-            dbc.AccordionItem([
-                dbc.Row([
-                    dbc.Col([html.Label("Short", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-ma-short', type='number', value=5, min=2, className="form-control", style=DARK_INPUT_STYLE)]),
-                    dbc.Col([html.Label("Long", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-ma-long', type='number', value=20, min=5, className="form-control", style=DARK_INPUT_STYLE)])
-                ])
-            ], title="MA Params", style=DARK_CARD_STYLE),
-            
-            dbc.AccordionItem([
-                dbc.Row([
-                    dbc.Col([html.Label("Period", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-boll-window', type='number', value=20, className="form-control", style=DARK_INPUT_STYLE)]),
-                    dbc.Col([html.Label("Std Dev", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-boll-std', type='number', value=1.0, step=0.1, className="form-control", style=DARK_INPUT_STYLE)])
+        # Market Regime Configuration
+        html.Div([
+            html.Div("Regime Logic", style=SECTION_TITLE_STYLE),
+            html.Div([
+                html.Div([
+                    html.Label("Trending", style=LABEL_STYLE),
+                    dcc.Dropdown(
+                        id='bf-mr-trending-strategy',
+                        options=[
+                            {'label': 'MA', 'value': 'MA'},
+                            {'label': 'SAR', 'value': 'SAR'},
+                            {'label': 'ATR Band', 'value': 'ATR'}
+                        ],
+                        value='SAR',
+                        style={'fontSize': '1.0rem', 'color': 'black'},
+                    ),
                 ]),
-                html.Div(style={'height': '8px'}),
-                dcc.Checklist(id='bf-boll-exit', options=[{'label': ' Exit at MA', 'value': 'exit'}], value=[], labelStyle={'fontSize': '1rem'})
-            ], title="Bollinger Params", style=DARK_CARD_STYLE),
+                html.Div([
+                    html.Label("Mean-Rev", style=LABEL_STYLE),
+                    dcc.Dropdown(
+                        id='bf-mr-meanrev-strategy',
+                        options=[
+                            {'label': 'Bollinger', 'value': 'Boll'},
+                            {'label': 'VWAP', 'value': 'VWAP'},
+                            {'label': 'ATR MeanRev', 'value': 'ATRMeanRev'}
+                        ],
+                        value='Boll',
+                        style={'fontSize': '1.0rem', 'color': 'black'}
+                    )
+                ]),
+            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(2, minmax(0, 1fr))', 'gap': '10px'})
+        ], style=SECTION_STYLE),
 
-            dbc.AccordionItem([
-                html.Label("Window", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
-                dcc.Input(id='bf-vwap-window', type='number', value=20, className="form-control", style=DARK_INPUT_STYLE)
-            ], title="VWAP Params", style=DARK_CARD_STYLE),
+        # Parameters - Responsive grid (2–3 columns depending on sidebar width)
+        # Bootstrap cols can stack in narrow sidebars; CSS grid is more predictable here.
+        html.Div([
+            html.Div("Parameters", style=SECTION_TITLE_STYLE),
 
-            dbc.AccordionItem([
-                html.Label("Lookback", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}),
-                dcc.Input(id='bf-mom-window', type='number', value=14, className="form-control", style=DARK_INPUT_STYLE)
-            ], title="Momentum Params", style=DARK_CARD_STYLE),
-            
-            dbc.AccordionItem([
-                dbc.Row([
-                    dbc.Col([html.Label("EMA", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-atr-ema-window', type='number', value=20, className="form-control", style=DARK_INPUT_STYLE)]),
-                    dbc.Col([html.Label("ATR", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-atr-window', type='number', value=20, className="form-control", style=DARK_INPUT_STYLE)])
-                ])
-            ], title="ATR Params", style=DARK_CARD_STYLE),
-            
-            dbc.AccordionItem([
-                dbc.Row([
-                    dbc.Col([html.Label("AF", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-sar-af', type='number', value=0.02, step=0.01, className="form-control", style=DARK_INPUT_STYLE)]),
-                    dbc.Col([html.Label("Max AF", style={'fontSize': '1rem', 'fontWeight': '500', 'marginBottom': '6px'}), dcc.Input(id='bf-sar-max-af', type='number', value=0.2, step=0.01, className="form-control", style=DARK_INPUT_STYLE)])
-                ])
-            ], title="SAR Params", style=DARK_CARD_STYLE),
-        ], start_collapsed=True, className="mb-3", flush=True, style={"backgroundColor": "#082255"}),
+            html.Div([
+                # MA
+                html.Div([
+                    html.Div("MA", style={'fontSize': '0.95rem', 'color': '#90CDF4', 'fontWeight': '700', 'marginBottom': '6px'}),
+                    html.Div([
+                        html.Div([
+                            html.Label("Short", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
+                            dcc.Input(
+                                id='bf-ma-short',
+                                type='number',
+                                value=5,
+                                min=2,
+                                style={**DARK_INPUT_STYLE, 'fontSize': '0.95rem', 'padding': '3px 6px', 'width': '100%'}
+                            ),
+                        ], style={'flex': '1'}),
+                        html.Div([
+                            html.Label("Long", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
+                            dcc.Input(
+                                id='bf-ma-long',
+                                type='number',
+                                value=20,
+                                min=5,
+                                style={**DARK_INPUT_STYLE, 'fontSize': '0.95rem', 'padding': '3px 6px', 'width': '100%'}
+                            ),
+                        ], style={'flex': '1'}),
+                    ], style={'display': 'flex', 'gap': '6px'})
+                ], style={'backgroundColor': 'rgba(255,255,255,0.03)', 'border': '1px solid #1E3A6E', 'borderRadius': '6px', 'padding': '10px'}),
+
+                # VWAP
+                html.Div([
+                    html.Div("VWAP", style={'fontSize': '0.95rem', 'color': '#90CDF4', 'fontWeight': '700', 'marginBottom': '6px'}),
+                    html.Label("Window", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
+                    dcc.Input(
+                        id='bf-vwap-window',
+                        type='number',
+                        value=20,
+                        style={**DARK_INPUT_STYLE, 'fontSize': '0.95rem', 'padding': '3px 6px', 'width': '100%'}
+                    )
+                ], style={'backgroundColor': 'rgba(255,255,255,0.03)', 'border': '1px solid #1E3A6E', 'borderRadius': '6px', 'padding': '10px'}),
+
+                # Momentum
+                html.Div([
+                    html.Div("Momentum", style={'fontSize': '0.95rem', 'color': '#90CDF4', 'fontWeight': '700', 'marginBottom': '6px'}),
+                    html.Label("Lookback", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
+                    dcc.Input(
+                        id='bf-mom-window',
+                        type='number',
+                        value=14,
+                        style={**DARK_INPUT_STYLE, 'fontSize': '0.95rem', 'padding': '3px 6px', 'width': '100%'}
+                    )
+                ], style={'backgroundColor': 'rgba(255,255,255,0.03)', 'border': '1px solid #1E3A6E', 'borderRadius': '6px', 'padding': '10px'}),
+
+                # Bollinger
+                html.Div([
+                    html.Div("Bollinger", style={'fontSize': '0.95rem', 'color': '#90CDF4', 'fontWeight': '700', 'marginBottom': '6px'}),
+                    html.Div([
+                        html.Div([
+                            html.Label("Window", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
+                            dcc.Input(
+                                id='bf-boll-window',
+                                type='number',
+                                value=20,
+                                style={**DARK_INPUT_STYLE, 'fontSize': '0.95rem', 'padding': '3px 6px', 'width': '100%'}
+                            ),
+                        ], style={'flex': '1'}),
+                        html.Div([
+                            html.Label("Std", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
+                            dcc.Input(
+                                id='bf-boll-std',
+                                type='number',
+                                value=1.0,
+                                step=0.1,
+                                style={**DARK_INPUT_STYLE, 'fontSize': '0.95rem', 'padding': '3px 6px', 'width': '100%'}
+                            ),
+                        ], style={'flex': '1'}),
+                    ], style={'display': 'flex', 'gap': '6px', 'marginBottom': '6px'}),
+                    dcc.Checklist(
+                        id='bf-boll-exit',
+                        options=[{'label': ' Exit@MA', 'value': 'exit'}],
+                        value=[],
+                        labelStyle={'fontSize': '0.85rem', 'color': '#CBD5E0'},
+                        inputStyle={'marginRight': '6px'}
+                    )
+                ], style={'backgroundColor': 'rgba(255,255,255,0.03)', 'border': '1px solid #1E3A6E', 'borderRadius': '6px', 'padding': '10px'}),
+
+                # SAR
+                html.Div([
+                    html.Div("SAR", style={'fontSize': '0.95rem', 'color': '#90CDF4', 'fontWeight': '700', 'marginBottom': '6px'}),
+                    html.Div([
+                        html.Div([
+                            html.Label("AF", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
+                            dcc.Input(
+                                id='bf-sar-af',
+                                type='number',
+                                value=0.02,
+                                step=0.01,
+                                style={**DARK_INPUT_STYLE, 'fontSize': '0.95rem', 'padding': '3px 6px', 'width': '100%'}
+                            ),
+                        ], style={'flex': '1'}),
+                        html.Div([
+                            html.Label("Max", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
+                            dcc.Input(
+                                id='bf-sar-max-af',
+                                type='number',
+                                value=0.2,
+                                step=0.01,
+                                style={**DARK_INPUT_STYLE, 'fontSize': '0.95rem', 'padding': '3px 6px', 'width': '100%'}
+                            ),
+                        ], style={'flex': '1'}),
+                    ], style={'display': 'flex', 'gap': '6px'})
+                ], style={'backgroundColor': 'rgba(255,255,255,0.03)', 'border': '1px solid #1E3A6E', 'borderRadius': '6px', 'padding': '10px'}),
+
+                # ATR
+                html.Div([
+                    html.Div("ATR", style={'fontSize': '0.95rem', 'color': '#90CDF4', 'fontWeight': '700', 'marginBottom': '6px'}),
+                    html.Div([
+                        html.Div([
+                            html.Label("EMA", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
+                            dcc.Input(
+                                id='bf-atr-ema-window',
+                                type='number',
+                                value=11,
+                                style={**DARK_INPUT_STYLE, 'fontSize': '0.95rem', 'padding': '3px 6px', 'width': '100%'}
+                            ),
+                        ], style={'flex': '1'}),
+                        html.Div([
+                            html.Label("Win", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
+                            dcc.Input(
+                                id='bf-atr-window',
+                                type='number',
+                                value=14,
+                                style={**DARK_INPUT_STYLE, 'fontSize': '0.95rem', 'padding': '3px 6px', 'width': '100%'}
+                            ),
+                        ], style={'flex': '1'}),
+                        html.Div([
+                            html.Label("Mult", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
+                            dcc.Input(
+                                id='bf-atr-mult',
+                                type='number',
+                                value=2.0,
+                                step=0.1,
+                                min=0.0,
+                                style={**DARK_INPUT_STYLE, 'fontSize': '0.95rem', 'padding': '3px 6px', 'width': '100%'}
+                            ),
+                        ], style={'flex': '1'}),
+                    ], style={'display': 'flex', 'gap': '6px'})
+                ], style={'backgroundColor': 'rgba(255,255,255,0.03)', 'border': '1px solid #1E3A6E', 'borderRadius': '6px', 'padding': '10px'}),
+            ], style={
+                'display': 'grid',
+                'gridTemplateColumns': 'repeat(auto-fit, minmax(150px, 1fr))',
+                'gap': '10px',
+            }),
+        ], style=SECTION_STYLE),
         
-        dbc.Button("Run Backtest", id='bf-run-button', style={
-            'width': '100%', 'padding': '12px', 'backgroundColor': '#007ACE', 
-            'color': 'white', 'border': 'none', 'cursor': 'pointer',
-            'fontSize': '1.1rem', 'fontWeight': 'bold', 'letterSpacing': '0.1rem'
+        dbc.Button("START BACKTEST", id='bf-run-button', style={
+            'width': '100%', 'padding': '10px', 'backgroundColor': '#3182CE', 
+            'color': 'white', 'border': 'none', 'cursor': 'pointer', 'borderRadius': '4px',
+            'fontSize': '1.05rem', 'fontWeight': '700', 'letterSpacing': '0.04rem',
+            'boxShadow': '0 2px 4px rgba(0,0,0,0.2)'
         })
     ], style={
-        'width': '320px', 'padding': '2rem 1rem', 'backgroundColor': '#082255',
-        'color': 'white', 'overflowY': 'auto', 'fontFamily': '"Open Sans", sans-serif'
+        'width': '340px', 'padding': '1.5rem', 'backgroundColor': '#0B1E3D', # Darker background
+        'color': 'white', 'overflowY': 'auto', 'fontFamily': '"Open Sans", sans-serif', 'fontSize': '1.0rem',
+        'borderRight': '1px solid #1E3A6E', 'height': '100%'
     })
     
     # Content area
@@ -2016,14 +2260,18 @@ def register_multiasset_callbacks(app):
         # Build Inputs
         inputs = []
         for factor in sorted_factors:
+            # Defaults: curvature budget often starts at 0; slope factors can be negative (directional tilt)
+            default_value = 0.0 if factor.startswith('IRCV.') else 1.0
+            min_value = -10.0 if factor.startswith(('IRSL.', 'SPSL.')) else 0.0
+
             inputs.append(
                 html.Div([
                     html.Label(factor, style={'color': THEME['text_main'], 'fontSize': '12px', 'width': '80px', 'fontWeight': 'bold'}),
                     dcc.Input(
                         id={'type': 'risk-budget-input', 'index': factor},
                         type='number',
-                        value=1,
-                        min=0,
+                        value=default_value,
+                        min=min_value,
                         step=0.1,
                         style={'width': '60px', 'fontSize': '12px', 'padding': '2px', 'backgroundColor': '#fff', 'color': '#000', 'border': 'none', 'borderRadius': '2px'}
                     ),
@@ -2923,6 +3171,47 @@ def register_multiasset_callbacks(app):
         return {'display': 'block'}
     
     @app.callback(
+        [Output('bf-oos-split-date', 'date'),
+         Output('bf-insample-lookback', 'options'),
+         Output('bf-insample-lookback', 'value')],
+        [Input('bf-trading-mode', 'value')]
+    )
+    def bf_set_oos_defaults_and_lookback_options(trading_mode):
+        """Set sensible defaults for split date and lookback based on trading mode."""
+        import pandas as pd
+        today = pd.Timestamp.now().normalize()
+
+        if trading_mode == 'intraday':
+            # Monday of the present week
+            oos_date = (today - pd.Timedelta(days=today.weekday())).date()
+            options = [
+                {'label': '1 Week', 'value': '1W'},
+                {'label': '2 Weeks', 'value': '2W'},
+                {'label': '1 Month', 'value': '1M'},
+                {'label': '3 Months', 'value': '3M'},
+            ]
+            value = '1M'
+        else:
+            # First day of the present year
+            oos_date = pd.Timestamp(year=today.year, month=1, day=1).date()
+            options = [
+                {'label': '6 Months', 'value': '6M'},
+                {'label': '1 Year', 'value': '1Y'},
+                {'label': '2 Years', 'value': '2Y'},
+            ]
+            value = '1Y'
+
+        return oos_date, options, value
+    
+    @app.callback(
+        [Input('bf-trading-mode', 'value')]
+    )
+    def bf_toggle_timeframe(mode):
+        if mode == 'daily':
+            return {'display': 'none'}
+        return {'display': 'block'}
+    
+    @app.callback(
         [Output('bf-wind-code', 'options'), Output('bf-wind-code', 'value')],
         [Input('bf-trading-mode', 'value')]
     )
@@ -2979,12 +3268,13 @@ def register_multiasset_callbacks(app):
          State('bf-mom-window', 'value'),
          State('bf-atr-ema-window', 'value'),
          State('bf-atr-window', 'value'),
+         State('bf-atr-mult', 'value'),
          State('bf-sar-af', 'value'),
          State('bf-sar-max-af', 'value')]
     )
     def bf_update_dashboard(n_clicks, source, trading_mode, wind_code, local_symbol, start_date, end_date, tf, 
                          selected_strategies,
-                         ma_s, ma_l, boll_w, boll_std, boll_exit, vwap_w, mom_w, atr_ema_w, atr_w,
+                         ma_s, ma_l, boll_w, boll_std, boll_exit, vwap_w, mom_w, atr_ema_w, atr_w, atr_mult,
                          sar_af, sar_max_af):
         if n_clicks == 0:
             return html.Div('Please configure parameters and click "Start Backtest"', style={'text-align': 'center', 'marginTop': '50px', 'color': THEME['text_sub']})
@@ -3035,6 +3325,18 @@ def register_multiasset_callbacks(app):
             if df_resampled.empty:
                 return html.Div("Data is empty after resampling", style={'color': THEME['danger']})
                 
+            # Out-of-sample split calculation
+            oos_start = pd.to_datetime(start_date)  # Use start_date as OOS boundary by default
+            try:
+                # Use last 20% of data as OOS for daily, last 30 days for intraday
+                if trading_mode == 'daily':
+                    cutoff_days = int(len(df_resampled) * 0.2)
+                    oos_start = df_resampled.index[-cutoff_days] if cutoff_days < len(df_resampled) else df_resampled.index[0]
+                else:
+                    oos_start = df_resampled.index[-1] - pd.Timedelta(days=30)
+            except Exception:
+                oos_start = df_resampled.index[0]
+            
             # Run strategies
             results = {}
             if 'MA' in selected_strategies:
@@ -3045,64 +3347,188 @@ def register_multiasset_callbacks(app):
             if 'VWAP' in selected_strategies:
                 results['VWAP'] = run_vwap_strategy(df_resampled, vwap_w)
             if 'Mom' in selected_strategies:
-                results['Mom'] = run_intraday_momentum_strategy(df_resampled, mom_w)
+                results['Mom'] = run_intraday_momentum_strategy(df_resampled, mom_w, vwap_w if 'VWAP' in results else 20)
             if 'ATR' in selected_strategies:
-                results['ATR'] = run_atr_band_strategy(df_resampled, atr_ema_w, atr_w)
+                results['ATR'] = run_atr_mean_reversion_strategy(df_resampled, atr_ema_w, atr_w, atr_mult=atr_mult)
             if 'SAR' in selected_strategies:
                 results['SAR'] = run_sar_strategy(df_resampled, sar_af, sar_max_af)
 
-            # Create Plotly Chart
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                                vertical_spacing=0.03, row_heights=[0.7, 0.3])
-
-            # Candlestick
-            fig.add_trace(go.Candlestick(
-                x=df_resampled.index,
-                open=df_resampled['open'], high=df_resampled['high'],
-                low=df_resampled['low'], close=df_resampled['close'],
-                name='Price'
-            ), row=1, col=1)
+            # Create 4-panel chart matching futures/backtest layout
+            fig = make_subplots(
+                rows=4, cols=1, 
+                shared_xaxes=False, 
+                vertical_spacing=0.06,
+                row_heights=[0.4, 0.15, 0.25, 0.2],
+                subplot_titles=("Price & Technical Indicators", "Market Regime (Placeholder)", "Cumulative Returns Comparison", "Position Status")
+            )
             
-            # Strategy Equity Curves
-            for name, res in results.items():
-                fig.add_trace(go.Scatter(
-                    x=res.index, 
-                    y=res['cumulative_returns'],
-                    mode='lines', name=f'{name} Equity'
-                ), row=2, col=1)
+            x_index = df_resampled.index.strftime('%Y-%m-%d<br>%H:%M')
+            split_label = oos_start.strftime('%Y-%m-%d<br>%H:%M')
+            
+            # Row 1: Price & Indicators (高对比度配色)
+            fig.add_trace(go.Scatter(x=x_index, y=df_resampled['close'], name='Close Price', line=dict(color='#FFFFFF', width=2.5)), row=1, col=1)
+            
+            if 'MA' in results:
+                df_ma = results['MA']
+                fig.add_trace(go.Scatter(x=x_index, y=df_ma['ma_short'], name=f'MA{ma_s}', line=dict(color='#FFB74D', width=1.5), visible='legendonly'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=x_index, y=df_ma['ma_long'], name=f'MA{ma_l}', line=dict(color='#64B5F6', width=1.5), visible='legendonly'), row=1, col=1)
 
+            if 'SAR' in results:
+                df_sar = results['SAR']
+                fig.add_trace(go.Scatter(x=x_index, y=df_sar['sar'], name='SAR', mode='markers', marker=dict(color='#BDBDBD', size=4), visible='legendonly'), row=1, col=1)
+                
+            if 'Boll' in results:
+                df_boll = results['Boll']
+                fig.add_trace(go.Scatter(x=x_index, y=df_boll['upper_band'], name='Bollinger Upper', line=dict(color='#81C784', width=1.5, dash='dot'), visible='legendonly'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=x_index, y=df_boll['lower_band'], name='Bollinger Lower', line=dict(color='#E57373', width=1.5, dash='dot'), visible='legendonly'), row=1, col=1)
+
+            if 'ATR' in results:
+                df_atr = results['ATR']
+                if 'atr_upper' in df_atr.columns and 'atr_lower' in df_atr.columns:
+                    fig.add_trace(go.Scatter(x=x_index, y=df_atr['atr_upper'], name='ATR Upper', line=dict(color='#FF6B6B', width=1.5, dash='solid')), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=x_index, y=df_atr['atr_lower'], name='ATR Lower', line=dict(color='#4ECDC4', width=1.5, dash='solid')), row=1, col=1)
+                
+            if 'VWAP' in results:
+                df_vwap = results['VWAP']
+                fig.add_trace(go.Scatter(x=x_index, y=df_vwap['vwap'], name='VWAP', line=dict(color='#BA68C8', width=1.5, dash='dash'), visible='legendonly'), row=1, col=1)
+                
+            if 'Mom' in results:
+                df_mom = results['Mom']
+                if 'upper_limit' in df_mom.columns and 'lower_limit' in df_mom.columns:
+                    fig.add_trace(go.Scatter(x=x_index, y=df_mom['upper_limit'], name='Momentum Upper', line=dict(color='#4DD0E1', width=1.5, dash='dashdot'), visible='legendonly'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=x_index, y=df_mom['lower_limit'], name='Momentum Lower', line=dict(color='#F06292', width=1.5, dash='dashdot'), visible='legendonly'), row=1, col=1)
+
+            # Row 2: Market Regime (placeholder - would need regime detector)
+            regime_series = pd.Series(0, index=df_resampled.index)
+            regime_label_series = pd.Series('unknown', index=df_resampled.index)
+            
+            fig.add_trace(go.Scatter(
+                x=x_index,
+                y=regime_series,
+                name='Regime State',
+                mode='lines',
+                line=dict(color='#42A5F5', width=2, shape='hv'),
+                fill='tozeroy',
+                fillcolor='rgba(66, 165, 245, 0.3)',
+                customdata=regime_label_series,
+                hovertemplate='Time: %{x}<br>State: %{y}<br>Regime: %{customdata}<extra></extra>'
+            ), row=2, col=1)
+
+            # Mark OOS split
+            fig.add_vline(
+                x=split_label,
+                line_width=2,
+                line_dash='dash',
+                line_color='#FFFFFF',
+                row=2,
+                col=1
+            )
+            fig.add_annotation(
+                x=split_label,
+                y=0.5,
+                xref='x2',
+                yref='y2',
+                text='OOS Start',
+                showarrow=True,
+                arrowhead=2,
+                ax=20,
+                ay=-30,
+                font=dict(color='#FFFFFF', size=11),
+                bgcolor='rgba(0, 0, 0, 0.6)',
+                bordercolor='#FFFFFF',
+                borderwidth=1
+            )
+
+            # Row 3: Cumulative Returns (鲜艳配色)
+            colors = {'MA': '#42A5F5', 'Boll': '#FFB74D', 'VWAP': '#BA68C8', 'Mom': '#4DD0E1', 'ATR': '#FF8A65', 'SAR': '#F06292'}
+            strategy_meta = [('MA', 'MA'), ('Boll', 'Boll'), ('VWAP', 'VWAP'), ('Mom', 'Momentum'), ('ATR', 'ATR'), ('SAR', 'SAR')]
+            
+            for key, title in strategy_meta:
+                if key in results:
+                    df_res = results[key]
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_index,
+                            y=df_res['cumulative_returns'],
+                            name=f'{title} Returns',
+                            line=dict(color=colors.get(key, '#BDBDBD'), width=2)
+                        ),
+                        row=3,
+                        col=1
+                    )
+            
+            # Row 4: Aggregated Position (高对比度)
+            agg_signal = pd.Series(0, index=df_resampled.index)
+            for key in results.keys():
+                agg_signal += results[key]['signal']
+                     
+            fig.add_trace(go.Scatter(
+                x=x_index, y=agg_signal, name='Aggregated Position', 
+                line=dict(color='#66BB6A', width=2, shape='hv'),
+                fill='tozeroy', fillcolor='rgba(102, 187, 106, 0.25)'
+            ), row=4, col=1)
+
+            # Layout Config
             fig.update_layout(
-                height=600, 
-                title="Backtest Results",
+                height=1200, 
+                hovermode="x unified",
                 template=THEME['chart_template'],
                 paper_bgcolor=THEME['bg_card'],
                 plot_bgcolor=THEME['bg_card'],
                 font={'color': THEME['text_main']},
-                margin=dict(l=50, r=50, t=50, b=50),
-                legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center"),
-                xaxis_rangeslider_visible=False
+                margin=dict(l=50, r=50, t=80, b=50),
+                legend=dict(orientation="h", y=1.02, x=1, xanchor="right")
             )
-            fig.update_xaxes(gridcolor=THEME['table_header'])
+            common_xaxis = dict(type='category', tickmode='auto', nticks=10, showgrid=True, gridcolor=THEME['table_header'])
+            fig.update_xaxes(row=1, col=1, **common_xaxis)
+            fig.update_xaxes(row=2, col=1, showticklabels=False, **common_xaxis)
+            fig.update_xaxes(row=3, col=1, showticklabels=False, **common_xaxis)
+            fig.update_xaxes(row=4, col=1, matches='x2', **common_xaxis)
             fig.update_yaxes(gridcolor=THEME['table_header'])
+            fig.update_layout(xaxis2=dict(matches='x4'), xaxis3=dict(matches='x4'), xaxis4=dict(matches='x2'))
 
-            # Helper for local Metric Card (redefined here or duplicated logic)
+            # Helper for local Metric Card 
             def create_metric_card_local(title, metrics):
                 return html.Div([
-                    html.H6(title, style={'color': THEME['text_sub'], 'marginBottom': '5px', 'fontSize': '14px'}),
+                    html.H6(title, style={'color': THEME['text_sub'], 'marginBottom': '8px', 'fontSize': '14px', 'fontWeight': 'bold'}),
                     html.Div([
-                        html.Div(f"Ret: {metrics.get('Total Return', 'N/A')}", style={'fontWeight': 'bold', 'color': THEME['success'] if str(metrics.get('Total Return')).startswith('+') else THEME['text_main']}),
-                        html.Div(f"DD: {metrics.get('Max Drawdown', 'N/A')}", style={'color': THEME['danger']}),
-                        html.Div(f"Sharpe: {metrics.get('Sharpe Ratio', 'N/A')}"),
-                        html.Div(f"Trades: {metrics.get('Trades', 'N/A')}"),
-                    ], style={'fontSize': '12px', 'lineHeight': '1.5', 'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '5px'})
-                ], style={'backgroundColor': THEME['bg_input'], 'padding': '10px', 'borderRadius': '4px', 'marginBottom': '10px', 'flex': '1', 'minWidth': '150px'})
+                        html.Div([
+                            html.Span("Total Return: ", style={'color': THEME['text_sub']}),
+                            html.Span(f"{metrics.get('Total Return', 'N/A')}", style={'fontWeight': 'bold', 'color': THEME['success'] if str(metrics.get('Total Return', '')).startswith('+') else THEME['text_main']})
+                        ], style={'marginBottom': '4px'}),
+                        html.Div([
+                            html.Span("Max DD: ", style={'color': THEME['text_sub']}),
+                            html.Span(f"{metrics.get('Max Drawdown', 'N/A')}", style={'color': THEME['danger']})
+                        ], style={'marginBottom': '4px'}),
+                        html.Div([
+                            html.Span("Sharpe: ", style={'color': THEME['text_sub']}),
+                            html.Span(f"{metrics.get('Sharpe Ratio', 'N/A')}")
+                        ], style={'marginBottom': '4px'}),
+                        html.Div([
+                            html.Span("Win Rate: ", style={'color': THEME['text_sub']}),
+                            html.Span(f"{metrics.get('Win Rate', 'N/A')}")
+                        ], style={'marginBottom': '4px'}),
+                        html.Div([
+                            html.Span("Trades: ", style={'color': THEME['text_sub']}),
+                            html.Span(f"{metrics.get('Trades', 'N/A')}")
+                        ]),
+                    ], style={'fontSize': '12px', 'lineHeight': '1.6'})
+                ], style={'backgroundColor': THEME['bg_input'], 'padding': '12px', 'borderRadius': '4px', 'marginBottom': '10px', 'flex': '1', 'minWidth': '180px', 'border': f"1px solid {THEME['table_header']}"})
 
-            # Card Display
+            # Calculate OOS metrics and display cards
             cards = []
+            strategy_meta = [('MA', 'MA Crossover'), ('SAR', 'SAR'), ('Boll', 'Bollinger Bands'), ('ATR', 'ATR'), ('VWAP', 'VWAP'), ('Mom', 'Intraday Momentum')]
             
-            for name, res in results.items():
-                m = calculate_metrics(res)
-                cards.append(create_metric_card_local(name, m))
+            for key, title in strategy_meta:
+                if key in results:
+                    # OOS metrics: start at OOS split date
+                    oos_df = results[key].loc[results[key].index >= oos_start].copy()
+                    if not oos_df.empty:
+                        oos_df['cumulative_returns'] = (1 + oos_df['strategy_returns'].fillna(0)).cumprod()
+                        metrics = calculate_metrics(oos_df)
+                    else:
+                        metrics = {}
+                    cards.append(create_metric_card_local(title, metrics))
                 
             return html.Div([
                 html.Div(cards, style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '15px'}),
@@ -3113,3 +3539,114 @@ def register_multiasset_callbacks(app):
             import traceback
             traceback.print_exc()
             return html.Div(f"Error running backtest: {str(e)}", style={'color': THEME['danger']})
+
+    # ============================================================================
+    # 7. Risk Exposure Display Callback (Summary Tab)
+    # ============================================================================
+    @app.callback(
+        Output('portfolio-risk-exposure', 'children'),
+        Input('portfolio-summary-container', 'children'),
+        prevent_initial_call=False
+    )
+    def update_portfolio_risk_exposure(trigger):
+        """
+        Calculate and display portfolio risk exposure.
+        Assumes: Alpha book weight = 0, Beta book weight = 1
+        Focus: China Gov Bond 1Y and 10Y exposure to IRDL.CN and IRSL.CN
+        """
+        if ALLOCATION_RESULTS['portfolio'] is None or ALLOCATION_RESULTS['summary'] is None:
+            return html.Div("Run Optimization First", style={'padding': '20px', 'textAlign': 'center', 'color': THEME['text_sub'], 'fontStyle': 'italic'})
+        
+        try:
+            portfolio = ALLOCATION_RESULTS['portfolio']
+            summary = ALLOCATION_RESULTS['summary']
+            
+            # Get weights (assuming 100% beta allocation as requested)
+            weights = summary.set_index('Asset')['Weight (%)'] / 100.0
+            
+            # Focus on CN1Y and CN10Y
+            target_assets = ['CN1Y', 'CN10Y']
+            target_factors = ['IRDL.CN', 'IRSL.CN']
+            
+            exposure_data = []
+            for asset_name in target_assets:
+                if asset_name not in portfolio.assets:
+                    continue
+                
+                asset = portfolio.assets[asset_name]
+                weight = weights.get(asset_name, 0.0)
+                
+                row = {'Asset': asset_name, 'Weight (%)': f"{weight * 100:.2f}%"}
+                
+                for factor in target_factors:
+                    sensitivity = asset.factors.get(factor, 0.0)
+                    # Portfolio exposure = weight × sensitivity
+                    exposure = weight * sensitivity
+                    row[f'{factor} Sensitivity'] = f"{sensitivity:.4f}"
+                    row[f'{factor} Exposure'] = f"{exposure:.4f}"
+                
+                exposure_data.append(row)
+            
+            if not exposure_data:
+                return html.Div("No CN1Y or CN10Y found in portfolio", 
+                              style={'padding': '20px', 'textAlign': 'center', 'color': THEME['warning']})
+            
+            df_exposure = pd.DataFrame(exposure_data)
+            
+            # Create table
+            exposure_table = dash_table.DataTable(
+                data=df_exposure.to_dict('records'),
+                columns=[{'name': col, 'id': col} for col in df_exposure.columns],
+                style_cell={
+                    'textAlign': 'center', 
+                    'padding': '10px', 
+                    'fontFamily': 'Arial, sans-serif',
+                    'backgroundColor': THEME['table_row_odd'],
+                    'color': THEME['text_main'],
+                    'border': 'none',
+                    'fontSize': '12px'
+                },
+                style_header={
+                    'backgroundColor': THEME['table_header'], 
+                    'color': THEME['text_main'], 
+                    'fontWeight': 'bold', 
+                    'textAlign': 'center',
+                    'border': 'none',
+                    'fontSize': '13px'
+                },
+                style_data_conditional=[
+                    {'if': {'row_index': 'even'}, 'backgroundColor': THEME['table_row_even']}
+                ],
+                style_table={'overflowX': 'auto', 'maxWidth': '900px', 'margin': '0 auto'}
+            )
+            
+            # Calculate total portfolio exposure
+            total_irdl = sum([float(row['IRDL.CN Exposure']) for row in exposure_data])
+            total_irsl = sum([float(row['IRSL.CN Exposure']) for row in exposure_data])
+            
+            summary_cards = html.Div([
+                html.Div([
+                    html.Div("Total IRDL.CN Exposure", style={'fontSize': '12px', 'color': THEME['text_sub'], 'marginBottom': '5px'}),
+                    html.Div(f"{total_irdl:.4f}", style={'fontSize': '20px', 'fontWeight': 'bold', 'color': THEME['accent']})
+                ], style={'backgroundColor': THEME['bg_input'], 'padding': '15px', 'borderRadius': '5px', 'flex': '1', 'minWidth': '150px', 'textAlign': 'center'}),
+                
+                html.Div([
+                    html.Div("Total IRSL.CN Exposure", style={'fontSize': '12px', 'color': THEME['text_sub'], 'marginBottom': '5px'}),
+                    html.Div(f"{total_irsl:.4f}", style={'fontSize': '20px', 'fontWeight': 'bold', 'color': THEME['warning']})
+                ], style={'backgroundColor': THEME['bg_input'], 'padding': '15px', 'borderRadius': '5px', 'flex': '1', 'minWidth': '150px', 'textAlign': 'center'}),
+            ], style={'display': 'flex', 'gap': '15px', 'marginBottom': '20px', 'justifyContent': 'center'})
+            
+            return html.Div([
+                summary_cards,
+                exposure_table,
+                html.Div([
+                    html.Span("📊 Exposure = Weight × Sensitivity | ", style={'fontSize': '11px', 'color': THEME['text_sub']}),
+                    html.Span("IRDL.CN: Level Risk | IRSL.CN: Slope Risk (2Y-10Y)", style={'fontSize': '11px', 'color': THEME['text_sub']})
+                ], style={'marginTop': '10px', 'textAlign': 'center', 'fontStyle': 'italic'})
+            ])
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return html.Div(f"Error calculating exposure: {str(e)}", 
+                          style={'color': THEME['danger'], 'padding': '20px'})

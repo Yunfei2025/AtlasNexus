@@ -61,7 +61,7 @@ def generate(data, d):
     return p['Event']
 
 def TSSampling(vT):
-    vm = vT.resample('5T').mean()
+    vm = vT.resample('5min').mean()
     vD = vT.resample('D').mean().dropna()
     h0 = pd.to_timedelta('9h 30m')
     h1 = pd.to_timedelta('11h 30m')

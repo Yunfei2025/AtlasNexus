@@ -489,6 +489,14 @@ class IRSRefresher:
 			spreads, time_based_df = self.compute_stats()
 			self.save_to_dashboard(spreads, time_based_df)
 			self.save_rt_pickle(spreads)
+			# Build normalized alpha snapshot for Atlas UI candidate scanning.
+			# Keep this non-fatal to avoid breaking the refresh pipeline.
+			try:
+				from curves.refreshers.alpha import save_alpha_spreads_snapshot
+				save_alpha_spreads_snapshot(DIR_INPUT, rewrite=True)
+				logger.info("Saved Alpha-spreadsrt.pkl")
+			except Exception as e:
+				logger.warning(f"Failed to build Alpha-spreadsrt.pkl: {e}")
 			
 			logger.info(f"Successfully completed IRS curve refresh at {datetime.now().strftime('%H:%M:%S')}")
 			print('\nFinish refreshing Swap Curve at：', datetime.now().strftime("%H:%M:%S"))

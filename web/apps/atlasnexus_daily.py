@@ -224,8 +224,8 @@ def _render_tab(tab):
                             children=[
                                 dcc.Tab(label="FACTOR", value="factor", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="BACKTEST-FACTOR", value="backtest-factor", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="BACKTEST-PORTFOLIO", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="FUTURES", value="backtest-factor", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="REBALANCE", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="SURFACE", value="surface", style=tab_style, selected_style=tab_selected_style),
                             ],
                             style={"height": "520px"},

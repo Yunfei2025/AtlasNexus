@@ -6,6 +6,7 @@ import datetime as dt
 
 import pandas as pd
 import plotly.graph_objs as go
+import re
 
 from settings.general import DateConfig
 
@@ -80,6 +81,10 @@ def getVolInfo(tick: pd.DataFrame, csinterval: str):
     volgvn = vol.loc[gvn]
     vol = pd.concat([volgvn, voltkn], axis=1)
     vol.columns = ['bid', 'ofr']
+    # normalize minute alias if provided as 'T' (pandas deprecation)
+    if isinstance(csinterval, str) and 'T' in csinterval:
+        csinterval = re.sub(r'(?<=\d)T\b', 'min', csinterval)
+
     volr = vol.resample(csinterval).sum()
 
     delta = (volr['ofr'] - volr['bid']) / (volr['ofr'] + volr['bid'])
