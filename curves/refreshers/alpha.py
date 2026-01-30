@@ -696,3 +696,8 @@ def load_alpha_candidates(
 if __name__ == "__main__":
 	out_path = save_alpha_spreads_snapshot(DIR_INPUT, rewrite=True)
 	print(f"Saved alpha snapshot: {out_path}")
+
+	from pathlib import Path
+	from curves.refreshers.alpha import AlphaSnapshotPaths, _read_pickle
+
+	paths = AlphaSnapshotPaths(Path(DIR_INPUT))

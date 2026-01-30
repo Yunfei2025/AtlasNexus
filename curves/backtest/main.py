@@ -23,7 +23,7 @@ btype = "IRS"
 # Update flags: list of strings from ['pool', 'bonds', 'cbts']
 update_list = []
 
-start = '2025-11-25'  # Backtest start date
+start = '2025-01-01'  # Backtest start date
 end = '2025-12-30'    # Backtest end date
 
 # Performance settings

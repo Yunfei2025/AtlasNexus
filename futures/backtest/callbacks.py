@@ -294,11 +294,17 @@ def register_callbacks(app):
                 features_train = features_all
 
             detector.fit(features_train)
-            states, _ = detector.predict(features_all)
-            regime_map = detector.get_state_regime_map()
-
-            regime_series.loc[features_all.index] = states
-            regime_label_series.loc[features_all.index] = [regime_map.get(int(s), 'unknown') for s in states]
+            # Use prediction with confidence filtering and short-run smoothing
+            try:
+                labels, states, probs = detector.predict_with_confidence(features_all, prob_threshold=0.6, min_run_length=3)
+                regime_series.loc[features_all.index] = states
+                regime_label_series.loc[features_all.index] = labels.values
+            except Exception as e:
+                # Fallback to plain predict if new method fails for any reason
+                states, _ = detector.predict(features_all)
+                regime_map = detector.get_state_regime_map()
+                regime_series.loc[features_all.index] = states
+                regime_label_series.loc[features_all.index] = [regime_map.get(int(s), 'unknown') for s in states]
         except Exception as e:
             print(f"Regime detection error: {e}")
             

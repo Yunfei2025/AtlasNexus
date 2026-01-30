@@ -259,8 +259,8 @@ def create_sidebar():
 
                 dbc.AccordionItem([
                     dbc.Row([
-                        dbc.Col([html.Label("EMA", style={'font-size': '0.9rem'}), dcc.Input(id='atr-ema-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                        dbc.Col([html.Label("ATR", style={'font-size': '0.9rem'}), dcc.Input(id='atr-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
+                        dbc.Col([html.Label("EMA", style={'font-size': '0.9rem'}), dcc.Input(id='atr-ema-window', type='number', value=11, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
+                        dbc.Col([html.Label("ATR", style={'font-size': '0.9rem'}), dcc.Input(id='atr-window', type='number', value=14, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
                         dbc.Col([html.Label("Mult", style={'font-size': '0.9rem'}), dcc.Input(id='atr-mult', type='number', value=2.0, step=0.1, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
                     ])
                 ], title="ATR Params", style=DARK_CARD_STYLE),

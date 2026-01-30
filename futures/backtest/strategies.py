@@ -151,7 +151,7 @@ def run_intraday_momentum_strategy(data, window=14, vwap_window=20):
     return df
 
 
-def run_atr_mean_reversion_strategy(data, ema_window=20, atr_window=20, atr_mult=2.0, exit_at_ema=True):
+def run_atr_mean_reversion_strategy(data, ema_window=11, atr_window=14, atr_mult=2.0, exit_at_ema=True):
     """ATR mean-reversion strategy.
 
     Bands: EMA(ema_window) ± atr_mult * ATR(atr_window)
