@@ -492,7 +492,7 @@ class IRSRefresher:
 			# Build normalized alpha snapshot for Atlas UI candidate scanning.
 			# Keep this non-fatal to avoid breaking the refresh pipeline.
 			try:
-				from curves.generators.alpha import save_alpha_spreads_snapshot
+				from curves.refreshers.alpha import save_alpha_spreads_snapshot
 				save_alpha_spreads_snapshot(DIR_INPUT, rewrite=True)
 				logger.info("Saved Alpha-spreadsrt.pkl")
 			except Exception as e:

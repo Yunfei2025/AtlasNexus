@@ -69,6 +69,12 @@ SPREAD_CATEGORIES = {
         'description': 'IRS spread trades (box, basis)',
         'style': 'MeanReversion',
     },
+    'Tenor-Spread': {
+        'label': 'Tenor Spreads',
+        'types': ['TenorSpread'],
+        'description': 'Curve slope / cross-curve spreads (e.g. 5s10s, 10s30s)',
+        'style': 'MeanReversion',
+    },
     'Bond-Futures': {
         'label': 'Bond vs Futures (Net Basis)',
         'types': ['NetBasis'],
@@ -151,10 +157,10 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
     """
     dir_input = _get_input_dir()
 
-    # Prefer the normalized snapshot generated in curves/generators/alpha.py.
+    # Prefer the normalized snapshot generated in curves/refreshers/alpha.py.
     # This aligns with how realtime z-scores / stationarity / carry+roll are stored.
     try:
-        from curves.generators.alpha import get_alpha_spread_table
+        from curves.refreshers.alpha import get_alpha_spread_table
 
         snap_df = get_alpha_spread_table(spread_type, dir_input=dir_input)
         if snap_df is not None and isinstance(snap_df, pd.DataFrame) and not snap_df.empty:
@@ -507,11 +513,12 @@ def build_candidates_layout() -> html.Div:
                         {'label': ' Bond-Curve (MR)', 'value': 'Bond-Curve'},
                         {'label': ' Bond-Swap (Carry)', 'value': 'Bond-Swap'},
                         {'label': ' Swap Spreads (MR)', 'value': 'Swap-Spread'},
+                        {'label': ' Tenor Spreads (MR)', 'value': 'Tenor-Spread'},
                         {'label': ' Net Basis (Carry)', 'value': 'Bond-Futures'},
                         {'label': ' Term Basis (MR)', 'value': 'Futures-Term'},
                         {'label': ' PCA Spread (MR)', 'value': 'PCA-Spread'},
                     ],
-                    value=['Bond-Curve', 'Bond-Swap'],
+                    value=['Bond-Curve', 'Bond-Swap', 'Tenor-Spread'],
                     inline=True,
                     labelStyle={'color': THEME['text_main'], 'marginRight': '15px', 'fontSize': '12px'},
                     inputStyle={'marginRight': '5px'},
@@ -842,7 +849,7 @@ def register_alpha_callbacks(app) -> None:
         # Use generator-side filtering so we cap to 20 MR + 20 Carry/Trend,
         # enforce stationary==YES for MeanReversion, and compute correlations.
         try:
-            from curves.generators.alpha import load_alpha_candidates
+            from curves.refreshers.alpha import load_alpha_candidates
 
             obj = load_alpha_candidates(
                 dir_input=_get_input_dir(),
