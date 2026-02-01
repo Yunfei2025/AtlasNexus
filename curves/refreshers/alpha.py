@@ -27,6 +27,13 @@ from typing import Dict, Optional, Iterable, Tuple
 import numpy as np
 import pandas as pd
 
+import sys
+
+# Add project root to Python path
+project_root = Path(__file__).parent.parent.parent.resolve()
+sys.path.insert(0, str(project_root))
+
+
 from curves.utils.file import updatePKL
 from settings.paths import DIR_INPUT
 
@@ -195,12 +202,15 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 	df_irs = irs_spdrt.get("spreads")
 	if isinstance(df_irs, pd.DataFrame) and not df_irs.empty:
 		df_irs = _normalize_index(df_irs)
+		# Filter out IDs ending with ".IR" as they are not used as candidates
+		df_irs = df_irs[~df_irs.index.astype(str).str.endswith(".IR")].copy()
 		df_irs = _ensure_numeric(df_irs, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
 		if "Carry(3m,bp)" in df_irs.columns and "Roll(3m,bp)" in df_irs.columns:
 			df_irs["carry_roll"] = df_irs["Carry(3m,bp)"] + df_irs["Roll(3m,bp)"]
 		df_irs["spread_type"] = "SwapSpread"
 		df_irs["category"] = "Swap-Spread"
-		out["SwapSpread"] = df_irs
+		if not df_irs.empty:
+			out["SwapSpread"] = df_irs
 
 	# Keep reference to IRS historical structure if callers need it later
 	if isinstance(irs_pxspd, dict) and "CarryRoll3m" in irs_pxspd and "SwapSpread" not in out:
@@ -236,6 +246,55 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 	return out
 
 
+def build_alpha_timeseries(dir_input: str | Path = DIR_INPUT) -> Dict[str, pd.DataFrame]:
+	"""Extract historical time series for correlation analysis.
+	
+	Returns dict with keys like 'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'
+	Each value is a DataFrame with time series columns (bonds/spreads) and datetime index.
+	"""
+	paths = AlphaSnapshotPaths(Path(dir_input))
+	
+	out: Dict[str, pd.DataFrame] = {}
+	
+	try:
+		# TBond-spds.pkl structure: dict with 'BondCurve' and 'BondSwap' keys
+		tbond_spd = _read_pickle(paths.tbond_spds)
+		if isinstance(tbond_spd, dict):
+			bc = tbond_spd.get("BondCurve", {})
+			if isinstance(bc, dict):
+				spread_ts = bc.get("Spread")
+				if isinstance(spread_ts, pd.DataFrame):
+					out["TBondCurve"] = spread_ts
+			
+			bs = tbond_spd.get("BondSwap", {})
+			if isinstance(bs, dict):
+				spread_ts = bs.get("Spread")
+				if isinstance(spread_ts, pd.DataFrame):
+					out["TBondSwap"] = spread_ts
+	except Exception as e:
+		print(f"Warning: Could not load TBond time series: {e}")
+	
+	try:
+		# CBond-spds.pkl structure: dict with 'BondCurve' and 'BondSwap' keys
+		cbond_spd = _read_pickle(paths.cbond_spds)
+		if isinstance(cbond_spd, dict):
+			bc = cbond_spd.get("BondCurve", {})
+			if isinstance(bc, dict):
+				spread_ts = bc.get("Spread")
+				if isinstance(spread_ts, pd.DataFrame):
+					out["CBondCurve"] = spread_ts
+			
+			bs = cbond_spd.get("BondSwap", {})
+			if isinstance(bs, dict):
+				spread_ts = bs.get("Spread")
+				if isinstance(spread_ts, pd.DataFrame):
+					out["CBondSwap"] = spread_ts
+	except Exception as e:
+		print(f"Warning: Could not load CBond time series: {e}")
+	
+	return out
+
+
 def save_alpha_spreads_snapshot(
 	dir_input: str | Path = DIR_INPUT,
 	*,
@@ -244,6 +303,12 @@ def save_alpha_spreads_snapshot(
 	"""Build and save snapshot to DIR_INPUT/Alpha-spreadsrt.pkl."""
 	paths = AlphaSnapshotPaths(Path(dir_input))
 	snapshot = build_alpha_spreads_snapshot(dir_input=paths.dir_input)
+	
+	# Add time series data under '_timeseries' key
+	timeseries = build_alpha_timeseries(dir_input=paths.dir_input)
+	if timeseries:
+		snapshot["_timeseries"] = timeseries
+	
 	updatePKL(snapshot, str(paths.out_snapshot), rewrite=rewrite)
 	return paths.out_snapshot
 
@@ -361,7 +426,7 @@ def load_historical_spread_series(
 	elif spread_type == "SwapSpread":
 		obj = _read_pickle(paths.irs_pxspds)
 		if not isinstance(obj, dict):
-			return {}
+			return {} 
 		df = obj.get("Spread")
 		if not isinstance(df, pd.DataFrame) or df.empty:
 			return {}

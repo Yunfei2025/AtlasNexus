@@ -61,13 +61,13 @@ SPREAD_CATEGORIES = {
         'label': 'Bond vs Swap',
         'types': ['TBondSwap', 'CBondSwap'],
         'description': 'Bond yield vs interpolated swap rate',
-        'style': 'Carry',
+        'style': 'Mixed',  # Can be Carry or Trend
     },
     'Swap-Spread': {
         'label': 'Swap Spreads',
         'types': ['SwapSpread'],
         'description': 'IRS spread trades (box, basis)',
-        'style': 'MeanReversion',
+        'style': 'Mixed',  # Can be MR or Carry/Trend
     },
     'Tenor-Spread': {
         'label': 'Tenor Spreads',
@@ -228,26 +228,67 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
     """Load historical spread time series for correlation analysis."""
     dir_input = _get_input_dir()
     
+    # First try loading from Alpha-spreadsrt.pkl which has pre-processed time series
+    alpha_snapshot = _load_pickle_safe(dir_input / 'Alpha-spreadsrt.pkl')
+    if alpha_snapshot and isinstance(alpha_snapshot, dict):
+        timeseries_data = alpha_snapshot.get('_timeseries', {})
+        if isinstance(timeseries_data, dict) and spread_type in timeseries_data:
+            ts = timeseries_data[spread_type]
+            if isinstance(ts, pd.DataFrame) and not ts.empty:
+                print(f"[DEBUG] Loaded {spread_type} from Alpha-spreadsrt['_timeseries'], shape={ts.shape}")
+                return ts
+    
+    # Fallback: load directly from source pickle files
     if spread_type in ['TBondCurve', 'TBondSwap']:
-        data = _load_pickle_safe(dir_input / 'TBond-spds.pkl')
+        filepath = dir_input / 'TBond-spds.pkl'
+        data = _load_pickle_safe(filepath)
         if data is None:
+            print(f"[DEBUG] {filepath} returned None")
             return None
         key = 'BondCurve' if spread_type == 'TBondCurve' else 'BondSwap'
-        return data.get(key, {}).get('Spread')
+        print(f"[DEBUG] TBond-spds.pkl keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+        if isinstance(data, dict) and key in data:
+            nested = data[key]
+            print(f"[DEBUG] data['{key}'] type: {type(nested)}, keys: {list(nested.keys()) if isinstance(nested, dict) else 'N/A'}")
+            if isinstance(nested, dict) and 'Spread' in nested:
+                result = nested['Spread']
+                print(f"[DEBUG] data['{key}']['Spread'] type: {type(result)}, shape: {result.shape if isinstance(result, pd.DataFrame) else 'N/A'}")
+                return result
+        return None
         
     elif spread_type in ['CBondCurve', 'CBondSwap']:
-        data = _load_pickle_safe(dir_input / 'CBond-spds.pkl')
+        filepath = dir_input / 'CBond-spds.pkl'
+        data = _load_pickle_safe(filepath)
         if data is None:
+            print(f"[DEBUG] {filepath} returned None")
             return None
         key = 'BondCurve' if spread_type == 'CBondCurve' else 'BondSwap'
-        return data.get(key, {}).get('Spread')
+        print(f"[DEBUG] CBond-spds.pkl keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+        if isinstance(data, dict) and key in data:
+            nested = data[key]
+            print(f"[DEBUG] data['{key}'] type: {type(nested)}, keys: {list(nested.keys()) if isinstance(nested, dict) else 'N/A'}")
+            if isinstance(nested, dict) and 'Spread' in nested:
+                result = nested['Spread']
+                print(f"[DEBUG] data['{key}']['Spread'] type: {type(result)}, shape: {result.shape if isinstance(result, pd.DataFrame) else 'N/A'}")
+                return result
+        return None
         
     elif spread_type == 'PCASpread':
-        data = _load_pickle_safe(dir_input / 'Misc-spds.pkl')
+        filepath = dir_input / 'Misc-spds.pkl'
+        data = _load_pickle_safe(filepath)
         if data is None:
+            print(f"[DEBUG] {filepath} returned None")
             return None
-        return data.get('PCASpread', {}).get('Spread')
+        print(f"[DEBUG] Misc-spds.pkl keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+        if isinstance(data, dict) and 'PCASpread' in data:
+            nested = data['PCASpread']
+            if isinstance(nested, dict) and 'Spread' in nested:
+                result = nested['Spread']
+                print(f"[DEBUG] data['PCASpread']['Spread'] type: {type(result)}, shape: {result.shape if isinstance(result, pd.DataFrame) else 'N/A'}")
+                return result
+        return None
     
+    print(f"[DEBUG] Unsupported spread_type: {spread_type}")
     return None
 
 
@@ -344,12 +385,15 @@ def compute_spread_correlation(
     
     for stype in spread_types:
         ts = load_spread_timeseries(stype)
+        print(f"[DEBUG] load_spread_timeseries({stype}) returned: {type(ts)}, shape: {ts.shape if isinstance(ts, pd.DataFrame) else 'N/A'}")
         if ts is not None and isinstance(ts, pd.DataFrame):
             # Use last lookback_days
             ts = ts.tail(lookback_days)
+            print(f"[DEBUG] After tail({lookback_days}): shape={ts.shape}, columns={list(ts.columns)[:5]}")
             for col in ts.columns:
                 all_spreads[f"{stype}|{col}"] = ts[col]
     
+    print(f"[DEBUG] Total spreads collected: {len(all_spreads)}")
     if len(all_spreads) < 2:
         return None, None
     
@@ -357,6 +401,7 @@ def compute_spread_correlation(
     # Use diff() for spread changes (more appropriate than pct_change for bp spreads)
     df_changes = df_spreads.diff().dropna()
     
+    print(f"[DEBUG] df_changes shape: {df_changes.shape}")
     if df_changes.shape[0] < 20:
         return None, None
     
@@ -429,7 +474,7 @@ def risk_parity_weights(
 
 def compute_candidate_scores(
     df: pd.DataFrame,
-    weights: Dict[str, float] = None,
+    weights: Optional[Dict[str, float]] = None,
 ) -> pd.DataFrame:
     """Compute composite scores for candidates.
     
@@ -487,6 +532,145 @@ def compute_candidate_scores(
     return df
 
 
+def compute_unified_edge_vol_score(
+    df: pd.DataFrame,
+    *,
+    mom_window: int = 20,
+    mom_k: float = 1.0,
+) -> pd.DataFrame:
+    """Compute a unified, weightless score across MR and Carry/Trend.
+
+    The intent is to rank all candidates on a common axis without user-chosen weights.
+
+    Uses expected daily edge (in spread bp/day) divided by risk (bp):
+    - MeanReversion: expected_move_per_day ≈ |spread - mean| / halflife
+    - Carry/Trend: expected_move_per_day ≈ carry_roll + k * momentum_per_day
+        where momentum_per_day ≈ (s_t - s_{t-m}) / m
+
+    Notes:
+    - For Carry/Trend, expected_move_per_day is aligned to trade direction when available:
+        BUY => + (carry_roll + k*mom)
+        SELL => - (carry_roll + k*mom)
+    - composite_score is clipped at 0 to avoid negative score-weighted allocations.
+    """
+    df = df.copy()
+
+    style = (
+        df['style'].astype(str).str.strip().str.lower()
+        if 'style' in df.columns
+        else pd.Series('', index=df.index, dtype=str)
+    )
+    is_mr = style.eq('meanreversion')
+
+    spread = (
+        pd.to_numeric(df['spread'], errors='coerce')
+        if 'spread' in df.columns
+        else pd.Series(np.nan, index=df.index, dtype=float)
+    )
+    mean = (
+        pd.to_numeric(df['mean'], errors='coerce')
+        if 'mean' in df.columns
+        else pd.Series(np.nan, index=df.index, dtype=float)
+    )
+    halflife = (
+        pd.to_numeric(df['halflife'], errors='coerce')
+        if 'halflife' in df.columns
+        else pd.Series(np.nan, index=df.index, dtype=float)
+    )
+    carry = (
+        pd.to_numeric(df['carry_roll'], errors='coerce')
+        if 'carry_roll' in df.columns
+        else pd.Series(np.nan, index=df.index, dtype=float)
+    )
+    vol = (
+        pd.to_numeric(df['vol'], errors='coerce').abs()
+        if 'vol' in df.columns
+        else pd.Series(np.nan, index=df.index, dtype=float)
+    )
+
+    # Robust risk fallback
+    risk = vol.replace(0, np.nan)
+    fallback_risk = float(risk.median(skipna=True)) if not risk.dropna().empty else 1.0
+    if not np.isfinite(fallback_risk) or fallback_risk <= 0:
+        fallback_risk = 1.0
+    risk = risk.fillna(fallback_risk)
+
+    # ---------------------------------------------------------------------
+    # Momentum per day (bp/day) for carry/trend trades
+    # ---------------------------------------------------------------------
+    # Prefer precomputed momentum if present, else compute from historical series.
+    mom_window_i = int(mom_window) if mom_window is not None else 20
+    if mom_window_i < 1:
+        mom_window_i = 1
+    try:
+        mom_k_f = float(mom_k) if mom_k is not None else 1.0
+    except Exception:
+        mom_k_f = 1.0
+
+    momentum_per_day = pd.Series(np.nan, index=df.index, dtype=float)
+    if 'momentum_per_day' in df.columns:
+        momentum_per_day = pd.to_numeric(df['momentum_per_day'], errors='coerce')
+    elif 'mom_per_day' in df.columns:
+        momentum_per_day = pd.to_numeric(df['mom_per_day'], errors='coerce')
+    elif {'spread_type', 'ID'}.issubset(df.columns):
+        try:
+            from curves.refreshers.alpha import load_historical_spread_series
+
+            dir_input = _get_input_dir()
+            # Only compute momentum for non-MR rows (keeps IO smaller).
+            df_tc = df.loc[~is_mr, ['spread_type', 'ID']].copy()
+            for stype, grp in df_tc.groupby('spread_type'):
+                ids = grp['ID'].astype(str).tolist()
+                series_map = load_historical_spread_series(
+                    str(stype),
+                    ids,
+                    dir_input=dir_input,
+                    lookback_days=max(252, mom_window_i + 5),
+                )
+                for row_idx, cid in grp['ID'].astype(str).items():
+                    s = series_map.get(f"{stype}|{cid}")
+                    if isinstance(s, pd.Series) and len(s) > mom_window_i:
+                        try:
+                            # Average bp/day over the window
+                            mom_val = float(pd.to_numeric(s, errors='coerce').diff(mom_window_i).dropna().iloc[-1]) / float(mom_window_i)
+                            momentum_per_day.at[row_idx] = mom_val  # type: ignore[index]
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
+    df['momentum_per_day'] = momentum_per_day
+
+    # ---------------------------------------------------------------------
+    # Expected move per day
+    # ---------------------------------------------------------------------
+    # MR: |spread - mean| / halflife
+    hl = halflife.replace(0, np.nan).abs()
+    expected_mr = (spread - mean).abs() / hl
+
+    # Carry/Trend: carry_roll + k * momentum_per_day, aligned to direction if available
+    tc_raw = carry.fillna(0.0) + (mom_k_f * momentum_per_day.fillna(0.0))
+
+    direction = (
+        df['direction'].astype(str).str.strip().str.upper()
+        if 'direction' in df.columns
+        else pd.Series('', index=df.index, dtype=str)
+    )
+    dir_sign = pd.Series(1.0, index=df.index, dtype=float)
+    dir_sign.loc[direction.eq('SELL')] = -1.0
+    expected_tc = tc_raw * dir_sign
+
+    expected_move_per_day = expected_tc.where(~is_mr, expected_mr)
+    df['expected_move_per_day'] = expected_move_per_day
+
+    # Edge and score
+    edge = expected_move_per_day.fillna(0.0)
+    df['edge'] = edge
+    df['risk'] = risk
+    df['composite_score'] = (edge / risk).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Layout Builders
 # ---------------------------------------------------------------------------
@@ -511,12 +695,11 @@ def build_candidates_layout() -> html.Div:
                     id='alpha-spread-categories',
                     options=[
                         {'label': ' Bond-Curve (MR)', 'value': 'Bond-Curve'},
-                        {'label': ' Bond-Swap (Carry)', 'value': 'Bond-Swap'},
-                        {'label': ' Swap Spreads (MR)', 'value': 'Swap-Spread'},
+                        {'label': ' Bond-Swap (Carry/Trend)', 'value': 'Bond-Swap'},
+                        {'label': ' Swap Spreads (MR/Carry)', 'value': 'Swap-Spread'},
                         {'label': ' Tenor Spreads (MR)', 'value': 'Tenor-Spread'},
                         {'label': ' Net Basis (Carry)', 'value': 'Bond-Futures'},
                         {'label': ' Term Basis (MR)', 'value': 'Futures-Term'},
-                        {'label': ' PCA Spread (MR)', 'value': 'PCA-Spread'},
                     ],
                     value=['Bond-Curve', 'Bond-Swap', 'Tenor-Spread'],
                     inline=True,
@@ -670,6 +853,48 @@ def build_scoring_layout() -> html.Div:
         # Scoring Weights Configuration
         html.Div([
             html.H6("Scoring Weights", style={'color': THEME['accent'], 'marginBottom': '15px'}),
+
+            html.Div([
+                html.Label("Scoring Scheme:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
+                dcc.Dropdown(
+                    id='alpha-score-scheme',
+                    options=[
+                        {'label': 'Unified (edge/vol) — weightless', 'value': 'unified_edge_vol'},
+                        {'label': 'Weighted (legacy sliders)', 'value': 'weighted_legacy'},
+                    ],
+                    value='unified_edge_vol',
+                    clearable=False,
+                    style={'width': '280px'},
+                ),
+                html.Div(
+                    "Unified uses expected_move_per_day/|vol|: MR ≈ |spread-mean|/halflife; Carry/Trend ≈ (carry_roll + k·momentum)/|vol| (direction-aligned).",
+                    style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginTop': '6px'},
+                ),
+            ], style={'marginBottom': '15px'}),
+
+            html.Div([
+                html.Div([
+                    html.Label("k (momentum weight):", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginRight': '8px'}),
+                    dcc.Input(
+                        id='alpha-mom-k',
+                        type='number',
+                        value=1.0,
+                        step=0.1,
+                        style={'width': '90px', 'marginRight': '25px'},
+                    ),
+                ], style={'display': 'flex', 'alignItems': 'center'}),
+                html.Div([
+                    html.Label("Momentum window (days):", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginRight': '8px'}),
+                    dcc.Input(
+                        id='alpha-mom-window',
+                        type='number',
+                        value=20,
+                        min=1,
+                        step=1,
+                        style={'width': '90px'},
+                    ),
+                ], style={'display': 'flex', 'alignItems': 'center'}),
+            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px', 'marginBottom': '10px'}),
             
             # Mean-Reversion Style Weights
             html.Div([
@@ -902,8 +1127,8 @@ def register_alpha_callbacks(app) -> None:
                 [],
             )
 
-        # Add direction label
-        if 'Zscore' in df_all.columns:
+        # Add direction label (only if not provided by generator)
+        if 'direction' not in df_all.columns and 'Zscore' in df_all.columns:
             df_all = df_all.copy()
             df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) < 0 else 'SELL')
 
@@ -929,36 +1154,108 @@ def register_alpha_callbacks(app) -> None:
             if col in df_display.columns:
                 df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(3)
 
-        # Full candidates table
-        table_all = dash_table.DataTable(
-            id='alpha-candidates-table',
-            columns=[{'name': c, 'id': c} for c in df_display.columns],
-            data=df_display.head(40).to_dict('records'),  # type: ignore[arg-type]
-            row_selectable='multi',
-            selected_rows=[],
-            style_table={'overflowX': 'auto', 'maxHeight': '350px', 'overflowY': 'auto'},
-            style_header={
-                'backgroundColor': THEME['table_header'],
-                'color': THEME['text_main'],
-                'fontWeight': 'bold',
-                'textAlign': 'left',
-            },
-            style_cell={
-                'backgroundColor': THEME['bg_card'],
-                'color': THEME['text_main'],
-                'textAlign': 'left',
-                'padding': '8px',
-                'fontSize': '12px',
-            },
-            style_data_conditional=[  # type: ignore[arg-type]
-                {'if': {'filter_query': '{direction} = "BUY"'}, 'backgroundColor': 'rgba(0, 204, 150, 0.15)'},
-                {'if': {'filter_query': '{direction} = "SELL"'}, 'backgroundColor': 'rgba(239, 85, 59, 0.15)'},
-                {'if': {'filter_query': '{selected_lowcorr} = True'}, 'backgroundColor': 'rgba(52, 152, 219, 0.18)'},
-                {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['table_row_odd']},
+        # Split candidates into MR and Trend/Carry
+        df_mr = pd.DataFrame()
+        df_trend = pd.DataFrame()
+
+        style_summary_div = html.Div()
+        if 'style' in df_display.columns:
+            style_counts = df_display['style'].astype(str).str.strip().value_counts(dropna=False)
+            style_summary = ', '.join([f"{k}: {int(v)}" for k, v in style_counts.items()])
+            style_summary_div = html.Div(
+                f"Styles found: {style_summary}",
+                style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'},
+            )
+
+            df_mr = df_display[df_display['style'].astype(str).str.lower().eq('meanreversion')].copy()
+            df_trend = df_display[df_display['style'].astype(str).str.lower().isin(['carry', 'trend', 'trendfollowing'])].copy()
+
+        # Shared table styling
+        _table_style_table = {'overflowX': 'auto', 'maxHeight': '300px', 'overflowY': 'auto'}
+        _table_style_header = {
+            'backgroundColor': THEME['table_header'],
+            'color': THEME['text_main'],
+            'fontWeight': 'bold',
+            'textAlign': 'left',
+        }
+        _table_style_cell = {
+            'backgroundColor': THEME['bg_card'],
+            'color': THEME['text_main'],
+            'textAlign': 'left',
+            'padding': '8px',
+            'fontSize': '12px',
+        }
+        _table_style_data_conditional = [  # type: ignore[arg-type]
+            {'if': {'filter_query': '{direction} = "BUY"'}, 'backgroundColor': 'rgba(0, 204, 150, 0.15)'},
+            {'if': {'filter_query': '{direction} = "SELL"'}, 'backgroundColor': 'rgba(239, 85, 59, 0.15)'},
+            {'if': {'filter_query': '{selected_lowcorr} = True'}, 'backgroundColor': 'rgba(52, 152, 219, 0.18)'},
+            {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['table_row_odd']},
+        ]
+
+        # MR candidates table (always render; show empty-state when none)
+        mr_body = html.Div(
+            "No mean-reversion candidates under current filters.",
+            style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '8px'},
+        )
+        if not df_mr.empty:
+            mr_body = dash_table.DataTable(
+                id='alpha-candidates-table-mr',
+                columns=[{'name': c, 'id': c} for c in df_mr.columns],
+                data=df_mr.head(20).to_dict('records'),  # type: ignore[arg-type]
+                row_selectable='multi',
+                selected_rows=[],
+                style_table=_table_style_table,
+                style_header=_table_style_header,
+                style_cell=_table_style_cell,
+                style_data_conditional=_table_style_data_conditional,  # type: ignore[arg-type]
+                page_size=20,
+                sort_action='native',
+                filter_action='native',
+            )
+
+        table_mr = html.Div(
+            [
+                html.H6(
+                    f"Mean-Reversion Candidates (max 20) - {len(df_mr)} found",
+                    style={'color': THEME['text_main'], 'marginBottom': '8px'},
+                ),
+                style_summary_div,
+                mr_body,
             ],
-            page_size=20,
-            sort_action='native',
-            filter_action='native',
+            style={'marginBottom': '20px'},
+        )
+
+        # Trend/Carry candidates table (always render; show empty-state when none)
+        trend_body = html.Div(
+            "No carry/trend candidates under current filters.",
+            style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '8px'},
+        )
+        if not df_trend.empty:
+            trend_body = dash_table.DataTable(
+                id='alpha-candidates-table-trend',
+                columns=[{'name': c, 'id': c} for c in df_trend.columns],
+                data=df_trend.head(20).to_dict('records'),  # type: ignore[arg-type]
+                row_selectable='multi',
+                selected_rows=[],
+                style_table=_table_style_table,
+                style_header=_table_style_header,
+                style_cell=_table_style_cell,
+                style_data_conditional=_table_style_data_conditional,  # type: ignore[arg-type]
+                page_size=20,
+                sort_action='native',
+                filter_action='native',
+            )
+
+        table_trend = html.Div(
+            [
+                html.H6(
+                    f"Carry/Trend Candidates (max 20) - {len(df_trend)} found",
+                    style={'color': THEME['text_main'], 'marginBottom': '8px'},
+                ),
+                style_summary_div,
+                trend_body,
+            ],
+            style={'marginBottom': '20px'},
         )
 
         # Low-correlation top-10 table (if available)
@@ -999,8 +1296,8 @@ def register_alpha_callbacks(app) -> None:
 
         table_out = html.Div([
             low_corr_div,
-            html.H6('Candidates (max 40: 20 MR + 20 Trend/Carry)', style={'color': THEME['text_main'], 'marginBottom': '8px'}),
-            table_all,
+            table_mr,
+            table_trend,
         ])
 
         status = f"Found {len(df_all)} candidates at {scanned_time}"
@@ -1029,13 +1326,25 @@ def register_alpha_callbacks(app) -> None:
             if cat in SPREAD_CATEGORIES:
                 spread_types.extend(SPREAD_CATEGORIES[cat]['types'])
         
-        if len(spread_types) < 2:
-            return html.Div("Need at least 2 spread types for correlation analysis.", style={'color': THEME['warning']})
+        if len(spread_types) == 0:
+            return html.Div("No spread types selected.", style={'color': THEME['warning']})
         
-        corr_matrix, _ = compute_spread_correlation(spread_types, lookback_days=lookback)
+        # First try to load pre-computed correlation from Alpha-candidates.pkl
+        dir_input = _get_input_dir()
+        candidates_data = _load_pickle_safe(dir_input / 'Alpha-candidates.pkl')
+        
+        corr_matrix = None
+        if candidates_data and isinstance(candidates_data, dict):
+            corr_matrix = candidates_data.get('corr')
+            print(f"[DEBUG] Loaded correlation from Alpha-candidates.pkl: {type(corr_matrix)}, shape: {corr_matrix.shape if isinstance(corr_matrix, pd.DataFrame) else 'N/A'}")
+        
+        # Fall back to computing correlation if not available
+        if corr_matrix is None or not isinstance(corr_matrix, pd.DataFrame) or corr_matrix.empty:
+            print(f"[DEBUG] Computing correlation for spread_types: {spread_types}")
+            corr_matrix, _ = compute_spread_correlation(spread_types, lookback_days=lookback)
         
         if corr_matrix is None or corr_matrix.empty:
-            return html.Div("Insufficient data for correlation analysis.", style={'color': THEME['warning']})
+            return html.Div("Insufficient data for correlation analysis. Need at least 2 instruments with historical data.", style={'color': THEME['warning']})
         
         # Rank low correlation pairs
         low_corr_pairs = rank_low_correlation_pairs(corr_matrix, top_n=15)
@@ -1133,6 +1442,9 @@ def register_alpha_callbacks(app) -> None:
          Output('alpha-portfolio-summary', 'children')],
         Input('alpha-score-btn', 'n_clicks'),
         [State('alpha-selected-candidates', 'data'),
+         State('alpha-score-scheme', 'value'),
+         State('alpha-mom-k', 'value'),
+         State('alpha-mom-window', 'value'),
          State('score-weight-zscore', 'value'),
          State('score-weight-mr', 'value'),
          State('score-weight-vol', 'value'),
@@ -1144,7 +1456,7 @@ def register_alpha_callbacks(app) -> None:
          State('alpha-max-corr', 'value')],
         prevent_initial_call=True
     )
-    def run_scoring(n_clicks, candidates, w_zscore, w_mr, w_vol, w_liq, 
+    def run_scoring(n_clicks, candidates, score_scheme, mom_k, mom_window, w_zscore, w_mr, w_vol, w_liq, 
                     total_capital, max_dv01, alloc_method, enforce_corr, max_corr):
         
         if not n_clicks:
@@ -1159,20 +1471,24 @@ def register_alpha_callbacks(app) -> None:
         
         df = pd.DataFrame(candidates)
         
-        # Normalize weights
-        total_w = w_zscore + w_mr + w_vol + w_liq
-        if total_w > 0:
-            weights = {
-                'zscore': w_zscore / total_w,
-                'mr_conf': w_mr / total_w,
-                'vol_adj': w_vol / total_w,
-                'liquidity': w_liq / total_w,
-            }
-        else:
-            weights = {'zscore': 0.25, 'mr_conf': 0.25, 'vol_adj': 0.25, 'liquidity': 0.25}
-        
+        score_scheme = (score_scheme or 'unified_edge_vol').strip().lower()
+
         # Compute scores
-        df_scored = compute_candidate_scores(df, weights)
+        if score_scheme == 'weighted_legacy':
+            total_w = (w_zscore or 0) + (w_mr or 0) + (w_vol or 0) + (w_liq or 0)
+            if total_w > 0:
+                weights = {
+                    'zscore': (w_zscore or 0) / total_w,
+                    'mr_conf': (w_mr or 0) / total_w,
+                    'vol_adj': (w_vol or 0) / total_w,
+                    'liquidity': (w_liq or 0) / total_w,
+                }
+            else:
+                weights = {'zscore': 0.25, 'mr_conf': 0.25, 'vol_adj': 0.25, 'liquidity': 0.25}
+            df_scored = compute_candidate_scores(df, weights)
+        else:
+            df_scored = compute_unified_edge_vol_score(df, mom_window=int(mom_window) if mom_window is not None else 20, mom_k=float(mom_k) if mom_k is not None else 1.0)
+
         df_scored = df_scored.sort_values('composite_score', ascending=False)
         
         # Apply correlation filter if enforced
@@ -1217,8 +1533,14 @@ def register_alpha_callbacks(app) -> None:
         df_scored['suggested_dv01'] = (df_scored['notional_mm'] * 1e6 * 0.0001).clip(upper=max_dv01)
         
         # Select display columns
-        display_cols = ['ID', 'spread_type', 'style', 'direction', 'Zscore', 'composite_score', 
-                        'zscore_score', 'mr_score', 'weight', 'notional_mm', 'suggested_dv01']
+        display_cols = [
+            'ID', 'spread_type', 'style', 'direction',
+            'Zscore', 'carry_roll', 'vol',
+            'momentum_per_day', 'expected_move_per_day',
+            'edge', 'risk', 'composite_score',
+            'zscore_score', 'mr_score',
+            'weight', 'notional_mm', 'suggested_dv01',
+        ]
         available_cols = [c for c in display_cols if c in df_scored.columns]
         
         df_display = df_scored[available_cols].copy()
@@ -1232,7 +1554,7 @@ def register_alpha_callbacks(app) -> None:
         table = dash_table.DataTable(
             id='alpha-scored-table',
             columns=[{'name': c, 'id': c} for c in df_display.columns],
-            data=df_display.head(30).to_dict('records'),
+            data=df_display.head(30).to_dict('records'),  # type: ignore[arg-type]
             style_table={'overflowX': 'auto', 'maxHeight': '350px', 'overflowY': 'auto'},
             style_header={
                 'backgroundColor': THEME['table_header'],
@@ -1256,7 +1578,7 @@ def register_alpha_callbacks(app) -> None:
                     'if': {'filter_query': '{direction} = "SELL"'},
                     'backgroundColor': 'rgba(239, 85, 59, 0.15)',
                 },
-            ],
+            ],  # type: ignore[arg-type]
             sort_action='native',
             page_size=15,
         )
