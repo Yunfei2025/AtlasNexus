@@ -52,6 +52,11 @@ from web.atlas_multiasset_tabs import (
     register_multiasset_callbacks,
 )
 
+from web.atlas_volatility_tabs import (
+    build_volatility_layout,
+    register_volatility_callbacks,
+)
+
 
 project_root = pathlib.Path(__file__).resolve().parents[2]
 assets_folder = str(project_root / "web" / "assets")
@@ -83,6 +88,7 @@ def _serve_pairs_regression():
 register_fi_callbacks(app)
 register_multiasset_callbacks(app)
 register_alpha_callbacks(app)
+register_volatility_callbacks(app)
 
 
 def build_header():
@@ -250,6 +256,7 @@ def _render_tab(tab):
                             vertical=True,
                             children=[
                                 dcc.Tab(label="CANDIDATES", value="candidates", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="VOLATILITY", value="volatility", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="SCORING", value="scoring", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="BACKTEST", value="backtest", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="BASKET", value="basket", style=tab_style, selected_style=tab_selected_style),
@@ -372,6 +379,8 @@ def _render_beta_subtabs(subtab: str):
 def _render_alpha_subtabs(subtab: str):
     if subtab == "candidates":
         return build_candidates_layout()
+    if subtab == "volatility":
+        return build_volatility_layout()
     if subtab == "scoring":
         return build_scoring_layout()
     if subtab == "backtest":
