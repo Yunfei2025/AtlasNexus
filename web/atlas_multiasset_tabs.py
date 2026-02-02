@@ -1831,39 +1831,14 @@ def register_multiasset_callbacks(app):
         except Exception as e:
             return go.Figure().update_layout(title=f"Error plotting data: {str(e)}", template=THEME['chart_template'])
 
-    # 3.4 Factor Selection State Restoration (from Store)
-    @app.callback(
-        [Output('factor-selection-ir', 'value'),
-         Output('factor-selection-sp', 'value'),
-         Output('factor-selection-fx', 'value'),
-         Output('factor-selection-cmd', 'value')],
-        Input('factor-selection-store', 'data')
-    )
-    def restore_factor_selections(stored_data):
-        """Restore factor selections from store when tab is reloaded."""
-        if not stored_data:
-            return (
-                SELECTED_FACTOR_POOL['ir_factors'],
-                SELECTED_FACTOR_POOL['sp_factors'],
-                SELECTED_FACTOR_POOL['fx_factors'],
-                SELECTED_FACTOR_POOL['cmd_factors']
-            )
-        return (
-            stored_data.get('ir', SELECTED_FACTOR_POOL['ir_factors']),
-            stored_data.get('sp', SELECTED_FACTOR_POOL['sp_factors']),
-            stored_data.get('fx', SELECTED_FACTOR_POOL['fx_factors']),
-            stored_data.get('cmd', SELECTED_FACTOR_POOL['cmd_factors'])
-        )
-    
-    # 3.5 Factor Pool Counter and Store Updater
+    # 3.4 Factor Pool Counter and Store Updater (simplified to avoid circular dependency)
     @app.callback(
         [Output('factor-pool-count', 'children'),
          Output('factor-selection-store', 'data')],
         [Input('factor-selection-ir', 'value'),
          Input('factor-selection-sp', 'value'),
          Input('factor-selection-fx', 'value'),
-         Input('factor-selection-cmd', 'value')],
-        prevent_initial_call=True
+         Input('factor-selection-cmd', 'value')]
     )
     def update_factor_pool_count(ir_factors, sp_factors, fx_factors, cmd_factors):
         # Store selected factors in global state for cross-tab access

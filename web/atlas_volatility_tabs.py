@@ -47,16 +47,16 @@ THEME = {
 # Ticker Options for Volatility Analysis
 # ---------------------------------------------------------------------------
 VOL_TICKER_OPTIONS = [
-    {'label': '上证50 (000016.SH)', 'value': '000016.SH'},
-    {'label': '沪深300 (000300.SH)', 'value': '000300.SH'},
-    {'label': '中证1000 (000852.SH)', 'value': '000852.SH'},
-    {'label': '黄金 (AU.SHF)', 'value': 'AU.SHF'},
-    {'label': '白银 (AG.SHF)', 'value': 'AG.SHF'},
-    {'label': '铜 (CU.SHF)', 'value': 'CU.SHF'},
-    {'label': '纯碱 (SA.CZC)', 'value': 'SA.CZC'},
-    {'label': '原油 (SC.INE)', 'value': 'SC.INE'},
-    {'label': '碳酸锂 (LC.GFE)', 'value': 'LC.GFE'},
-    {'label': '螺纹钢 (RB.SHF)', 'value': 'RB.SHF'},
+    {'label': 'SSE 50 (000016.SH)', 'value': '000016.SH'},
+    {'label': 'CSI 300 (000300.SH)', 'value': '000300.SH'},
+    {'label': 'CSI 1000 (000852.SH)', 'value': '000852.SH'},
+    {'label': 'Gold (AU.SHF)', 'value': 'AU.SHF'},
+    {'label': 'Silver (AG.SHF)', 'value': 'AG.SHF'},
+    {'label': 'Copper (CU.SHF)', 'value': 'CU.SHF'},
+    {'label': 'Soda Ash (SA.CZC)', 'value': 'SA.CZC'},
+    {'label': 'Crude Oil (SC.INE)', 'value': 'SC.INE'},
+    {'label': 'Lithium Carbonate (LC.GFE)', 'value': 'LC.GFE'},
+    {'label': 'Rebar (RB.SHF)', 'value': 'RB.SHF'},
 ]
 
 DEFAULT_TICKER = 'AU.SHF'
@@ -281,7 +281,7 @@ def build_volatility_layout() -> html.Div:
             html.Div([
                 # Ticker selector
                 html.Div([
-                    html.Label("标的选择:", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '5px'}),
+                    html.Label("Ticker:", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '5px'}),
                     dcc.Dropdown(
                         id='vol-ticker-dropdown',
                         options=VOL_TICKER_OPTIONS,
@@ -293,7 +293,7 @@ def build_volatility_layout() -> html.Div:
                 
                 # Lookback period
                 html.Div([
-                    html.Label("回看周期:", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '5px'}),
+                    html.Label("Lookback Period:", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '5px'}),
                     dcc.Input(
                         id='vol-lookback-input',
                         type='number',
@@ -314,7 +314,7 @@ def build_volatility_layout() -> html.Div:
                 
                 # Bollinger Band multiplier
                 html.Div([
-                    html.Label("标准差倍数:", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '5px'}),
+                    html.Label("Std Deviation Multiplier:", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '5px'}),
                     dcc.Input(
                         id='vol-numstd-input',
                         type='number',
@@ -337,7 +337,7 @@ def build_volatility_layout() -> html.Div:
                 html.Div([
                     html.Label(" ", style={'color': 'transparent', 'fontSize': '12px', 'marginBottom': '5px'}),
                     html.Button(
-                        "▶ 运行分析",
+                        "▶ Run Analysis",
                         id='vol-run-analysis-btn',
                         n_clicks=0,
                         style={
@@ -356,7 +356,7 @@ def build_volatility_layout() -> html.Div:
                 html.Div([
                     html.Label(" ", style={'color': 'transparent', 'fontSize': '12px', 'marginBottom': '5px'}),
                     html.Button(
-                        "🔄 更新数据",
+                        "🔄 Refresh Data",
                         id='vol-refresh-data-btn',
                         n_clicks=0,
                         style={
@@ -372,7 +372,7 @@ def build_volatility_layout() -> html.Div:
             ], style={'display': 'flex', 'alignItems': 'flex-end', 'flexWrap': 'wrap', 'gap': '10px'}),
             
             # Status line
-            html.Div(id='vol-status-line', children="准备就绪",
+            html.Div(id='vol-status-line', children="Ready",
                      style={'color': THEME['text_sub'], 'marginTop': '10px', 'fontSize': '12px', 'fontStyle': 'italic'}),
             
         ], style={
@@ -389,7 +389,7 @@ def build_volatility_layout() -> html.Div:
             children=[
                 # Results container
                 html.Div(id='vol-results-container', children=[
-                    html.Div("点击 \"运行分析\" 开始...", 
+                    html.Div("Click \"Run Analysis\" to start...", 
                              style={'color': THEME['text_sub'], 'textAlign': 'center', 'padding': '50px'})
                 ]),
             ],
@@ -416,7 +416,7 @@ def build_vol_results_display(
     info_items = []
     
     info_items.append(html.Div([
-        html.Span("标的:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+        html.Span("Ticker:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
         html.Br(),
         html.Span(ticker, style={'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '16px'}),
     ], style={'padding': '10px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '5px', 'marginRight': '10px'}))
@@ -432,17 +432,17 @@ def build_vol_results_display(
     # Signal interpretation
     latest_signal = int(signals.iloc[-1]) if len(signals) > 0 else 0
     if latest_signal == 1:
-        signal_text = "🟢 做多波动率"
+        signal_text = "🟢 Long Volatility"
         signal_color = THEME['success']
     elif latest_signal == -1:
-        signal_text = "🔴 做空波动率"
+        signal_text = "🔴 Short Volatility"
         signal_color = THEME['danger']
     else:
-        signal_text = "⚪ 中性观望"
+        signal_text = "⚪ Neutral"
         signal_color = THEME['text_sub']
     
     info_items.append(html.Div([
-        html.Span("当前信号:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+        html.Span("Current Signal:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
         html.Br(),
         html.Span(signal_text, style={'color': signal_color, 'fontWeight': 'bold', 'fontSize': '14px'}),
     ], style={'padding': '10px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '5px'}))
@@ -451,13 +451,13 @@ def build_vol_results_display(
     
     # Metrics panel
     metrics_items = [
-        ('总收益率', f"{metrics['total_return']:.2%}"),
-        ('年化收益', f"{metrics['annualized_return']:.2%}"),
-        ('波动率', f"{metrics['volatility']:.2%}"),
-        ('夏普比率', f"{metrics['sharpe_ratio']:.2f}"),
-        ('胜率', f"{metrics['win_rate']:.2%}"),
-        ('最大回撤', f"{metrics['max_drawdown']:.2%}"),
-        ('交易次数', str(metrics['num_trades'])),
+        ('Total Return', f"{metrics['total_return']:.2%}"),
+        ('Annualized Return', f"{metrics['annualized_return']:.2%}"),
+        ('Volatility', f"{metrics['volatility']:.2%}"),
+        ('Sharpe Ratio', f"{metrics['sharpe_ratio']:.2f}"),
+        ('Win Rate', f"{metrics['win_rate']:.2%}"),
+        ('Max Drawdown', f"{metrics['max_drawdown']:.2%}"),
+        ('Num Trades', str(metrics['num_trades'])),
     ]
     
     metrics_panel = html.Div([
@@ -465,7 +465,7 @@ def build_vol_results_display(
             html.Span(name + ":", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
             html.Br(),
             html.Span(value, style={
-                'color': THEME['success'] if '收益' in name and not value.startswith('-') else 
+                'color': THEME['success'] if 'Return' in name and not value.startswith('-') else 
                         (THEME['danger'] if value.startswith('-') else THEME['text_main']),
                 'fontWeight': 'bold', 
                 'fontSize': '14px'
@@ -481,7 +481,7 @@ def build_vol_results_display(
     fig_ts.add_trace(go.Scatter(x=df.index, y=df['IV_3M'], name='3M IV', mode='lines', line=dict(color='#e74c3c', width=2)))
     
     fig_ts.update_layout(
-        title='隐含波动率期限结构',
+        title='Implied Volatility Term Structure',
         height=300,
         margin=dict(l=50, r=20, t=40, b=40),
         plot_bgcolor=THEME['bg_main'],
@@ -498,11 +498,11 @@ def build_vol_results_display(
     fig_bb.add_trace(go.Scatter(x=df.index, y=df['IV_1M'], name='1M IV', mode='lines', line=dict(color='#3498db', width=2)))
     
     if 'IV_1M_MA' in df.columns:
-        fig_bb.add_trace(go.Scatter(x=df.index, y=df['IV_1M_MA'], name='移动平均', mode='lines', line=dict(color='#f39c12', width=1.5, dash='dash')))
+        fig_bb.add_trace(go.Scatter(x=df.index, y=df['IV_1M_MA'], name='Moving Average', mode='lines', line=dict(color='#f39c12', width=1.5, dash='dash')))
     
     if 'IV_1M_Upper' in df.columns and 'IV_1M_Lower' in df.columns:
-        fig_bb.add_trace(go.Scatter(x=df.index, y=df['IV_1M_Upper'], name='上轨', mode='lines', line=dict(color='gray', width=1), showlegend=False))
-        fig_bb.add_trace(go.Scatter(x=df.index, y=df['IV_1M_Lower'], name='布林带', mode='lines', line=dict(color='gray', width=1), fill='tonexty', fillcolor='rgba(128,128,128,0.2)'))
+        fig_bb.add_trace(go.Scatter(x=df.index, y=df['IV_1M_Upper'], name='Upper Band', mode='lines', line=dict(color='gray', width=1), showlegend=False))
+        fig_bb.add_trace(go.Scatter(x=df.index, y=df['IV_1M_Lower'], name='Bollinger Bands', mode='lines', line=dict(color='gray', width=1), fill='tonexty', fillcolor='rgba(128,128,128,0.2)'))
     
     # Add signal markers
     buy_signals = df[signals == 1]
@@ -511,19 +511,19 @@ def build_vol_results_display(
     if len(buy_signals) > 0:
         fig_bb.add_trace(go.Scatter(
             x=buy_signals.index, y=buy_signals['IV_1M'],
-            mode='markers', name='做多信号',
+            mode='markers', name='Long Signal',
             marker=dict(color=THEME['success'], size=8, symbol='triangle-up'),
         ))
     
     if len(sell_signals) > 0:
         fig_bb.add_trace(go.Scatter(
             x=sell_signals.index, y=sell_signals['IV_1M'],
-            mode='markers', name='做空信号',
+            mode='markers', name='Short Signal',
             marker=dict(color=THEME['danger'], size=8, symbol='triangle-down'),
         ))
     
     fig_bb.update_layout(
-        title='均值回归策略 - 布林带',
+        title='Mean Reversion Strategy - Bollinger Bands',
         height=350,
         margin=dict(l=50, r=20, t=40, b=40),
         plot_bgcolor=THEME['bg_main'],
@@ -539,13 +539,13 @@ def build_vol_results_display(
     fig_cum = go.Figure()
     fig_cum.add_trace(go.Scatter(
         x=cumulative_return.index, y=cumulative_return.values,
-        name='策略累计收益', mode='lines', line=dict(color=THEME['accent'], width=2),
+        name='Strategy Cumulative Return', mode='lines', line=dict(color=THEME['accent'], width=2),
         fill='tozeroy', fillcolor=f'rgba(52, 152, 219, 0.2)',
     ))
     fig_cum.add_hline(y=1, line_dash='dash', line_color=THEME['text_sub'])
     
     fig_cum.update_layout(
-        title='策略累计收益曲线',
+        title='Strategy Cumulative Return Curve',
         height=250,
         margin=dict(l=50, r=20, t=40, b=40),
         plot_bgcolor=THEME['bg_main'],
@@ -564,14 +564,14 @@ def build_vol_results_display(
         
         fig_slope.add_trace(go.Scatter(
             x=zscore.index, y=zscore.values,
-            name='期限结构Z-Score', mode='lines', line=dict(color=THEME['accent'], width=1.5),
+            name='Term Structure Z-Score', mode='lines', line=dict(color=THEME['accent'], width=1.5),
         ))
         fig_slope.add_hline(y=1.5, line_dash='dash', line_color=THEME['danger'], annotation_text='+1.5σ')
         fig_slope.add_hline(y=-1.5, line_dash='dash', line_color=THEME['success'], annotation_text='-1.5σ')
         fig_slope.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
     
     fig_slope.update_layout(
-        title='期限结构斜率 Z-Score (1M-3M)',
+        title='Term Structure Slope Z-Score (1M-3M)',
         height=200,
         margin=dict(l=50, r=20, t=40, b=40),
         plot_bgcolor=THEME['bg_main'],
@@ -613,8 +613,8 @@ def register_volatility_callbacks(app) -> None:
         """Run volatility analysis or refresh data."""
         ctx = callback_context
         if not ctx.triggered:
-            return html.Div("点击 \"运行分析\" 开始...", 
-                           style={'color': THEME['text_sub'], 'textAlign': 'center', 'padding': '50px'}), "准备就绪"
+            return html.Div("Click \"Run Analysis\" to start...", 
+                           style={'color': THEME['text_sub'], 'textAlign': 'center', 'padding': '50px'}), "Ready"
         
         triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
         
@@ -624,21 +624,21 @@ def register_volatility_callbacks(app) -> None:
                 success = retrieve_vol_data()
                 if success:
                     return (
-                        html.Div("数据已更新，请点击 \"运行分析\" 查看结果", 
+                        html.Div("Data updated, please click \"Run Analysis\" to see results", 
                                 style={'color': THEME['success'], 'textAlign': 'center', 'padding': '50px'}),
-                        f"数据更新完成 @ {datetime.now().strftime('%H:%M:%S')}"
+                        f"Data update completed @ {datetime.now().strftime('%H:%M:%S')}"
                     )
                 else:
                     return (
-                        html.Div("数据更新失败，请检查网络连接", 
+                        html.Div("Data update failed, please check network connection", 
                                 style={'color': THEME['danger'], 'textAlign': 'center', 'padding': '50px'}),
-                        "数据更新失败"
+                        "Data update failed"
                     )
             except Exception as e:
                 return (
-                    html.Div(f"数据更新出错: {str(e)}", 
+                    html.Div(f"Data update error: {str(e)}", 
                             style={'color': THEME['danger'], 'textAlign': 'center', 'padding': '50px'}),
-                    f"错误: {str(e)[:50]}"
+                    f"Error: {str(e)[:50]}"
                 )
         
         # Handle run analysis button
@@ -649,10 +649,10 @@ def register_volatility_callbacks(app) -> None:
                 if df is None:
                     return (
                         html.Div([
-                            html.P(f"无法加载 {ticker} 的数据", style={'color': THEME['danger']}),
-                            html.P("请先点击 \"更新数据\" 获取最新数据", style={'color': THEME['text_sub']}),
+                            html.P(f"Unable to load data for {ticker}", style={'color': THEME['danger']}),
+                            html.P("Please click \"Refresh Data\" to get the latest data first", style={'color': THEME['text_sub']}),
                         ], style={'textAlign': 'center', 'padding': '50px'}),
-                        f"数据加载失败 - {ticker}"
+                        f"Data loading failed - {ticker}"
                     )
                 
                 # Validate parameters
@@ -671,7 +671,7 @@ def register_volatility_callbacks(app) -> None:
                 # Build results display
                 results_div = build_vol_results_display(df, signals, backtest_results, ticker)
                 
-                status = f"分析完成 @ {datetime.now().strftime('%H:%M:%S')} | {ticker} | 回看: {lookback}天 | σ倍数: {num_std}"
+                status = f"Analysis completed @ {datetime.now().strftime('%H:%M:%S')} | {ticker} | Lookback: {lookback} days | σ multiplier: {num_std}"
                 
                 return results_div, status
                 
@@ -679,13 +679,13 @@ def register_volatility_callbacks(app) -> None:
                 import traceback
                 traceback.print_exc()
                 return (
-                    html.Div(f"分析出错: {str(e)}", 
+                    html.Div(f"Analysis error: {str(e)}", 
                             style={'color': THEME['danger'], 'textAlign': 'center', 'padding': '50px'}),
-                    f"错误: {str(e)[:50]}"
+                    f"Error: {str(e)[:50]}"
                 )
         
         return (
-            html.Div("点击 \"运行分析\" 开始...", 
+            html.Div("Click \"Run Analysis\" to start...", 
                     style={'color': THEME['text_sub'], 'textAlign': 'center', 'padding': '50px'}),
-            "准备就绪"
+            "Ready"
         )

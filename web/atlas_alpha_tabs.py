@@ -3,7 +3,7 @@
 
 Implements:
 - CANDIDATES subtab: Scan for alpha candidates based on spread z-scores, with correlation filtering
-- SCORING subtab: Multi-factor scoring with risk parity allocation
+- PORTFOLIO subtab: Multi-factor scoring with risk parity allocation
 
 Data sources:
 - Bond-Curve spreads: TBond-spds.pkl, CBond-spds.pkl
@@ -118,6 +118,13 @@ MAX_CORRELATION_THRESHOLD = 0.6
 
 # Instrument selector prefix for non-spread (macro) series used by bond-swap trend backtests
 MACRO_PREFIX = "MACRO|"
+
+# Global state for diversified trade recommendations
+# This persists across tab switches (unlike dcc.Store which is tab-scoped)
+DIVERSIFIED_TRADE_RECOMMENDATIONS = {
+    'trades': [],       # List of recommended trade dictionaries
+    'timestamp': None   # When the analysis was run
+}
 
 # ---------------------------------------------------------------------------
 # Data Loading Utilities
@@ -671,6 +678,134 @@ def compute_unified_edge_vol_score(
     return df
 
 
+def select_diversified_trades(
+    candidates: List[Dict],
+    max_trades: int = 10,
+) -> List[Dict]:
+    """Select diversified trades using greedy low-correlation selection.
+    
+    Prioritizes high-quality trades (high score, good risk metrics) while
+    minimizing correlation between selected trades.
+    """
+    if not candidates or len(candidates) == 0:
+        return []
+    
+    # Convert to DataFrame for easier manipulation
+    df = pd.DataFrame(candidates)
+    
+    # Filter for quality: must have valid score, vol, and zscore
+    df = df[
+        (df.get('composite_score', pd.Series([0] * len(df))) > 0) &
+        (df.get('vol', pd.Series([np.nan] * len(df))).notna()) &
+        (df.get('Zscore', pd.Series([np.nan] * len(df))).notna())
+    ].copy()
+    
+    if len(df) == 0:
+        return []
+    
+    # Sort by composite_score (or score if available)
+    score_col = 'composite_score' if 'composite_score' in df.columns else 'score'
+    if score_col in df.columns:
+        df = df.sort_values(score_col, ascending=False)
+    
+    # Simple greedy diversification: alternate between spread types and styles
+    selected = []
+    seen_types = set()
+    seen_styles = set()
+    
+    # First pass: one from each spread_type
+    for _, row in df.iterrows():
+        if len(selected) >= max_trades:
+            break
+        spread_type = row.get('spread_type', '')
+        if spread_type not in seen_types:
+            selected.append(row.to_dict())
+            seen_types.add(spread_type)
+    
+    # Second pass: fill remaining slots with highest scoring
+    for _, row in df.iterrows():
+        if len(selected) >= max_trades:
+            break
+        if row.to_dict() not in selected:
+            selected.append(row.to_dict())
+    
+    return selected[:max_trades]
+
+
+def build_diversified_trades_display(trades: List[Dict]) -> html.Div:
+    """Build display for diversified trade recommendations."""
+    if not trades or len(trades) == 0:
+        return html.Div(
+            "No diversified trades available. Run scan to generate recommendations.",
+            style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '10px'}
+        )
+    
+    # Group by spread type for summary
+    type_counts = {}
+    for trade in trades:
+        t_type = trade.get('spread_type', 'Other')
+        type_counts[t_type] = type_counts.get(t_type, 0) + 1
+    
+    summary_items = []
+    for t_type, count in sorted(type_counts.items()):
+        summary_items.append(
+            html.Span(
+                f"{count} {t_type}",
+                style={
+                    'backgroundColor': THEME['bg_input'],
+                    'padding': '4px 10px',
+                    'borderRadius': '3px',
+                    'marginRight': '8px',
+                    'fontSize': '11px',
+                    'display': 'inline-block',
+                    'marginBottom': '5px',
+                }
+            )
+        )
+    
+    # Build trade list
+    trade_items = []
+    for i, trade in enumerate(trades[:10], 1):
+        trade_id = trade.get('ID', 'N/A')
+        spread_type = trade.get('spread_type', 'N/A')
+        style = trade.get('style', 'N/A')
+        direction = trade.get('direction', 'N/A')
+        zscore = trade.get('Zscore', 0)
+        score = trade.get('composite_score', trade.get('score', 0))
+        
+        dir_color = THEME['success'] if direction == 'BUY' else THEME['danger']
+        
+        trade_items.append(
+            html.Div([
+                html.Span(f"{i}. ", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginRight': '5px'}),
+                html.Span(f"{trade_id}", style={'color': THEME['text_main'], 'fontWeight': 'bold', 'marginRight': '8px'}),
+                html.Span(f"[{spread_type}]", style={'color': THEME['accent'], 'fontSize': '11px', 'marginRight': '8px'}),
+                html.Span(f"{style}", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginRight': '8px'}),
+                html.Span(f"{direction}", style={'color': dir_color, 'fontWeight': 'bold', 'fontSize': '11px', 'marginRight': '8px'}),
+                html.Span(f"Z={zscore:.2f}", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginRight': '8px'}),
+                html.Span(f"Score={score:.2f}", style={'color': THEME['success'] if score > 0 else THEME['text_sub'], 'fontSize': '11px'}),
+            ], style={'marginBottom': '6px'})
+        )
+    
+    return html.Div([
+        html.P(
+            f"Based on scan results, {len(trades)} diversified trades are recommended:",
+            style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '10px'}
+        ),
+        html.Div(summary_items, style={'marginBottom': '12px'}),
+        html.Div(
+            trade_items,
+            style={
+                'backgroundColor': THEME['bg_input'],
+                'padding': '10px',
+                'borderRadius': '4px',
+                'maxHeight': '250px',
+                'overflowY': 'auto'
+            }
+        ),
+    ])
+
+
 # ---------------------------------------------------------------------------
 # Layout Builders
 # ---------------------------------------------------------------------------
@@ -832,212 +967,114 @@ def build_candidates_layout() -> html.Div:
             ),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'}),
         
-        # Store for selected candidates (passed to scoring tab)
+        # Diversified Trade Recommendation Panel
+        html.Div([
+            html.Hr(style={'borderColor': THEME['text_sub'], 'margin': '20px 0'}),
+            html.H6("📊 Diversified Trade Recommendation", style={'color': THEME['success'], 'marginBottom': '10px'}),
+            html.Div(id='alpha-diversified-trades-display'),
+            html.Div([
+                html.Button(
+                    "🔄 Replace Strategy Pool with 10 Recommended Trades",
+                    id='alpha-replace-pool-btn',
+                    n_clicks=0,
+                    style={
+                        'backgroundColor': THEME['success'],
+                        'color': 'white',
+                        'padding': '10px 25px',
+                        'border': 'none',
+                        'borderRadius': '5px',
+                        'cursor': 'pointer',
+                        'fontWeight': 'bold',
+                        'fontSize': '14px',
+                        'marginTop': '10px',
+                    }
+                ),
+                html.Span(
+                    id='alpha-replace-pool-status',
+                    style={'marginLeft': '15px', 'color': THEME['text_sub'], 'fontSize': '12px'}
+                ),
+            ]),
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginTop': '15px'}),
+        
+        # Store for selected candidates (passed to portfolio tab)
         dcc.Store(id='alpha-selected-candidates', data=[]),
         
     ], style={'padding': '10px'})
 
 
-def build_scoring_layout() -> html.Div:
-    """Build the SCORING subtab layout."""
+def build_portfolio_layout() -> html.Div:
+    """Build the PORTFOLIO subtab layout."""
     
     return html.Div([
-        # Header
-        html.H6("Alpha Scoring & Sizing", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
-        html.P(
-            "Score candidates using multiple factors and allocate capital using risk parity. "
-            "Non-mean-reverting trades (Carry style) use carry-to-risk scoring instead of MR metrics.",
-            style={'color': THEME['text_sub'], 'fontSize': '13px', 'marginBottom': '20px'}
-        ),
-        
-        # Scoring Weights Configuration
+        # Configuration Panel
         html.Div([
-            html.H6("Scoring Weights", style={'color': THEME['accent'], 'marginBottom': '15px'}),
-
             html.Div([
-                html.Label("Scoring Scheme:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                dcc.Dropdown(
-                    id='alpha-score-scheme',
-                    options=[
-                        {'label': 'Unified (edge/vol) — weightless', 'value': 'unified_edge_vol'},
-                        {'label': 'Weighted (legacy sliders)', 'value': 'weighted_legacy'},
-                    ],
-                    value='unified_edge_vol',
-                    clearable=False,
-                    style={'width': '280px'},
+                html.H5("Configuration", style={'margin': '0', 'color': THEME['text_main'], 'fontSize': '16px'}),
+            ], style={'flex': '1'}),
+            
+            html.Div([
+                html.Label("Total Capital:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
+                dcc.Input(
+                    id='alpha-total-capital',
+                    type='number',
+                    value=100,
+                    min=1,
+                    style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
                 ),
-                html.Div(
-                    "Unified uses expected_move_per_day/|vol|: MR ≈ |spread-mean|/halflife; Carry/Trend ≈ (carry_roll + k·momentum)/|vol| (direction-aligned).",
-                    style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginTop': '6px'},
-                ),
-            ], style={'marginBottom': '15px'}),
-
-            html.Div([
-                html.Div([
-                    html.Label("k (momentum weight):", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginRight': '8px'}),
-                    dcc.Input(
-                        id='alpha-mom-k',
-                        type='number',
-                        value=1.0,
-                        step=0.1,
-                        style={'width': '90px', 'marginRight': '25px'},
-                    ),
-                ], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([
-                    html.Label("Momentum window (days):", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginRight': '8px'}),
-                    dcc.Input(
-                        id='alpha-mom-window',
-                        type='number',
-                        value=20,
-                        min=1,
-                        step=1,
-                        style={'width': '90px'},
-                    ),
-                ], style={'display': 'flex', 'alignItems': 'center'}),
-            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px', 'marginBottom': '10px'}),
-            
-            # Mean-Reversion Style Weights
-            html.Div([
-                html.Label("Mean-Reversion Style", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginBottom': '10px', 'display': 'block'}),
-                html.Div([
-                    html.Div([
-                        html.Label("Z-Score Signal:", style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-                        dcc.Slider(id='score-weight-zscore', min=0, max=1, step=0.05, value=0.40,
-                                   marks={0: '0', 0.5: '0.5', 1: '1'}),
-                    ], style={'flex': '1', 'marginRight': '15px'}),
-                    html.Div([
-                        html.Label("MR Confidence:", style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-                        dcc.Slider(id='score-weight-mr', min=0, max=1, step=0.05, value=0.30,
-                                   marks={0: '0', 0.5: '0.5', 1: '1'}),
-                    ], style={'flex': '1', 'marginRight': '15px'}),
-                    html.Div([
-                        html.Label("Vol Adjusted:", style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-                        dcc.Slider(id='score-weight-vol', min=0, max=1, step=0.05, value=0.15,
-                                   marks={0: '0', 0.5: '0.5', 1: '1'}),
-                    ], style={'flex': '1', 'marginRight': '15px'}),
-                    html.Div([
-                        html.Label("Liquidity:", style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-                        dcc.Slider(id='score-weight-liq', min=0, max=1, step=0.05, value=0.15,
-                                   marks={0: '0', 0.5: '0.5', 1: '1'}),
-                    ], style={'flex': '1'}),
-                ], style={'display': 'flex'}),
-            ], style={'marginBottom': '20px'}),
-            
-            # Carry Style Weights (for non-MR trades)
-            html.Div([
-                html.Label("Carry Style (Bond-Swap, Net Basis)", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginBottom': '10px', 'display': 'block'}),
-                html.Div([
-                    html.Div([
-                        html.Label("Carry/Risk:", style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-                        dcc.Slider(id='score-weight-carry', min=0, max=1, step=0.05, value=0.50,
-                                   marks={0: '0', 0.5: '0.5', 1: '1'}),
-                    ], style={'flex': '1', 'marginRight': '15px'}),
-                    html.Div([
-                        html.Label("Trend/Momentum:", style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-                        dcc.Slider(id='score-weight-trend', min=0, max=1, step=0.05, value=0.25,
-                                   marks={0: '0', 0.5: '0.5', 1: '1'}),
-                    ], style={'flex': '1', 'marginRight': '15px'}),
-                    html.Div([
-                        html.Label("Hedge Stability:", style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-                        dcc.Slider(id='score-weight-hedge', min=0, max=1, step=0.05, value=0.25,
-                                   marks={0: '0', 0.5: '0.5', 1: '1'}),
-                    ], style={'flex': '1'}),
-                ], style={'display': 'flex'}),
-            ]),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
-        
-        # Risk Allocation Settings
-        html.Div([
-            html.H6("Risk Allocation", style={'color': THEME['accent'], 'marginBottom': '15px'}),
-            
-            html.Div([
-                html.Div([
-                    html.Label("Total Capital (MM):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                    dcc.Input(
-                        id='alpha-total-capital',
-                        type='number',
-                        value=100,
-                        min=1,
-                        style={'width': '100px', 'marginRight': '30px'},
-                    ),
-                ], style={'display': 'flex', 'alignItems': 'center'}),
+                html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
                 
-                html.Div([
-                    html.Label("Max DV01 per Trade:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                    dcc.Input(
-                        id='alpha-max-dv01',
-                        type='number',
-                        value=50000,
-                        min=1000,
-                        step=1000,
-                        style={'width': '120px', 'marginRight': '30px'},
-                    ),
-                ], style={'display': 'flex', 'alignItems': 'center'}),
-                
-                html.Div([
-                    html.Label("Allocation Method:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                    dcc.Dropdown(
-                        id='alpha-alloc-method',
-                        options=[
-                            {'label': 'Risk Parity', 'value': 'risk_parity'},
-                            {'label': 'Equal Weight', 'value': 'equal'},
-                            {'label': 'Score-Weighted', 'value': 'score'},
-                            {'label': 'Inverse Vol', 'value': 'inv_vol'},
-                        ],
-                        value='risk_parity',
-                        clearable=False,
-                        style={'width': '150px'},
-                    ),
-                ], style={'display': 'flex', 'alignItems': 'center'}),
-            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '20px', 'marginBottom': '15px'}),
-            
-            # Correlation constraint
-            html.Div([
-                dcc.Checklist(
-                    id='alpha-enforce-corr',
-                    options=[{'label': ' Enforce max correlation constraint from Candidates tab', 'value': 'enforce'}],
-                    value=['enforce'],
-                    labelStyle={'color': THEME['text_main'], 'fontSize': '13px'},
+                html.Label("Max DV01 per Trade:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
+                dcc.Input(
+                    id='alpha-max-dv01',
+                    type='number',
+                    value=50000,
+                    min=1000,
+                    step=1000,
+                    style={'width': '120px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
                 ),
-            ]),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
+                html.Span("CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
+                
+                html.Label("Method:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
+                html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '14px', 'fontWeight': 'bold'}),
+            ], style={'display': 'flex', 'alignItems': 'center'}),
+        ], style={'display': 'flex', 'alignItems': 'center', 'padding': '15px 20px', 'backgroundColor': THEME['bg_input'], 'borderBottom': f'1px solid {THEME["table_header"]}', 'borderRadius': '8px 8px 0 0', 'marginBottom': '20px'}),
         
-        # Run Scoring Button
+        # Hidden inputs for removed features (keep for callback compatibility)
         html.Div([
-            html.Button(
-                "⚡ Run Scoring & Allocation",
-                id='alpha-score-btn',
-                n_clicks=0,
-                style={
-                    'backgroundColor': THEME['success'],
-                    'color': 'white',
-                    'padding': '12px 30px',
-                    'border': 'none',
-                    'borderRadius': '4px',
-                    'cursor': 'pointer',
-                    'fontWeight': 'bold',
-                    'fontSize': '14px',
-                    'marginRight': '15px',
-                }
-            ),
-            html.Span(id='alpha-score-status', style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-        ], style={'marginBottom': '20px'}),
+            dcc.Input(id='alpha-mom-k', type='number', value=1.0, style={'display': 'none'}),
+            dcc.Input(id='alpha-mom-window', type='number', value=20, style={'display': 'none'}),
+            dcc.Input(id='alpha-alloc-method', type='text', value='risk_parity', style={'display': 'none'}),
+            dcc.Checklist(id='alpha-enforce-corr', options=[], value=[], style={'display': 'none'}),
+        ], style={'display': 'none'}),
         
-        # Scored Results
+        # Portfolio Allocation Results
         html.Div([
-            html.H6("Scored & Sized Trades", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
+            html.Div([
+                html.H4("Portfolio Allocation Results", style={'color': THEME['text_main'], 'marginBottom': '15px', 'flex': '1'}),
+                html.Div([
+                    html.Button(
+                        'RUN OPTIMIZATION',
+                        id='alpha-score-btn',
+                        n_clicks=0,
+                        style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '8px 20px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold'}
+                    ),
+                ], style={'marginLeft': '20px'})
+            ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between'}),
+            
+            html.Div([
+                html.Div(id='alpha-score-status', style={'fontSize': '13px', 'color': THEME['text_main'], 'marginRight': '20px'}),
+                html.Div(id='alpha-portfolio-summary', style={'color': THEME['text_sub'], 'fontSize': '11px'})
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px', 'justifyContent': 'flex-end'}),
+
             dcc.Loading(
-                id='loading-scoring',
+                id='loading-portfolio',
                 type='default',
-                children=html.Div(id='alpha-scored-table-container'),
-            ),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '20px'}),
+                children=html.Div(id='alpha-scored-table-container')
+            )
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'marginBottom': '20px', 'borderRadius': '5px'}),
         
-        # Summary Stats
-        html.Div([
-            html.H6("Portfolio Summary", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
-            html.Div(id='alpha-portfolio-summary'),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'}),
+        # Store for selected candidates (passed from Candidates tab)
+        dcc.Store(id='alpha-selected-candidates', data=[]),
         
     ], style={'padding': '10px'})
 
@@ -1055,7 +1092,8 @@ def register_alpha_callbacks(app) -> None:
     @app.callback(
         [Output('alpha-candidates-table-container', 'children'),
          Output('alpha-scan-status', 'children'),
-         Output('alpha-selected-candidates', 'data')],
+         Output('alpha-selected-candidates', 'data'),
+         Output('alpha-diversified-trades-display', 'children')],
         Input('alpha-scan-btn', 'n_clicks'),
         [State('alpha-spread-categories', 'value'),
          State('alpha-zscore-threshold', 'value'),
@@ -1064,7 +1102,7 @@ def register_alpha_callbacks(app) -> None:
     )
     def scan_candidates(n_clicks, categories, zscore_thd, direction):
         if not n_clicks or not categories:
-            return html.Div("Select spread categories and click Scan.", style={'color': THEME['text_sub']}), "", []
+            return html.Div("Select spread categories and click Scan.", style={'color': THEME['text_sub']}), "", [], html.Div()
 
         try:
             z_thd = float(zscore_thd) if zscore_thd is not None else float(ZSCORE_ENTRY_THRESHOLD)
@@ -1108,6 +1146,7 @@ def register_alpha_callbacks(app) -> None:
                 ),
                 f"Scanned at {scanned_time}",
                 [],
+                html.Div()
             )
 
         # Direction filter (applied after generator selection)
@@ -1125,6 +1164,7 @@ def register_alpha_callbacks(app) -> None:
                 ),
                 f"Scanned at {scanned_time}",
                 [],
+                html.Div()
             )
 
         # Add direction label (only if not provided by generator)
@@ -1303,7 +1343,80 @@ def register_alpha_callbacks(app) -> None:
         status = f"Found {len(df_all)} candidates at {scanned_time}"
 
         candidate_data = df_display.to_dict('records')
-        return table_out, status, candidate_data
+        
+        # Build diversified trades display (shows recommended low-correlation trades)
+        diversified_display = html.Div()
+        if isinstance(df_low, pd.DataFrame) and not df_low.empty:
+            # Store recommended trades in global variable for "Replace Pool" button
+            DIVERSIFIED_TRADE_RECOMMENDATIONS['trades'] = df_low.to_dict('records')
+            DIVERSIFIED_TRADE_RECOMMENDATIONS['timestamp'] = datetime.now()
+            
+            trade_items = []
+            for idx, row in df_low.iterrows():
+                trade_id = row.get('ID', idx)
+                spread_type = row.get('spread_type', 'N/A')
+                style = row.get('style', 'N/A')
+                zscore = row.get('Zscore', 0)
+                trade_items.append(
+                    html.Div(
+                        f"• {trade_id} ({spread_type} - {style}) | Z={zscore:.2f}",
+                        style={'fontSize': '11px', 'color': THEME['text_main'], 'padding': '2px 0'}
+                    )
+                )
+            
+            diversified_display = html.Div([
+                html.Div(
+                    f"✓ {len(df_low)} low-correlation trades recommended for diversification",
+                    style={'color': THEME['success'], 'fontWeight': 'bold', 'marginBottom': '8px', 'fontSize': '12px'}
+                ),
+                html.Div(trade_items, style={'maxHeight': '150px', 'overflowY': 'auto', 'backgroundColor': THEME['bg_input'], 'padding': '8px', 'borderRadius': '4px'})
+            ])
+        else:
+            # No low-correlation trades available
+            DIVERSIFIED_TRADE_RECOMMENDATIONS['trades'] = []
+            DIVERSIFIED_TRADE_RECOMMENDATIONS['timestamp'] = None
+            diversified_display = html.Div(
+                "Run scan to generate diversified trade recommendations",
+                style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'}
+            )
+        
+        return table_out, status, candidate_data, diversified_display
+    
+    # -------------------------------------------------------------------------
+    # CANDIDATES: Replace Strategy Pool with Diversified Trades
+    # -------------------------------------------------------------------------
+    @app.callback(
+        [Output('alpha-replace-pool-status', 'children'),
+         Output('alpha-selected-candidates', 'data', allow_duplicate=True)],
+        Input('alpha-replace-pool-btn', 'n_clicks'),
+        prevent_initial_call=True
+    )
+    def replace_strategy_pool(n_clicks):
+        """Replace the strategy pool with recommended diversified trades."""
+        if not n_clicks or n_clicks == 0:
+            return "", []
+        
+        # Get trades from global variable (set by scan)
+        recommended_trades = DIVERSIFIED_TRADE_RECOMMENDATIONS.get('trades', [])
+        
+        if not recommended_trades:
+            return "⚠ No recommended trades available. Please run scan first.", []
+        
+        try:
+            # Count trades by type for status message
+            type_counts = {}
+            for trade in recommended_trades:
+                t_type = trade.get('spread_type', 'Other')
+                type_counts[t_type] = type_counts.get(t_type, 0) + 1
+            
+            type_summary = ", ".join([f"{count} {t}" for t, count in type_counts.items()])
+            status_msg = f"✓ Replaced strategy pool with {len(recommended_trades)} trades ({type_summary}). Switch to Portfolio tab to allocate capital."
+            
+            return status_msg, recommended_trades
+            
+        except Exception as e:
+            print(f"Error replacing strategy pool: {e}")
+            return f"❌ Error: {str(e)[:50]}", []
     
     # -------------------------------------------------------------------------
     # CANDIDATES: Correlation Check
@@ -1434,7 +1547,7 @@ def register_alpha_callbacks(app) -> None:
         ])
     
     # -------------------------------------------------------------------------
-    # SCORING: Run Scoring & Allocation
+    # PORTFOLIO: Run Scoring & Allocation
     # -------------------------------------------------------------------------
     @app.callback(
         [Output('alpha-scored-table-container', 'children'),
@@ -1442,13 +1555,8 @@ def register_alpha_callbacks(app) -> None:
          Output('alpha-portfolio-summary', 'children')],
         Input('alpha-score-btn', 'n_clicks'),
         [State('alpha-selected-candidates', 'data'),
-         State('alpha-score-scheme', 'value'),
          State('alpha-mom-k', 'value'),
          State('alpha-mom-window', 'value'),
-         State('score-weight-zscore', 'value'),
-         State('score-weight-mr', 'value'),
-         State('score-weight-vol', 'value'),
-         State('score-weight-liq', 'value'),
          State('alpha-total-capital', 'value'),
          State('alpha-max-dv01', 'value'),
          State('alpha-alloc-method', 'value'),
@@ -1456,8 +1564,7 @@ def register_alpha_callbacks(app) -> None:
          State('alpha-max-corr', 'value')],
         prevent_initial_call=True
     )
-    def run_scoring(n_clicks, candidates, score_scheme, mom_k, mom_window, w_zscore, w_mr, w_vol, w_liq, 
-                    total_capital, max_dv01, alloc_method, enforce_corr, max_corr):
+    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, max_dv01, alloc_method, enforce_corr, max_corr):
         
         if not n_clicks:
             return html.Div(), "", html.Div()
@@ -1471,23 +1578,12 @@ def register_alpha_callbacks(app) -> None:
         
         df = pd.DataFrame(candidates)
         
-        score_scheme = (score_scheme or 'unified_edge_vol').strip().lower()
-
-        # Compute scores
-        if score_scheme == 'weighted_legacy':
-            total_w = (w_zscore or 0) + (w_mr or 0) + (w_vol or 0) + (w_liq or 0)
-            if total_w > 0:
-                weights = {
-                    'zscore': (w_zscore or 0) / total_w,
-                    'mr_conf': (w_mr or 0) / total_w,
-                    'vol_adj': (w_vol or 0) / total_w,
-                    'liquidity': (w_liq or 0) / total_w,
-                }
-            else:
-                weights = {'zscore': 0.25, 'mr_conf': 0.25, 'vol_adj': 0.25, 'liquidity': 0.25}
-            df_scored = compute_candidate_scores(df, weights)
-        else:
-            df_scored = compute_unified_edge_vol_score(df, mom_window=int(mom_window) if mom_window is not None else 20, mom_k=float(mom_k) if mom_k is not None else 1.0)
+        # Compute unified weightless scores
+        df_scored = compute_unified_edge_vol_score(
+            df, 
+            mom_window=int(mom_window) if mom_window is not None else 20, 
+            mom_k=float(mom_k) if mom_k is not None else 1.0
+        )
 
         df_scored = df_scored.sort_values('composite_score', ascending=False)
         
@@ -1969,11 +2065,11 @@ def build_basket_layout() -> html.Div:
             style={'color': THEME['text_sub'], 'fontSize': '13px', 'marginBottom': '20px'}
         ),
         
-        # Basket table (populated from scoring)
+        # Basket table (populated from portfolio)
         html.Div([
             html.H6("Current Basket", style={'color': THEME['accent'], 'marginBottom': '10px'}),
             html.Div(id='alpha-basket-table-container', children=[
-                html.P("No trades in basket. Score candidates in the Scoring tab and add to basket.", 
+                html.P("No trades in basket. Optimize portfolio in the Portfolio tab and add to basket.", 
                        style={'color': THEME['text_sub'], 'padding': '20px'})
             ]),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),

@@ -222,7 +222,9 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 	if tenor_spd:
 		df_ts = pd.DataFrame(tenor_spd).sort_index()
 		# Basic stats over recent window
-		df_hist = df_ts.tail(252)
+		# lookback 252 trading days (~1 year)
+		N = 252
+		df_hist = df_ts.tail(N)
 		latest = df_hist.ffill().iloc[-1]
 		mu = df_hist.mean(skipna=True)
 		sig = df_hist.std(skipna=True).replace(0, np.nan)

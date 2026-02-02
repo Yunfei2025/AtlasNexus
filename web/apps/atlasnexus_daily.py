@@ -37,7 +37,7 @@ from web.atlas_fi_tabs import (
 
 from web.atlas_alpha_tabs import (
     build_candidates_layout,
-    build_scoring_layout,
+    build_portfolio_layout,
     build_basket_layout,
     build_backtest_layout,
     register_alpha_callbacks,
@@ -217,6 +217,8 @@ def _render_tab(tab):
         )
 
     if tab == "beta":
+        # Pre-render initial subtab content so it shows immediately
+        initial_beta_content = build_multiasset_factor_layout()
         return html.Div(
             [
                 html.H5("Beta Book (Top-down)"),
@@ -236,7 +238,7 @@ def _render_tab(tab):
                             ],
                             style={"height": "520px"},
                         ),
-                        html.Div(id="an-beta-subtabs-content", style={"paddingLeft": "16px", "width": "100%"}),
+                        html.Div(id="an-beta-subtabs-content", children=initial_beta_content, style={"paddingLeft": "16px", "width": "100%"}),
                     ],
                     style={"display": "flex", "flexDirection": "row", "gap": "12px"},
                 ),
@@ -244,6 +246,8 @@ def _render_tab(tab):
         )
 
     if tab == "alpha":
+        # Pre-render initial subtab content so it shows immediately
+        initial_alpha_content = build_candidates_layout()
         return html.Div(
             [
                 html.H5("Alpha Book (Bottom-up)"),
@@ -256,17 +260,17 @@ def _render_tab(tab):
                             vertical=True,
                             children=[
                                 dcc.Tab(label="CANDIDATES", value="candidates", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="VOLATILITY", value="volatility", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="SCORING", value="scoring", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="BACKTEST", value="backtest", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="BASKET", value="basket", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="SPREAD INFO", value="spreads", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="SPREAD", value="spreads", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="PAIRS", value="pairs", style=tab_style, selected_style=tab_selected_style),
                                 dcc.Tab(label="CURVES", value="curves", style=tab_style, selected_style=tab_selected_style),
+                                dcc.Tab(label="VOLATILITY", value="volatility", style=tab_style, selected_style=tab_selected_style),
                             ],
                             style={"height": "520px"},
                         ),
-                        html.Div(id="an-alpha-subtabs-content", style={"paddingLeft": "16px", "width": "100%"}),
+                        html.Div(id="an-alpha-subtabs-content", children=initial_alpha_content, style={"paddingLeft": "16px", "width": "100%"}),
                     ],
                     style={"display": "flex", "flexDirection": "row", "gap": "12px"},
                 ),
@@ -381,8 +385,8 @@ def _render_alpha_subtabs(subtab: str):
         return build_candidates_layout()
     if subtab == "volatility":
         return build_volatility_layout()
-    if subtab == "scoring":
-        return build_scoring_layout()
+    if subtab == "portfolio":
+        return build_portfolio_layout()
     if subtab == "backtest":
         return build_backtest_layout()
     if subtab == "basket":
@@ -399,4 +403,21 @@ def _render_alpha_subtabs(subtab: str):
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=8080, debug=False, use_reloader=False)
+    import webbrowser
+    from threading import Timer
+    
+    def open_browser():
+        """Open browser after a short delay to ensure server is ready."""
+        webbrowser.open_new("http://127.0.0.1:8080/")
+    
+    # # Open browser automatically after 1.5 seconds
+    Timer(1.5, open_browser).start()
+    
+    # print("="*60)
+    # print("AtlasNexus Daily Console starting...")
+    # print("Server: http://127.0.0.1:8080")
+    # print("Browser window will open automatically")
+    # print("Press Ctrl+C to stop the server")
+    # print("="*60)
+    
+    app.run(host="127.0.0.1", port=8080, debug=True, use_reloader=False)
