@@ -4,7 +4,12 @@
 
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
 
 # Cache and Database
 cache/
