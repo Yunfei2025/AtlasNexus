@@ -116,6 +116,8 @@ def build_header():
 def build_tabs_panel():
     return html.Div(
         [
+            # Shared store for Alpha Book (persists across subtab switches)
+            dcc.Store(id='alpha-selected-candidates', data=[]),
             html.Div(
                 [
                     dcc.Tabs(
@@ -381,6 +383,7 @@ def _render_beta_subtabs(subtab: str):
     Input("an-alpha-subtabs", "value"),
 )
 def _render_alpha_subtabs(subtab: str):
+    """Render Alpha Book subtabs (store is defined in build_tabs_panel for persistence)."""
     if subtab == "candidates":
         return build_candidates_layout()
     if subtab == "volatility":

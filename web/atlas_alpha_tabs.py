@@ -475,6 +475,135 @@ def risk_parity_weights(
     return pd.Series(w, index=assets)
 
 
+def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str, float], np.ndarray]:
+    """Compute risk parity weights for alpha candidates using historical spread data.
+    
+    Args:
+        df_candidates: DataFrame with candidate trades (must have 'ID', 'spread_type' columns)
+    
+    Returns:
+        Tuple of (weights_dict, risk_contribution_array)
+        - weights_dict: {trade_id: weight}
+        - risk_contribution_array: risk contribution for each trade
+    """
+    from scipy.optimize import minimize
+    
+    # Load historical spread time series for each candidate
+    dir_input = _get_input_dir()
+    spread_series = {}
+    
+    for idx, row in df_candidates.iterrows():
+        trade_id = row['ID']
+        spread_type = row.get('spread_type', '')
+        
+        # Try to load spread time series
+        try:
+            # Load the spread data file
+            if spread_type in ['TBondCurve', 'TBondSwap']:
+                data = _load_pickle_safe(dir_input / 'TBond-spds.pkl')
+                key = 'BondCurve' if spread_type == 'TBondCurve' else 'BondSwap'
+            elif spread_type in ['CBondCurve', 'CBondSwap']:
+                data = _load_pickle_safe(dir_input / 'CBond-spds.pkl')
+                key = 'BondCurve' if spread_type == 'CBondCurve' else 'BondSwap'
+            elif spread_type == 'SwapSpread':
+                data = _load_pickle_safe(dir_input / 'IRS-pxspds.pkl')
+                key = 'Spread'
+            elif spread_type in ['NetBasis', 'TermBasis']:
+                data = _load_pickle_safe(dir_input / 'futures-spds.pkl')
+                key = spread_type
+            else:
+                data = _load_pickle_safe(dir_input / 'Misc-spds.pkl')
+                key = 'Spread'
+            
+            if data and key in data:
+                spread_df = data[key].get('Spread')
+                if spread_df is not None and trade_id in spread_df.columns:
+                    # Use last 252 days (1 year) for covariance
+                    spread_series[trade_id] = spread_df[trade_id].dropna().tail(252)
+        except Exception as e:
+            print(f"Warning: Could not load spread data for {trade_id}: {e}")
+    
+    # If we don't have enough historical data, fall back to simplified method
+    if len(spread_series) < 2:
+        print("⚠ Insufficient historical data for risk parity, using inverse volatility")
+        n = len(df_candidates)
+        weights = {row['ID']: 1/n for _, row in df_candidates.iterrows()}
+        risk_contrib = np.ones(n) / n
+        return weights, risk_contrib
+    
+    # Align all series to common dates
+    spread_df = pd.DataFrame(spread_series).dropna()
+    
+    if len(spread_df) < 20:
+        print("⚠ Too few common dates for covariance, using inverse volatility")
+        n = len(df_candidates)
+        weights = {row['ID']: 1/n for _, row in df_candidates.iterrows()}
+        risk_contrib = np.ones(n) / n
+        return weights, risk_contrib
+    
+    # Calculate returns (daily changes)
+    returns = spread_df.diff().dropna()
+    
+    # Calculate covariance matrix
+    cov_matrix = returns.cov()
+    cov = cov_matrix.values
+    n = len(cov)
+    
+    # Risk parity optimization
+    def _risk_contribution(w, cov):
+        """Calculate risk contribution for each asset."""
+        port_var = w.T @ cov @ w
+        if port_var < 1e-12:
+            return np.ones(len(w)) / len(w)
+        marginal_risk = cov @ w
+        return (w * marginal_risk) / np.sqrt(port_var)
+    
+    def _objective(w, cov):
+        """Objective: minimize variance of risk contributions."""
+        rc = _risk_contribution(w, cov)
+        target = 1.0 / len(w)
+        return np.sum((rc - target) ** 2)
+    
+    # Constraints: weights sum to 1
+    constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
+    
+    # Bounds: no short positions, max 50% in any single trade
+    bounds = [(0.0, 0.5) for _ in range(n)]
+    
+    # Initial guess: equal weight
+    w0 = np.ones(n) / n
+    
+    # Optimize
+    result = minimize(
+        _objective,
+        w0,
+        args=(cov,),
+        method='SLSQP',
+        bounds=bounds,
+        constraints=constraints,
+        options={'maxiter': 1000, 'ftol': 1e-9}
+    )
+    
+    if not result.success:
+        print(f"⚠ Risk parity optimization did not converge: {result.message}")
+        # Fall back to equal weights
+        weights_array = np.ones(n) / n
+    else:
+        weights_array = result.x
+    
+    # Calculate final risk contributions
+    risk_contrib = _risk_contribution(weights_array, cov)
+    
+    # Create weights dictionary
+    weights_dict = {col: w for col, w in zip(spread_df.columns, weights_array)}
+    
+    print(f"✓ Risk parity optimization completed:")
+    print(f"  - Weights std: {weights_array.std():.4f}")
+    print(f"  - Risk contribution std: {risk_contrib.std():.4f}")
+    
+    return weights_dict, risk_contrib
+
+
 # ---------------------------------------------------------------------------
 # Scoring Functions
 # ---------------------------------------------------------------------------
@@ -996,9 +1125,6 @@ def build_candidates_layout() -> html.Div:
             ]),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginTop': '15px'}),
         
-        # Store for selected candidates (passed to portfolio tab)
-        dcc.Store(id='alpha-selected-candidates', data=[]),
-        
     ], style={'padding': '10px'})
 
 
@@ -1017,22 +1143,22 @@ def build_portfolio_layout() -> html.Div:
                 dcc.Input(
                     id='alpha-total-capital',
                     type='number',
-                    value=100,
+                    value=10000,
                     min=1,
                     style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
                 ),
-                html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
+                html.Span("Million CNY (10B)", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
                 
                 html.Label("Max DV01 per Trade:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
                 dcc.Input(
                     id='alpha-max-dv01',
                     type='number',
-                    value=50000,
+                    value=5000000,
                     min=1000,
                     step=1000,
                     style={'width': '120px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
                 ),
-                html.Span("CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
+                html.Span("CNY (5M)", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
                 
                 html.Label("Method:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
                 html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '14px', 'fontWeight': 'bold'}),
@@ -1061,6 +1187,12 @@ def build_portfolio_layout() -> html.Div:
                 ], style={'marginLeft': '20px'})
             ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between'}),
             
+            # Current Strategy Pool Display
+            html.Div([
+                html.Div(id='alpha-pool-status', style={'fontSize': '13px', 'color': THEME['text_sub'], 'marginBottom': '10px'}),
+                html.Div(id='alpha-pool-preview', style={'fontSize': '11px', 'color': THEME['text_main']}),
+            ], style={'marginBottom': '15px', 'padding': '10px', 'backgroundColor': THEME['bg_input'], 'borderRadius': '4px'}),
+            
             html.Div([
                 html.Div(id='alpha-score-status', style={'fontSize': '13px', 'color': THEME['text_main'], 'marginRight': '20px'}),
                 html.Div(id='alpha-portfolio-summary', style={'color': THEME['text_sub'], 'fontSize': '11px'})
@@ -1069,12 +1201,12 @@ def build_portfolio_layout() -> html.Div:
             dcc.Loading(
                 id='loading-portfolio',
                 type='default',
-                children=html.Div(id='alpha-scored-table-container')
+                children=[
+                    html.Div(id='alpha-scored-table-container'),
+                    html.Div(id='alpha-risk-chart-container', style={'marginTop': '20px'}),
+                ]
             )
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'marginBottom': '20px', 'borderRadius': '5px'}),
-        
-        # Store for selected candidates (passed from Candidates tab)
-        dcc.Store(id='alpha-selected-candidates', data=[]),
         
     ], style={'padding': '10px'})
 
@@ -1547,10 +1679,61 @@ def register_alpha_callbacks(app) -> None:
         ])
     
     # -------------------------------------------------------------------------
+    # PORTFOLIO: Display Current Strategy Pool
+    # -------------------------------------------------------------------------
+    @app.callback(
+        [Output('alpha-pool-status', 'children'),
+         Output('alpha-pool-preview', 'children')],
+        [Input('alpha-selected-candidates', 'data'),
+         Input('alpha-score-btn', 'n_clicks')], # Trigger on button click too
+    )
+    def display_strategy_pool(candidates, _): # Ignore button clicks argument
+        """Display the current strategy pool content."""
+        if not candidates or len(candidates) == 0:
+            return (
+                "📭 Strategy Pool is empty. Go to CANDIDATES tab and click 'Replace Strategy Pool' button.",
+                html.Div()
+            )
+        
+        # Count by type
+        df = pd.DataFrame(candidates)
+        type_counts = df['spread_type'].value_counts().to_dict() if 'spread_type' in df.columns else {}
+        type_summary = ", ".join([f"{count} {t}" for t, count in type_counts.items()])
+        
+        # Create preview list
+        preview_items = []
+        for i, row in enumerate(df.head(10).itertuples(), 1):
+            trade_id = getattr(row, 'ID', f'Trade {i}')
+            spread_type = getattr(row, 'spread_type', 'N/A')
+            direction = getattr(row, 'direction', 'N/A')
+            zscore = getattr(row, 'Zscore', 0)
+            
+            dir_color = THEME['success'] if direction == 'BUY' else THEME['danger']
+            
+            preview_items.append(
+                html.Span([
+                    html.Span(f"{trade_id}", style={'fontWeight': 'bold', 'marginRight': '5px'}),
+                    html.Span(f"({spread_type})", style={'color': THEME['accent'], 'marginRight': '5px'}),
+                    html.Span(direction, style={'color': dir_color, 'marginRight': '5px'}),
+                    html.Span(f"Z={zscore:.2f}", style={'color': THEME['text_sub']}),
+                ], style={'marginRight': '15px', 'display': 'inline-block', 'marginBottom': '5px'})
+            )
+        
+        if len(df) > 10:
+            preview_items.append(
+                html.Span(f"... +{len(df) - 10} more", style={'color': THEME['text_sub'], 'fontStyle': 'italic'})
+            )
+        
+        status = f"✓ Strategy Pool contains {len(candidates)} trades ({type_summary})"
+        
+        return status, html.Div(preview_items)
+    
+    # -------------------------------------------------------------------------
     # PORTFOLIO: Run Scoring & Allocation
     # -------------------------------------------------------------------------
     @app.callback(
         [Output('alpha-scored-table-container', 'children'),
+         Output('alpha-risk-chart-container', 'children'),
          Output('alpha-score-status', 'children'),
          Output('alpha-portfolio-summary', 'children')],
         Input('alpha-score-btn', 'n_clicks'),
@@ -1567,40 +1750,50 @@ def register_alpha_callbacks(app) -> None:
     def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, max_dv01, alloc_method, enforce_corr, max_corr):
         
         if not n_clicks:
-            return html.Div(), "", html.Div()
+            return html.Div(), html.Div(), "", html.Div()
         
         if not candidates:
             return (
                 html.Div("No candidates. Run scan in Candidates tab first.", style={'color': THEME['warning']}),
+                html.Div(),
                 "",
                 html.Div()
             )
         
+        print(f"[DEBUG] run_scoring: received {len(candidates)} candidates")
+        print(f"[DEBUG] total_capital={total_capital}, max_dv01={max_dv01}, alloc_method={alloc_method}")
+        
         df = pd.DataFrame(candidates)
+        print(f"[DEBUG] df columns: {df.columns.tolist()}")
+        
+        # Handle None values with defaults
+        mom_window = int(mom_window) if mom_window is not None else 20
+        mom_k = float(mom_k) if mom_k is not None else 1.0
+        total_capital = float(total_capital) if total_capital is not None else 10000.0  # Default 10B
+        max_dv01 = float(max_dv01) if max_dv01 is not None else 5000000.0  # Default 5M
         
         # Compute unified weightless scores
         df_scored = compute_unified_edge_vol_score(
             df, 
-            mom_window=int(mom_window) if mom_window is not None else 20, 
-            mom_k=float(mom_k) if mom_k is not None else 1.0
+            mom_window=mom_window, 
+            mom_k=mom_k
         )
 
         df_scored = df_scored.sort_values('composite_score', ascending=False)
-        
-        # Apply correlation filter if enforced
-        if enforce_corr and 'enforce' in (enforce_corr or []):
-            # Greedy selection: keep only low-correlated candidates
-            # For now, just note this in the summary (full implementation would require correlation data)
-            pass
         
         # Allocation
         n_trades = len(df_scored)
         if n_trades == 0:
             return (
                 html.Div("No candidates after filtering.", style={'color': THEME['warning']}),
+                html.Div(),
                 "",
                 html.Div()
             )
+        
+        # Determine allocation method
+        alloc_method = alloc_method or 'risk_parity'
+        print(f"[DEBUG] Using allocation method: {alloc_method}")
         
         if alloc_method == 'equal':
             df_scored['weight'] = 1 / n_trades
@@ -1613,20 +1806,28 @@ def register_alpha_callbacks(app) -> None:
                 df_scored['weight'] = inv_vol / inv_vol.sum()
             else:
                 df_scored['weight'] = 1 / n_trades
-        else:  # risk_parity (simplified)
-            if 'vol' in df_scored.columns and len(df_scored) > 1:
-                # Use inverse volatility as proxy for risk parity
-                inv_vol = 1 / df_scored['vol'].replace(0, np.nan).fillna(df_scored['vol'].mean())
-                df_scored['weight'] = inv_vol / inv_vol.sum()
-            else:
+        else:  # risk_parity (default)
+            try:
+                weights_dict, risk_contrib = _compute_risk_parity_weights(df_scored)
+                df_scored['weight'] = df_scored['ID'].map(weights_dict).fillna(0)
+                df_scored['risk_contribution'] = df_scored['ID'].map(dict(zip(df_scored['ID'], risk_contrib))).fillna(0)
+            except Exception as e:
+                print(f"⚠ Risk parity optimization failed: {e}, falling back to equal weights")
                 df_scored['weight'] = 1 / n_trades
+                df_scored['risk_contribution'] = 1 / n_trades
+        
+        # Normalize weights to sum to 1
+        weight_sum = df_scored['weight'].sum()
+        if weight_sum > 0 and weight_sum != 1.0:
+            df_scored['weight'] = df_scored['weight'] / weight_sum
         
         # Calculate notional
         df_scored['notional_mm'] = df_scored['weight'] * total_capital
         
-        # Cap by max DV01 (simplified - assuming ~1bp = 0.01% of notional for bonds)
-        # This would need proper DV01 calculation in production
-        df_scored['suggested_dv01'] = (df_scored['notional_mm'] * 1e6 * 0.0001).clip(upper=max_dv01)
+        # Calculate suggested DV01 based on notional and typical bond duration
+        # Assume average duration ~ 5 years for bond spreads
+        avg_duration = 5.0
+        df_scored['suggested_dv01'] = (df_scored['notional_mm'] * 1e6 * avg_duration * 0.0001).clip(upper=max_dv01)
         
         # Select display columns
         display_cols = [
@@ -1635,7 +1836,7 @@ def register_alpha_callbacks(app) -> None:
             'momentum_per_day', 'expected_move_per_day',
             'edge', 'risk', 'composite_score',
             'zscore_score', 'mr_score',
-            'weight', 'notional_mm', 'suggested_dv01',
+            'weight', 'risk_contribution', 'notional_mm', 'suggested_dv01',
         ]
         available_cols = [c for c in display_cols if c in df_scored.columns]
         
@@ -1697,6 +1898,13 @@ def register_alpha_callbacks(app) -> None:
                     html.Span(f"{df_scored['composite_score'].mean():.1f}", style={'color': THEME['text_main']}),
                 ], style={'marginRight': '30px'}),
                 html.Div([
+                    html.Strong("Risk Parity: ", style={'color': THEME['text_sub']}),
+                    html.Span(
+                        f"σ(RC)={df_scored['risk_contribution'].std():.3f}" if 'risk_contribution' in df_scored.columns else "N/A",
+                        style={'color': THEME['text_main']}
+                    ),
+                ], style={'marginRight': '30px'}),
+                html.Div([
                     html.Strong("BUY/SELL: ", style={'color': THEME['text_sub']}),
                     html.Span(
                         f"{(df_scored['direction'] == 'BUY').sum()} / {(df_scored['direction'] == 'SELL').sum()}",
@@ -1715,7 +1923,50 @@ def register_alpha_callbacks(app) -> None:
             ]),
         ])
         
-        return table, status, summary
+        # Create risk contribution chart if available
+        risk_chart = html.Div()
+        if 'risk_contribution' in df_scored.columns and 'weight' in df_scored.columns:
+            # Create side-by-side bar charts: Weights vs Risk Contributions
+            fig = go.Figure()
+            
+            # Sort by weight for better visualization
+            df_chart = df_scored.nlargest(15, 'weight')[['ID', 'weight', 'risk_contribution']].copy()
+            
+            fig.add_trace(go.Bar(
+                x=df_chart['ID'],
+                y=df_chart['weight'] * 100,
+                name='Weight (%)',
+                marker_color=THEME['accent'],
+                yaxis='y',
+            ))
+            
+            fig.add_trace(go.Bar(
+                x=df_chart['ID'],
+                y=df_chart['risk_contribution'] * 100,
+                name='Risk Contribution (%)',
+                marker_color=THEME['success'],
+                yaxis='y',
+            ))
+            
+            fig.update_layout(
+                title={
+                    'text': 'Portfolio Allocation: Weights vs Risk Contributions',
+                    'font': {'size': 14, 'color': THEME['text_main']},
+                },
+                xaxis={'title': 'Trade ID', 'tickangle': -45, 'color': THEME['text_main']},
+                yaxis={'title': 'Percentage (%)', 'color': THEME['text_main']},
+                barmode='group',
+                template='plotly_dark',
+                paper_bgcolor=THEME['bg_card'],
+                plot_bgcolor=THEME['bg_card'],
+                height=400,
+                margin={'l': 60, 'r': 20, 't': 50, 'b': 100},
+                legend={'orientation': 'h', 'y': 1.1, 'x': 0.5, 'xanchor': 'center'},
+            )
+            
+            risk_chart = dcc.Graph(figure=fig, config={'displayModeBar': False})
+        
+        return table, risk_chart, status, summary
 
     # -------------------------------------------------------------------------
     # BACKTEST: Mode Tab Selector

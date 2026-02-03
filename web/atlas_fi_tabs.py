@@ -399,7 +399,7 @@ def register_callbacks(app) -> None:
                     from pairs.main import main as pairs_main
 
                     # Try to find Dashboard.xlsm for configuration
-                    project_root = Path(__file__).resolve().parents[1]
+                    project_root = Path(__file__).resolve().parents[2]
                     dashboard_path = project_root / "Dashboard.xlsm"
                     if dashboard_path.exists():
                         pairs_main(excel_mode=False, excel_path=str(dashboard_path))
