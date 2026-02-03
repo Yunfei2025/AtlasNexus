@@ -1743,11 +1743,10 @@ def register_alpha_callbacks(app) -> None:
          State('alpha-total-capital', 'value'),
          State('alpha-max-dv01', 'value'),
          State('alpha-alloc-method', 'value'),
-         State('alpha-enforce-corr', 'value'),
-         State('alpha-max-corr', 'value')],
+         State('alpha-enforce-corr', 'value')],
         prevent_initial_call=True
     )
-    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, max_dv01, alloc_method, enforce_corr, max_corr):
+    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, max_dv01, alloc_method, enforce_corr):
         
         if not n_clicks:
             return html.Div(), html.Div(), "", html.Div()
@@ -1760,213 +1759,231 @@ def register_alpha_callbacks(app) -> None:
                 html.Div()
             )
         
-        print(f"[DEBUG] run_scoring: received {len(candidates)} candidates")
-        print(f"[DEBUG] total_capital={total_capital}, max_dv01={max_dv01}, alloc_method={alloc_method}")
-        
-        df = pd.DataFrame(candidates)
-        print(f"[DEBUG] df columns: {df.columns.tolist()}")
-        
-        # Handle None values with defaults
-        mom_window = int(mom_window) if mom_window is not None else 20
-        mom_k = float(mom_k) if mom_k is not None else 1.0
-        total_capital = float(total_capital) if total_capital is not None else 10000.0  # Default 10B
-        max_dv01 = float(max_dv01) if max_dv01 is not None else 5000000.0  # Default 5M
-        
-        # Compute unified weightless scores
-        df_scored = compute_unified_edge_vol_score(
-            df, 
-            mom_window=mom_window, 
-            mom_k=mom_k
-        )
+        try:
+            print(f"[DEBUG] run_scoring: received {len(candidates)} candidates")
+            print(f"[DEBUG] total_capital={total_capital}, max_dv01={max_dv01}, alloc_method={alloc_method}")
+            
+            df = pd.DataFrame(candidates)
+            print(f"[DEBUG] df columns: {df.columns.tolist()}")
+            
+            # Handle None values with defaults
+            mom_window = int(mom_window) if mom_window is not None else 20
+            mom_k = float(mom_k) if mom_k is not None else 1.0
+            total_capital = float(total_capital) if total_capital is not None else 10000.0  # Default 10B
+            max_dv01 = float(max_dv01) if max_dv01 is not None else 5000000.0  # Default 5M
+            
+            # Compute unified weightless scores
+            df_scored = compute_unified_edge_vol_score(
+                df, 
+                mom_window=mom_window, 
+                mom_k=mom_k
+            )
 
-        df_scored = df_scored.sort_values('composite_score', ascending=False)
-        
-        # Allocation
-        n_trades = len(df_scored)
-        if n_trades == 0:
-            return (
-                html.Div("No candidates after filtering.", style={'color': THEME['warning']}),
-                html.Div(),
-                "",
-                html.Div()
+            df_scored = df_scored.sort_values('composite_score', ascending=False)
+            
+            # Allocation
+            n_trades = len(df_scored)
+            if n_trades == 0:
+                return (
+                    html.Div("No candidates after filtering.", style={'color': THEME['warning']}),
+                    html.Div(),
+                    "",
+                    html.Div()
+                )
+            
+            # Determine allocation method
+            alloc_method = alloc_method or 'risk_parity'
+            print(f"[DEBUG] Using allocation method: {alloc_method}")
+            
+            if alloc_method == 'equal':
+                df_scored['weight'] = 1 / n_trades
+            elif alloc_method == 'score':
+                score_sum = df_scored['composite_score'].sum()
+                df_scored['weight'] = df_scored['composite_score'] / score_sum if score_sum > 0 else 1 / n_trades
+            elif alloc_method == 'inv_vol':
+                if 'vol' in df_scored.columns:
+                    inv_vol = 1 / df_scored['vol'].replace(0, np.nan).fillna(df_scored['vol'].mean())
+                    df_scored['weight'] = inv_vol / inv_vol.sum()
+                else:
+                    df_scored['weight'] = 1 / n_trades
+            else:  # risk_parity (default)
+                try:
+                    weights_dict, risk_contrib = _compute_risk_parity_weights(df_scored)
+                    df_scored['weight'] = df_scored['ID'].map(weights_dict).fillna(0)
+                    df_scored['risk_contribution'] = df_scored['ID'].map(dict(zip(df_scored['ID'], risk_contrib))).fillna(0)
+                except Exception as e:
+                    print(f"⚠ Risk parity optimization failed: {e}, falling back to equal weights")
+                    df_scored['weight'] = 1 / n_trades
+                    df_scored['risk_contribution'] = 1 / n_trades
+            
+            # Normalize weights to sum to 1
+            weight_sum = df_scored['weight'].sum()
+            if weight_sum > 0 and weight_sum != 1.0:
+                df_scored['weight'] = df_scored['weight'] / weight_sum
+            
+            # Calculate notional
+            df_scored['notional_mm'] = df_scored['weight'] * total_capital
+            
+            # Calculate suggested DV01 based on notional and typical bond duration
+            # Assume average duration ~ 5 years for bond spreads
+            avg_duration = 5.0
+            df_scored['suggested_dv01'] = (df_scored['notional_mm'] * 1e6 * avg_duration * 0.0001).clip(upper=max_dv01)
+            
+            # Select display columns
+            display_cols = [
+                'ID', 'spread_type', 'style', 'direction',
+                'Zscore', 'carry_roll', 'vol',
+                'momentum_per_day', 'expected_move_per_day',
+                'edge', 'risk', 'composite_score',
+                'zscore_score', 'mr_score',
+                'weight', 'risk_contribution', 'notional_mm', 'suggested_dv01',
+            ]
+            available_cols = [c for c in display_cols if c in df_scored.columns]
+            
+            df_display = df_scored[available_cols].copy()
+            
+            # Round numeric columns
+            for col in df_display.columns:
+                if df_display[col].dtype in ['float64', 'float32']:
+                    df_display[col] = df_display[col].round(2)
+            
+            # Build scored table
+            # Conditional styling only if direction column exists
+            conditional_style = []
+            if 'direction' in df_display.columns:
+                conditional_style = [
+                    {
+                        'if': {'filter_query': '{direction} = "BUY"'},
+                        'backgroundColor': 'rgba(0, 204, 150, 0.15)',
+                    },
+                    {
+                        'if': {'filter_query': '{direction} = "SELL"'},
+                        'backgroundColor': 'rgba(239, 85, 59, 0.15)',
+                    },
+                ]
+            
+            table = dash_table.DataTable(
+                id='alpha-scored-table',
+                columns=[{'name': c, 'id': c} for c in df_display.columns],
+                data=df_display.head(30).to_dict('records'),  # type: ignore[arg-type]
+                style_table={'overflowX': 'auto', 'maxHeight': '350px', 'overflowY': 'auto'},
+                style_header={
+                    'backgroundColor': THEME['table_header'],
+                    'color': THEME['text_main'],
+                    'fontWeight': 'bold',
+                    'textAlign': 'left',
+                },
+                style_cell={
+                    'backgroundColor': THEME['bg_card'],
+                    'color': THEME['text_main'],
+                    'textAlign': 'left',
+                    'padding': '8px',
+                    'fontSize': '12px',
+                },
+                style_data_conditional=conditional_style,  # type: ignore[arg-type]
+                sort_action='native',
+                page_size=15,
             )
-        
-        # Determine allocation method
-        alloc_method = alloc_method or 'risk_parity'
-        print(f"[DEBUG] Using allocation method: {alloc_method}")
-        
-        if alloc_method == 'equal':
-            df_scored['weight'] = 1 / n_trades
-        elif alloc_method == 'score':
-            score_sum = df_scored['composite_score'].sum()
-            df_scored['weight'] = df_scored['composite_score'] / score_sum if score_sum > 0 else 1 / n_trades
-        elif alloc_method == 'inv_vol':
-            if 'vol' in df_scored.columns:
-                inv_vol = 1 / df_scored['vol'].replace(0, np.nan).fillna(df_scored['vol'].mean())
-                df_scored['weight'] = inv_vol / inv_vol.sum()
-            else:
-                df_scored['weight'] = 1 / n_trades
-        else:  # risk_parity (default)
-            try:
-                weights_dict, risk_contrib = _compute_risk_parity_weights(df_scored)
-                df_scored['weight'] = df_scored['ID'].map(weights_dict).fillna(0)
-                df_scored['risk_contribution'] = df_scored['ID'].map(dict(zip(df_scored['ID'], risk_contrib))).fillna(0)
-            except Exception as e:
-                print(f"⚠ Risk parity optimization failed: {e}, falling back to equal weights")
-                df_scored['weight'] = 1 / n_trades
-                df_scored['risk_contribution'] = 1 / n_trades
-        
-        # Normalize weights to sum to 1
-        weight_sum = df_scored['weight'].sum()
-        if weight_sum > 0 and weight_sum != 1.0:
-            df_scored['weight'] = df_scored['weight'] / weight_sum
-        
-        # Calculate notional
-        df_scored['notional_mm'] = df_scored['weight'] * total_capital
-        
-        # Calculate suggested DV01 based on notional and typical bond duration
-        # Assume average duration ~ 5 years for bond spreads
-        avg_duration = 5.0
-        df_scored['suggested_dv01'] = (df_scored['notional_mm'] * 1e6 * avg_duration * 0.0001).clip(upper=max_dv01)
-        
-        # Select display columns
-        display_cols = [
-            'ID', 'spread_type', 'style', 'direction',
-            'Zscore', 'carry_roll', 'vol',
-            'momentum_per_day', 'expected_move_per_day',
-            'edge', 'risk', 'composite_score',
-            'zscore_score', 'mr_score',
-            'weight', 'risk_contribution', 'notional_mm', 'suggested_dv01',
-        ]
-        available_cols = [c for c in display_cols if c in df_scored.columns]
-        
-        df_display = df_scored[available_cols].copy()
-        
-        # Round numeric columns
-        for col in df_display.columns:
-            if df_display[col].dtype in ['float64', 'float32']:
-                df_display[col] = df_display[col].round(2)
-        
-        # Build scored table
-        table = dash_table.DataTable(
-            id='alpha-scored-table',
-            columns=[{'name': c, 'id': c} for c in df_display.columns],
-            data=df_display.head(30).to_dict('records'),  # type: ignore[arg-type]
-            style_table={'overflowX': 'auto', 'maxHeight': '350px', 'overflowY': 'auto'},
-            style_header={
-                'backgroundColor': THEME['table_header'],
-                'color': THEME['text_main'],
-                'fontWeight': 'bold',
-                'textAlign': 'left',
-            },
-            style_cell={
-                'backgroundColor': THEME['bg_card'],
-                'color': THEME['text_main'],
-                'textAlign': 'left',
-                'padding': '8px',
-                'fontSize': '12px',
-            },
-            style_data_conditional=[
-                {
-                    'if': {'filter_query': '{direction} = "BUY"'},
-                    'backgroundColor': 'rgba(0, 204, 150, 0.15)',
-                },
-                {
-                    'if': {'filter_query': '{direction} = "SELL"'},
-                    'backgroundColor': 'rgba(239, 85, 59, 0.15)',
-                },
-            ],  # type: ignore[arg-type]
-            sort_action='native',
-            page_size=15,
-        )
-        
-        status = f"Scored {len(df_scored)} trades at {datetime.now().strftime('%H:%M:%S')}"
-        
-        # Portfolio summary
-        summary = html.Div([
-            html.Div([
+            
+            status = f"Scored {len(df_scored)} trades at {datetime.now().strftime('%H:%M:%S')}"
+            
+            # Portfolio summary
+            summary = html.Div([
                 html.Div([
-                    html.Strong("Total Trades: ", style={'color': THEME['text_sub']}),
-                    html.Span(f"{len(df_scored)}", style={'color': THEME['text_main']}),
-                ], style={'marginRight': '30px'}),
+                    html.Div([
+                        html.Strong("Total Trades: ", style={'color': THEME['text_sub']}),
+                        html.Span(f"{len(df_scored)}", style={'color': THEME['text_main']}),
+                    ], style={'marginRight': '30px'}),
+                    html.Div([
+                        html.Strong("Capital Allocated: ", style={'color': THEME['text_sub']}),
+                        html.Span(f"{total_capital:.1f} MM", style={'color': THEME['text_main']}),
+                    ], style={'marginRight': '30px'}),
+                    html.Div([
+                        html.Strong("Avg Score: ", style={'color': THEME['text_sub']}),
+                        html.Span(f"{df_scored['composite_score'].mean():.1f}", style={'color': THEME['text_main']}),
+                    ], style={'marginRight': '30px'}),
+                    html.Div([
+                        html.Strong("Risk Parity: ", style={'color': THEME['text_sub']}),
+                        html.Span(
+                            f"σ(RC)={df_scored['risk_contribution'].std():.3f}" if 'risk_contribution' in df_scored.columns else "N/A",
+                            style={'color': THEME['text_main']}
+                        ),
+                    ], style={'marginRight': '30px'}),
+                    html.Div([
+                        html.Strong("BUY/SELL: ", style={'color': THEME['text_sub']}),
+                        html.Span(
+                            f"{(df_scored['direction'] == 'BUY').sum()} / {(df_scored['direction'] == 'SELL').sum()}" if 'direction' in df_scored.columns else "N/A",
+                            style={'color': THEME['text_main']}
+                        ),
+                    ]),
+                ], style={'display': 'flex', 'flexWrap': 'wrap', 'marginBottom': '15px'}),
+                
+                # Style breakdown
                 html.Div([
-                    html.Strong("Capital Allocated: ", style={'color': THEME['text_sub']}),
-                    html.Span(f"{total_capital:.1f} MM", style={'color': THEME['text_main']}),
-                ], style={'marginRight': '30px'}),
-                html.Div([
-                    html.Strong("Avg Score: ", style={'color': THEME['text_sub']}),
-                    html.Span(f"{df_scored['composite_score'].mean():.1f}", style={'color': THEME['text_main']}),
-                ], style={'marginRight': '30px'}),
-                html.Div([
-                    html.Strong("Risk Parity: ", style={'color': THEME['text_sub']}),
+                    html.Strong("By Style: ", style={'color': THEME['text_sub']}),
                     html.Span(
-                        f"σ(RC)={df_scored['risk_contribution'].std():.3f}" if 'risk_contribution' in df_scored.columns else "N/A",
-                        style={'color': THEME['text_main']}
-                    ),
-                ], style={'marginRight': '30px'}),
-                html.Div([
-                    html.Strong("BUY/SELL: ", style={'color': THEME['text_sub']}),
-                    html.Span(
-                        f"{(df_scored['direction'] == 'BUY').sum()} / {(df_scored['direction'] == 'SELL').sum()}",
-                        style={'color': THEME['text_main']}
-                    ),
+                        " | ".join([f"{style}: {count}" for style, count in df_scored.groupby('style').size().items()]),
+                        style={'color': THEME['text_main'], 'fontSize': '12px'}
+                    ) if 'style' in df_scored.columns else "",
                 ]),
-            ], style={'display': 'flex', 'flexWrap': 'wrap', 'marginBottom': '15px'}),
+            ])
             
-            # Style breakdown
-            html.Div([
-                html.Strong("By Style: ", style={'color': THEME['text_sub']}),
-                html.Span(
-                    " | ".join([f"{style}: {count}" for style, count in df_scored.groupby('style').size().items()]),
-                    style={'color': THEME['text_main'], 'fontSize': '12px'}
-                ) if 'style' in df_scored.columns else "",
-            ]),
-        ])
+            # Create risk contribution chart if available
+            risk_chart = html.Div()
+            if 'risk_contribution' in df_scored.columns and 'weight' in df_scored.columns:
+                # Create side-by-side bar charts: Weights vs Risk Contributions
+                fig = go.Figure()
+                
+                # Sort by weight for better visualization
+                df_chart = df_scored.nlargest(15, 'weight')[['ID', 'weight', 'risk_contribution']].copy()
+                
+                fig.add_trace(go.Bar(
+                    x=df_chart['ID'],
+                    y=df_chart['weight'] * 100,
+                    name='Weight (%)',
+                    marker_color=THEME['accent'],
+                    yaxis='y',
+                ))
+                
+                fig.add_trace(go.Bar(
+                    x=df_chart['ID'],
+                    y=df_chart['risk_contribution'] * 100,
+                    name='Risk Contribution (%)',
+                    marker_color=THEME['success'],
+                    yaxis='y',
+                ))
+                
+                fig.update_layout(
+                    title={
+                        'text': 'Portfolio Allocation: Weights vs Risk Contributions',
+                        'font': {'size': 14, 'color': THEME['text_main']},
+                    },
+                    xaxis={'title': 'Trade ID', 'tickangle': -45, 'color': THEME['text_main']},
+                    yaxis={'title': 'Percentage (%)', 'color': THEME['text_main']},
+                    barmode='group',
+                    template='plotly_dark',
+                    paper_bgcolor=THEME['bg_card'],
+                    plot_bgcolor=THEME['bg_card'],
+                    height=400,
+                    margin={'l': 60, 'r': 20, 't': 50, 'b': 100},
+                    legend={'orientation': 'h', 'y': 1.1, 'x': 0.5, 'xanchor': 'center'},
+                )
+                
+                risk_chart = dcc.Graph(figure=fig, config={'displayModeBar': False})
+            
+            return table, risk_chart, status, summary
         
-        # Create risk contribution chart if available
-        risk_chart = html.Div()
-        if 'risk_contribution' in df_scored.columns and 'weight' in df_scored.columns:
-            # Create side-by-side bar charts: Weights vs Risk Contributions
-            fig = go.Figure()
-            
-            # Sort by weight for better visualization
-            df_chart = df_scored.nlargest(15, 'weight')[['ID', 'weight', 'risk_contribution']].copy()
-            
-            fig.add_trace(go.Bar(
-                x=df_chart['ID'],
-                y=df_chart['weight'] * 100,
-                name='Weight (%)',
-                marker_color=THEME['accent'],
-                yaxis='y',
-            ))
-            
-            fig.add_trace(go.Bar(
-                x=df_chart['ID'],
-                y=df_chart['risk_contribution'] * 100,
-                name='Risk Contribution (%)',
-                marker_color=THEME['success'],
-                yaxis='y',
-            ))
-            
-            fig.update_layout(
-                title={
-                    'text': 'Portfolio Allocation: Weights vs Risk Contributions',
-                    'font': {'size': 14, 'color': THEME['text_main']},
-                },
-                xaxis={'title': 'Trade ID', 'tickangle': -45, 'color': THEME['text_main']},
-                yaxis={'title': 'Percentage (%)', 'color': THEME['text_main']},
-                barmode='group',
-                template='plotly_dark',
-                paper_bgcolor=THEME['bg_card'],
-                plot_bgcolor=THEME['bg_card'],
-                height=400,
-                margin={'l': 60, 'r': 20, 't': 50, 'b': 100},
-                legend={'orientation': 'h', 'y': 1.1, 'x': 0.5, 'xanchor': 'center'},
+        except Exception as e:
+            import traceback
+            error_msg = f"Error in portfolio optimization: {str(e)}"
+            print(f"[ERROR] {error_msg}")
+            print(traceback.format_exc())
+            return (
+                html.Div(error_msg, style={'color': THEME['warning'], 'padding': '10px'}),
+                html.Div(),
+                f"Error at {datetime.now().strftime('%H:%M:%S')}",
+                html.Div(f"Details: {str(e)[:100]}", style={'color': THEME['warning'], 'fontSize': '11px'})
             )
-            
-            risk_chart = dcc.Graph(figure=fig, config={'displayModeBar': False})
-        
-        return table, risk_chart, status, summary
 
     # -------------------------------------------------------------------------
     # BACKTEST: Mode Tab Selector
