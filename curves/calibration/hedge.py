@@ -32,13 +32,25 @@ class HedgeCalculator:
         self.col_map = BondConfig.get_column_mapping()
         self._jacobian_cache = None
     
-    @staticmethod
-    def get_ftp(bond_obj: pd.Series) -> float:
-        """Extract FTP from bond object with error handling."""
-        try:
-            return bond_obj.loc['估价收益率:%(中债)']
-        except KeyError:
-            return np.nan
+    def get_ftp(self, bond_obj: pd.Series, env: Optional[Dict] = None) -> float:
+        """Extract FTP from bond object, preferring previous-day FR007 from env['SwapTS']."""
+        # Try to use FR007.IR from previous trading day
+        if env and 'SwapTS' in env:
+            try:
+                ts = env['SwapTS']
+                if 'FR007.IR' in ts.columns and len(ts) > 0:
+                    # Use last available FR007 rate
+                    val = ts['FR007.IR'].iloc[-1]
+                    if not pd.isna(val):
+                        return float(val)
+            except Exception:
+                pass
+        
+        ## Fallback to CNBD FTP
+        #try:
+        #    return float(bond_obj.loc['估价收益率:%(中债)'])
+        #except KeyError:
+        #    return np.nan
     
     def _get_hedge_terms(self, curve) -> pd.Index:
         """Get hedge terms from curve reference with better error handling."""
@@ -135,7 +147,7 @@ class HedgeCalculator:
             stat_his[k].loc[bond, 'Roll(3m,bp)'] = roll_value
             
             # Calculate Carry
-            ftp = self.get_ftp(bond_obj)
+            ftp = self.get_ftp(bond_obj, env=env)
             coupon = env['Def'].loc[bond, '票面利率:%']
             carry_value = BASIS_POINTS * (coupon - ftp) / 4
             stat_his[k].loc[bond, 'Carry(3m,bp)'] = carry_value     
