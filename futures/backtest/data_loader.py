@@ -8,6 +8,7 @@ import os
 import re
 from datetime import datetime
 import functools
+from settings.paths import DIR_DATA, DIR_INPUT
 
 # Try importing WindPy
 try:
@@ -295,17 +296,13 @@ def get_local_file_path(symbol, timeframe):
         Absolute file path to the pkl file
     """
     try:
-        script_dir = os.path.dirname(__file__)
-        # project_root should be the parent folder of bin-v3.0 (one level above bin-v3.0)
-        project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
-        
         if timeframe == '1D':
             # Daily data: use futures-dailyK_con.pkl from input folder
-            return os.path.join(project_root, 'input', 'futures-dailyK_con.pkl')
+            return os.path.join(DIR_INPUT, 'futures-dailyK_con.pkl')
         else:
             # Intraday data: use symbol.pkl from database/futures folder
             file_name = symbol.split('.')[0]  # Remove extension if any
-            return os.path.join(project_root, 'database', 'futures', f'{file_name}.pkl')
+            return os.path.join(DIR_DATA, 'futures', f'{file_name}.pkl')
     except Exception as e:
         return None
 

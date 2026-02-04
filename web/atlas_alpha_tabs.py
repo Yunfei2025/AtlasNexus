@@ -567,8 +567,8 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     # Constraints: weights sum to 1
     constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
     
-    # Bounds: no short positions, max 50% in any single trade
-    bounds = [(0.0, 0.5) for _ in range(n)]
+    # Bounds: no short positions, max 30% in any single trade (reduced from 50% for better diversification)
+    bounds = [(0.0, 0.3) for _ in range(n)]
     
     # Initial guess: equal weight
     w0 = np.ones(n) / n
@@ -664,6 +664,87 @@ def compute_candidate_scores(
         weights['vol_adj'] * df['vol_score'] +
         weights['liquidity'] * df['liquidity_score']
     )
+    
+    return df
+
+
+def compute_scan_score(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute lightweight scan-time score for ranking and filtering.
+    
+    This is a fast preview score computed during candidate scanning without
+    loading historical time series. Portfolio allocation will recompute the
+    authoritative score with full parameters.
+    
+    Formula:
+    - MeanReversion: edge/risk = |spread - mean| / halflife / vol
+    - Carry/Trend: edge/risk = (carry_roll * direction_sign) / vol
+    - composite_score_preview = max(0, edge/risk)
+    
+    Returns:
+        DataFrame with added columns: edge_preview, composite_score_preview
+    """
+    df = df.copy()
+    
+    style = (
+        df['style'].astype(str).str.strip().str.lower()
+        if 'style' in df.columns
+        else pd.Series('', index=df.index, dtype=str)
+    )
+    is_mr = style.eq('meanreversion')
+    
+    spread = (
+        pd.to_numeric(df['spread'], errors='coerce')
+        if 'spread' in df.columns
+        else pd.Series(np.nan, index=df.index, dtype=float)
+    )
+    mean = (
+        pd.to_numeric(df['mean'], errors='coerce')
+        if 'mean' in df.columns
+        else pd.Series(np.nan, index=df.index, dtype=float)
+    )
+    halflife = (
+        pd.to_numeric(df['halflife'], errors='coerce')
+        if 'halflife' in df.columns
+        else pd.Series(np.nan, index=df.index, dtype=float)
+    )
+    carry = (
+        pd.to_numeric(df['carry_roll'], errors='coerce')
+        if 'carry_roll' in df.columns
+        else pd.Series(np.nan, index=df.index, dtype=float)
+    )
+    vol = (
+        pd.to_numeric(df['vol'], errors='coerce').abs()
+        if 'vol' in df.columns
+        else pd.Series(np.nan, index=df.index, dtype=float)
+    )
+    
+    # Robust risk fallback
+    risk = vol.replace(0, np.nan)
+    fallback_risk = float(risk.median(skipna=True)) if not risk.dropna().empty else 1.0
+    if not np.isfinite(fallback_risk) or fallback_risk <= 0:
+        fallback_risk = 1.0
+    risk = risk.fillna(fallback_risk)
+    
+    # MR: |spread - mean| / halflife
+    hl = halflife.replace(0, np.nan).abs()
+    expected_mr = (spread - mean).abs() / hl
+    
+    # Carry/Trend: carry_roll aligned to direction
+    direction = (
+        df['direction'].astype(str).str.strip().str.upper()
+        if 'direction' in df.columns
+        else pd.Series('', index=df.index, dtype=str)
+    )
+    dir_sign = pd.Series(1.0, index=df.index, dtype=float)
+    dir_sign.loc[direction.eq('SELL')] = -1.0
+    expected_tc = carry.fillna(0.0) * dir_sign
+    
+    # Combine
+    expected_move = expected_tc.where(~is_mr, expected_mr)
+    edge = expected_move.fillna(0.0)
+    
+    df['edge_preview'] = edge
+    df['composite_score_preview'] = (edge / risk).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)
     
     return df
 
@@ -1100,10 +1181,26 @@ def build_candidates_layout() -> html.Div:
         html.Div([
             html.Hr(style={'borderColor': THEME['text_sub'], 'margin': '20px 0'}),
             html.H6("📊 Diversified Trade Recommendation", style={'color': THEME['success'], 'marginBottom': '10px'}),
+            html.P(
+                "Select top N trades from the Lowest Correlation Pairs (from Correlation Check above).",
+                style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '10px'}
+            ),
+            html.Div([
+                html.Label("Number of trades (N):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
+                dcc.Input(
+                    id='alpha-diversified-n',
+                    type='number',
+                    value=10,
+                    min=1,
+                    max=50,
+                    step=1,
+                    style={'width': '80px', 'marginRight': '20px', 'padding': '5px', 'borderRadius': '4px'}
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
             html.Div(id='alpha-diversified-trades-display'),
             html.Div([
                 html.Button(
-                    "🔄 Replace Strategy Pool with 10 Recommended Trades",
+                    "🔄 Replace Strategy Pool with Selected Trades",
                     id='alpha-replace-pool-btn',
                     n_clicks=0,
                     style={
@@ -1124,6 +1221,9 @@ def build_candidates_layout() -> html.Div:
                 ),
             ]),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginTop': '15px'}),
+        
+        # Hidden stores for correlation data
+        dcc.Store(id='alpha-corr-pairs-store', data=[]),
         
     ], style={'padding': '10px'})
 
@@ -1304,9 +1404,14 @@ def register_alpha_callbacks(app) -> None:
             df_all = df_all.copy()
             df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) < 0 else 'SELL')
 
-        # Sort by score if present
+        # Compute lightweight scan-time preview score
+        df_all = compute_scan_score(df_all)
+
+        # Sort by score if present (generator score takes priority, else use preview)
         if 'score' in df_all.columns:
             df_all = df_all.sort_values('score', ascending=False)
+        elif 'composite_score_preview' in df_all.columns:
+            df_all = df_all.sort_values('composite_score_preview', ascending=False)
         elif 'abs_zscore' in df_all.columns:
             df_all = df_all.sort_values('abs_zscore', ascending=False)
 
@@ -1314,7 +1419,7 @@ def register_alpha_callbacks(app) -> None:
         display_cols = [
             'ID', 'spread_type', 'category', 'style', 'direction',
             'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'stationary',
-            'score', 'selected_lowcorr'
+            'composite_score_preview', 'score', 'selected_lowcorr'
         ]
         df_display = df_all.copy()
         if 'ID' not in df_display.columns and df_display.index.name == 'ID':
@@ -1322,7 +1427,7 @@ def register_alpha_callbacks(app) -> None:
         available_cols = [c for c in display_cols if c in df_display.columns]
         df_display = df_display[available_cols].copy()
 
-        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score']:
+        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score', 'composite_score_preview']:
             if col in df_display.columns:
                 df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(3)
 
@@ -1479,26 +1584,34 @@ def register_alpha_callbacks(app) -> None:
         # Build diversified trades display (shows recommended low-correlation trades)
         diversified_display = html.Div()
         if isinstance(df_low, pd.DataFrame) and not df_low.empty:
+            # Add direction column to df_low if not present
+            df_low_enriched = df_low.copy()
+            if 'direction' not in df_low_enriched.columns and 'Zscore' in df_low_enriched.columns:
+                df_low_enriched['direction'] = df_low_enriched['Zscore'].apply(lambda z: 'BUY' if float(z) < 0 else 'SELL')
+            
             # Store recommended trades in global variable for "Replace Pool" button
-            DIVERSIFIED_TRADE_RECOMMENDATIONS['trades'] = df_low.to_dict('records')
+            DIVERSIFIED_TRADE_RECOMMENDATIONS['trades'] = df_low_enriched.to_dict('records')
             DIVERSIFIED_TRADE_RECOMMENDATIONS['timestamp'] = datetime.now()
             
             trade_items = []
-            for idx, row in df_low.iterrows():
+            for idx, row in df_low_enriched.iterrows():
                 trade_id = row.get('ID', idx)
                 spread_type = row.get('spread_type', 'N/A')
                 style = row.get('style', 'N/A')
                 zscore = row.get('Zscore', 0)
+                direction = row.get('direction', 'N/A')
+                dir_color = THEME['success'] if direction == 'BUY' else THEME['danger']
                 trade_items.append(
-                    html.Div(
-                        f"• {trade_id} ({spread_type} - {style}) | Z={zscore:.2f}",
-                        style={'fontSize': '11px', 'color': THEME['text_main'], 'padding': '2px 0'}
-                    )
+                    html.Div([
+                        html.Span(f"• {trade_id} ({spread_type} - {style}) ", style={'color': THEME['text_main']}),
+                        html.Span(f"{direction}", style={'color': dir_color, 'fontWeight': 'bold'}),
+                        html.Span(f" | Z={zscore:.2f}", style={'color': THEME['text_main']}),
+                    ], style={'fontSize': '11px', 'padding': '2px 0'})
                 )
             
             diversified_display = html.Div([
                 html.Div(
-                    f"✓ {len(df_low)} low-correlation trades recommended for diversification",
+                    f"✓ {len(df_low_enriched)} low-correlation trades recommended for diversification",
                     style={'color': THEME['success'], 'fontWeight': 'bold', 'marginBottom': '8px', 'fontSize': '12px'}
                 ),
                 html.Div(trade_items, style={'maxHeight': '150px', 'overflowY': 'auto', 'backgroundColor': THEME['bg_input'], 'padding': '8px', 'borderRadius': '4px'})
@@ -1519,77 +1632,203 @@ def register_alpha_callbacks(app) -> None:
     # -------------------------------------------------------------------------
     @app.callback(
         [Output('alpha-replace-pool-status', 'children'),
-         Output('alpha-selected-candidates', 'data', allow_duplicate=True)],
+         Output('alpha-selected-candidates', 'data', allow_duplicate=True),
+         Output('alpha-diversified-trades-display', 'children', allow_duplicate=True)],
         Input('alpha-replace-pool-btn', 'n_clicks'),
+        [State('alpha-corr-pairs-store', 'data'),
+         State('alpha-diversified-n', 'value'),
+         State('alpha-selected-candidates', 'data')],
         prevent_initial_call=True
     )
-    def replace_strategy_pool(n_clicks):
-        """Replace the strategy pool with recommended diversified trades."""
+    def replace_strategy_pool(n_clicks, corr_pairs_data, n_trades, all_candidates):
+        """Replace the strategy pool with top N trades from lowest correlation pairs."""
         if not n_clicks or n_clicks == 0:
-            return "", []
+            return "", [], html.Div()
         
-        # Get trades from global variable (set by scan)
-        recommended_trades = DIVERSIFIED_TRADE_RECOMMENDATIONS.get('trades', [])
+        # Validate inputs
+        if not corr_pairs_data or len(corr_pairs_data) == 0:
+            return "⚠ No correlation pairs available. Please run 'Check Correlation' first.", [], html.Div(
+                "Run 'Check Correlation' to generate low-correlation pairs.",
+                style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'}
+            )
         
-        if not recommended_trades:
-            return "⚠ No recommended trades available. Please run scan first.", []
+        if not all_candidates or len(all_candidates) == 0:
+            return "⚠ No candidates available. Please run scan first.", [], html.Div(
+                "Run scan to generate candidates.",
+                style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'}
+            )
         
         try:
+            # Get top N pairs
+            n = int(n_trades) if n_trades else 10
+            top_pairs = corr_pairs_data[:n]
+            
+            # Extract asset names from pairs
+            selected_asset_names = set()
+            for pair in top_pairs:
+                selected_asset_names.add(pair.get('Asset A', ''))
+                selected_asset_names.add(pair.get('Asset B', ''))
+            
+            # Debug output
+            print(f"[DEBUG] Top {n} correlation pairs:")
+            print(f"[DEBUG] Selected asset names from pairs: {selected_asset_names}")
+            
+            # Match with candidates using ID
+            df_candidates = pd.DataFrame(all_candidates)
+            if 'ID' not in df_candidates.columns:
+                return "⚠ Candidate data missing ID column.", [], html.Div()
+            
+            # Debug output
+            print(f"[DEBUG] Candidate IDs available: {set(df_candidates['ID'].tolist())}")
+            
+            # Filter candidates that are in the selected low-correlation pairs
+            selected_trades = []
+            for _, row in df_candidates.iterrows():
+                trade_id = row.get('ID', '')
+                if trade_id in selected_asset_names:
+                    trade_dict = row.to_dict()
+                    # Ensure direction column exists
+                    if 'direction' not in trade_dict and 'Zscore' in trade_dict:
+                        zscore = float(trade_dict['Zscore'])
+                        trade_dict['direction'] = 'BUY' if zscore < 0 else 'SELL'
+                    selected_trades.append(trade_dict)
+            
+            print(f"[DEBUG] Matched {len(selected_trades)} trades")
+            
+            if len(selected_trades) == 0:
+                return "⚠ No matching trades found in candidates.", [], html.Div(
+                    "Could not match correlation pairs to scanned candidates.",
+                    style={'color': THEME['warning'], 'fontSize': '11px'}
+                )
+            
             # Count trades by type for status message
             type_counts = {}
-            for trade in recommended_trades:
+            for trade in selected_trades:
                 t_type = trade.get('spread_type', 'Other')
                 type_counts[t_type] = type_counts.get(t_type, 0) + 1
             
             type_summary = ", ".join([f"{count} {t}" for t, count in type_counts.items()])
-            status_msg = f"✓ Replaced strategy pool with {len(recommended_trades)} trades ({type_summary}). Switch to Portfolio tab to allocate capital."
+            status_msg = f"✓ Replaced strategy pool with {len(selected_trades)} trades ({type_summary}). Switch to Portfolio tab to allocate capital."
             
-            return status_msg, recommended_trades
+            # Build display
+            trade_items = []
+            for trade in selected_trades:
+                trade_id = trade.get('ID', 'N/A')
+                spread_type = trade.get('spread_type', 'N/A')
+                style = trade.get('style', 'N/A')
+                zscore = trade.get('Zscore', 0)
+                direction = trade.get('direction', 'N/A')
+                dir_color = THEME['success'] if direction == 'BUY' else THEME['danger']
+                trade_items.append(
+                    html.Div([
+                        html.Span(f"• {trade_id} ({spread_type} - {style}) ", style={'color': THEME['text_main']}),
+                        html.Span(f"{direction}", style={'color': dir_color, 'fontWeight': 'bold'}),
+                        html.Span(f" | Z={zscore:.2f}", style={'color': THEME['text_main']}),
+                    ], style={'fontSize': '11px', 'padding': '2px 0'})
+                )
+            
+            diversified_display = html.Div([
+                html.Div(
+                    f"✓ {len(selected_trades)} low-correlation trades selected from correlation analysis",
+                    style={'color': THEME['success'], 'fontWeight': 'bold', 'marginBottom': '8px', 'fontSize': '12px'}
+                ),
+                html.Div(trade_items, style={'maxHeight': '150px', 'overflowY': 'auto', 'backgroundColor': THEME['bg_input'], 'padding': '8px', 'borderRadius': '4px'})
+            ])
+            
+            return status_msg, selected_trades, diversified_display
             
         except Exception as e:
             print(f"Error replacing strategy pool: {e}")
-            return f"❌ Error: {str(e)[:50]}", []
+            import traceback
+            traceback.print_exc()
+            return f"❌ Error: {str(e)[:50]}", [], html.Div()
     
     # -------------------------------------------------------------------------
     # CANDIDATES: Correlation Check
     # -------------------------------------------------------------------------
     @app.callback(
-        Output('alpha-corr-results', 'children'),
+        [Output('alpha-corr-results', 'children'),
+         Output('alpha-corr-pairs-store', 'data')],
         Input('alpha-corr-btn', 'n_clicks'),
         [State('alpha-spread-categories', 'value'),
          State('alpha-corr-lookback', 'value'),
-         State('alpha-max-corr', 'value')],
+         State('alpha-max-corr', 'value'),
+         State('alpha-selected-candidates', 'data')],
         prevent_initial_call=True
     )
-    def check_correlation(n_clicks, categories, lookback, max_corr):
+    def check_correlation(n_clicks, categories, lookback, max_corr, all_candidates):
         if not n_clicks or not categories:
-            return html.Div("Select categories and click Check Correlation.", style={'color': THEME['text_sub']})
+            return html.Div("Select categories and click Check Correlation.", style={'color': THEME['text_sub']}), []
         
-        # Gather spread types
-        spread_types = []
-        for cat in categories:
-            if cat in SPREAD_CATEGORIES:
-                spread_types.extend(SPREAD_CATEGORIES[cat]['types'])
+        # If we have scanned candidates, use those for correlation analysis
+        if all_candidates and len(all_candidates) > 0:
+            df_candidates = pd.DataFrame(all_candidates)
+            if 'ID' in df_candidates.columns and 'spread_type' in df_candidates.columns:
+                print(f"[DEBUG] Using {len(df_candidates)} scanned candidates for correlation analysis")
+                
+                # Load time series for each candidate
+                all_spreads = {}
+                for _, row in df_candidates.iterrows():
+                    trade_id = row.get('ID', '')
+                    spread_type = row.get('spread_type', '')
+                    if not trade_id or not spread_type:
+                        continue
+                    
+                    ts = load_spread_timeseries(spread_type)
+                    if ts is not None and isinstance(ts, pd.DataFrame) and trade_id in ts.columns:
+                        all_spreads[trade_id] = ts[trade_id]
+                
+                print(f"[DEBUG] Loaded time series for {len(all_spreads)} candidates")
+                
+                if len(all_spreads) >= 2:
+                    df_spreads = pd.DataFrame(all_spreads).tail(lookback)
+                    df_changes = df_spreads.diff().dropna()
+                    
+                    if len(df_changes) >= 20:
+                        corr_matrix = df_changes.corr()
+                    else:
+                        corr_matrix = None
+                else:
+                    corr_matrix = None
+                
+                if corr_matrix is not None and not corr_matrix.empty:
+                    # Use candidate-based correlation
+                    print(f"[DEBUG] Built correlation matrix from candidates: {corr_matrix.shape}")
+                else:
+                    # Fall back to category-based
+                    print(f"[DEBUG] Insufficient candidate data, falling back to category analysis")
+                    corr_matrix = None
+            else:
+                corr_matrix = None
+        else:
+            corr_matrix = None
         
-        if len(spread_types) == 0:
-            return html.Div("No spread types selected.", style={'color': THEME['warning']})
-        
-        # First try to load pre-computed correlation from Alpha-candidates.pkl
-        dir_input = _get_input_dir()
-        candidates_data = _load_pickle_safe(dir_input / 'Alpha-candidates.pkl')
-        
-        corr_matrix = None
-        if candidates_data and isinstance(candidates_data, dict):
-            corr_matrix = candidates_data.get('corr')
-            print(f"[DEBUG] Loaded correlation from Alpha-candidates.pkl: {type(corr_matrix)}, shape: {corr_matrix.shape if isinstance(corr_matrix, pd.DataFrame) else 'N/A'}")
-        
-        # Fall back to computing correlation if not available
-        if corr_matrix is None or not isinstance(corr_matrix, pd.DataFrame) or corr_matrix.empty:
-            print(f"[DEBUG] Computing correlation for spread_types: {spread_types}")
-            corr_matrix, _ = compute_spread_correlation(spread_types, lookback_days=lookback)
+        # Fall back to category-based correlation if no candidates available
+        if corr_matrix is None:
+            # Gather spread types
+            spread_types = []
+            for cat in categories:
+                if cat in SPREAD_CATEGORIES:
+                    spread_types.extend(SPREAD_CATEGORIES[cat]['types'])
+            
+            if len(spread_types) == 0:
+                return html.Div("No spread types selected.", style={'color': THEME['warning']}), []
+            
+            # First try to load pre-computed correlation from Alpha-candidates.pkl
+            dir_input = _get_input_dir()
+            candidates_data = _load_pickle_safe(dir_input / 'Alpha-candidates.pkl')
+            
+            if candidates_data and isinstance(candidates_data, dict):
+                corr_matrix = candidates_data.get('corr')
+                print(f"[DEBUG] Loaded correlation from Alpha-candidates.pkl: {type(corr_matrix)}, shape: {corr_matrix.shape if isinstance(corr_matrix, pd.DataFrame) else 'N/A'}")
+            
+            # Fall back to computing correlation if not available
+            if corr_matrix is None or not isinstance(corr_matrix, pd.DataFrame) or corr_matrix.empty:
+                print(f"[DEBUG] Computing correlation for spread_types: {spread_types}")
+                corr_matrix, _ = compute_spread_correlation(spread_types, lookback_days=lookback)
         
         if corr_matrix is None or corr_matrix.empty:
-            return html.Div("Insufficient data for correlation analysis. Need at least 2 instruments with historical data.", style={'color': THEME['warning']})
+            return html.Div("Insufficient data for correlation analysis. Need at least 2 instruments with historical data.", style={'color': THEME['warning']}), []
         
         # Rank low correlation pairs
         low_corr_pairs = rank_low_correlation_pairs(corr_matrix, top_n=15)
@@ -1671,12 +1910,15 @@ def register_alpha_callbacks(app) -> None:
                 )
             ])
         
+        # Store pairs data for later use
+        pairs_data = low_corr_pairs.to_dict('records') if isinstance(low_corr_pairs, pd.DataFrame) else []
+        
         return html.Div([
             heatmap_div,
             html.H6("Lowest Correlation Pairs", style={'color': THEME['text_main'], 'marginTop': '15px', 'marginBottom': '10px'}),
             pairs_table,
             warning_div,
-        ])
+        ]), pairs_data
     
     # -------------------------------------------------------------------------
     # PORTFOLIO: Display Current Strategy Pool
@@ -1781,11 +2023,17 @@ def register_alpha_callbacks(app) -> None:
 
             df_scored = df_scored.sort_values('composite_score', ascending=False)
             
+            # Filter out zero or near-zero score trades (negative expected edge)
+            min_score_threshold = 0.001
+            df_scored = df_scored[df_scored['composite_score'] > min_score_threshold].copy()
+            
+            print(f"[DEBUG] After filtering zero-score trades: {len(df_scored)} remaining (threshold={min_score_threshold})")
+            
             # Allocation
             n_trades = len(df_scored)
             if n_trades == 0:
                 return (
-                    html.Div("No candidates after filtering.", style={'color': THEME['warning']}),
+                    html.Div("No candidates with positive expected edge. All trades filtered out (score ≤ 0).", style={'color': THEME['warning']}),
                     html.Div(),
                     "",
                     html.Div()
