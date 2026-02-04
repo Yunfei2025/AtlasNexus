@@ -36,21 +36,11 @@ class HedgeCalculator:
         """Extract FTP from bond object, preferring previous-day FR007 from env['SwapTS']."""
         # Try to use FR007.IR from previous trading day
         if env and 'SwapTS' in env:
-            try:
-                ts = env['SwapTS']
-                if 'FR007.IR' in ts.columns and len(ts) > 0:
-                    # Use last available FR007 rate
-                    val = ts['FR007.IR'].iloc[-1]
-                    if not pd.isna(val):
-                        return float(val)
-            except Exception:
-                pass
-        
-        ## Fallback to CNBD FTP
-        #try:
-        #    return float(bond_obj.loc['估价收益率:%(中债)'])
-        #except KeyError:
-        #    return np.nan
+            # return bond_obj.loc['估价收益率:%(中债)']
+            return env['SwapRT'].loc['FR007.IR','成交收益率']
+        except KeyError:
+            return np.nan
+
     
     def _get_hedge_terms(self, curve) -> pd.Index:
         """Get hedge terms from curve reference with better error handling."""
