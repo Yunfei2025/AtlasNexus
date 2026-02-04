@@ -239,6 +239,7 @@ def build_pairs_layout():
 
     return html.Div(
         [
+            # Top Section: Configuration
             html.Div(
                 [
                     html.Div(
@@ -248,6 +249,55 @@ def build_pairs_layout():
                                 "Interactive spread analysis with confidence bands (in basis points)",
                                 style={"color": "#ffffff", "font-size": "14px", "margin": "10px 0"},
                             ),
+                            
+                            # Pairs configuration table
+                            html.Div([
+                                html.Table([
+                                    html.Thead(html.Tr([
+                                        html.Th("", style={"color": "#ffffff", "padding": "8px", "text-align": "left", "min-width": "50px"}),
+                                        html.Th("Pair 1", style={"color": "#ffffff", "padding": "8px", "text-align": "center", "min-width": "120px"}),
+                                        html.Th("Pair 2", style={"color": "#ffffff", "padding": "8px", "text-align": "center", "min-width": "120px"}),
+                                        html.Th("Pair 3", style={"color": "#ffffff", "padding": "8px", "text-align": "center", "min-width": "120px"}),
+                                        html.Th("Pair 4", style={"color": "#ffffff", "padding": "8px", "text-align": "center", "min-width": "120px"}),
+                                    ])),
+                                    html.Tbody([
+                                        html.Tr([
+                                            html.Td("Leg1", style={"color": "#ffffff", "padding": "8px", "font-weight": "bold"}),
+                                            html.Td(dcc.Input(id='pairs-leg1-1', value='250211.IB', type='text', 
+                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
+                                            html.Td(dcc.Input(id='pairs-leg1-2', value='250020.IB', type='text',
+                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
+                                            html.Td(dcc.Input(id='pairs-leg1-3', value='250215.IB', type='text',
+                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
+                                            html.Td(dcc.Input(id='pairs-leg1-4', value='2500006.IB', type='text',
+                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
+                                        ]),
+                                        html.Tr([
+                                            html.Td("Leg2", style={"color": "#ffffff", "padding": "8px", "font-weight": "bold"}),
+                                            html.Td(dcc.Input(id='pairs-leg2-1', value='240024.IB', type='text',
+                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
+                                            html.Td(dcc.Input(id='pairs-leg2-2', value='FR007S5Y.IR', type='text',
+                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
+                                            html.Td(dcc.Input(id='pairs-leg2-3', value='250018.IB', type='text',
+                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
+                                            html.Td(dcc.Input(id='pairs-leg2-4', value='210005.IB', type='text',
+                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
+                                        ]),
+                                    ])
+                                ], style={"width": "100%", "border-collapse": "collapse", "margin": "10px 0"}),
+                                
+                                html.Div([
+                                    html.Label("Days:", style={"color": "#ffffff", "margin-right": "10px", "font-weight": "bold"}),
+                                    dcc.Input(
+                                        id='pairs-days-input',
+                                        type='number',
+                                        value=90,
+                                        min=1,
+                                        style={"width": "80px", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"}
+                                    ),
+                                ], style={"margin": "10px 0", "display": "flex", "align-items": "center"}),
+                            ], style={"margin": "15px 0", "padding": "15px", "background": "#0f2847", "border-radius": "5px"}),
+                            
                             html.Div(
                                 [
                                     html.Button(
@@ -258,17 +308,18 @@ def build_pairs_layout():
                                             "background": "#007ACE",
                                             "color": "white",
                                             "border": "none",
-                                            "padding": "8px 16px",
+                                            "padding": "10px 20px",
                                             "border-radius": "4px",
                                             "cursor": "pointer",
                                             "font-size": "14px",
                                             "margin": "10px 0",
+                                            "font-weight": "bold",
                                         },
                                     ),
                                     html.Div(
                                         id="pairs-last-updated",
                                         children="Last updated: Loading...",
-                                        style={"color": "#ffffff", "font-size": "12px", "margin": "5px 0"},
+                                        style={"color": "#ffffff", "font-size": "12px", "margin": "10px 0"},
                                     ),
                                 ],
                                 style={"margin": "15px 0"},
@@ -277,8 +328,15 @@ def build_pairs_layout():
                         className="graph__title",
                     )
                 ],
-                className="one-fourth column histogram__container",
+                style={
+                    "background": app_color["graph_bg"],
+                    "border-radius": "8px",
+                    "padding": "20px",
+                    "margin-bottom": "20px",
+                },
             ),
+            
+            # Bottom Section: Real-time Pair Analysis Results
             html.Div(
                 [
                     html.Div(
@@ -315,7 +373,9 @@ def build_pairs_layout():
                     ),
                     html.Div(id="pairs-content-loader", style={"display": "none"}),
                 ],
-                className="three-fourths column futures__price__container",
+                style={
+                    "width": "100%",
+                },
             ),
         ]
     )

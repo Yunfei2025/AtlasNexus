@@ -293,6 +293,9 @@ def statistics(interval, data_rt_js, stype, inst, season):
         spread.loc[sell, 'color'] = 'red'
         spread['color'].fillna('grey', inplace=True)
 
+    # Sort by index (ticker code) for better readability
+    spread = spread.sort_index()
+    
     trace = getTraceStat(spread,stype)
     layout = layout_stat(yunit)
     figure = go.Figure(data=[trace], layout=layout)

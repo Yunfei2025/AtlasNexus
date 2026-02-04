@@ -35,9 +35,11 @@ class HedgeCalculator:
     def get_ftp(self, bond_obj: pd.Series, env: Optional[Dict] = None) -> float:
         """Extract FTP from bond object, preferring previous-day FR007 from env['SwapTS']."""
         # Try to use FR007.IR from previous trading day
-        if env and 'SwapTS' in env:
-            # return bond_obj.loc['估价收益率:%(中债)']
-            return env['SwapRT'].loc['FR007.IR','成交收益率']
+        try:
+            if env and 'SwapTS' in env:
+                # return bond_obj.loc['估价收益率:%(中债)']
+                return env['SwapRT'].loc['FR007.IR','成交收益率']
+            return np.nan
         except KeyError:
             return np.nan
 
