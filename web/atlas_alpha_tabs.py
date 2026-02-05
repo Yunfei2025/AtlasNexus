@@ -1243,22 +1243,22 @@ def build_portfolio_layout() -> html.Div:
                 dcc.Input(
                     id='alpha-total-capital',
                     type='number',
-                    value=10000,
+                    value=10,
                     min=1,
                     style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
                 ),
-                html.Span("Million CNY (10B)", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
+                html.Span("Billion CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
                 
                 html.Label("Max DV01 per Trade:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
                 dcc.Input(
                     id='alpha-max-dv01',
                     type='number',
-                    value=5000000,
-                    min=1000,
-                    step=1000,
+                    value=5,
+                    min=1,
+                    step=1,
                     style={'width': '120px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
                 ),
-                html.Span("CNY (5M)", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
+                html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
                 
                 html.Label("Method:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
                 html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '14px', 'fontWeight': 'bold'}),

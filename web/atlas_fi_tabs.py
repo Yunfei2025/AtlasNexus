@@ -27,7 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from dash import dcc, html, dash_table
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 
 
 def build_spreads_layout():
@@ -449,25 +449,71 @@ def register_callbacks(app) -> None:
     @app.callback(
         [Output("pairs-plots-container", "children"), Output("pairs-last-updated", "children")],
         [Input("pairs-content-loader", "children"), Input("pairs-refresh-btn", "n_clicks")],
+        [State("pairs-leg1-1", "value"), State("pairs-leg2-1", "value"),
+         State("pairs-leg1-2", "value"), State("pairs-leg2-2", "value"),
+         State("pairs-leg1-3", "value"), State("pairs-leg2-3", "value"),
+         State("pairs-leg1-4", "value"), State("pairs-leg2-4", "value"),
+         State("pairs-days-input", "value")],
     )
-    def _load_pairs_content(_, n_clicks):
-        # Optional: re-run pairs analysis when refresh clicked
+    def _load_pairs_content(_, n_clicks, leg1_1, leg2_1, leg1_2, leg2_2, leg1_3, leg2_3, leg1_4, leg2_4, window_days):
+        # Re-run pairs analysis using input parameters when refresh clicked
         if callback_context.triggered:
             trigger_id = callback_context.triggered[0]["prop_id"]
             if "pairs-refresh-btn" in trigger_id and n_clicks and n_clicks > 0:
                 try:
-                    from pairs.main import main as pairs_main
-
-                    # Try to find Dashboard.xlsm for configuration
-                    project_root = Path(__file__).resolve().parents[2]
-                    dashboard_path = project_root / "Dashboard.xlsm"
-                    if dashboard_path.exists():
-                        pairs_main(excel_mode=False, excel_path=str(dashboard_path))
-                    else:
-                        pairs_main(excel_mode=False, excel_path=None)
+                    from pairs.manager import PairManager
+                    from pairs.dashboard import Dashboard
+                    
+                    # Validate window_days
+                    if not window_days or window_days < 1:
+                        window_days = 90
+                    
+                    # Create PairManager and add pairs based on user inputs
+                    manager = PairManager()
+                    
+                    # Add pairs if both legs are provided
+                    pairs_config = [
+                        ("Pair 1", leg1_1, leg2_1),
+                        ("Pair 2", leg1_2, leg2_2),
+                        ("Pair 3", leg1_3, leg2_3),
+                        ("Pair 4", leg1_4, leg2_4),
+                    ]
+                    
+                    for name, leg1, leg2 in pairs_config:
+                        if leg1 and leg2 and leg1.strip() and leg2.strip():
+                            manager.add_pair(name, leg1.strip(), leg2.strip(), window=int(window_days))
+                    
+                    if len(manager) == 0:
+                        raise ValueError("No valid pairs configured. Please provide at least one pair.")
+                    
+                    # Prepare analysis for all pairs
+                    analyses = manager.prepare_analysis()
+                    
+                    # Generate dashboard HTML
+                    project_root = Path(__file__).resolve().parents[1]
+                    output_path = project_root / "pairs" / "regression_plots.html"
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    dashboard_gen = Dashboard()
+                    pairs_data = {}
+                    for pair_name, pair in manager.pairs.items():
+                        if pair_name in analyses:
+                            pairs_data[pair_name] = {
+                                'name': pair_name,
+                                'leg1': pair.leg1,
+                                'leg2': pair.leg2,
+                                'spread_df': analyses[pair_name]['spread_df'],
+                                'regression_result': analyses[pair_name]['regression_result']
+                            }
+                    
+                    dashboard_gen.create_unified_dashboard(pairs_data, str(output_path))
 
                     last_updated = f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 except Exception as e:
+                    import traceback
+                    error_msg = f"Error: {str(e)}"
+                    print(f"Pairs analysis error: {error_msg}")
+                    print(traceback.format_exc())
                     last_updated = f"Error: {str(e)[:120]} at {datetime.datetime.now().strftime('%H:%M:%S')}"
             else:
                 last_updated = f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
