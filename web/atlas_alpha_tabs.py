@@ -839,6 +839,15 @@ def compute_unified_edge_vol_score(
     risk = risk.fillna(fallback_risk)
 
     # ---------------------------------------------------------------------
+    # Carry per day (bp/day)
+    # ---------------------------------------------------------------------
+    # carry_roll is stored as a 3m carry+roll (bp) for the BUY side.
+    # Convert to per-day and flip sign for SELL where we have direction.
+    carry_days = 63.0  # ~3m trading days
+    carry_per_day = carry / carry_days
+    df['carry_per_day'] = carry_per_day
+
+    # ---------------------------------------------------------------------
     # Momentum per day (bp/day) for carry/trend trades
     # ---------------------------------------------------------------------
     # Prefer precomputed momentum if present, else compute from historical series.
@@ -887,21 +896,61 @@ def compute_unified_edge_vol_score(
     # ---------------------------------------------------------------------
     # Expected move per day
     # ---------------------------------------------------------------------
-    # MR: |spread - mean| / halflife
-    hl = halflife.replace(0, np.nan).abs()
-    expected_mr = (spread - mean).abs() / hl
-
-    # Carry/Trend: carry_roll + k * momentum_per_day, aligned to direction if available
-    tc_raw = carry.fillna(0.0) + (mom_k_f * momentum_per_day.fillna(0.0))
-
-    direction = (
+    # ---------------------------------------------------------------------
+    # Direction for scoring
+    # ---------------------------------------------------------------------
+    # For MR, direction comes from mean-reversion (z-score sign).
+    # For Carry/Trend, use momentum-implied direction when available.
+    direction_in = (
         df['direction'].astype(str).str.strip().str.upper()
         if 'direction' in df.columns
         else pd.Series('', index=df.index, dtype=str)
     )
+
+    # MR direction convention for spreads in this app:
+    #   z > 0 => BUY spread
+    #   z < 0 => SELL spread
+    # For MR rows we always derive this from Zscore to avoid carrying forward any stale/mismatched UI direction.
+    z = pd.to_numeric(df['Zscore'], errors='coerce') if 'Zscore' in df.columns else pd.Series(np.nan, index=df.index)
+    mr_dir = pd.Series('SELL', index=df.index, dtype=str)
+    mr_dir.loc[z.gt(0)] = 'BUY'
+
+    # TC direction: prefer momentum sign if available, else keep provided
+    tc_dir = direction_in.copy()
+    mom = momentum_per_day
+    tc_dir = tc_dir.where(~(tc_dir.eq('') & mom.gt(0)), 'BUY')
+    tc_dir = tc_dir.where(~(tc_dir.eq('') & mom.lt(0)), 'SELL')
+
+    direction_score = tc_dir.where(~is_mr, mr_dir)
+    df['direction_score'] = direction_score
+
     dir_sign = pd.Series(1.0, index=df.index, dtype=float)
-    dir_sign.loc[direction.eq('SELL')] = -1.0
-    expected_tc = tc_raw * dir_sign
+    dir_sign.loc[direction_score.eq('SELL')] = -1.0
+    df['dir_sign_score'] = dir_sign
+
+    # MR expected PnL per day (directional):
+    # Our trading convention uses direction derived from Zscore sign:
+    #   z > 0 => BUY action (buy leg1 / sell leg2)
+    #   z < 0 => SELL action (sell leg1 / buy leg2)
+    # In this setup the stored spread series is typically leg2-leg1, so BUY action corresponds
+    # to being short the stored spread. Therefore expected PnL per day from mean reversion is:
+    #   expected_pnl_mr ≈ dir_sign * (spread - mean) / halflife
+    # and carry_roll is a BUY-side PnL (3m, bp), so SELL flips its sign via dir_sign.
+    hl = halflife.replace(0, np.nan).abs()
+    mr_reversion_pnl_per_day = ((spread - mean) / hl).replace([np.inf, -np.inf], np.nan)
+    expected_mr = (dir_sign * mr_reversion_pnl_per_day).fillna(0.0) + (carry_per_day.fillna(0.0) * dir_sign)
+
+    # Carry/Trend: carry_per_day + k * momentum_per_day, aligned to scoring direction.
+    tc_raw = carry_per_day.fillna(0.0) + (mom_k_f * momentum_per_day.fillna(0.0))
+
+    # Trend confirmation: if momentum exists, require it to agree with direction.
+    # This avoids ranking trades where direction is not confirmed by recent move.
+    trend_confirm = pd.Series(1.0, index=df.index, dtype=float)
+    has_mom = momentum_per_day.notna() & (momentum_per_day.abs() > 0)
+    trend_confirm.loc[has_mom] = (momentum_per_day.loc[has_mom] * dir_sign.loc[has_mom] > 0).astype(float)
+    df['trend_confirm'] = trend_confirm
+
+    expected_tc = tc_raw * dir_sign * trend_confirm
 
     expected_move_per_day = expected_tc.where(~is_mr, expected_mr)
     df['expected_move_per_day'] = expected_move_per_day
@@ -1408,11 +1457,17 @@ def register_alpha_callbacks(app) -> None:
             )
 
         # Direction filter (applied after generator selection)
-        if 'Zscore' in df_all.columns:
+        # Mean-reversion convention for this app:
+        #   z > +thd => BUY spread
+        #   z < -thd => SELL spread
+        # Apply this filter only to MR rows (carry/trend direction is not derived from z-score).
+        if 'Zscore' in df_all.columns and 'style' in df_all.columns:
+            style_s = df_all['style'].astype(str).str.strip().str.lower()
+            is_mr_row = style_s.eq('meanreversion')
             if direction == 'buy':
-                df_all = df_all[df_all['Zscore'] <= -z_thd].copy()
+                df_all = df_all[(~is_mr_row) | (df_all['Zscore'] >= z_thd)].copy()
             elif direction == 'sell':
-                df_all = df_all[df_all['Zscore'] >= z_thd].copy()
+                df_all = df_all[(~is_mr_row) | (df_all['Zscore'] <= -z_thd)].copy()
 
         if df_all.empty:
             return (
@@ -1426,18 +1481,22 @@ def register_alpha_callbacks(app) -> None:
             )
 
         # Add direction label (only if not provided by generator)
+        # MR convention here: z>0 => BUY, z<0 => SELL.
         if 'direction' not in df_all.columns and 'Zscore' in df_all.columns:
             df_all = df_all.copy()
-            df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) < 0 else 'SELL')
+            df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) > 0 else 'SELL')
 
-        # Compute lightweight scan-time preview score
-        df_all = compute_scan_score(df_all)
+        # Ensure a single canonical ranking column.
+        # Prefer generator-provided unified `score`; fall back to UI preview if needed.
+        if 'score' not in df_all.columns:
+            df_all = compute_scan_score(df_all)
+            if 'composite_score_preview' in df_all.columns:
+                df_all = df_all.copy()
+                df_all['score'] = pd.to_numeric(df_all['composite_score_preview'], errors='coerce')
 
         # Sort by score if present (generator score takes priority, else use preview)
         if 'score' in df_all.columns:
             df_all = df_all.sort_values('score', ascending=False)
-        elif 'composite_score_preview' in df_all.columns:
-            df_all = df_all.sort_values('composite_score_preview', ascending=False)
         elif 'abs_zscore' in df_all.columns:
             df_all = df_all.sort_values('abs_zscore', ascending=False)
 
@@ -1445,7 +1504,7 @@ def register_alpha_callbacks(app) -> None:
         display_cols = [
             'ID', 'spread_type', 'category', 'style', 'direction',
             'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'stationary',
-            'composite_score_preview', 'score', 'selected_lowcorr'
+            'score', 'selected_lowcorr'
         ]
         df_display = df_all.copy()
         if 'ID' not in df_display.columns and df_display.index.name == 'ID':
@@ -1453,7 +1512,7 @@ def register_alpha_callbacks(app) -> None:
         available_cols = [c for c in display_cols if c in df_display.columns]
         df_display = df_display[available_cols].copy()
 
-        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score', 'composite_score_preview']:
+        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score']:
             if col in df_display.columns:
                 df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(3)
 

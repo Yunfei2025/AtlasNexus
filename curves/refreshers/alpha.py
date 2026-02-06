@@ -351,11 +351,11 @@ def _stationary_yes_mask(s: pd.Series) -> pd.Series:
 
 
 def _rank_score(df: pd.DataFrame, style: str) -> pd.Series:
-	"""Scoring for candidate ranking.
+	"""Deprecated: use unified edge/risk scoring.
 
-	- MeanReversion: abs(Zscore)
-	- Trend/Carry: abs(carry_roll)/vol if available, else abs(Zscore)
+	Kept for backward compatibility if other modules import it.
 	"""
+	# Fall back to previous behavior.
 	z_raw = df["Zscore"] if "Zscore" in df.columns else pd.Series(index=df.index, dtype=float)
 	z = pd.to_numeric(z_raw, errors="coerce")
 	abs_z = z.abs()
@@ -369,6 +369,130 @@ def _rank_score(df: pd.DataFrame, style: str) -> pd.Series:
 		if carry_risk.notna().any():
 			return carry_risk.fillna(-1e9)
 	return abs_z.fillna(-1e9)
+
+
+def _add_unified_score_preview(
+	df: pd.DataFrame,
+	*,
+	carry_days: float = 63.0,
+	mom_k: float = 1.0,
+) -> pd.DataFrame:
+	"""Add a unified scan-time score to df.
+
+	This is the fast, generator-side analogue of the UI/portfolio unified scorer:
+	- MR: expected_pnl_per_day ~= dir_sign * (spread-mean)/halflife + dir_sign * carry_per_day
+	- Carry/Trend: expected_pnl_per_day ~= dir_sign * (carry_per_day + k*mom_per_day) * trend_confirm
+	- score = max(0, expected_pnl_per_day / risk)
+
+	Notes:
+	- carry_roll is stored as 3m carry+roll (bp) for the BUY side.
+	- momentum is optional; if not available, score reduces to carry_per_day/risk.
+	"""
+	if df is None:
+		return df
+	if df.empty:
+		out = df.copy()
+		# Ensure downstream code can sort/filter reliably.
+		out["score"] = pd.Series(dtype=float)
+		if "direction" not in out.columns:
+			out["direction"] = pd.Series(dtype=str)
+		return out
+
+	out = df.copy()
+
+	style = (
+		out["style"].astype(str).str.strip().str.lower()
+		if "style" in out.columns
+		else pd.Series("", index=out.index, dtype=str)
+	)
+	is_mr = style.eq("meanreversion")
+
+	spread = pd.to_numeric(
+		out["spread"] if "spread" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	)
+	mean = pd.to_numeric(
+		out["mean"] if "mean" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	)
+	halflife = pd.to_numeric(
+		out["halflife"] if "halflife" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	)
+	carry_roll = pd.to_numeric(
+		out["carry_roll"] if "carry_roll" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	)
+	vol = pd.to_numeric(
+		out["vol"] if "vol" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	).abs()
+
+	# Robust risk fallback
+	risk = vol.replace(0, np.nan)
+	fallback_risk = float(risk.median(skipna=True)) if not risk.dropna().empty else 1.0
+	if not np.isfinite(fallback_risk) or fallback_risk <= 0:
+		fallback_risk = 1.0
+	risk = risk.fillna(fallback_risk)
+
+	# Carry per day
+	cd = float(carry_days) if carry_days else 63.0
+	if not np.isfinite(cd) or cd <= 0:
+		cd = 63.0
+	carry_per_day = carry_roll / cd
+	out["carry_per_day"] = carry_per_day
+
+	# Momentum per day (optional)
+	momentum_per_day = pd.Series(np.nan, index=out.index, dtype=float)
+	if "momentum_per_day" in out.columns:
+		momentum_per_day = pd.to_numeric(out["momentum_per_day"], errors="coerce")
+	elif "mom_per_day" in out.columns:
+		momentum_per_day = pd.to_numeric(out["mom_per_day"], errors="coerce")
+	out["momentum_per_day"] = momentum_per_day
+
+	# Direction conventions
+	# MR: z > 0 => BUY spread ; z < 0 => SELL spread
+	z = pd.to_numeric(
+		out["Zscore"] if "Zscore" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	)
+	mr_dir = pd.Series("SELL", index=out.index, dtype=str)
+	mr_dir.loc[z.gt(0)] = "BUY"
+
+	# Carry/Trend: pick direction that makes expected PnL positive
+	# (carry_roll is BUY-side expected PnL)
+	mu_tc = carry_per_day.fillna(0.0) + float(mom_k) * momentum_per_day.fillna(0.0)
+	tc_dir = pd.Series("BUY", index=out.index, dtype=str)
+	tc_dir.loc[mu_tc.lt(0)] = "SELL"
+
+	direction = tc_dir.where(~is_mr, mr_dir)
+	out["direction"] = direction
+
+	dir_sign = pd.Series(1.0, index=out.index, dtype=float)
+	dir_sign.loc[direction.eq("SELL")] = -1.0
+	out["dir_sign_score"] = dir_sign
+
+	# MR expected pnl/day
+	hl = halflife.replace(0, np.nan).abs()
+	mr_reversion_pnl_per_day = ((spread - mean) / hl).replace([np.inf, -np.inf], np.nan)
+	expected_mr = (dir_sign * mr_reversion_pnl_per_day).fillna(0.0) + (dir_sign * carry_per_day.fillna(0.0))
+
+	# Carry expected pnl/day with optional trend confirmation
+	has_mom = momentum_per_day.notna() & (momentum_per_day.abs() > 0)
+	trend_confirm = pd.Series(1.0, index=out.index, dtype=float)
+	trend_confirm.loc[has_mom] = (momentum_per_day.loc[has_mom] * dir_sign.loc[has_mom] > 0).astype(float)
+	out["trend_confirm"] = trend_confirm
+
+	expected_tc = mu_tc * dir_sign * trend_confirm
+
+	expected_move_per_day = expected_tc.where(~is_mr, expected_mr)
+	out["expected_move_per_day"] = expected_move_per_day
+	out["risk"] = risk
+
+	# Single canonical score
+	score = (expected_move_per_day / risk).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)
+	out["score"] = score
+	return out
 
 
 def load_historical_spread_series(
@@ -680,8 +804,8 @@ def build_alpha_candidates(
 		trend = trend[trend["abs_zscore"] >= z_thd].copy()
 
 	# Score + rank
-	mr["score"] = _rank_score(mr, "MeanReversion")
-	trend["score"] = _rank_score(trend, "Carry")
+	mr = _add_unified_score_preview(mr)
+	trend = _add_unified_score_preview(trend)
 
 	mr = mr.sort_values(["score"], ascending=False).head(int(max_per_style)).copy()
 	trend = trend.sort_values(["score"], ascending=False).head(int(max_per_style)).copy()
