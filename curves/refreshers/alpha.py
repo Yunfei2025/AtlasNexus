@@ -202,7 +202,7 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 	df_irs = irs_spdrt.get("spreads")
 	if isinstance(df_irs, pd.DataFrame) and not df_irs.empty:
 		df_irs = _normalize_index(df_irs)
-		# Filter out IDs ending with ".IR" as they are not used as candidates
+		# Exclude IDs ending with ".IR"
 		df_irs = df_irs[~df_irs.index.astype(str).str.endswith(".IR")].copy()
 		df_irs = _ensure_numeric(df_irs, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
 		if "Carry(3m,bp)" in df_irs.columns and "Roll(3m,bp)" in df_irs.columns:
@@ -432,7 +432,10 @@ def load_historical_spread_series(
 		df = obj.get("Spread")
 		if not isinstance(df, pd.DataFrame) or df.empty:
 			return {}
+		# Exclude ".IR" columns to align with candidates
+		df = df.loc[:, ~pd.Index(df.columns.astype(str)).str.endswith(".IR")].copy()
 		df = df.sort_index().tail(int(lookback_days))
+
 		for cid in candidates:
 			if cid in df.columns:
 				s = pd.to_numeric(df[cid], errors="coerce").dropna()
@@ -616,12 +619,25 @@ def build_alpha_candidates(
 	# Style mapping: treat Bond-Swap as Trend/Carry, Bond-Curve and Swap-Spread as MeanReversion
 	cat_to_style = {
 		"Bond-Curve": "MeanReversion",
-		"Swap-Spread": "MeanReversion",
+		#"Swap-Spread": "MeanReversion", # HANDLED DYNAMICALLY BELOW
 		"Bond-Swap": "Carry",
 		"Tenor-Spread": "MeanReversion",
 	}
 	if "style" not in df_all.columns:
-		df_all["style"] = df_all["category"].map(cat_to_style).fillna("Unknown")
+		df_all["style"] = df_all["category"].map(cat_to_style)
+		
+		# Dynamic style for Swap-Spread: MR if stationary, else Carry
+		mask_ss = df_all["category"] == "Swap-Spread"
+		if mask_ss.any():
+			# Initialize with Carry
+			df_all.loc[mask_ss, "style"] = "Carry"
+			# Upgrade stationary ones to MeanReversion
+			if "stationary" in df_all.columns:
+				stat_mask = mask_ss & _stationary_yes_mask(df_all["stationary"])
+				if stat_mask.any():
+					df_all.loc[stat_mask, "style"] = "MeanReversion"
+		
+		df_all["style"] = df_all["style"].fillna("Unknown")
 
 	# Extract ID from index
 	if df_all.index.name != "ID":
@@ -649,8 +665,19 @@ def build_alpha_candidates(
 	except Exception:
 		z_thd = 2.0
 
+	# Mean-reversion entries are governed by z-score threshold.
 	mr = mr[mr["abs_zscore"] >= z_thd].copy()
-	trend = trend[trend["abs_zscore"] >= z_thd].copy()
+
+	# Trend/Carry:
+	# - For Bond-Swap (and other non Swap-Spread carry), keep z-score threshold.
+	# - For Swap-Spread carry (non-stationary), do NOT gate by z-score; rank by carry_roll/vol.
+	if not trend.empty and "category" in trend.columns:
+		trend_ss = trend[trend["category"].astype(str).eq("Swap-Spread")].copy()
+		trend_other = trend[~trend["category"].astype(str).eq("Swap-Spread")].copy()
+		trend_other = trend_other[trend_other["abs_zscore"] >= z_thd].copy()
+		trend = pd.concat([trend_ss, trend_other], axis=0, ignore_index=True)
+	else:
+		trend = trend[trend["abs_zscore"] >= z_thd].copy()
 
 	# Score + rank
 	mr["score"] = _rank_score(mr, "MeanReversion")

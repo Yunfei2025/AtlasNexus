@@ -171,6 +171,9 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
 
         snap_df = get_alpha_spread_table(spread_type, dir_input=dir_input)
         if snap_df is not None and isinstance(snap_df, pd.DataFrame) and not snap_df.empty:
+            if spread_type == 'SwapSpread':
+                # Filter out .IR columns/indices if present
+                snap_df = snap_df[~snap_df.index.astype(str).str.endswith('.IR')].copy()
             return snap_df
     except Exception:
         pass
@@ -194,7 +197,11 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
         data = _load_pickle_safe(dir_input / 'IRS-pxspds.pkl')
         if data is None:
             return None
-        return data.get('StatInfo')
+        df = data.get('StatInfo')
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            df = df[~df.index.astype(str).str.endswith('.IR')].copy()
+            return df
+        return None
         
     elif spread_type == 'NetBasis':
         data = _load_pickle_safe(dir_input / 'futures-spds.pkl')
@@ -242,6 +249,10 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         if isinstance(timeseries_data, dict) and spread_type in timeseries_data:
             ts = timeseries_data[spread_type]
             if isinstance(ts, pd.DataFrame) and not ts.empty:
+                # SwapSpread: exclude instruments ending with '.IR'
+                if spread_type == 'SwapSpread':
+                    cols = pd.Index(ts.columns.astype(str))
+                    ts = ts.loc[:, ~cols.str.endswith('.IR')].copy()
                 print(f"[DEBUG] Loaded {spread_type} from Alpha-spreadsrt['_timeseries'], shape={ts.shape}")
                 return ts
     
@@ -293,6 +304,21 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                 result = nested['Spread']
                 print(f"[DEBUG] data['PCASpread']['Spread'] type: {type(result)}, shape: {result.shape if isinstance(result, pd.DataFrame) else 'N/A'}")
                 return result
+        return None
+
+    elif spread_type == 'SwapSpread':
+        filepath = dir_input / 'IRS-pxspds.pkl'
+        data = _load_pickle_safe(filepath)
+        if data is None:
+            print(f"[DEBUG] {filepath} returned None")
+            return None
+        if isinstance(data, dict) and 'Spread' in data:
+            df_spread = data.get('Spread')
+            if isinstance(df_spread, pd.DataFrame) and not df_spread.empty:
+                cols = pd.Index(df_spread.columns.astype(str))
+                df_spread = df_spread.loc[:, ~cols.str.endswith('.IR')].copy()
+                print(f"[DEBUG] Loaded SwapSpread from IRS-pxspds.pkl Spread, shape={df_spread.shape}")
+                return df_spread
         return None
     
     print(f"[DEBUG] Unsupported spread_type: {spread_type}")
