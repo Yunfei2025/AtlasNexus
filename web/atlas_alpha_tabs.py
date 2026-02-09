@@ -2794,25 +2794,25 @@ def build_individual_backtest_panel() -> html.Div:
                 html.Div([
                     html.Label("Entry Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25,
-                              style={'width': '80px', 'marginRight': '30px'}),
+                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
                 
                 html.Div([
                     html.Label("Exit Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25,
-                              style={'width': '80px', 'marginRight': '30px'}),
+                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
                 
                 html.Div([
                     html.Label("Stop Loss (σ):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5,
-                              style={'width': '80px', 'marginRight': '30px'}),
+                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
                 
                 html.Div([
                     html.Label("Max Holding (days):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-max-hold', type='number', value=60, min=5, max=252, step=5,
-                              style={'width': '80px'}),
+                              style={'width': '80px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px', 'marginBottom': '15px'}),
             
@@ -2855,31 +2855,31 @@ def build_individual_backtest_panel() -> html.Div:
                 html.Div([
                     html.Label("Theta:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-theta', type='number', value=0.02, min=0.001, max=0.2, step=0.001,
-                              style={'width': '90px', 'marginRight': '30px'}),
+                              style={'width': '90px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
 
                 html.Div([
                     html.Label("Mom window:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1,
-                              style={'width': '80px', 'marginRight': '30px'}),
+                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
 
                 html.Div([
                     html.Label("Vol window:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1,
-                              style={'width': '80px', 'marginRight': '30px'}),
+                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
 
                 html.Div([
                     html.Label("Trail mult:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-trailing-mult', type='number', value=1.5, min=0.5, max=5.0, step=0.1,
-                              style={'width': '80px', 'marginRight': '30px'}),
+                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
 
                 html.Div([
                     html.Label("Carry buffer:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-carry-buffer', type='number', value=0.0, step=0.0001,
-                              style={'width': '90px'}),
+                              style={'width': '90px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px'}),
 
@@ -2982,31 +2982,31 @@ def build_portfolio_backtest_panel() -> html.Div:
                     html.Div([
                         html.Label("Theta:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                         dcc.Input(id='bt-port-theta', type='number', value=0.02, min=0.001, max=0.2, step=0.001,
-                                  style={'width': '90px', 'marginRight': '30px'}),
+                                  style={'width': '90px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                     ], style={'display': 'flex', 'alignItems': 'center'}),
 
                     html.Div([
                         html.Label("Mom window:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                         dcc.Input(id='bt-port-mom-window', type='number', value=20, min=5, max=120, step=1,
-                                  style={'width': '80px', 'marginRight': '30px'}),
+                                  style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                     ], style={'display': 'flex', 'alignItems': 'center'}),
 
                     html.Div([
                         html.Label("Vol window:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                         dcc.Input(id='bt-port-vol-window', type='number', value=60, min=20, max=252, step=1,
-                                  style={'width': '80px', 'marginRight': '30px'}),
+                                  style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                     ], style={'display': 'flex', 'alignItems': 'center'}),
 
                     html.Div([
                         html.Label("Trail mult:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                         dcc.Input(id='bt-port-trailing-mult', type='number', value=1.5, min=0.5, max=5.0, step=0.1,
-                                  style={'width': '80px', 'marginRight': '30px'}),
+                                  style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                     ], style={'display': 'flex', 'alignItems': 'center'}),
 
                     html.Div([
                         html.Label("Carry buffer:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                         dcc.Input(id='bt-port-carry-buffer', type='number', value=0.0, step=0.0001,
-                                  style={'width': '90px'}),
+                                  style={'width': '90px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                     ], style={'display': 'flex', 'alignItems': 'center'}),
                 ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px', 'marginBottom': '8px'}),
 
@@ -3024,19 +3024,19 @@ def build_portfolio_backtest_panel() -> html.Div:
                 html.Div([
                     html.Label("Max Positions:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-max-positions', type='number', value=10, min=3, max=30, step=1,
-                              style={'width': '80px', 'marginRight': '30px'}),
+                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
                 
                 html.Div([
                     html.Label("Entry Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-port-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25,
-                              style={'width': '80px', 'marginRight': '30px'}),
+                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
                 
                 html.Div([
                     html.Label("Exit Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-port-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25,
-                              style={'width': '80px', 'marginRight': '30px'}),
+                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
                 
                 html.Div([
@@ -3107,13 +3107,13 @@ def build_portfolio_backtest_panel() -> html.Div:
                 html.Div([
                     html.Label("Initial Capital (MM):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-initial-capital', type='number', value=100, min=10, max=1000, step=10,
-                              style={'width': '100px', 'marginRight': '30px'}),
+                              style={'width': '100px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
                 
                 html.Div([
                     html.Label("Transaction Cost (bp):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                     dcc.Input(id='bt-txn-cost', type='number', value=0.5, min=0, max=5, step=0.1,
-                              style={'width': '80px'}),
+                              style={'width': '80px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px'}),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),

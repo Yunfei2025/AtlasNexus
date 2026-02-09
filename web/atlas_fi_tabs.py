@@ -43,7 +43,7 @@ def build_spreads_layout():
     GRAPH_INTERVAL_LONG = 300_000
 
     def _interval_block(include_long: bool = False):
-        blocks = [dcc.Interval(id="data-refresh", interval=int(GRAPH_INTERVAL), n_intervals=0)]
+        blocks = []
         if include_long:
             blocks.append(
                 dcc.Interval(id="data-refresh-long", interval=int(GRAPH_INTERVAL_LONG), n_intervals=0)
@@ -175,7 +175,7 @@ def build_curves_layout():
                                 className="custom-dropdown",
                                 style={'color': '#000'}
                             ),
-                            dcc.Interval(id="data-refresh", interval=int(GRAPH_INTERVAL), n_intervals=0),
+                            # dcc.Interval(id="data-refresh", interval=int(GRAPH_INTERVAL), n_intervals=0), # Moved to apps/atlasnexus_daily.py
                         ],
                         className="graph__title",
                     ),
