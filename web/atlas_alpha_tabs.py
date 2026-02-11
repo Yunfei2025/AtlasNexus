@@ -1366,7 +1366,10 @@ def build_portfolio_layout() -> html.Div:
             html.Div([
                 html.Div(id='alpha-pool-status', style={'fontSize': '13px', 'color': THEME['text_sub'], 'marginBottom': '10px'}),
                 html.Div(id='alpha-pool-preview', style={'fontSize': '11px', 'color': THEME['text_main']}),
-            ], style={'marginBottom': '15px', 'padding': '10px', 'backgroundColor': THEME['bg_input'], 'borderRadius': '4px'}),
+            ]),
+            
+            # Hidden store to persist optimized weights for Backtest tab
+            dcc.Store(id='alpha-optimized-weights', storage_type='session'),
             
             html.Div([
                 html.Div(id='alpha-score-status', style={'fontSize': '13px', 'color': THEME['text_main'], 'marginRight': '20px'}),
@@ -2062,7 +2065,8 @@ def register_alpha_callbacks(app) -> None:
         [Output('alpha-scored-table-container', 'children'),
          Output('alpha-risk-chart-container', 'children'),
          Output('alpha-score-status', 'children'),
-         Output('alpha-portfolio-summary', 'children')],
+         Output('alpha-portfolio-summary', 'children'),
+         Output('alpha-optimized-weights', 'data')],
         Input('alpha-score-btn', 'n_clicks'),
         [State('alpha-selected-candidates', 'data'),
          State('alpha-mom-k', 'value'),
@@ -2076,14 +2080,15 @@ def register_alpha_callbacks(app) -> None:
     def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, max_dv01, alloc_method, enforce_corr):
         
         if not n_clicks:
-            return html.Div(), html.Div(), "", html.Div()
+            return html.Div(), html.Div(), "", html.Div(), []
         
         if not candidates:
             return (
                 html.Div("No candidates. Run scan in Candidates tab first.", style={'color': THEME['warning']}),
                 html.Div(),
                 "",
-                html.Div()
+                html.Div(),
+                []
             )
         
         try:
@@ -2121,7 +2126,8 @@ def register_alpha_callbacks(app) -> None:
                     html.Div("No candidates with positive expected edge. All trades filtered out (score ≤ 0).", style={'color': THEME['warning']}),
                     html.Div(),
                     "",
-                    html.Div()
+                    html.Div(),
+                    []
                 )
             
             # Determine allocation method
@@ -2161,6 +2167,10 @@ def register_alpha_callbacks(app) -> None:
             # Assume average duration ~ 5 years for bond spreads
             avg_duration = 5.0
             df_scored['suggested_dv01'] = (df_scored['notional_mm'] * 1e6 * avg_duration * 0.0001).clip(upper=max_dv01)
+            
+            # Store optimized results (Filter out zero/negligible weights for cleaner backtesting)
+            df_nonzero = df_scored[df_scored['weight'] > 0.0001].copy()
+            optimized_results = df_nonzero.to_dict('records')
             
             # Select display columns
             display_cols = [
@@ -2304,7 +2314,7 @@ def register_alpha_callbacks(app) -> None:
                 
                 risk_chart = dcc.Graph(figure=fig, config={'displayModeBar': False})
             
-            return table, risk_chart, status, summary
+            return table, risk_chart, status, summary, optimized_results
         
         except Exception as e:
             import traceback
@@ -2315,7 +2325,8 @@ def register_alpha_callbacks(app) -> None:
                 html.Div(error_msg, style={'color': THEME['warning'], 'padding': '10px'}),
                 html.Div(),
                 f"Error at {datetime.now().strftime('%H:%M:%S')}",
-                html.Div(f"Details: {str(e)[:100]}", style={'color': THEME['warning'], 'fontSize': '11px'})
+                html.Div(f"Details: {str(e)[:100]}", style={'color': THEME['warning'], 'fontSize': '11px'}),
+                []
             )
 
     # -------------------------------------------------------------------------
@@ -2356,6 +2367,40 @@ def register_alpha_callbacks(app) -> None:
         
         options = [{'label': str(idx), 'value': str(idx)} for idx in df.index[:50]]
         return macro_options + options
+
+    # -------------------------------------------------------------------------
+    # BACKTEST: Update Trade Style based on Spread Type (auto-assign default)
+    # -------------------------------------------------------------------------
+    @app.callback(
+        Output('bt-trade-style', 'value'),
+        Input('bt-spread-type', 'value')
+    )
+    def update_backtest_trade_style(spread_type):
+        if not spread_type:
+            return 'mr'
+
+        # Default fallback
+        style_key = 'mr'
+
+        # Look up from categories
+        for _, info in SPREAD_CATEGORIES.items():
+            if spread_type in info.get('types', []):
+                s = info.get('style', 'MeanReversion') 
+                if s == 'MeanReversion':
+                    style_key = 'mr'
+                elif s == 'Carry':
+                    style_key = 'carry'
+                elif s == 'Trend': 
+                    style_key = 'trend'
+                elif s == 'Mixed':
+                    # Heuristics for mixed types
+                    if spread_type in ['TBondSwap', 'CBondSwap']:
+                        style_key = 'carry'
+                    elif spread_type == 'SwapSpread':
+                        style_key = 'mr'
+                break
+        
+        return style_key
 
     # -------------------------------------------------------------------------
     # BACKTEST: Run Individual Backtest
@@ -2438,222 +2483,296 @@ def register_alpha_callbacks(app) -> None:
         return display, status
 
     # -------------------------------------------------------------------------
+    # BACKTEST: Portfolio Data Preview Callback
+    # -------------------------------------------------------------------------
+    @app.callback(
+        Output('bt-portfolio-data-preview', 'children'),
+        Input('alpha-optimized-weights', 'data')
+    )
+    def update_portfolio_preview(optimized_data):
+        if not optimized_data:
+            return html.P(
+                "No portfolio data loaded. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.",
+                style={'color': THEME['warning'], 'fontStyle': 'italic'}
+            )
+        
+        try:
+            # Count assets and calculate metrics
+            n_assets = len(optimized_data)
+            total_weight = sum(item.get('weight', 0) for item in optimized_data)
+            
+            # Count by direction
+            n_buy = sum(1 for item in optimized_data if item.get('direction') == 'BUY')
+            n_sell = sum(1 for item in optimized_data if item.get('direction') == 'SELL')
+            
+            # Count by style
+            style_counts = {}
+            for item in optimized_data:
+                style = item.get('style', 'Unknown')
+                style_counts[style] = style_counts.get(style, 0) + 1
+            
+            # Top assets by weight (Show all if reasonably small, else scrollable list)
+            sorted_assets = sorted(optimized_data, key=lambda x: x.get('weight', 0), reverse=True)
+            
+            # Asset list to display (All non-zero, already filtered by store logic)
+            asset_list = []
+            for item in sorted_assets:
+                w = item.get('weight', 0)
+                if w <= 0.0001: continue
+                asset_list.append(html.Li(
+                     f"{item.get('ID', 'Unknown')} - {w*100:.1f}% ({item.get('direction', 'N/A')})",
+                     style={'color': THEME['text_main'], 'fontSize': '11px', 'marginBottom': '3px'}
+                ))
+
+            return html.Div([
+                html.Div([
+                    html.Div([
+                        html.Strong("Total Assets: ", style={'color': THEME['text_sub']}),
+                        html.Span(f"{len(asset_list)}", style={'color': THEME['success'], 'fontWeight': 'bold', 'fontSize': '16px'}),
+                    ], style={'marginRight': '30px'}),
+                    html.Div([
+                        html.Strong("Weight Sum: ", style={'color': THEME['text_sub']}),
+                        html.Span(f"{total_weight*100:.1f}%", style={'color': THEME['text_main']}),
+                    ], style={'marginRight': '30px'}),
+                    html.Div([
+                        html.Strong("Direction: ", style={'color': THEME['text_sub']}),
+                        html.Span(f"BUY: {n_buy} / SELL: {n_sell}", style={'color': THEME['text_main']}),
+                    ], style={'marginRight': '30px'}),
+                    html.Div([
+                        html.Strong("Styles: ", style={'color': THEME['text_sub']}),
+                        html.Span(
+                            ' | '.join([f"{k}: {v}" for k, v in style_counts.items()]),
+                            style={'color': THEME['text_main'], 'fontSize': '12px'}
+                        ),
+                    ]),
+                ], style={'display': 'flex', 'flexWrap': 'wrap', 'marginBottom': '15px'}),
+                
+                html.Div([
+                    html.Strong("Active Portfolio Assets (Backtest Universe):", style={'color': THEME['text_sub'], 'display': 'block', 'marginBottom': '8px'}),
+                    html.Div([
+                        html.Ul(asset_list, style={'margin': '0', 'paddingLeft': '20px'}),
+                    ], style={'maxHeight': '150px', 'overflowY': 'auto', 'border': '1px solid #444', 'padding': '5px', 'borderRadius': '4px'})
+                ]),
+            ])
+        except Exception as e:
+            return html.P(
+                f"Error parsing portfolio data: {str(e)}",
+                style={'color': THEME['danger']}
+            )
+    
+    # -------------------------------------------------------------------------
     # BACKTEST: Run Portfolio Backtest
     # -------------------------------------------------------------------------
     @app.callback(
         [Output('bt-portfolio-results', 'children'),
          Output('bt-portfolio-status', 'children')],
         Input('bt-run-portfolio-btn', 'n_clicks'),
-        [State('bt-portfolio-categories', 'value'),
-         State('bt-max-positions', 'value'),
-         State('bt-port-entry-z', 'value'),
-         State('bt-port-exit-z', 'value'),
+        [State('alpha-optimized-weights', 'data'),
          State('bt-rebalance-freq', 'value'),
-         State('bt-alloc-method', 'value'),
-         State('bt-corr-constraint', 'value'),
-         State('bt-bondswap-style', 'value'),
-         State('bt-port-include-macro', 'value'),
-         State('bt-port-theta', 'value'),
-         State('bt-port-mom-window', 'value'),
-         State('bt-port-vol-window', 'value'),
-         State('bt-port-trailing-mult', 'value'),
-         State('bt-port-carry-buffer', 'value'),
-         State('bt-port-allow-short', 'value'),
-         State('bt-port-period', 'value'),
          State('bt-initial-capital', 'value'),
-         State('bt-txn-cost', 'value')],
+         State('bt-txn-cost', 'value'),
+         State('bt-port-period', 'value')],
         prevent_initial_call=True
     )
-    def run_portfolio_backtest(n_clicks, categories, max_pos, entry_z, exit_z, 
-                                rebal_freq, alloc_method, corr_constraint,
-                                bondswap_style, include_macro,
-                                theta, mom_window, vol_window, trailing_mult, carry_buffer, allow_short,
-                                period, capital, txn_cost):
-        if not n_clicks or not categories:
+    def run_portfolio_backtest(n_clicks, optimized_data, rebal_freq, capital, txn_cost, period):
+        if not n_clicks:
             return html.Div(), ""
         
-        # Collect all spread time series
-        all_results = []
-        all_spreads = {}
+        if not optimized_data:
+            return html.Div(
+                "No optimized portfolio data found. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.",
+                style={'color': THEME['warning'], 'padding': '20px'}
+            ), "Waiting for portfolio data..."
         
-        bondswap_style = bondswap_style or 'carry'
-        include_macro = bool(include_macro and 'include' in include_macro)
-
-        trend_params = {
-            'theta': float(theta) if theta is not None else 0.02,
-            'mom_window': int(mom_window) if mom_window is not None else 20,
-            'vol_window': int(vol_window) if vol_window is not None else 60,
-            'trailing_mult': float(trailing_mult) if trailing_mult is not None else 1.5,
-            'carry_buffer': float(carry_buffer) if carry_buffer is not None else 0.0,
-            'max_hold': 60,
-            'allow_short': bool(allow_short and 'allow' in allow_short),
-        }
-
-        for cat in categories:
-            if cat not in SPREAD_CATEGORIES:
-                continue
+        try:
+            # Parse settings
+            capital = float(capital) if capital is not None else 10000000.0
+            txn_cost_bp = float(txn_cost) if txn_cost is not None else 1.0
+            lookback_days = int(period) if period is not None else 252
             
-            for stype in SPREAD_CATEGORIES[cat]['types']:
-                spread_ts = load_spread_timeseries(stype)
-                if spread_ts is None:
+            # 1. Load Data for All Assets
+            asset_data = {}
+            weights = {}
+            valid_assets = []
+            
+            print(f"[DEBUG] Portfolio Backtest: Loading data for {len(optimized_data)} assets")
+            
+            for item in optimized_data:
+                full_id = item.get('ID')
+                weight = float(item.get('weight', 0.0))
+                
+                if not full_id or weight <= 0:
                     continue
                 
-                spread_ts = spread_ts.tail(period)
+                # Parse ID (Assuming format "Type|Instrument" or just "Instrument" if unique, but usually piped)
+                # In run_scoring/candidates, ID is usually "SpreadType|Instrument"
+                if '|' in full_id:
+                    spread_type, instrument = full_id.split('|', 1)
+                else:
+                    # Fallback: try to guess or skip
+                    # In candidates generation (not shown here but implied), ID usually constructed as Type|Name
+                    # If simplified ID used, we might need lookup. 
+                    # For now assume ID is sufficient or contains spread_type info
+                    continue
                 
-                # Run backtest on each spread
-                for col in spread_ts.columns[:10]:  # Limit for performance
-                    ts = spread_ts[col]
-                    if len(ts.dropna()) < 60:
-                        continue
+                # Load Series
+                df_spread = load_spread_timeseries(spread_type)
+                if df_spread is None or instrument not in df_spread.columns:
+                    print(f"[WARN] Data not found for {full_id}")
+                    continue
+                
+                series = df_spread[instrument].dropna()
+                if len(series) < 10:
+                    continue
+                
+                asset_data[full_id] = series
+                weights[full_id] = weight
+                valid_assets.append(full_id)
+            
+            if not valid_assets:
+                return html.Div("Failed to load historical data for any selected assets.", style={'color': THEME['danger']}), "Data load failed"
+            
+            # Combine into one DataFrame and align dates
+            df_prices = pd.DataFrame(asset_data)
+            df_prices = df_prices.sort_index().ffill().dropna()
+            
+            # Slice to requested period
+            if lookback_days < len(df_prices):
+                df_prices = df_prices.iloc[-lookback_days:]
+            
+            if df_prices.empty:
+                 return html.Div("No overlapping historical data found for the selected portfolio.", style={'color': THEME['danger']}), "Data align failed"
+                 
+            print(f"[DEBUG] Backtest aligned data shape: {df_prices.shape}")
+            
+            # 2. Simulation Setup
+            # Get Directions (+1 for BUY, -1 for SELL)
+            directions = {}
+            for item in optimized_data:
+                directions[item.get('ID')] = 1 if item.get('direction') == 'BUY' else -1
+            
+            # Calculate Daily Changes (Spread Change in bp)
+            # Assumption: Spread series quotes are in BP or can be treated as additive value changes.
+            df_changes = df_prices.diff().fillna(0)
+            
+            # Apply Direction
+            for asset in valid_assets:
+                 dir_mult = directions.get(asset, 1)
+                 df_changes[asset] = df_changes[asset] * dir_mult
+            
+            # Normalize weights for valid assets
+            total_weight_raw = sum(weights[a] for a in valid_assets)
+            alloc_weights = {a: weights[a]/total_weight_raw for a in valid_assets}
+            
+            # 3. Calculate Portfolio PnL
+            # Method: Constant Risk Weights (Daily Rebalancing equivalent)
+            # Daily PnL (bp) = Sum( Asset_Change(bp) * Weight )
+            # *Note on Capital*: We are graphing PnL in BP (Return on Notional).
+            # Total BP Return = Sum( Asset_BP_Return * Asset_Weight )
+            
+            weighted_changes = pd.DataFrame(index=df_changes.index)
+            for asset in valid_assets:
+                weighted_changes[asset] = df_changes[asset] * alloc_weights[asset]
+            
+            portfolio_daily_pnl_bp = weighted_changes.sum(axis=1)
+            
+            # Apply Entry Cost (once at start)
+            if not portfolio_daily_pnl_bp.empty:
+                portfolio_daily_pnl_bp.iloc[0] -= txn_cost_bp
+            
+            # Cumulative PnL
+            cum_pnl_bp = portfolio_daily_pnl_bp.cumsum()
+            
+            # 4. Metrics & Charts
+            total_pnl = float(cum_pnl_bp.iloc[-1])
+            n_days = len(cum_pnl_bp)
+            avg_pnl = float(portfolio_daily_pnl_bp.mean())
+            std_pnl = float(portfolio_daily_pnl_bp.std())
+            sharpe = (avg_pnl / std_pnl * np.sqrt(252)) if std_pnl > 0 else 0.0
+            
+            running_max = np.maximum.accumulate(cum_pnl_bp)
+            drawdowns = running_max - cum_pnl_bp
+            max_drawdown = float(drawdowns.max())
+            
+            win_days = (portfolio_daily_pnl_bp > 0).sum()
+            win_rate = (win_days / n_days * 100) if n_days > 0 else 0.0
 
-                    use_trend = (cat == 'Bond-Swap' and bondswap_style == 'trend')
-                    if use_trend:
-                        result = run_trend_backtest_dc(spread_ts=ts, **trend_params)
-                    else:
-                        result = run_spread_backtest(
-                            spread_ts=ts,
-                            entry_z=entry_z or 2.0,
-                            exit_z=exit_z or 0.5,
-                            stop_z=4.0,
-                            max_hold=60,
-                            trade_style='mr' if SPREAD_CATEGORIES[cat]['style'] == 'MeanReversion' else 'carry',
-                        )
-                    
-                    if result.get('n_trades', 0) > 0:
-                        result['spread_type'] = stype
-                        result['instrument'] = col
-                        result['category'] = cat
-                        all_results.append(result)
-                        all_spreads[f"{stype}|{col}"] = ts
-
-                # Optional: include macro series for Treasury bond-swap category
-                if include_macro and cat == 'Bond-Swap' and stype == 'TBondSwap':
-                    for macro_name in ['TBond-FR007:1Y', 'TBond-FR007:5Y']:
-                        mts = load_macro_series(macro_name)
-                        if mts is None:
-                            continue
-                        mts = mts.tail(period)
-                        if len(mts.dropna()) < 60:
-                            continue
-
-                        if bondswap_style == 'trend':
-                            mres = run_trend_backtest_dc(spread_ts=mts, **trend_params)
-                        else:
-                            mres = run_spread_backtest(
-                                spread_ts=mts,
-                                entry_z=entry_z or 2.0,
-                                exit_z=exit_z or 0.5,
-                                stop_z=4.0,
-                                max_hold=60,
-                                trade_style='carry',
-                            )
-
-                        if mres.get('n_trades', 0) > 0:
-                            mres['spread_type'] = stype
-                            mres['instrument'] = macro_name
-                            mres['category'] = cat
-                            all_results.append(mres)
-                            all_spreads[f"{stype}|{macro_name}"] = mts
-        
-        if not all_results:
-            return html.Div("No valid backtest results. Check data availability.", style={'color': THEME['warning']}), ""
-        
-        # Aggregate results
-        results_df = pd.DataFrame([
-            {
-                'spread_type': r['spread_type'],
-                'instrument': r['instrument'],
-                'category': r['category'],
-                'style': (
-                    bondswap_style
-                    if r.get('category') == 'Bond-Swap'
-                    else ('mr' if SPREAD_CATEGORIES.get(r.get('category'), {}).get('style') == 'MeanReversion' else 'carry')
-                ),
-                'n_trades': r['n_trades'],
-                'total_pnl': r['total_pnl'],
-                'win_rate': r['win_rate'],
-                'sharpe': r['sharpe'],
-                'max_dd': r['max_drawdown'],
-            }
-            for r in all_results
-        ])
-        
-        # Select top spreads by Sharpe
-        results_df = results_df.sort_values('sharpe', ascending=False)
-        top_spreads = results_df.head(max_pos or 10)
-        
-        # Portfolio-level metrics
-        portfolio_pnl = top_spreads['total_pnl'].sum()
-        portfolio_trades = top_spreads['n_trades'].sum()
-        avg_sharpe = top_spreads['sharpe'].mean()
-        avg_winrate = top_spreads['win_rate'].mean()
-        
-        # Build display
-        metrics_div = html.Div([
-            html.H6("Portfolio Backtest Results", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
-            html.Div([
-                html.Div([
-                    html.Strong("Spreads Tested: ", style={'color': THEME['text_sub']}),
-                    html.Span(f"{len(results_df)}", style={'color': THEME['text_main']}),
-                ], style={'marginRight': '25px'}),
-                html.Div([
-                    html.Strong("Top Spreads: ", style={'color': THEME['text_sub']}),
-                    html.Span(f"{len(top_spreads)}", style={'color': THEME['text_main']}),
-                ], style={'marginRight': '25px'}),
-                html.Div([
-                    html.Strong("Total Trades: ", style={'color': THEME['text_sub']}),
-                    html.Span(f"{portfolio_trades:.0f}", style={'color': THEME['text_main']}),
-                ], style={'marginRight': '25px'}),
-                html.Div([
-                    html.Strong("Portfolio PnL: ", style={'color': THEME['text_sub']}),
-                    html.Span(f"{portfolio_pnl:.1f} bp", style={'color': THEME['success'] if portfolio_pnl > 0 else THEME['danger']}),
-                ], style={'marginRight': '25px'}),
-                html.Div([
-                    html.Strong("Avg Sharpe: ", style={'color': THEME['text_sub']}),
-                    html.Span(f"{avg_sharpe:.2f}", style={'color': THEME['success'] if avg_sharpe > 1 else THEME['text_main']}),
-                ], style={'marginRight': '25px'}),
-                html.Div([
-                    html.Strong("Avg Win Rate: ", style={'color': THEME['text_sub']}),
-                    html.Span(f"{avg_winrate:.1f}%", style={'color': THEME['text_main']}),
-                ]),
-            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '20px'}),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'})
-        
-        # Top spreads table
-        top_spreads_display = top_spreads.copy()
-        for col in ['total_pnl', 'win_rate', 'sharpe', 'max_dd']:
-            if col in top_spreads_display.columns:
-                top_spreads_display[col] = top_spreads_display[col].round(2)
-        
-        spreads_table = html.Div([
-            html.H6("Top Performing Spreads", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
-            dash_table.DataTable(
-                columns=[{'name': c, 'id': c} for c in top_spreads_display.columns],
-                data=top_spreads_display.to_dict('records'),
-                style_table={'overflowX': 'auto', 'maxHeight': '300px', 'overflowY': 'auto'},
-                style_header={
-                    'backgroundColor': THEME['table_header'],
-                    'color': THEME['text_main'],
-                    'fontWeight': 'bold',
-                },
-                style_cell={
-                    'backgroundColor': THEME['bg_card'],
-                    'color': THEME['text_main'],
-                    'fontSize': '11px',
-                    'padding': '6px',
-                },
+            # Chart
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=cum_pnl_bp.index,
+                y=cum_pnl_bp.values,
+                mode='lines',
+                name='Portfolio PnL (bp)',
+                line=dict(color=THEME['accent'], width=2),
+                fill='tozeroy',
+                fillcolor='rgba(0, 204, 150, 0.1)'
+            ))
+            
+            fig.update_layout(
+                title=f'Portfolio Cumulative PnL (Last {n_days} days)',
+                xaxis={'title': '', 'gridcolor': THEME['bg_card']},
+                yaxis={'title': 'PnL (bp)', 'gridcolor': THEME['bg_card']},
+                template='plotly_dark',
+                paper_bgcolor=THEME['bg_card'],
+                plot_bgcolor=THEME['bg_card'],
+                height=350,
+                margin={'l': 60, 'r': 20, 't': 50, 'b': 40}
+            )
+            chart = dcc.Graph(figure=fig)
+            
+            # Stats Display
+            stats_style = {'display': 'flex', 'flexWrap': 'wrap', 'gap': '20px', 'marginBottom': '10px'}
+            item_style = {'display': 'flex', 'flexDirection': 'column'}
+            label_style = {'color': THEME['text_sub'], 'fontSize': '12px'}
+            val_style = {'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '16px'}
+            
+            stats = html.Div([
+                html.Div([html.Span("Total Return", style=label_style), html.Span(f"{total_pnl:+.1f} bp", style={**val_style, 'color': THEME['success'] if total_pnl>0 else THEME['danger']})], style=item_style),
+                html.Div([html.Span("Sharpe Ratio", style=label_style), html.Span(f"{sharpe:.2f}", style=val_style)], style=item_style),
+                html.Div([html.Span("Win Rate", style=label_style), html.Span(f"{win_rate:.1f}%", style=val_style)], style=item_style),
+                html.Div([html.Span("Max Drawdown", style=label_style), html.Span(f"-{max_drawdown:.1f} bp", style={**val_style, 'color': THEME['danger']})], style=item_style),
+                html.Div([html.Span("Volatility (Daily)", style=label_style), html.Span(f"{std_pnl:.2f} bp", style=val_style)], style=item_style),
+            ], style=stats_style)
+            
+            # Asset Contribution Table
+            contribs = (weighted_changes.sum() / 1.0).sort_values(ascending=False) # raw bp contrib
+            
+            contrib_data = []
+            for asset, pnl in contribs.items():
+                contrib_data.append({
+                     'Asset': asset,
+                     'Weight': f"{alloc_weights.get(asset,0)*100:.1f}%",
+                     'Contribution (bp)': round(pnl, 1)
+                })
+                
+            contrib_table = dash_table.DataTable(
+                columns=[{'name': i, 'id': i} for i in ['Asset', 'Weight', 'Contribution (bp)']],
+                data=contrib_data,
+                page_size=10,
+                style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main']},
+                style_cell={'backgroundColor': THEME['bg_card'], 'color': THEME['text_main'], 'textAlign': 'left'},
                 style_data_conditional=[
-                    {'if': {'filter_query': '{sharpe} > 1'}, 'backgroundColor': 'rgba(0, 204, 150, 0.1)'},
-                    {'if': {'filter_query': '{sharpe} < 0'}, 'backgroundColor': 'rgba(239, 85, 59, 0.1)'},
-                ],
-                sort_action='native',
-                page_size=15,
-            ),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'})
-        
-        status = f"Portfolio backtest completed at {datetime.now().strftime('%H:%M:%S')}"
-        
-        return html.Div([metrics_div, spreads_table]), status
+                    {'if': {'filter_query': '{Contribution (bp)} > 0', 'column_id': 'Contribution (bp)'}, 'color': THEME['success']},
+                    {'if': {'filter_query': '{Contribution (bp)} < 0', 'column_id': 'Contribution (bp)'}, 'color': THEME['danger']},
+                ]
+            )
+            
+            results_content = html.Div([
+                stats,
+                chart,
+                html.H6("Asset Contributions", style={'color': THEME['text_main'], 'marginTop': '20px'}),
+                contrib_table
+            ])
+            
+            status_msg = f"Backtest completed at {datetime.now().strftime('%H:%M:%S')} over {n_days} days"
+            
+            return results_content, status_msg
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return html.Div(f"Error executing portfolio backtest: {str(e)}", style={'color': THEME['danger']}), "Error"
 
 
 def build_basket_layout() -> html.Div:
@@ -2783,6 +2902,22 @@ def build_individual_backtest_panel() -> html.Div:
                     ),
                 ], style={'marginRight': '20px'}),
             ], style={'display': 'flex', 'marginBottom': '15px'}),
+            
+            # Trade Style Selection
+            html.Div([
+                html.Label("Trade Style:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginBottom': '5px', 'display': 'block'}),
+                dcc.RadioItems(
+                    id='bt-trade-style',
+                    options=[
+                        {'label': ' Mean-Reversion', 'value': 'mr'},
+                        {'label': ' Carry', 'value': 'carry'},
+                        {'label': ' Trend (Directional-Change)', 'value': 'trend'},
+                    ],
+                    value='mr',
+                    inline=True,
+                    labelStyle={'color': THEME['text_main'], 'marginRight': '15px'},
+                ),
+            ], style={'marginBottom': '0px'}),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
         
         # Strategy Parameters
@@ -2829,20 +2964,7 @@ def build_individual_backtest_panel() -> html.Div:
                     ],
                     value=504,
                     clearable=False,
-                    style={'width': '150px', 'marginRight': '30px'},
-                ),
-                
-                html.Label("Trade Style:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                dcc.RadioItems(
-                    id='bt-trade-style',
-                    options=[
-                        {'label': ' Mean-Reversion', 'value': 'mr'},
-                        {'label': ' Carry', 'value': 'carry'},
-                        {'label': ' Trend (Directional-Change)', 'value': 'trend'},
-                    ],
-                    value='mr',
-                    inline=True,
-                    labelStyle={'color': THEME['text_main'], 'marginRight': '15px'},
+                    style={'width': '150px'},
                 ),
             ], style={'display': 'flex', 'alignItems': 'center'}),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
@@ -2926,161 +3048,34 @@ def build_portfolio_backtest_panel() -> html.Div:
     """Build the portfolio backtest panel."""
     
     return html.Div([
+        # Portfolio Data Preview
+        html.Div([
+            html.H6("Portfolio Data", style={'color': THEME['accent'], 'marginBottom': '10px'}),
+            html.Div(id='bt-portfolio-data-preview', children=[
+                html.P("No portfolio data loaded. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.",
+                       style={'color': THEME['warning'], 'fontStyle': 'italic'})
+            ]),
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
+        
         # Portfolio Configuration
         html.Div([
-            html.H6("Portfolio Configuration", style={'color': THEME['accent'], 'marginBottom': '15px'}),
+            html.H6("Backtest Configuration", style={'color': THEME['accent'], 'marginBottom': '15px'}),
             
-            # Spread categories to include
             html.Div([
-                html.Label("Include Spread Categories:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginBottom': '8px', 'display': 'block'}),
-                dcc.Checklist(
-                    id='bt-portfolio-categories',
+                html.Label("Rebalance Frequency:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
+                dcc.Dropdown(
+                    id='bt-rebalance-freq',
                     options=[
-                        {'label': ' Bond-Curve', 'value': 'Bond-Curve'},
-                        {'label': ' Bond-Swap', 'value': 'Bond-Swap'},
-                        {'label': ' Swap Spreads', 'value': 'Swap-Spread'},
-                        {'label': ' Net Basis', 'value': 'Bond-Futures'},
-                        {'label': ' Term Basis', 'value': 'Futures-Term'},
+                        {'label': 'Quarterly', 'value': 'Q'},
+                        {'label': 'Monthly', 'value': 'M'},
+                        {'label': 'Daily (Constant Weight)', 'value': 'D'},
                     ],
-                    value=['Bond-Curve', 'Bond-Swap'],
-                    inline=True,
-                    labelStyle={'color': THEME['text_main'], 'marginRight': '15px', 'fontSize': '12px'},
+                    value='Q',
+                    clearable=False,
+                    style={'width': '200px'},
                 ),
-            ], style={'marginBottom': '15px'}),
-
-            # Bond-Swap specific style override
-            html.Div([
-                html.H6("Bond-Swap Settings", style={'color': THEME['accent'], 'marginBottom': '10px'}),
-                html.Div([
-                    html.Label("Bond-Swap Style:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                    dcc.RadioItems(
-                        id='bt-bondswap-style',
-                        options=[
-                            {'label': ' Carry', 'value': 'carry'},
-                            {'label': ' Trend (Directional-Change)', 'value': 'trend'},
-                        ],
-                        value='carry',
-                        inline=True,
-                        labelStyle={'color': THEME['text_main'], 'marginRight': '15px'},
-                    ),
-                ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '8px'}),
-
-                html.Div([
-                    dcc.Checklist(
-                        id='bt-port-include-macro',
-                        options=[{'label': ' Include macro series (TBond-FR007 1Y/5Y) when Bond-Swap selected', 'value': 'include'}],
-                        value=['include'],
-                        labelStyle={'color': THEME['text_main'], 'fontSize': '13px'},
-                    ),
-                ]),
-            ], style={'backgroundColor': THEME['bg_input'], 'padding': '12px', 'borderRadius': '5px', 'marginBottom': '15px'}),
-
-            # Trend parameters for portfolio Bond-Swap (used when Bond-Swap Style = Trend)
-            html.Div([
-                html.H6("Bond-Swap Trend Parameters (Directional-Change)", style={'color': THEME['accent'], 'marginBottom': '10px'}),
-                html.Div([
-                    html.Div([
-                        html.Label("Theta:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                        dcc.Input(id='bt-port-theta', type='number', value=0.02, min=0.001, max=0.2, step=0.001,
-                                  style={'width': '90px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
-                    ], style={'display': 'flex', 'alignItems': 'center'}),
-
-                    html.Div([
-                        html.Label("Mom window:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                        dcc.Input(id='bt-port-mom-window', type='number', value=20, min=5, max=120, step=1,
-                                  style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
-                    ], style={'display': 'flex', 'alignItems': 'center'}),
-
-                    html.Div([
-                        html.Label("Vol window:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                        dcc.Input(id='bt-port-vol-window', type='number', value=60, min=20, max=252, step=1,
-                                  style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
-                    ], style={'display': 'flex', 'alignItems': 'center'}),
-
-                    html.Div([
-                        html.Label("Trail mult:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                        dcc.Input(id='bt-port-trailing-mult', type='number', value=1.5, min=0.5, max=5.0, step=0.1,
-                                  style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
-                    ], style={'display': 'flex', 'alignItems': 'center'}),
-
-                    html.Div([
-                        html.Label("Carry buffer:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                        dcc.Input(id='bt-port-carry-buffer', type='number', value=0.0, step=0.0001,
-                                  style={'width': '90px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
-                    ], style={'display': 'flex', 'alignItems': 'center'}),
-                ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px', 'marginBottom': '8px'}),
-
-                html.Div([
-                    dcc.Checklist(
-                        id='bt-port-allow-short',
-                        options=[{'label': ' Allow short-spread trades (trend mode)', 'value': 'allow'}],
-                        value=['allow'],
-                        labelStyle={'color': THEME['text_main'], 'fontSize': '13px'},
-                    ),
-                ]),
-            ], style={'backgroundColor': THEME['bg_input'], 'padding': '12px', 'borderRadius': '5px', 'marginBottom': '15px'}),
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px'}),
             
-            html.Div([
-                html.Div([
-                    html.Label("Max Positions:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                    dcc.Input(id='bt-max-positions', type='number', value=10, min=3, max=30, step=1,
-                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
-                ], style={'display': 'flex', 'alignItems': 'center'}),
-                
-                html.Div([
-                    html.Label("Entry Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                    dcc.Input(id='bt-port-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25,
-                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
-                ], style={'display': 'flex', 'alignItems': 'center'}),
-                
-                html.Div([
-                    html.Label("Exit Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                    dcc.Input(id='bt-port-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25,
-                              style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'}),
-                ], style={'display': 'flex', 'alignItems': 'center'}),
-                
-                html.Div([
-                    html.Label("Rebalance:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                    dcc.Dropdown(
-                        id='bt-rebalance-freq',
-                        options=[
-                            {'label': 'Daily', 'value': 'D'},
-                            {'label': 'Weekly', 'value': 'W'},
-                            {'label': 'Monthly', 'value': 'M'},
-                        ],
-                        value='W',
-                        clearable=False,
-                        style={'width': '120px'},
-                    ),
-                ], style={'display': 'flex', 'alignItems': 'center'}),
-            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px', 'marginBottom': '15px'}),
-            
-            # Allocation method
-            html.Div([
-                html.Label("Allocation Method:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                dcc.RadioItems(
-                    id='bt-alloc-method',
-                    options=[
-                        {'label': ' Risk Parity', 'value': 'risk_parity'},
-                        {'label': ' Equal Weight', 'value': 'equal'},
-                        {'label': ' Inverse Vol', 'value': 'inv_vol'},
-                        {'label': ' Score-Weighted', 'value': 'score'},
-                    ],
-                    value='risk_parity',
-                    inline=True,
-                    labelStyle={'color': THEME['text_main'], 'marginRight': '15px'},
-                ),
-            ], style={'marginBottom': '15px'}),
-            
-            # Correlation constraint
-            html.Div([
-                dcc.Checklist(
-                    id='bt-corr-constraint',
-                    options=[{'label': ' Enforce max correlation constraint (0.5)', 'value': 'enforce'}],
-                    value=['enforce'],
-                    labelStyle={'color': THEME['text_main'], 'fontSize': '13px'},
-                ),
-            ]),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
         
         # Backtest Settings
