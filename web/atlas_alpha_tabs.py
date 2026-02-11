@@ -2365,7 +2365,8 @@ def register_alpha_callbacks(app) -> None:
         if df is None or df.empty:
             return macro_options
         
-        options = [{'label': str(idx), 'value': str(idx)} for idx in df.index[:50]]
+        # Return all available instruments (previously limited to 50)
+        options = [{'label': str(idx), 'value': str(idx)} for idx in df.index]
         return macro_options + options
 
     # -------------------------------------------------------------------------
@@ -2604,21 +2605,26 @@ def register_alpha_callbacks(app) -> None:
                 if not full_id or weight <= 0:
                     continue
                 
-                # Parse ID (Assuming format "Type|Instrument" or just "Instrument" if unique, but usually piped)
-                # In run_scoring/candidates, ID is usually "SpreadType|Instrument"
+                # Parse ID/Type
+                spread_type = item.get('spread_type')
+                instrument = full_id
+                
+                # If ID is composite like "Type|Instrument", split it
                 if '|' in full_id:
-                    spread_type, instrument = full_id.split('|', 1)
-                else:
-                    # Fallback: try to guess or skip
-                    # In candidates generation (not shown here but implied), ID usually constructed as Type|Name
-                    # If simplified ID used, we might need lookup. 
-                    # For now assume ID is sufficient or contains spread_type info
+                    _type, _inst = full_id.split('|', 1)
+                    if not spread_type:
+                        spread_type = _type
+                    instrument = _inst
+                
+                if not spread_type:
+                    # Fallback default if not present (unlikely if flow is correct)
+                    # print(f"[WARN] No spread type found for {full_id}, skipping.")
                     continue
                 
                 # Load Series
                 df_spread = load_spread_timeseries(spread_type)
                 if df_spread is None or instrument not in df_spread.columns:
-                    print(f"[WARN] Data not found for {full_id}")
+                    print(f"[WARN] Data not found for {full_id} (Type={spread_type}, Inst={instrument})")
                     continue
                 
                 series = df_spread[instrument].dropna()
@@ -2646,39 +2652,201 @@ def register_alpha_callbacks(app) -> None:
             print(f"[DEBUG] Backtest aligned data shape: {df_prices.shape}")
             
             # 2. Simulation Setup
-            # Get Directions (+1 for BUY, -1 for SELL)
-            directions = {}
-            for item in optimized_data:
-                directions[item.get('ID')] = 1 if item.get('direction') == 'BUY' else -1
+            # We need to simulate the active TRADING STRATEGY for each asset, not just passive holding.
+            # This matches the "Individual Backtest" logic which is strategy-based (Mean Reversion/Trend).
             
-            # Calculate Daily Changes (Spread Change in bp)
-            # Assumption: Spread series quotes are in BP or can be treated as additive value changes.
-            df_changes = df_prices.diff().fillna(0)
+            # Simulation Parameters (Defaults matching individual backtest)
+            entry_z_default = 2.0
+            exit_z_default = 0.5
+            stop_z_default = 4.0
+            max_hold_days = 60
             
-            # Apply Direction
+            daily_pnls = {}
+            
             for asset in valid_assets:
-                 dir_mult = directions.get(asset, 1)
-                 df_changes[asset] = df_changes[asset] * dir_mult
-            
+                ts = df_prices[asset]  # Aligned series
+                
+                # Retrieve style (default to 'mr')
+                # Find the item in optimized_data
+                asset_info = next((item for item in optimized_data if item.get('ID') == asset or f"{item.get('spread_type')}|{full_id}" == asset), {})
+                style = asset_info.get('style', 'mr')
+                
+                # Calculate indicators
+                lookback = 60
+                rolling_mean = ts.rolling(lookback).mean()
+                rolling_std = ts.rolling(lookback).std()
+                zscore = (ts - rolling_mean) / rolling_std
+                
+                # Trading Loop
+                # Generate Daily PnL series (Mark-to-Market)
+                # State
+                position = 0
+                entry_price_ref = 0.0
+                entry_z_ref = 0.0
+                days_held = 0
+                
+                asset_pnl = []
+                
+                # Pre-calculate price changes
+                delta = ts.diff().fillna(0)
+                
+                vals = ts.values
+                zs = zscore.values
+                deltas = delta.values
+                
+                for i in range(len(ts)):
+                    price = vals[i]
+                    z = zs[i]
+                    d = deltas[i]
+                    
+                    # 1. Calculate PnL from yesterday's position
+                    # MTM PnL = Position * Change
+                    # Note: We use 'd' (change from i-1 to i). Position established at i-1 close applies to this change.
+                    daily_pnl = position * d
+                    
+                    # 2. Check Exits (if in position)
+                    action = 0 # 0: none, 1: buy (open/cover), -1: sell (open/cover)
+                    
+                    if position != 0:
+                        days_held += 1
+                        exit_signal = False
+                        
+                        # Logic matches run_spread_backtest
+                        if style == 'carry':
+                            if (position == 1 and z > entry_z_ref + 1.0) or (position == -1 and z < entry_z_ref - 1.0):
+                                exit_signal = True
+                        else: # mr
+                            if (position == 1 and z >= -exit_z_default) or (position == -1 and z <= exit_z_default):
+                                exit_signal = True
+                        
+                        # Stop loss
+                        if (position == 1 and z < -stop_z_default) or (position == -1 and z > stop_z_default):
+                            exit_signal = True
+                            
+                        # Max hold
+                        if days_held >= max_hold_days:
+                            exit_signal = True
+                            
+                        if exit_signal or np.isnan(z):
+                            # Close position
+                            position = 0
+                            days_held = 0
+                            # Cost applied on exit? Or entry? 
+                            # Let's apply half-turn cost on every trade execution (change in pos)
+                            # But here we simplified. Let's deduct cost at end of day loop.
+                    
+                    # 3. Check Entries (if flat)
+                    if position == 0 and not np.isnan(z):
+                        if style == 'carry' or style == 'mr':
+                            if z <= -entry_z_default:
+                                position = 1
+                                entry_price_ref = price
+                                entry_z_ref = z
+                                days_held = 0
+                            elif z >= entry_z_default:
+                                position = -1
+                                entry_price_ref = price
+                                entry_z_ref = z
+                                days_held = 0
+                    
+                    # Apply transaction cost if position changed
+                    # (Strictly we should compare new 'position' with 'prev_position', but here we simply updated 'position')
+                    # We need to track prev_position for cost
+                    # Actually, simplistic approach: 
+                    # If we just entered (pos 0->1), cost. If we just exited (pos 1->0), cost.
+                    # We need to store 'position' for NEXT day's return calculation.
+                    # Wait, 'daily_pnl' calculated at start of loop corresponds to return from 'yesterday end' to 'today end'.
+                    # So 'position' variable at start of loop IS the previous day's position.
+                    # The 'position' updated at end of loop is for TOMORROW.
+                    
+                    # Correct logic flow:
+                    # Current Position (from prev step) -> PnL (d * current_pos)
+                    # Decide Next Position based on Today's Z -> next_pos
+                    # Cost = abs(next_pos - current_pos) * cost
+                    
+                    # Let's rewrite loop slightly to be clean
+                    pass 
+                
+                # Cleaner Loop for PnL
+                positions = np.zeros(len(ts))
+                curr_pos = 0
+                curr_entry_z = 0
+                curr_days = 0
+                
+                for i in range(len(ts)):
+                    z = zs[i]
+                    if np.isnan(z):
+                        positions[i] = 0
+                        continue
+                    
+                    # Check Exit
+                    if curr_pos != 0:
+                        curr_days += 1
+                        should_exit = False
+                        
+                        if style == 'carry':
+                             if (curr_pos == 1 and z > curr_entry_z + 1.0) or (curr_pos == -1 and z < curr_entry_z - 1.0): should_exit = True
+                        else: # mr
+                             if (curr_pos == 1 and z >= -exit_z_default) or (curr_pos == -1 and z <= exit_z_default): should_exit = True
+                        
+                        if (curr_pos == 1 and z < -stop_z_default) or (curr_pos == -1 and z > stop_z_default): should_exit = True
+                        if curr_days >= max_hold_days: should_exit = True
+                        
+                        if should_exit:
+                            curr_pos = 0
+                            curr_days = 0
+                    
+                    # Check Entry (only if flat)
+                    if curr_pos == 0:
+                         if z <= -entry_z_default:
+                             curr_pos = 1
+                             curr_entry_z = z
+                             curr_days = 0
+                         elif z >= entry_z_default:
+                             curr_pos = -1
+                             curr_entry_z = z
+                             curr_days = 0
+                    
+                    positions[i] = curr_pos
+                    
+                # Calculate Daily Returns
+                # Position[i] is the position held at END of day i.
+                # It generates return on Day i+1.
+                # So PnL[i+1] = Position[i] * Delta[i+1]
+                pos_series = pd.Series(positions, index=ts.index).shift(1).fillna(0) # Position HELD into today
+                
+                # Transaction Costs
+                # Cost triggered when position changes value today vs yesterday
+                # pos_series is "position yesterday".
+                # positions (raw) is "position today".
+                # Change = abs(positions - pos_series_unshifted) ?
+                # Correct: Trade occurs at Close of Day i.
+                # Pos[i-1] changed to Pos[i]. Cost paid at Day i.
+                pos_raw = pd.Series(positions, index=ts.index)
+                trades_diff = pos_raw.diff().abs().fillna(0)
+                
+                # Daily PnL
+                # PnL = (Position_yesterday * Price_Change_today) - (Trade_Volume * Cost)
+                # Trade Volume = trades_diff (0->1 is 1 unit, 1->-1 is 2 units)
+                
+                daily_pnl_series = (pos_series * delta) - (trades_diff * txn_cost_bp)
+                daily_pnls[asset] = daily_pnl_series
+
+            # 3. Calculate Portfolio PnL (Weighted Sum)
             # Normalize weights for valid assets
             total_weight_raw = sum(weights[a] for a in valid_assets)
             alloc_weights = {a: weights[a]/total_weight_raw for a in valid_assets}
             
-            # 3. Calculate Portfolio PnL
-            # Method: Constant Risk Weights (Daily Rebalancing equivalent)
-            # Daily PnL (bp) = Sum( Asset_Change(bp) * Weight )
-            # *Note on Capital*: We are graphing PnL in BP (Return on Notional).
-            # Total BP Return = Sum( Asset_BP_Return * Asset_Weight )
-            
-            weighted_changes = pd.DataFrame(index=df_changes.index)
+            weighted_changes = pd.DataFrame(index=df_prices.index)
             for asset in valid_assets:
-                weighted_changes[asset] = df_changes[asset] * alloc_weights[asset]
+                if asset in daily_pnls:
+                    weighted_changes[asset] = daily_pnls[asset] * alloc_weights[asset]
+                else:
+                    weighted_changes[asset] = 0.0
             
             portfolio_daily_pnl_bp = weighted_changes.sum(axis=1)
             
-            # Apply Entry Cost (once at start)
-            if not portfolio_daily_pnl_bp.empty:
-                portfolio_daily_pnl_bp.iloc[0] -= txn_cost_bp
+            # (Remove the previous "entry cost at start" block, as dynamic cost is now included)
             
             # Cumulative PnL
             cum_pnl_bp = portfolio_daily_pnl_bp.cumsum()
