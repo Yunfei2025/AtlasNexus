@@ -406,6 +406,32 @@ def register_callbacks(app) -> None:
     import pandas as pd
     from settings.general import DIR_INPUT
     from settings.fixed_income import BondConfig
+    
+    # Import plotting dependencies at function level to catch errors early
+    try:
+        import plotly.graph_objs as go
+        from web.core.styles import app_color
+        PLOTTING_AVAILABLE = True
+    except Exception as e:
+        print(f"Warning: Plotting dependencies not available: {e}")
+        PLOTTING_AVAILABLE = False
+        app_color = {"graph_bg": "#082255", "graph_line": "#007ACE"}
+        go = None
+    
+    # Try to import web.core modules (they might fail if data files are missing)
+    try:
+        from web.core.graphs import statistics as orig_statistics
+        from web.core.graphs import spreadts as orig_spreadts
+        from web.core.graphs import curves_graph as orig_curves
+        from web.core.scripts import refresh as orig_refresh
+        GRAPHS_AVAILABLE = True
+    except Exception as e:
+        print(f"Warning: web.core.graphs not available (data files may be missing): {e}")
+        GRAPHS_AVAILABLE = False
+        orig_statistics = None
+        orig_spreadts = None
+        orig_curves = None
+        orig_refresh = None
 
     # Pickle cache to avoid redundant file loads
     _PICKLE_CACHE: dict[str, tuple[float, object]] = {}
@@ -438,12 +464,15 @@ def register_callbacks(app) -> None:
     )
     def _refresh_realtime_data(interval):
         """Load realtime spread data using the core script."""
+        if not GRAPHS_AVAILABLE or orig_refresh is None:
+            print("Realtime data refresh skipped: web.core.scripts not available")
+            return "{}"
         try:
-            # Reuse the original data loading logic to ensure consistency
-            from web.core.scripts import refresh as orig_refresh
             return orig_refresh(interval)
         except Exception as e:
             print(f"Error refreshing realtime data via core script: {e}")
+            import traceback
+            traceback.print_exc()
             return "{}"
 
     @app.callback(
@@ -577,9 +606,18 @@ def register_callbacks(app) -> None:
     )
     def _update_spread_bar(interval, data_rt_js, stype, inst, season):
         """Update the spread bar chart."""
+        if not PLOTTING_AVAILABLE or go is None:
+            # Return a simple dict-based figure if plotly isn't available
+            return {"data": [], "layout": {"title": "Plotting not available"}}
+        
+        if not GRAPHS_AVAILABLE or orig_statistics is None:
+            return go.Figure(data=[], layout=dict(
+                plot_bgcolor=app_color["graph_bg"],
+                paper_bgcolor=app_color["graph_bg"],
+                title="Data files not loaded. Please run EOD job to generate data."
+            ))
+        
         try:
-            from web.core.graphs import statistics as orig_statistics
-            
             # Check if key exists in data to avoid KeyError
             if data_rt_js:
                 data_rt = json.loads(data_rt_js)
@@ -592,8 +630,6 @@ def register_callbacks(app) -> None:
                         raise KeyError(f"Data not available for {stype}")
                 elif stype not in data_rt:
                     # Return a friendly empty chart instead of crashing
-                    from web.core.styles import app_color
-                    import plotly.graph_objs as go
                     return go.Figure(data=[], layout=dict(
                         plot_bgcolor=app_color["graph_bg"],
                         paper_bgcolor=app_color["graph_bg"],
@@ -603,8 +639,9 @@ def register_callbacks(app) -> None:
             # Forward real data to original implementation
             return orig_statistics(interval, data_rt_js, stype, inst, season)
         except Exception as e:
-            from web.core.styles import app_color
-            import plotly.graph_objs as go
+            print(f"Error in _update_spread_bar: {e}")
+            import traceback
+            traceback.print_exc()
             empty_figure = go.Figure(data=[], layout=dict(
                 plot_bgcolor=app_color["graph_bg"],
                 paper_bgcolor=app_color["graph_bg"],
@@ -633,12 +670,29 @@ def register_callbacks(app) -> None:
     )
     def _update_spread_ts(stype, inst, season, ticker):
         """Update the spread time series chart."""
+        if not PLOTTING_AVAILABLE or go is None:
+            return {"data": [], "layout": {"title": "Plotting not available"}}
+        
+        if not GRAPHS_AVAILABLE or orig_spreadts is None:
+            return go.Figure(data=[], layout=dict(
+                plot_bgcolor=app_color["graph_bg"],
+                paper_bgcolor=app_color["graph_bg"],
+                title="Data files not loaded. Please run EOD job to generate data."
+            ))
+        
         try:
-            from web.core.graphs import spreadts as orig_spreadts
+            # Handle empty/None ticker gracefully
+            if not ticker:
+                return go.Figure(data=[], layout=dict(
+                    plot_bgcolor=app_color["graph_bg"],
+                    paper_bgcolor=app_color["graph_bg"],
+                    title="Please select a ticker from the bar chart above"
+                ))
             return orig_spreadts(stype, inst, season, ticker)
         except Exception as e:
-            from web.core.styles import app_color
-            import plotly.graph_objs as go
+            print(f"Error in _update_spread_ts: {e}")
+            import traceback
+            traceback.print_exc()
             empty_figure = go.Figure(data=[], layout=dict(
                 plot_bgcolor=app_color["graph_bg"],
                 paper_bgcolor=app_color["graph_bg"],
@@ -658,15 +712,27 @@ def register_callbacks(app) -> None:
     )
     def _update_curves(interval, curve_type):
         """Update the curves chart."""
+        if not PLOTTING_AVAILABLE or go is None:
+            return {"data": [], "layout": {"title": "Plotting not available"}}, "Error", {"display": "none"}
+        
+        if not GRAPHS_AVAILABLE or orig_curves is None:
+            empty_figure = go.Figure(data=[], layout=dict(
+                plot_bgcolor=app_color["graph_bg"],
+                paper_bgcolor=app_color["graph_bg"],
+                title="Data files not loaded. Please run EOD job to generate data."
+            ))
+            return empty_figure, "Data Not Available", {"display": "none"}
+        
         try:
-            from web.core.graphs import curves_graph as orig_curves
             return orig_curves(interval, curve_type)
         except Exception as e:
-            from web.core.styles import app_color
-            import plotly.graph_objs as go
+            print(f"Error in _update_curves: {e}")
+            import traceback
+            traceback.print_exc()
             empty_figure = go.Figure(data=[], layout=dict(
                 plot_bgcolor=app_color["graph_bg"],
                 paper_bgcolor=app_color["graph_bg"],
                 title=f"Error: {str(e)[:100]}"
             ))
             return empty_figure, "Error Loading Curves", {"display": "none"}
+
