@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Created on Wed Sep 24 19:52:56 2025
 
@@ -183,7 +183,7 @@ def updateInstrumentDef():
                 def_file = DIR_INPUT / (btype + "-InstrumentInfo.pkl")
                 interval = dp.date() - get_mtime_date(def_file)
 
-                if interval.days == 10: # update the pool every 10 days
+                if interval.days == 5: # update the pool every 5 days
                     pool = updateInstrumentPool(btype, dps)
                     bonds = pool.index
                 else:

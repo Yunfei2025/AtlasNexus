@@ -114,10 +114,113 @@ def build_header():
 
 
 def build_tabs_panel():
+    # Pre-build all main tab contents to preserve state
+    run_center_content = html.Div(
+        [
+            html.Div([
+                html.A(html.Button("Update Data", id="an-btn-update", n_clicks=0, style={'marginRight': '10px'})),
+                html.A(html.Button("Run EOD", id="an-btn-eod", n_clicks=0, style={'marginRight': '10px'})),
+                html.A(html.Button("Run EOD (+update)", id="an-btn-eod-update", n_clicks=0)),
+            ], style={'padding': '15px'}),
+            html.Div(id="an-job-status", children="No job running.", style={'padding': '0 15px', 'fontStyle': 'italic'}),
+            html.Div(id="an-run-center-content"),
+            dcc.Interval(id="an-run-center-interval", interval=5_000, n_intervals=0),
+        ]
+    )
+    
+    beta_content = html.Div(
+        [
+            html.H5("Beta Book (Top-down)"),
+            html.P("Planned: factor/regime → portfolio construction → risk-managed execution."),
+            html.Div(
+                [
+                    dcc.Tabs(
+                        id="an-beta-subtabs",
+                        value="factor",
+                        vertical=True,
+                        children=[
+                            dcc.Tab(label="FACTOR", value="factor", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="FUTURES", value="backtest-factor", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="REBALANCE", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="SURFACE", value="surface", style=tab_style, selected_style=tab_selected_style),
+                        ],
+                        style={"height": "520px"},
+                    ),
+                    html.Div([
+                        html.Div(id="beta-factor-div", children=build_multiasset_factor_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
+                        html.Div(id="beta-portfolio-div", children=build_multiasset_portfolio_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-backtest-factor-div", children=build_factor_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-surface-div", children=build_surface_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                    ], style={"position": "relative", "width": "100%", "minHeight": "500px"}),
+                ],
+                style={"display": "flex", "flexDirection": "row", "gap": "12px"},
+            ),
+        ]
+    )
+    
+    alpha_content = html.Div(
+        [
+            html.H5("Alpha Book (Bottom-up)"),
+            html.P("Relative value alpha: candidates → correlation check → scoring → risk parity sizing → basket."),
+            html.Div(
+                [
+                    dcc.Tabs(
+                        id="an-alpha-subtabs",
+                        value="candidates",
+                        vertical=True,
+                        children=[
+                            dcc.Tab(label="CANDIDATES", value="candidates", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="BACKTEST", value="backtest", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="BASKET", value="basket", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="SPREAD", value="spreads", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="PAIRS", value="pairs", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="CURVES", value="curves", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="VOLATILITY", value="volatility", style=tab_style, selected_style=tab_selected_style),
+                        ],
+                        style={"height": "520px"},
+                    ),
+                    html.Div([
+                        html.Div(id="alpha-candidates-div", children=build_candidates_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
+                        html.Div(id="alpha-portfolio-div", children=build_portfolio_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="alpha-backtest-div", children=build_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="alpha-basket-div", children=build_basket_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="alpha-spreads-div", children=build_spreads_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="alpha-pairs-div", children=build_pairs_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="alpha-curves-div", children=build_curves_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="alpha-volatility-div", children=build_volatility_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                    ], style={"position": "relative", "width": "100%", "minHeight": "500px"}),
+                ],
+                style={"display": "flex", "flexDirection": "row", "gap": "12px"},
+            ),
+        ]
+    )
+    
+    risk_content = build_multiasset_risk_layout()
+    
     return html.Div(
         [
-            # Shared store for Alpha Book (persists across subtab switches)
+            # Shared stores for persisting content across tab switches
             dcc.Store(id='alpha-selected-candidates', data=[]),
+            dcc.Store(id='alpha-candidates-content', storage_type='session'),
+            dcc.Store(id='alpha-portfolio-content', storage_type='session'),
+            dcc.Store(id='alpha-backtest-content', storage_type='session'),
+            dcc.Store(id='alpha-basket-content', storage_type='session'),
+            dcc.Store(id='alpha-spreads-content', storage_type='session'),
+            dcc.Store(id='alpha-pairs-content', storage_type='session'),
+            dcc.Store(id='alpha-curves-content', storage_type='session'),
+            dcc.Store(id='alpha-volatility-content', storage_type='session'),
+            dcc.Store(id='beta-factor-content', storage_type='session'),
+            dcc.Store(id='beta-portfolio-content', storage_type='session'),
+            dcc.Store(id='beta-backtest-factor-content', storage_type='session'),
+            dcc.Store(id='beta-backtest-portfolio-content', storage_type='session'),
+            dcc.Store(id='beta-surface-content', storage_type='session'),
+            
+            # Shared intervals
+            dcc.Interval(id="data-refresh", interval=60_000, n_intervals=0),
+            
             html.Div(
                 [
                     dcc.Tabs(
@@ -128,11 +231,16 @@ def build_tabs_panel():
                             dcc.Tab(label="Beta Book", value="beta", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="Alpha Book", value="alpha", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="Summary", value="risk", style=tab_style, selected_style=tab_selected_style),
-                            # Spreads tab moved into the Alpha Book content (bottom-up signals / pair screens)
                         ],
                         style=tabs_styles,
                     ),
-                    html.Div(id="an-tabs-content"),
+                    # Pre-render all main tabs with absolute positioning to preserve state
+                    html.Div([
+                        html.Div(id="run-center-div", children=run_center_content, style={"position": "relative", "display": "block"}),
+                        html.Div(id="beta-div", children=beta_content, style={"position": "relative", "display": "none"}),
+                        html.Div(id="alpha-div", children=alpha_content, style={"position": "relative", "display": "none"}),
+                        html.Div(id="risk-div", children=risk_content, style={"position": "relative", "display": "none"}),
+                    ], style={"width": "100%"}),
                     dcc.Interval(id="an-interval", interval=5_000, n_intervals=0),
                 ],
                 className="tab__title",
@@ -199,90 +307,22 @@ def _start_jobs(n_update, n_eod, n_eod_update):
 
 
 @app.callback(
-    Output("an-tabs-content", "children"),
+    [Output("run-center-div", "style"),
+     Output("beta-div", "style"),
+     Output("alpha-div", "style"),
+     Output("risk-div", "style")],
     Input("an-tabs", "value"),
 )
 def _render_tab(tab):
-    if tab == "run-center":
-        # Return a container with a dynamic updating section
-        return html.Div(
-            [
-                html.Div([
-                    html.A(html.Button("Update Data", id="an-btn-update", n_clicks=0, style={'marginRight': '10px'})),
-                    html.A(html.Button("Run EOD", id="an-btn-eod", n_clicks=0, style={'marginRight': '10px'})),
-                    html.A(html.Button("Run EOD (+update)", id="an-btn-eod-update", n_clicks=0)),
-                ], style={'padding': '15px'}),
-                html.Div(id="an-job-status", children="No job running.", style={'padding': '0 15px', 'fontStyle': 'italic'}),
-                html.Div(id="an-run-center-content"),
-                dcc.Interval(id="an-run-center-interval", interval=5_000, n_intervals=0),
-            ]
-        )
-
-    if tab == "beta":
-        # Pre-render initial subtab content so it shows immediately
-        initial_beta_content = build_multiasset_factor_layout()
-        return html.Div(
-            [
-                html.H5("Beta Book (Top-down)"),
-                html.P("Planned: factor/regime → portfolio construction → risk-managed execution."),
-                html.Div(
-                    [
-                        dcc.Tabs(
-                            id="an-beta-subtabs",
-                            value="factor",
-                            vertical=True,
-                            children=[
-                                dcc.Tab(label="FACTOR", value="factor", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="FUTURES", value="backtest-factor", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="REBALANCE", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="SURFACE", value="surface", style=tab_style, selected_style=tab_selected_style),
-                            ],
-                            style={"height": "520px"},
-                        ),
-                        html.Div(id="an-beta-subtabs-content", children=initial_beta_content, style={"paddingLeft": "16px", "width": "100%"}),
-                    ],
-                    style={"display": "flex", "flexDirection": "row", "gap": "12px"},
-                ),
-            ]
-        )
-
-    if tab == "alpha":
-        # Pre-render initial subtab content so it shows immediately
-        initial_alpha_content = build_candidates_layout()
-        return html.Div(
-            [
-                html.H5("Alpha Book (Bottom-up)"),
-                html.P("Relative value alpha: candidates → correlation check → scoring → risk parity sizing → basket."),
-                html.Div(
-                    [
-                        dcc.Tabs(
-                            id="an-alpha-subtabs",
-                            value="candidates",
-                            vertical=True,
-                            children=[
-                                dcc.Tab(label="CANDIDATES", value="candidates", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="BACKTEST", value="backtest", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="BASKET", value="basket", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="SPREAD", value="spreads", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="PAIRS", value="pairs", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="CURVES", value="curves", style=tab_style, selected_style=tab_selected_style),
-                                dcc.Tab(label="VOLATILITY", value="volatility", style=tab_style, selected_style=tab_selected_style),
-                            ],
-                            style={"height": "520px"},
-                        ),
-                        html.Div(id="an-alpha-subtabs-content", children=initial_alpha_content, style={"paddingLeft": "16px", "width": "100%"}),
-                    ],
-                    style={"display": "flex", "flexDirection": "row", "gap": "12px"},
-                ),
-            ]
-        )
-
-    if tab == "risk":
-        return build_multiasset_risk_layout()
-
-    return html.Div([html.P(f"Unknown tab: {tab}")])
+    """Show/hide main tabs to preserve state."""
+    styles = {
+        "run-center": {"display": "block"} if tab == "run-center" else {"display": "none"},
+        "beta": {"display": "block"} if tab == "beta" else {"display": "none"},
+        "alpha": {"display": "block"} if tab == "alpha" else {"display": "none"},
+        "risk": {"display": "block"} if tab == "risk" else {"display": "none"},
+    }
+    
+    return styles["run-center"], styles["beta"], styles["alpha"], styles["risk"]
 
 
 @app.callback(
@@ -356,52 +396,68 @@ def _update_run_center(n, job_id):
 
 
 @app.callback(
-    Output("an-beta-subtabs-content", "children"),
+    [Output("beta-factor-div", "style"),
+     Output("beta-portfolio-div", "style"),
+     Output("beta-backtest-factor-div", "style"),
+     Output("beta-backtest-portfolio-div", "style"),
+     Output("beta-surface-div", "style")],
     Input("an-beta-subtabs", "value"),
 )
 def _render_beta_subtabs(subtab: str):
-    if subtab == "factor":
-        return build_multiasset_factor_layout()
-
-    if subtab == "portfolio":
-        return build_multiasset_portfolio_layout()
-
-    if subtab == "backtest-factor":
-        return build_factor_backtest_layout()
-
-    if subtab == "backtest-portfolio":
-        return build_multiasset_backtest_layout()
-
-    if subtab == "surface":
-        return build_surface_layout()
-
-    return html.Div([html.P(f"Unknown Beta subtab: {subtab}")])
+    """Show/hide Beta Book subtabs to preserve state."""
+    base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
+    styles = {
+        "factor": {**base_style, "display": "block"} if subtab == "factor" else {**base_style, "display": "none"},
+        "portfolio": {**base_style, "display": "block"} if subtab == "portfolio" else {**base_style, "display": "none"},
+        "backtest-factor": {**base_style, "display": "block"} if subtab == "backtest-factor" else {**base_style, "display": "none"},
+        "backtest-portfolio": {**base_style, "display": "block"} if subtab == "backtest-portfolio" else {**base_style, "display": "none"},
+        "surface": {**base_style, "display": "block"} if subtab == "surface" else {**base_style, "display": "none"},
+    }
+    
+    return (
+        styles["factor"],
+        styles["portfolio"],
+        styles["backtest-factor"],
+        styles["backtest-portfolio"],
+        styles["surface"]
+    )
 
 
 @app.callback(
-    Output("an-alpha-subtabs-content", "children"),
+    [Output("alpha-candidates-div", "style"),
+     Output("alpha-portfolio-div", "style"),
+     Output("alpha-backtest-div", "style"),
+     Output("alpha-basket-div", "style"),
+     Output("alpha-spreads-div", "style"),
+     Output("alpha-pairs-div", "style"),
+     Output("alpha-curves-div", "style"),
+     Output("alpha-volatility-div", "style")],
     Input("an-alpha-subtabs", "value"),
 )
 def _render_alpha_subtabs(subtab: str):
-    """Render Alpha Book subtabs (store is defined in build_tabs_panel for persistence)."""
-    if subtab == "candidates":
-        return build_candidates_layout()
-    if subtab == "volatility":
-        return build_volatility_layout()
-    if subtab == "portfolio":
-        return build_portfolio_layout()
-    if subtab == "backtest":
-        return build_backtest_layout()
-    if subtab == "basket":
-        return build_basket_layout()
-    if subtab == "spreads":
-        return build_spreads_layout()
-    if subtab == "pairs":
-        return build_pairs_layout()
-    if subtab == "curves":
-        return build_curves_layout()
-
-    return html.Div([html.P(f"Unknown Alpha subtab: {subtab}")])
+    """Show/hide Alpha Book subtabs to preserve state."""
+    base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
+    styles = {
+        "candidates": {**base_style, "display": "block"} if subtab == "candidates" else {**base_style, "display": "none"},
+        "portfolio": {**base_style, "display": "block"} if subtab == "portfolio" else {**base_style, "display": "none"},
+        "backtest": {**base_style, "display": "block"} if subtab == "backtest" else {**base_style, "display": "none"},
+        "basket": {**base_style, "display": "block"} if subtab == "basket" else {**base_style, "display": "none"},
+        "spreads": {**base_style, "display": "block"} if subtab == "spreads" else {**base_style, "display": "none"},
+        "pairs": {**base_style, "display": "block"} if subtab == "pairs" else {**base_style, "display": "none"},
+        "curves": {**base_style, "display": "block"} if subtab == "curves" else {**base_style, "display": "none"},
+        "volatility": {**base_style, "display": "block"} if subtab == "volatility" else {**base_style, "display": "none"},
+    }
+    
+    return (
+        styles["candidates"],
+        styles["portfolio"],
+        styles["backtest"],
+        styles["basket"],
+        styles["spreads"],
+        styles["pairs"],
+        styles["curves"],
+        styles["volatility"]
+    )
 
 
 

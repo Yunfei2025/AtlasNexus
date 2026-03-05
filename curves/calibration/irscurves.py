@@ -150,12 +150,54 @@ class CurveDataManager:
         self.data_path = data_path or os.path.join(DIR_INPUT, 'IRS-cvdata.pkl')
         self._curve_data = None
         self._last_load_time = None
+        self._did_migrate_legacy_tenors = False
+
+    def _migrate_legacy_tenors(self) -> bool:
+        """Backfill legacy tenor columns (e.g., '3m') into current ones (e.g., '1s')."""
+        if self._curve_data is None:
+            return False
+
+        legacy_to_current = {
+            '3m': '1s',
+            '6m': '2s',
+            '9m': '3s',
+            '1y': '4s'
+        }
+
+        changed = False
+        for curve_type in IRSConfig.CURVE_TYPES:
+            for kind in ['spot', 'forward']:
+                df = self._curve_data.get(curve_type, {}).get(kind)
+                if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+                    continue
+
+                for legacy, current in legacy_to_current.items():
+                    if legacy not in df.columns:
+                        continue
+
+                    if current not in df.columns:
+                        df[current] = df[legacy]
+                        changed = True
+                    else:
+                        before_na = df[current].isna().sum()
+                        df[current] = df[current].where(~df[current].isna(), df[legacy])
+                        after_na = df[current].isna().sum()
+                        if after_na != before_na:
+                            changed = True
+
+        return changed
     
     def load(self, force_reload: bool = False) -> Dict:
         """Load curve data from pickle file with caching."""
         if self._curve_data is None or force_reload:
             if os.path.exists(self.data_path):
                 self._curve_data = pd.read_pickle(self.data_path)
+                # One-time migration for legacy tenor labels stored in existing pickles
+                if not self._did_migrate_legacy_tenors:
+                    if self._migrate_legacy_tenors():
+                        print("Migrated legacy tenors in IRS-cvdata (e.g., 3m -> 1s).")
+                        self.save()
+                    self._did_migrate_legacy_tenors = True
             else:
                 # Initialize empty structure
                 self._curve_data = {
@@ -223,7 +265,12 @@ class FixingRateProvider:
         tenor_numeric = self.tenor_converter.to_numeric(list(forward_data.index))
         forward_data_numeric = pd.Series(forward_data.values, index=tenor_numeric)
         forward_data_numeric.loc[0] = fixing_rate
-        forward_data_numeric = forward_data_numeric.sort_index().dropna()
+        forward_data_numeric = (
+            forward_data_numeric.sort_index()
+            .groupby(level=0)
+            .apply(lambda x: x.dropna().iloc[-1] if x.dropna().size else x.iloc[-1])
+            .dropna()
+        )
         
         # Calculate terms for workdays
         terms = [(day - trade_date).days / GeneralConfig.YN for day in workdays]
@@ -249,7 +296,12 @@ class FixingRateProvider:
         tenor_numeric = self.tenor_converter.to_numeric(list(spot_data.index))
         spot_data_numeric = pd.Series(spot_data.values, index=tenor_numeric)
         spot_data_numeric.loc[0] = fixing_rate
-        spot_data_numeric = spot_data_numeric.sort_index().dropna()
+        spot_data_numeric = (
+            spot_data_numeric.sort_index()
+            .groupby(level=0)
+            .apply(lambda x: x.dropna().iloc[-1] if x.dropna().size else x.iloc[-1])
+            .dropna()
+        )
         
         # Calculate terms for workdays
         terms = [(day - trade_date).days / GeneralConfig.YN for day in workdays]
@@ -342,6 +394,7 @@ class CurveGenerator:
         spot_data = curve_data[curve_type]['spot']
         common = [d for d in timewindow if d in spot_data.index]
         spot_data = spot_data.loc[common]
+        spot_data = self._normalize_tenor_columns(spot_data)
         
         # Extract available tenors
         available_labels = [lbl for lbl in IRSConfig.TENOR_MAP.values() if lbl in spot_data.columns]
@@ -377,6 +430,71 @@ class CurveGenerator:
         self.curve_data_manager.update_curve(curve_type, prev_date, sr.values, fr.values, terms)
         
         return curve
+
+    @staticmethod
+    def _normalize_tenor_columns(spot_data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normalize legacy tenor labels to current 's' labels.
+
+        Example: '3m' -> '1s', '6m' -> '2s', '9m' -> '3s', '1y' -> '4s'
+        """
+        legacy_to_current = {
+            '3m': '1s',
+            '6m': '2s',
+            '9m': '3s',
+            '1y': '4s'
+        }
+
+        spot_data = spot_data.copy()
+
+        for legacy, current in legacy_to_current.items():
+            if legacy not in spot_data.columns:
+                continue
+
+            if current in spot_data.columns:
+                spot_data[current] = spot_data[current].where(
+                    ~spot_data[current].isna(), spot_data[legacy]
+                )
+                spot_data = spot_data.drop(columns=[legacy])
+            else:
+                spot_data = spot_data.rename(columns={legacy: current})
+
+        return spot_data
+
+    @staticmethod
+    def _normalize_tenor_index(tenor_series: pd.Series) -> pd.Series:
+        """Normalize legacy tenor index labels to the current 's' labels."""
+        if tenor_series is None or tenor_series.empty:
+            return tenor_series
+
+        legacy_to_current = {
+            '3m': '1s',
+            '6m': '2s',
+            '9m': '3s',
+            '1y': '4s'
+        }
+
+        sr = tenor_series.copy()
+        sr.index = [str(i).strip().lower() for i in sr.index]
+
+        for legacy, current in legacy_to_current.items():
+            if legacy not in sr.index:
+                continue
+
+            if current in sr.index:
+                try:
+                    if pd.isna(sr.loc[current]):
+                        sr.loc[current] = sr.loc[legacy]
+                except Exception:
+                    pass
+                sr = sr.drop(index=legacy)
+            else:
+                sr = sr.rename(index={legacy: current})
+
+        if sr.index.has_duplicates:
+            sr = sr.groupby(level=0).apply(lambda x: x.dropna().iloc[-1] if x.dropna().size else x.iloc[-1])
+
+        return sr
     
     def _extract_historical_spots(self, curve_ts: pd.Series, timewindow: pd.DatetimeIndex, 
                                    curve_type: str):
@@ -635,6 +753,9 @@ def px2Fixings(td):
     for ct in IRSConfig.CURVE_TYPES:
         forward = curve_data[ct]['forward'].loc[td]
         spot = curve_data[ct]['spot'].loc[td]
+
+        forward = CurveGenerator._normalize_tenor_index(forward)
+        spot = CurveGenerator._normalize_tenor_index(spot)
         
         if forward.empty or spot.empty:
             print(f"Warning: Empty curve data for curve type {ct}")
