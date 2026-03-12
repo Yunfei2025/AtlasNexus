@@ -3712,6 +3712,35 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             ]),
         ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '20px'}),
     ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'})
+
+    # Instrument chart (first chart): show underlying spread/macro series used in backtest.
+    instrument_fig = go.Figure()
+    if 'spread_ts' in results and results['spread_ts'] is not None:
+        spread_ts = results['spread_ts'].dropna()
+        if len(spread_ts) > 0:
+            instrument_fig.add_trace(go.Scatter(
+                x=spread_ts.index,
+                y=spread_ts.values,
+                mode='lines',
+                name='Instrument',
+                line=dict(color=THEME['accent'], width=2),
+            ))
+
+    instrument_fig.update_layout(
+        title='Instrument History',
+        height=250,
+        margin=dict(l=50, r=20, t=40, b=40),
+        plot_bgcolor=THEME['bg_main'],
+        paper_bgcolor=THEME['bg_main'],
+        font=dict(color=THEME['text_main']),
+        xaxis=dict(gridcolor=THEME['bg_card']),
+        yaxis=dict(title='Value', gridcolor=THEME['bg_card']),
+        showlegend=False,
+    )
+
+    instrument_div = html.Div([
+        dcc.Graph(figure=instrument_fig, style={'height': '250px'}),
+    ], style={'marginBottom': '15px'})
     
     # Equity curve chart
     equity_fig = go.Figure()
@@ -3829,6 +3858,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     
     return html.Div([
         metrics_div,
+        instrument_div,
         equity_div,
         signal_div,
         trades_table,
