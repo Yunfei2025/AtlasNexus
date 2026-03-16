@@ -184,12 +184,12 @@ After scoring, portfolio weights are computed:
 ### Mean-Reversion Trade
 
 ```
-Spread: TBond210009.IB-TBondCurve5Y
+Spread: UST 5Y issue vs fitted Treasury curve
 Current: 3.15 bp
 Mean: 0.50 bp
 Halflife: 12 days
 Vol: 2.0 bp
-Direction: SELL (spread > mean)
+Direction: SELL (bond is rich to curve)
 
 Scan-time:
   expected_move = |3.15 - 0.50| / 12 = 0.221 bp/day
@@ -202,7 +202,7 @@ Portfolio-time: (same, no momentum for MR)
 ### Carry/Trend Trade
 
 ```
-Spread: FR007S5Y-FR007S10Y (5s10s swap spread)
+Spread: SOFR 5s10s swap curve (5s10s slope)
 Carry: 1.5 bp/quarter → 0.5 bp/month
 Vol: 3.0 bp
 Direction: BUY
@@ -220,7 +220,7 @@ Portfolio-time:
   composite_score = 0.167 / 3.0 = 0.056
 ```
 
-(Note: In the second example, carry is monthly so divided by 30 for daily; momentum boosts the edge.)
+(Note: In the second example, carry is monthly so divided by 30 for daily; momentum boosts the edge. The production implementation in this repo still uses China-market instruments such as FR007 and CGB series, but the scoring logic is market-agnostic.)
 
 ---
 

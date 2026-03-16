@@ -490,7 +490,47 @@ def build_multiasset_factor_layout():
         ], style={'maxWidth': '800px', 'margin': '0 auto 20px auto', 'padding': '15px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '5px', 'border': f'1px solid {THEME["table_header"]}'}),
         
 
-        dcc.Graph(id='factor-history-chart')
+        dcc.Graph(id='factor-history-chart'),
+
+        # ── Factor Model Signals Panel ────────────────────────────────────
+        html.Div([
+            html.H5("📡 Factor Model Signals",
+                     style={'color': THEME['text_main'], 'marginBottom': '10px'}),
+            html.P(
+                "Live signal buckets from the factor prediction engine.  "
+                "Each risk factor is mapped to a directional bucket that drives "
+                "risk-budget scalars for the Portfolio tab.",
+                style={'color': THEME['text_sub'], 'fontSize': '12px',
+                       'marginBottom': '15px'}),
+            html.Div([
+                html.Button(
+                    "Refresh Signals",
+                    id='refresh-factor-signals-btn',
+                    n_clicks=0,
+                    style={
+                        'backgroundColor': THEME['accent'],
+                        'color': 'white', 'padding': '5px 15px',
+                        'border': 'none', 'borderRadius': '4px',
+                        'cursor': 'pointer', 'fontWeight': 'bold',
+                        'marginRight': '15px',
+                    }),
+                html.Span(id='factor-signals-status',
+                          style={'color': THEME['text_sub'], 'fontSize': '12px'}),
+            ], style={'marginBottom': '15px'}),
+            dcc.Loading(
+                id='loading-factor-signals',
+                type='default',
+                children=html.Div(id='factor-signals-table-container'),
+            ),
+        ], style={
+            'backgroundColor': THEME['bg_card'], 'padding': '20px',
+            'borderRadius': '5px',
+            'border': f'1px solid {THEME["table_header"]}',
+            'marginTop': '20px',
+        }),
+        # Store for the latest signal snapshot (consumed by Portfolio tab)
+        dcc.Store(id='factor-signals-snapshot-store', data={}),
+
     ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px', 'borderRadius': '5px', 'margin': '10px'})
 
 
@@ -709,7 +749,22 @@ def build_multiasset_portfolio_layout():
                 
                 # Column 3: Risk Budgets
                 html.Div([
-                    html.H6("Risk Budgets", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '15px'}),
+                    html.H6("Risk Budgets", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '10px'}),
+                    # --- Factor signal toggle ---
+                    html.Div([
+                        dcc.Checklist(
+                            id='use-factor-signals-toggle',
+                            options=[{'label': ' Use Factor Model Signals', 'value': 'on'}],
+                            value=[],
+                            inputStyle={'marginRight': '5px'},
+                            labelStyle={'color': THEME['accent'], 'fontSize': '12px', 'fontWeight': 'bold'},
+                            style={'marginBottom': '8px'},
+                        ),
+                        html.Span(
+                            id='factor-signals-toggle-status',
+                            style={'color': THEME['text_sub'], 'fontSize': '11px'},
+                        ),
+                    ]),
                     html.Div(
                         id='risk-budget-container',
                         children=[html.Div("Add assets to see risk factors", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px'})] if not initial_pool else [],
@@ -2077,6 +2132,144 @@ def register_multiasset_callbacks(app):
         
         return inputs
 
+    # ── 3.7  Factor Model Signals – refresh & render ──────────────────
+    @app.callback(
+        [Output('factor-signals-table-container', 'children'),
+         Output('factor-signals-status', 'children'),
+         Output('factor-signals-snapshot-store', 'data')],
+        [Input('refresh-factor-signals-btn', 'n_clicks')],
+        prevent_initial_call=True,
+    )
+    def refresh_factor_signals(n_clicks):
+        """Compute signal snapshot from the factor prediction engine and
+        render as a colour-coded table in the Factor tab."""
+        try:
+            from factors.processing.exposure_mapper import (
+                BucketConfig, compute_signal_snapshot,
+            )
+            from factors.processing.risk_factor_mapper import (
+                CONTRACT_RISK_PROFILES, decompose_signal_series,
+            )
+            import joblib, os, glob
+            from settings.paths import PATH
+
+            # --- locate latest trained model artifacts -------------------------
+            model_dir = os.path.join(str(PATH), 'factors')
+            model_files = glob.glob(os.path.join(model_dir, 'trained_model_*.joblib'))
+            if not model_files:
+                return (
+                    html.Div("No trained factor models found.", style={'color': THEME['text_sub']}),
+                    "No models",
+                    {},
+                )
+
+            # --- collect per-contract signals ----------------------------------
+            rf_signals: dict = {}  # risk_factor → signal Series
+            for mf in model_files:
+                basename = os.path.basename(mf)
+                # e.g. trained_model_T.CFE_20250831.joblib
+                parts = basename.replace('trained_model_', '').replace('.joblib', '').split('_')
+                contract = parts[0] if parts else None
+                if contract not in CONTRACT_RISK_PROFILES:
+                    continue
+                model = joblib.load(mf)
+                predictions = model.get('predictions')
+                if predictions is None or (hasattr(predictions, 'empty') and predictions.empty):
+                    continue
+                decomposed = decompose_signal_series(predictions, contract)
+                for col in decomposed.columns:
+                    if col in rf_signals:
+                        rf_signals[col] = rf_signals[col].add(decomposed[col], fill_value=0)
+                    else:
+                        rf_signals[col] = decomposed[col].copy()
+
+            if not rf_signals:
+                return (
+                    html.Div("Models loaded but no signal series found (check 'predictions' key in .joblib).",
+                             style={'color': THEME['text_sub']}),
+                    "No signals",
+                    {},
+                )
+
+            # --- bucket mapping ------------------------------------------------
+            cfg = BucketConfig()
+            snapshot = compute_signal_snapshot(rf_signals, cfg)
+
+            if snapshot.empty:
+                return (
+                    html.Div("Signal snapshot is empty.", style={'color': THEME['text_sub']}),
+                    "Empty",
+                    {},
+                )
+
+            # --- render table --------------------------------------------------
+            def _bucket_color(label):
+                label_lower = str(label).lower()
+                if 'strong long' in label_lower: return THEME['success']
+                if 'long' in label_lower: return '#27ae60'
+                if 'strong short' in label_lower: return THEME['danger']
+                if 'short' in label_lower: return '#c0392b'
+                return THEME['text_sub']
+
+            rows = []
+            for _, row in snapshot.iterrows():
+                rows.append(html.Tr([
+                    html.Td(row['risk_factor'], style={'fontWeight': 'bold'}),
+                    html.Td(f"{row['signal']:.4f}"),
+                    html.Td(row['bucket_label'],
+                             style={'color': _bucket_color(row['bucket_label']),
+                                    'fontWeight': 'bold'}),
+                    html.Td(f"{row['scalar']:+.1f}×"),
+                    html.Td(f"{row['risk_budget']:+.2f} M"),
+                    html.Td(f"{row['confidence']:.0%}"),
+                ], style={'fontSize': '12px'}))
+
+            table = html.Table(
+                [html.Thead(html.Tr([
+                    html.Th(c, style={'padding': '4px 8px', 'color': THEME['text_sub'],
+                                      'borderBottom': f'1px solid {THEME["table_header"]}'})
+                    for c in ['Risk Factor', 'Signal', 'Bucket', 'Scalar',
+                              'Risk Budget', 'Confidence']
+                ]))] + [html.Tbody(rows)],
+                style={'width': '100%', 'color': THEME['text_main'],
+                       'fontSize': '12px', 'borderCollapse': 'collapse'},
+            )
+
+            # Store snapshot as serialisable dict for Portfolio tab
+            snapshot_data = snapshot.to_dict(orient='records')
+
+            return (
+                table,
+                f"Updated ({len(snapshot)} factors)",
+                snapshot_data,
+            )
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return (
+                html.Div(f"Error: {e}", style={'color': THEME['danger']}),
+                "Error",
+                {},
+            )
+
+    # ── 3.8  Auto-fill risk budgets from factor signals ───────────────
+    @app.callback(
+        Output('factor-signals-toggle-status', 'children'),
+        [Input('use-factor-signals-toggle', 'value')],
+        [State('factor-signals-snapshot-store', 'data'),
+         State('asset-pool-store', 'data')],
+        prevent_initial_call=True,
+    )
+    def autofill_risk_budgets_status(toggle_value, snapshot_data, asset_pool):
+        """When the toggle is ON and a signal snapshot exists, show guidance.
+        The actual budget values are injected in the Run Analysis callback."""
+        if 'on' not in (toggle_value or []):
+            return ""
+        if not snapshot_data:
+            return "⚠ No signal snapshot. Click 'Refresh Signals' in the Factor tab first."
+        return f"✓ {len(snapshot_data)} factor signals will override risk budgets at run time."
+
     # 4. Run Analysis (Portfolio Tab -> Results)
     @app.callback(
         [Output('portfolio-table-container', 'children'),
@@ -2089,9 +2282,12 @@ def register_multiasset_callbacks(app):
          State('risk-model-selector', 'value'),
          State('asset-pool-store', 'data'),
          State({'type': 'risk-budget-input', 'index': ALL}, 'value'),
-         State({'type': 'risk-budget-input', 'index': ALL}, 'id')]
+         State({'type': 'risk-budget-input', 'index': ALL}, 'id'),
+         State('use-factor-signals-toggle', 'value'),
+         State('factor-signals-snapshot-store', 'data')]
     )
-    def run_analysis(n_clicks, total_capital, capital_unit, risk_model, asset_pool, budget_values, budget_ids):
+    def run_analysis(n_clicks, total_capital, capital_unit, risk_model, asset_pool,
+                     budget_values, budget_ids, signal_toggle, signal_snapshot):
         if n_clicks == 0:
             return (html.Div("No data available. Click 'Run Analysis' to start.", style={'color': THEME['text_sub']}),
                     "", "", {})
@@ -2121,6 +2317,21 @@ def register_multiasset_callbacks(app):
                         risk_budgets[factor_name] = float(val) if val is not None else 1.0
                     except (ValueError, TypeError):
                         pass
+
+            # Override risk budgets with factor model signals when toggle is ON
+            if 'on' in (signal_toggle or []) and signal_snapshot:
+                signal_budgets = {
+                    rec['risk_factor']: rec['risk_budget']
+                    for rec in signal_snapshot
+                    if rec.get('risk_factor') and rec.get('risk_budget') is not None
+                }
+                if signal_budgets and risk_budgets is not None:
+                    for factor, budget in signal_budgets.items():
+                        if factor in risk_budgets:
+                            risk_budgets[factor] = budget
+                    print(f"📡 Signal-driven budgets applied for {len(signal_budgets)} factors")
+                elif signal_budgets:
+                    risk_budgets = signal_budgets
 
             # Determine use_deterministic flag
             use_deterministic = (risk_model == 'deterministic')

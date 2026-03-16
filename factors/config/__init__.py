@@ -212,6 +212,21 @@ class ModelConfig(BaseConfig):
         self.min_stable_ic = 0.03  # Minimum IC to consider stable
         self.use_factor_diversification = True  # Ensure factor diversification
         self.max_factor_correlation = 0.6  # Max correlation between selected factors
+        
+        # --- Exposure Bucket Mapping (Signal → Risk Budget) ---
+        self.bucket_quantile_boundaries = [0.0, 0.05, 0.20, 0.40, 0.60, 0.80, 0.95, 1.0]
+        self.bucket_scalars = [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5]
+        self.bucket_labels = [
+            'Strong Short', 'Short', 'Mild Short', 'Neutral',
+            'Mild Long', 'Long', 'Strong Long'
+        ]
+        self.bucket_quantile_lookback = 252  # Rolling window for quantile estimation
+        self.bucket_persistence_days = 3     # Hysteresis: days before bucket change triggers
+        self.bucket_base_risk_budget = 1.0   # Base risk budget per factor (millions CNY)
+        
+        # --- Regime-Aware IC Weighting ---
+        self.use_regime_aware_ic = False     # Use regime-conditional IC weights
+        self.regime_ic_window = 60           # Lookback for regime features
 
         # --- Normalization ---
         self.normalization_method = 'zscore'

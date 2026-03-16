@@ -41,6 +41,12 @@ from settings.paths import DIR_INPUT
 ALPHA_SNAPSHOT_FILENAME = "Alpha-spreadsrt.pkl"
 ALPHA_CANDIDATES_FILENAME = "Alpha-candidates.pkl"
 
+# ──────────────── Candidate scoring parameters ────────────────
+_HORIZON_DAYS: int = 21              # 1-month expected-return horizon (trading days)
+_EWMA_DRIFT_HALFLIFE: float = 15.0   # EWMA half-life for directional drift estimation (days)
+_RISK_VOL_WINDOW: int = 63           # 3-month risk normalisation window (trading days)
+_CARRY_BASIS_DAYS: float = 63.0      # carry_roll is stored as a ~3-month quantity
+
 
 @dataclass(frozen=True)
 class AlphaSnapshotPaths:
@@ -350,6 +356,66 @@ def _stationary_yes_mask(s: pd.Series) -> pd.Series:
 	return s.astype(str).str.upper().eq("YES")
 
 
+def _compute_trend_metrics(
+	s: pd.Series,
+	*,
+	ewma_halflife: float = _EWMA_DRIFT_HALFLIFE,
+	vol_window: int = _RISK_VOL_WINDOW,
+) -> Tuple[float, float]:
+	"""Compute (ewma_drift_per_day, risk_vol_63d) from a historical spread series.
+
+	ewma_drift_per_day: EWMA mean of daily spread changes (bp/day), last value.
+	    Positive = spread rising.  Weighted with half-life = ewma_halflife days.
+	risk_vol_63d: rolling std of daily changes over the last vol_window obs (bp).
+	    Default 63 days matches the carry_roll 3-month basis.
+	Returns (nan, nan) when series has fewer than 5 non-null observations.
+	"""
+	s_clean = pd.to_numeric(s, errors="coerce").dropna()
+	if len(s_clean) < 5:
+		return np.nan, np.nan
+	daily_chg = s_clean.diff().dropna()
+	if daily_chg.empty:
+		return np.nan, np.nan
+	# EWMA drift: λ = 1 − exp(−ln2 / halflife)
+	alpha = 1.0 - np.exp(-np.log(2.0) / max(float(ewma_halflife), 1.0))
+	ewma_drift = float(daily_chg.ewm(alpha=alpha, adjust=False).mean().iloc[-1])
+	# 3-month rolling vol (fall back to full series if shorter)
+	w = min(int(vol_window), len(daily_chg))
+	risk_vol = float(daily_chg.iloc[-w:].std(ddof=1)) if w >= 5 else np.nan
+	return ewma_drift, risk_vol
+
+
+def _enrich_candidates_with_drift(
+	df: pd.DataFrame,
+	series_map: Dict[str, pd.Series],
+) -> pd.DataFrame:
+	"""Add ewma_drift_per_day and risk_vol_63d columns from pre-loaded historical series.
+
+	Called before _add_unified_score_preview so that the scorer can use EWMA drift
+	for directional candidates and 3-month rolling vol as the risk normaliser.
+	"""
+	if df.empty or "ID" not in df.columns or "spread_type" not in df.columns:
+		out = df.copy()
+		out["ewma_drift_per_day"] = np.nan
+		out["risk_vol_63d"] = np.nan
+		return out
+	out = df.copy()
+	ewma_drifts: list[float] = []
+	risk_vols: list[float] = []
+	for _, row in out.iterrows():
+		key = f"{row['spread_type']}|{row['ID']}"
+		s = series_map.get(key)
+		if isinstance(s, pd.Series) and len(s.dropna()) >= 10:
+			drift, rvol = _compute_trend_metrics(s)
+		else:
+			drift, rvol = np.nan, np.nan
+		ewma_drifts.append(drift)
+		risk_vols.append(rvol)
+	out["ewma_drift_per_day"] = ewma_drifts
+	out["risk_vol_63d"] = risk_vols
+	return out
+
+
 def _rank_score(df: pd.DataFrame, style: str) -> pd.Series:
 	"""Deprecated: use unified edge/risk scoring.
 
@@ -374,31 +440,41 @@ def _rank_score(df: pd.DataFrame, style: str) -> pd.Series:
 def _add_unified_score_preview(
 	df: pd.DataFrame,
 	*,
-	carry_days: float = 63.0,
-	mom_k: float = 1.0,
+	horizon_days: int = _HORIZON_DAYS,
+	carry_basis_days: float = _CARRY_BASIS_DAYS,
 ) -> pd.DataFrame:
-	"""Add a unified scan-time score to df.
+	"""Unified candidate score: (expected_return_H + carry_H) / risk.
 
-	This is the fast, generator-side analogue of the UI/portfolio unified scorer:
-	- MR: expected_pnl_per_day ~= dir_sign * (spread-mean)/halflife + dir_sign * carry_per_day
-	- Carry/Trend: expected_pnl_per_day ~= dir_sign * (carry_per_day + k*mom_per_day) * trend_confirm
-	- score = max(0, expected_pnl_per_day / risk)
+	Scoring horizon H = horizon_days (default 21 = 1 month):
 
-	Notes:
-	- carry_roll is stored as 3m carry+roll (bp) for the BUY side.
-	- momentum is optional; if not available, score reduces to carry_per_day/risk.
+	MeanReversion
+	  E[return_H] = (1 − exp(−κH)) × dir_sign × (spread − mean)
+	  where κ = ln(2) / halflife  [OU mean-reversion speed]
+	  carry_H    = dir_sign × carry_roll × (H / carry_basis_days)
+
+	Carry / Trend
+	  E[return_H] = H × ewma_drift_per_day × dir_sign × trend_confirm
+	  where trend_confirm = 0.5 when EWMA drift disagrees with carry sign
+	  carry_H    = dir_sign × carry_roll × (H / carry_basis_days)
+
+	Risk normalisation (3-month basis):
+	  risk = risk_vol_63d  when available (3m rolling vol from historical series)
+	       = vol           otherwise (OU stationary σ or rolling std at scan time)
+
+	score = max(0, (E[return_H] + carry_H) / risk)
 	"""
 	if df is None:
 		return df
 	if df.empty:
 		out = df.copy()
-		# Ensure downstream code can sort/filter reliably.
 		out["score"] = pd.Series(dtype=float)
 		if "direction" not in out.columns:
 			out["direction"] = pd.Series(dtype=str)
 		return out
 
 	out = df.copy()
+	H = float(max(1, int(horizon_days)))
+	cd = float(carry_basis_days) if carry_basis_days and np.isfinite(float(carry_basis_days)) and float(carry_basis_days) > 0 else 63.0
 
 	style = (
 		out["style"].astype(str).str.strip().str.lower()
@@ -411,7 +487,7 @@ def _add_unified_score_preview(
 		out["spread"] if "spread" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	)
-	mean = pd.to_numeric(
+	mean_ = pd.to_numeric(
 		out["mean"] if "mean" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	)
@@ -427,70 +503,72 @@ def _add_unified_score_preview(
 		out["vol"] if "vol" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	).abs()
+	ewma_drift = pd.to_numeric(
+		out["ewma_drift_per_day"] if "ewma_drift_per_day" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	)
+	risk_vol_series = pd.to_numeric(
+		out["risk_vol_63d"] if "risk_vol_63d" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	).abs()
 
-	# Robust risk fallback
-	risk = vol.replace(0, np.nan)
+	# Risk: prefer 3m rolling vol from historical series; fall back to calibrated vol column
+	risk = risk_vol_series.where(risk_vol_series.gt(0) & risk_vol_series.notna(), vol)
+	risk = risk.replace(0, np.nan)
 	fallback_risk = float(risk.median(skipna=True)) if not risk.dropna().empty else 1.0
 	if not np.isfinite(fallback_risk) or fallback_risk <= 0:
 		fallback_risk = 1.0
 	risk = risk.fillna(fallback_risk)
+	out["risk"] = risk
 
-	# Carry per day
-	cd = float(carry_days) if carry_days else 63.0
-	if not np.isfinite(cd) or cd <= 0:
-		cd = 63.0
-	carry_per_day = carry_roll / cd
-	out["carry_per_day"] = carry_per_day
+	# carry_roll is stored in basis points (bp); spread/vol/risk are in % (0.15 = 15bp).
+	# Divide by 100 to convert bp → % before scaling to the H-day horizon.
+	carry_H = (carry_roll / 100.0) * (H / cd)
+	out["carry_H"] = carry_H
 
-	# Momentum per day (optional)
-	momentum_per_day = pd.Series(np.nan, index=out.index, dtype=float)
-	if "momentum_per_day" in out.columns:
-		momentum_per_day = pd.to_numeric(out["momentum_per_day"], errors="coerce")
-	elif "mom_per_day" in out.columns:
-		momentum_per_day = pd.to_numeric(out["mom_per_day"], errors="coerce")
-	out["momentum_per_day"] = momentum_per_day
-
-	# Direction conventions
-	# MR: z > 0 => BUY spread ; z < 0 => SELL spread
+	# ── Direction ─────────────────────────────────────────────────────────────
 	z = pd.to_numeric(
 		out["Zscore"] if "Zscore" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	)
+	# MR: z > 0 → BUY (spread above mean, expect downward reversion)
 	mr_dir = pd.Series("SELL", index=out.index, dtype=str)
 	mr_dir.loc[z.gt(0)] = "BUY"
-
-	# Carry/Trend: pick direction that makes expected PnL positive
-	# (carry_roll is BUY-side expected PnL)
-	mu_tc = carry_per_day.fillna(0.0) + float(mom_k) * momentum_per_day.fillna(0.0)
+	# Carry/Trend: direction from combined carry + drift signal
+	mu_tc = carry_H.fillna(0.0) + ewma_drift.fillna(0.0) * H
 	tc_dir = pd.Series("BUY", index=out.index, dtype=str)
 	tc_dir.loc[mu_tc.lt(0)] = "SELL"
-
 	direction = tc_dir.where(~is_mr, mr_dir)
 	out["direction"] = direction
-
 	dir_sign = pd.Series(1.0, index=out.index, dtype=float)
 	dir_sign.loc[direction.eq("SELL")] = -1.0
 	out["dir_sign_score"] = dir_sign
 
-	# MR expected pnl/day
+	# ── MR expected return over H (OU reversion model) ────────────────────────
+	# E[s_H − s_0] = −(1 − e^{−κH})(spread − mean)
+	# PnL for BUY (dir_sign=+1, spread > mean): dir_sign × (spread−mean) × factor > 0
 	hl = halflife.replace(0, np.nan).abs()
-	mr_reversion_pnl_per_day = ((spread - mean) / hl).replace([np.inf, -np.inf], np.nan)
-	expected_mr = (dir_sign * mr_reversion_pnl_per_day).fillna(0.0) + (dir_sign * carry_per_day.fillna(0.0))
+	kappa = (np.log(2) / hl).replace([np.inf, -np.inf], np.nan)
+	reversion_factor = (1.0 - np.exp(-kappa * H)).fillna(0.0).clip(0.0, 1.0)
+	mr_gap = (spread - mean_).fillna(0.0)
+	expected_mr = dir_sign * mr_gap * reversion_factor + dir_sign * carry_H.fillna(0.0)
 
-	# Carry expected pnl/day with optional trend confirmation
-	has_mom = momentum_per_day.notna() & (momentum_per_day.abs() > 0)
+	# ── Directional expected return over H (EWMA drift model) ─────────────────
+	# Primary signal: H × ewma_drift_per_day, aligned to direction
+	# Confidence haircut to 0.5 when EWMA drift disagrees with carry_roll sign
+	has_drift = ewma_drift.notna() & (ewma_drift.abs() > 0)
+	has_carry = carry_roll.notna() & (carry_roll.abs() > 0)
 	trend_confirm = pd.Series(1.0, index=out.index, dtype=float)
-	trend_confirm.loc[has_mom] = (momentum_per_day.loc[has_mom] * dir_sign.loc[has_mom] > 0).astype(float)
+	disagree = has_drift & has_carry & ((ewma_drift * carry_roll * dir_sign).lt(0))
+	trend_confirm.loc[disagree] = 0.5
 	out["trend_confirm"] = trend_confirm
+	expected_tc = (ewma_drift.fillna(0.0) * dir_sign * H * trend_confirm
+	               + dir_sign * carry_H.fillna(0.0))
 
-	expected_tc = mu_tc * dir_sign * trend_confirm
-
-	expected_move_per_day = expected_tc.where(~is_mr, expected_mr)
-	out["expected_move_per_day"] = expected_move_per_day
-	out["risk"] = risk
-
-	# Single canonical score
-	score = (expected_move_per_day / risk).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)
+	# ── Combine and score ─────────────────────────────────────────────────────
+	total_return = expected_tc.where(~is_mr, expected_mr)
+	out["expected_return_H"] = total_return
+	score = (total_return / risk).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)
 	out["score"] = score
 	return out
 
@@ -803,7 +881,21 @@ def build_alpha_candidates(
 	else:
 		trend = trend[trend["abs_zscore"] >= z_thd].copy()
 
-	# Score + rank
+	# Load historical series for all pre-filtered candidates before scoring.
+	# The same series_map is reused for correlation below — no duplicate IO.
+	all_pre = pd.concat([mr, trend], axis=0, ignore_index=True)
+	series_map: Dict[str, pd.Series] = {}
+	if not all_pre.empty and "spread_type" in all_pre.columns and "ID" in all_pre.columns:
+		for stype in all_pre["spread_type"].unique().tolist():
+			ids = all_pre.loc[all_pre["spread_type"].eq(stype), "ID"].astype(str).unique().tolist()
+			series_map.update(
+				load_historical_spread_series(stype, ids, dir_input=dir_input, lookback_days=lookback_days)
+			)
+
+	# Enrich with EWMA drift + 3m rolling vol, then score + rank
+	mr = _enrich_candidates_with_drift(mr, series_map)
+	trend = _enrich_candidates_with_drift(trend, series_map)
+
 	mr = _add_unified_score_preview(mr)
 	trend = _add_unified_score_preview(trend)
 
@@ -814,11 +906,7 @@ def build_alpha_candidates(
 	if candidates.empty:
 		return {"asof": pd.Timestamp.now(), "candidates": candidates, "selected_lowcorr": pd.DataFrame(), "corr": None}
 
-	# Compute correlations using historical spread series
-	series_map: Dict[str, pd.Series] = {}
-	for stype in candidates["spread_type"].unique().tolist():
-		ids = candidates.loc[candidates["spread_type"] == stype, "ID"].astype(str).unique().tolist()
-		series_map.update(load_historical_spread_series(stype, ids, dir_input=dir_input, lookback_days=lookback_days))
+	# series_map already loaded above; use directly for correlation
 
 	corr, _ = compute_candidate_correlation(series_map)
 	# Add correlation key to candidates (even if corr is None)

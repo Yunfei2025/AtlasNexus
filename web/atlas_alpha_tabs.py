@@ -751,11 +751,14 @@ def compute_scan_score(df: pd.DataFrame) -> pd.DataFrame:
         fallback_risk = 1.0
     risk = risk.fillna(fallback_risk)
     
-    # MR: |spread - mean| / halflife
+    # MR: OU expected return over 21-day horizon = (1 - exp(-κH)) × |spread - mean|
+    # H = 21 trading days (1-month); κ = ln(2) / halflife
     hl = halflife.replace(0, np.nan).abs()
-    expected_mr = (spread - mean).abs() / hl
-    
-    # Carry/Trend: carry_roll aligned to direction
+    kappa_mr = (np.log(2) / hl).replace([np.inf, -np.inf], np.nan)
+    reversion_factor = (1.0 - np.exp(-kappa_mr * 21.0)).fillna(0.0).clip(0.0, 1.0)
+    expected_mr = (spread - mean).abs() * reversion_factor
+
+    # Carry/Trend: carry scaled to same 21-day horizon (carry_roll is 63-day basis)
     direction = (
         df['direction'].astype(str).str.strip().str.upper()
         if 'direction' in df.columns
@@ -763,8 +766,9 @@ def compute_scan_score(df: pd.DataFrame) -> pd.DataFrame:
     )
     dir_sign = pd.Series(1.0, index=df.index, dtype=float)
     dir_sign.loc[direction.eq('SELL')] = -1.0
-    expected_tc = carry.fillna(0.0) * dir_sign
-    
+    # carry_roll is in bp; spread/risk are in % — divide by 100 to match units
+    expected_tc = (carry.fillna(0.0) / 100.0) * dir_sign * (21.0 / 63.0)
+
     # Combine
     expected_move = expected_tc.where(~is_mr, expected_mr)
     edge = expected_move.fillna(0.0)

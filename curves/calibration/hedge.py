@@ -143,7 +143,8 @@ class HedgeCalculator:
             # Calculate Carry
             ftp = self.get_ftp(bond_obj, env=env)
             coupon = env['Def'].loc[bond, '票面利率:%']
-            carry_value = BASIS_POINTS * (coupon - ftp) / 4
+            ytm = bond_obj.loc['估价收益率:%(中债)']
+            carry_value = BASIS_POINTS * (ytm - ftp) / 4
             stat_his[k].loc[bond, 'Carry(3m,bp)'] = carry_value     
 
 def BondHedge(stat_his: Dict, env: Dict, ytm_quote: pd.DataFrame, 

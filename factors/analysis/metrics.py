@@ -218,3 +218,102 @@ def calculate_max_drawdown(cumulative_returns: pd.Series) -> float:
     
     # Return maximum drawdown (most negative value)
     return drawdown.min()
+
+
+# ======================================================================
+# IC decay analysis
+# ======================================================================
+
+def calculate_ic_decay(
+    factors: pd.DataFrame,
+    returns: pd.Series,
+    lags: list = None,
+) -> pd.DataFrame:
+    """
+    Compute the Information Coefficient (Spearman) at multiple forward lags.
+
+    This tells you *how quickly* a factor's predictive power decays.  The
+    half-life of the IC curve is useful for calibrating rebalancing
+    frequency and signal smoothing parameters.
+
+    Parameters
+    ----------
+    factors : pd.DataFrame
+        Factor level data (one column per factor).
+    returns : pd.Series
+        Daily return series (not shifted — shifting is done internally).
+    lags : list[int], optional
+        Forward lags in trading days.  Default: [1, 2, 5, 10, 20].
+
+    Returns
+    -------
+    pd.DataFrame
+        Rows = factor names, columns = lag values, values = IC at that lag.
+        An extra column ``'half_life'`` gives the estimated half-life in
+        days (using log-linear interpolation of the absolute IC curve).
+    """
+    if lags is None:
+        lags = [1, 2, 5, 10, 20]
+
+    if factors.empty or returns.empty:
+        return pd.DataFrame()
+
+    results: dict = {lag: {} for lag in lags}
+
+    for lag in lags:
+        future = returns.shift(-lag)
+        common = factors.index.intersection(future.dropna().index)
+        if len(common) < 30:
+            for col in factors.columns:
+                results[lag][col] = np.nan
+            continue
+        fa = factors.loc[common]
+        ra = future.loc[common]
+        for col in fa.columns:
+            f = fa[col].dropna()
+            idx = f.index.intersection(ra.dropna().index)
+            if len(idx) < 20:
+                results[lag][col] = np.nan
+                continue
+            ic, _ = spearmanr(f.loc[idx], ra.loc[idx])
+            results[lag][col] = ic if not np.isnan(ic) else 0.0
+
+    df = pd.DataFrame(results)
+    df.columns = [f'IC_lag{l}' for l in lags]
+
+    # Estimate half-life from absolute IC curve
+    half_lives = []
+    for factor_name in df.index:
+        ic_curve = df.loc[factor_name].abs().values
+        hl = _estimate_half_life(lags, ic_curve)
+        half_lives.append(hl)
+    df['half_life'] = half_lives
+
+    return df
+
+
+def _estimate_half_life(lags: list, abs_ic: np.ndarray) -> float:
+    """Estimate the half-life of an IC decay curve via log-linear interpolation."""
+    if len(lags) < 2 or np.all(np.isnan(abs_ic)):
+        return np.nan
+
+    ic0 = abs_ic[0]
+    if np.isnan(ic0) or ic0 < 1e-8:
+        return np.nan
+
+    target = ic0 / 2.0
+
+    # Walk forward to find when |IC| drops below target
+    for i in range(1, len(lags)):
+        if np.isnan(abs_ic[i]):
+            continue
+        if abs_ic[i] <= target:
+            # Linear interpolation between lags[i-1] and lags[i]
+            prev_ic = abs_ic[i - 1] if not np.isnan(abs_ic[i - 1]) else ic0
+            if prev_ic == abs_ic[i]:
+                return float(lags[i])
+            frac = (prev_ic - target) / (prev_ic - abs_ic[i])
+            return lags[i - 1] + frac * (lags[i] - lags[i - 1])
+
+    # IC never drops to half — return NaN (very persistent signal)
+    return np.nan

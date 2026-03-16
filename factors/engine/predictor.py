@@ -468,3 +468,101 @@ def interpret_linear_model_coefficients(trained_model: Dict,
     interpretation['rank'] = range(1, len(interpretation) + 1)
     
     return interpretation.head(top_n) if top_n is not None else interpretation
+
+
+# ======================================================================
+# Regime-aware IC weighting
+# ======================================================================
+
+def calculate_regime_conditional_ic(
+    factors: pd.DataFrame,
+    returns: pd.Series,
+    price_series: pd.Series,
+    selected_factors: List[str],
+    regime_window: int = 60,
+) -> Dict[str, pd.Series]:
+    """
+    Compute IC weights conditional on the current market regime.
+
+    The HMM ``RegimeDetector`` from ``futures.backtest.regime`` classifies
+    each day into *trending* or *mean-reverting*.  IC is then calculated
+    separately for each regime, and the weights corresponding to the
+    **latest detected regime** are returned.
+
+    Args:
+        factors: Factor level DataFrame (aligned with *returns*)
+        returns: Return series (daily)
+        price_series: Close price series for regime detection features
+        selected_factors: Factor column names to evaluate
+        regime_window: Lookback window for regime feature calculation
+
+    Returns:
+        Dict with keys:
+          - ``'weights'``: pd.Series of IC weights for the current regime
+          - ``'regime'``: str label of detected regime ('trending' / 'mean_reverting')
+          - ``'regime_ic'``: dict mapping regime label → per-factor IC Series
+    """
+    try:
+        from futures.backtest.regime import RegimeDetector
+    except ImportError:
+        print("⚠️ RegimeDetector not available – falling back to unconditional IC")
+        return None
+
+    available = [f for f in selected_factors if f in factors.columns]
+    if not available:
+        return None
+
+    # --- build regime labels ---------------------------------------------------
+    detector = RegimeDetector(n_states=2)
+
+    # Build a minimal DataFrame with 'close' column for feature calculation
+    price_df = pd.DataFrame({'close': price_series})
+    features = detector.calculate_features(price_df, window=regime_window, use_enhanced=False)
+    if features.empty or len(features) < regime_window + 20:
+        return None
+
+    detector.fit(features)
+    states, _ = detector.predict(features)
+    regime_labels = detector.map_states_to_regime(states)
+
+    # Align indices across factors, returns and regime labels
+    common = factors.index.intersection(returns.index).intersection(regime_labels.index)
+    if len(common) < 60:
+        return None
+
+    factors_a = factors.loc[common, available]
+    returns_a = returns.loc[common]
+    regime_a = regime_labels.loc[common]
+
+    # --- per-regime IC ---------------------------------------------------------
+    regime_ic: Dict[str, pd.Series] = {}
+    for regime_label in regime_a.unique():
+        mask = regime_a == regime_label
+        if mask.sum() < 30:
+            continue
+        ic_vals = {}
+        for col in available:
+            f = factors_a.loc[mask, col]
+            r = returns_a.loc[mask]
+            if f.std() > 0 and r.std() > 0:
+                ic_vals[col] = f.corr(r)
+            else:
+                ic_vals[col] = 0.0
+        regime_ic[regime_label] = pd.Series(ic_vals)
+
+    if not regime_ic:
+        return None
+
+    # Current regime = last observation
+    current_regime = regime_a.iloc[-1]
+    if current_regime in regime_ic:
+        weights = regime_ic[current_regime]
+    else:
+        # Fallback: average across regimes
+        weights = pd.DataFrame(regime_ic).mean(axis=1)
+
+    return {
+        'weights': weights.fillna(0),
+        'regime': current_regime,
+        'regime_ic': regime_ic,
+    }

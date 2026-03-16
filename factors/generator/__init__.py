@@ -11,6 +11,8 @@ from .volatility import VolatilityFactors
 from .volume import VolumeFactors
 from .price import PriceFactors
 from .yield_curve import YieldCurveFactors
+from .carry import CarryFactors
+from .value import ValueFactors
 from .factory import FactorCalculatorFactory
 
 __all__ = [
@@ -21,5 +23,7 @@ __all__ = [
     'VolumeFactors',
     'PriceFactors',
     'YieldCurveFactors',
+    'CarryFactors',
+    'ValueFactors',
     'FactorCalculatorFactory'
 ]

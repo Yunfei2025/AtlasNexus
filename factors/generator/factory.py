@@ -15,6 +15,8 @@ from .volatility import VolatilityFactors
 from .volume import VolumeFactors
 from .price import PriceFactors
 from .yield_curve import YieldCurveFactors
+from .carry import CarryFactors
+from .value import ValueFactors
 from .macro import MacroFactors
 from .high_order import HighOrderFactorGenerator
 
@@ -43,7 +45,9 @@ class FactorCalculatorFactory:
             'volatility': VolatilityFactors(self.data),
             'volume': VolumeFactors(self.data),
             'price': PriceFactors(self.data),
-            'yield_curve': YieldCurveFactors(self.data)
+            'yield_curve': YieldCurveFactors(self.data),
+            'carry': CarryFactors(self.data),
+            'value': ValueFactors(self.data)
         }
 
     def generate_factors(self, max_high_order_factors: int = 100) -> Tuple[pd.DataFrame, pd.DataFrame]:

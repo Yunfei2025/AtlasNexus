@@ -262,7 +262,7 @@ def run_analysis(start_date: str = None, end_date: str = None, ticker: str = Non
         periods_to_analyze, _, _ = generate_analysis_periods(start_dt, end_dt, config.ticker, config)
         results = _execute_parallel_analysis(periods_to_analyze, engine.num_cores)
         successful_count = sum(1 for r in results if r['result']['status'] == 'success')
-        import pdb; pdb.set_trace()
+      
         # Process predictions and create portfolios
         concatenated_predictions, concatenated_portfolios = _process_predictions_and_portfolios(
             results, config, data

@@ -1,6 +1,8 @@
-# Alpha Book — Non-Mean-Reverting RV (Bond-Swap) + Concrete CGB–FR007 Trend Signal
+# Alpha Book — Non-Mean-Reverting RV (Bond-Swap) + China Implementation with Developed-Market Analogues
 
 This note consolidates the discussion on **non-mean-reverting** RV trades (esp. bond-swap) and defines a **concrete trend/carry signal** for the CGB–FR007 swap spread used in AtlasNexus.
+
+The live implementation in this repo is China-rates specific, but the trade logic is portable to developed markets. In a US framing, the closest analogues are typically **UST vs SOFR/OIS**, **UST curve structures**, **on/off-the-run Treasury relative value**, and **agency/Treasury spread trades**.
 
 ## 1) Why bond-swap is often not mean-reverting
 Bond-swap (bond vs IRS) can trend because it is driven by slow-moving and regime-dependent forces:
@@ -38,6 +40,14 @@ Even “market-neutral” RV trades can crowd together. Use:
 - Gate or scale positions if max |corr| exceeds threshold (e.g. 0.3–0.5)
 
 (Alpha Book Candidates tab already follows this “diff + heatmap + low-corr pairs” pattern.)
+
+### D) Developed-market translation (US examples)
+The same trade archetypes extend cleanly to the US market:
+
+- **IRS curve steepeners/flatteners (SOFR/OIS):** After a Fed cutting cycle pauses, the front end often anchors while intermediate and long-end forwards reprice toward either soft recovery or renewed slowdown. That makes 2s10s or 5s30s SOFR curve steepeners/flatteners a cleaner developed-market analogue than FR007 slope trades. Illustrative US setup: once the market stops pricing sequential cuts, receive front-end SOFR less aggressively and express a 2s10s or 5s30s steepener as term premium rebuilds.
+- **On/off-the-run UST spread compression:** When a new 10Y or 30Y Treasury benchmark is issued, dealer balance sheets, futures hedgers, and repo desks migrate quickly into the new on-the-run issue. The prior benchmark often cheapens on asset-swap or spline measures, then partially re-richens once the benchmark transition is absorbed. Illustrative US setup: short the rich new benchmark versus the prior issue after the initial liquidity grab fades, targeting convergence in fitted-curve or asset-swap spread terms.
+- **Agency vs Treasury spread dislocations:** A US analogue to policy-bank versus sovereign spread trades is agency debentures or SSA paper versus Treasuries. Spread moves are often driven by investor base rotation, bank balance-sheet usage, and regulatory demand rather than pure default risk. Illustrative US setup: when real-money demand rotates sharply into Treasuries during a risk-off or balance-sheet-constrained period, agency-Treasury spreads can widen enough to justify long agency versus short duration-matched UST.
+- **Bond-swap basis (UST vs SOFR swap spread):** The US bond-swap basis reflects funding conditions, dealer balance-sheet capacity, Treasury collateral specialness, and swap receiving flows. Reserve injections, quarter-end balance-sheet normalization, or heavy liability-hedging demand can push cash Treasuries and SOFR swap rates out of line for weeks or months. Illustrative US setup: buy a cheap Treasury versus pay fixed in matched-maturity SOFR swaps when repo conditions normalise and the swap spread is expected to re-compress.
 
 ---
 
