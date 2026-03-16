@@ -112,13 +112,8 @@ def is_business_hours() -> bool:
     now = datetime.datetime.now()
     return (9 <= now.hour <= 18) and (now.weekday() <= 5)
 
-@app.callback(
-    Output("container-button-1", "children"),
-    Input("generate-button", "n_clicks"),
-    background=True,
-    manager=background_callback_manager,
-)
-def initialise(n_clicks):
+
+def run_initialise() -> str:
     if not _locks["initialise"].acquire(blocking=False):
         return "Initialising (already running)..."
     try:
@@ -145,6 +140,15 @@ def initialise(n_clicks):
             _locks["initialise"].release()
         except RuntimeError:
             pass
+
+@app.callback(
+    Output("container-button-1", "children"),
+    Input("generate-button", "n_clicks"),
+    background=True,
+    manager=background_callback_manager,
+)
+def initialise(n_clicks):
+    return run_initialise()
 
 @app.callback(
     Output("refresh-time", "children"),

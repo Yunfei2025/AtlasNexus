@@ -57,6 +57,9 @@ class BondConfig:
     SPREAD_MAP = {
         'TBondCurve': 'Treasury Bond 3+Model-Curve',
         'CBondCurve': 'Policybank Bond 3+Model-Curve',
+        "LBondSpread": "Local Treasury Bond Spread",
+        "BBondSpread": "CommercialBank Bond Spread",
+        "MNoteSpread": "Medium Term Note Spread",
         'TBondSwap': 'Treasury Bond Repo7d-Swap',
         'CBondSwap': 'Policybank Bond Repo7d-Swap',
         'SwapSpread': 'Swaps',

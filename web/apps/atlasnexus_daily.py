@@ -9,6 +9,7 @@ Port: 8080
 
 from __future__ import annotations
 import sys
+import os
 from dash import dcc, html
 from dash.dependencies import Input, Output, State
 
@@ -56,6 +57,9 @@ from web.atlas_volatility_tabs import (
     build_volatility_layout,
     register_volatility_callbacks,
 )
+
+
+GRAPH_INTERVAL = int(os.environ.get("GRAPH_INTERVAL", 30 * 60_000))
 
 
 project_root = pathlib.Path(__file__).resolve().parents[2]
@@ -217,9 +221,11 @@ def build_tabs_panel():
             dcc.Store(id='beta-backtest-factor-content', storage_type='session'),
             dcc.Store(id='beta-backtest-portfolio-content', storage_type='session'),
             dcc.Store(id='beta-surface-content', storage_type='session'),
+            dcc.Store(id='an-autoruns1-status', storage_type='memory'),
+            dcc.Store(id='an-autoruns2-status', storage_type='memory'),
             
             # Shared intervals
-            dcc.Interval(id="data-refresh", interval=60_000, n_intervals=0),
+            dcc.Interval(id="data-refresh", interval=GRAPH_INTERVAL, n_intervals=0),
             
             html.Div(
                 [
@@ -274,6 +280,32 @@ def _tick(n):
         f"Refresh tick: {n}",
         f"Latest EOD run: {format_run_meta(meta)}",
     )
+
+
+@app.callback(
+    Output("an-autoruns1-status", "data"),
+    Input("data-refresh", "n_intervals"),
+)
+def _run_core_autoruns1(n_intervals):
+    try:
+        from web.core.scripts import autoruns1 as core_autoruns1
+
+        return core_autoruns1(n_intervals, "AtlasNexus Daily active")
+    except Exception as exc:
+        return f"autoruns1 failed: {exc}"
+
+
+@app.callback(
+    Output("an-autoruns2-status", "data"),
+    Input("data-refresh", "n_intervals"),
+)
+def _run_core_autoruns2(n_intervals):
+    try:
+        from web.core.scripts import autoruns2 as core_autoruns2
+
+        return core_autoruns2(n_intervals, "AtlasNexus Daily active")
+    except Exception as exc:
+        return f"autoruns2 failed: {exc}"
 
 
 @app.callback(
@@ -464,6 +496,7 @@ def _render_alpha_subtabs(subtab: str):
 if __name__ == "__main__":
     import webbrowser
     from threading import Timer
+    from web.core.scripts import run_initialise
     
     def open_browser():
         """Open browser after a short delay to ensure server is ready."""
@@ -478,5 +511,8 @@ if __name__ == "__main__":
     # print("Browser window will open automatically")
     # print("Press Ctrl+C to stop the server")
     # print("="*60)
+
+    init_status = run_initialise()
+    print(f"AtlasNexus startup initialisation: {init_status}")
     
     app.run(host="127.0.0.1", port=8080, debug=True, use_reloader=False)
