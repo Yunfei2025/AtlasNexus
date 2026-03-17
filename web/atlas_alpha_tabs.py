@@ -751,14 +751,14 @@ def compute_scan_score(df: pd.DataFrame) -> pd.DataFrame:
         fallback_risk = 1.0
     risk = risk.fillna(fallback_risk)
     
-    # MR: OU expected return over 21-day horizon = (1 - exp(-κH)) × |spread - mean|
-    # H = 21 trading days (1-month); κ = ln(2) / halflife
+    # MR: OU expected return over 30-day horizon = (1 - exp(-κH)) × |spread - mean|
+    # H = 30 calendar-day approximation; κ = ln(2) / halflife
     hl = halflife.replace(0, np.nan).abs()
     kappa_mr = (np.log(2) / hl).replace([np.inf, -np.inf], np.nan)
-    reversion_factor = (1.0 - np.exp(-kappa_mr * 21.0)).fillna(0.0).clip(0.0, 1.0)
+    reversion_factor = (1.0 - np.exp(-kappa_mr * 30.0)).fillna(0.0).clip(0.0, 1.0)
     expected_mr = (spread - mean).abs() * reversion_factor
 
-    # Carry/Trend: carry scaled to same 21-day horizon (carry_roll is 63-day basis)
+    # Carry/Trend: carry scaled to same 30-day horizon (carry_roll is 90-day basis)
     direction = (
         df['direction'].astype(str).str.strip().str.upper()
         if 'direction' in df.columns
@@ -767,7 +767,7 @@ def compute_scan_score(df: pd.DataFrame) -> pd.DataFrame:
     dir_sign = pd.Series(1.0, index=df.index, dtype=float)
     dir_sign.loc[direction.eq('SELL')] = -1.0
     # carry_roll is in bp; spread/risk are in % — divide by 100 to match units
-    expected_tc = (carry.fillna(0.0) / 100.0) * dir_sign * (21.0 / 63.0)
+    expected_tc = (carry.fillna(0.0) / 100.0) * dir_sign * (30.0 / 90.0)
 
     # Combine
     expected_move = expected_tc.where(~is_mr, expected_mr)
@@ -847,7 +847,7 @@ def compute_unified_edge_vol_score(
     # ---------------------------------------------------------------------
     # carry_roll is stored as a 3m carry+roll (bp) for the BUY side.
     # Convert to per-day and flip sign for SELL where we have direction.
-    carry_days = 63.0  # ~3m trading days
+    carry_days = 90.0  # ~3m calendar-day approximation
     carry_per_day = carry / carry_days
     df['carry_per_day'] = carry_per_day
 

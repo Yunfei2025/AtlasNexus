@@ -42,10 +42,10 @@ ALPHA_SNAPSHOT_FILENAME = "Alpha-spreadsrt.pkl"
 ALPHA_CANDIDATES_FILENAME = "Alpha-candidates.pkl"
 
 # ──────────────── Candidate scoring parameters ────────────────
-_HORIZON_DAYS: int = 21              # 1-month expected-return horizon (trading days)
-_EWMA_DRIFT_HALFLIFE: float = 15.0   # EWMA half-life for directional drift estimation (days)
-_RISK_VOL_WINDOW: int = 63           # 3-month risk normalisation window (trading days)
-_CARRY_BASIS_DAYS: float = 63.0      # carry_roll is stored as a ~3-month quantity
+_HORIZON_DAYS: int = 30              # 1-month expected-return horizon (calendar-day approximation)
+_REG_LOOKBACK_DAYS: int = 30         # regression window for slope & z-score (~1 month of trading days)
+_RISK_VOL_WINDOW: int = 90           # 3-month risk normalisation window (calendar-day approximation)
+_CARRY_BASIS_DAYS: float = 90.0      # carry_roll is stored as a ~3-month quantity
 
 
 @dataclass(frozen=True)
@@ -359,60 +359,87 @@ def _stationary_yes_mask(s: pd.Series) -> pd.Series:
 def _compute_trend_metrics(
 	s: pd.Series,
 	*,
-	ewma_halflife: float = _EWMA_DRIFT_HALFLIFE,
+	reg_lookback: int = _REG_LOOKBACK_DAYS,
 	vol_window: int = _RISK_VOL_WINDOW,
-) -> Tuple[float, float]:
-	"""Compute (ewma_drift_per_day, risk_vol_63d) from a historical spread series.
+) -> Tuple[float, float, float, float]:
+	"""Compute (reg_slope_per_day, risk_vol, reg_mean, reg_vol_resid) from a historical spread series.
 
-	ewma_drift_per_day: EWMA mean of daily spread changes (bp/day), last value.
-	    Positive = spread rising.  Weighted with half-life = ewma_halflife days.
-	risk_vol_63d: rolling std of daily changes over the last vol_window obs (bp).
-	    Default 63 days matches the carry_roll 3-month basis.
-	Returns (nan, nan) when series has fewer than 5 non-null observations.
+	reg_slope_per_day: OLS linear-regression slope on spread levels (series units / day).
+	    Positive = spread trending upward over the lookback window.
+	risk_vol: rolling std of daily first-differences over the last vol_window obs.
+	    Used as the risk denominator in the expected-return score.
+	reg_mean: regression-fitted value at the last observation (trendline level today).
+	reg_vol_resid: std of regression residuals; used as the z-score denominator so that
+	    Zscore = (spread − reg_mean) / reg_vol_resid.
+	Returns (nan, nan, nan, nan) when series has fewer than 5 non-null observations.
 	"""
 	s_clean = pd.to_numeric(s, errors="coerce").dropna()
-	if len(s_clean) < 5:
-		return np.nan, np.nan
+	n_all = len(s_clean)
+	if n_all < 5:
+		return np.nan, np.nan, np.nan, np.nan
+
+	# OLS on the most recent reg_lookback observations: y = a + b*x
+	s_reg = s_clean.iloc[-min(int(reg_lookback), n_all):]
+	n = len(s_reg)
+	y = s_reg.to_numpy(dtype=float)
+	x = np.arange(n, dtype=float)
+	x_mean = x.mean()
+	y_mean = y.mean()
+	xx = float(np.dot(x - x_mean, x - x_mean))
+	if xx <= 0.0:
+		return np.nan, np.nan, np.nan, np.nan
+	b = float(np.dot(x - x_mean, y - y_mean)) / xx
+	a = y_mean - b * x_mean
+	y_hat = a + b * x
+	residuals = y - y_hat
+	reg_slope_per_day = b
+	reg_mean = float(y_hat[-1])  # fitted trendline level at last observation
+	reg_vol_resid = float(residuals.std(ddof=1)) if n >= 5 else np.nan
+
+	# 3-month rolling vol of first differences for risk normalisation
 	daily_chg = s_clean.diff().dropna()
-	if daily_chg.empty:
-		return np.nan, np.nan
-	# EWMA drift: λ = 1 − exp(−ln2 / halflife)
-	alpha = 1.0 - np.exp(-np.log(2.0) / max(float(ewma_halflife), 1.0))
-	ewma_drift = float(daily_chg.ewm(alpha=alpha, adjust=False).mean().iloc[-1])
-	# 3-month rolling vol (fall back to full series if shorter)
 	w = min(int(vol_window), len(daily_chg))
 	risk_vol = float(daily_chg.iloc[-w:].std(ddof=1)) if w >= 5 else np.nan
-	return ewma_drift, risk_vol
+	return reg_slope_per_day, risk_vol, reg_mean, reg_vol_resid
 
 
-def _enrich_candidates_with_drift(
+def _enrich_candidates_with_regression(
 	df: pd.DataFrame,
 	series_map: Dict[str, pd.Series],
 ) -> pd.DataFrame:
-	"""Add ewma_drift_per_day and risk_vol_63d columns from pre-loaded historical series.
+	"""Add reg_slope_per_day, risk_vol_63d, reg_mean, reg_vol_resid columns.
 
-	Called before _add_unified_score_preview so that the scorer can use EWMA drift
-	for directional candidates and 3-month rolling vol as the risk normaliser.
+	Called before _add_unified_score_preview so that the scorer can use the
+	regression slope as the directional signal and regression residual vol for
+	z-score computation and risk normalisation.
 	"""
 	if df.empty or "ID" not in df.columns or "spread_type" not in df.columns:
 		out = df.copy()
-		out["ewma_drift_per_day"] = np.nan
+		out["reg_slope_per_day"] = np.nan
 		out["risk_vol_63d"] = np.nan
+		out["reg_mean"] = np.nan
+		out["reg_vol_resid"] = np.nan
 		return out
 	out = df.copy()
-	ewma_drifts: list[float] = []
+	reg_slopes: list[float] = []
 	risk_vols: list[float] = []
+	reg_means: list[float] = []
+	reg_vols_resid: list[float] = []
 	for _, row in out.iterrows():
 		key = f"{row['spread_type']}|{row['ID']}"
 		s = series_map.get(key)
 		if isinstance(s, pd.Series) and len(s.dropna()) >= 10:
-			drift, rvol = _compute_trend_metrics(s)
+			slope, rvol, rmean, rvolresid = _compute_trend_metrics(s)
 		else:
-			drift, rvol = np.nan, np.nan
-		ewma_drifts.append(drift)
+			slope, rvol, rmean, rvolresid = np.nan, np.nan, np.nan, np.nan
+		reg_slopes.append(slope)
 		risk_vols.append(rvol)
-	out["ewma_drift_per_day"] = ewma_drifts
+		reg_means.append(rmean)
+		reg_vols_resid.append(rvolresid)
+	out["reg_slope_per_day"] = reg_slopes
 	out["risk_vol_63d"] = risk_vols
+	out["reg_mean"] = reg_means
+	out["reg_vol_resid"] = reg_vols_resid
 	return out
 
 
@@ -443,25 +470,44 @@ def _add_unified_score_preview(
 	horizon_days: int = _HORIZON_DAYS,
 	carry_basis_days: float = _CARRY_BASIS_DAYS,
 ) -> pd.DataFrame:
-	"""Unified candidate score: (expected_return_H + carry_H) / risk.
+	"""Unified candidate score for YTM-spread trades.
 
-	Scoring horizon H = horizon_days (default 21 = 1 month):
+	Spread = YTM_A − YTM_B.  "BUY the spread" means buy bond A, sell bond B.
+	Since bond prices move INVERSELY to yields, BUY profits when spread FALLS.
 
-	MeanReversion
-	  E[return_H] = (1 − exp(−κH)) × dir_sign × (spread − mean)
-	  where κ = ln(2) / halflife  [OU mean-reversion speed]
-	  carry_H    = dir_sign × carry_roll × (H / carry_basis_days)
+	── Expected spread change (unified for MR and Trend/Carry) ────────────────
+	  E[Δs_H] = slope × H + (reg_mean − spread)
 
-	Carry / Trend
-	  E[return_H] = H × ewma_drift_per_day × dir_sign × trend_confirm
-	  where trend_confirm = 0.5 when EWMA drift disagrees with carry sign
-	  carry_H    = dir_sign × carry_roll × (H / carry_basis_days)
+	  • slope × H        — linear trend drift extrapolated H days forward
+	  • (reg_mean−spread) — today's deviation from the regression trendline,
+	                        expected to revert toward zero
 
-	Risk normalisation (3-month basis):
-	  risk = risk_vol_63d  when available (3m rolling vol from historical series)
-	       = vol           otherwise (OU stationary σ or rolling std at scan time)
+	  For MeanReversion candidates the regression slope ≈ 0, so the formula
+	  collapses to full reversion-to-trendline.  For Trend/Carry candidates
+	  the slope term dominates.  No separate MR vs TC branches needed.
 
-	score = max(0, (E[return_H] + carry_H) / risk)
+	── Expected P&L for the BUY side (canonical direction) ───────────────────
+	  P&L_BUY = −TTM × E[Δs_H]  +  carry_H
+	  where:
+	    TTM       ≈ modified duration of the long leg (term-to-maturity proxy)
+	    carry_H   = carry_roll(bp) / 100 × (H / carry_basis_days)
+	              (carry already expressed as a P&L return, not a yield change)
+	    −TTM × E[Δs_H]: when spread falls (E[Δs_H] < 0), long bond A gains
+	                     price × TTM bp per bp of spread narrowing.
+
+	  For SwapSpread/TenorSpread where TTM is unavailable, TTM defaults to 1.
+
+	── Direction & score ──────────────────────────────────────────────────────
+	  direction = BUY  if P&L_BUY > 0     (spread expected to fall net of carry)
+	            = SELL if P&L_BUY < 0     (spread expected to rise, short is better)
+
+	  score = dir_sign × P&L_BUY / (TTM × risk_vol_63d)   ≥ 0
+	         (always positive; direction encodes which side to trade)
+
+	── Z-score ────────────────────────────────────────────────────────────────
+	  Zscore = (spread − reg_mean) / reg_vol_resid  when regression available
+	         = Zscore from snapshot                  otherwise
+	  Positive z → spread above trendline.  For MR: positive z → BUY (expect fall).
 	"""
 	if df is None:
 		return df
@@ -474,14 +520,7 @@ def _add_unified_score_preview(
 
 	out = df.copy()
 	H = float(max(1, int(horizon_days)))
-	cd = float(carry_basis_days) if carry_basis_days and np.isfinite(float(carry_basis_days)) and float(carry_basis_days) > 0 else 63.0
-
-	style = (
-		out["style"].astype(str).str.strip().str.lower()
-		if "style" in out.columns
-		else pd.Series("", index=out.index, dtype=str)
-	)
-	is_mr = style.eq("meanreversion")
+	cd = float(carry_basis_days) if carry_basis_days and np.isfinite(float(carry_basis_days)) and float(carry_basis_days) > 0 else 90.0
 
 	spread = pd.to_numeric(
 		out["spread"] if "spread" in out.columns else pd.Series(np.nan, index=out.index),
@@ -489,10 +528,6 @@ def _add_unified_score_preview(
 	)
 	mean_ = pd.to_numeric(
 		out["mean"] if "mean" in out.columns else pd.Series(np.nan, index=out.index),
-		errors="coerce",
-	)
-	halflife = pd.to_numeric(
-		out["halflife"] if "halflife" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	)
 	carry_roll = pd.to_numeric(
@@ -503,72 +538,89 @@ def _add_unified_score_preview(
 		out["vol"] if "vol" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	).abs()
-	ewma_drift = pd.to_numeric(
-		out["ewma_drift_per_day"] if "ewma_drift_per_day" in out.columns else pd.Series(np.nan, index=out.index),
+	reg_slope = pd.to_numeric(
+		out["reg_slope_per_day"] if "reg_slope_per_day" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	)
+	reg_mean_col = pd.to_numeric(
+		out["reg_mean"] if "reg_mean" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	)
+	reg_vol_resid = pd.to_numeric(
+		out["reg_vol_resid"] if "reg_vol_resid" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	).abs()
 	risk_vol_series = pd.to_numeric(
 		out["risk_vol_63d"] if "risk_vol_63d" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	).abs()
 
-	# Risk: prefer 3m rolling vol from historical series; fall back to calibrated vol column
-	risk = risk_vol_series.where(risk_vol_series.gt(0) & risk_vol_series.notna(), vol)
-	risk = risk.replace(0, np.nan)
-	fallback_risk = float(risk.median(skipna=True)) if not risk.dropna().empty else 1.0
+	# ── TTM: duration proxy for the long leg (fallback 1.0 for non-bond spreads) ──
+	ttm = pd.to_numeric(
+		out["ttm"] if "ttm" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	).abs()
+	ttm = ttm.fillna(1.0).clip(lower=0.25)  # minimum 3-month floor; 1.0 for IRS/tenor
+	out["ttm_used"] = ttm
+
+	# ── Spread-vol risk (in spread units): prefer 3m rolling, fall back to snapshot vol ──
+	risk_spd = risk_vol_series.where(risk_vol_series.gt(0) & risk_vol_series.notna(), vol)
+	risk_spd = risk_spd.replace(0, np.nan)
+	fallback_risk = float(risk_spd.median(skipna=True)) if not risk_spd.dropna().empty else 1.0
 	if not np.isfinite(fallback_risk) or fallback_risk <= 0:
 		fallback_risk = 1.0
-	risk = risk.fillna(fallback_risk)
-	out["risk"] = risk
+	risk_spd = risk_spd.fillna(fallback_risk)
+	out["risk"] = risk_spd
 
-	# carry_roll is stored in basis points (bp); spread/vol/risk are in % (0.15 = 15bp).
-	# Divide by 100 to convert bp → % before scaling to the H-day horizon.
+	# ── Carry: convert bp → % return, scaled to H-day horizon ─────────────────
+	# carry_roll is already a P&L return (bp), not a yield spread change.
 	carry_H = (carry_roll / 100.0) * (H / cd)
 	out["carry_H"] = carry_H
 
-	# ── Direction ─────────────────────────────────────────────────────────────
-	z = pd.to_numeric(
+	# ── Z-score: regression-based (spread − reg_mean) / reg_vol_resid ──────────
+	# Positive z → spread above trendline.
+	# Falls back to snapshot z when regression data are unavailable.
+	z_snap = pd.to_numeric(
 		out["Zscore"] if "Zscore" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	)
-	# MR: z > 0 → BUY (spread above mean, expect downward reversion)
-	mr_dir = pd.Series("SELL", index=out.index, dtype=str)
-	mr_dir.loc[z.gt(0)] = "BUY"
-	# Carry/Trend: direction from combined carry + drift signal
-	mu_tc = carry_H.fillna(0.0) + ewma_drift.fillna(0.0) * H
-	tc_dir = pd.Series("BUY", index=out.index, dtype=str)
-	tc_dir.loc[mu_tc.lt(0)] = "SELL"
-	direction = tc_dir.where(~is_mr, mr_dir)
+	reg_z = (spread - reg_mean_col) / reg_vol_resid.replace(0, np.nan)
+	z = reg_z.where(reg_z.notna(), z_snap)
+	out["Zscore"] = z
+
+	# ── Unified expected spread change E[Δs_H] ─────────────────────────────────
+	# E[Δs_H] = slope × H + (reg_mean − spread)
+	# Fallback when regression unavailable: full reversion to OU mean (mean_ − spread).
+	trendline_gap = (reg_mean_col - spread)          # positive when spread is BELOW trendline
+	trendline_gap_used = trendline_gap.where(
+		reg_mean_col.notna(), (mean_ - spread)        # fallback: OU mean reversion
+	).fillna(0.0)
+	e_spread = reg_slope.fillna(0.0) * H + trendline_gap_used   # in yield-spread units (%)
+
+	# ── Expected P&L for canonical BUY position ────────────────────────────────
+	# BUY profits when spread FALLS: P&L_BUY = −TTM × E[Δs_H] + carry_H
+	# • −TTM × E[Δs_H]: converts expected yield-spread move to price-return via duration
+	#   Negative E[Δs_H] (falling spread) → positive price return for long bond A ✓
+	# • carry_H: carry/roll P&L for holding the BUY side
+	pnl_buy = -ttm * e_spread + carry_H.fillna(0.0)
+
+	# ── Direction: sign of P&L_BUY ─────────────────────────────────────────────
+	# BUY  if pnl_buy > 0  (spread expected to fall, or carry dominates)
+	# SELL if pnl_buy < 0  (spread expected to rise, better to short)
+	direction = pd.Series("SELL", index=out.index, dtype=str)
+	direction.loc[pnl_buy.gt(0)] = "BUY"
 	out["direction"] = direction
-	dir_sign = pd.Series(1.0, index=out.index, dtype=float)
-	dir_sign.loc[direction.eq("SELL")] = -1.0
+	dir_sign = pd.Series(-1.0, index=out.index, dtype=float)
+	dir_sign.loc[direction.eq("BUY")] = 1.0
 	out["dir_sign_score"] = dir_sign
 
-	# ── MR expected return over H (OU reversion model) ────────────────────────
-	# E[s_H − s_0] = −(1 − e^{−κH})(spread − mean)
-	# PnL for BUY (dir_sign=+1, spread > mean): dir_sign × (spread−mean) × factor > 0
-	hl = halflife.replace(0, np.nan).abs()
-	kappa = (np.log(2) / hl).replace([np.inf, -np.inf], np.nan)
-	reversion_factor = (1.0 - np.exp(-kappa * H)).fillna(0.0).clip(0.0, 1.0)
-	mr_gap = (spread - mean_).fillna(0.0)
-	expected_mr = dir_sign * mr_gap * reversion_factor + dir_sign * carry_H.fillna(0.0)
-
-	# ── Directional expected return over H (EWMA drift model) ─────────────────
-	# Primary signal: H × ewma_drift_per_day, aligned to direction
-	# Confidence haircut to 0.5 when EWMA drift disagrees with carry_roll sign
-	has_drift = ewma_drift.notna() & (ewma_drift.abs() > 0)
-	has_carry = carry_roll.notna() & (carry_roll.abs() > 0)
-	trend_confirm = pd.Series(1.0, index=out.index, dtype=float)
-	disagree = has_drift & has_carry & ((ewma_drift * carry_roll * dir_sign).lt(0))
-	trend_confirm.loc[disagree] = 0.5
-	out["trend_confirm"] = trend_confirm
-	expected_tc = (ewma_drift.fillna(0.0) * dir_sign * H * trend_confirm
-	               + dir_sign * carry_H.fillna(0.0))
-
-	# ── Combine and score ─────────────────────────────────────────────────────
-	total_return = expected_tc.where(~is_mr, expected_mr)
-	out["expected_return_H"] = total_return
-	score = (total_return / risk).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)
+	# ── Score: expected return / risk (always ≥ 0, direction captured above) ────
+	# Numerator:   dir_sign × pnl_buy = |pnl_buy|   (% return for the recommended side)
+	# Denominator: TTM × risk_spd                    (% return vol, duration-scaled)
+	risk_return = (ttm * risk_spd).replace(0, np.nan)
+	expected_return_H = dir_sign * pnl_buy          # always ≥ 0
+	out["expected_return_H"] = expected_return_H
+	score = (expected_return_H / risk_return).replace([np.inf, -np.inf], np.nan).fillna(0.0)
 	out["score"] = score
 	return out
 
@@ -892,9 +944,9 @@ def build_alpha_candidates(
 				load_historical_spread_series(stype, ids, dir_input=dir_input, lookback_days=lookback_days)
 			)
 
-	# Enrich with EWMA drift + 3m rolling vol, then score + rank
-	mr = _enrich_candidates_with_drift(mr, series_map)
-	trend = _enrich_candidates_with_drift(trend, series_map)
+	# Enrich with regression slope + 3m rolling vol, then score + rank
+	mr = _enrich_candidates_with_regression(mr, series_map)
+	trend = _enrich_candidates_with_regression(trend, series_map)
 
 	mr = _add_unified_score_preview(mr)
 	trend = _add_unified_score_preview(trend)
