@@ -175,6 +175,10 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		if isinstance(df_bc, pd.DataFrame) and not df_bc.empty:
 			df_bc = _normalize_index(df_bc)
 			df_bc = _ensure_numeric(df_bc, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+			if "Carry(3m,bp)" in df_bc.columns:
+				df_bc["carry_3m_bp"] = pd.to_numeric(df_bc["Carry(3m,bp)"], errors="coerce")
+			if "Roll(3m,bp)" in df_bc.columns:
+				df_bc["roll_3m_bp"] = pd.to_numeric(df_bc["Roll(3m,bp)"], errors="coerce")
 			if "Carry(3m,bp)" in df_bc.columns and "Roll(3m,bp)" in df_bc.columns:
 				df_bc["carry_roll"] = df_bc["Carry(3m,bp)"] + df_bc["Roll(3m,bp)"]
 			df_bc["spread_type"] = f"{prefix}Curve"
@@ -198,6 +202,8 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		if isinstance(carry_hist, pd.DataFrame) and not carry_hist.empty:
 			carry_latest = _last_values(carry_hist)
 			df_rt["carry_roll"] = carry_latest.reindex(df_rt.index)
+			df_rt["carry_3m_bp"] = carry_latest.reindex(df_rt.index)
+			df_rt["roll_3m_bp"] = 0.0
 
 		df_rt["spread_type"] = f"{prefix}Swap"
 		df_rt["category"] = "Bond-Swap"
@@ -220,6 +226,10 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		df_irs = df_irs[~df_irs.index.astype(str).str.endswith(".IR")].copy()
 		df_irs = df_irs[_exclude_swapspread_butterflies(df_irs.index)].copy()
 		df_irs = _ensure_numeric(df_irs, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+		if "Carry(3m,bp)" in df_irs.columns:
+			df_irs["carry_3m_bp"] = pd.to_numeric(df_irs["Carry(3m,bp)"], errors="coerce")
+		if "Roll(3m,bp)" in df_irs.columns:
+			df_irs["roll_3m_bp"] = pd.to_numeric(df_irs["Roll(3m,bp)"], errors="coerce")
 		if "Carry(3m,bp)" in df_irs.columns and "Roll(3m,bp)" in df_irs.columns:
 			df_irs["carry_roll"] = df_irs["Carry(3m,bp)"] + df_irs["Roll(3m,bp)"]
 		df_irs["spread_type"] = "SwapSpread"
@@ -479,10 +489,18 @@ def _add_unified_score_preview(
 	horizon_days: int = _HORIZON_DAYS,
 	carry_basis_days: float = _CARRY_BASIS_DAYS,
 ) -> pd.DataFrame:
-	"""Unified candidate score for YTM-spread trades.
+	"""Unified candidate score for spread trades in return space.
 
 	Spread = YTM_A − YTM_B.  "BUY the spread" means buy bond A, sell bond B.
 	Since bond prices move INVERSELY to yields, BUY profits when spread FALLS.
+
+	The raw spread signal and raw risk volatility are both in yield space.
+	To make the score dimensionally consistent, only the mark-to-market term
+	from spread changes is duration-scaled.  Running carry is kept as a return
+	on financed notional; roll is used in whatever return units the source
+	already reports.  Risk is converted to return-vol with the same duration.
+
+	  score = |carry_H + roll_H − D_eff × E[Δs_H]| / (D_eff × σ(Δs))
 
 	── Expected spread change (unified for MR and Trend/Carry) ────────────────
 	  E[Δs_H] = slope × H + (reg_mean − spread)
@@ -495,23 +513,22 @@ def _add_unified_score_preview(
 	  collapses to full reversion-to-trendline.  For Trend/Carry candidates
 	  the slope term dominates.  No separate MR vs TC branches needed.
 
-	── Expected P&L for the BUY side (canonical direction) ───────────────────
-	  P&L_BUY = −TTM × E[Δs_H]  +  carry_H
+	── Expected P&L for the BUY side (return space) ──────────────────────────
+	  P&L_BUY = carry_H + roll_H + D_eff × (−E[Δs_H])
 	  where:
-	    TTM       ≈ modified duration of the long leg (term-to-maturity proxy)
-	    carry_H   = carry_roll(bp) / 100 × (H / carry_basis_days)
-	              (carry already expressed as a P&L return, not a yield change)
-	    −TTM × E[Δs_H]: when spread falls (E[Δs_H] < 0), long bond A gains
-	                     price × TTM bp per bp of spread narrowing.
+	    carry_H = carry_3m_bp / 100 × (H / carry_basis_days)     [return %]
+	    roll_H  = roll_3m_bp  / 100 × (H / carry_basis_days)     [return %]
+	    D_eff × (−E[Δs_H])                                      [return %]
 
-	  For SwapSpread/TenorSpread where TTM is unavailable, TTM defaults to 1.
+	  BondCurve carry is running carry (yield-like return, no duration scaling).
+	  BondCurve roll and IRS carry/roll are already return terms in the source.
 
 	── Direction & score ──────────────────────────────────────────────────────
 	  direction = BUY  if P&L_BUY > 0     (spread expected to fall net of carry)
 	            = SELL if P&L_BUY < 0     (spread expected to rise, short is better)
 
-	  score = dir_sign × P&L_BUY / (TTM × risk_vol_63d)   ≥ 0
-	         (always positive; direction encodes which side to trade)
+	  score = |P&L_BUY| / (D_eff × risk_spd)   ≥ 0
+	         (dimensionless return / return-vol ratio; direction encodes side)
 
 	── Z-score ────────────────────────────────────────────────────────────────
 	  Zscore = (spread − reg_mean) / reg_vol_resid  when regression available
@@ -543,6 +560,14 @@ def _add_unified_score_preview(
 		out["carry_roll"] if "carry_roll" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	)
+	carry_bp = pd.to_numeric(
+		out["carry_3m_bp"] if "carry_3m_bp" in out.columns else out.get("Carry(3m,bp)", pd.Series(np.nan, index=out.index)),
+		errors="coerce",
+	)
+	roll_bp = pd.to_numeric(
+		out["roll_3m_bp"] if "roll_3m_bp" in out.columns else out.get("Roll(3m,bp)", pd.Series(np.nan, index=out.index)),
+		errors="coerce",
+	)
 	vol = pd.to_numeric(
 		out["vol"] if "vol" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
@@ -563,28 +588,43 @@ def _add_unified_score_preview(
 		out["risk_vol_63d"] if "risk_vol_63d" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	).abs()
+	trade_duration = pd.to_numeric(
+		out["Duration"] if "Duration" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	).abs()
 
-	# ── TTM: duration proxy for the long leg (fallback 1.0 for non-bond spreads) ──
+	# ── Effective duration: contract duration when available, else TTM proxy ─────
 	ttm = pd.to_numeric(
 		out["ttm"] if "ttm" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	).abs()
-	ttm = ttm.fillna(1.0).clip(lower=0.25)  # minimum 3-month floor; 1.0 for IRS/tenor
-	out["ttm_used"] = ttm
+	duration_eff = trade_duration.where(trade_duration.gt(0) & trade_duration.notna(), ttm)
+	duration_eff = duration_eff.fillna(1.0).clip(lower=0.25)
+	out["ttm_used"] = duration_eff
 
-	# ── Spread-vol risk (in spread units): prefer 3m rolling, fall back to snapshot vol ──
+	# ── Spread-vol risk converted to return-vol via duration ───────────────────
+	# risk_spd is σ(daily yield-spread changes), computed from the spread series.
+	# Multiply by effective duration so numerator and denominator are both returns.
 	risk_spd = risk_vol_series.where(risk_vol_series.gt(0) & risk_vol_series.notna(), vol)
 	risk_spd = risk_spd.replace(0, np.nan)
 	fallback_risk = float(risk_spd.median(skipna=True)) if not risk_spd.dropna().empty else 1.0
 	if not np.isfinite(fallback_risk) or fallback_risk <= 0:
 		fallback_risk = 1.0
 	risk_spd = risk_spd.fillna(fallback_risk)
-	out["risk"] = risk_spd
+	risk_return = (duration_eff * risk_spd).replace(0, np.nan)
+	out["risk_spd_yield"] = risk_spd
+	out["risk"] = risk_return
 
-	# ── Carry: convert bp → % return, scaled to H-day horizon ─────────────────
-	# carry_roll is already a P&L return (bp), not a yield spread change.
-	carry_H = (carry_roll / 100.0) * (H / cd)
+	# ── Carry and roll over horizon, kept as return terms ─────────────────────
+	# BondCurve/BondSwap carry is a running carry return and is not duration-scaled.
+	# IRS carry/roll are already return terms in source bp.  BondCurve roll is also
+	# already a duration-based return term.  /100 converts bp → %.
+	carry_bp = carry_bp.where(carry_bp.notna(), carry_roll.where(roll_bp.isna(), np.nan))
+	roll_bp = roll_bp.fillna(0.0)
+	carry_H = (carry_bp / 100.0) * (H / cd)
+	roll_H = (roll_bp / 100.0) * (H / cd)
 	out["carry_H"] = carry_H
+	out["roll_H"] = roll_H
 
 	# ── Z-score: regression-based (spread − reg_mean) / reg_vol_resid ──────────
 	# Positive z → spread above trendline.
@@ -606,12 +646,25 @@ def _add_unified_score_preview(
 	).fillna(0.0)
 	e_spread = reg_slope.fillna(0.0) * H + trendline_gap_used   # in yield-spread units (%)
 
-	# ── Expected P&L for canonical BUY position ────────────────────────────────
-	# BUY profits when spread FALLS: P&L_BUY = −TTM × E[Δs_H] + carry_H
-	# • −TTM × E[Δs_H]: converts expected yield-spread move to price-return via duration
-	#   Negative E[Δs_H] (falling spread) → positive price return for long bond A ✓
-	# • carry_H: carry/roll P&L for holding the BUY side
-	pnl_buy = -ttm * e_spread + carry_H.fillna(0.0)
+	# ── Expected P&L for canonical BUY position — return space ────────────────
+	# BUY profits when spread FALLS:
+	#   P&L_BUY = D_eff × (−E[Δs_H]) + carry_H + roll_H
+	#
+	# Duration scales only the MTM from expected spread changes.
+	# carry_H stays as running carry return; roll_H stays as source roll return.
+	# risk_return is the matching return-vol denominator.
+	#
+	# Example (IRS 1y5y flattener, TTM=5, E[Δs]=6bp, carry=20bp/3m, σ=5bp):
+	#   pnl_buy = 5×0.06 + (20/3)/100 = 0.30 + 0.0667 = 0.3667 %
+	#   risk    = 5×0.05 = 0.25 %
+	#   score   = 0.3667 / 0.25 = 1.47
+	#
+	#   −D_eff×E[Δs_H]: spread expected to fall → BUY gains in MTM terms ✓
+	#   carry_H       : running carry on financed notional ✓
+	#   roll_H        : roll-down return from aging the position ✓
+	mtm_buy = duration_eff * (-e_spread)
+	out["mtm_H"] = mtm_buy
+	pnl_buy = mtm_buy + carry_H.fillna(0.0) + roll_H.fillna(0.0)
 
 	# ── Direction: sign of P&L_BUY ─────────────────────────────────────────────
 	# BUY  if pnl_buy > 0  (spread expected to fall, or carry dominates)
@@ -623,10 +676,10 @@ def _add_unified_score_preview(
 	dir_sign.loc[direction.eq("BUY")] = 1.0
 	out["dir_sign_score"] = dir_sign
 
-	# ── Score: expected return / risk (always ≥ 0, direction captured above) ────
-	# Numerator:   dir_sign × pnl_buy = |pnl_buy|   (% return for the recommended side)
-	# Denominator: TTM × risk_spd                    (% return vol, duration-scaled)
-	risk_return = (ttm * risk_spd).replace(0, np.nan)
+	# ── Score: return / return-vol — dimensionless ratio ──────────────────────
+	# score = |P&L_BUY| / risk_spd
+	# Numerator: carry + roll + duration-scaled MTM, all in return %
+	# Denominator: duration-scaled spread-vol, also in return %
 	expected_return_H = dir_sign * pnl_buy          # always ≥ 0
 	out["expected_return_H"] = expected_return_H
 	score = (expected_return_H / risk_return).replace([np.inf, -np.inf], np.nan).fillna(0.0)
@@ -960,6 +1013,19 @@ def build_alpha_candidates(
 
 	mr = _add_unified_score_preview(mr)
 	trend = _add_unified_score_preview(trend)
+
+	# ── Execution-feasibility filters ──────────────────────────────────────────
+	# Bond-Swap (TBondSwap / CBondSwap): borrowing the bond to short is not
+	# feasible in practice, so only BUY-side candidates are kept.
+	# Bond-Curve (TBondCurve / CBondCurve): shorting off-the-run bonds is
+	# similarly not feasible, so only BUY-side candidates are kept.
+	_SELL_RESTRICTED_CATEGORIES = {"Bond-Swap", "Bond-Curve"}
+	if "category" in mr.columns and "direction" in mr.columns:
+		sell_restricted = mr["category"].isin(_SELL_RESTRICTED_CATEGORIES)
+		mr = mr[~(sell_restricted & mr["direction"].eq("SELL"))].copy()
+	if "category" in trend.columns and "direction" in trend.columns:
+		sell_restricted = trend["category"].isin(_SELL_RESTRICTED_CATEGORIES)
+		trend = trend[~(sell_restricted & trend["direction"].eq("SELL"))].copy()
 
 	mr = mr.sort_values(["score"], ascending=False).head(int(max_per_style)).copy()
 	trend = trend.sort_values(["score"], ascending=False).head(int(max_per_style)).copy()

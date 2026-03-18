@@ -996,7 +996,7 @@ def select_diversified_trades(
     
     # Filter for quality: must have valid score, vol, and zscore
     df = df[
-        (df.get('composite_score', pd.Series([0] * len(df))) > 0) &
+        (df.get('score', pd.Series([0] * len(df))) > 0) &
         (df.get('vol', pd.Series([np.nan] * len(df))).notna()) &
         (df.get('Zscore', pd.Series([np.nan] * len(df))).notna())
     ].copy()
@@ -1004,8 +1004,8 @@ def select_diversified_trades(
     if len(df) == 0:
         return []
     
-    # Sort by composite_score (or score if available)
-    score_col = 'composite_score' if 'composite_score' in df.columns else 'score'
+    # Sort by score (from alpha.py unified scorer)
+    score_col = 'score'
     if score_col in df.columns:
         df = df.sort_values(score_col, ascending=False)
     
@@ -1072,7 +1072,7 @@ def build_diversified_trades_display(trades: List[Dict]) -> html.Div:
         style = trade.get('style', 'N/A')
         direction = trade.get('direction', 'N/A')
         zscore = trade.get('Zscore', 0)
-        score = trade.get('composite_score', trade.get('score', 0))
+        score = trade.get('score', 0)
         
         dir_color = THEME['success'] if direction == 'BUY' else THEME['danger']
         
@@ -2115,23 +2115,22 @@ def register_alpha_callbacks(app) -> None:
             print(f"[DEBUG] df columns: {df.columns.tolist()}")
             
             # Handle None values with defaults
-            mom_window = int(mom_window) if mom_window is not None else 20
-            mom_k = float(mom_k) if mom_k is not None else 1.0
             total_capital = float(total_capital) if total_capital is not None else 10000.0  # Default 10B
             max_dv01 = float(max_dv01) if max_dv01 is not None else 5000000.0  # Default 5M
             
-            # Compute unified weightless scores
-            df_scored = compute_unified_edge_vol_score(
-                df, 
-                mom_window=mom_window, 
-                mom_k=mom_k
-            )
+            # Use the pre-computed `score` from alpha.py (_add_unified_score_preview).
+            # score = expected_return_H / (TTM × risk_vol)  ≥ 0
+            # direction encodes BUY/SELL; score is always non-negative.
+            df_scored = df.copy()
+            if 'score' not in df_scored.columns:
+                df_scored['score'] = 0.0
+            df_scored['score'] = pd.to_numeric(df_scored['score'], errors='coerce').fillna(0.0)
 
-            df_scored = df_scored.sort_values('composite_score', ascending=False)
+            df_scored = df_scored.sort_values('score', ascending=False)
             
-            # Filter out zero or near-zero score trades (negative expected edge)
+            # Filter out zero-score trades (no edge)
             min_score_threshold = 0.001
-            df_scored = df_scored[df_scored['composite_score'] > min_score_threshold].copy()
+            df_scored = df_scored[df_scored['score'] > min_score_threshold].copy()
             
             print(f"[DEBUG] After filtering zero-score trades: {len(df_scored)} remaining (threshold={min_score_threshold})")
             
@@ -2153,8 +2152,8 @@ def register_alpha_callbacks(app) -> None:
             if alloc_method == 'equal':
                 df_scored['weight'] = 1 / n_trades
             elif alloc_method == 'score':
-                score_sum = df_scored['composite_score'].sum()
-                df_scored['weight'] = df_scored['composite_score'] / score_sum if score_sum > 0 else 1 / n_trades
+                score_sum = df_scored['score'].sum()
+                df_scored['weight'] = df_scored['score'] / score_sum if score_sum > 0 else 1 / n_trades
             elif alloc_method == 'inv_vol':
                 if 'vol' in df_scored.columns:
                     inv_vol = 1 / df_scored['vol'].replace(0, np.nan).fillna(df_scored['vol'].mean())
@@ -2190,11 +2189,10 @@ def register_alpha_callbacks(app) -> None:
             
             # Select display columns
             display_cols = [
-                'ID', 'spread_type', 'style', 'direction',
-                'Zscore', 'carry_roll', 'vol',
-                'momentum_per_day', 'expected_move_per_day',
-                'edge', 'risk', 'composite_score',
-                'zscore_score', 'mr_score',
+                'ID', 'spread_type', 'category', 'style', 'direction',
+                'Zscore', 'spread', 'carry_roll', 'vol',
+                'reg_slope_per_day', 'ttm_used', 'expected_return_H', 'risk',
+                'score',
                 'weight', 'risk_contribution', 'notional_mm', 'suggested_dv01',
             ]
             available_cols = [c for c in display_cols if c in df_scored.columns]
@@ -2259,7 +2257,7 @@ def register_alpha_callbacks(app) -> None:
                     ], style={'marginRight': '30px'}),
                     html.Div([
                         html.Strong("Avg Score: ", style={'color': THEME['text_sub']}),
-                        html.Span(f"{df_scored['composite_score'].mean():.1f}", style={'color': THEME['text_main']}),
+                        html.Span(f"{df_scored['score'].mean():.3f}", style={'color': THEME['text_main']}),
                     ], style={'marginRight': '30px'}),
                     html.Div([
                         html.Strong("Risk Parity: ", style={'color': THEME['text_sub']}),
