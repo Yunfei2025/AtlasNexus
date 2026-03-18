@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
@@ -118,6 +119,7 @@ MAX_CORRELATION_THRESHOLD = 0.6
 
 # Instrument selector prefix for non-spread (macro) series used by bond-swap trend backtests
 MACRO_PREFIX = "MACRO|"
+_SWAP_SPREAD_BUTTERFLY_PATTERN = re.compile(r"^(?:Repo|Shi3M)-(?:\d+[my]){3,}$", re.IGNORECASE)
 
 # Global state for diversified trade recommendations
 # This persists across tab switches (unlike dcc.Store which is tab-scoped)
@@ -125,6 +127,12 @@ DIVERSIFIED_TRADE_RECOMMENDATIONS = {
     'trades': [],       # List of recommended trade dictionaries
     'timestamp': None   # When the analysis was run
 }
+
+
+def _exclude_swapspread_butterflies(labels: pd.Index | pd.Series):
+    """Return mask that excludes IRS butterfly IDs such as Repo-1y2y5y or Shi3M-3m6m9m."""
+    text = labels.astype(str)
+    return ~text.str.match(_SWAP_SPREAD_BUTTERFLY_PATTERN)
 
 # ---------------------------------------------------------------------------
 # Data Loading Utilities
@@ -174,6 +182,7 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
             if spread_type == 'SwapSpread':
                 # Filter out .IR columns/indices if present
                 snap_df = snap_df[~snap_df.index.astype(str).str.endswith('.IR')].copy()
+                snap_df = snap_df[_exclude_swapspread_butterflies(snap_df.index)].copy()
             return snap_df
     except Exception:
         pass
@@ -200,6 +209,7 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
         df = data.get('StatInfo')
         if isinstance(df, pd.DataFrame) and not df.empty:
             df = df[~df.index.astype(str).str.endswith('.IR')].copy()
+            df = df[_exclude_swapspread_butterflies(df.index)].copy()
             return df
         return None
         
@@ -253,6 +263,7 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                 if spread_type == 'SwapSpread':
                     cols = pd.Index(ts.columns.astype(str))
                     ts = ts.loc[:, ~cols.str.endswith('.IR')].copy()
+                    ts = ts.loc[:, _exclude_swapspread_butterflies(pd.Index(ts.columns))].copy()
                 print(f"[DEBUG] Loaded {spread_type} from Alpha-spreadsrt['_timeseries'], shape={ts.shape}")
                 return ts
     
@@ -317,6 +328,7 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
             if isinstance(df_spread, pd.DataFrame) and not df_spread.empty:
                 cols = pd.Index(df_spread.columns.astype(str))
                 df_spread = df_spread.loc[:, ~cols.str.endswith('.IR')].copy()
+                df_spread = df_spread.loc[:, _exclude_swapspread_butterflies(pd.Index(df_spread.columns))].copy()
                 print(f"[DEBUG] Loaded SwapSpread from IRS-pxspds.pkl Spread, shape={df_spread.shape}")
                 return df_spread
         return None

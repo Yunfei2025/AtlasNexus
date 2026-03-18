@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Iterable, Tuple
+import re
 
 import numpy as np
 import pandas as pd
@@ -46,6 +47,13 @@ _HORIZON_DAYS: int = 30              # 1-month expected-return horizon (calendar
 _REG_LOOKBACK_DAYS: int = 30         # regression window for slope & z-score (~1 month of trading days)
 _RISK_VOL_WINDOW: int = 90           # 3-month risk normalisation window (calendar-day approximation)
 _CARRY_BASIS_DAYS: float = 90.0      # carry_roll is stored as a ~3-month quantity
+_SWAP_SPREAD_BUTTERFLY_PATTERN = re.compile(r"^(?:Repo|Shi3M)-(?:\d+[my]){3,}$", re.IGNORECASE)
+
+
+def _exclude_swapspread_butterflies(labels: pd.Index | pd.Series):
+	"""Return mask that excludes IRS butterfly IDs such as Repo-1y2y5y or Shi3M-3m6m9m."""
+	text = labels.astype(str)
+	return ~text.str.match(_SWAP_SPREAD_BUTTERFLY_PATTERN)
 
 
 @dataclass(frozen=True)
@@ -210,6 +218,7 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		df_irs = _normalize_index(df_irs)
 		# Exclude IDs ending with ".IR"
 		df_irs = df_irs[~df_irs.index.astype(str).str.endswith(".IR")].copy()
+		df_irs = df_irs[_exclude_swapspread_butterflies(df_irs.index)].copy()
 		df_irs = _ensure_numeric(df_irs, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
 		if "Carry(3m,bp)" in df_irs.columns and "Roll(3m,bp)" in df_irs.columns:
 			df_irs["carry_roll"] = df_irs["Carry(3m,bp)"] + df_irs["Roll(3m,bp)"]
@@ -688,6 +697,7 @@ def load_historical_spread_series(
 			return {}
 		# Exclude ".IR" columns to align with candidates
 		df = df.loc[:, ~pd.Index(df.columns.astype(str)).str.endswith(".IR")].copy()
+		df = df.loc[:, _exclude_swapspread_butterflies(pd.Index(df.columns))].copy()
 		df = df.sort_index().tail(int(lookback_days))
 
 		for cid in candidates:
