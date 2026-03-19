@@ -35,6 +35,7 @@ project_root = Path(__file__).parent.parent.parent.resolve()
 sys.path.insert(0, str(project_root))
 
 
+from curves.calibration.stat import OU_calibrate
 from curves.utils.file import updatePKL
 from settings.paths import DIR_INPUT
 
@@ -47,6 +48,7 @@ _HORIZON_DAYS: int = 30              # 1-month expected-return horizon (calendar
 _REG_LOOKBACK_DAYS: int = 30         # regression window for slope & z-score (~1 month of trading days)
 _RISK_VOL_WINDOW: int = 90           # 3-month risk normalisation window (calendar-day approximation)
 _CARRY_BASIS_DAYS: float = 90.0      # carry_roll is stored as a ~3-month quantity
+_ANNUAL_CARRY_BASIS_DAYS: float = 365.0
 _SWAP_SPREAD_BUTTERFLY_PATTERN = re.compile(r"^(?:Repo|Shi3M)-(?:\d+[my]){3,}$", re.IGNORECASE)
 
 
@@ -126,6 +128,24 @@ def _ensure_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 	return out
 
 
+def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
+	"""Build tenor spread time series from CNBD key-rate history."""
+	if not isinstance(cnbd_data, dict) or "CGB" not in cnbd_data or "CDB" not in cnbd_data:
+		return {}
+	try:
+		return {
+			"CGB-5s10s": cnbd_data["CGB"]["中债国债到期收益率:10年"] - cnbd_data["CGB"]["中债国债到期收益率:5年"],
+			"CGB-10s30s": cnbd_data["CGB"]["中债国债到期收益率:30年"] - cnbd_data["CGB"]["中债国债到期收益率:10年"],
+			"CDB-5s10s": cnbd_data["CDB"]["中债国开债到期收益率:10年"] - cnbd_data["CDB"]["中债国开债到期收益率:5年"],
+			"CDB-10s30s": cnbd_data["CDB"]["中债国开债到期收益率:30年"] - cnbd_data["CDB"]["中债国开债到期收益率:10年"],
+			"CDBCGB-5y": cnbd_data["CDB"]["中债国开债到期收益率:5年"] - cnbd_data["CGB"]["中债国债到期收益率:5年"],
+			"CDBCGB-10y": cnbd_data["CDB"]["中债国开债到期收益率:10年"] - cnbd_data["CGB"]["中债国债到期收益率:10年"],
+			"CDBCGB-30y": cnbd_data["CDB"]["中债国开债到期收益率:30年"] - cnbd_data["CGB"]["中债国债到期收益率:30年"],
+		}
+	except Exception:
+		return {}
+
+
 def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str, pd.DataFrame]:
 	"""Build normalized snapshot tables keyed by spread type.
 
@@ -145,16 +165,8 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 	cnbd_data = _read_pickle(paths.cnbd_data)
 
 	tenor_spd: dict[str, pd.Series] = {}
-	# Only build if CNBD data looks like expected dict-of-DataFrames
 	try:
-		if isinstance(cnbd_data, dict) and "CGB" in cnbd_data and "CDB" in cnbd_data:
-			tenor_spd["CGB-5s10s"] = cnbd_data["CGB"]["中债国债到期收益率:10年"] - cnbd_data["CGB"]["中债国债到期收益率:5年"]
-			tenor_spd["CGB-10s30s"] = cnbd_data["CGB"]["中债国债到期收益率:30年"] - cnbd_data["CGB"]["中债国债到期收益率:10年"]
-			tenor_spd["CDB-5s10s"] = cnbd_data["CDB"]["中债国开债到期收益率:10年"] - cnbd_data["CDB"]["中债国开债到期收益率:5年"]
-			tenor_spd["CDB-10s30s"] = cnbd_data["CDB"]["中债国开债到期收益率:30年"] - cnbd_data["CDB"]["中债国开债到期收益率:10年"]
-			tenor_spd["CDBCGB-5y"] = cnbd_data["CDB"]["中债国开债到期收益率:5年"] - cnbd_data["CGB"]["中债国债到期收益率:5年"]
-			tenor_spd["CDBCGB-10y"] = cnbd_data["CDB"]["中债国开债到期收益率:10年"] - cnbd_data["CGB"]["中债国债到期收益率:10年"]
-			tenor_spd["CDBCGB-30y"] = cnbd_data["CDB"]["中债国开债到期收益率:30年"] - cnbd_data["CGB"]["中债国债到期收益率:30年"]
+		tenor_spd = _build_tenor_spread_timeseries(cnbd_data)
 	except Exception:
 		tenor_spd = {}
 
@@ -246,25 +258,30 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 	# -----------------------
 	if tenor_spd:
 		df_ts = pd.DataFrame(tenor_spd).sort_index()
-		# Basic stats over recent window
-		# lookback 252 trading days (~1 year)
+		# Use the recent 252 trading days (~1y), consistent with candidate lookback.
 		N = 252
 		df_hist = df_ts.tail(N)
-		latest = df_hist.ffill().iloc[-1]
-		mu = df_hist.mean(skipna=True)
-		sig = df_hist.std(skipna=True).replace(0, np.nan)
-		z = (latest - mu) / sig
+		stat_info = OU_calibrate(df_hist)
+		latest = df_hist.ffill().iloc[-1].rename("spread")
 
-		df_tenor = pd.DataFrame(
-			{
-				"spread": latest,
-				"mean": mu,
-				"vol": sig,
-				"Zscore": z,
-				"halflife": np.nan,
-				"stationary": "YES",
-			}
+		df_tenor = stat_info.join(latest, how="right")
+		for col in ["mean", "vol", "halflife"]:
+			if col not in df_tenor.columns:
+				df_tenor[col] = np.nan
+		if "stationary" not in df_tenor.columns:
+			df_tenor["stationary"] = "NO"
+
+		df_tenor["spread"] = pd.to_numeric(df_tenor["spread"], errors="coerce")
+		df_tenor["mean"] = pd.to_numeric(df_tenor["mean"], errors="coerce")
+		df_tenor["vol"] = pd.to_numeric(df_tenor["vol"], errors="coerce")
+		df_tenor["Zscore"] = (
+			(df_tenor["spread"] - df_tenor["mean"]) /
+			df_tenor["vol"].replace(0, np.nan)
 		)
+		# Use the tenor spread level itself as annual BUY-side carry+roll proxy.
+		# Spread is stored in yield %, so convert to annual bp.
+		df_tenor["carry_roll"] = df_tenor["spread"] * 100.0
+		df_tenor["carry_basis_days"] = _ANNUAL_CARRY_BASIS_DAYS
 		df_tenor.index.name = "ID"
 		df_tenor["spread_type"] = "TenorSpread"
 		df_tenor["category"] = "Tenor-Spread"
@@ -546,7 +563,12 @@ def _add_unified_score_preview(
 
 	out = df.copy()
 	H = float(max(1, int(horizon_days)))
-	cd = float(carry_basis_days) if carry_basis_days and np.isfinite(float(carry_basis_days)) and float(carry_basis_days) > 0 else 90.0
+	carry_basis_series = pd.to_numeric(
+		out["carry_basis_days"] if "carry_basis_days" in out.columns else pd.Series(np.nan, index=out.index),
+		errors="coerce",
+	)
+	cd_default = float(carry_basis_days) if carry_basis_days and np.isfinite(float(carry_basis_days)) and float(carry_basis_days) > 0 else 90.0
+	cd = carry_basis_series.where(carry_basis_series.gt(0) & carry_basis_series.notna(), cd_default)
 
 	spread = pd.to_numeric(
 		out["spread"] if "spread" in out.columns else pd.Series(np.nan, index=out.index),
@@ -764,17 +786,8 @@ def load_historical_spread_series(
 		obj = _read_pickle(paths.cnbd_data)
 		if not isinstance(obj, dict):
 			return {}
-		try:
-			tenor_ts = {
-				"CGB-5s10s": obj["CGB"]["中债国债到期收益率:10年"] - obj["CGB"]["中债国债到期收益率:5年"],
-				"CGB-10s30s": obj["CGB"]["中债国债到期收益率:30年"] - obj["CGB"]["中债国债到期收益率:10年"],
-				"CDB-5s10s": obj["CDB"]["中债国开债到期收益率:10年"] - obj["CDB"]["中债国开债到期收益率:5年"],
-				"CDB-10s30s": obj["CDB"]["中债国开债到期收益率:30年"] - obj["CDB"]["中债国开债到期收益率:10年"],
-				"CDBCGB-5y": obj["CDB"]["中债国开债到期收益率:5年"] - obj["CGB"]["中债国债到期收益率:5年"],
-				"CDBCGB-10y": obj["CDB"]["中债国开债到期收益率:10年"] - obj["CGB"]["中债国债到期收益率:10年"],
-				"CDBCGB-30y": obj["CDB"]["中债国开债到期收益率:30年"] - obj["CGB"]["中债国债到期收益率:30年"],
-			}
-		except Exception:
+		tenor_ts = _build_tenor_spread_timeseries(obj)
+		if not tenor_ts:
 			return {}
 
 		df = pd.DataFrame(tenor_ts).sort_index().tail(int(lookback_days))
@@ -933,26 +946,24 @@ def build_alpha_candidates(
 		if c in df_all.columns:
 			df_all[c] = pd.to_numeric(df_all[c], errors="coerce")
 
-	# Style mapping: treat Bond-Swap as Trend/Carry, Bond-Curve and Swap-Spread as MeanReversion
+	# Style mapping: explicit carry categories stay Carry; mixed categories are ADF-driven.
 	cat_to_style = {
 		"Bond-Curve": "MeanReversion",
 		#"Swap-Spread": "MeanReversion", # HANDLED DYNAMICALLY BELOW
 		"Bond-Swap": "Carry",
-		"Tenor-Spread": "MeanReversion",
 	}
 	if "style" not in df_all.columns:
 		df_all["style"] = df_all["category"].map(cat_to_style)
 		
-		# Dynamic style for Swap-Spread: MR if stationary, else Carry
-		mask_ss = df_all["category"] == "Swap-Spread"
-		if mask_ss.any():
-			# Initialize with Carry
-			df_all.loc[mask_ss, "style"] = "Carry"
-			# Upgrade stationary ones to MeanReversion
-			if "stationary" in df_all.columns:
-				stat_mask = mask_ss & _stationary_yes_mask(df_all["stationary"])
-				if stat_mask.any():
-					df_all.loc[stat_mask, "style"] = "MeanReversion"
+		# Dynamic style for mixed categories: MR if stationary, else Carry.
+		for dynamic_category in ["Swap-Spread", "Tenor-Spread"]:
+			mask_dynamic = df_all["category"] == dynamic_category
+			if mask_dynamic.any():
+				df_all.loc[mask_dynamic, "style"] = "Carry"
+				if "stationary" in df_all.columns:
+					stat_mask = mask_dynamic & _stationary_yes_mask(df_all["stationary"])
+					if stat_mask.any():
+						df_all.loc[stat_mask, "style"] = "MeanReversion"
 		
 		df_all["style"] = df_all["style"].fillna("Unknown")
 

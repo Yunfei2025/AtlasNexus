@@ -74,7 +74,7 @@ SPREAD_CATEGORIES = {
         'label': 'Tenor Spreads',
         'types': ['TenorSpread'],
         'description': 'Curve slope / cross-curve spreads (e.g. 5s10s, 10s30s)',
-        'style': 'MeanReversion',
+        'style': 'Mixed',
     },
     'Bond-Futures': {
         'label': 'Bond vs Futures (Net Basis)',
@@ -770,7 +770,7 @@ def compute_scan_score(df: pd.DataFrame) -> pd.DataFrame:
     reversion_factor = (1.0 - np.exp(-kappa_mr * 30.0)).fillna(0.0).clip(0.0, 1.0)
     expected_mr = (spread - mean).abs() * reversion_factor
 
-    # Carry/Trend: carry scaled to same 30-day horizon (carry_roll is 90-day basis)
+    # Carry/Trend: carry scaled to same 30-day horizon.
     direction = (
         df['direction'].astype(str).str.strip().str.upper()
         if 'direction' in df.columns
@@ -778,8 +778,14 @@ def compute_scan_score(df: pd.DataFrame) -> pd.DataFrame:
     )
     dir_sign = pd.Series(1.0, index=df.index, dtype=float)
     dir_sign.loc[direction.eq('SELL')] = -1.0
+    carry_basis_days = (
+        pd.to_numeric(df['carry_basis_days'], errors='coerce')
+        if 'carry_basis_days' in df.columns
+        else pd.Series(90.0, index=df.index, dtype=float)
+    )
+    carry_basis_days = carry_basis_days.where(carry_basis_days.gt(0) & np.isfinite(carry_basis_days), 90.0)
     # carry_roll is in bp; spread/risk are in % — divide by 100 to match units
-    expected_tc = (carry.fillna(0.0) / 100.0) * dir_sign * (30.0 / 90.0)
+    expected_tc = (carry.fillna(0.0) / 100.0) * dir_sign * (30.0 / carry_basis_days)
 
     # Combine
     expected_move = expected_tc.where(~is_mr, expected_mr)
@@ -857,10 +863,15 @@ def compute_unified_edge_vol_score(
     # ---------------------------------------------------------------------
     # Carry per day (bp/day)
     # ---------------------------------------------------------------------
-    # carry_roll is stored as a 3m carry+roll (bp) for the BUY side.
+    # carry_roll is stored in bp for the BUY side; basis can vary by spread type.
     # Convert to per-day and flip sign for SELL where we have direction.
-    carry_days = 90.0  # ~3m calendar-day approximation
-    carry_per_day = carry / carry_days
+    carry_basis_days = (
+        pd.to_numeric(df['carry_basis_days'], errors='coerce')
+        if 'carry_basis_days' in df.columns
+        else pd.Series(90.0, index=df.index, dtype=float)
+    )
+    carry_basis_days = carry_basis_days.where(carry_basis_days.gt(0) & np.isfinite(carry_basis_days), 90.0)
+    carry_per_day = carry / carry_basis_days
     df['carry_per_day'] = carry_per_day
 
     # ---------------------------------------------------------------------
@@ -1133,7 +1144,7 @@ def build_candidates_layout() -> html.Div:
                         {'label': ' Bond-Curve (MR)', 'value': 'Bond-Curve'},
                         {'label': ' Bond-Swap (Carry/Trend)', 'value': 'Bond-Swap'},
                         {'label': ' Swap Spreads (MR/Carry)', 'value': 'Swap-Spread'},
-                        {'label': ' Tenor Spreads (MR)', 'value': 'Tenor-Spread'},
+                        {'label': ' Tenor Spreads (ADF→MR / Carry)', 'value': 'Tenor-Spread'},
                         {'label': ' Net Basis (Carry)', 'value': 'Bond-Futures'},
                         {'label': ' Term Basis (MR)', 'value': 'Futures-Term'},
                     ],
@@ -1436,7 +1447,7 @@ def register_alpha_callbacks(app) -> None:
             z_thd = float(ZSCORE_ENTRY_THRESHOLD)
 
         # Use generator-side filtering so we cap to 20 MR + 20 Carry/Trend,
-        # enforce stationary==YES for MeanReversion, and compute correlations.
+        # enforce stationary==YES for MeanReversion rows, and compute correlations.
         try:
             from curves.refreshers.alpha import load_alpha_candidates
 
@@ -1467,7 +1478,7 @@ def register_alpha_callbacks(app) -> None:
         if df_all.empty:
             return (
                 html.Div(
-                    f"No candidates found (MR requires stationary=YES, zscore≥{z_thd:g}).",
+                    f"No candidates found (MR rows require stationary=YES, zscore≥{z_thd:g}).",
                     style={'color': THEME['warning']},
                 ),
                 f"Scanned at {scanned_time}",
@@ -2413,6 +2424,8 @@ def register_alpha_callbacks(app) -> None:
                         style_key = 'carry'
                     elif spread_type == 'SwapSpread':
                         style_key = 'mr'
+                    elif spread_type == 'TenorSpread':
+                        style_key = 'carry'
                 break
         
         return style_key
