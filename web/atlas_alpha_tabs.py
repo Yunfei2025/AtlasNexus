@@ -771,6 +771,7 @@ def compute_scan_score(df: pd.DataFrame) -> pd.DataFrame:
     expected_mr = (spread - mean).abs() * reversion_factor
 
     # Carry/Trend: carry scaled to same 30-day horizon.
+    # For annual tenor carry we use a 30/360 basis, so 1m carry = annual / 12.
     direction = (
         df['direction'].astype(str).str.strip().str.upper()
         if 'direction' in df.columns
@@ -864,6 +865,7 @@ def compute_unified_edge_vol_score(
     # Carry per day (bp/day)
     # ---------------------------------------------------------------------
     # carry_roll is stored in bp for the BUY side; basis can vary by spread type.
+    # For annual tenor carry we use a 30/360 basis, so 1m carry = annual / 12.
     # Convert to per-day and flip sign for SELL where we have direction.
     carry_basis_days = (
         pd.to_numeric(df['carry_basis_days'], errors='coerce')

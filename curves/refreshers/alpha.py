@@ -48,7 +48,7 @@ _HORIZON_DAYS: int = 30              # 1-month expected-return horizon (calendar
 _REG_LOOKBACK_DAYS: int = 30         # regression window for slope & z-score (~1 month of trading days)
 _RISK_VOL_WINDOW: int = 90           # 3-month risk normalisation window (calendar-day approximation)
 _CARRY_BASIS_DAYS: float = 90.0      # carry_roll is stored as a ~3-month quantity
-_ANNUAL_CARRY_BASIS_DAYS: float = 365.0
+_ANNUAL_CARRY_BASIS_DAYS: float = 360.0
 _SWAP_SPREAD_BUTTERFLY_PATTERN = re.compile(r"^(?:Repo|Shi3M)-(?:\d+[my]){3,}$", re.IGNORECASE)
 
 
@@ -280,6 +280,7 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		)
 		# Use the tenor spread level itself as annual BUY-side carry+roll proxy.
 		# Spread is stored in yield %, so convert to annual bp.
+		# Use 30/360 scaling so a 1-month horizon is exactly annual_carry / 12.
 		df_tenor["carry_roll"] = df_tenor["spread"] * 100.0
 		df_tenor["carry_basis_days"] = _ANNUAL_CARRY_BASIS_DAYS
 		df_tenor.index.name = "ID"
