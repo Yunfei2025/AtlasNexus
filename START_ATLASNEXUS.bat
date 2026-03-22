@@ -9,10 +9,24 @@ echo.
 
 REM Activate conda environment
 echo [1/3] Activating conda environment 'dev'...
-call conda activate dev
+
+REM Try standard conda locations in order
+set CONDA_BAT=
+if exist "%USERPROFILE%\anaconda3\condabin\conda.bat"   set CONDA_BAT=%USERPROFILE%\anaconda3\condabin\conda.bat
+if exist "%USERPROFILE%\miniconda3\condabin\conda.bat"  set CONDA_BAT=%USERPROFILE%\miniconda3\condabin\conda.bat
+if exist "C:\ProgramData\anaconda3\condabin\conda.bat"  set CONDA_BAT=C:\ProgramData\anaconda3\condabin\conda.bat
+if exist "C:\ProgramData\miniconda3\condabin\conda.bat" set CONDA_BAT=C:\ProgramData\miniconda3\condabin\conda.bat
+
+if "%CONDA_BAT%"=="" (
+    echo ERROR: Could not find conda.bat. Please check your Anaconda/Miniconda installation.
+    pause
+    exit /b 1
+)
+
+call "%CONDA_BAT%" activate dev
 if errorlevel 1 (
     echo ERROR: Failed to activate conda environment 'dev'
-    echo Please ensure Anaconda/Miniconda is installed and 'dev' environment exists
+    echo Please ensure the 'dev' environment exists: conda create -n dev python=3.13
     pause
     exit /b 1
 )

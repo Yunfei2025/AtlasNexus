@@ -3,39 +3,70 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from engine.artifacts import write_json
+from engine.artifacts import ArtifactStore, write_json
 from engine.context import RunConfig
 from engine.data_update import load_default_retrievers, run_data_update
 
 logger = logging.getLogger(__name__)
 
+# Ordered list of (step_name, module_path, function_name).
+# Each interface module exposes ``calibrate(cfg, store) -> Any``.
+_EOD_STEPS: list[tuple[str, str, str]] = [
+    ("curves",      "curves.interface",      "calibrate"),
+    ("factors",     "factors.interface",      "calibrate"),
+    ("pairs",       "pairs.interface",        "calibrate"),
+    ("futures",     "futures.interface",      "calibrate"),
+    ("multiasset",  "multiasset.interface",   "calibrate"),
+    ("derivatives", "derivatives.interface",  "calibrate"),
+]
 
-def run(cfg: RunConfig, *, update_data: bool = False) -> None:
-    """Run daily EOD pipeline.
 
-    This is a thin orchestrator. It should:
-    1) (optional) update data via retrieve.py modules
-    2) build universe (portfolio)
-    3) compute regime/factors
-    4) compute RV/curves metrics (for FI selection)
-    5) generate strategy signals (pairs/futures/derivatives)
-    6) aggregate targets + risk (multiasset)
-    7) produce manual tickets
-    8) write artifacts for web monitoring
+def run(cfg: RunConfig, *, update_data: bool = False) -> dict[str, str]:
+    """Run the daily EOD pipeline.
 
-    The wiring is intentionally incremental.
+    Execution order:
+      0. (optional) update data via retrieve.py modules
+      1. curves   – full calibration chain (Trend → BondCurve → Credit → IRS → Stat → Pairs)
+      2. factors  – factor model training + signal generation
+      3. pairs    – pair regression analysis
+      4. futures  – daily portfolio strategy analysis
+      5. multiasset – universe construction + factor optimizer
+      6. derivatives – option pricing / vol analysis
+
+    Each step is isolated behind its ``interface.calibrate(cfg, store)``
+    entry point.  A failing step is logged and recorded but does **not**
+    abort downstream steps (best-effort).
     """
 
     logger.info("EOD run started: run_id=%s asof=%s", cfg.run_id, cfg.asof)
+    store = ArtifactStore(cfg.input_dir)
 
+    # ── 0. Data retrieval ──────────────────────────────────────────────
     if update_data:
         load_default_retrievers()
         run_data_update(cfg)
 
-    # --- Step 3: Compute factor signals for risk exposure control -----------
-    signal_snapshot = _compute_factor_signals(cfg)
+    # ── 1-6. Module calibration steps ──────────────────────────────────
+    step_status: dict[str, str] = {}
+    import importlib
 
-    # Stub artifact so web can show the run exists
+    for step_name, module_path, func_name in _EOD_STEPS:
+        logger.info("── Step: %s ─────────────────────────────────", step_name)
+        try:
+            mod = importlib.import_module(module_path)
+            fn = getattr(mod, func_name)
+            fn(cfg, store)
+            step_status[step_name] = "ok"
+        except Exception:
+            logger.exception("Step '%s' failed — continuing with next step", step_name)
+            step_status[step_name] = "failed"
+
+    # ── 7. Factor signals (existing logic kept for backward compat) ────
+    signal_snapshot = _compute_factor_signals(cfg)
+    if signal_snapshot:
+        step_status["factor_signals"] = "ok"
+
+    # ── Write run metadata ─────────────────────────────────────────────
     write_json(
         cfg.output_dir / "run_meta.json",
         {
@@ -43,11 +74,13 @@ def run(cfg: RunConfig, *, update_data: bool = False) -> None:
             "run_id": cfg.run_id,
             "asof": cfg.asof.isoformat(),
             "generated_at": datetime.utcnow().isoformat(),
-            "status": "stub",
+            "status": "completed",
+            "steps": step_status,
         },
     )
 
-    logger.info("EOD run finished (stub). Output: %s", cfg.output_dir)
+    logger.info("EOD run finished. Steps: %s  Output: %s", step_status, cfg.output_dir)
+    return step_status
 
 
 # ── helpers ────────────────────────────────────────────────────────────

@@ -11,10 +11,10 @@ class RunConfig:
     """Configuration for a single engine run."""
 
     asof: date
-    mode: str  # eod | intraday
+    mode: str  # eod | intraday | refresh
     run_id: str
     output_dir: Path
-    cache_dir: Path | None = None
+    input_dir: Path  # shared artifact store (``../input``)
     params: dict[str, Any] = field(default_factory=dict)
 
 
@@ -28,8 +28,10 @@ def resolve_output_dir(project_root: Path, run_id: str) -> Path:
     return project_root / "runs" / run_id
 
 
-def resolve_cache_dir(project_root: Path) -> Path:
-    return project_root / "cache"
+def resolve_input_dir(project_root: Path) -> Path:
+    """Return the shared ``input/`` directory (sibling of project root)."""
+    from settings.paths import DIR_INPUT
+    return DIR_INPUT
 
 
 def build_run_config(
@@ -39,21 +41,20 @@ def build_run_config(
     asof: date | None = None,
     run_id: str | None = None,
     output_dir: Path | None = None,
-    cache_dir: Path | None = None,
+    input_dir: Path | None = None,
     params: dict[str, Any] | None = None,
 ) -> RunConfig:
     asof = asof or date.today()
     run_id = run_id or default_run_id(asof, mode)
     out_dir = output_dir or resolve_output_dir(project_root, run_id)
-    cache_dir = cache_dir or resolve_cache_dir(project_root)
+    inp_dir = input_dir or resolve_input_dir(project_root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    cache_dir.mkdir(parents=True, exist_ok=True)
 
     return RunConfig(
         asof=asof,
         mode=mode,
         run_id=run_id,
         output_dir=out_dir,
-        cache_dir=cache_dir,
+        input_dir=inp_dir,
         params=params or {},
     )

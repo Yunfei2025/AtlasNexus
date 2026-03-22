@@ -20,3 +20,11 @@ web/apps/cache/
 
 runs/_jobs/*
 runs/*
+
+# Generated outputs (regenerable)
+factors/*.csv
+factors/*.joblib
+factors/*backtest_results*.html
+futures/techs/*.png
+backtest/portfolio_dashboard_output.html
+pairs/regression_plots.html

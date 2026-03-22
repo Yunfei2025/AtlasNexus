@@ -52,6 +52,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional list of module paths to run (defaults to engine defaults)",
     )
 
+    refresh = sub.add_parser("refresh", help="Run intraday refresh pipeline (engine)")
+    refresh.add_argument("--asof", type=_parse_date, default=None, help="As-of date YYYY-MM-DD")
+    refresh.add_argument(
+        "--steps",
+        nargs="*",
+        default=None,
+        help="Refresh step names to run (default: all). Choices: rates, credit, irs, stat",
+    )
+
+    sched = sub.add_parser("scheduler", help="Start periodic refresh scheduler during trading hours")
+    sched.add_argument("--interval", type=int, default=300, help="Seconds between refresh ticks (default: 300)")
+    sched.add_argument("--start-hour", type=int, default=9, help="Trading window start hour (default: 9)")
+    sched.add_argument("--end-hour", type=int, default=16, help="Trading window end hour (default: 16)")
+    sched.add_argument(
+        "--mode",
+        choices=["refresh", "intraday"],
+        default="refresh",
+        help="Pipeline to run each tick (default: refresh)",
+    )
+
     return p
 
 def run_web_app():
@@ -283,7 +303,7 @@ def main():
         return
 
     # Engine-driven orchestration
-    if args.cmd in {"eod", "intraday", "update-data"}:
+    if args.cmd in {"eod", "intraday", "update-data", "refresh", "scheduler"}:
         from engine.cli import main as engine_main
 
         engine_argv: list[str] = [args.cmd]
@@ -293,6 +313,13 @@ def main():
             engine_argv.append("--update-data")
         if args.cmd == "update-data" and getattr(args, "modules", None):
             engine_argv.extend(["--modules", *args.modules])
+        if args.cmd == "refresh" and getattr(args, "steps", None):
+            engine_argv.extend(["--steps", *args.steps])
+        if args.cmd == "scheduler":
+            engine_argv.extend(["--interval", str(args.interval)])
+            engine_argv.extend(["--start-hour", str(args.start_hour)])
+            engine_argv.extend(["--end-hour", str(args.end_hour)])
+            engine_argv.extend(["--mode", args.mode])
 
         engine_main(engine_argv, project_root=project_root)
         return

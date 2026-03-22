@@ -1686,7 +1686,7 @@ def register_multiasset_callbacks(app):
                 font={'color': THEME['text_main']},
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font={'color': THEME['text_main']}),
                 xaxis=dict(
-                    rangeslider=dict(visible=True, thickness=0.05),
+                    rangeslider=dict(visible=False),
                     rangeselector=dict(
                         buttons=[
                             dict(count=1, label="1M", step="month", stepmode="backward"),
@@ -2013,47 +2013,62 @@ def register_multiasset_callbacks(app):
     # 3.55 Add Diversified Assets to Pool Callback
     # Uses global variable instead of dcc.Store because dcc.Store data doesn't persist across tab switches
     @app.callback(
-        Output('add-diversified-status', 'children'),
+        [Output('add-diversified-status', 'children'),
+         Output('asset-pool-store', 'data', allow_duplicate=True),
+         Output('asset-pool-display', 'children', allow_duplicate=True),
+         Output('pool-count', 'children', allow_duplicate=True)],
         Input('add-diversified-assets-btn', 'n_clicks'),
         prevent_initial_call=True
     )
     def add_diversified_assets_to_pool(n_clicks):
         """
         Replace the asset pool with recommended diversified assets.
-        Uses global DIVERSIFICATION_RECOMMENDATIONS instead of dcc.Store.
-        Saves directly to persistent storage file - Portfolio tab will pick up changes on next load.
+        Updates asset-pool-store directly so the Portfolio tab sees the change
+        immediately without requiring a page reload.
         """
+        no_change = (dash.no_update, dash.no_update, dash.no_update)
         if not n_clicks or n_clicks == 0:
-            return ""
-        
+            return ("",) + no_change
+
         # Get assets from global variable (set by correlation analysis)
         recommended_assets = DIVERSIFICATION_RECOMMENDATIONS.get('assets', [])
-        
+
         if not recommended_assets:
-            return "⚠ No recommended assets available. Please run correlation analysis first."
-        
-        # REPLACE the entire asset pool with recommended assets (as user requested)
+            return ("⚠ No recommended assets available. Please run correlation analysis first.",) + no_change
+
+        # REPLACE the entire asset pool with recommended assets
         new_pool = [asset.copy() for asset in recommended_assets]
-        
-        # Save to persistent storage immediately
-        # This will be picked up by Portfolio tab when it loads/refreshes
+
+        # Save to persistent storage
         try:
             save_asset_pool(new_pool)
-            
-            # Count assets by type for status message
-            type_counts = {}
-            for asset in new_pool:
-                a_type = asset.get('type', 'Other')
-                type_counts[a_type] = type_counts.get(a_type, 0) + 1
-            
-            type_summary = ", ".join([f"{count} {t}" for t, count in type_counts.items()])
-            status_msg = f"✓ Saved {len(new_pool)} assets to pool ({type_summary}). Switch to Portfolio tab to view."
-            
-            return status_msg
-            
         except Exception as e:
             print(f"Error saving asset pool: {e}")
-            return f"✗ Error saving: {str(e)}"
+            return (f"✗ Error saving: {str(e)}",) + no_change
+
+        # Build display items (same style as manage_asset_pool)
+        display = []
+        for asset in new_pool:
+            bg_col = '#b48b32' if asset.get('type') == 'Commodities' else '#2c5e40'
+            display.append(html.Div([
+                html.Span(f"• {asset['name']}", style={'fontWeight': 'bold', 'color': 'white'}),
+                html.Span(
+                    f" ({asset.get('universe', '')} - {asset.get('sector', '')})",
+                    style={'color': '#ddd', 'fontSize': '12px'},
+                ),
+            ], style={'padding': '5px', 'marginBottom': '5px', 'backgroundColor': bg_col, 'borderRadius': '3px'}))
+
+        count_text = f"({len(new_pool)})"
+
+        # Count assets by type for status message
+        type_counts: dict = {}
+        for asset in new_pool:
+            a_type = asset.get('type', 'Other')
+            type_counts[a_type] = type_counts.get(a_type, 0) + 1
+        type_summary = ", ".join([f"{count} {t}" for t, count in type_counts.items()])
+        status_msg = f"✓ {len(new_pool)} assets added to pool ({type_summary})."
+
+        return status_msg, new_pool, display, count_text
 
     # 3.6 Risk Factor Budget Input Generator
     @app.callback(
