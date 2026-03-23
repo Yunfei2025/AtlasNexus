@@ -16,6 +16,7 @@ if exist "%USERPROFILE%\anaconda3\condabin\conda.bat"   set CONDA_BAT=%USERPROFI
 if exist "%USERPROFILE%\miniconda3\condabin\conda.bat"  set CONDA_BAT=%USERPROFILE%\miniconda3\condabin\conda.bat
 if exist "C:\ProgramData\anaconda3\condabin\conda.bat"  set CONDA_BAT=C:\ProgramData\anaconda3\condabin\conda.bat
 if exist "C:\ProgramData\miniconda3\condabin\conda.bat" set CONDA_BAT=C:\ProgramData\miniconda3\condabin\conda.bat
+if exist "D:\ProgramData\Miniconda3\condabin\conda.bat" set CONDA_BAT=D:\ProgramData\Miniconda3\condabin\conda.bat
 
 if "%CONDA_BAT%"=="" (
     echo ERROR: Could not find conda.bat. Please check your Anaconda/Miniconda installation.
