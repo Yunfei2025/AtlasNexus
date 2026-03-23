@@ -58,6 +58,11 @@ from web.atlas_volatility_tabs import (
     register_volatility_callbacks,
 )
 
+from web.atlas_factor_backtest_tabs import (
+    build_factor_model_backtest_layout,
+    register_factor_backtest_callbacks,
+)
+
 
 GRAPH_INTERVAL = int(os.environ.get("GRAPH_INTERVAL", 30 * 60_000))
 
@@ -93,6 +98,7 @@ register_fi_callbacks(app)
 register_multiasset_callbacks(app)
 register_alpha_callbacks(app)
 register_volatility_callbacks(app)
+register_factor_backtest_callbacks(app)
 
 
 def build_header():
@@ -145,6 +151,7 @@ def build_tabs_panel():
                         children=[
                             dcc.Tab(label="FACTOR", value="factor", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="BACKTEST", value="factor-model-bt", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="FUTURES", value="backtest-factor", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="REBALANCE", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="SURFACE", value="surface", style=tab_style, selected_style=tab_selected_style),
@@ -154,6 +161,7 @@ def build_tabs_panel():
                     html.Div([
                         html.Div(id="beta-factor-div", children=build_multiasset_factor_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
                         html.Div(id="beta-portfolio-div", children=build_multiasset_portfolio_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-factor-model-bt-div", children=build_factor_model_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="beta-backtest-factor-div", children=build_factor_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="beta-surface-div", children=build_surface_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
@@ -218,6 +226,7 @@ def build_tabs_panel():
             dcc.Store(id='alpha-volatility-content', storage_type='session'),
             dcc.Store(id='beta-factor-content', storage_type='session'),
             dcc.Store(id='beta-portfolio-content', storage_type='session'),
+            dcc.Store(id='beta-factor-model-bt-content', storage_type='session'),
             dcc.Store(id='beta-backtest-factor-content', storage_type='session'),
             dcc.Store(id='beta-backtest-portfolio-content', storage_type='session'),
             dcc.Store(id='beta-surface-content', storage_type='session'),
@@ -430,6 +439,7 @@ def _update_run_center(n, job_id):
 @app.callback(
     [Output("beta-factor-div", "style"),
      Output("beta-portfolio-div", "style"),
+     Output("beta-factor-model-bt-div", "style"),
      Output("beta-backtest-factor-div", "style"),
      Output("beta-backtest-portfolio-div", "style"),
      Output("beta-surface-div", "style")],
@@ -438,20 +448,10 @@ def _update_run_center(n, job_id):
 def _render_beta_subtabs(subtab: str):
     """Show/hide Beta Book subtabs to preserve state."""
     base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
-    styles = {
-        "factor": {**base_style, "display": "block"} if subtab == "factor" else {**base_style, "display": "none"},
-        "portfolio": {**base_style, "display": "block"} if subtab == "portfolio" else {**base_style, "display": "none"},
-        "backtest-factor": {**base_style, "display": "block"} if subtab == "backtest-factor" else {**base_style, "display": "none"},
-        "backtest-portfolio": {**base_style, "display": "block"} if subtab == "backtest-portfolio" else {**base_style, "display": "none"},
-        "surface": {**base_style, "display": "block"} if subtab == "surface" else {**base_style, "display": "none"},
-    }
-    
-    return (
-        styles["factor"],
-        styles["portfolio"],
-        styles["backtest-factor"],
-        styles["backtest-portfolio"],
-        styles["surface"]
+    keys = ["factor", "portfolio", "factor-model-bt", "backtest-factor", "backtest-portfolio", "surface"]
+    return tuple(
+        {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
+        for k in keys
     )
 
 
