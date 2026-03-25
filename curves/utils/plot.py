@@ -341,12 +341,12 @@ def plotTrend(dfp, dfv, dff):
     dfl1 = dfp['Line1']
     dfl2 = dfp['Line2']
     dfm = dfp['Marker']
+
     bgx = {
         "showgrid": True,
         "showline": True,
         "gridcolor": "#0f3174",
         "zeroline": False,
-    #    "title": "Date",
     }
     bgy = {
         "showgrid": True,
@@ -355,34 +355,55 @@ def plotTrend(dfp, dfv, dff):
         "zeroline": False,
         "title": "%",
     }
-    specs = [[{'rowspan': 3, 'colspan': 2}, {}, {}, {}],
-             [{}, {}, {}, {}],
-             [{}, {}, {}, {}]]
-    fig = make_subplots(rows=3, cols=4,
-                        horizontal_spacing=0.05,
-                        vertical_spacing=0.02,
-                        shared_xaxes = True,
-                        specs=specs)
+
+    # ── New layout: 3 rows × 3 cols ──────────────────────────────────────────
+    # Row 1 (50 %)  : big trend figure spanning all 3 columns
+    # Row 2 (25 %)  : 3 fixing subplots (FR001 / FR007 / SHIBOR3M) side-by-side
+    # Row 3 (25 %)  : 3 factor subplots side-by-side
+    # Old right-column arrangement was: col 1 → row 1, col 2 → row 2 (transposed)
+    n_fix = min(dfv.shape[1], 3)
+    n_fac = min(dff.shape[1], 3)
+
+    # Build subplot titles: empty for the big chart, then fixing/factor names
+    _fix_titles = list(dfv.columns[:n_fix])
+    _fac_titles = list(dff.columns[:n_fac])
+    # pad to 3 if fewer series
+    _fix_titles += [""] * (3 - n_fix)
+    _fac_titles += [""] * (3 - n_fac)
+    subplot_titles = [""] + _fix_titles + _fac_titles   # 7 entries
+
+    specs = [
+        [{"colspan": 3}, None, None],   # row 1: big figure (full width)
+        [{}, {}, {}],                   # row 2: fixing subplots
+        [{}, {}, {}],                   # row 3: factor subplots
+    ]
+    fig = make_subplots(
+        rows=3,
+        cols=3,
+        specs=specs,
+        row_heights=[0.50, 0.25, 0.25],
+        horizontal_spacing=0.05,
+        vertical_spacing=0.06,
+        subplot_titles=subplot_titles,
+    )
+
+    # ── Row 1: main trend chart ──────────────────────────────────────────────
     for i in range(dfl1.shape[1]):
         fig.add_trace(go.Scatter(
             name=dfl1.columns[i],
             x=dfl1.index,
             y=dfl1.iloc[:, i],
-            line={
-                "width": 3,
-                "color": _palette_color(px.colors.qualitative.Set1, i)
-            }),
-            row=1, col=1)
+            line={"width": 3, "color": _palette_color(px.colors.qualitative.Set1, i)},
+        ), row=1, col=1)
+
     for i in range(dfl2.shape[1]):
         fig.add_trace(go.Scatter(
             name=dfl2.columns[i],
             x=dfl2.index,
             y=dfl2.iloc[:, i],
-            line={
-                "width": 3,
-                "color": _palette_color(px.colors.qualitative.Set1, i + 1)
-            }),
-            row=1, col=1)
+            line={"width": 3, "color": _palette_color(px.colors.qualitative.Set1, i + 1)},
+        ), row=1, col=1)
+
     for i in range(dfm.shape[1]):
         fig.add_trace(go.Scatter(
             name=dfm.columns[i],
@@ -393,63 +414,53 @@ def plotTrend(dfp, dfv, dff):
                 symbol=_symbol(1 + i * 4),
                 color=_palette_color(px.colors.qualitative.Set1, i),
                 size=10,
-            )),
-            row=1, col=1)
-    for i in range(dfv.shape[1]):
+            ),
+        ), row=1, col=1)
+
+    # ── Row 2: fixings — one subplot per series ──────────────────────────────
+    for i in range(n_fix):
         fig.add_trace(go.Scatter(
             name=dfv.columns[i],
             x=dfv.index,
             y=dfv.iloc[:, i],
-            line={
-                "width": 3,
-                "color": _palette_color(px.colors.qualitative.Set1, i + 1)
-            },
-            xaxis='x3',
-            yaxis='y3',
-            showlegend=True),
-            row=i+1, col=3)
-    for i in range(dff.shape[1]):
+            line={"width": 2, "color": _palette_color(px.colors.qualitative.Set1, i + 1)},
+            showlegend=False,
+        ), row=2, col=i + 1)
+
+    # ── Row 3: factors — one subplot per series ──────────────────────────────
+    for i in range(n_fac):
         fig.add_trace(go.Scatter(
             name=dff.columns[i],
             x=dff.index,
             y=dff.iloc[:, i],
-            line={
-                "width": 3,
-                "color": _palette_color(px.colors.qualitative.Set1, i + 4)
-            },
-            showlegend=True),
-            row=i+1, col=4)
+            line={"width": 2, "color": _palette_color(px.colors.qualitative.Set1, i + 4)},
+            showlegend=False,
+        ), row=3, col=i + 1)
 
+    # ── Global styling ───────────────────────────────────────────────────────
     fig.update_layout(
-        height=700,
-        xaxis_title=dfl1.index.name,
-        yaxis_title='%',
-        title={'text': 'Trends: CNBD Treasury Bond, IRS and Fixings',#Implied Vol of Curve Level/Slope/Curvature',
-               'x': 0.5,
-               'xanchor': 'center',
-               'yanchor': 'top'},
-        legend=dict(x=0.01, y=0.1, traceorder="normal"),
+        height=800,
+        title={
+            "text": "Trends: CNBD Treasury Bond, IRS and Fixings",
+            "x": 0.5,
+            "xanchor": "center",
+            "yanchor": "top",
+        },
+        legend=dict(x=0.01, y=0.88, traceorder="normal"),
         plot_bgcolor=GeneralConfig.app_color["graph_bg"],
         paper_bgcolor=GeneralConfig.app_color["graph_bg"],
         font={"color": "#fff"},
     )
-    fig.update_layout(
-        xaxis=bgx,
-        yaxis=bgy,
-        xaxis3=bgx,
-        yaxis3=bgy,
-        xaxis7=bgx,
-        yaxis7=bgy,
-        xaxis11=bgx,
-        yaxis11=bgy,
-        xaxis4=bgx,
-        yaxis4=bgy,
-        xaxis8=bgx,
-        yaxis8=bgy,
-        xaxis12=bgx,
-        yaxis12=bgy,
-    )
-    #fig.show()
+    fig.update_xaxes(**bgx)
+    fig.update_yaxes(**bgy)
+    # Slightly smaller y-axis title for the small subplots
+    fig.update_yaxes(title_text="", row=2)
+    fig.update_yaxes(title_text="", row=3)
+    # Style subplot annotation titles (row/col labels)
+    for ann in fig.layout.annotations:
+        ann.font.size = 11
+        ann.font.color = "#aab0c0"
+
     return fig
 
 def plotIRSSpotCurve(fixings, curve_dict):

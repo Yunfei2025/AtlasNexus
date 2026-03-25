@@ -46,8 +46,8 @@ echo Press Ctrl+C to stop the server
 echo ============================================================
 echo.
 
-REM Start the Dash app
-python web\apps\atlasnexus_daily.py
+REM Start the Dash app via the canonical main.py entry point
+python main.py daily-web
 
 REM If the script exits, pause to show any error messages
 if errorlevel 1 (

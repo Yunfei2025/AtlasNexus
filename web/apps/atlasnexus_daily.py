@@ -19,16 +19,19 @@ project_root = Path(__file__).parent.parent.parent.resolve()
 sys.path.insert(0, str(project_root))
 
 # Import lightweight style constants (do not import web.core which triggers data loads).
-from web.atlas_styles import tab_style, tabs_styles, tab_selected_style
+from web.tabs.atlas_styles import tab_style, tabs_styles, tab_selected_style
 
 # We intentionally create a new Dash instance to avoid interfering with existing apps.
 from dash import Dash as _Dash
 import pathlib
 
 from web.services.artifacts import find_latest_run, format_run_meta
-from web.services.jobs import start_engine_job, tail_log, get_job_status
+from web.services.jobs import (
+    start_engine_job, tail_log, get_job_status,
+    list_running_jobs, finalize_job_if_done, _cmd_type,
+)
 
-from web.atlas_fi_tabs import (
+from web.tabs.atlas_fi_tabs import (
     build_curves_layout,
     build_pairs_layout,
     build_spreads_layout,
@@ -36,7 +39,7 @@ from web.atlas_fi_tabs import (
     register_callbacks as register_fi_callbacks,
 )
 
-from web.atlas_alpha_tabs import (
+from web.tabs.atlas_alpha_tabs import (
     build_candidates_layout,
     build_portfolio_layout,
     build_basket_layout,
@@ -44,7 +47,7 @@ from web.atlas_alpha_tabs import (
     register_alpha_callbacks,
 )
 
-from web.atlas_multiasset_tabs import (
+from web.tabs.atlas_multiasset_tabs import (
     build_multiasset_factor_layout,
     build_multiasset_portfolio_layout,
     build_multiasset_risk_layout,
@@ -53,14 +56,19 @@ from web.atlas_multiasset_tabs import (
     register_multiasset_callbacks,
 )
 
-from web.atlas_volatility_tabs import (
+from web.tabs.atlas_volatility_tabs import (
     build_volatility_layout,
     register_volatility_callbacks,
 )
 
-from web.atlas_factor_backtest_tabs import (
+from web.tabs.atlas_factor_backtest_tabs import (
     build_factor_model_backtest_layout,
     register_factor_backtest_callbacks,
+)
+
+from web.tabs.atlas_trend_tabs import (
+    build_trend_layout,
+    register_trend_callbacks,
 )
 
 
@@ -99,6 +107,7 @@ register_multiasset_callbacks(app)
 register_alpha_callbacks(app)
 register_volatility_callbacks(app)
 register_factor_backtest_callbacks(app)
+register_trend_callbacks(app)
 
 
 def build_header():
@@ -125,14 +134,128 @@ def build_header():
 
 def build_tabs_panel():
     # Pre-build all main tab contents to preserve state
+    _btn_style = {
+        'background': '#1a3a6e', 'color': '#ffffff', 'border': '1px solid #2a5298',
+        'borderRadius': '4px', 'padding': '6px 14px', 'cursor': 'pointer', 'fontSize': '13px',
+    }
+    _lbl_style = {'color': '#aab0c0', 'fontSize': '11px', 'marginBottom': '4px', 'display': 'block'}
+    _input_style = {
+        'background': '#112e66', 'color': '#ffffff', 'border': '1px solid #2a5298',
+        'borderRadius': '4px', 'padding': '5px 8px', 'width': '100%', 'fontSize': '13px',
+    }
+    _dd_style = {'fontSize': '13px'}
+    _dd_theme = {
+        'backgroundColor': '#112e66',
+        'optionHeight': 30,
+    }
+
     run_center_content = html.Div(
         [
+            # ── Engine jobs row ──────────────────────────────────────────────
             html.Div([
-                html.A(html.Button("Update Data", id="an-btn-update", n_clicks=0, style={'marginRight': '10px'})),
-                html.A(html.Button("Run EOD", id="an-btn-eod", n_clicks=0, style={'marginRight': '10px'})),
-                html.A(html.Button("Run EOD (+update)", id="an-btn-eod-update", n_clicks=0)),
-            ], style={'padding': '15px'}),
-            html.Div(id="an-job-status", children="No job running.", style={'padding': '0 15px', 'fontStyle': 'italic'}),
+                html.A(html.Button("Update Data",       id="an-btn-update",     n_clicks=0, style={**_btn_style, 'marginRight': '10px'})),
+                html.A(html.Button("Run EOD",           id="an-btn-eod",        n_clicks=0, style={**_btn_style, 'marginRight': '10px'})),
+                html.A(html.Button("Run EOD (+update)", id="an-btn-eod-update", n_clicks=0, style=_btn_style)),
+            ], style={'padding': '15px 15px 8px 15px'}),
+
+            # ── Curve Backtest panel ─────────────────────────────────────────
+            html.Hr(style={'borderColor': '#1a3a6e', 'margin': '0 12px 0 12px'}),
+            html.Div([
+                html.Div("CURVE BACKTEST", style={
+                    'color': '#aab0c0', 'fontSize': '11px', 'fontWeight': '600',
+                    'letterSpacing': '0.08em', 'marginBottom': '12px',
+                }),
+                html.Div([
+                    # Instrument type
+                    html.Div([
+                        html.Label("Instrument Type", style=_lbl_style),
+                        dcc.Dropdown(
+                            id="an-bt-btype",
+                            options=[
+                                {'label': 'IRS',   'value': 'IRS'},
+                                {'label': 'TBond', 'value': 'TBond'},
+                                {'label': 'CBond', 'value': 'CBond'},
+                            ],
+                            value='IRS',
+                            clearable=False,
+                            style=_dd_style,
+                        ),
+                    ], style={'minWidth': '120px', 'flex': '0 0 120px'}),
+                    # Update steps
+                    html.Div([
+                        html.Label("Update Steps", style=_lbl_style),
+                        dcc.Dropdown(
+                            id="an-bt-update-list",
+                            options=[
+                                {'label': 'pool',  'value': 'pool'},
+                                {'label': 'bonds', 'value': 'bonds'},
+                                {'label': 'cbts',  'value': 'cbts'},
+                            ],
+                            value=['pool'],
+                            multi=True,
+                            clearable=False,
+                            style=_dd_style,
+                        ),
+                    ], style={'minWidth': '200px', 'flex': '1 1 200px'}),
+                    # Start date
+                    html.Div([
+                        html.Label("Start Date", style=_lbl_style),
+                        dcc.Input(
+                            id="an-bt-start",
+                            type="text",
+                            value="2026-01-01",
+                            placeholder="YYYY-MM-DD",
+                            debounce=True,
+                            style=_input_style,
+                        ),
+                    ], style={'minWidth': '120px', 'flex': '0 0 120px'}),
+                    # End date
+                    html.Div([
+                        html.Label("End Date", style=_lbl_style),
+                        dcc.Input(
+                            id="an-bt-end",
+                            type="text",
+                            value="2026-03-01",
+                            placeholder="YYYY-MM-DD",
+                            debounce=True,
+                            style=_input_style,
+                        ),
+                    ], style={'minWidth': '120px', 'flex': '0 0 120px'}),
+                    # Workers
+                    html.Div([
+                        html.Label("Workers", style=_lbl_style),
+                        dcc.Input(
+                            id="an-bt-processes",
+                            type="number",
+                            value=4,
+                            min=1,
+                            max=32,
+                            step=1,
+                            style=_input_style,
+                        ),
+                    ], style={'minWidth': '80px', 'flex': '0 0 80px'}),
+                    # Run button (aligned to bottom of row)
+                    html.Div([
+                        html.Button(
+                            "▶  Run Backtest",
+                            id="an-btn-backtest",
+                            n_clicks=0,
+                            style={**_btn_style, 'background': '#1a5276', 'borderColor': '#2e86c1',
+                                   'fontWeight': '600', 'marginTop': '18px'},
+                        ),
+                    ]),
+                ], style={
+                    'display': 'flex', 'flexDirection': 'row', 'gap': '12px',
+                    'alignItems': 'flex-end', 'flexWrap': 'wrap',
+                }),
+            ], style={
+                'padding': '14px 15px', 'background': '#0c2b64',
+                'margin': '10px 12px', 'borderRadius': '6px',
+            }),
+
+            # ── Status + log ─────────────────────────────────────────────────
+            html.Div(id="an-job-status", children="No job running.",
+                     style={'padding': '4px 15px', 'fontStyle': 'italic', 'color': '#aab0c0', 'fontSize': '12px'}),
             html.Div(id="an-run-center-content"),
             dcc.Interval(id="an-run-center-interval", interval=5_000, n_intervals=0),
         ]
@@ -155,16 +278,18 @@ def build_tabs_panel():
                             dcc.Tab(label="FUTURES", value="backtest-factor", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="REBALANCE", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="SURFACE", value="surface", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="TREND",   value="trend",   style=tab_style, selected_style=tab_selected_style),
                         ],
                         style={"height": "520px"},
                     ),
                     html.Div([
-                        html.Div(id="beta-factor-div", children=build_multiasset_factor_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
-                        html.Div(id="beta-portfolio-div", children=build_multiasset_portfolio_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-factor-model-bt-div", children=build_factor_model_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-backtest-factor-div", children=build_factor_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-surface-div", children=build_surface_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-factor-div",            children=build_multiasset_factor_layout(),    style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
+                        html.Div(id="beta-portfolio-div",         children=build_multiasset_portfolio_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-factor-model-bt-div",   children=build_factor_model_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-backtest-factor-div",   children=build_factor_backtest_layout(),      style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-backtest-portfolio-div",children=build_multiasset_backtest_layout(),  style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-surface-div",           children=build_surface_layout(),              style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-trend-div",             children=build_trend_layout(),                style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                     ], style={"position": "relative", "width": "100%", "minHeight": "500px"}),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
@@ -230,6 +355,7 @@ def build_tabs_panel():
             dcc.Store(id='beta-backtest-factor-content', storage_type='session'),
             dcc.Store(id='beta-backtest-portfolio-content', storage_type='session'),
             dcc.Store(id='beta-surface-content', storage_type='session'),
+            dcc.Store(id='beta-trend-content', storage_type='session'),
             dcc.Store(id='an-autoruns1-status', storage_type='memory'),
             dcc.Store(id='an-autoruns2-status', storage_type='memory'),
             
@@ -323,9 +449,16 @@ def _run_core_autoruns2(n_intervals):
     Input("an-btn-update", "n_clicks"),
     Input("an-btn-eod", "n_clicks"),
     Input("an-btn-eod-update", "n_clicks"),
+    Input("an-btn-backtest", "n_clicks"),
+    State("an-bt-btype", "value"),
+    State("an-bt-update-list", "value"),
+    State("an-bt-start", "value"),
+    State("an-bt-end", "value"),
+    State("an-bt-processes", "value"),
     prevent_initial_call=True,
 )
-def _start_jobs(n_update, n_eod, n_eod_update):
+def _start_jobs(n_update, n_eod, n_eod_update, n_bt,
+                bt_btype, bt_update_list, bt_start, bt_end, bt_processes):
     ctx = __import__("dash").callback_context
     if not ctx.triggered:
         raise __import__("dash").exceptions.PreventUpdate
@@ -343,6 +476,19 @@ def _start_jobs(n_update, n_eod, n_eod_update):
     if trig == "an-btn-eod-update":
         job = start_engine_job(argv=["eod", "--update-data"])
         return job.job_id, f"Started job {job.job_id}: eod --update-data"
+
+    if trig == "an-btn-backtest":
+        btype = bt_btype or "IRS"
+        ul = bt_update_list or ["pool"]
+        start = (bt_start or "").strip()
+        end = (bt_end or "").strip()
+        procs = str(int(bt_processes)) if bt_processes else "4"
+        argv = ["curve-backtest", "--btype", btype,
+                "--update-list", *ul,
+                "--start", start, "--end", end,
+                "--processes", procs]
+        job = start_engine_job(argv=argv)
+        return job.job_id, f"Started job {job.job_id}: curve-backtest ({btype}, {start}→{end})"
 
     raise __import__("dash").exceptions.PreventUpdate
 
@@ -372,66 +518,144 @@ def _render_tab(tab):
     State("an-job-id", "data"),
 )
 def _update_run_center(n, job_id):
-    """Update Run Center content on interval - only when Run Center tab is active."""
+    """Update Run Center content on interval.
+
+    Each tick:
+    - Auto-finalizes any RUNNING jobs whose PID has exited.
+    - Shows a live "running jobs" badge strip.
+    - Shows full log/status for the last-launched job (job_id from store).
+    """
     meta = find_latest_run(mode="eod")
-    # Job info
-    status = get_job_status(job_id) if job_id else None
-    if status:
-        state = status.get("state", "UNKNOWN")
-        pid = status.get("pid")
-        started = status.get("started_at")
-        ended = status.get("ended_at")
-        cmd = status.get("cmd")
+
+    # Auto-finalize all stale RUNNING jobs and collect what is truly running.
+    running_jobs = list_running_jobs()  # already finalizes stale entries internally
+
+    _state_colors = {
+        "RUNNING":  ("#1a5276", "#2e86c1"),
+        "FINISHED": ("#1a4731", "#27ae60"),
+        "FAILED":   ("#6e1a1a", "#c0392b"),
+    }
+
+    def _badge(s):
+        bg, fg = _state_colors.get(s, ("#2c2c3e", "#aab0c0"))
+        return html.Span(
+            s,
+            style={
+                "background": bg, "color": fg, "border": f"1px solid {fg}",
+                "borderRadius": "3px", "padding": "1px 6px",
+                "fontSize": "11px", "fontWeight": "600",
+            },
+        )
+
+    def _job_row(s):
+        jid   = s.get("job_id", "?")
+        state = s.get("state", "UNKNOWN")
+        jtype = _cmd_type(s.get("cmd", [])) or "?"
+        pid   = s.get("pid")
+        start = s.get("started_at", "")[:19]
         return html.Div(
             [
-                html.H5("Run Center"),
-                html.P("Use the buttons above to run engine jobs."),
-                html.P(f"Latest EOD run: {format_run_meta(meta)}"),
-                html.Hr(),
+                _badge(state),
+                html.Span(f" {jtype}",  style={"color": "#ffffff", "fontWeight": "600", "marginLeft": "6px"}),
+                html.Span(f" {jid[:8]}\u2026", style={"color": "#aab0c0", "fontSize": "11px"}),
+                html.Span(f" pid={pid}",       style={"color": "#aab0c0", "fontSize": "11px", "marginLeft": "8px"}),
+                html.Span(f" started {start}", style={"color": "#aab0c0", "fontSize": "11px", "marginLeft": "8px"}),
+            ],
+            style={"padding": "4px 0"},
+        )
+
+    # Running jobs banner
+    if running_jobs:
+        banner = html.Div(
+            [html.Div("RUNNING JOBS", style={"color": "#aab0c0", "fontSize": "11px",
+                                              "fontWeight": "600", "letterSpacing": "0.08em",
+                                              "marginBottom": "6px"})] +
+            [_job_row(j) for j in running_jobs],
+            style={"background": "#0c2b64", "border": "1px solid #2a5298",
+                   "borderRadius": "5px", "padding": "10px 14px", "marginBottom": "10px"},
+        )
+    else:
+        banner = html.Div(
+            "No jobs currently running.",
+            style={"color": "#aab0c0", "fontSize": "12px", "fontStyle": "italic",
+                   "marginBottom": "8px"},
+        )
+
+    # Finalize & refresh status for the tracked job_id
+    status = None
+    if job_id:
+        status = finalize_job_if_done(job_id)
+
+    header = html.Div(
+        [
+            html.P(f"Latest EOD run: {format_run_meta(meta)}",
+                   style={"margin": "0 0 8px 0", "color": "#aab0c0", "fontSize": "12px"}),
+            banner,
+        ]
+    )
+
+    if status:
+        state   = status.get("state", "UNKNOWN")
+        pid     = status.get("pid")
+        started = status.get("started_at", "")[:19]
+        ended   = status.get("ended_at", "") or "—"
+        cmd     = status.get("cmd", [])
+        jtype   = _cmd_type(cmd) or "?"
+        return html.Div(
+            [
+                header,
+                html.Hr(style={"borderColor": "#1a3a6e", "margin": "0 0 10px 0"}),
                 html.Div(
                     [
-                        html.H6("Job status"),
+                        html.Div(
+                            "LAST JOB",
+                            style={"color": "#aab0c0", "fontSize": "11px", "fontWeight": "600",
+                                   "letterSpacing": "0.08em", "marginBottom": "6px"},
+                        ),
                         html.Div(
                             [
-                                html.Strong("Job ID: "),
-                                html.Span(job_id),
-                                html.Br(),
-                                html.Strong("State: "),
-                                html.Span(state),
-                                html.Br(),
-                                html.Strong("PID: "),
-                                html.Span(str(pid)),
-                                html.Br(),
-                                html.Strong("Started: "),
-                                html.Span(str(started)),
-                                html.Br(),
-                                html.Strong("Ended: "),
-                                html.Span(str(ended)),
-                                html.Br(),
-                                html.Strong("Cmd: "),
-                                html.Code(str(cmd)),
+                                _badge(state),
+                                html.Span(f"  {jtype}",
+                                          style={"color": "#ffffff", "fontWeight": "600"}),
                             ],
-                            style={"lineHeight": "1.6em"},
+                            style={"marginBottom": "6px"},
+                        ),
+                        html.Div(
+                            [
+                                html.Strong("Job ID: "),   html.Span(job_id), html.Br(),
+                                html.Strong("PID: "),      html.Span(str(pid)), html.Br(),
+                                html.Strong("Started: "),  html.Span(started), html.Br(),
+                                html.Strong("Ended: "),    html.Span(str(ended)[:19]), html.Br(),
+                                html.Strong("Cmd: "),      html.Code(" ".join(str(a) for a in cmd)),
+                            ],
+                            style={"lineHeight": "1.8em", "fontSize": "12px"},
                         ),
                     ],
-                    style={"marginBottom": "12px"},
+                    style={"background": "#082255", "borderRadius": "5px",
+                           "padding": "10px 14px", "marginBottom": "10px"},
                 ),
-                html.H6("Job log (tail)"),
+                html.Div(
+                    "LOG OUTPUT (TAIL)",
+                    style={"color": "#aab0c0", "fontSize": "11px", "fontWeight": "600",
+                           "letterSpacing": "0.08em", "marginBottom": "4px"},
+                ),
                 html.Pre(
                     tail_log(job_id, max_lines=200),
-                    style={"whiteSpace": "pre-wrap", "maxHeight": "360px", "overflowY": "auto"},
+                    style={"whiteSpace": "pre-wrap", "maxHeight": "360px", "overflowY": "auto",
+                           "background": "#040f24", "color": "#c8d8f0",
+                           "padding": "10px", "borderRadius": "4px", "fontSize": "12px"},
                 ),
             ]
         )
     else:
-        # No active job selected: show latest run meta and a helpful hint
         return html.Div(
             [
-                html.H5("Run Center"),
-                html.P("Use the buttons above to run engine jobs."),
-                html.P(f"Latest EOD run: {format_run_meta(meta)}"),
-                html.Hr(),
-                html.P("No active job selected. Start a job using the header buttons to see live logs and status."),
+                header,
+                html.Hr(style={"borderColor": "#1a3a6e", "margin": "0 0 10px 0"}),
+                html.P(
+                    "No active job selected. Start a job using the buttons above to see live logs.",
+                    style={"color": "#aab0c0", "fontStyle": "italic", "fontSize": "12px"},
+                ),
             ]
         )
 
@@ -442,13 +666,14 @@ def _update_run_center(n, job_id):
      Output("beta-factor-model-bt-div", "style"),
      Output("beta-backtest-factor-div", "style"),
      Output("beta-backtest-portfolio-div", "style"),
-     Output("beta-surface-div", "style")],
+     Output("beta-surface-div", "style"),
+     Output("beta-trend-div", "style")],
     Input("an-beta-subtabs", "value"),
 )
 def _render_beta_subtabs(subtab: str):
     """Show/hide Beta Book subtabs to preserve state."""
     base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
-    keys = ["factor", "portfolio", "factor-model-bt", "backtest-factor", "backtest-portfolio", "surface"]
+    keys = ["factor", "portfolio", "factor-model-bt", "backtest-factor", "backtest-portfolio", "surface", "trend"]
     return tuple(
         {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
         for k in keys
@@ -494,25 +719,10 @@ def _render_alpha_subtabs(subtab: str):
 
 
 if __name__ == "__main__":
-    import webbrowser
-    from threading import Timer
-    from web.core.scripts import run_initialise
-    
-    def open_browser():
-        """Open browser after a short delay to ensure server is ready."""
-        webbrowser.open_new("http://127.0.0.1:8080/")
-    
-    # # Open browser automatically after 1.5 seconds
-    Timer(1.5, open_browser).start()
-    
-    # print("="*60)
-    # print("AtlasNexus Daily Console starting...")
-    # print("Server: http://127.0.0.1:8080")
-    # print("Browser window will open automatically")
-    # print("Press Ctrl+C to stop the server")
-    # print("="*60)
-
-    init_status = run_initialise()
-    print(f"AtlasNexus startup initialisation: {init_status}")
-    
-    app.run(host="127.0.0.1", port=8080, debug=True, use_reloader=False)
+    # Delegate to the canonical entry point so there is one startup path.
+    import subprocess, sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    raise SystemExit(
+        subprocess.call([sys.executable, str(root / "main.py"), "daily-web"])
+    )

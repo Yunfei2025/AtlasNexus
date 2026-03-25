@@ -17,7 +17,7 @@ from dash.dependencies import Input, Output, State
 project_root = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(project_root))
 
-from web.atlas_styles import tab_style, tabs_styles, tab_selected_style
+from web.tabs.atlas_styles import tab_style, tabs_styles, tab_selected_style
 from web.services.artifacts import find_latest_run, format_run_meta
 from web.services.jobs import start_engine_job, tail_log
 
