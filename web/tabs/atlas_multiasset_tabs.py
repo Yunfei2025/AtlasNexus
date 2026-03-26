@@ -67,6 +67,32 @@ THEME = {
     'chart_template': 'plotly_dark'
 }
 
+BOND_SIGNAL_FILE_MAP = {
+    'TBond': 'TBond-spdsrt.pkl',
+    'CBond': 'CBond-spdsrt.pkl',
+    'GBond': 'GBond-spdsrt.pkl',
+    'LBond': 'LBond-spdsrt.pkl',
+    'BBond': 'BBond-spdsrt.pkl',
+    'MNote': 'MNote-spdsrt.pkl',
+}
+
+BOND_SIGNAL_LABELS = {
+    'TBond': 'Treasury Bond',
+    'CBond': 'Policybank Bond',
+    'GBond': 'Government-backed Bond',
+    'LBond': 'Local Treasury Bond',
+    'BBond': 'Commercial Bank Bond',
+    'MNote': 'Medium Term Note',
+}
+
+BOND_SIGNAL_BUCKETS = [
+    ('0-1Y', 0.0, 1.0),
+    ('1-3Y', 1.0, 3.0),
+    ('3-5Y', 3.0, 5.0),
+    ('5-7Y', 5.0, 7.0),
+    ('7-10Y', 7.0, 10.0),
+]
+
 # Global state for allocation results
 ALLOCATION_RESULTS = {
     'summary': None,
@@ -798,6 +824,428 @@ def build_multiasset_portfolio_layout():
             html.Div(id='portfolio-table-container')
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'marginBottom': '20px', 'borderRadius': '5px'}),
     ], style={'padding': '10px', 'backgroundColor': THEME['bg_main']})
+
+
+def _load_bond_signal_frame(bond_type: str):
+    """Load realtime bond spread data for the requested bond type."""
+    file_name = BOND_SIGNAL_FILE_MAP.get(bond_type, f'{bond_type}-spdsrt.pkl')
+    signal_file = os.path.join(DIR_INPUT, file_name)
+
+    if not os.path.exists(signal_file):
+        return None, f"No realtime file found for {bond_type} ({file_name})."
+
+    data = pd.read_pickle(signal_file)
+    source_key = 'table'
+
+    if isinstance(data, dict):
+        if isinstance(data.get('BondCurve'), pd.DataFrame):
+            data = data['BondCurve']
+            source_key = 'BondCurve'
+        else:
+            first_frame = next((value for value in data.values() if isinstance(value, pd.DataFrame)), None)
+            if first_frame is None:
+                return None, f"{file_name} does not contain a tabular signal payload."
+            data = first_frame
+
+    if not isinstance(data, pd.DataFrame) or data.empty:
+        return None, f"{file_name} does not contain usable bond signals."
+
+    frame = data.copy()
+    frame['Code'] = frame.index.astype(str)
+    return frame, source_key
+
+
+def _resolve_bond_signal_columns(frame: pd.DataFrame):
+    normalized = {
+        str(col).lower().replace('_', '').replace('-', '').replace(' ', ''): col
+        for col in frame.columns
+    }
+    col_ttm = normalized.get('ttm') or normalized.get('term') or normalized.get('ptmyear')
+    col_z = normalized.get('zscore') or normalized.get('z')
+    col_id = normalized.get('code') or normalized.get('windcode') or 'Code'
+    col_name = normalized.get('name') or normalized.get('windcode') or col_id
+    col_mid = (
+        normalized.get('mid')
+        or normalized.get('midprice')
+        or normalized.get('price')
+        or normalized.get('lastprice')
+        or normalized.get('close')
+        or normalized.get('cleanprice')
+        or normalized.get('dirtyprice')
+    )
+    col_bid = (
+        normalized.get('bid')
+        or normalized.get('bidprice')
+        or normalized.get('rtbid1')
+        or normalized.get('rtbid')
+    )
+    col_ofr = (
+        normalized.get('ofr')
+        or normalized.get('offer')
+        or normalized.get('ask')
+        or normalized.get('askprice')
+        or normalized.get('rtask1')
+        or normalized.get('rtask')
+    )
+    col_carry_3m = normalized.get('carry3mbp') or normalized.get('carry3m')
+    col_roll_3m = normalized.get('roll3mbp') or normalized.get('roll3m')
+    col_carry = (
+        normalized.get('cr3mbp')
+        or normalized.get('carryroll3m')
+        or normalized.get('carryroll')
+        or normalized.get('carry')
+        or normalized.get('bondcarry')
+    )
+
+    required = all(col in frame.columns for col in [col_ttm, col_z, col_id] if col is not None)
+    if not required or col_ttm is None or col_z is None:
+        return None
+
+    return {
+        'ttm': col_ttm,
+        'z': col_z,
+        'id': col_id,
+        'name': col_name,
+        'mid': col_mid,
+        'bid': col_bid,
+        'ofr': col_ofr,
+        'carry_3m': col_carry_3m,
+        'roll_3m': col_roll_3m,
+        'carry': col_carry,
+    }
+
+
+def _build_bond_signal_mini_table(df: pd.DataFrame, columns: dict, title: str, color: str):
+    if df.empty:
+        return html.Div(
+            "No signals in this bucket.",
+            style={
+                'color': THEME['text_sub'],
+                'fontSize': '12px',
+                'padding': '18px 12px',
+                'textAlign': 'center',
+                'backgroundColor': THEME['bg_input'],
+                'borderRadius': '8px',
+                'border': f'1px solid {THEME["table_header"]}',
+            },
+        )
+
+    col_id = columns['id']
+    col_name = columns['name']
+    col_ttm = columns['ttm']
+    col_z = columns['z']
+    col_mid = columns.get('mid')
+    col_cr3m = columns.get('cr3m')
+
+    target_cols = [col_id]
+    if col_name != col_id:
+        target_cols.append(col_name)
+    if col_mid and col_mid in df.columns:
+        target_cols.append(col_mid)
+    if col_cr3m and col_cr3m in df.columns:
+        target_cols.append(col_cr3m)
+    target_cols.extend([col_ttm, col_z])
+    valid_cols = [col for col in target_cols if col in df.columns]
+
+    display_cols_map = {
+        col_id: 'Code',
+        col_name: 'Name',
+        col_mid: 'Mid Price',
+        col_cr3m: 'C+R,3m',
+        col_ttm: 'TTM',
+        col_z: 'Z-Score',
+    }
+
+    records = []
+    for record in df[valid_cols].to_dict('records'):
+        formatted = {}
+        for col in valid_cols:
+            value = record.get(col)
+            if col == col_ttm and pd.notna(value):
+                value = f"{float(value):.2f}Y"
+            elif col == col_mid and pd.notna(value):
+                value = f"{float(value):.3f}"
+            elif col == col_cr3m and pd.notna(value):
+                value = f"{float(value):.2f}"
+            elif col == col_z and pd.notna(value):
+                value = f"{float(value):.2f}"
+            formatted[display_cols_map.get(col, col)] = value
+        records.append(formatted)
+
+    return html.Div([
+        html.Div(title, style={
+            'color': color,
+            'fontSize': '12px',
+            'fontWeight': '700',
+            'letterSpacing': '0.04em',
+            'marginBottom': '8px',
+            'textTransform': 'uppercase',
+        }),
+        dash_table.DataTable(
+            data=records,
+            columns=[
+                {'name': display_cols_map.get(col, col), 'id': display_cols_map.get(col, col)}
+                for col in valid_cols
+            ],
+            style_cell={
+                'textAlign': 'center',
+                'padding': '7px 8px',
+                'backgroundColor': THEME['bg_input'],
+                'color': THEME['text_main'],
+                'border': 'none',
+                'fontSize': '11px',
+                'whiteSpace': 'normal',
+                'height': 'auto',
+            },
+            style_header={
+                'backgroundColor': THEME['table_header'],
+                'fontWeight': 'bold',
+                'color': color,
+                'border': 'none',
+            },
+            style_data_conditional=[
+                {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['table_row_even']},
+            ],
+            style_table={'overflowX': 'auto'},
+        ),
+    ])
+
+
+def _build_bond_signal_cards(bond_type: str):
+    frame, source_key = _load_bond_signal_frame(bond_type)
+    if frame is None:
+        empty_state = html.Div([
+            html.H5(
+                f"{BOND_SIGNAL_LABELS.get(bond_type, bond_type)} signals unavailable",
+                style={'color': THEME['warning'], 'marginBottom': '8px'},
+            ),
+            html.P(
+                source_key,
+                style={'color': THEME['text_sub'], 'margin': '0', 'fontSize': '13px'},
+            ),
+        ], style={
+            'padding': '28px',
+            'backgroundColor': THEME['bg_card'],
+            'borderRadius': '12px',
+            'border': f'1px dashed {THEME["table_header"]}',
+            'textAlign': 'center',
+        })
+        return empty_state, None
+
+    columns = _resolve_bond_signal_columns(frame)
+    if columns is None:
+        return html.Div(
+            "Missing required columns for bond signals (ttm, z-score, code).",
+            style={'color': THEME['danger'], 'padding': '20px', 'textAlign': 'center'},
+        ), None
+
+    col_ttm = columns['ttm']
+    col_z = columns['z']
+    col_mid = columns.get('mid')
+    col_bid = columns.get('bid')
+    col_ofr = columns.get('ofr')
+    col_carry_3m = columns.get('carry_3m')
+    col_roll_3m = columns.get('roll_3m')
+    col_carry = columns.get('carry')
+    frame[col_ttm] = pd.to_numeric(frame[col_ttm], errors='coerce')
+    frame[col_z] = pd.to_numeric(frame[col_z], errors='coerce')
+    if col_mid and col_mid in frame.columns:
+        frame[col_mid] = pd.to_numeric(frame[col_mid], errors='coerce')
+    elif col_bid and col_ofr and col_bid in frame.columns and col_ofr in frame.columns:
+        frame['__mid_price__'] = (
+            pd.to_numeric(frame[col_bid], errors='coerce')
+            + pd.to_numeric(frame[col_ofr], errors='coerce')
+        ) / 2.0
+        columns['mid'] = '__mid_price__'
+        col_mid = '__mid_price__'
+    if col_carry_3m and col_carry_3m in frame.columns:
+        frame[col_carry_3m] = pd.to_numeric(frame[col_carry_3m], errors='coerce')
+    if col_roll_3m and col_roll_3m in frame.columns:
+        frame[col_roll_3m] = pd.to_numeric(frame[col_roll_3m], errors='coerce')
+    if col_carry_3m and col_roll_3m and col_carry_3m in frame.columns and col_roll_3m in frame.columns:
+        frame['__cr_3m__'] = frame[col_carry_3m] + frame[col_roll_3m]
+        columns['cr3m'] = '__cr_3m__'
+    elif col_carry and col_carry in frame.columns:
+        columns['cr3m'] = col_carry
+    if col_carry and col_carry in frame.columns:
+        frame[col_carry] = pd.to_numeric(frame[col_carry], errors='coerce')
+    frame = frame.dropna(subset=[col_ttm, col_z]).copy()
+
+    if frame.empty:
+        return html.Div(
+            "No valid numeric signal rows found in the realtime dataset.",
+            style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'},
+        ), None
+
+    bucket_cards = []
+    for bucket_label, min_ttm, max_ttm in BOND_SIGNAL_BUCKETS:
+        bucket_df = frame[(frame[col_ttm] > min_ttm) & (frame[col_ttm] <= max_ttm)].copy()
+        if bucket_df.empty:
+            sell_candidates = bucket_df
+            buy_candidates = bucket_df
+            avg_z = None
+        else:
+            sell_candidates = bucket_df.sort_values(col_z, ascending=True).head(5)
+            buy_candidates = bucket_df.sort_values(col_z, ascending=False).head(5)
+            avg_z = bucket_df[col_z].mean()
+
+        stats = [
+            html.Span(
+                f"{len(bucket_df)} bonds",
+                style={
+                    'padding': '4px 10px',
+                    'borderRadius': '999px',
+                    'backgroundColor': THEME['bg_input'],
+                    'color': THEME['text_sub'],
+                    'fontSize': '11px',
+                },
+            )
+        ]
+        if avg_z is not None and pd.notna(avg_z):
+            stats.append(
+                html.Span(
+                    f"Avg Z {avg_z:+.2f}",
+                    style={
+                        'padding': '4px 10px',
+                        'borderRadius': '999px',
+                        'backgroundColor': 'rgba(52, 152, 219, 0.15)',
+                        'color': THEME['accent'],
+                        'fontSize': '11px',
+                    },
+                )
+            )
+
+        bucket_cards.append(
+            html.Div([
+                html.Div([
+                    html.Div(bucket_label, style={
+                        'color': THEME['text_main'],
+                        'fontSize': '16px',
+                        'fontWeight': '700',
+                    }),
+                    html.Div(f"TTM in ({min_ttm:.0f}, {max_ttm:.0f}] years", style={
+                        'color': THEME['text_sub'],
+                        'fontSize': '12px',
+                        'marginTop': '2px',
+                    }),
+                ]),
+                html.Div(stats, style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap'}),
+                html.Div([
+                    html.Div(
+                        _build_bond_signal_mini_table(
+                            sell_candidates,
+                            columns,
+                            'SELL (Low Z)',
+                            THEME['danger'],
+                        ),
+                        style={'flex': '1 1 0'},
+                    ),
+                    html.Div(
+                        _build_bond_signal_mini_table(
+                            buy_candidates,
+                            columns,
+                            'BUY (High Z)',
+                            THEME['success'],
+                        ),
+                        style={'flex': '1 1 0'},
+                    ),
+                ], style={'display': 'flex', 'gap': '12px', 'flexWrap': 'wrap', 'marginTop': '16px'}),
+            ], style={
+                'background': 'linear-gradient(180deg, rgba(12,43,100,0.98), rgba(8,34,85,0.98))',
+                'border': f'1px solid {THEME["table_header"]}',
+                'borderRadius': '14px',
+                'padding': '18px',
+                'boxShadow': '0 10px 24px rgba(0, 0, 0, 0.18)',
+            })
+        )
+
+    return html.Div(
+        bucket_cards,
+        style={
+            'display': 'grid',
+            'gridTemplateColumns': 'repeat(auto-fit, minmax(360px, 1fr))',
+            'gap': '16px',
+            'alignItems': 'start',
+        },
+    ), len(frame)
+
+
+def build_multiasset_bond_layout():
+    """Build the layout for the dedicated Bond signals tab."""
+    dropdown_options = [
+        {'label': f"{BOND_SIGNAL_LABELS.get(bond_type, bond_type)} ({bond_type})", 'value': bond_type}
+        for bond_type in ['TBond', 'CBond', 'GBond', 'LBond', 'BBond', 'MNote']
+    ]
+
+    return html.Div([
+        html.Div([
+            html.Div([
+                html.H4("Bond Trading Signals (Z-Score)", style={
+                    'margin': '0 0 6px 0',
+                    'color': THEME['text_main'],
+                }),
+                html.P(
+                    "Realtime relative-value signals by maturity bucket. Labels are inverted per request: low Z shows SELL and high Z shows BUY.",
+                    style={'margin': '0', 'color': THEME['text_sub'], 'fontSize': '13px'},
+                ),
+            ], style={'flex': '1 1 auto', 'minWidth': '280px'}),
+            html.Div([
+                html.Div([
+                    html.Label('Bond Type', style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '6px', 'display': 'block'}),
+                    dcc.Dropdown(
+                        id='beta-bond-type-selector',
+                        options=dropdown_options,
+                        value='TBond',
+                        clearable=False,
+                        style={'minWidth': '240px', 'fontSize': '13px'},
+                    ),
+                ], style={'minWidth': '240px'}),
+                html.Button(
+                    'Refresh Data',
+                    id='beta-bond-refresh-btn',
+                    n_clicks=0,
+                    style={
+                        'backgroundColor': THEME['accent'],
+                        'color': 'white',
+                        'padding': '10px 16px',
+                        'border': 'none',
+                        'borderRadius': '8px',
+                        'cursor': 'pointer',
+                        'fontSize': '13px',
+                        'fontWeight': 'bold',
+                        'height': '40px',
+                        'alignSelf': 'flex-end',
+                    },
+                ),
+            ], style={
+                'display': 'flex',
+                'gap': '12px',
+                'alignItems': 'stretch',
+                'flexWrap': 'wrap',
+                'justifyContent': 'flex-end',
+            }),
+        ], style={
+            'display': 'flex',
+            'justifyContent': 'space-between',
+            'gap': '16px',
+            'flexWrap': 'wrap',
+            'marginBottom': '14px',
+        }),
+        html.Div(id='beta-bond-status', style={
+            'color': THEME['text_sub'],
+            'fontSize': '12px',
+            'marginBottom': '16px',
+        }),
+        dcc.Loading(
+            id='beta-bond-loading',
+            type='default',
+            children=html.Div(id='beta-bond-signals-container', style={'minHeight': '420px'}),
+        ),
+    ], style={
+        'padding': '18px',
+        'backgroundColor': THEME['bg_main'],
+        'borderRadius': '10px',
+    })
 
 
 def build_multiasset_risk_layout():
@@ -2268,6 +2716,39 @@ def register_multiasset_callbacks(app):
                 {},
             )
 
+    @app.callback(
+        [Output('beta-bond-signals-container', 'children'),
+         Output('beta-bond-status', 'children')],
+        [Input('beta-bond-refresh-btn', 'n_clicks'),
+         Input('beta-bond-type-selector', 'value')],
+        prevent_initial_call=False,
+    )
+    def refresh_beta_bond_signals(refresh_clicks, bond_type):
+        selected_bond_type = bond_type or 'TBond'
+        try:
+            signal_cards, bond_count = _build_bond_signal_cards(selected_bond_type)
+            action = 'Loaded'
+            ctx = dash.callback_context
+            if ctx.triggered:
+                trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+                if trigger_id == 'beta-bond-refresh-btn':
+                    action = 'Refreshed'
+                elif trigger_id == 'beta-bond-type-selector':
+                    action = 'Switched'
+
+            label = BOND_SIGNAL_LABELS.get(selected_bond_type, selected_bond_type)
+            if bond_count is None:
+                status = f"{action} {label} · no live signal rows available · {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            else:
+                status = f"{action} {label} · {bond_count} live rows · {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            return signal_cards, status
+        except Exception as e:
+            traceback.print_exc()
+            return (
+                html.Div(f"Error loading bond signals: {e}", style={'color': THEME['danger'], 'padding': '20px'}),
+                f"Load failed · {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            )
+
     # ── 3.8  Auto-fill risk budgets from factor signals ───────────────
     @app.callback(
         Output('factor-signals-toggle-status', 'children'),
@@ -2435,167 +2916,8 @@ def register_multiasset_callbacks(app):
             
             status_msg = html.Span("✓ Analysis completed successfully!", style={'color': THEME['success'], 'fontWeight': 'bold'})
             timestamp_msg = f"Last updated: {ALLOCATION_RESULTS['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"
-            
-            # --- Bond Trading Suggestion List (New Feature) ---
-            # Automatically load specific bond data if present
-            bond_signal_table = None
-            try:
-                signal_file = os.path.join(DIR_INPUT, 'CBond-spdsrt.pkl')
-                
-                # Try to check if "CN1Y" or similar rate asset is in the pool? 
-                # User request: "对于一年期国债CN1Y...生成买卖列表".
-                # It seems he implies this should appear in Portfolio Results context. 
-                # We will check if file exists and try to generate it regardless, or appended to the results section.
-                
-                if os.path.exists(signal_file):
-                    df_signals = pd.read_pickle(signal_file)
-                    # Check if 'BondCurve' key exists (User specified key='BondCurve')
-                    if isinstance(df_signals, dict) and 'BondCurve' in df_signals:
-                        bond_data = df_signals['BondCurve']
-                    elif isinstance(df_signals, pd.DataFrame):
-                        # Maybe the pickle is just the DF?
-                         bond_data = df_signals
-                    else:
-                        bond_data = None
-                    
-                    if bond_data is not None and not bond_data.empty:
-                        # The bond code is in the index. promote it to a column 'Code'
-                        bond_data = bond_data.copy()
-                        bond_data['Code'] = bond_data.index
 
-                        # Ensure columns exist (case insensitive check)
-                        cols = {c.lower(): c for c in bond_data.columns}
-                        
-                        col_ttm = cols.get('ttm')
-                        col_z = cols.get('zscore') or cols.get('z-score')
-                        col_id = cols.get('code') # Should resolve to 'Code'
-                        col_name = cols.get('name') or cols.get('wind_code') or col_id # Fallback to Code if Name missing
-
-                        if col_ttm and col_z and col_id:
-                            # User Logic:
-                            # CN1Y: 0 < ttm <= 1
-                            # CN2Y: 1 < ttm <= 2
-                            # CN5Y: 2 < ttm <= 5
-                            # CN10Y: 5 < ttm <= 10
-                            
-                            # Identify which "Rates" assets are in the selected pool to decide which buckets to show
-                            # OR just show all relevant signals for buckets that have data and signals.
-                            # User requested logic maps asset names to TTM buckets.
-                            
-                            pool_asset_sectors = []
-                            for asset in asset_pool:
-                                if asset.get('type') == 'Rates' and asset.get('universe') in ['China Gov Bond', 'CN']:
-                                     sec = asset.get('sector', '')
-                                     if sec: pool_asset_sectors.append(sec.strip())
-                            
-                            # Define buckets
-                            buckets = {
-                                '1Y': (0, 1),
-                                '2Y': (1, 2),
-                                '5Y': (2, 5),
-                                '10Y': (5, 10),
-                                '30Y': (10, 30) # Added 30Y just in case, though user didn't explicitly ask for signal logic yet.
-                            }
-                            
-                            # If no specific Rates assets selected, maybe show nothing or just 1Y? 
-                            # User context: "When asset allocation HAS other term treasuries..." -> implies filtering by pool.
-                            # If pool is empty of CN Rates, we might default to showing nothing or just 1Y as before?
-                            # Let's show buckets present in the pool.
-                            
-                            target_sectors = [s for s in pool_asset_sectors if s in buckets]
-                            # If user manually added "CN1Y" (which is 'Rates' 'China Gov Bond' '1Y'), we process '1Y'.
-                            
-                            signal_tables = []
-                            
-                            for sector in target_sectors:
-                                min_t, max_t = buckets[sector]
-                                # Filter data for this bucket
-                                # Assuming bond_data has all bonds.
-                                df_bucket = bond_data[(bond_data[col_ttm] > min_t) & (bond_data[col_ttm] <= max_t)].copy()
-                                
-                                if df_bucket.empty: continue
-
-                                # Buy Candidates: Lowest z-score (most negative)
-                                # Sell Candidates: Highest z-score (most positive)
-                                buy_list = df_bucket.sort_values(col_z, ascending=True).head(5)
-                                sell_list = df_bucket.sort_values(col_z, ascending=False).head(5)
-                                
-                                # Helper to format a table
-                                def make_mini_table(df, title, color):
-                                    if df.empty: return html.Div()
-                                    
-                                    # Define target columns, avoiding duplicates if Name fallback calls to Code
-                                    target_cols = [col_id]
-                                    if col_name != col_id:
-                                        target_cols.append(col_name)
-                                    target_cols.extend([col_ttm, col_z])
-                                    
-                                    # Ensure columns exist
-                                    valid_cols = [c for c in target_cols if c in df.columns]
-                                    
-                                    # Map to display names
-                                    display_cols_map = {col_id: 'Code', col_name: 'Name', col_ttm: 'TTM', col_z: 'Z-Score'}
-                                    
-                                    records = df[valid_cols].to_dict('records')
-                                    
-                                    formatted_records = []
-                                    for r in records:
-                                        # Data Formatting
-                                        if col_ttm in r: r[col_ttm] = f"{r[col_ttm]:.2f}Y"
-                                        if col_z in r: r[col_z] = f"{r[col_z]:.2f}"
-                                        
-                                        # Rename keys
-                                        new_r = {}
-                                        for c in valid_cols:
-                                            d_name = display_cols_map.get(c, c)
-                                            new_r[d_name] = r[c]
-                                        formatted_records.append(new_r)
-                                    
-                                    final_cols = [{'name': display_cols_map.get(c, c), 'id': display_cols_map.get(c, c)} for c in valid_cols]
-
-                                    return html.Div([
-                                        html.H6(title, style={'color': color, 'marginBottom': '5px', 'textAlign': 'center', 'fontSize': '11px'}),
-                                        dash_table.DataTable(
-                                            data=formatted_records,
-                                            columns=final_cols,
-                                            style_cell={'textAlign': 'center', 'padding': '4px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': 'none', 'fontSize': '11px'},
-                                            style_header={'backgroundColor': THEME['bg_card'], 'fontWeight': 'bold', 'color': color, 'border': 'none'}
-                                        )
-                                    ], style={'flex': '1', 'margin': '2px'})
-
-                                sector_div = html.Div([
-                                    html.H5(f"CN {sector} ({min_t}-{max_t}Y) Signals", style={'color': THEME['text_main'], 'marginTop': '10px', 'fontSize': '13px', 'borderBottom': f'1px dashed {THEME["text_sub"]}'}),
-                                    html.Div([
-                                        make_mini_table(buy_list, "BUY (Low Z)", THEME['success']),
-                                        make_mini_table(sell_list, "SELL (High Z)", THEME['danger'])
-                                    ], style={'display': 'flex', 'gap': '5px'})
-                                ], style={'marginBottom': '10px', 'backgroundColor': 'rgba(255,255,255,0.03)', 'padding': '5px', 'borderRadius': '5px', 'flex': '1 1 30%', 'minWidth': '300px'})
-                                
-                                signal_tables.append(sector_div)
-
-                            if signal_tables:
-                                bond_signal_table = html.Div([
-                                    html.H5("Bond Trading Signals (Z-Score)", style={'color': THEME['text_main'], 'marginTop': '20px', 'borderTop': f'1px solid {THEME["text_sub"]}', 'paddingTop': '10px'}),
-                                    html.Div(signal_tables, style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'justifyContent': 'flex-start'})
-                                ])
-                            else:
-                                bond_signal_table = None
-
-                        else:
-                            print("Missing required columns for bond signals (ttm, z-score, code)")
-                            bond_signal_table = None
-
-
-            except Exception as e:
-                print(f"Error generating bond signals: {e}")
-                # Don't fail the whole callback for this optional feature
-            
-            final_output = html.Div([
-                portfolio_table,
-                bond_signal_table if bond_signal_table else html.Div()
-            ])
-            
-            return (final_output, status_msg, timestamp_msg, {'status': 'success'})
+            return (portfolio_table, status_msg, timestamp_msg, {'status': 'success'})
             
         except Exception as e:
             # Print full traceback for debugging

@@ -12,6 +12,14 @@ from sklearn.decomposition import PCA
 from .config import CURVE_CONFIG, SPREAD_CONFIG
 
 
+def _load_fx_curve_artifact(input_dir: str) -> dict:
+    for file_name in ("fxcurve_ts.pkl", "curve_ts.pkl"):
+        file_path = os.path.join(input_dir, file_name)
+        if os.path.exists(file_path):
+            return pd.read_pickle(file_path)
+    raise FileNotFoundError("Neither fxcurve_ts.pkl nor curve_ts.pkl exists in the input directory")
+
+
 # Deterministic factor weights for yield curve analysis
 # Tenors: 1Y, 2Y, 5Y, 10Y, 30Y
 DETERMINISTIC_WEIGHTS = {
@@ -78,7 +86,7 @@ class DeterministicRiskFactorAnalyzer:
                 return data
             else:
                 # Default: load from fxcurve_ts.pkl
-                curves_ts = pd.read_pickle(os.path.join(self.input_dir, "fxcurve_ts.pkl"))
+                curves_ts = _load_fx_curve_artifact(self.input_dir)
                 return curves_ts.get(country)
         except Exception as e:
             print(f"Warning: Could not load curve data for {country}: {e}")
@@ -349,7 +357,7 @@ class PCARiskFactorAnalyzer:
                 return data
             else:
                 # Default: load from fxcurve_ts.pkl
-                curves_ts = pd.read_pickle(os.path.join(self.input_dir, "fxcurve_ts.pkl"))
+                curves_ts = _load_fx_curve_artifact(self.input_dir)
                 return curves_ts.get(country)
         except Exception as e:
             print(f"Warning: Could not load curve data for {country}: {e}")
@@ -399,7 +407,7 @@ class PCARiskFactorAnalyzer:
         lookback_days = int(self.lookback_years * 252)
         
         # Determine list of countries: keys from fxcurve_ts + explicit config keys
-        curves_ts = pd.read_pickle(os.path.join(self.input_dir, "fxcurve_ts.pkl"))
+        curves_ts = _load_fx_curve_artifact(self.input_dir)
         countries = set(curves_ts.keys()) | set(CURVE_CONFIG.keys())
         
         results: Dict[str, Tuple[PCA, pd.DataFrame]] = {}
@@ -580,7 +588,7 @@ class PCARiskFactorAnalyzer:
             return self._full_history_scores_cache
         
         # Determine all countries
-        curves_ts = pd.read_pickle(os.path.join(self.input_dir, "fxcurve_ts.pkl"))
+        curves_ts = _load_fx_curve_artifact(self.input_dir)
         countries = set(curves_ts.keys()) | set(CURVE_CONFIG.keys())
         
         all_scores = pd.DataFrame()

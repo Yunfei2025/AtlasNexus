@@ -23,6 +23,16 @@ _dates = DateConfig.get_date_mappings()
 _date_strs = DateConfig.get_date_strings()
 
 
+def _file_mtime_date(file_path: str):
+    if not os.path.exists(file_path):
+        return None
+    return pd.Timestamp(os.path.getmtime(file_path), unit='s').date()
+
+
+def _is_updated_today(file_path: str) -> bool:
+    return _file_mtime_date(file_path) == _dates['d']
+
+
 def retrieveTick(date, futures):
     from WindPy import w
     w.start()
@@ -72,48 +82,37 @@ def get_contract_no():
 def futuresDailyK():
     # 设置合约代码，例如10年期国债期货主力合约代码
     file_path = os.path.join(DIR_INPUT, 'futures-dailyK_con.pkl')
-    # Check if file was updated today
-    if os.path.exists(file_path):
-        mtime = os.path.getmtime(file_path)
-        from datetime import datetime
-        file_date = datetime.fromtimestamp(mtime).date()
-        today = _dates['d']
-        if file_date == today:
-            print(f"{file_path} was updated today, skipping futuresDailyK().")
-        else:
-            flist = FuturesConfig.SYMBOLS
-            # 设置日期范围
-            dps = _date_strs['dp']
-            if GeneralConfig.DSHIFT == 1:
-                starts = _date_strs['d7d']
-            else:
-                starts = _date_strs['d1m']
-            data_dict = {}
-            # 获取日频历史K线数据
-            for f in flist:
-                data = _wsd(f, "open,high,low,close,volume", starts, dps)
-                data.columns = [a.capitalize() for a in data.columns]
-                data_dict[f] = data
-            data_dict = updatePKL(data_dict, file_path)
-    else:
-        print("Futures daily K data file missing.")
+    if _is_updated_today(file_path):
+        print(f"{file_path} was updated today, skipping futuresDailyK().")
+        return
+
+    flist = FuturesConfig.SYMBOLS
+    dps = _date_strs['dp']
+    starts = _date_strs['d7d'] if GeneralConfig.DSHIFT == 1 else _date_strs['d1m']
+    data_dict = {}
+    for f in flist:
+        data = _wsd(f, "open,high,low,close,volume", starts, dps)
+        data.columns = [a.capitalize() for a in data.columns]
+        data_dict[f] = data
+    updatePKL(data_dict, file_path)
+
+
+def retrieveFuturesDailyK():
+    futuresDailyK()
 
 def retrieveMarcoPx():
     file_path = os.path.join(DIR_INPUT, 'macro-px.pkl')
-    from datetime import datetime
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    # Check if file exists and was created today
-    file_ctime = datetime.fromtimestamp(os.path.getctime(file_path)).strftime('%Y-%m-%d')
+    if _is_updated_today(file_path):
+        print(f"{file_path} was updated today, skipping retrieveMarcoPx().")
+        return
+
+    print("Updating macroeconomic time series...")
+    from factors.config import MACRO_SYMBOLS
+
+    starts = _date_strs['d7d'] if GeneralConfig.DSHIFT == 1 else _date_strs['d1m']
+    dps = _date_strs['dp']
     macro_ts = {}
-    if file_ctime != today_str:
-        print("Updating macroeconomic time series...")
-        from factors.config import MACRO_SYMBOLS
-        if GeneralConfig.DSHIFT == 1:
-            starts = _date_strs['d7d']
-        else:
-            starts = _date_strs['d1m']
-        dps = _date_strs['dp']
-        for m in MACRO_SYMBOLS.keys():
-            macro_ts[m] = _wsd(MACRO_SYMBOLS[m], "close", starts, dps)
-        macro_ts = updatePKL(macro_ts, file_path)
+    for macro_name, symbol in MACRO_SYMBOLS.items():
+        macro_ts[macro_name] = _wsd(symbol, "close", starts, dps)
+    updatePKL(macro_ts, file_path)
 

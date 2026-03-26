@@ -10,10 +10,18 @@ import os
 from settings.paths import DIR_INPUT
 
 
+def _load_fx_curve_artifact():
+    for file_name in ("fxcurve_ts.pkl", "curve_ts.pkl"):
+        file_path = os.path.join(DIR_INPUT, file_name)
+        if os.path.exists(file_path):
+            return pd.read_pickle(file_path)
+    raise FileNotFoundError("Neither fxcurve_ts.pkl nor curve_ts.pkl exists in DIR_INPUT")
+
+
 def load_raw_market_data():
     """Load raw market data for PnL calculation."""
     # Load FX Curves (Foreign Yields)
-    fx_curves = pd.read_pickle(os.path.join(DIR_INPUT, "fxcurve_ts.pkl"))
+    fx_curves = _load_fx_curve_artifact()
     
     # Load China Yields
     cn_data_ts = pd.read_pickle(os.path.join(DIR_INPUT, "database-px.pkl"))

@@ -7,6 +7,7 @@ Created on Wed Sep 24 19:52:56 2025
 import os
 import sys
 import pickle
+import time
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -33,6 +34,18 @@ _date_strs = DateConfig.get_date_strings()
 def _save_pickle(obj, path):
     with open(path, 'wb') as f:
         pickle.dump(obj, f)
+
+
+def _wsq_until_nonempty(symbols, fields, *, retry_delay: float = 0.5):
+    """Retry realtime WSQ requests until a non-empty DataFrame is returned."""
+    attempt = 0
+    while True:
+        attempt += 1
+        result = _wsq(symbols, fields)
+        if isinstance(result, pd.DataFrame) and not result.empty:
+            return result
+        print(f"WSQ returned empty data on attempt {attempt}; retrying...")
+        time.sleep(retry_delay)
         
 def filterInstrument(bond_info,btype,hist=False):
     bond_info = bond_info[bond_info['CLAUSE'].isna()]
@@ -251,20 +264,22 @@ def retrieveWindRT(btype):
     with open(os.path.join(DIR_INPUT,btype+'-InstrumentInfo.pkl'), 'rb') as file:
         bond_info = pickle.load(file)
     if btype == 'IRS':
-        bond_rt = _wsq(list(bond_info.index), "rt_bid1,rt_ask1,rt_last_ytm")
+        bond_rt = _wsq_until_nonempty(list(bond_info.index), "rt_bid1,rt_ask1,rt_last_ytm")
     elif btype == 'futures':
         bond_rt = {}
-        bond_rt['futures'] = _wsq(list(FuturesConfig.get_ticker_list()), "rt_bid1,rt_ask1,rt_last")
+        bond_rt['futures'] = _wsq_until_nonempty(list(FuturesConfig.get_ticker_list()), "rt_bid1,rt_ask1,rt_last")
         with open(os.path.join(DIR_INPUT, btype + '-InstrumentInfo.pkl'), 'rb') as file:
             futures_dp = pickle.load(file)['DeliveryPool']
         bond_list = []
         for t in futures_dp.keys():
             bond_list.extend(list(futures_dp[t].index))
         bond_list = list(set(bond_list))
-        bond_rt['bonds'] = _wsq(bond_list, "rt_ask1,rt_bid1,rt_latest")
+        bond_rt['bonds'] = _wsq_until_nonempty(bond_list, "rt_ask1,rt_bid1,rt_latest")
     else:
-        bond_rt = _wsq(list(bond_info.index), "rt_bid_price1ytm,rt_ask_price1ytm")
+        bond_rt = _wsq_until_nonempty(list(bond_info.index), "rt_bid_price1ytm,rt_ask_price1ytm")
+
     if btype != 'futures':
+        assert isinstance(bond_rt, pd.DataFrame)
         col_map_rt = BondConfig.get_column_mapping()
         bond_rt.columns = [ col_map_rt[c] for c in bond_rt.columns]
         bond_rt = bond_rt.replace(0,np.nan)
@@ -287,7 +302,8 @@ def retrieveEnvRT(env,btype):
                 px_cnbd = env['Def'].loc[k,'估价收益率:%(中债)']
                 if np.isnan(px) or (px < 1e-4) or (px > 10) :
                     env['BondRT'].loc[k,p] = px_cnbd
-        env['SwapRT']  = retrieveWindRT('IRS')
+
+        env['SwapRT'] = retrieveWindRT('IRS')
         if btype in ['TBond','CBond']:
             fixings = ['FR001.IR','FR007.IR','SHIBOR3M.IR']
             for c in ['买价收益率','卖价收益率']:

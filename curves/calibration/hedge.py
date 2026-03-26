@@ -34,14 +34,36 @@ class HedgeCalculator:
     
     def get_ftp(self, bond_obj: pd.Series, env: Optional[Dict] = None) -> float:
         """Extract FTP from bond object, preferring previous-day FR007 from env['SwapTS']."""
-        # Try to use FR007.IR from previous trading day
+        if not env:
+            return np.nan
+
         try:
-            if env and 'SwapTS' in env:
-                # return bond_obj.loc['估价收益率:%(中债)']
-                return env['SwapRT'].loc['FR007.IR','成交收益率']
-            return np.nan
-        except KeyError:
-            return np.nan
+            swap_rt = env.get('SwapRT')
+            if isinstance(swap_rt, pd.DataFrame) and 'FR007.IR' in swap_rt.index:
+                for col in ['成交收益率', self.col_map.get('Bid'), self.col_map.get('Ofr')]:
+                    if col and col in swap_rt.columns:
+                        value = pd.to_numeric(pd.Series([swap_rt.loc['FR007.IR', col]]), errors='coerce').iloc[0]
+                        if pd.notna(value) and np.isfinite(value):
+                            return float(value)
+
+                bid_col = self.col_map.get('Bid')
+                ofr_col = self.col_map.get('Ofr')
+                if bid_col in swap_rt.columns and ofr_col in swap_rt.columns:
+                    bid = pd.to_numeric(pd.Series([swap_rt.loc['FR007.IR', bid_col]]), errors='coerce').iloc[0]
+                    ofr = pd.to_numeric(pd.Series([swap_rt.loc['FR007.IR', ofr_col]]), errors='coerce').iloc[0]
+                    if pd.notna(bid) and pd.notna(ofr):
+                        return float((bid + ofr) / 2.0)
+        except Exception:
+            pass
+
+        try:
+            swap_ts = env.get('SwapTS')
+            if isinstance(swap_ts, pd.DataFrame) and 'FR007.IR' in swap_ts.columns:
+                fr007 = pd.to_numeric(swap_ts['FR007.IR'], errors='coerce').dropna()
+                if not fr007.empty:
+                    return float(fr007.iloc[-1])
+        except Exception:
+            pass
 
         return np.nan
 
@@ -78,7 +100,6 @@ class HedgeCalculator:
         # Check if hedging instruments exist in sensitivity data
         missing_hedges = [h for h in hedgings if h not in sen.index]
         if missing_hedges:
-            # import pdb; pdb.set_trace()
             print(f"Warning: Hedging instruments {missing_hedges} not found in sensitivity data")
             available_hedges = [h for h in hedgings if h in sen.index]
             if not available_hedges:

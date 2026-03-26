@@ -50,6 +50,7 @@ from web.tabs.atlas_alpha_tabs import (
 from web.tabs.atlas_multiasset_tabs import (
     build_multiasset_factor_layout,
     build_multiasset_portfolio_layout,
+    build_multiasset_bond_layout,
     build_multiasset_risk_layout,
     build_multiasset_backtest_layout,
     build_factor_backtest_layout,
@@ -274,6 +275,7 @@ def build_tabs_panel():
                         children=[
                             dcc.Tab(label="FACTOR", value="factor", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="BOND", value="bond", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="BACKTEST", value="factor-model-bt", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="FUTURES", value="backtest-factor", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="REBALANCE", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
@@ -285,6 +287,7 @@ def build_tabs_panel():
                     html.Div([
                         html.Div(id="beta-factor-div",            children=build_multiasset_factor_layout(),    style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
                         html.Div(id="beta-portfolio-div",         children=build_multiasset_portfolio_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-bond-div",              children=build_multiasset_bond_layout(),      style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="beta-factor-model-bt-div",   children=build_factor_model_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="beta-backtest-factor-div",   children=build_factor_backtest_layout(),      style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="beta-backtest-portfolio-div",children=build_multiasset_backtest_layout(),  style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
@@ -663,6 +666,7 @@ def _update_run_center(n, job_id):
 @app.callback(
     [Output("beta-factor-div", "style"),
      Output("beta-portfolio-div", "style"),
+    Output("beta-bond-div", "style"),
      Output("beta-factor-model-bt-div", "style"),
      Output("beta-backtest-factor-div", "style"),
      Output("beta-backtest-portfolio-div", "style"),
@@ -673,7 +677,7 @@ def _update_run_center(n, job_id):
 def _render_beta_subtabs(subtab: str):
     """Show/hide Beta Book subtabs to preserve state."""
     base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
-    keys = ["factor", "portfolio", "factor-model-bt", "backtest-factor", "backtest-portfolio", "surface", "trend"]
+    keys = ["factor", "portfolio", "bond", "factor-model-bt", "backtest-factor", "backtest-portfolio", "surface", "trend"]
     return tuple(
         {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
         for k in keys

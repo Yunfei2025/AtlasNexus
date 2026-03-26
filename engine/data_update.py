@@ -15,7 +15,7 @@ DEFAULT_RETRIEVER_MODULES: list[str] = [
     "data.providers.retrieve",
     # Curves / surfaces
     "curves.utils.retrieve",
-    # NOTE: `surface` package imports Dash app at import time; keep it opt-in via `--modules surface.retrieve`.
+    "surface.retrieve",
     # Multiasset
     "multiasset.retrieve",
     # Futures intraday
