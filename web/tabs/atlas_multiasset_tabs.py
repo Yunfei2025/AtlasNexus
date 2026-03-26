@@ -614,6 +614,7 @@ def build_multiasset_portfolio_layout():
         # Data Stores
         dcc.Store(id='portfolio-data-store'),
         dcc.Store(id='asset-pool-store', data=initial_pool),
+        dcc.Store(id='rp-budget-store', data={}),
 
         html.Div([
             # Section 1: Configuration Header & Capital
@@ -775,8 +776,8 @@ def build_multiasset_portfolio_layout():
                 
                 # Column 3: Risk Budgets
                 html.Div([
-                    html.H6("Risk Budgets", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '10px'}),
-                    # --- Factor signal toggle ---
+                    html.H6("Risk Budgets", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '6px'}),
+                    # Hidden toggle kept for callback compatibility
                     html.Div([
                         dcc.Checklist(
                             id='use-factor-signals-toggle',
@@ -784,19 +785,22 @@ def build_multiasset_portfolio_layout():
                             value=[],
                             inputStyle={'marginRight': '5px'},
                             labelStyle={'color': THEME['accent'], 'fontSize': '12px', 'fontWeight': 'bold'},
-                            style={'marginBottom': '8px'},
                         ),
-                        html.Span(
-                            id='factor-signals-toggle-status',
-                            style={'color': THEME['text_sub'], 'fontSize': '11px'},
-                        ),
-                    ]),
+                        html.Span(id='factor-signals-toggle-status', style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                    ], style={'display': 'none'}),
+                    # Column headers
+                    html.Div([
+                        html.Span("Factor", style={'color': THEME['text_sub'], 'fontSize': '10px', 'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0'}),
+                        html.Span("RP Max", style={'color': THEME['text_sub'], 'fontSize': '10px', 'width': '54px', 'textAlign': 'right', 'flexShrink': '0'}),
+                        html.Span("Coeff", style={'color': THEME['text_sub'], 'fontSize': '10px', 'width': '44px', 'textAlign': 'center', 'flexShrink': '0'}),
+                        html.Span("Exposure", style={'color': THEME['text_sub'], 'fontSize': '10px', 'flex': '1', 'textAlign': 'right'}),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'padding': '0 8px 4px 8px', 'borderBottom': f'1px solid {THEME["table_header"]}', 'marginBottom': '4px', 'gap': '4px'}),
                     html.Div(
                         id='risk-budget-container',
                         children=[html.Div("Add assets to see risk factors", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px'})] if not initial_pool else [],
-                        style={'height': '150px', 'overflowY': 'auto', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '4px', 'padding': '8px', 'backgroundColor': THEME['bg_input']}
+                        style={'maxHeight': '190px', 'overflowY': 'auto', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '4px', 'padding': '6px 8px', 'backgroundColor': THEME['bg_input']}
                     ),
-                    html.Div("Default max risk budget: 1M CNY", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '5px', 'textAlign': 'center'})
+                    html.Div("Exposure = RP Max × Factor Coeff (editable). Run analysis to refresh RP Max.", style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '4px', 'textAlign': 'center'})
                 ], style={'width': '30%', 'padding': '20px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '0 0 8px 0'}),
             ], style={'display': 'flex'}),
             
@@ -857,7 +861,7 @@ def _load_bond_signal_frame(bond_type: str):
 
 def _resolve_bond_signal_columns(frame: pd.DataFrame):
     normalized = {
-        str(col).lower().replace('_', '').replace('-', '').replace(' ', ''): col
+        str(col).lower().replace('_', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '').replace(',', ''): col
         for col in frame.columns
     }
     col_ttm = normalized.get('ttm') or normalized.get('term') or normalized.get('ptmyear')
@@ -2521,9 +2525,13 @@ def register_multiasset_callbacks(app):
     # 3.6 Risk Factor Budget Input Generator
     @app.callback(
         Output('risk-budget-container', 'children'),
-        [Input('asset-pool-store', 'data')]
+        [Input('asset-pool-store', 'data'),
+         Input('rp-budget-store', 'data'),
+         Input('factor-signals-snapshot-store', 'data')],
+        [State('capital-input', 'value'),
+         State('capital-unit', 'value')],
     )
-    def update_risk_budget_inputs(asset_pool):
+    def update_risk_budget_inputs(asset_pool, rp_budgets, snapshot_data, capital, capital_unit):
         if not asset_pool:
              return [html.Div("Add assets to see risk factors", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px', 'textAlign': 'center'})]
 
@@ -2531,32 +2539,26 @@ def register_multiasset_callbacks(app):
         
         # Mappings based on MultiAsset logic
         rates_map = {'CN': 'CN', 'US': 'US', 'EU': 'DE', 'UK': 'UK', 'JP': 'JP'}
-        # comm_map keys should match asset names in pool
         comm_map = {'Gold': 'AU', 'Aluminium': 'AL', 'Copper': 'CU', 'Crude Oil': 'SC', 'Crude_Oil': 'SC'}
 
         for asset in asset_pool:
             a_type = asset.get('type')
-            # Fallback if universe is code not name
             
             if a_type == 'Rates':
                 asset_name = asset.get('name', '')
-                prefix = asset_name[:2] # CN1Y -> CN
+                prefix = asset_name[:2]
                 rf_country = rates_map.get(prefix)
-                # Handle EU case: EU->DE explicitly if map didn't catch (EU is in map keys as DE output)
-                
                 if rf_country:
                     active_factors.add(f"IRDL.{rf_country}")
                     active_factors.add(f"IRSL.{rf_country}")
                     active_factors.add(f"IRCV.{rf_country}")
             
             elif a_type == 'Spread':
-                 # Name prefixes: IRS, CDB, ICP
                  asset_name = asset.get('name', '')
                  if asset_name.startswith('IRS'): code = 'IRS'
                  elif asset_name.startswith('CDB'): code = 'CDB'
                  elif asset_name.startswith('ICP'): code = 'ICP'
                  else: code = None
-                 
                  if code:
                      active_factors.add(f"SPDL.{code}")
                      if code != 'ICP':
@@ -2564,7 +2566,6 @@ def register_multiasset_callbacks(app):
             
             elif a_type == 'Commodities':
                  asset_name = asset.get('name', '')
-                 # Map name to code
                  code = comm_map.get(asset_name)
                  if code:
                      active_factors.add(f"CMDL.{code}")
@@ -2572,28 +2573,93 @@ def register_multiasset_callbacks(app):
         if not active_factors:
              return [html.Div("No risk factors identified.", style={'color': THEME['text_sub'], 'fontSize': '12px'})]
 
-        # Sort factors
         sorted_factors = sorted(list(active_factors))
-        
-        # Build Inputs
-        inputs = []
+        n_factors = len(sorted_factors)
+
+        # ── Compute RP Max per factor ──────────────────────────────────────────
+        # Use post-run RP budgets if available; else fall back to equal capital share
+        try:
+            cap_val = float(capital or 100)
+            cap_mult = 1e9 if (capital_unit == 'billion') else 1e6
+            total_capital_m = cap_val * cap_mult / 1e6
+        except (TypeError, ValueError):
+            total_capital_m = 100.0
+        equal_share = round(total_capital_m / n_factors, 2) if n_factors else 1.0
+
+        def get_rp_max(factor):
+            if rp_budgets and factor in rp_budgets:
+                return float(rp_budgets[factor])
+            return equal_share
+
+        # ── Factor model signal lookup (scalar + colour) ───────────────────────
+        SCALAR_META = {
+            -1.5: ('Strong Short', THEME.get('danger', '#e74c3c')),
+            -1.0: ('Short',        '#e74c3c'),
+            -0.5: ('Mild Short',   '#e67e22'),
+             0.0: ('Neutral',      THEME.get('text_sub', '#aaa')),
+             0.5: ('Mild Long',    '#27ae60'),
+             1.0: ('Long',         THEME.get('success', '#2ecc71')),
+             1.5: ('Strong Long',  '#2ecc71'),
+        }
+        snapshot_by_rf = {}
+        if snapshot_data:
+            for rec in snapshot_data:
+                rf = rec.get('risk_factor')
+                if rf:
+                    snapshot_by_rf[rf] = rec
+
+        def get_coeff(factor):
+            rec = snapshot_by_rf.get(factor)
+            if rec is not None:
+                return float(rec.get('scalar', 1.0))
+            return 1.0  # default: full long — placeholder until factor model is run
+
+        # ── Build rows ─────────────────────────────────────────────────────────
+        rows = []
         for factor in sorted_factors:
-            inputs.append(
+            rp_max = get_rp_max(factor)
+            coeff  = get_coeff(factor)
+            suggested = round(rp_max * coeff, 2)
+            label, color = SCALAR_META.get(coeff, (f'{coeff:+.1f}×', THEME.get('text_main', '#fff')))
+            is_default_coeff = factor not in snapshot_by_rf
+
+            rows.append(
                 html.Div([
-                    html.Label(factor, style={'color': THEME['text_main'], 'fontSize': '12px', 'width': '80px', 'fontWeight': 'bold'}),
+                    html.Span(factor, style={
+                        'color': THEME['text_main'], 'fontSize': '11px',
+                        'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0',
+                    }),
+                    html.Span(f"{rp_max:.1f}M", style={
+                        'color': THEME['text_sub'], 'fontSize': '11px',
+                        'width': '54px', 'textAlign': 'right', 'flexShrink': '0',
+                    }),
+                    html.Span(
+                        f"×{coeff:+.1f}",
+                        title=f"{label}{' (default)' if is_default_coeff else ''}",
+                        style={
+                            'color': THEME.get('text_sub', '#aaa') if is_default_coeff else color,
+                            'fontSize': '11px', 'width': '44px', 'textAlign': 'center',
+                            'flexShrink': '0', 'fontWeight': 'bold',
+                            'fontStyle': 'italic' if is_default_coeff else 'normal',
+                        }
+                    ),
                     dcc.Input(
                         id={'type': 'risk-budget-input', 'index': factor},
                         type='number',
-                        value=1,
-                        min=0,
+                        value=suggested,
                         step=0.1,
-                        style={'width': '60px', 'fontSize': '12px', 'padding': '2px', 'backgroundColor': '#fff', 'color': '#000', 'border': 'none', 'borderRadius': '2px'}
+                        style={
+                            'width': '52px', 'fontSize': '11px', 'padding': '2px 4px',
+                            'backgroundColor': '#fff', 'color': '#000',
+                            'border': f'1px solid {THEME["table_header"]}',
+                            'borderRadius': '2px', 'textAlign': 'right',
+                        }
                     ),
-                    html.Span("M", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '3px'})
-                ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '5px', 'justifyContent': 'space-between'})
+                    html.Span("M", style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '2px'}),
+                ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px', 'gap': '4px'})
             )
         
-        return inputs
+        return rows
 
     # ── 3.7  Factor Model Signals – refresh & render ──────────────────
     @app.callback(
@@ -2771,7 +2837,8 @@ def register_multiasset_callbacks(app):
         [Output('portfolio-table-container', 'children'),
          Output('status-message', 'children'),
          Output('timestamp-display', 'children'),
-         Output('portfolio-data-store', 'data')],
+         Output('portfolio-data-store', 'data'),
+         Output('rp-budget-store', 'data')],
         [Input('run-button', 'n_clicks')],
         [State('capital-input', 'value'),
          State('capital-unit', 'value'),
@@ -2786,7 +2853,7 @@ def register_multiasset_callbacks(app):
                      budget_values, budget_ids, signal_toggle, signal_snapshot):
         if n_clicks == 0:
             return (html.Div("No data available. Click 'Run Analysis' to start.", style={'color': THEME['text_sub']}),
-                    "", "", {})
+                    "", "", {}, {})
 
         try:
             # Validate asset pool
@@ -2794,7 +2861,7 @@ def register_multiasset_callbacks(app):
                 error_msg = html.Span("⚠ Please add assets to the pool before running analysis", 
                                     style={'color': THEME['warning'], 'fontWeight': 'bold'})
                 return (html.Div("No assets in pool.", style={'color': THEME['warning']}),
-                        error_msg, "", {})
+                        error_msg, "", {}, {})
             
             # Convert capital to CNY
             multiplier = 1e9 if capital_unit == 'billion' else 1e6
@@ -2842,7 +2909,7 @@ def register_multiasset_callbacks(app):
                 error_msg = html.Span("⚠ No matching assets found in optimization results", 
                                     style={'color': THEME['warning'], 'fontWeight': 'bold'})
                 return (html.Div("No matching assets found.", style={'color': THEME['warning']}),
-                        error_msg, "", {})
+                        error_msg, "", {}, {})
             
             # Update global state
             ALLOCATION_RESULTS.update({
@@ -2917,7 +2984,15 @@ def register_multiasset_callbacks(app):
             status_msg = html.Span("✓ Analysis completed successfully!", style={'color': THEME['success'], 'fontWeight': 'bold'})
             timestamp_msg = f"Last updated: {ALLOCATION_RESULTS['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"
 
-            return (portfolio_table, status_msg, timestamp_msg, {'status': 'success'})
+            # Compute RP-suggested equal budget per factor (updates Risk Budget panel)
+            total_capital_m = total_capital_cny / 1e6
+            if risk_budgets:
+                n_active = len(risk_budgets)
+                rp_budgets_out = {f: round(total_capital_m / n_active, 2) for f in risk_budgets}
+            else:
+                rp_budgets_out = {}
+
+            return (portfolio_table, status_msg, timestamp_msg, {'status': 'success'}, rp_budgets_out)
             
         except Exception as e:
             # Print full traceback for debugging
@@ -2929,7 +3004,7 @@ def register_multiasset_callbacks(app):
             
             error_msg = html.Span(f"✗ Error: {str(e)}", style={'color': THEME['danger'], 'fontWeight': 'bold'})
             return (html.Div(f"Error: {str(e)}", style={'color': THEME['danger']}),
-                    error_msg, "", {})
+                    error_msg, "", {}, {})
 
     # 4.5 Backtest Factor Pool Display and Min Date Info
     @app.callback(

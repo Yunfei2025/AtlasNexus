@@ -37,7 +37,7 @@ if __name__ == "__main__":
 
 
     # CBond reference demo
-    file_path = os.path.join(DIR_INPUT, 'TBond-InstrumentInfo.pkl')#'TBond-cvref.pkl')
+    file_path = os.path.join(DIR_INPUT, 'CBond-spdsrt.pkl')
     data = pd.read_pickle(file_path)
     key = 'BondCurve'
     bond_data = data[key]

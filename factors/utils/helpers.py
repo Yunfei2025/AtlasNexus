@@ -7,12 +7,14 @@ This module contains utility functions for factor analysis results processing,
 CSV export, and data aggregation to keep the main FactorEngine clean.
 """
 
+import os
 import pandas as pd
 import csv
 import joblib
 from typing import Dict, List, Tuple
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+from settings.paths import DIR_INPUT
 
 def generate_analysis_periods(start_dt: datetime, end_dt: datetime, ticker: str, config) -> Tuple[List[Tuple], datetime, datetime]:
     """
@@ -94,6 +96,7 @@ def save_factor_analysis_results(results: List[Dict], output_file: str = "factor
             factor_data.append(factor_info)
         
         # Save to CSV
+        output_file = os.path.join(str(DIR_INPUT), os.path.basename(output_file))
         with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
             if factor_data:
                 # Get all possible fieldnames
@@ -245,6 +248,7 @@ def save_final_model(results: List[Dict], periods_to_analyze: List[Tuple], confi
     }
     
     try:
+        model_filename = os.path.join(str(DIR_INPUT), model_filename)
         joblib.dump(model_package, model_filename)
         print(f"💾 Model saved to: {model_filename}")
         return True

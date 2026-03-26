@@ -1026,6 +1026,37 @@ def build_alpha_candidates(
 	mr = _add_unified_score_preview(mr)
 	trend = _add_unified_score_preview(trend)
 
+	# ── BondSwap direction override + score recomputation ────────────────────────
+	# Convention: spread = bond yield − swap rate.
+	# z > 0 (spread above mean, bond cheap vs swap) → BUY; z < 0 → SELL.
+	# The stored carry (BondCarry) is the BUY-side carry (buy bond, sell swap).
+	# Pin direction to z-score sign, then recompute score with carry correctly
+	# attributed: +carry for BUY, −carry for SELL.
+	if not trend.empty and "category" in trend.columns and "Zscore" in trend.columns:
+		bs_mask = trend["category"].astype(str).eq("Bond-Swap")
+		if bs_mask.any():
+			bs_idx = trend.index[bs_mask]
+			z_bs = pd.to_numeric(trend.loc[bs_idx, "Zscore"], errors="coerce")
+			bs_dir = pd.Series(
+				["BUY" if (pd.notna(z) and float(z) > 0) else "SELL" for z in z_bs],
+				index=bs_idx,
+			)
+			trend.loc[bs_idx, "direction"] = bs_dir
+			# Recompute score with carry sign aligned to the pinned direction.
+			# carry_H / roll_H / mtm_H were computed as BUY-side quantities by
+			# _add_unified_score_preview; negate all three when direction is SELL.
+			if {"mtm_H", "carry_H", "roll_H", "risk"}.issubset(trend.columns):
+				bs_dir_sign = bs_dir.map({"BUY": 1.0, "SELL": -1.0}).fillna(1.0)
+				pnl_bs = (
+					trend.loc[bs_idx, "mtm_H"].fillna(0.0)
+					+ trend.loc[bs_idx, "carry_H"].fillna(0.0)
+					+ trend.loc[bs_idx, "roll_H"].fillna(0.0)
+				)
+				risk_bs = trend.loc[bs_idx, "risk"].replace(0, np.nan).fillna(1.0)
+				exp_ret = (bs_dir_sign * pnl_bs).clip(lower=0.0)
+				trend.loc[bs_idx, "expected_return_H"] = exp_ret
+				trend.loc[bs_idx, "score"] = (exp_ret / risk_bs).fillna(0.0)
+
 	# ── Execution-feasibility filters ──────────────────────────────────────────
 	# Bond-Swap (TBondSwap / CBondSwap): borrowing the bond to short is not
 	# feasible in practice, so only BUY-side candidates are kept.

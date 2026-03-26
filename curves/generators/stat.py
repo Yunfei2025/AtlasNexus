@@ -307,9 +307,10 @@ class StatGenerator:
                     spreads['NetBasis'][season]['StatInfo'].loc[t, 'futures'] = f
             statinfo_by_season[season] = spreads['NetBasis'][season]['StatInfo']
 
-        with pd.ExcelWriter(os.path.join(DIR_OUTPUT, 'FuturesStatInfo.xlsx')) as writer:
-            for k, df in statinfo_by_season.items():
-                df.to_excel(writer, sheet_name=k)
+        # Disabled for current workflow: do not generate FuturesStatInfo.xlsx
+        # with pd.ExcelWriter(os.path.join(DIR_OUTPUT, 'FuturesStatInfo.xlsx')) as writer:
+        #     for k, df in statinfo_by_season.items():
+        #         df.to_excel(writer, sheet_name=k)
 
         updatePKL(spreads, os.path.join(DIR_INPUT, f'{btype}-spds.pkl'), rewrite=True)
 

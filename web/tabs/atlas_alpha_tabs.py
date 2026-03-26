@@ -1144,13 +1144,13 @@ def build_candidates_layout() -> html.Div:
                     id='alpha-spread-categories',
                     options=[
                         {'label': ' Bond-Curve (MR)', 'value': 'Bond-Curve'},
-                        {'label': ' Bond-Swap (Carry/Trend)', 'value': 'Bond-Swap'},
-                        {'label': ' Swap Spreads (MR/Carry)', 'value': 'Swap-Spread'},
-                        {'label': ' Tenor Spreads (ADF→MR / Carry)', 'value': 'Tenor-Spread'},
-                        {'label': ' Net Basis (Carry)', 'value': 'Bond-Futures'},
+                        {'label': ' Bond-Swap (Trend)', 'value': 'Bond-Swap'},
+                        {'label': ' Swap Spreads (MR/Trend)', 'value': 'Swap-Spread'},
+                        {'label': ' Tenor Spreads (MR/Trend)', 'value': 'Tenor-Spread'},
+                        {'label': ' Net Basis (Trend)', 'value': 'Bond-Futures'},
                         {'label': ' Term Basis (MR)', 'value': 'Futures-Term'},
                     ],
-                    value=['Bond-Curve', 'Bond-Swap', 'Tenor-Spread'],
+                    value=['Bond-Curve', 'Bond-Swap', 'Swap-Spread', 'Tenor-Spread'],
                     inline=True,
                     labelStyle={'color': THEME['text_main'], 'marginRight': '15px', 'fontSize': '12px'},
                     inputStyle={'marginRight': '5px'},
@@ -1704,7 +1704,7 @@ def register_alpha_callbacks(app) -> None:
             # Add direction column to df_low if not present
             df_low_enriched = df_low.copy()
             if 'direction' not in df_low_enriched.columns and 'Zscore' in df_low_enriched.columns:
-                df_low_enriched['direction'] = df_low_enriched['Zscore'].apply(lambda z: 'BUY' if float(z) < 0 else 'SELL')
+                df_low_enriched['direction'] = df_low_enriched['Zscore'].apply(lambda z: 'BUY' if float(z) > 0 else 'SELL')
             
             # Store recommended trades in global variable for "Replace Pool" button
             DIVERSIFIED_TRADE_RECOMMENDATIONS['trades'] = df_low_enriched.to_dict('records')
@@ -1807,7 +1807,7 @@ def register_alpha_callbacks(app) -> None:
                     # Ensure direction column exists
                     if 'direction' not in trade_dict and 'Zscore' in trade_dict:
                         zscore = float(trade_dict['Zscore'])
-                        trade_dict['direction'] = 'BUY' if zscore < 0 else 'SELL'
+                        trade_dict['direction'] = 'BUY' if zscore > 0 else 'SELL'
                     selected_trades.append(trade_dict)
             
             print(f"[DEBUG] Matched {len(selected_trades)} trades")

@@ -135,7 +135,7 @@ def build_spread_series(b: str, inst: str, season: int, stype: str) -> Dict[str,
 
         s = 100 * d["Spread"][tenor].dropna()
         if spread_type in ["TBondCurve", "CBondCurve"]:
-            s = s - d["StatInfo"].loc[tenor, "mean"]
+            s = s - d["StatInfo"].loc[tenor, "mean"] * 100
         return s
 
     dfts, tenor_options = _resolve_datasets(stype)

@@ -242,8 +242,9 @@ class StatRefresher:
             self._write_pickle(spreads_all[obtype + 'Spread'], f'{obtype}-spdsrt.pkl')
 
         spread_df = pd.concat(spreads_all, axis=0).droplevel(0)
-        with pd.ExcelWriter(os.path.join(DIR_OUTPUT, 'OBondHedgings.xlsx')) as writer:
-            spread_df.to_excel(writer)
+        # Disabled for current workflow: do not generate OBondHedgings.xlsx
+        # with pd.ExcelWriter(os.path.join(DIR_OUTPUT, 'OBondHedgings.xlsx')) as writer:
+        #     spread_df.to_excel(writer)
 
     def refresh_misc_spreads(self) -> None:
         stat = ld.loadStatData('Misc')
