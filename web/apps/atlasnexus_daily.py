@@ -92,15 +92,12 @@ app.title = "AtlasNexus Daily Console"
 # can access it from the Dash app (matches web/core/server.py behavior).
 @app.server.route("/pairs/regression_plots.html")
 def _serve_pairs_regression():
-    try:
-        from flask import send_file, abort
-        pairs_file = project_root / "pairs" / "regression_plots.html"
-        if pairs_file.exists():
-            return send_file(str(pairs_file))
-        else:
-            abort(404)
-    except Exception:
-        pass  # abort(500) not available or simple pass to avoid crash
+    from flask import send_file, abort
+
+    pairs_file = project_root / "pairs" / "regression_plots.html"
+    if pairs_file.exists():
+        return send_file(str(pairs_file))
+    abort(404)
 
 # Register callbacks for migrated legacy FI layouts (Pairs tab refresh callback).
 register_fi_callbacks(app)
@@ -469,8 +466,8 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt,
     trig = ctx.triggered[0]["prop_id"].split(".")[0]
 
     if trig == "an-btn-update":
-        job = start_engine_job(argv=["update-data"])
-        return job.job_id, f"Started job {job.job_id}: update-data"
+        job = start_engine_job(argv=["update-data", "--force"])
+        return job.job_id, f"Started job {job.job_id}: update-data --force"
 
     if trig == "an-btn-eod":
         job = start_engine_job(argv=["eod"])

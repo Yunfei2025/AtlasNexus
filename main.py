@@ -46,6 +46,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional list of module paths to run (defaults to engine defaults)",
     )
+    upd.add_argument("--force", action="store_true", help="Force refresh even if data was already updated today")
 
     refresh = sub.add_parser("refresh", help="Run intraday refresh pipeline (engine)")
     refresh.add_argument("--asof", type=_parse_date, default=None, help="As-of date YYYY-MM-DD")
@@ -171,6 +172,8 @@ def main():
             engine_argv.append("--update-data")
         if args.cmd == "update-data" and getattr(args, "modules", None):
             engine_argv.extend(["--modules", *args.modules])
+        if args.cmd == "update-data" and getattr(args, "force", False):
+            engine_argv.append("--force")
         if args.cmd == "refresh" and getattr(args, "steps", None):
             engine_argv.extend(["--steps", *args.steps])
         if args.cmd == "scheduler":

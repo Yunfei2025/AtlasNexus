@@ -20,10 +20,15 @@ def _file_mtime_date(file_path: str):
 def _is_updated_today(file_path: str) -> bool:
     return _file_mtime_date(file_path) == dt.datetime.today().date()
 
-def futuresDailyK():
+
+def _force_update_requested(cfg=None) -> bool:
+    return bool(getattr(cfg, "params", {}).get("force_update", False))
+
+def futuresDailyK(cfg=None):
     # 设置合约代码，例如10年期国债期货主力合约代码
     file_path = os.path.join(DIR_INPUT, 'futures-dailyK_con.pkl')
-    if _is_updated_today(file_path):
+    force_update = _force_update_requested(cfg)
+    if _is_updated_today(file_path) and not force_update:
         print(f"{file_path} was updated today, skipping futuresDailyK().")
         return
 
@@ -37,9 +42,14 @@ def futuresDailyK():
         data_dict[f] = data
     updatePKL(data_dict, file_path)
 
-def retrieveMarcoPx():
+
+def retrieveFuturesDailyK(cfg=None):
+    futuresDailyK(cfg)
+
+def retrieveMarcoPx(cfg=None):
     file_path = os.path.join(DIR_INPUT, 'macro-px.pkl')
-    if _is_updated_today(file_path):
+    force_update = _force_update_requested(cfg)
+    if _is_updated_today(file_path) and not force_update:
         print(f"{file_path} was updated today, skipping retrieveMarcoPx().")
         return
 

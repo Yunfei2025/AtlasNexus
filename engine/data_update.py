@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import importlib
 import logging
+from dataclasses import replace
+from datetime import date, datetime
+from pathlib import Path
 from typing import Iterable
 
 from engine.context import RunConfig
@@ -25,6 +28,40 @@ DEFAULT_RETRIEVER_MODULES: list[str] = [
     # Derivatives vol
     "derivatives.vol.retrieve",
 ]
+
+DAILY_REQUIRED_RETRIEVERS: dict[str, str] = {
+    "factors.utils.retrieve:retrieveMarcoPx": "macro-px.pkl",
+    "futures.intraday.retrieve:retrieveFuturesDailyK": "futures-dailyK_con.pkl",
+    "derivatives.vol.retrieve:retrieveFuturesVol": "futures-volpx.pkl",
+}
+
+
+def _file_mtime_date(path: Path) -> date | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).date()
+    except FileNotFoundError:
+        return None
+
+
+def get_stale_daily_retrievers(cfg: RunConfig) -> list[str]:
+    stale: list[str] = []
+    for retriever_name, artifact_name in DAILY_REQUIRED_RETRIEVERS.items():
+        artifact_path = cfg.input_dir / artifact_name
+        if _file_mtime_date(artifact_path) != cfg.asof:
+            stale.append(retriever_name)
+    return stale
+
+
+def ensure_daily_required_updates(cfg: RunConfig) -> list[str]:
+    load_default_retrievers()
+    stale = get_stale_daily_retrievers(cfg)
+    if not stale:
+        logger.info("Daily required data already up to date for %s", cfg.asof)
+        return []
+
+    logger.info("Refreshing stale daily data retrievers: %s", ", ".join(stale))
+    run_data_update(cfg, names=stale)
+    return stale
 
 
 def _try_register_module(module_name: str) -> None:
@@ -72,7 +109,7 @@ def load_default_retrievers(extra_modules: Iterable[str] | None = None) -> None:
             _try_register_module(m)
 
 
-def run_data_update(cfg: RunConfig, *, names: list[str] | None = None) -> None:
+def run_data_update(cfg: RunConfig, *, names: list[str] | None = None, force: bool = False) -> None:
     """Run 0..N data retrieval/update routines.
 
     If names is None: run all registered.
@@ -85,6 +122,7 @@ def run_data_update(cfg: RunConfig, *, names: list[str] | None = None) -> None:
 
     retrievers = get_retrievers()
     selected = names or sorted(retrievers.keys())
+    effective_cfg = replace(cfg, params={**cfg.params, "force_update": force}) if force else cfg
 
     if not selected:
         logger.warning(
@@ -113,7 +151,7 @@ def run_data_update(cfg: RunConfig, *, names: list[str] | None = None) -> None:
         try:
             # Try calling with cfg first; if it fails, fall back to no-arg.
             try:
-                fn(cfg)
+                fn(effective_cfg)
             except TypeError:
                 fn()
         except Exception as e:

@@ -19,7 +19,7 @@ if os.environ.get('WEB_LOG_TIMINGS','0') == '1':
     logger.info('Importing web.core.scripts...')
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 import diskcache
@@ -48,7 +48,7 @@ if os.environ.get('WEB_LOG_TIMINGS','0') == '1':
 
 cache = diskcache.Cache("./cache")
 background_callback_manager = DiskcacheManager(cache)
-_PICKLE_CACHE: dict[str, tuple[float, object]] = {}
+_PICKLE_CACHE: dict[str, tuple[float, Any]] = {}
 BOND_TYPES = ("TBond", "CBond")
 
 _locks = {
@@ -64,7 +64,7 @@ class Utils:
     """Utility functions for file operations and parallel execution."""
 
     @staticmethod
-    def get_mtime_date(path_obj: pathlib.Path) -> datetime.date | None:
+    def get_mtime_date(path_obj: pathlib.Path | str) -> datetime.date | None:
         try:
             # Accept either a pathlib.Path or a string path. Convert to Path to
             # ensure we can call .stat() without raising AttributeError when
@@ -75,7 +75,7 @@ class Utils:
             return None
 
     @staticmethod
-    def load_pickle_cached(path_obj: pathlib.Path):
+    def load_pickle_cached(path_obj: pathlib.Path | str) -> Any | None:
         path = str(path_obj)
         try:
             mtime = os.path.getmtime(path)
@@ -121,6 +121,17 @@ def run_initialise() -> str:
             return "Error: Direct API calls not available. Please check imports."
 
         t = datetime.datetime.today()
+        try:
+            from engine.context import build_run_config
+            from engine.data_update import ensure_daily_required_updates
+
+            cfg = build_run_config(project_root=project_root, mode="data", asof=t.date())
+            refreshed = ensure_daily_required_updates(cfg)
+            if refreshed:
+                print(f"Daily required data refreshed: {', '.join(refreshed)}")
+        except Exception as e:
+            print(f"WARNING: Daily required data refresh failed: {e}")
+
         if (t.hour >= 9) and (t.hour <= 18) and (t.weekday() <= 5):
             print("Updating database and running generators...")
             try:
@@ -236,12 +247,12 @@ def refresh(interval):
     data_rt: dict[str, Any] = {}
     for btype in ["TBond", "CBond"]:
         datart_dict = Utils.load_pickle_cached(os.path.join(DIR_INPUT,f"{btype}-spdsrt.pkl"))
-        if datart_dict:
+        if isinstance(datart_dict, Mapping):
             data_rt[f"{btype}Curve"] = datart_dict["BondCurve"]
             data_rt[f"{btype}Swap"] = datart_dict["BondSwap"]
 
     irs_rt = Utils.load_pickle_cached(os.path.join(DIR_INPUT,"IRS-spdsrt.pkl"))
-    if irs_rt:
+    if isinstance(irs_rt, Mapping):
         data_rt['SwapSpread'] = irs_rt['spreads']
 
     for btype in BondConfig.INCLUDE_FILTERS.keys():
@@ -249,21 +260,21 @@ def refresh(interval):
         data_rt[f"{btype}Spread"] = spd
 
     portspds = Utils.load_pickle_cached(os.path.join(DIR_INPUT,"Portfolio-spds.pkl"))
-    if portspds:
+    if isinstance(portspds, Mapping):
         data_rt['AssetPCASpread'] = portspds.get('StatInfo', None)
 
     miscspds = Utils.load_pickle_cached(os.path.join(DIR_INPUT,"Misc-spdsrt.pkl"))
-    if miscspds:
+    if isinstance(miscspds, Mapping):
         data_rt['SectorPCASpread'] = miscspds.get('PCASpread', None)
         data_rt['BinarySpread'] = miscspds.get('BinarySpread', None)
 
     futspds = Utils.load_pickle_cached(os.path.join(DIR_INPUT,"futures-spdsrt.pkl"))
-    if futspds:
+    if isinstance(futspds, Mapping):
         data_rt['NetBasis'] = futspds.get('NetBasis', None)
         data_rt['TermBasis'] = futspds.get('TermBasis', None)
 
     positions = Utils.load_pickle_cached(os.path.join(DIR_INPUT,"positions.pkl"))
-    if positions:
+    if isinstance(positions, Mapping):
         positions_last = {k: v.iloc[-1] for k, v in positions.items()}
         data_rt['InsPos'] = pd.concat(positions_last, axis=1)
 

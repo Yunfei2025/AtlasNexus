@@ -67,6 +67,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional list of registered retriever names to run (defaults to all registered)",
     )
+    upd.add_argument(
+        "--force",
+        action="store_true",
+        help="Force refresh even if a target artifact was already updated today",
+    )
 
     return p
 
@@ -120,7 +125,7 @@ def main(argv: list[str] | None = None, *, project_root: Path | None = None) -> 
 
         cfg = build_run_config(project_root=project_root, mode="data", asof=date.today())
         load_default_retrievers(extra_modules=args.modules)
-        run_data_update(cfg, names=args.retrievers)
+        run_data_update(cfg, names=args.retrievers, force=args.force)
         return 0
 
     raise ValueError(f"Unknown cmd: {args.cmd}")

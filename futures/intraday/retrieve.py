@@ -33,6 +33,10 @@ def _is_updated_today(file_path: str) -> bool:
     return _file_mtime_date(file_path) == _dates['d']
 
 
+def _force_update_requested(cfg=None) -> bool:
+    return bool(getattr(cfg, "params", {}).get("force_update", False))
+
+
 def retrieveTick(date, futures):
     from WindPy import w
     w.start()
@@ -79,10 +83,11 @@ def get_contract_no():
     clist_ = clist.squeeze().tolist()
     return clist_
 
-def futuresDailyK():
+def futuresDailyK(cfg=None):
     # 设置合约代码，例如10年期国债期货主力合约代码
     file_path = os.path.join(DIR_INPUT, 'futures-dailyK_con.pkl')
-    if _is_updated_today(file_path):
+    force_update = _force_update_requested(cfg)
+    if _is_updated_today(file_path) and not force_update:
         print(f"{file_path} was updated today, skipping futuresDailyK().")
         return
 
@@ -97,12 +102,14 @@ def futuresDailyK():
     updatePKL(data_dict, file_path)
 
 
-def retrieveFuturesDailyK():
-    futuresDailyK()
+def retrieveFuturesDailyK(cfg=None):
+    futuresDailyK(cfg)
 
-def retrieveMarcoPx():
+
+def retrieveMarcoPx(cfg=None):
     file_path = os.path.join(DIR_INPUT, 'macro-px.pkl')
-    if _is_updated_today(file_path):
+    force_update = _force_update_requested(cfg)
+    if _is_updated_today(file_path) and not force_update:
         print(f"{file_path} was updated today, skipping retrieveMarcoPx().")
         return
 

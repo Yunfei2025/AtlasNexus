@@ -860,8 +860,11 @@ def _load_bond_signal_frame(bond_type: str):
 
 
 def _resolve_bond_signal_columns(frame: pd.DataFrame):
+    def _normalize_column_name(col) -> str:
+        return ''.join(ch for ch in str(col).lower() if ch.isalnum())
+
     normalized = {
-        str(col).lower().replace('_', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '').replace(',', ''): col
+        _normalize_column_name(col): col
         for col in frame.columns
     }
     col_ttm = normalized.get('ttm') or normalized.get('term') or normalized.get('ptmyear')
@@ -893,9 +896,19 @@ def _resolve_bond_signal_columns(frame: pd.DataFrame):
     )
     col_carry_3m = normalized.get('carry3mbp') or normalized.get('carry3m')
     col_roll_3m = normalized.get('roll3mbp') or normalized.get('roll3m')
+    col_cr3m = (
+        normalized.get('cr3m')
+        or normalized.get('cr3mbp')
+        or normalized.get('carryroll3m')
+        or normalized.get('carryroll3mbp')
+        or normalized.get('carryroll')
+        or normalized.get('carry')
+        or normalized.get('bondcarry')
+    )
     col_carry = (
         normalized.get('cr3mbp')
         or normalized.get('carryroll3m')
+        or normalized.get('carryroll3mbp')
         or normalized.get('carryroll')
         or normalized.get('carry')
         or normalized.get('bondcarry')
@@ -913,6 +926,7 @@ def _resolve_bond_signal_columns(frame: pd.DataFrame):
         'mid': col_mid,
         'bid': col_bid,
         'ofr': col_ofr,
+        'cr3m': col_cr3m,
         'carry_3m': col_carry_3m,
         'roll_3m': col_roll_3m,
         'carry': col_carry,
@@ -1048,6 +1062,7 @@ def _build_bond_signal_cards(bond_type: str):
     col_mid = columns.get('mid')
     col_bid = columns.get('bid')
     col_ofr = columns.get('ofr')
+    col_cr3m = columns.get('cr3m')
     col_carry_3m = columns.get('carry_3m')
     col_roll_3m = columns.get('roll_3m')
     col_carry = columns.get('carry')
@@ -1062,14 +1077,16 @@ def _build_bond_signal_cards(bond_type: str):
         ) / 2.0
         columns['mid'] = '__mid_price__'
         col_mid = '__mid_price__'
+    if col_cr3m and col_cr3m in frame.columns:
+        frame[col_cr3m] = pd.to_numeric(frame[col_cr3m], errors='coerce')
     if col_carry_3m and col_carry_3m in frame.columns:
         frame[col_carry_3m] = pd.to_numeric(frame[col_carry_3m], errors='coerce')
     if col_roll_3m and col_roll_3m in frame.columns:
         frame[col_roll_3m] = pd.to_numeric(frame[col_roll_3m], errors='coerce')
-    if col_carry_3m and col_roll_3m and col_carry_3m in frame.columns and col_roll_3m in frame.columns:
+    if (not col_cr3m or col_cr3m not in frame.columns) and col_carry_3m and col_roll_3m and col_carry_3m in frame.columns and col_roll_3m in frame.columns:
         frame['__cr_3m__'] = frame[col_carry_3m] + frame[col_roll_3m]
         columns['cr3m'] = '__cr_3m__'
-    elif col_carry and col_carry in frame.columns:
+    elif (not col_cr3m or col_cr3m not in frame.columns) and col_carry and col_carry in frame.columns:
         columns['cr3m'] = col_carry
     if col_carry and col_carry in frame.columns:
         frame[col_carry] = pd.to_numeric(frame[col_carry], errors='coerce')
