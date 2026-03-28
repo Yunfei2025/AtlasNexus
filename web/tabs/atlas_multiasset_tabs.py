@@ -7,7 +7,7 @@ for use within the AtlasNexus Daily application.
 from __future__ import annotations
 
 import dash
-from dash import dcc, html, dash_table, ALL
+from dash import dcc, html, dash_table, ALL, Patch
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -518,45 +518,6 @@ def build_multiasset_factor_layout():
 
         dcc.Graph(id='factor-history-chart'),
 
-        # ── Factor Model Signals Panel ────────────────────────────────────
-        html.Div([
-            html.H5("📡 Factor Model Signals",
-                     style={'color': THEME['text_main'], 'marginBottom': '10px'}),
-            html.P(
-                "Live signal buckets from the factor prediction engine.  "
-                "Each risk factor is mapped to a directional bucket that drives "
-                "risk-budget scalars for the Portfolio tab.",
-                style={'color': THEME['text_sub'], 'fontSize': '12px',
-                       'marginBottom': '15px'}),
-            html.Div([
-                html.Button(
-                    "Refresh Signals",
-                    id='refresh-factor-signals-btn',
-                    n_clicks=0,
-                    style={
-                        'backgroundColor': THEME['accent'],
-                        'color': 'white', 'padding': '5px 15px',
-                        'border': 'none', 'borderRadius': '4px',
-                        'cursor': 'pointer', 'fontWeight': 'bold',
-                        'marginRight': '15px',
-                    }),
-                html.Span(id='factor-signals-status',
-                          style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-            ], style={'marginBottom': '15px'}),
-            dcc.Loading(
-                id='loading-factor-signals',
-                type='default',
-                children=html.Div(id='factor-signals-table-container'),
-            ),
-        ], style={
-            'backgroundColor': THEME['bg_card'], 'padding': '20px',
-            'borderRadius': '5px',
-            'border': f'1px solid {THEME["table_header"]}',
-            'marginTop': '20px',
-        }),
-        # Store for the latest signal snapshot (consumed by Portfolio tab)
-        dcc.Store(id='factor-signals-snapshot-store', data={}),
-
     ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px', 'borderRadius': '5px', 'margin': '10px'})
 
 
@@ -571,8 +532,8 @@ def build_multiasset_portfolio_layout():
         
     initial_pool = []
     initial_n_clicks = 0
-    initial_capital = 100
-    initial_unit = 'million'
+    initial_capital = 10
+    initial_unit = 'billion'
     
     if last_run_data:
         if 'asset_pool' in last_run_data:
@@ -805,7 +766,46 @@ def build_multiasset_portfolio_layout():
             ], style={'display': 'flex'}),
             
         ], style={'backgroundColor': THEME['bg_card'], 'marginBottom': '20px', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '8px'}),
-        
+
+        # ── Factor Model Signals Panel ────────────────────────────────────
+        html.Div([
+            html.H5("📡 Factor Model Signals",
+                    style={'color': THEME['text_main'], 'marginBottom': '10px'}),
+            html.P(
+                "Live signal buckets from the factor prediction engine. "
+                "Each risk factor is mapped to a directional bucket that drives "
+                "risk-budget scalars for Portfolio allocation.",
+                style={'color': THEME['text_sub'], 'fontSize': '12px',
+                       'marginBottom': '15px'}),
+            html.Div([
+                html.Button(
+                    "Refresh Signals",
+                    id='refresh-factor-signals-btn',
+                    n_clicks=0,
+                    style={
+                        'backgroundColor': THEME['accent'],
+                        'color': 'white', 'padding': '5px 15px',
+                        'border': 'none', 'borderRadius': '4px',
+                        'cursor': 'pointer', 'fontWeight': 'bold',
+                        'marginRight': '15px',
+                    }),
+                html.Span(id='factor-signals-status',
+                          style={'color': THEME['text_sub'], 'fontSize': '12px'}),
+            ], style={'marginBottom': '15px'}),
+            dcc.Loading(
+                id='loading-factor-signals',
+                type='default',
+                children=html.Div(id='factor-signals-table-container'),
+            ),
+        ], style={
+            'backgroundColor': THEME['bg_card'], 'padding': '20px',
+            'borderRadius': '5px',
+            'border': f'1px solid {THEME["table_header"]}',
+            'marginBottom': '20px',
+        }),
+        # Store for the latest signal snapshot (consumed by Portfolio allocation)
+        dcc.Store(id='factor-signals-snapshot-store', data={}),
+
         # Portfolio Table Results
         html.Div([
             html.Div([
@@ -986,9 +986,35 @@ def _build_bond_signal_mini_table(df: pd.DataFrame, columns: dict, title: str, c
             elif col == col_cr3m and pd.notna(value):
                 value = f"{float(value):.2f}"
             elif col == col_z and pd.notna(value):
-                value = f"{float(value):.2f}"
+                value = round(float(value), 4)   # keep numeric for bar gradient
             formatted[display_cols_map.get(col, col)] = value
         records.append(formatted)
+
+    # ── Z-Score bar styles (center-anchored, green right / red left) ──────────
+    z_vals = pd.to_numeric(df[col_z], errors='coerce')
+    _pos_clr = "rgba(39,174,96,0.55)"
+    _neg_clr = "rgba(231,76,60,0.55)"
+    _max_abs = max(abs(z_vals.dropna()).max() if not z_vals.dropna().empty else 1.0, 0.1)
+    z_bar_styles: list[dict] = []
+    for _i, _v in enumerate(z_vals):
+        try:
+            _v = float(_v)
+        except (TypeError, ValueError):
+            continue
+        _norm = max(-1.0, min(1.0, _v / _max_abs))
+        _half = abs(_norm) * 50
+        if _norm >= 0:
+            _grad = (f"transparent 50%, "
+                     f"{_pos_clr} 50%, {_pos_clr} {50 + _half:.1f}%, "
+                     f"transparent {50 + _half:.1f}%")
+        else:
+            _grad = (f"transparent {50 - _half:.1f}%, "
+                     f"{_neg_clr} {50 - _half:.1f}%, {_neg_clr} 50%, "
+                     f"transparent 50%")
+        z_bar_styles.append({
+            "if": {"row_index": _i, "column_id": "Z-Score"},
+            "background": f"linear-gradient(to right, {_grad})",
+        })
 
     return html.Div([
         html.Div(title, style={
@@ -1002,7 +1028,12 @@ def _build_bond_signal_mini_table(df: pd.DataFrame, columns: dict, title: str, c
         dash_table.DataTable(
             data=records,
             columns=[
-                {'name': display_cols_map.get(col, col), 'id': display_cols_map.get(col, col)}
+                (
+                    {'name': display_cols_map.get(col, col), 'id': display_cols_map.get(col, col),
+                     'type': 'numeric', 'format': {'specifier': '.2f'}}
+                    if col == col_z else
+                    {'name': display_cols_map.get(col, col), 'id': display_cols_map.get(col, col)}
+                )
                 for col in valid_cols
             ],
             style_cell={
@@ -1023,6 +1054,7 @@ def _build_bond_signal_mini_table(df: pd.DataFrame, columns: dict, title: str, c
             },
             style_data_conditional=[
                 {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['table_row_even']},
+                *z_bar_styles,
             ],
             style_table={'overflowX': 'auto'},
         ),
@@ -2172,12 +2204,67 @@ def register_multiasset_callbacks(app):
                     type="date",
                     gridcolor=THEME['table_header']
                 ),
-                yaxis=dict(gridcolor=THEME['table_header']),
+                yaxis=dict(gridcolor=THEME['table_header'], autorange=True),
                 uirevision='constant'
             )
             return fig
         except Exception as e:
             return go.Figure().update_layout(title=f"Error plotting data: {str(e)}", template=THEME['chart_template'])
+
+    @app.callback(
+        Output('factor-history-chart', 'figure', allow_duplicate=True),
+        Input('factor-history-chart', 'relayoutData'),
+        State('factor-history-chart', 'figure'),
+        prevent_initial_call=True
+    )
+    def rescale_factor_history_yaxis(relayout_data, figure):
+        """Rescale y-axis to visible data when x-axis range changes via rangeselector."""
+        if not relayout_data or not figure:
+            raise dash.exceptions.PreventUpdate
+
+        x_start = relayout_data.get('xaxis.range[0]')
+        x_end   = relayout_data.get('xaxis.range[1]')
+
+        # Also handle autorange reset ("All" button)
+        if relayout_data.get('xaxis.autorange') is True:
+            patched = Patch()
+            patched['layout']['yaxis']['autorange'] = True
+            return patched
+
+        if x_start is None or x_end is None:
+            raise dash.exceptions.PreventUpdate
+
+        try:
+            t_start = pd.Timestamp(x_start)
+            t_end   = pd.Timestamp(x_end)
+        except Exception:
+            raise dash.exceptions.PreventUpdate
+
+        y_min, y_max = float('inf'), float('-inf')
+        for trace in figure.get('data', []):
+            xs = trace.get('x', [])
+            ys = trace.get('y', [])
+            for x_val, y_val in zip(xs, ys):
+                if y_val is None:
+                    continue
+                try:
+                    t = pd.Timestamp(x_val)
+                except Exception:
+                    continue
+                if t_start <= t <= t_end:
+                    if y_val < y_min:
+                        y_min = y_val
+                    if y_val > y_max:
+                        y_max = y_val
+
+        if y_min == float('inf') or y_max == float('-inf'):
+            raise dash.exceptions.PreventUpdate
+
+        padding = (y_max - y_min) * 0.05 if y_max != y_min else abs(y_max) * 0.05 or 0.5
+        patched = Patch()
+        patched['layout']['yaxis']['autorange'] = False
+        patched['layout']['yaxis']['range'] = [y_min - padding, y_max + padding]
+        return patched
 
     # 3.4 Factor Pool Counter and Store Updater
     @app.callback(
@@ -2710,6 +2797,10 @@ def register_multiasset_callbacks(app):
                 )
 
             # --- collect per-contract signals ----------------------------------
+            from factors.processing.loader import getDailyTS, ensure_returns_column
+            from factors.generator.factory import FactorCalculatorFactory
+            from factors.engine.predictor import predict_returns
+
             rf_signals: dict = {}  # risk_factor → signal Series
             for mf in model_files:
                 basename = os.path.basename(mf)
@@ -2718,8 +2809,23 @@ def register_multiasset_callbacks(app):
                 contract = parts[0] if parts else None
                 if contract not in CONTRACT_RISK_PROFILES:
                     continue
-                model = joblib.load(mf)
-                predictions = model.get('predictions')
+                artifact = joblib.load(mf)
+                trained_model  = artifact.get('trained_model', {})
+                selected_factors = artifact.get('selected_factors', [])
+                ticker = artifact.get('config', {}).get('ticker', contract)
+                if not trained_model or not selected_factors:
+                    continue
+                # Generate current-day predictions from live factor data
+                try:
+                    raw_data = getDailyTS(ticker)
+                    raw_data = ensure_returns_column(raw_data)
+                    factory  = FactorCalculatorFactory(raw_data)
+                    all_factors = factory.generate_factors()
+                    predictions = predict_returns(all_factors, trained_model, selected_factors)
+                    predictions = predictions.dropna()
+                    predictions = predictions[predictions != 0]
+                except Exception:
+                    continue
                 if predictions is None or (hasattr(predictions, 'empty') and predictions.empty):
                     continue
                 decomposed = decompose_signal_series(predictions, contract)
@@ -2731,7 +2837,7 @@ def register_multiasset_callbacks(app):
 
             if not rf_signals:
                 return (
-                    html.Div("Models loaded but no signal series found (check 'predictions' key in .joblib).",
+                    html.Div("No signal series could be computed from trained models.",
                              style={'color': THEME['text_sub']}),
                     "No signals",
                     {},

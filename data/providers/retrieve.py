@@ -4,6 +4,7 @@ Created on Mon Sep 18 22:47:31 2023
 
 @author: CMBC
 """
+import pandas as pd
 import pickle
 import datetime as dt
 from settings.general import DateConfig

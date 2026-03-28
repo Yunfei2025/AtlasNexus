@@ -369,7 +369,15 @@ class IRSRefresher:
 			'S3M_Forward': s3m_forwards
 		}, index=index_labels)
 		time_based_df.index.name = 'Term'
-		
+
+		# Save forward rate table so the web dashboard can read it without touching Dashboard.xlsm
+		try:
+			with open(os.path.join(DIR_INPUT, 'IRS-forward.pkl'), 'wb') as _f:
+				import pickle as _pickle
+				_pickle.dump(time_based_df, _f)
+		except Exception as _e:
+			logger.warning(f"Could not save IRS-forward.pkl: {_e}")
+
 		logger.info("Statistics computation completed")
 		return spreads, time_based_df
 

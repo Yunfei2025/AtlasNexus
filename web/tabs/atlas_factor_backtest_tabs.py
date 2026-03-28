@@ -18,6 +18,7 @@ from dash.exceptions import PreventUpdate
 
 from factors.config import config_manager
 from factors.engine.factor_engine import run_analysis
+from factors.processing.loader import getDailyTS
 
 # ── Theme (Atlas dark-blue palette) ─────────────────────────────────────────
 THEME = {
@@ -50,7 +51,15 @@ JOB_STATE: dict[str, dict[str, Any]] = {}
 
 def _default_dates() -> tuple[str, str]:
     date_config = config_manager.date_config
-    return date_config.day_data_start_date, date_config.day_data_end_date
+    end_date = date_config.day_data_end_date
+    try:
+        ticker = config_manager.model_config.ticker
+        data = getDailyTS(ticker)
+        if data is not None and not data.empty:
+            end_date = pd.Timestamp(data.index.max()).strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    return date_config.day_data_start_date, end_date
 
 
 def _start_job(start_date: str, end_date: str, ticker: str) -> str:

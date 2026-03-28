@@ -72,6 +72,11 @@ from web.tabs.atlas_trend_tabs import (
     register_trend_callbacks,
 )
 
+from web.tabs.atlas_market_data_tab import (
+    build_market_data_layout,
+    register_market_data_callbacks,
+)
+
 
 GRAPH_INTERVAL = int(os.environ.get("GRAPH_INTERVAL", 30 * 60_000))
 
@@ -106,6 +111,7 @@ register_alpha_callbacks(app)
 register_volatility_callbacks(app)
 register_factor_backtest_callbacks(app)
 register_trend_callbacks(app)
+register_market_data_callbacks(app)
 
 
 def build_header():
@@ -270,26 +276,22 @@ def build_tabs_panel():
                         value="factor",
                         vertical=True,
                         children=[
-                            dcc.Tab(label="FACTOR", value="factor", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="BOND", value="bond", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="BACKTEST", value="factor-model-bt", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="FUTURES", value="backtest-factor", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="FACTOR",    value="factor",            style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="PORTFOLIO", value="portfolio",         style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="REBALANCE", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="SURFACE", value="surface", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="TREND",   value="trend",   style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="BOND",      value="bond",              style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="BACKTEST",  value="factor-model-bt",   style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="FUTURES",   value="backtest-factor",   style=tab_style, selected_style=tab_selected_style),
                         ],
                         style={"height": "520px"},
                     ),
                     html.Div([
-                        html.Div(id="beta-factor-div",            children=build_multiasset_factor_layout(),    style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
-                        html.Div(id="beta-portfolio-div",         children=build_multiasset_portfolio_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-bond-div",              children=build_multiasset_bond_layout(),      style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-factor-div",            children=build_multiasset_factor_layout(),     style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
+                        html.Div(id="beta-portfolio-div",         children=build_multiasset_portfolio_layout(),  style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-bond-div",              children=build_multiasset_bond_layout(),       style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="beta-factor-model-bt-div",   children=build_factor_model_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-backtest-factor-div",   children=build_factor_backtest_layout(),      style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-backtest-portfolio-div",children=build_multiasset_backtest_layout(),  style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-surface-div",           children=build_surface_layout(),              style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-trend-div",             children=build_trend_layout(),                style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-backtest-factor-div",   children=build_factor_backtest_layout(),       style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(),  style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                     ], style={"position": "relative", "width": "100%", "minHeight": "500px"}),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
@@ -336,7 +338,34 @@ def build_tabs_panel():
     )
     
     risk_content = build_multiasset_risk_layout()
-    
+
+    market_content = html.Div(
+        [
+            html.H5("Market"),
+            html.Div(
+                [
+                    dcc.Tabs(
+                        id="an-market-subtabs",
+                        value="data",
+                        vertical=True,
+                        children=[
+                            dcc.Tab(label="DATA",    value="data",    style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="TREND",   value="trend",   style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="SURFACE", value="surface", style=tab_style, selected_style=tab_selected_style),
+                        ],
+                        style={"height": "520px"},
+                    ),
+                    html.Div([
+                        html.Div(id="market-data-div",    children=build_market_data_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
+                        html.Div(id="market-trend-div",   children=build_trend_layout(),        style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="market-surface-div", children=build_surface_layout(),      style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                    ], style={"position": "relative", "width": "100%", "minHeight": "500px"}),
+                ],
+                style={"display": "flex", "flexDirection": "row", "gap": "12px"},
+            ),
+        ]
+    )
+
     return html.Div(
         [
             # Shared stores for persisting content across tab switches
@@ -366,21 +395,23 @@ def build_tabs_panel():
                 [
                     dcc.Tabs(
                         id="an-tabs",
-                        value="run-center",
+                        value="market",
                         children=[
+                            dcc.Tab(label="Market",    value="market",     style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Beta Book",  value="beta",       style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Alpha Book", value="alpha",      style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Summary",    value="risk",       style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="Run Center", value="run-center", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Beta Book", value="beta", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Alpha Book", value="alpha", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Summary", value="risk", style=tab_style, selected_style=tab_selected_style),
                         ],
                         style=tabs_styles,
                     ),
                     # Pre-render all main tabs with absolute positioning to preserve state
                     html.Div([
-                        html.Div(id="run-center-div", children=run_center_content, style={"position": "relative", "display": "block"}),
-                        html.Div(id="beta-div", children=beta_content, style={"position": "relative", "display": "none"}),
-                        html.Div(id="alpha-div", children=alpha_content, style={"position": "relative", "display": "none"}),
-                        html.Div(id="risk-div", children=risk_content, style={"position": "relative", "display": "none"}),
+                        html.Div(id="market-div",     children=market_content,     style={"position": "relative", "display": "block"}),
+                        html.Div(id="beta-div",       children=beta_content,       style={"position": "relative", "display": "none"}),
+                        html.Div(id="alpha-div",      children=alpha_content,      style={"position": "relative", "display": "none"}),
+                        html.Div(id="risk-div",       children=risk_content,       style={"position": "relative", "display": "none"}),
+                        html.Div(id="run-center-div", children=run_center_content, style={"position": "relative", "display": "none"}),
                     ], style={"width": "100%"}),
                     dcc.Interval(id="an-interval", interval=5_000, n_intervals=0),
                 ],
@@ -494,22 +525,17 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt,
 
 
 @app.callback(
-    [Output("run-center-div", "style"),
+    [Output("market-div", "style"),
      Output("beta-div", "style"),
      Output("alpha-div", "style"),
-     Output("risk-div", "style")],
+     Output("risk-div", "style"),
+     Output("run-center-div", "style")],
     Input("an-tabs", "value"),
 )
 def _render_tab(tab):
     """Show/hide main tabs to preserve state."""
-    styles = {
-        "run-center": {"display": "block"} if tab == "run-center" else {"display": "none"},
-        "beta": {"display": "block"} if tab == "beta" else {"display": "none"},
-        "alpha": {"display": "block"} if tab == "alpha" else {"display": "none"},
-        "risk": {"display": "block"} if tab == "risk" else {"display": "none"},
-    }
-    
-    return styles["run-center"], styles["beta"], styles["alpha"], styles["risk"]
+    tabs = ["market", "beta", "alpha", "risk", "run-center"]
+    return tuple({"display": "block"} if tab == t else {"display": "none"} for t in tabs)
 
 
 @app.callback(
@@ -663,18 +689,32 @@ def _update_run_center(n, job_id):
 @app.callback(
     [Output("beta-factor-div", "style"),
      Output("beta-portfolio-div", "style"),
-    Output("beta-bond-div", "style"),
+     Output("beta-bond-div", "style"),
      Output("beta-factor-model-bt-div", "style"),
      Output("beta-backtest-factor-div", "style"),
-     Output("beta-backtest-portfolio-div", "style"),
-     Output("beta-surface-div", "style"),
-     Output("beta-trend-div", "style")],
+     Output("beta-backtest-portfolio-div", "style")],
     Input("an-beta-subtabs", "value"),
 )
 def _render_beta_subtabs(subtab: str):
     """Show/hide Beta Book subtabs to preserve state."""
     base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
-    keys = ["factor", "portfolio", "bond", "factor-model-bt", "backtest-factor", "backtest-portfolio", "surface", "trend"]
+    keys = ["factor", "portfolio", "bond", "factor-model-bt", "backtest-factor", "backtest-portfolio"]
+    return tuple(
+        {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
+        for k in keys
+    )
+
+
+@app.callback(
+    [Output("market-data-div",    "style"),
+     Output("market-trend-div",   "style"),
+     Output("market-surface-div", "style")],
+    Input("an-market-subtabs", "value"),
+)
+def _render_market_subtabs(subtab: str):
+    """Show/hide Market subtabs to preserve state."""
+    base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
+    keys = ["data", "trend", "surface"]
     return tuple(
         {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
         for k in keys

@@ -57,7 +57,6 @@ class RiskFactorLoader:
         
         # Commodity factors
         risk_factors = self._load_commodity_factors(risk_factors, macro_data)
-        print("Loaded risk factors:", risk_factors.columns.tolist())
         
         # Drop NaN values
         # risk_factors = risk_factors.dropna()

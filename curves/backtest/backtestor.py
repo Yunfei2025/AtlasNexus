@@ -119,7 +119,7 @@ class Backtestor:
         
         if self.btype in ['TBond', 'CBond', 'IRS']:
             # Use parallel implementation for curve initialization
-            print(f"� Using parallel curve initialization for {self.btype}")
+            print(f"Using parallel curve initialization for {self.btype}")
             manager = CurveManager(self.btype)
             
             # Add parallel processing to curve initialization

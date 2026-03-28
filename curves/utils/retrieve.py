@@ -190,7 +190,8 @@ def updateInstrumentDef():
                     bond_info['DeliveryPool'][t] = bond_info['DeliveryPool'][t].set_index('code')
                 _tickers = FuturesConfig.get_ticker_list()
                 bond_info['Bucket'] = {'NQ1': _tickers[:4], 'NQ2': _tickers[4:8], 'NQ3': _tickers[8:12]}
-                bond_info['Def'] = _wss(_tickers, "lasttrade_date,close")
+                bond_info['Def'] = _wss(_tickers, "lasttrade_date,close,tbf_ctd02,tbf_irr02,tbf_fytm02", 
+                                        "futurePriceType=1;bondTradingVenue=1;tradeDate="+dps)
             else:
                 from curves.utils.generator_utils import get_mtime_date
                 def_file = DIR_INPUT / (btype + "-InstrumentInfo.pkl")

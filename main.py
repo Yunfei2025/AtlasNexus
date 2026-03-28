@@ -88,8 +88,7 @@ def run_atlasnexus_daily_app():
         import webbrowser
         from threading import Timer
 
-        logger.info("🚀 Starting AtlasNexus Daily Console")
-        logger.info("Starting server on 127.0.0.1:8080...")
+        logger.info("Starting AtlasNexus Daily Console")
         logger.info("Web server starting... Press Ctrl+C to stop and return to main menu")
 
         init_status = run_initialise()
@@ -100,7 +99,7 @@ def run_atlasnexus_daily_app():
         try:
             atlasnexus_daily.app.run(host="127.0.0.1", port=8080, debug=False, use_reloader=False)
         except KeyboardInterrupt:
-            logger.info("👋 AtlasNexus Daily Console stopped by user")
+            logger.info("AtlasNexus Daily Console stopped by user")
         except Exception as e:
             logger.error(f"❌ AtlasNexus Daily Console error: {e}")
 
@@ -145,7 +144,7 @@ def main():
     args = parser.parse_args(sys.argv[1:])
 
     logger.info("=" * 60)
-    logger.info("🏦 FIEngine - Financial Engineering Platform")
+    logger.info(" AtlasNexus - Systematic Investment Platform")
     logger.info("=" * 60)
 
     # Default: start the main daily console.
