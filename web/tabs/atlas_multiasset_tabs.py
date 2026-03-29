@@ -581,11 +581,11 @@ def build_multiasset_portfolio_layout():
             # Section 1: Configuration Header & Capital
             html.Div([
                 html.Div([
-                    html.H5("Configuration", style={'margin': '0', 'color': THEME['text_main'], 'fontSize': '16px'}),
+                    html.H5("Configuration", style={'margin': '0', 'color': THEME['text_main'], 'fontSize': '14px'}),
                 ], style={'flex': '1'}),
                 
                 html.Div([
-                    html.Label("Total Capital:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
+                    html.Label("Total Capital:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '12px', 'color': THEME['text_main']}),
                     dcc.Input(
                         id='capital-input',
                         type='number',
@@ -600,12 +600,12 @@ def build_multiasset_portfolio_layout():
                         ],
                         value=initial_unit,
                         clearable=False,
-                        style={'width': '100px', 'marginRight': '5px', 'fontSize': '13px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
+                        style={'width': '100px', 'marginRight': '5px', 'fontSize': '12px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
                     ),
-                    html.Span("CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
+                    html.Span("CNY", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginRight': '20px'}),
                     
                     # Risk Factor Model Selection
-                    html.Label("Model:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
+                    html.Label("Model:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '12px', 'color': THEME['text_main']}),
                     dcc.RadioItems(
                         id='risk-model-selector',
                         options=[
@@ -614,130 +614,109 @@ def build_multiasset_portfolio_layout():
                         ],
                         value='deterministic',
                         inline=True,
-                        labelStyle={'color': THEME['text_main'], 'marginRight': '15px'},
-                        inputStyle={'marginRight': '5px'},
-                        style={'fontSize': '13px'}
+                        labelStyle={'color': THEME['text_main'], 'marginRight': '12px'},
+                        inputStyle={'marginRight': '4px'},
+                        style={'fontSize': '12px'}
                     ),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
             ], style={'display': 'flex', 'alignItems': 'center', 'padding': '15px 20px', 'backgroundColor': THEME['bg_input'], 'borderBottom': f'1px solid {THEME["table_header"]}', 'borderRadius': '8px 8px 0 0'}),
             
-            # Section 2: Main Content (Selection + Pool + Action)
+            # Section 2: Two-column — sidebar (asset controls) | Risk Budgets (primary)
             html.Div([
-                # Column 1: Asset Selection
+                # ── Left sidebar: Asset Selection + Pool stacked ──────────────────
                 html.Div([
-                    html.H6("Asset Selection", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '15px'}),
-                    
-                    # Step 1: Type
+                    # Asset Selection (compact)
                     html.Div([
-                        html.Label("Type:", style={'fontWeight': 'bold', 'width': '70px', 'fontSize': '13px', 'color': THEME['text_main']}),
-                        dcc.RadioItems(
-                            id='asset-type-selector',
-                            options=[
-                                {'label': ' Rates', 'value': 'Rates'},
-                                {'label': ' Spread', 'value': 'Spread'},
-                                {'label': ' Commodities', 'value': 'Commodities'},
-                            ],
-                            value=None,
-                            inline=True,
-                            labelStyle={'color': THEME['text_main']},
-                            inputStyle={'marginRight': '5px', 'marginLeft': '10px'},
-                            style={'fontSize': '13px'}
-                        ),
-                    ], style={'marginBottom': '12px', 'display': 'flex', 'alignItems': 'center'}),
-                    
-                    # Step 2: Universe (Rates & Spread)
-                    html.Div([
-                        html.Label("Universe:", style={'fontWeight': 'bold', 'width': '70px', 'fontSize': '13px', 'color': THEME['text_main']}),
-                        dcc.Dropdown(
-                            id='universe-selector',
-                            options=[],
-                            value=None,
-                            placeholder="Select universe...",
-                            clearable=True,
-                            style={'width': '100%', 'fontSize': '13px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
-                        ),
-                    ], id='universe-selection-row', style={'display': 'none', 'marginBottom': '12px', 'alignItems': 'center'}),
-                    
-                    # Step 3: Sectors (Rates & Spread)
-                    html.Div([
-                        html.Label("Sector:", style={'fontWeight': 'bold', 'width': '70px', 'fontSize': '13px', 'alignSelf': 'flex-start', 'marginTop': '5px', 'color': THEME['text_main']}),
+                        html.H6("Asset Selection", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '10px', 'fontSize': '13px'}),
                         html.Div([
-                            dcc.Checklist(
-                                id='sector-selector',
+                            html.Label("Type:", style={'fontWeight': 'bold', 'width': '55px', 'fontSize': '12px', 'color': THEME['text_main']}),
+                            dcc.RadioItems(
+                                id='asset-type-selector',
                                 options=[
-                                    {'label': ' 1Y', 'value': '1Y'},
-                                    {'label': ' 2Y', 'value': '2Y'},
-                                    {'label': ' 5Y', 'value': '5Y'},
-                                    {'label': ' 10Y', 'value': '10Y'},
-                                    {'label': ' 30Y', 'value': '30Y'},
+                                    {'label': ' Rates', 'value': 'Rates'},
+                                    {'label': ' Spread', 'value': 'Spread'},
+                                    {'label': ' Cmdty', 'value': 'Commodities'},
                                 ],
-                                value=[],
+                                value=None,
                                 inline=True,
-                                labelStyle={'color': THEME['text_main']},
-                                inputStyle={'marginRight': '3px', 'marginLeft': '8px'},
-                                style={'fontSize': '13px', 'marginBottom': '8px'}
+                                labelStyle={'color': THEME['text_main'], 'fontSize': '12px'},
+                                inputStyle={'marginRight': '4px', 'marginLeft': '6px'},
+                                style={'fontSize': '12px'},
                             ),
-                            html.Button(
-                                'Add to Pool',
-                                id='add-to-pool-btn',
-                                n_clicks=0,
-                                style={'backgroundColor': '#2ecc71', 'color': 'white', 'padding': '4px 12px', 'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontSize': '12px'}
-                            ),
-                        ], style={'flex': '1'})
-                    ], id='sector-selection-row', style={'display': 'none', 'marginBottom': '12px', 'alignItems': 'flex-start'}),
-                    
-                    # Step 2: Commodities
-                    html.Div([
-                        html.Label("Items:", style={'fontWeight': 'bold', 'width': '70px', 'fontSize': '13px', 'alignSelf': 'flex-start', 'marginTop': '5px', 'color': THEME['text_main']}),
+                        ], style={'marginBottom': '8px', 'display': 'flex', 'alignItems': 'center'}),
                         html.Div([
-                            dcc.Checklist(
-                                id='commodities-selector',
-                                options=[
-                                    {'label': ' Gold', 'value': 'Gold'},
-                                    {'label': ' Aluminium', 'value': 'Aluminium'},
-                                    {'label': ' Copper', 'value': 'Copper'},
-                                    {'label': ' Crude Oil', 'value': 'Crude_Oil'},
-                                ],
-                                value=[],
-                                inline=True,
-                                labelStyle={'color': THEME['text_main']},
-                                inputStyle={'marginRight': '3px', 'marginLeft': '8px'},
-                                style={'fontSize': '13px', 'marginBottom': '8px'}
+                            html.Label("Universe:", style={'fontWeight': 'bold', 'width': '55px', 'fontSize': '12px', 'color': THEME['text_main']}),
+                            dcc.Dropdown(
+                                id='universe-selector',
+                                options=[], value=None,
+                                placeholder="Select...", clearable=True,
+                                style={'width': '100%', 'fontSize': '12px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
                             ),
-                            html.Button(
-                                'Add to Pool',
-                                id='add-commodities-btn',
-                                n_clicks=0,
-                                style={'backgroundColor': '#f39c12', 'color': 'white', 'padding': '4px 12px', 'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontSize': '12px'}
-                            ),
-                        ], style={'flex': '1'})
-                    ], id='commodities-confirm-row', style={'display': 'none', 'marginBottom': '12px', 'alignItems': 'flex-start'}),
-                    
-                ], style={'width': '40%', 'padding': '20px', 'borderRight': f'1px solid {THEME["table_header"]}'}),
-                
-                # Column 2: Asset Pool
+                        ], id='universe-selection-row', style={'display': 'none', 'marginBottom': '8px', 'alignItems': 'center'}),
+                        html.Div([
+                            html.Label("Sector:", style={'fontWeight': 'bold', 'width': '55px', 'fontSize': '12px', 'alignSelf': 'flex-start', 'marginTop': '4px', 'color': THEME['text_main']}),
+                            html.Div([
+                                dcc.Checklist(
+                                    id='sector-selector',
+                                    options=[
+                                        {'label': ' 1Y', 'value': '1Y'},
+                                        {'label': ' 2Y', 'value': '2Y'},
+                                        {'label': ' 5Y', 'value': '5Y'},
+                                        {'label': ' 10Y', 'value': '10Y'},
+                                        {'label': ' 30Y', 'value': '30Y'},
+                                    ],
+                                    value=[], inline=True,
+                                    labelStyle={'color': THEME['text_main'], 'fontSize': '12px'},
+                                    inputStyle={'marginRight': '2px', 'marginLeft': '5px'},
+                                    style={'fontSize': '12px', 'marginBottom': '6px'},
+                                ),
+                                html.Button('Add to Pool', id='add-to-pool-btn', n_clicks=0,
+                                    style={'backgroundColor': '#2ecc71', 'color': 'white', 'padding': '3px 10px', 'border': 'none', 'borderRadius': '3px', 'cursor': 'pointer', 'fontSize': '12px'}),
+                            ], style={'flex': '1'}),
+                        ], id='sector-selection-row', style={'display': 'none', 'marginBottom': '8px', 'alignItems': 'flex-start'}),
+                        html.Div([
+                            html.Label("Items:", style={'fontWeight': 'bold', 'width': '55px', 'fontSize': '12px', 'alignSelf': 'flex-start', 'marginTop': '4px', 'color': THEME['text_main']}),
+                            html.Div([
+                                dcc.Checklist(
+                                    id='commodities-selector',
+                                    options=[
+                                        {'label': ' Gold', 'value': 'Gold'},
+                                        {'label': ' Alum', 'value': 'Aluminium'},
+                                        {'label': ' Copper', 'value': 'Copper'},
+                                        {'label': ' Oil', 'value': 'Crude_Oil'},
+                                    ],
+                                    value=[], inline=True,
+                                    labelStyle={'color': THEME['text_main'], 'fontSize': '12px'},
+                                    inputStyle={'marginRight': '2px', 'marginLeft': '5px'},
+                                    style={'fontSize': '12px', 'marginBottom': '6px'},
+                                ),
+                                html.Button('Add to Pool', id='add-commodities-btn', n_clicks=0,
+                                    style={'backgroundColor': '#f39c12', 'color': 'white', 'padding': '3px 10px', 'border': 'none', 'borderRadius': '3px', 'cursor': 'pointer', 'fontSize': '12px'}),
+                            ], style={'flex': '1'}),
+                        ], id='commodities-confirm-row', style={'display': 'none', 'marginBottom': '8px', 'alignItems': 'flex-start'}),
+                    ], style={'padding': '12px 14px', 'borderBottom': f'1px solid {THEME["table_header"]}'}),
+                    # ── Asset Pool ────────────────────────────────────────────────────
+                    html.Div([
+                        html.Div([
+                            html.H6("Asset Pool", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '0', 'fontSize': '13px'}),
+                            html.Span(id='pool-count', children=pool_count_text, style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginLeft': '5px'}),
+                            html.Button('Clear', id='clear-pool-btn', n_clicks=0,
+                                style={'backgroundColor': THEME['danger'], 'color': 'white', 'padding': '2px 7px', 'border': 'none', 'borderRadius': '3px', 'cursor': 'pointer', 'fontSize': '12px', 'marginLeft': 'auto'}),
+                        ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '8px'}),
+                        html.Div(
+                            id='asset-pool-display', children=pool_display,
+                            style={'height': '180px', 'overflowY': 'auto', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '4px', 'padding': '6px', 'backgroundColor': THEME['bg_input']},
+                        ),
+                    ], style={'padding': '12px 14px'}),
+                ], style={'width': '28%', 'borderRight': f'1px solid {THEME["table_header"]}', 'display': 'flex', 'flexDirection': 'column'}),
+
+                # ── Right main: Risk Budgets (primary) ───────────────────────────────
                 html.Div([
                     html.Div([
-                        html.H6("Asset Pool", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '0'}),
-                        html.Span(id='pool-count', children=pool_count_text, style={'color': THEME['text_sub'], 'fontSize': '13px', 'marginLeft': '5px'}),
-                        html.Button(
-                            'Clear',
-                            id='clear-pool-btn',
-                            n_clicks=0,
-                            style={'backgroundColor': THEME['danger'], 'color': 'white', 'padding': '2px 8px', 'border': 'none', 'borderRadius': '3px', 'cursor': 'pointer', 'fontSize': '11px', 'marginLeft': 'auto'}
-                        )
-                    ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
-                    
-                    html.Div(
-                        id='asset-pool-display',
-                        children=pool_display,
-                        style={'height': '150px', 'overflowY': 'auto', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '4px', 'padding': '8px', 'backgroundColor': THEME['bg_input']}
-                    ),
-                ], style={'width': '30%', 'padding': '20px', 'borderRight': f'1px solid {THEME["table_header"]}'}),
-                
-                # Column 3: Risk Budgets
-                html.Div([
-                    html.H6("Risk Budgets", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '6px'}),
+                        html.H6("Risk Budgets", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '0', 'fontSize': '13px', 'fontWeight': 'bold'}),
+                        html.Span("Exposure = RP Max × Coeff  ·  Vol from EWMA factor risk decomposition",
+                                  style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '12px'}),
+                    ], style={'display': 'flex', 'alignItems': 'baseline', 'marginBottom': '8px'}),
                     # Hidden toggle kept for callback compatibility
                     html.Div([
                         dcc.Checklist(
@@ -749,56 +728,65 @@ def build_multiasset_portfolio_layout():
                         ),
                         html.Span(id='factor-signals-toggle-status', style={'color': THEME['text_sub'], 'fontSize': '11px'}),
                     ], style={'display': 'none'}),
-                    # Column headers
+                    # Column headers: Factor | Vol% ann | RP Max | Coeff | Exposure
                     html.Div([
-                        html.Span("Factor", style={'color': THEME['text_sub'], 'fontSize': '10px', 'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0'}),
-                        html.Span("RP Max", style={'color': THEME['text_sub'], 'fontSize': '10px', 'width': '54px', 'textAlign': 'right', 'flexShrink': '0'}),
-                        html.Span("Coeff", style={'color': THEME['text_sub'], 'fontSize': '10px', 'width': '44px', 'textAlign': 'center', 'flexShrink': '0'}),
-                        html.Span("Exposure", style={'color': THEME['text_sub'], 'fontSize': '10px', 'flex': '1', 'textAlign': 'right'}),
-                    ], style={'display': 'flex', 'alignItems': 'center', 'padding': '0 8px 4px 8px', 'borderBottom': f'1px solid {THEME["table_header"]}', 'marginBottom': '4px', 'gap': '4px'}),
+                        html.Span("Factor",   style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0'}),
+                        html.Span("Vol %ann", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '54px', 'textAlign': 'right', 'flexShrink': '0'}),
+                        html.Span("RP Max",   style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '54px', 'textAlign': 'right', 'flexShrink': '0'}),
+                        html.Span("Coeff",    style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '44px', 'textAlign': 'center', 'flexShrink': '0'}),
+                        html.Span("Exposure", style={'color': THEME['text_sub'], 'fontSize': '11px', 'flex': '1', 'textAlign': 'right'}),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'padding': '0 8px 4px 8px',
+                              'borderBottom': f'1px solid {THEME["table_header"]}', 'marginBottom': '4px', 'gap': '4px'}),
                     html.Div(
                         id='risk-budget-container',
                         children=[html.Div("Add assets to see risk factors", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px'})] if not initial_pool else [],
-                        style={'maxHeight': '190px', 'overflowY': 'auto', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '4px', 'padding': '6px 8px', 'backgroundColor': THEME['bg_input']}
+                        style={'maxHeight': '280px', 'overflowY': 'auto',
+                               'border': f'1px solid {THEME["table_header"]}',
+                               'borderRadius': '4px', 'padding': '6px 8px',
+                               'backgroundColor': THEME['bg_input']},
                     ),
-                    html.Div("Exposure = RP Max × Factor Coeff (editable). Run analysis to refresh RP Max.", style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '4px', 'textAlign': 'center'})
-                ], style={'width': '30%', 'padding': '20px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '0 0 8px 0'}),
+                    html.Div("Run analysis to update RP Max and Vol from latest risk decomposition.",
+                             style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '5px', 'textAlign': 'center'}),
+                ], style={'flex': '1', 'padding': '16px 20px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '0 0 8px 0'}),
             ], style={'display': 'flex'}),
-            
+
         ], style={'backgroundColor': THEME['bg_card'], 'marginBottom': '20px', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '8px'}),
 
-        # ── Factor Model Signals Panel ────────────────────────────────────
-        html.Div([
-            html.H5("📡 Factor Model Signals",
-                    style={'color': THEME['text_main'], 'marginBottom': '10px'}),
-            html.P(
-                "Live signal buckets from the factor prediction engine. "
-                "Each risk factor is mapped to a directional bucket that drives "
-                "risk-budget scalars for Portfolio allocation.",
-                style={'color': THEME['text_sub'], 'fontSize': '12px',
-                       'marginBottom': '15px'}),
+        # ── Factor Model Signals Panel (collapsible) ─────────────────────────
+        html.Details([
+            html.Summary([
+                html.Span("📡 Factor Model Signals",
+                          style={'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '13px'}),
+                html.Span("  ·  expand to refresh live signal buckets from the factor prediction engine",
+                          style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+            ], style={'padding': '10px 16px', 'cursor': 'pointer', 'listStyleType': 'none',
+                      'WebkitAppearance': 'none', 'MozAppearance': 'none',
+                      'backgroundColor': THEME['bg_input'], 'borderRadius': '5px',
+                      'userSelect': 'none'}),
             html.Div([
-                html.Button(
-                    "Refresh Signals",
-                    id='refresh-factor-signals-btn',
-                    n_clicks=0,
-                    style={
-                        'backgroundColor': THEME['accent'],
-                        'color': 'white', 'padding': '5px 15px',
-                        'border': 'none', 'borderRadius': '4px',
-                        'cursor': 'pointer', 'fontWeight': 'bold',
-                        'marginRight': '15px',
-                    }),
-                html.Span(id='factor-signals-status',
-                          style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-            ], style={'marginBottom': '15px'}),
-            dcc.Loading(
-                id='loading-factor-signals',
-                type='default',
-                children=html.Div(id='factor-signals-table-container'),
-            ),
+                html.Div([
+                    html.Button(
+                        "Refresh Signals",
+                        id='refresh-factor-signals-btn',
+                        n_clicks=0,
+                        style={
+                            'backgroundColor': THEME['accent'],
+                            'color': 'white', 'padding': '5px 15px',
+                            'border': 'none', 'borderRadius': '4px',
+                            'cursor': 'pointer', 'fontWeight': 'bold',
+                            'fontSize': '12px', 'marginRight': '15px',
+                        }),
+                    html.Span(id='factor-signals-status',
+                              style={'color': THEME['text_sub'], 'fontSize': '12px'}),
+                ], style={'marginBottom': '12px'}),
+                dcc.Loading(
+                    id='loading-factor-signals',
+                    type='default',
+                    children=html.Div(id='factor-signals-table-container'),
+                ),
+            ], style={'padding': '14px 16px', 'borderTop': f'1px solid {THEME["table_header"]}'}),
         ], style={
-            'backgroundColor': THEME['bg_card'], 'padding': '20px',
+            'backgroundColor': THEME['bg_card'],
             'borderRadius': '5px',
             'border': f'1px solid {THEME["table_header"]}',
             'marginBottom': '20px',
@@ -809,19 +797,19 @@ def build_multiasset_portfolio_layout():
         # Portfolio Table Results
         html.Div([
             html.Div([
-                 html.H4("Portfolio Allocation Results", style={'color': THEME['text_main'], 'marginBottom': '15px', 'flex': '1'}),
+                 html.H4("Portfolio Allocation Results", style={'color': THEME['text_main'], 'fontSize': '15px', 'marginBottom': '10px', 'flex': '1'}),
                  html.Div([
                         html.Button(
                             'RUN ANALYSIS',
                             id='run-button',
                             n_clicks=initial_n_clicks,
-                            style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '8px 20px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold'}
+                            style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '8px 20px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '13px', 'fontWeight': 'bold'}
                         ),
                  ], style={'marginLeft': '20px'})
             ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between'}),
             
             html.Div([
-                html.Div(id='status-message', style={'fontSize': '13px', 'color': THEME['text_main'], 'marginRight': '20px'}),
+                html.Div(id='status-message', style={'fontSize': '12px', 'color': THEME['text_main'], 'marginRight': '20px'}),
                 html.Div(id='timestamp-display', style={'color': THEME['text_sub'], 'fontSize': '11px'})
             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px', 'justifyContent': 'flex-end'}),
 
@@ -1613,6 +1601,212 @@ def build_multiasset_backtest_layout():
     ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px', 'borderRadius': '5px', 'margin': '10px'})
 
 
+def build_risk_factor_backtest_layout():
+    """Build the layout for the Risk Factor Backtest tab (BACKTEST subtab in Beta Book).
+
+    Maps PORTFOLIO-tab risk factors to yield/price series, runs close-only
+    technical strategies (MA, Bollinger, Momentum, Z-Score), and persists PnL.
+    """
+    from multiasset.factor_backtest import STRATEGY_REGISTRY
+
+    all_factor_options = [
+        # IR
+        {'label': 'IRDL.CN (China Level)',   'value': 'IRDL.CN'},
+        {'label': 'IRDL.US (US Level)',       'value': 'IRDL.US'},
+        {'label': 'IRDL.DE (Europe Level)',   'value': 'IRDL.DE'},
+        {'label': 'IRDL.JP (Japan Level)',    'value': 'IRDL.JP'},
+        {'label': 'IRDL.UK (UK Level)',       'value': 'IRDL.UK'},
+        {'label': 'IRSL.CN (China Slope)',    'value': 'IRSL.CN'},
+        {'label': 'IRSL.US (US Slope)',       'value': 'IRSL.US'},
+        {'label': 'IRCV.CN (China Curvature)','value': 'IRCV.CN'},
+        # Spread
+        {'label': 'SPDL.IRS (IRS Level)',     'value': 'SPDL.IRS'},
+        {'label': 'SPSL.IRS (IRS Slope)',     'value': 'SPSL.IRS'},
+        {'label': 'SPDL.CDB (CDB Level)',     'value': 'SPDL.CDB'},
+        {'label': 'SPSL.CDB (CDB Slope)',     'value': 'SPSL.CDB'},
+        {'label': 'SPDL.ICP (ICP Level)',     'value': 'SPDL.ICP'},
+        # FX
+        {'label': 'FXDL.USDCNY',             'value': 'FXDL.USDCNY'},
+        {'label': 'FXDL.EURCNY',             'value': 'FXDL.EURCNY'},
+        # Commodity
+        {'label': 'CMDL.AU (Gold)',           'value': 'CMDL.AU'},
+        {'label': 'CMDL.CU (Copper)',         'value': 'CMDL.CU'},
+        {'label': 'CMDL.AL (Aluminium)',      'value': 'CMDL.AL'},
+        {'label': 'CMDL.SC (Crude Oil)',      'value': 'CMDL.SC'},
+    ]
+
+    strategy_options = [{'label': s, 'value': s} for s in STRATEGY_REGISTRY]
+    default_factors = ['IRDL.CN', 'IRSL.CN', 'SPDL.CDB', 'FXDL.USDCNY']
+
+    return html.Div([
+        html.H4("Risk Factor Backtest",
+                 style={'color': THEME['text_main'], 'marginBottom': '6px'}),
+        html.P("Backtest technical strategies on risk factors from the PORTFOLIO tab. "
+               "Yield factors use duration-adjusted returns; FX/Commodity use price returns.",
+               style={'color': THEME['text_sub'], 'fontSize': '12px',
+                      'marginBottom': '16px', 'fontStyle': 'italic'}),
+
+        # ── Row 1: Factor selection ─────────────────────────────────────
+        html.Div([
+            html.Div([
+                html.Label("Factors:", style={'fontWeight': 'bold', 'marginRight': '10px',
+                                              'color': THEME['text_main'], 'fontSize': '13px'}),
+                dcc.Dropdown(
+                    id='rfbt-factor-selector',
+                    options=all_factor_options,
+                    value=default_factors,
+                    multi=True,
+                    placeholder="Select factors…",
+                    style={'flex': '1', 'minWidth': '360px',
+                           'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center', 'flex': '1'}),
+
+            html.Div([
+                html.Label("Strategy:", style={'fontWeight': 'bold', 'marginRight': '10px',
+                                               'color': THEME['text_main'], 'fontSize': '13px'}),
+                dcc.Dropdown(
+                    id='rfbt-strategy-selector',
+                    options=strategy_options,
+                    value='MA',
+                    clearable=False,
+                    style={'width': '140px',
+                           'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center'}),
+        ], style={'display': 'flex', 'gap': '20px', 'flexWrap': 'wrap',
+                  'marginBottom': '12px'}),
+
+        # ── Row 2: Date range & strategy params ─────────────────────────
+        html.Div([
+            html.Div([
+                html.Label("Period:", style={'fontWeight': 'bold', 'marginRight': '10px',
+                                             'color': THEME['text_main'], 'fontSize': '13px'}),
+                dcc.DatePickerRange(
+                    id='rfbt-date-range',
+                    min_date_allowed=datetime(2015, 1, 1).date(),
+                    max_date_allowed=datetime.now().date(),
+                    start_date=datetime(2023, 1, 1).date(),
+                    end_date=datetime.now().date(),
+                    display_format='YYYY-MM-DD',
+                    style={'backgroundColor': THEME['bg_input']},
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center'}),
+
+            # MA params (shown/hidden dynamically)
+            html.Div(id='rfbt-ma-params', children=[
+                html.Label("Short:", style={'fontWeight': 'bold', 'marginRight': '4px',
+                                            'color': THEME['text_main'], 'fontSize': '12px'}),
+                dcc.Input(id='rfbt-ma-short', type='number', value=10, min=2,
+                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
+                                 'borderRadius': '4px', 'border': '1px solid #444',
+                                 'backgroundColor': '#fff', 'color': '#000'}),
+                html.Label("Long:", style={'fontWeight': 'bold', 'marginRight': '4px',
+                                           'color': THEME['text_main'], 'fontSize': '12px'}),
+                dcc.Input(id='rfbt-ma-long', type='number', value=30, min=5,
+                          style={'width': '55px', 'padding': '4px',
+                                 'borderRadius': '4px', 'border': '1px solid #444',
+                                 'backgroundColor': '#fff', 'color': '#000'}),
+            ], style={'display': 'flex', 'alignItems': 'center'}),
+
+            # Bollinger params
+            html.Div(id='rfbt-boll-params', children=[
+                html.Label("Window:", style={'fontWeight': 'bold', 'marginRight': '4px',
+                                             'color': THEME['text_main'], 'fontSize': '12px'}),
+                dcc.Input(id='rfbt-boll-window', type='number', value=20, min=5,
+                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
+                                 'borderRadius': '4px', 'border': '1px solid #444',
+                                 'backgroundColor': '#fff', 'color': '#000'}),
+                html.Label("Std:", style={'fontWeight': 'bold', 'marginRight': '4px',
+                                          'color': THEME['text_main'], 'fontSize': '12px'}),
+                dcc.Input(id='rfbt-boll-std', type='number', value=1.5, step=0.1,
+                          style={'width': '55px', 'padding': '4px',
+                                 'borderRadius': '4px', 'border': '1px solid #444',
+                                 'backgroundColor': '#fff', 'color': '#000'}),
+            ], style={'display': 'none', 'alignItems': 'center'}),
+
+            # Momentum params
+            html.Div(id='rfbt-mom-params', children=[
+                html.Label("Lookback:", style={'fontWeight': 'bold', 'marginRight': '4px',
+                                               'color': THEME['text_main'], 'fontSize': '12px'}),
+                dcc.Input(id='rfbt-mom-window', type='number', value=20, min=5,
+                          style={'width': '55px', 'padding': '4px',
+                                 'borderRadius': '4px', 'border': '1px solid #444',
+                                 'backgroundColor': '#fff', 'color': '#000'}),
+            ], style={'display': 'none', 'alignItems': 'center'}),
+
+            # Z-Score params
+            html.Div(id='rfbt-zscore-params', children=[
+                html.Label("Window:", style={'fontWeight': 'bold', 'marginRight': '4px',
+                                             'color': THEME['text_main'], 'fontSize': '12px'}),
+                dcc.Input(id='rfbt-zscore-window', type='number', value=60, min=10,
+                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
+                                 'borderRadius': '4px', 'border': '1px solid #444',
+                                 'backgroundColor': '#fff', 'color': '#000'}),
+                html.Label("Entry Z:", style={'fontWeight': 'bold', 'marginRight': '4px',
+                                              'color': THEME['text_main'], 'fontSize': '12px'}),
+                dcc.Input(id='rfbt-zscore-entry', type='number', value=1.5, step=0.1,
+                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
+                                 'borderRadius': '4px', 'border': '1px solid #444',
+                                 'backgroundColor': '#fff', 'color': '#000'}),
+                html.Label("Exit Z:", style={'fontWeight': 'bold', 'marginRight': '4px',
+                                             'color': THEME['text_main'], 'fontSize': '12px'}),
+                dcc.Input(id='rfbt-zscore-exit', type='number', value=0.5, step=0.1,
+                          style={'width': '55px', 'padding': '4px',
+                                 'borderRadius': '4px', 'border': '1px solid #444',
+                                 'backgroundColor': '#fff', 'color': '#000'}),
+            ], style={'display': 'none', 'alignItems': 'center'}),
+
+            # Factor Model params
+            html.Div(id='rfbt-fm-params', children=[
+                html.Label("Train (months):", style={'fontWeight': 'bold', 'marginRight': '4px',
+                                                     'color': THEME['text_main'], 'fontSize': '12px'}),
+                dcc.Input(id='rfbt-fm-train', type='number', value=12, min=3,
+                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
+                                 'borderRadius': '4px', 'border': '1px solid #444',
+                                 'backgroundColor': '#fff', 'color': '#000'}),
+                html.Label("IC thr:", style={'fontWeight': 'bold', 'marginRight': '4px',
+                                             'color': THEME['text_main'], 'fontSize': '12px'}),
+                dcc.Input(id='rfbt-fm-ic', type='number', value=0.05, step=0.01, min=0.01,
+                          style={'width': '60px', 'marginRight': '10px', 'padding': '4px',
+                                 'borderRadius': '4px', 'border': '1px solid #444',
+                                 'backgroundColor': '#fff', 'color': '#000'}),
+                html.Label("Top N:", style={'fontWeight': 'bold', 'marginRight': '4px',
+                                            'color': THEME['text_main'], 'fontSize': '12px'}),
+                dcc.Input(id='rfbt-fm-topn', type='number', value=8, min=1,
+                          style={'width': '55px', 'padding': '4px',
+                                 'borderRadius': '4px', 'border': '1px solid #444',
+                                 'backgroundColor': '#fff', 'color': '#000'}),
+            ], style={'display': 'none', 'alignItems': 'center'}),
+
+        ], style={'display': 'flex', 'gap': '16px', 'flexWrap': 'wrap',
+                  'marginBottom': '14px', 'alignItems': 'center'}),
+
+        # ── Row 3: Buttons ──────────────────────────────────────────────
+        html.Div([
+            html.Button("Generate factor-rates.pkl", id='rfbt-generate-btn', n_clicks=0,
+                        style={'backgroundColor': THEME['accent'], 'color': 'white',
+                               'padding': '8px 16px', 'border': 'none', 'borderRadius': '5px',
+                               'cursor': 'pointer', 'fontSize': '12px', 'fontWeight': 'bold',
+                               'marginRight': '12px'}),
+            html.Button("Run Backtest & Save", id='rfbt-run-btn', n_clicks=0,
+                        style={'backgroundColor': THEME['success'], 'color': 'white',
+                               'padding': '8px 16px', 'border': 'none', 'borderRadius': '5px',
+                               'cursor': 'pointer', 'fontSize': '12px', 'fontWeight': 'bold'}),
+            html.Span(id='rfbt-status', style={'marginLeft': '16px',
+                                               'color': THEME['text_sub'], 'fontSize': '12px'}),
+        ], style={'marginBottom': '16px'}),
+
+        # ── Results area ────────────────────────────────────────────────
+        dcc.Loading(
+            type='default',
+            children=html.Div(id='rfbt-results-container', style={'minHeight': '200px'}),
+        ),
+
+    ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px',
+              'borderRadius': '5px', 'margin': '10px'})
+
+
 def build_factor_backtest_layout():
     """Build the layout for the Futures/Factor Backtest tab - uses futures.backtest.layout."""
     from datetime import timedelta
@@ -2174,38 +2368,69 @@ def register_multiasset_callbacks(app):
                 raise ValueError("Cannot load risk factor data")
             
             fig = go.Figure()
+            x_min_all = None
+            x_max_all = None
             for factor in selected_factors:
                 if factor in factor_levels.columns:
                     series = factor_levels[factor].dropna()
                     if not series.empty:
                         fig.add_trace(go.Scatter(x=series.index, y=series.values, mode='lines', name=factor))
-            
+                        s_min = series.index.min()
+                        s_max = series.index.max()
+                        x_min_all = s_min if x_min_all is None else min(x_min_all, s_min)
+                        x_max_all = s_max if x_max_all is None else max(x_max_all, s_max)
+
+            default_xaxis = dict(
+                rangeslider=dict(visible=False),
+                rangeselector=dict(
+                    buttons=[
+                        dict(count=1, label="1M", step="month", stepmode="backward"),
+                        dict(count=3, label="3M", step="month", stepmode="backward"),
+                        dict(count=6, label="6M", step="month", stepmode="backward"),
+                        dict(count=1, label="YTD", step="year", stepmode="todate"),
+                        dict(count=1, label="1Y", step="year", stepmode="backward"),
+                        dict(count=3, label="3Y", step="year", stepmode="backward"),
+                        dict(count=5, label="5Y", step="year", stepmode="backward"),
+                        dict(step="all", label="All")
+                    ],
+                    bgcolor=THEME['bg_card'], activecolor=THEME['accent'], font=dict(size=11, color='#000'), x=0, y=1.15
+                ),
+                type="date",
+                gridcolor=THEME['table_header']
+            )
+
+            yaxis_config = dict(gridcolor=THEME['table_header'], autorange=True)
+
+            # Default to 3M rather than "All" when data exists.
+            if x_max_all is not None and x_min_all is not None:
+                default_start = max(x_min_all, pd.Timestamp(x_max_all) - relativedelta(months=3))
+                default_xaxis['range'] = [default_start, x_max_all]
+
+                y_min, y_max = float('inf'), float('-inf')
+                for factor in selected_factors:
+                    if factor in factor_levels.columns:
+                        series = factor_levels[factor].dropna()
+                        mask = (series.index >= default_start) & (series.index <= x_max_all)
+                        viz_series = series[mask]
+                        if not viz_series.empty:
+                            y_min = min(y_min, viz_series.min())
+                            y_max = max(y_max, viz_series.max())
+                
+                if y_min != float('inf') and y_max != float('-inf'):
+                    padding = (y_max - y_min) * 0.05 if y_max != y_min else abs(y_max) * 0.05 or 0.5
+                    yaxis_config['range'] = [y_min - padding, y_max + padding]
+                    yaxis_config['autorange'] = False
+
             fig.update_layout(
                 xaxis_title="Date", yaxis_title="Value", hovermode='x unified',
                 template=THEME['chart_template'], height=500,
                 paper_bgcolor=THEME['bg_main'], plot_bgcolor=THEME['bg_main'],
                 font={'color': THEME['text_main']},
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font={'color': THEME['text_main']}),
-                xaxis=dict(
-                    rangeslider=dict(visible=False),
-                    rangeselector=dict(
-                        buttons=[
-                            dict(count=1, label="1M", step="month", stepmode="backward"),
-                            dict(count=3, label="3M", step="month", stepmode="backward"),
-                            dict(count=6, label="6M", step="month", stepmode="backward"),
-                            dict(count=1, label="YTD", step="year", stepmode="todate"),
-                            dict(count=1, label="1Y", step="year", stepmode="backward"),
-                            dict(count=3, label="3Y", step="year", stepmode="backward"),
-                            dict(count=5, label="5Y", step="year", stepmode="backward"),
-                            dict(step="all", label="All")
-                        ],
-                        bgcolor=THEME['bg_card'], activecolor=THEME['accent'], font=dict(size=11, color='#000'), x=0, y=1.15
-                    ),
-                    type="date",
-                    gridcolor=THEME['table_header']
-                ),
-                yaxis=dict(gridcolor=THEME['table_header'], autorange=True),
-                uirevision='constant'
+                xaxis=default_xaxis,
+                yaxis=yaxis_config,
+                # Avoid freezing prior zoom/range state when factor selections change.
+                uirevision='factor-history-dynamic'
             )
             return fig
         except Exception as e:
@@ -2690,9 +2915,21 @@ def register_multiasset_callbacks(app):
             total_capital_m = 100.0
         equal_share = round(total_capital_m / n_factors, 2) if n_factors else 1.0
 
+        # Build risk-contribution-based defaults from a prior run (if available)
+        _prior_risk = ALLOCATION_RESULTS['factor_risk']
+        _rc_defaults = {}
+        if _prior_risk is not None and not _prior_risk.empty and 'Risk Contribution (%)' in _prior_risk.columns:
+            _rc_map = dict(zip(_prior_risk['Risk Factor'], _prior_risk['Risk Contribution (%)']))
+            _total_rc = sum(v for v in _rc_map.values() if pd.notna(v) and v > 0)
+            if _total_rc > 0:
+                _rc_defaults = {f: round(total_capital_m * _rc_map.get(f, 0) / _total_rc, 2)
+                                for f in sorted_factors}
+
         def get_rp_max(factor):
             if rp_budgets and factor in rp_budgets:
                 return float(rp_budgets[factor])
+            if factor in _rc_defaults:
+                return _rc_defaults[factor]
             return equal_share
 
         # ── Factor model signal lookup (scalar + colour) ───────────────────────
@@ -2718,6 +2955,11 @@ def register_multiasset_callbacks(app):
                 return float(rec.get('scalar', 1.0))
             return 1.0  # default: full long — placeholder until factor model is run
 
+        # ── Factor vol lookup (from latest risk decomposition run) ────────────
+        _vol_map = {}
+        if _prior_risk is not None and not _prior_risk.empty and 'Volatility (% ann.)' in _prior_risk.columns:
+            _vol_map = dict(zip(_prior_risk['Risk Factor'], _prior_risk['Volatility (% ann.)']))
+
         # ── Build rows ─────────────────────────────────────────────────────────
         rows = []
         for factor in sorted_factors:
@@ -2727,14 +2969,22 @@ def register_multiasset_callbacks(app):
             label, color = SCALAR_META.get(coeff, (f'{coeff:+.1f}×', THEME.get('text_main', '#fff')))
             is_default_coeff = factor not in snapshot_by_rf
 
+            vol_val = _vol_map.get(factor)
+            vol_str = f"{vol_val:.2f}" if vol_val is not None and pd.notna(vol_val) else "–"
+
             rows.append(
                 html.Div([
                     html.Span(factor, style={
-                        'color': THEME['text_main'], 'fontSize': '11px',
+                        'color': THEME['text_main'], 'fontSize': '12px',
                         'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0',
                     }),
+                    html.Span(vol_str, style={
+                        'color': THEME.get('text_sub', '#aaa'), 'fontSize': '12px',
+                        'width': '54px', 'textAlign': 'right', 'flexShrink': '0',
+                        'fontFamily': 'monospace',
+                    }),
                     html.Span(f"{rp_max:.1f}M", style={
-                        'color': THEME['text_sub'], 'fontSize': '11px',
+                        'color': THEME['text_sub'], 'fontSize': '12px',
                         'width': '54px', 'textAlign': 'right', 'flexShrink': '0',
                     }),
                     html.Span(
@@ -2742,7 +2992,7 @@ def register_multiasset_callbacks(app):
                         title=f"{label}{' (default)' if is_default_coeff else ''}",
                         style={
                             'color': THEME.get('text_sub', '#aaa') if is_default_coeff else color,
-                            'fontSize': '11px', 'width': '44px', 'textAlign': 'center',
+                            'fontSize': '12px', 'width': '44px', 'textAlign': 'center',
                             'flexShrink': '0', 'fontWeight': 'bold',
                             'fontStyle': 'italic' if is_default_coeff else 'normal',
                         }
@@ -2753,13 +3003,13 @@ def register_multiasset_callbacks(app):
                         value=suggested,
                         step=0.1,
                         style={
-                            'width': '52px', 'fontSize': '11px', 'padding': '2px 4px',
+                            'width': '52px', 'fontSize': '12px', 'padding': '2px 4px',
                             'backgroundColor': '#fff', 'color': '#000',
                             'border': f'1px solid {THEME["table_header"]}',
                             'borderRadius': '2px', 'textAlign': 'right',
                         }
                     ),
-                    html.Span("M", style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '2px'}),
+                    html.Span("M", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '2px'}),
                 ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px', 'gap': '4px'})
             )
         
@@ -3107,13 +3357,22 @@ def register_multiasset_callbacks(app):
             status_msg = html.Span("✓ Analysis completed successfully!", style={'color': THEME['success'], 'fontWeight': 'bold'})
             timestamp_msg = f"Last updated: {ALLOCATION_RESULTS['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"
 
-            # Compute RP-suggested equal budget per factor (updates Risk Budget panel)
+            # Compute RP-suggested budget per factor using actual risk contributions
             total_capital_m = total_capital_cny / 1e6
+            rp_budgets_out = {}
             if risk_budgets:
                 n_active = len(risk_budgets)
-                rp_budgets_out = {f: round(total_capital_m / n_active, 2) for f in risk_budgets}
-            else:
-                rp_budgets_out = {}
+                rc_map = {}
+                if not factor_risk.empty and 'Risk Contribution (%)' in factor_risk.columns:
+                    rc_map = dict(zip(factor_risk['Risk Factor'], factor_risk['Risk Contribution (%)']))
+                total_rc = sum(v for v in rc_map.values() if pd.notna(v) and v > 0)
+                if total_rc > 0:
+                    rp_budgets_out = {
+                        f: round(total_capital_m * rc_map.get(f, 100.0 / n_active) / total_rc, 2)
+                        for f in risk_budgets
+                    }
+                else:
+                    rp_budgets_out = {f: round(total_capital_m / n_active, 2) for f in risk_budgets}
 
             return (portfolio_table, status_msg, timestamp_msg, {'status': 'success'}, rp_budgets_out)
             
@@ -3903,3 +4162,227 @@ def register_multiasset_callbacks(app):
             import traceback
             traceback.print_exc()
             return html.Div(f"Error running backtest: {str(e)}", style={'color': THEME['danger']})
+
+    # ================================================================
+    # Risk Factor Backtest callbacks (BACKTEST subtab)
+    # ================================================================
+
+    @app.callback(
+        [Output('rfbt-ma-params', 'style'),
+         Output('rfbt-boll-params', 'style'),
+         Output('rfbt-mom-params', 'style'),
+         Output('rfbt-zscore-params', 'style'),
+         Output('rfbt-fm-params', 'style')],
+        Input('rfbt-strategy-selector', 'value'),
+    )
+    def toggle_rfbt_strategy_params(strategy):
+        """Show/hide strategy-specific parameter inputs."""
+        flex = {'display': 'flex', 'alignItems': 'center'}
+        hide = {'display': 'none', 'alignItems': 'center'}
+        return (
+            flex if strategy == 'MA' else hide,
+            flex if strategy == 'Bollinger' else hide,
+            flex if strategy == 'Momentum' else hide,
+            flex if strategy == 'Z-Score' else hide,
+            flex if strategy == 'FactorModel' else hide,
+        )
+
+    @app.callback(
+        Output('rfbt-status', 'children', allow_duplicate=True),
+        Input('rfbt-generate-btn', 'n_clicks'),
+        prevent_initial_call=True,
+    )
+    def generate_factor_rates_click(n_clicks):
+        """Generate (or regenerate) factor-rates.pkl."""
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        try:
+            from multiasset.factor_backtest import generate_factor_rates
+            df = generate_factor_rates(DIR_INPUT, save=True)
+            return f"✅ factor-rates.pkl saved ({df.shape[1]} factors, {len(df)} days)"
+        except Exception as e:
+            return f"❌ Error: {e}"
+
+    @app.callback(
+        [Output('rfbt-results-container', 'children'),
+         Output('rfbt-status', 'children')],
+        Input('rfbt-run-btn', 'n_clicks'),
+        [State('rfbt-factor-selector', 'value'),
+         State('rfbt-strategy-selector', 'value'),
+         State('rfbt-date-range', 'start_date'),
+         State('rfbt-date-range', 'end_date'),
+         State('rfbt-ma-short', 'value'),
+         State('rfbt-ma-long', 'value'),
+         State('rfbt-boll-window', 'value'),
+         State('rfbt-boll-std', 'value'),
+         State('rfbt-mom-window', 'value'),
+         State('rfbt-zscore-window', 'value'),
+         State('rfbt-zscore-entry', 'value'),
+         State('rfbt-zscore-exit', 'value'),
+         State('rfbt-fm-train', 'value'),
+         State('rfbt-fm-ic', 'value'),
+         State('rfbt-fm-topn', 'value')],
+        prevent_initial_call=True,
+    )
+    def run_risk_factor_backtest(
+        n_clicks, factors, strategy, start_date, end_date,
+        ma_short, ma_long, boll_window, boll_std,
+        mom_window, zscore_window, zscore_entry, zscore_exit,
+        fm_train, fm_ic, fm_topn,
+    ):
+        if not n_clicks or not factors:
+            raise dash.exceptions.PreventUpdate
+
+        try:
+            from multiasset.factor_backtest import (
+                run_factor_backtest, compute_metrics, get_factor_duration,
+                _is_yield_factor,
+            )
+
+            # Build strategy-specific kwargs
+            kwargs = {}
+            if strategy == 'MA':
+                kwargs = {'short_window': int(ma_short or 10),
+                          'long_window': int(ma_long or 30)}
+            elif strategy == 'Bollinger':
+                kwargs = {'window': int(boll_window or 20),
+                          'num_std': float(boll_std or 1.5)}
+            elif strategy == 'Momentum':
+                kwargs = {'window': int(mom_window or 20)}
+            elif strategy == 'Z-Score':
+                kwargs = {'window': int(zscore_window or 60),
+                          'entry_z': float(zscore_entry or 1.5),
+                          'exit_z': float(zscore_exit or 0.5)}
+            elif strategy == 'FactorModel':
+                kwargs = {'train_months': int(fm_train or 12),
+                          'ic_threshold': float(fm_ic or 0.05),
+                          'top_n': int(fm_topn or 8)}
+
+            results = run_factor_backtest(
+                factors=factors,
+                strategy=strategy,
+                start_date=start_date,
+                end_date=end_date,
+                input_dir=DIR_INPUT,
+                save=True,
+                **kwargs,
+            )
+
+            if not results:
+                return (
+                    html.Div("No results — check that factor-rates.pkl exists and factors have data.",
+                             style={'color': THEME['warning'], 'padding': '20px'}),
+                    "⚠️ No factors produced results",
+                )
+
+            # ── Build summary metrics table ─────────────────────────────
+            metric_rows = []
+            for factor, df in results.items():
+                m = compute_metrics(df)
+                dur = get_factor_duration(factor)
+                is_y = _is_yield_factor(factor)
+                metric_rows.append({
+                    'Factor': factor,
+                    'Type': 'Yield' if is_y else 'Price',
+                    'Dur': f'{dur:.1f}' if dur > 0 else '—',
+                    'Total Ret': f"{m.get('Total Return', 0):.2%}",
+                    'Ann Ret': f"{m.get('Ann. Return', 0):.2%}",
+                    'Ann Vol': f"{m.get('Ann. Vol', 0):.2%}",
+                    'Sharpe': f"{m.get('Sharpe', 0):.2f}",
+                    'Max DD': f"{m.get('Max Drawdown', 0):.2%}",
+                    'Win': f"{m.get('Win Rate', 0):.1%}",
+                    'Days': int(m.get('Days', 0)),
+                })
+
+            metrics_table = dash_table.DataTable(
+                data=metric_rows,
+                columns=[{'name': c, 'id': c} for c in metric_rows[0].keys()],
+                style_cell={'textAlign': 'center', 'padding': '6px 8px',
+                            'backgroundColor': THEME['bg_input'],
+                            'color': THEME['text_main'], 'border': 'none',
+                            'fontSize': '11px'},
+                style_header={'backgroundColor': THEME['table_header'],
+                              'fontWeight': 'bold', 'color': THEME['accent'],
+                              'border': 'none'},
+                style_data_conditional=[
+                    {'if': {'row_index': 'odd'},
+                     'backgroundColor': THEME['table_row_even']},
+                ],
+                style_table={'overflowX': 'auto', 'marginBottom': '16px'},
+            )
+
+            # ── Build cumulative return chart ───────────────────────────
+            fig = go.Figure()
+            colors = ['#3498db', '#e74c3c', '#2ecc71', '#f39c12',
+                      '#9b59b6', '#1abc9c', '#e67e22', '#34495e',
+                      '#E91E63', '#00BCD4']
+            for i, (factor, df) in enumerate(results.items()):
+                cum = df['cumulative_returns'].dropna()
+                fig.add_trace(go.Scatter(
+                    x=cum.index, y=cum.values, mode='lines',
+                    name=factor, line={'color': colors[i % len(colors)]},
+                ))
+
+            fig.update_layout(
+                title=f'Cumulative Returns — {strategy} Strategy',
+                xaxis_title='Date', yaxis_title='Cumulative Return',
+                hovermode='x unified',
+                template=THEME['chart_template'], height=420,
+                paper_bgcolor=THEME['bg_main'],
+                plot_bgcolor=THEME['bg_main'],
+                font={'color': THEME['text_main']},
+                legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                            xanchor='right', x=1,
+                            font={'color': THEME['text_main']}),
+                xaxis=dict(gridcolor=THEME['table_header']),
+                yaxis=dict(gridcolor=THEME['table_header']),
+            )
+
+            # ── Build signals chart (subplots per factor) ──────────────
+            n_factors = len(results)
+            signal_fig = make_subplots(
+                rows=n_factors, cols=1, shared_xaxes=True,
+                subplot_titles=list(results.keys()),
+                vertical_spacing=0.04,
+            )
+            for i, (factor, df) in enumerate(results.items(), start=1):
+                sig = df['signal'].dropna()
+                signal_fig.add_trace(
+                    go.Scatter(
+                        x=sig.index, y=sig.values, mode='lines',
+                        name=f'{factor} sig',
+                        line={'color': colors[(i - 1) % len(colors)], 'width': 1},
+                    ),
+                    row=i, col=1,
+                )
+
+            signal_fig.update_layout(
+                title='Positions / Signals',
+                height=max(200, 120 * n_factors),
+                template=THEME['chart_template'],
+                paper_bgcolor=THEME['bg_main'],
+                plot_bgcolor=THEME['bg_main'],
+                font={'color': THEME['text_main']},
+                showlegend=False,
+            )
+
+            status_msg = (f"✅ Backtest complete — {strategy} on "
+                          f"{len(results)} factors, saved to factor-backtest.pkl")
+
+            return (
+                html.Div([
+                    metrics_table,
+                    dcc.Graph(figure=fig),
+                    dcc.Graph(figure=signal_fig),
+                ]),
+                status_msg,
+            )
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return (
+                html.Div(f"Error: {e}",
+                         style={'color': THEME['danger'], 'padding': '20px'}),
+                f"❌ {e}",
+            )

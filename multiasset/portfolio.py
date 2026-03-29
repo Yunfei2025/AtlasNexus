@@ -176,10 +176,15 @@ class Portfolio:
                 
                 # Calculate this factor's contribution to asset returns
                 if 'IRDL' in factor_name or 'IRSL' in factor_name or 'IRCV' in factor_name:
-                    # IR factors are PCA scores (cumulative), take diff for daily changes
+                    # IR factors are PCA cumulative scores — diff() recovers daily changes
                     pc_score_changes = risk_factors_df[factor_name].diff()
                     factor_contrib = sensitivity * pc_score_changes
-                elif 'FXDL' in factor_name:
+                elif 'SPDL' in factor_name or 'SPSL' in factor_name:
+                    # Spread factors are also cumulative sums of daily bp changes —
+                    # must use diff(), NOT pct_change() (which explodes on a cumsum series)
+                    factor_contrib = risk_factors_df[factor_name].diff() * sensitivity
+                elif 'FXDL' in factor_name or 'CMDL' in factor_name:
+                    # FX and commodity factors: stored as price levels, use pct return
                     factor_contrib = risk_factors_df[factor_name].pct_change() * 100 * sensitivity
                 else:
                     factor_contrib = risk_factors_df[factor_name].pct_change() * 100 * sensitivity

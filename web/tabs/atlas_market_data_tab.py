@@ -170,19 +170,26 @@ def _card(title: str, content: Any) -> html.Div:
 
 # Instruments to show in the money-market panel (in order)
 _REPO_INSTRUMENTS = ["FR001.IR", "FR007.IR", "SHIBOR3M.IR"]
-_SWAP_INSTRUMENTS = ["FR007S1Y.IR", "FR007S5Y.IR"]
+_SWAP_INSTRUMENTS = [
+    "FR007S3M.IR", "FR007S6M.IR", "FR007S9M.IR",
+    "FR007S1Y.IR", "FR007S2Y.IR",
+    "FR007S5Y.IR",
+    "SHI3MS1Y.IR", "SHI3MS5Y.IR",
+]
 _MM_INSTRUMENTS   = _REPO_INSTRUMENTS + _SWAP_INSTRUMENTS
 
 
 def _load_money_market() -> pd.DataFrame:
     """Money-market snapshot.
 
-    Close  – daily fixing/close:
+    Close       – daily fixing/close:
         • Repo rates (FR001/FR007/SHIBOR3M): database-px.pkl['IRS'] last valid row
-        • IRS swaps  (FR007S1Y/FR007S5Y):    IRS-cvpx.pkl['ytm_act'] last row
-    Quote  – real-time / mid:
+        • IRS swaps:                          IRS-cvpx.pkl['ytm_act'] last row
+    Quote       – real-time / mid:
         • Repo rates: same as Close (published fixings, no bid/ofr available)
         • IRS swaps:  IRS-spdsrt.pkl['swaps']['Quote'] (market-quoted mid)
+    Chg (bp)    – (Quote − Close) × 100
+    CR (3m, bp) – Carry(3m,bp) + Roll(3m,bp) from IRS-spdsrt.pkl['swaps']
     """
     rows: list[dict] = []
 
@@ -198,7 +205,13 @@ def _load_money_market() -> pd.DataFrame:
         except Exception:
             val = None
         v = round(float(val), 4) if val is not None and pd.notna(val) else "—"
-        rows.append({"Reference": inst, "Close (%)": v, "Quote (%)": v})
+        rows.append({
+            "Reference": inst,
+            "Close (%)": v,
+            "Quote (%)": v,
+            "Chg (bp)": 0.00 if v != "—" else "—",
+            "CR (3m, bp)": "—",
+        })
 
     # ── IRS swaps ─────────────────────────────────────────────────────────────
     try:
@@ -207,17 +220,38 @@ def _load_money_market() -> pd.DataFrame:
         ytm_act_last = pd.Series(dtype=float)
 
     try:
-        swap_quote: pd.Series = pd.read_pickle(str(DIR_INPUT / "IRS-spdsrt.pkl"))["swaps"]["Quote"]
+        swaps_df: pd.DataFrame = pd.read_pickle(str(DIR_INPUT / "IRS-spdsrt.pkl"))["swaps"]
     except Exception:
-        swap_quote = pd.Series(dtype=float)
+        swaps_df = pd.DataFrame()
 
     for inst in _SWAP_INSTRUMENTS:
         c = ytm_act_last.get(inst)
-        q = swap_quote.get(inst)
+        if not swaps_df.empty and inst in swaps_df.index:
+            q     = swaps_df.loc[inst, "Quote"]
+            carry = swaps_df.loc[inst, "Carry(3m,bp)"]
+            roll  = swaps_df.loc[inst, "Roll(3m,bp)"]
+        else:
+            q = carry = roll = None
+
+        c_val = round(float(c), 4) if c is not None and pd.notna(c) else "—"
+        q_val = round(float(q), 4) if q is not None and pd.notna(q) else "—"
+
+        if c_val != "—" and q_val != "—":
+            chg = round((float(q_val) - float(c_val)) * 100, 2)
+        else:
+            chg = "—"
+
+        if carry is not None and roll is not None and pd.notna(carry) and pd.notna(roll):
+            cr = round(float(carry) + float(roll), 2)
+        else:
+            cr = "—"
+
         rows.append({
             "Reference": inst,
-            "Close (%)": round(float(c), 4) if c is not None and pd.notna(c) else "—",
-            "Quote (%)": round(float(q), 4) if q is not None and pd.notna(q) else "—",
+            "Close (%)": c_val,
+            "Quote (%)": q_val,
+            "Chg (bp)": chg,
+            "CR (3m, bp)": cr,
         })
 
     return pd.DataFrame(rows)
@@ -282,28 +316,53 @@ def _load_bond_futures() -> pd.DataFrame:
 
 
 def _load_reference_bonds() -> pd.DataFrame:
-    """F33:H42 — on-the-run reference bonds from TBond/CBond cvref pickles."""
+    """On-the-run CGB/CDB reference bonds with CR(3m,bp) from spdsrt pickles."""
     tenors = ["0.3Y", "0.5Y", "0.7Y", "1Y", "1.5Y", "2Y", "3Y", "5Y", "10Y"]
     tenor_cols = [f"Term near {t}" for t in tenors]
 
     rows = []
     try:
-        cgb_ref = pd.read_pickle(str(DIR_INPUT / "TBond-cvref.pkl"))
+        cgb_ref  = pd.read_pickle(str(DIR_INPUT / "TBond-cvref.pkl"))
         cgb_last = cgb_ref.get("RefBond", pd.DataFrame()).iloc[-1] if isinstance(cgb_ref, dict) else pd.Series()
     except Exception:
         cgb_last = pd.Series()
 
     try:
-        cdb_ref = pd.read_pickle(str(DIR_INPUT / "CBond-cvref.pkl"))
+        cdb_ref  = pd.read_pickle(str(DIR_INPUT / "CBond-cvref.pkl"))
         cdb_last = cdb_ref.get("RefBond", pd.DataFrame()).iloc[-1] if isinstance(cdb_ref, dict) else pd.Series()
     except Exception:
         cdb_last = pd.Series()
 
+    try:
+        cgb_bc = pd.read_pickle(str(DIR_INPUT / "TBond-spdsrt.pkl")).get("BondCurve", pd.DataFrame())
+    except Exception:
+        cgb_bc = pd.DataFrame()
+
+    try:
+        cdb_bc = pd.read_pickle(str(DIR_INPUT / "CBond-spdsrt.pkl")).get("BondCurve", pd.DataFrame())
+    except Exception:
+        cdb_bc = pd.DataFrame()
+
+    def _cr(bc: pd.DataFrame, bond_id: Any) -> Any:
+        """Return Carry(3m,bp) + Roll(3m,bp) for bond_id in BondCurve, else '—'."""
+        if not isinstance(bond_id, str) or bc.empty or bond_id not in bc.index:
+            return "—"
+        row = bc.loc[bond_id]
+        carry = row.get("Carry(3m,bp)")
+        roll  = row.get("Roll(3m,bp)")
+        if pd.notna(carry) and pd.notna(roll):
+            return round(float(carry) + float(roll), 2)
+        return "—"
+
     for tenor, col in zip(tenors, tenor_cols):
+        cgb_id = cgb_last.get(col, "—")
+        cdb_id = cdb_last.get(col, "—")
         rows.append({
-            "Tenor": tenor,
-            "CGB": cgb_last.get(col, "—"),
-            "CDB": cdb_last.get(col, "—"),
+            "Tenor":   tenor,
+            "CGB":     cgb_id,
+            "CGB_CR":  _cr(cgb_bc, cgb_id),
+            "CDB":     cdb_id,
+            "CDB_CR":  _cr(cdb_bc, cdb_id),
         })
     return pd.DataFrame(rows)
 
@@ -394,12 +453,12 @@ def build_market_data_layout() -> html.Div:
                     html.Div(
                         _card("REFERENCE BONDS",
                               html.Div(id="mkt-data-refbond-table")),
-                        style={"flex": "0 0 auto", "width": "320px"},
+                        style={"flex": "1 1 auto", "minWidth": "450px"},
                     ),
                     html.Div(
                         _card("IRS FORWARD RATES",
                               html.Div(id="mkt-data-irs-table")),
-                        style={"flex": "1", "minWidth": "0"},
+                        style={"flex": "1.2 1 auto", "minWidth": "0"},
                     ),
                 ],
                 style={"display": "flex", "gap": "14px"},
@@ -433,7 +492,15 @@ def register_market_data_callbacks(app) -> None:
             tbl_mm = html.Span("Data unavailable", style={"color": THEME["text_sub"], "fontSize": "12px"})
         else:
             cols_mm = [{"name": c, "id": c} for c in df_mm.columns]
-            tbl_mm = _dt_style("mkt-dt-rates", cols_mm, df_mm.to_dict("records"))
+            mm_styles: list[dict] = []
+            for bar_col in ["Chg (bp)", "CR (3m, bp)"]:
+                if bar_col in df_mm.columns:
+                    bar_vals = pd.to_numeric(df_mm[bar_col], errors="coerce").dropna()
+                    if len(bar_vals):
+                        max_abs = max(abs(bar_vals).max(), 0.1)
+                        mm_styles += _bar_styles_zscore(df_mm, bar_col, max_abs=max_abs)
+            tbl_mm = _dt_style("mkt-dt-rates", cols_mm, df_mm.to_dict("records"),
+                               extra_styles=mm_styles)
 
         # ── Bond Futures ──────────────────────────────────────────────────
         df_fut = _load_bond_futures()
@@ -455,8 +522,18 @@ def register_market_data_callbacks(app) -> None:
         if df_ref.empty:
             tbl_ref = html.Span("Data unavailable", style={"color": THEME["text_sub"], "fontSize": "12px"})
         else:
-            cols_ref = [{"name": c, "id": c} for c in df_ref.columns]
-            tbl_ref = _dt_style("mkt-dt-refbond", cols_ref, df_ref.to_dict("records"))
+            _ref_labels = {"Tenor": "Tenor", "CGB": "CGB", "CGB_CR": "CR,3m",
+                           "CDB": "CDB", "CDB_CR": "CR,3m"}
+            cols_ref = [{"name": _ref_labels.get(c, c), "id": c} for c in df_ref.columns]
+            ref_styles: list[dict] = []
+            for cr_col in ["CGB_CR", "CDB_CR"]:
+                if cr_col in df_ref.columns:
+                    cr_vals = pd.to_numeric(df_ref[cr_col], errors="coerce").dropna()
+                    if len(cr_vals):
+                        max_abs = max(abs(cr_vals).max(), 0.1)
+                        ref_styles += _bar_styles_zscore(df_ref, cr_col, max_abs=max_abs)
+            tbl_ref = _dt_style("mkt-dt-refbond", cols_ref, df_ref.to_dict("records"),
+                                extra_styles=ref_styles)
 
         # ── IRS Forward Rates ─────────────────────────────────────────────
         df_irs = _load_irs_forward()

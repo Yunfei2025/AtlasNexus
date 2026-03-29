@@ -139,7 +139,13 @@ class DeterministicRiskFactorAnalyzer:
             return self._full_history_scores_cache
         
         if countries is None:
-            countries = list(CURVE_CONFIG.keys())
+            # Deterministic mode should cover the same country universe as PCA mode:
+            # CN from CURVE_CONFIG plus countries available in fxcurve/curve artifacts.
+            try:
+                curves_ts = _load_fx_curve_artifact(self.input_dir)
+                countries = sorted(set(CURVE_CONFIG.keys()) | set(curves_ts.keys()))
+            except Exception:
+                countries = list(CURVE_CONFIG.keys())
         
         all_scores = pd.DataFrame()
         
@@ -149,32 +155,23 @@ class DeterministicRiskFactorAnalyzer:
                 print(f"Skipping {country}: no curve data")
                 continue
             
-            # Calculate yield changes (daily differences in bp)
-            yield_changes = curve_data.diff().dropna()
-            
-            if yield_changes.empty:
-                print(f"Skipping {country}: no yield changes")
-                continue
-            
-            # Apply deterministic weights to yield changes
-            # Each factor is a weighted combination of tenor changes
+            # Apply deterministic weights directly to yield levels.
+            # IRDL.XX = weighted average yield (e.g. ~2.5% for CN)
+            # IRSL.XX = weighted slope (long - short), meaningful in % units
+            # This preserves the current absolute level rather than an
+            # arbitrary cumsum starting from 0 on the first available date.
             for factor_name, weights in self.weights.items():
-                # Ensure we have the right number of tenors
-                n_tenors = min(len(weights), len(yield_changes.columns))
+                n_tenors = min(len(weights), len(curve_data.columns))
                 if n_tenors < len(weights):
                     print(f"Warning: {country} has only {n_tenors} tenors, expected {len(weights)}")
-                    # Use available tenors only
                     w = weights[:n_tenors]
-                    tenor_changes = yield_changes.iloc[:, :n_tenors]
+                    tenor_levels = curve_data.iloc[:, :n_tenors]
                 else:
                     w = weights
-                    tenor_changes = yield_changes.iloc[:, :len(weights)]
+                    tenor_levels = curve_data.iloc[:, :len(weights)]
                 
-                # Factor return = weighted sum of tenor changes
-                factor_returns = (tenor_changes * w).sum(axis=1)
-                
-                # Cumulative sum to get "level" of the factor
-                factor_level = factor_returns.cumsum()
+                # Factor level = weighted combination of current yield levels
+                factor_level = (tenor_levels * w).sum(axis=1)
                 
                 # Store with naming convention: Factor.Country
                 col_name = f"{factor_name}.{country}"
@@ -207,13 +204,6 @@ class DeterministicRiskFactorAnalyzer:
                 print(f"Skipping {spread_type}: no spread data")
                 continue
             
-            # Calculate spread changes (daily differences in bp)
-            spread_changes = spread_data.diff().dropna()
-            
-            if spread_changes.empty:
-                print(f"Skipping {spread_type}: no spread changes")
-                continue
-            
             # Get weights for this spread type
             if spread_type not in DETERMINISTIC_SPREAD_WEIGHTS:
                 print(f"Skipping {spread_type}: no weights defined")
@@ -221,23 +211,22 @@ class DeterministicRiskFactorAnalyzer:
             
             spread_weights = DETERMINISTIC_SPREAD_WEIGHTS[spread_type]
             
-            # Apply deterministic weights to spread changes
+            # Apply deterministic weights directly to spread levels.
+            # SPDL.CDB = equal-weighted avg CDB spread level in %
+            # SPSL.CDB = slope of CDB spread curve
+            # Preserves current absolute level rather than an arbitrary cumsum.
             for factor_name, weights in spread_weights.items():
-                # Ensure we have the right number of tenors
-                n_tenors = min(len(weights), len(spread_changes.columns))
+                n_tenors = min(len(weights), len(spread_data.columns))
                 if n_tenors < len(weights):
                     print(f"Warning: {spread_type} has only {n_tenors} tenors, expected {len(weights)}")
                     w = weights[:n_tenors]
-                    tenor_changes = spread_changes.iloc[:, :n_tenors]
+                    tenor_levels = spread_data.iloc[:, :n_tenors]
                 else:
                     w = weights
-                    tenor_changes = spread_changes.iloc[:, :len(weights)]
+                    tenor_levels = spread_data.iloc[:, :len(weights)]
                 
-                # Factor return = weighted sum of tenor changes
-                factor_returns = (tenor_changes * w).sum(axis=1)
-                
-                # Cumulative sum to get "level" of the factor
-                factor_level = factor_returns.cumsum()
+                # Factor level = weighted combination of current spread levels
+                factor_level = (tenor_levels * w).sum(axis=1)
                 
                 # Store with naming convention: Factor.SpreadType
                 col_name = f"{factor_name}.{spread_type}"

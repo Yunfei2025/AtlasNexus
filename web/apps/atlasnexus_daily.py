@@ -53,6 +53,7 @@ from web.tabs.atlas_multiasset_tabs import (
     build_multiasset_bond_layout,
     build_multiasset_risk_layout,
     build_multiasset_backtest_layout,
+    build_risk_factor_backtest_layout,
     build_factor_backtest_layout,
     register_multiasset_callbacks,
 )
@@ -64,7 +65,7 @@ from web.tabs.atlas_volatility_tabs import (
 
 from web.tabs.atlas_factor_backtest_tabs import (
     build_factor_model_backtest_layout,
-    register_factor_backtest_callbacks,
+    # register_factor_backtest_callbacks,  # replaced by rfbt- callbacks in multiasset
 )
 
 from web.tabs.atlas_trend_tabs import (
@@ -109,7 +110,7 @@ register_fi_callbacks(app)
 register_multiasset_callbacks(app)
 register_alpha_callbacks(app)
 register_volatility_callbacks(app)
-register_factor_backtest_callbacks(app)
+# register_factor_backtest_callbacks(app)  # replaced by rfbt- callbacks in multiasset
 register_trend_callbacks(app)
 register_market_data_callbacks(app)
 
@@ -289,7 +290,7 @@ def build_tabs_panel():
                         html.Div(id="beta-factor-div",            children=build_multiasset_factor_layout(),     style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
                         html.Div(id="beta-portfolio-div",         children=build_multiasset_portfolio_layout(),  style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="beta-bond-div",              children=build_multiasset_bond_layout(),       style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-factor-model-bt-div",   children=build_factor_model_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="beta-factor-model-bt-div",   children=build_risk_factor_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="beta-backtest-factor-div",   children=build_factor_backtest_layout(),       style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(),  style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                     ], style={"position": "relative", "width": "100%", "minHeight": "500px"}),
