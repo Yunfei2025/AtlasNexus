@@ -5,9 +5,11 @@ Created on Tue Aug  9 16:26:57 2022
 @author: 马云飞
 """
 import pandas as pd
+import numpy as _np
 import sympy as sp
 import time 
 from functools import lru_cache
+from scipy.linalg import expm as _scipy_expm
 
 # Convert matrices to hashable tuples for caching
 def _matrix_to_tuple(matrix):
@@ -288,9 +290,10 @@ def _calAB_matrix_cached(tau_val, S2_tuple, gamma_val, mtype):
     a = a_temp[0, 0] + u
     
     # Compute b more efficiently
-    # Pre-compute matrix exponential and identity
-    K_tau = K * tau_val
-    exp_K_tau = sp.exp(-K_tau)
+    # Pre-compute matrix exponential using scipy (numerically stable)
+    # sp.exp(-K_tau) uses jordan_form()/nsimplify() which introduces noise
+    K_np = _np.array(K.tolist(), dtype=float)
+    exp_K_tau = sp.Matrix(_scipy_expm(-K_np * tau_val).tolist())
     identity = sp.eye(3)
     
     # Use safe inverse for K
@@ -353,9 +356,14 @@ def calAB_matrix(tau, S2, gamma, mtype):
         a = a_temp[0, 0] + u
         
         # Compute b more efficiently
-        # Pre-compute matrix exponential and identity
-        K_tau = K * tau
-        exp_K_tau = sp.exp(-K_tau)
+        # Pre-compute matrix exponential using scipy (numerically stable)
+        try:
+            K_np = _np.array(K.tolist(), dtype=float)
+            tau_f = float(tau)
+            exp_K_tau = sp.Matrix(_scipy_expm(-K_np * tau_f).tolist())
+        except (TypeError, ValueError):
+            K_tau = K * tau
+            exp_K_tau = sp.exp(-K_tau)
         identity = sp.eye(3)
         
         # Use safe inverse for K

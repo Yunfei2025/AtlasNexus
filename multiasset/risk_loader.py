@@ -60,7 +60,11 @@ class RiskFactorLoader:
         
         # Drop NaN values
         # risk_factors = risk_factors.dropna()
-        
+
+        if not isinstance(risk_factors.index, pd.DatetimeIndex):
+            risk_factors.index = pd.to_datetime(risk_factors.index)
+        risk_factors = risk_factors.sort_index()
+
         self._risk_factors_cache = risk_factors
         return risk_factors
     

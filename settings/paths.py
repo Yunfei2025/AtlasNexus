@@ -17,3 +17,5 @@ if str(PATH) not in sys.path:
 DIR_INPUT = PATH.joinpath(r'../input').resolve()
 DIR_OUTPUT = PATH.joinpath(r'../output').resolve()
 DIR_DATA = PATH.joinpath(r'../database').resolve()
+DIR_MODELS = DIR_INPUT / 'models'  # trained model artefacts (.joblib)
+DIR_MODELS.mkdir(parents=True, exist_ok=True)

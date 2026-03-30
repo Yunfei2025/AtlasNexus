@@ -314,10 +314,8 @@ def build_tabs_panel():
                             dcc.Tab(label="CANDIDATES", value="candidates", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="BACKTEST", value="backtest", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="BASKET", value="basket", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="SPREAD", value="spreads", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="PAIRS", value="pairs", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="CURVES", value="curves", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="VOLATILITY", value="volatility", style=tab_style, selected_style=tab_selected_style),
                         ],
                         style={"height": "520px"},
@@ -326,11 +324,10 @@ def build_tabs_panel():
                         html.Div(id="alpha-candidates-div", children=build_candidates_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
                         html.Div(id="alpha-portfolio-div", children=build_portfolio_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="alpha-backtest-div", children=build_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="alpha-basket-div", children=build_basket_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="alpha-spreads-div", children=build_spreads_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="alpha-pairs-div", children=build_pairs_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="alpha-curves-div", children=build_curves_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="alpha-volatility-div", children=build_volatility_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        # alpha-basket-div intentionally removed
                     ], style={"position": "relative", "width": "100%", "minHeight": "500px"}),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
@@ -353,6 +350,7 @@ def build_tabs_panel():
                             dcc.Tab(label="DATA",    value="data",    style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="TREND",   value="trend",   style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="SURFACE", value="surface", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="CURVES",  value="curves",  style=tab_style, selected_style=tab_selected_style),
                         ],
                         style={"height": "520px"},
                     ),
@@ -360,6 +358,7 @@ def build_tabs_panel():
                         html.Div(id="market-data-div",    children=build_market_data_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
                         html.Div(id="market-trend-div",   children=build_trend_layout(),        style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                         html.Div(id="market-surface-div", children=build_surface_layout(),      style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                        html.Div(id="market-curves-div",  children=build_curves_layout(),       style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
                     ], style={"position": "relative", "width": "100%", "minHeight": "500px"}),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
@@ -709,13 +708,14 @@ def _render_beta_subtabs(subtab: str):
 @app.callback(
     [Output("market-data-div",    "style"),
      Output("market-trend-div",   "style"),
-     Output("market-surface-div", "style")],
+     Output("market-surface-div", "style"),
+     Output("market-curves-div",  "style")],
     Input("an-market-subtabs", "value"),
 )
 def _render_market_subtabs(subtab: str):
     """Show/hide Market subtabs to preserve state."""
     base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
-    keys = ["data", "trend", "surface"]
+    keys = ["data", "trend", "surface", "curves"]
     return tuple(
         {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
         for k in keys
@@ -726,36 +726,18 @@ def _render_market_subtabs(subtab: str):
     [Output("alpha-candidates-div", "style"),
      Output("alpha-portfolio-div", "style"),
      Output("alpha-backtest-div", "style"),
-     Output("alpha-basket-div", "style"),
      Output("alpha-spreads-div", "style"),
      Output("alpha-pairs-div", "style"),
-     Output("alpha-curves-div", "style"),
      Output("alpha-volatility-div", "style")],
     Input("an-alpha-subtabs", "value"),
 )
 def _render_alpha_subtabs(subtab: str):
     """Show/hide Alpha Book subtabs to preserve state."""
     base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
-    styles = {
-        "candidates": {**base_style, "display": "block"} if subtab == "candidates" else {**base_style, "display": "none"},
-        "portfolio": {**base_style, "display": "block"} if subtab == "portfolio" else {**base_style, "display": "none"},
-        "backtest": {**base_style, "display": "block"} if subtab == "backtest" else {**base_style, "display": "none"},
-        "basket": {**base_style, "display": "block"} if subtab == "basket" else {**base_style, "display": "none"},
-        "spreads": {**base_style, "display": "block"} if subtab == "spreads" else {**base_style, "display": "none"},
-        "pairs": {**base_style, "display": "block"} if subtab == "pairs" else {**base_style, "display": "none"},
-        "curves": {**base_style, "display": "block"} if subtab == "curves" else {**base_style, "display": "none"},
-        "volatility": {**base_style, "display": "block"} if subtab == "volatility" else {**base_style, "display": "none"},
-    }
-    
-    return (
-        styles["candidates"],
-        styles["portfolio"],
-        styles["backtest"],
-        styles["basket"],
-        styles["spreads"],
-        styles["pairs"],
-        styles["curves"],
-        styles["volatility"]
+    keys = ["candidates", "portfolio", "backtest", "spreads", "pairs", "volatility"]
+    return tuple(
+        {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
+        for k in keys
     )
 
 

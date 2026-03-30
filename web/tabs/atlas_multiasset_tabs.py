@@ -29,7 +29,8 @@ from multiasset.main import run_risk_parity_allocation, create_custom_portfolio
 from multiasset.storage import save_asset_pool
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import PCAFactorRiskParityOptimizer
-from settings.paths import DIR_INPUT
+from multiasset.factor_backtest import compute_ewma_factor_vols
+from settings.paths import DIR_INPUT, DIR_MODELS
 
 # --- Import from futures.backtest for Backtest-Factor tab ---
 import dash_bootstrap_components as dbc
@@ -128,7 +129,7 @@ def compute_factor_vol_map(
     lookback_years: int = RISK_BUDGET_VOL_LOOKBACK_YEARS,
     ewma_lambda: float = RISK_BUDGET_EWMA_LAMBDA,
 ) -> dict[str, float]:
-    """Compute annualized EWMA volatilities for selected risk factors."""
+    """Compute annualized EWMA factor vol in price-return percent space."""
     if not factor_names:
         return {}
 
@@ -149,30 +150,10 @@ def compute_factor_vol_map(
     end_date = factor_levels.index.max()
     start_date = end_date - relativedelta(years=lookback_years)
     window = factor_levels.loc[factor_levels.index >= start_date, available_factors]
+    if isinstance(window, pd.Series):
+        window = window.to_frame()
 
-    alpha = 1.0 - ewma_lambda
-    vol_map: dict[str, float] = {}
-
-    for factor in available_factors:
-        levels = window[factor].dropna()
-        if len(levels) < 5:
-            continue
-
-        if factor.startswith(('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL')):
-            returns = levels.diff().dropna()
-        else:
-            returns = (levels.pct_change() * 100).dropna()
-
-        if len(returns) < 5:
-            continue
-
-        ewma_var = returns.ewm(alpha=alpha, adjust=False).var().dropna()
-        if ewma_var.empty:
-            continue
-
-        vol_map[factor] = float(np.sqrt(ewma_var.iloc[-1]) * np.sqrt(252))
-
-    return vol_map
+    return compute_ewma_factor_vols(window, ewma_lambda=ewma_lambda)
 
 # ============================================================================
 # Factor to Asset Mapping Table
@@ -772,17 +753,20 @@ def build_multiasset_portfolio_layout():
                         html.Span("Exposure = RP Max × Coeff  ·  Vol auto-updated from 1Y EWMA factor history",
                                   style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '12px'}),
                     ], style={'display': 'flex', 'alignItems': 'baseline', 'marginBottom': '8px'}),
-                    # Hidden toggle kept for callback compatibility
                     html.Div([
-                        dcc.Checklist(
-                            id='use-factor-signals-toggle',
-                            options=[{'label': ' Use Factor Model Signals', 'value': 'on'}],
-                            value=[],
+                        dcc.RadioItems(
+                            id='allocation-mode',
+                            options=[
+                                {'label': ' Pure Risk Parity', 'value': 'risk_parity'},
+                                {'label': ' Factor Model Scaling', 'value': 'factor_scaling'},
+                            ],
+                            value='risk_parity',
                             inputStyle={'marginRight': '5px'},
-                            labelStyle={'color': THEME['accent'], 'fontSize': '12px', 'fontWeight': 'bold'},
+                            labelStyle={'display': 'inline', 'marginRight': '16px', 'color': THEME['text_main'], 'fontSize': '12px'},
+                            style={'display': 'inline-flex'},
                         ),
-                        html.Span(id='factor-signals-toggle-status', style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-                    ], style={'display': 'none'}),
+                        html.Span(id='factor-signals-toggle-status', style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '8px'}),
+                    ], style={'marginBottom': '8px'}),
                     # Column headers: Factor | Vol% ann | RP Max | Coeff | Exposure
                     html.Div([
                         html.Span("Factor",   style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0'}),
@@ -1662,8 +1646,6 @@ def build_risk_factor_backtest_layout():
     Maps PORTFOLIO-tab risk factors to yield/price series, runs close-only
     technical strategies (MA, Bollinger, Momentum, Z-Score), and persists PnL.
     """
-    from multiasset.factor_backtest import STRATEGY_REGISTRY
-
     all_factor_options = [
         # IR
         {'label': 'IRDL.CN (China Level)',   'value': 'IRDL.CN'},
@@ -1690,7 +1672,6 @@ def build_risk_factor_backtest_layout():
         {'label': 'CMDL.SC (Crude Oil)',      'value': 'CMDL.SC'},
     ]
 
-    strategy_options = [{'label': s, 'value': s} for s in STRATEGY_REGISTRY]
     default_factors = ['IRDL.CN', 'IRSL.CN', 'SPDL.CDB', 'FXDL.USDCNY']
 
     return html.Div([
@@ -1717,18 +1698,8 @@ def build_risk_factor_backtest_layout():
                 ),
             ], style={'display': 'flex', 'alignItems': 'center', 'flex': '1'}),
 
-            html.Div([
-                html.Label("Strategy:", style={'fontWeight': 'bold', 'marginRight': '10px',
-                                               'color': THEME['text_main'], 'fontSize': '13px'}),
-                dcc.Dropdown(
-                    id='rfbt-strategy-selector',
-                    options=strategy_options,
-                    value='MA',
-                    clearable=False,
-                    style={'width': '140px',
-                           'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center'}),
+            # Hidden store – always FactorModel
+            dcc.Store(id='rfbt-strategy-selector', data='FactorModel'),
         ], style={'display': 'flex', 'gap': '20px', 'flexWrap': 'wrap',
                   'marginBottom': '12px'}),
 
@@ -1748,69 +1719,24 @@ def build_risk_factor_backtest_layout():
                 ),
             ], style={'display': 'flex', 'alignItems': 'center'}),
 
-            # MA params (shown/hidden dynamically)
+            # Hidden placeholders (keep IDs for callback State refs)
             html.Div(id='rfbt-ma-params', children=[
-                html.Label("Short:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                            'color': THEME['text_main'], 'fontSize': '12px'}),
-                dcc.Input(id='rfbt-ma-short', type='number', value=10, min=2,
-                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
-                html.Label("Long:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                           'color': THEME['text_main'], 'fontSize': '12px'}),
-                dcc.Input(id='rfbt-ma-long', type='number', value=30, min=5,
-                          style={'width': '55px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
-            ], style={'display': 'flex', 'alignItems': 'center'}),
+                dcc.Input(id='rfbt-ma-short', type='number', value=10, style={'display': 'none'}),
+                dcc.Input(id='rfbt-ma-long', type='number', value=30, style={'display': 'none'}),
+            ], style={'display': 'none'}),
 
-            # Bollinger params
             html.Div(id='rfbt-boll-params', children=[
-                html.Label("Window:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                             'color': THEME['text_main'], 'fontSize': '12px'}),
-                dcc.Input(id='rfbt-boll-window', type='number', value=20, min=5,
-                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
-                html.Label("Std:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                          'color': THEME['text_main'], 'fontSize': '12px'}),
-                dcc.Input(id='rfbt-boll-std', type='number', value=1.5, step=0.1,
-                          style={'width': '55px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
-            ], style={'display': 'none', 'alignItems': 'center'}),
-
-            # Momentum params
+                dcc.Input(id='rfbt-boll-window', type='number', value=20, style={'display': 'none'}),
+                dcc.Input(id='rfbt-boll-std', type='number', value=1.5, style={'display': 'none'}),
+            ], style={'display': 'none'}),
             html.Div(id='rfbt-mom-params', children=[
-                html.Label("Lookback:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                               'color': THEME['text_main'], 'fontSize': '12px'}),
-                dcc.Input(id='rfbt-mom-window', type='number', value=20, min=5,
-                          style={'width': '55px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
-            ], style={'display': 'none', 'alignItems': 'center'}),
-
-            # Z-Score params
+                dcc.Input(id='rfbt-mom-window', type='number', value=20, style={'display': 'none'}),
+            ], style={'display': 'none'}),
             html.Div(id='rfbt-zscore-params', children=[
-                html.Label("Window:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                             'color': THEME['text_main'], 'fontSize': '12px'}),
-                dcc.Input(id='rfbt-zscore-window', type='number', value=60, min=10,
-                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
-                html.Label("Entry Z:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                              'color': THEME['text_main'], 'fontSize': '12px'}),
-                dcc.Input(id='rfbt-zscore-entry', type='number', value=1.5, step=0.1,
-                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
-                html.Label("Exit Z:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                             'color': THEME['text_main'], 'fontSize': '12px'}),
-                dcc.Input(id='rfbt-zscore-exit', type='number', value=0.5, step=0.1,
-                          style={'width': '55px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
-            ], style={'display': 'none', 'alignItems': 'center'}),
+                dcc.Input(id='rfbt-zscore-window', type='number', value=60, style={'display': 'none'}),
+                dcc.Input(id='rfbt-zscore-entry', type='number', value=1.5, style={'display': 'none'}),
+                dcc.Input(id='rfbt-zscore-exit', type='number', value=0.5, style={'display': 'none'}),
+            ], style={'display': 'none'}),
 
             # Factor Model params
             html.Div(id='rfbt-fm-params', children=[
@@ -1832,7 +1758,7 @@ def build_risk_factor_backtest_layout():
                           style={'width': '55px', 'padding': '4px',
                                  'borderRadius': '4px', 'border': '1px solid #444',
                                  'backgroundColor': '#fff', 'color': '#000'}),
-            ], style={'display': 'none', 'alignItems': 'center'}),
+            ], style={'display': 'flex', 'alignItems': 'center'}),
 
         ], style={'display': 'flex', 'gap': '16px', 'flexWrap': 'wrap',
                   'marginBottom': '14px', 'alignItems': 'center'}),
@@ -3088,7 +3014,14 @@ def register_multiasset_callbacks(app):
     )
     def refresh_factor_signals(n_clicks):
         """Compute signal snapshot from the factor prediction engine and
-        render as a colour-coded table in the Factor tab."""
+        render as a colour-coded table in the Factor tab.
+
+        Signal sources (merged, risk-factor models take priority):
+        1. Contract-level ``trained_model_*.joblib`` from ``factors/``
+           → decomposed to risk factors via exposure profiles.
+        2. Risk-factor-level ``factor_model_*.joblib`` from ``input/models/``
+           → direct risk-factor predictions (override contract-based).
+        """
         try:
             from factors.processing.exposure_mapper import (
                 BucketConfig, compute_signal_snapshot,
@@ -3099,54 +3032,64 @@ def register_multiasset_callbacks(app):
             import joblib, os, glob
             from settings.paths import PATH
 
-            # --- locate latest trained model artifacts -------------------------
+            rf_signals: dict = {}  # risk_factor → signal Series
+            source_info: list = []  # human-readable summary
+
+            # --- Source 1: contract-level models (factors/) --------------------
             model_dir = os.path.join(str(PATH), 'factors')
             model_files = glob.glob(os.path.join(model_dir, 'trained_model_*.joblib'))
-            if not model_files:
-                return (
-                    html.Div("No trained factor models found.", style={'color': THEME['text_sub']}),
-                    "No models",
-                    {},
-                )
 
-            # --- collect per-contract signals ----------------------------------
-            from factors.processing.loader import getDailyTS, ensure_returns_column
-            from factors.generator.factory import FactorCalculatorFactory
-            from factors.engine.predictor import predict_returns
+            if model_files:
+                from factors.processing.loader import getDailyTS, ensure_returns_column
+                from factors.generator.factory import FactorCalculatorFactory
+                from factors.engine.predictor import predict_returns
 
-            rf_signals: dict = {}  # risk_factor → signal Series
-            for mf in model_files:
-                basename = os.path.basename(mf)
-                # e.g. trained_model_T.CFE_20250831.joblib
-                parts = basename.replace('trained_model_', '').replace('.joblib', '').split('_')
-                contract = parts[0] if parts else None
-                if contract not in CONTRACT_RISK_PROFILES:
-                    continue
-                artifact = joblib.load(mf)
-                trained_model  = artifact.get('trained_model', {})
-                selected_factors = artifact.get('selected_factors', [])
-                ticker = artifact.get('config', {}).get('ticker', contract)
-                if not trained_model or not selected_factors:
-                    continue
-                # Generate current-day predictions from live factor data
-                try:
-                    raw_data = getDailyTS(ticker)
-                    raw_data = ensure_returns_column(raw_data)
-                    factory  = FactorCalculatorFactory(raw_data)
-                    all_factors = factory.generate_factors()
-                    predictions = predict_returns(all_factors, trained_model, selected_factors)
-                    predictions = predictions.dropna()
-                    predictions = predictions[predictions != 0]
-                except Exception:
-                    continue
-                if predictions is None or (hasattr(predictions, 'empty') and predictions.empty):
-                    continue
-                decomposed = decompose_signal_series(predictions, contract)
-                for col in decomposed.columns:
-                    if col in rf_signals:
-                        rf_signals[col] = rf_signals[col].add(decomposed[col], fill_value=0)
-                    else:
-                        rf_signals[col] = decomposed[col].copy()
+                n_contracts = 0
+                for mf in model_files:
+                    basename = os.path.basename(mf)
+                    parts = basename.replace('trained_model_', '').replace('.joblib', '').split('_')
+                    contract = parts[0] if parts else None
+                    if contract not in CONTRACT_RISK_PROFILES:
+                        continue
+                    artifact = joblib.load(mf)
+                    trained_model  = artifact.get('trained_model', {})
+                    selected_factors = artifact.get('selected_factors', [])
+                    ticker = artifact.get('config', {}).get('ticker', contract)
+                    if not trained_model or not selected_factors:
+                        continue
+                    try:
+                        raw_data = getDailyTS(ticker)
+                        raw_data = ensure_returns_column(raw_data)
+                        factory  = FactorCalculatorFactory(raw_data)
+                        all_factors = factory.generate_factors()
+                        predictions = predict_returns(all_factors, trained_model, selected_factors)
+                        predictions = predictions.dropna()
+                        predictions = predictions[predictions != 0]
+                    except Exception:
+                        continue
+                    if predictions is None or (hasattr(predictions, 'empty') and predictions.empty):
+                        continue
+                    decomposed = decompose_signal_series(predictions, contract)
+                    for col in decomposed.columns:
+                        if col in rf_signals:
+                            rf_signals[col] = rf_signals[col].add(decomposed[col], fill_value=0)
+                        else:
+                            rf_signals[col] = decomposed[col].copy()
+                    n_contracts += 1
+
+                if n_contracts:
+                    source_info.append(f"{n_contracts} contracts")
+
+            # --- Source 2: risk-factor-level models (input/models/) -----------
+            try:
+                from multiasset.factor_model import predict_factor_signals
+                rf_model_signals = predict_factor_signals(DIR_INPUT, DIR_MODELS)
+                if rf_model_signals:
+                    for rf, series in rf_model_signals.items():
+                        rf_signals[rf] = series  # override contract-derived
+                    source_info.append(f"{len(rf_model_signals)} risk-factor models")
+            except Exception as e:
+                print(f"Warning: risk-factor model signals unavailable: {e}")
 
             if not rf_signals:
                 return (
@@ -3203,9 +3146,11 @@ def register_multiasset_callbacks(app):
             # Store snapshot as serialisable dict for Portfolio tab
             snapshot_data = snapshot.to_dict(orient='records')
 
+            source_str = ' + '.join(source_info) if source_info else 'unknown'
+
             return (
                 table,
-                f"Updated ({len(snapshot)} factors)",
+                f"Updated ({len(snapshot)} factors · {source_str})",
                 snapshot_data,
             )
 
@@ -3254,19 +3199,19 @@ def register_multiasset_callbacks(app):
     # ── 3.8  Auto-fill risk budgets from factor signals ───────────────
     @app.callback(
         Output('factor-signals-toggle-status', 'children'),
-        [Input('use-factor-signals-toggle', 'value')],
+        [Input('allocation-mode', 'value')],
         [State('factor-signals-snapshot-store', 'data'),
          State('asset-pool-store', 'data')],
         prevent_initial_call=True,
     )
-    def autofill_risk_budgets_status(toggle_value, snapshot_data, asset_pool):
-        """When the toggle is ON and a signal snapshot exists, show guidance.
-        The actual budget values are injected in the Run Analysis callback."""
-        if 'on' not in (toggle_value or []):
+    def autofill_risk_budgets_status(allocation_mode, snapshot_data, asset_pool):
+        """When Factor Model Scaling is selected and a signal snapshot exists, show guidance.
+        The actual budget values are applied in the Run Analysis callback."""
+        if allocation_mode != 'factor_scaling':
             return ""
         if not snapshot_data:
             return "⚠ No signal snapshot. Click 'Refresh Signals' in the Factor tab first."
-        return f"✓ {len(snapshot_data)} factor signals will override risk budgets at run time."
+        return f"✓ {len(snapshot_data)} factor signals will scale risk budgets at run time."
 
     # 4. Run Analysis (Portfolio Tab -> Results)
     @app.callback(
@@ -3282,11 +3227,11 @@ def register_multiasset_callbacks(app):
          State('asset-pool-store', 'data'),
          State({'type': 'risk-budget-input', 'index': ALL}, 'value'),
          State({'type': 'risk-budget-input', 'index': ALL}, 'id'),
-         State('use-factor-signals-toggle', 'value'),
+         State('allocation-mode', 'value'),
          State('factor-signals-snapshot-store', 'data')]
     )
     def run_analysis(n_clicks, total_capital, capital_unit, risk_model, asset_pool,
-                     budget_values, budget_ids, signal_toggle, signal_snapshot):
+                     budget_values, budget_ids, allocation_mode, signal_snapshot):
         if n_clicks == 0:
             return (html.Div("No data available. Click 'Run Analysis' to start.", style={'color': THEME['text_sub']}),
                     "", "", {}, {})
@@ -3317,20 +3262,18 @@ def register_multiasset_callbacks(app):
                     except (ValueError, TypeError):
                         pass
 
-            # Override risk budgets with factor model signals when toggle is ON
-            if 'on' in (signal_toggle or []) and signal_snapshot:
-                signal_budgets = {
-                    rec['risk_factor']: rec['risk_budget']
-                    for rec in signal_snapshot
-                    if rec.get('risk_factor') and rec.get('risk_budget') is not None
-                }
-                if signal_budgets and risk_budgets is not None:
-                    for factor, budget in signal_budgets.items():
-                        if factor in risk_budgets:
-                            risk_budgets[factor] = budget
-                    print(f"📡 Signal-driven budgets applied for {len(signal_budgets)} factors")
-                elif signal_budgets:
-                    risk_budgets = signal_budgets
+            # Mode 2: scale each user-entered RP budget by factor model scalar
+            if allocation_mode == 'factor_scaling' and signal_snapshot:
+                snapshot_by_rf = {rec['risk_factor']: rec for rec in signal_snapshot if rec.get('risk_factor')}
+                if risk_budgets is not None:
+                    scaled_count = 0
+                    for factor in list(risk_budgets.keys()):
+                        rec = snapshot_by_rf.get(factor)
+                        if rec is not None:
+                            scalar = float(rec.get('scalar', 1.0))
+                            risk_budgets[factor] = round(risk_budgets[factor] * scalar, 2)
+                            scaled_count += 1
+                    print(f"📡 Factor model scaling applied to {scaled_count} risk budgets")
 
             # Determine use_deterministic flag
             use_deterministic = (risk_model == 'deterministic')
@@ -4236,19 +4179,13 @@ def register_multiasset_callbacks(app):
          Output('rfbt-mom-params', 'style'),
          Output('rfbt-zscore-params', 'style'),
          Output('rfbt-fm-params', 'style')],
-        Input('rfbt-strategy-selector', 'value'),
+        Input('rfbt-strategy-selector', 'data'),
     )
     def toggle_rfbt_strategy_params(strategy):
         """Show/hide strategy-specific parameter inputs."""
         flex = {'display': 'flex', 'alignItems': 'center'}
         hide = {'display': 'none', 'alignItems': 'center'}
-        return (
-            flex if strategy == 'MA' else hide,
-            flex if strategy == 'Bollinger' else hide,
-            flex if strategy == 'Momentum' else hide,
-            flex if strategy == 'Z-Score' else hide,
-            flex if strategy == 'FactorModel' else hide,
-        )
+        return (hide, hide, hide, hide, flex)
 
     @app.callback(
         Output('rfbt-status', 'children', allow_duplicate=True),
@@ -4271,7 +4208,7 @@ def register_multiasset_callbacks(app):
          Output('rfbt-status', 'children')],
         Input('rfbt-run-btn', 'n_clicks'),
         [State('rfbt-factor-selector', 'value'),
-         State('rfbt-strategy-selector', 'value'),
+         State('rfbt-strategy-selector', 'data'),
          State('rfbt-date-range', 'start_date'),
          State('rfbt-date-range', 'end_date'),
          State('rfbt-ma-short', 'value'),
@@ -4302,24 +4239,11 @@ def register_multiasset_callbacks(app):
                 _is_yield_factor,
             )
 
-            # Build strategy-specific kwargs
-            kwargs = {}
-            if strategy == 'MA':
-                kwargs = {'short_window': int(ma_short or 10),
-                          'long_window': int(ma_long or 30)}
-            elif strategy == 'Bollinger':
-                kwargs = {'window': int(boll_window or 20),
-                          'num_std': float(boll_std or 1.5)}
-            elif strategy == 'Momentum':
-                kwargs = {'window': int(mom_window or 20)}
-            elif strategy == 'Z-Score':
-                kwargs = {'window': int(zscore_window or 60),
-                          'entry_z': float(zscore_entry or 1.5),
-                          'exit_z': float(zscore_exit or 0.5)}
-            elif strategy == 'FactorModel':
-                kwargs = {'train_months': int(fm_train or 12),
-                          'ic_threshold': float(fm_ic or 0.05),
-                          'top_n': int(fm_topn or 8)}
+            # Build strategy-specific kwargs – always FactorModel
+            strategy = 'FactorModel'
+            kwargs = {'train_months': int(fm_train or 12),
+                      'ic_threshold': float(fm_ic or 0.05),
+                      'top_n': int(fm_topn or 8)}
 
             results = run_factor_backtest(
                 factors=factors,
@@ -4347,7 +4271,7 @@ def register_multiasset_callbacks(app):
                 metric_rows.append({
                     'Factor': factor,
                     'Type': 'Yield' if is_y else 'Price',
-                    'Dur': f'{dur:.1f}' if dur > 0 else '—',
+                    'Scale': f'{dur:.1f}' if dur > 0 else '—',
                     'Total Ret': f"{m.get('Total Return', 0):.2%}",
                     'Ann Ret': f"{m.get('Ann. Return', 0):.2%}",
                     'Ann Vol': f"{m.get('Ann. Vol', 0):.2%}",

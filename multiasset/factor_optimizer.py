@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 from typing import Optional, Tuple, Dict
 from scipy.optimize import minimize
+from multiasset.factor_backtest import compute_ewma_factor_vols, get_factor_price_beta
 from multiasset.portfolio import Portfolio
 from multiasset.pca_analyzer import PCARiskFactorAnalyzer
 from dateutil.relativedelta import relativedelta
@@ -63,21 +64,22 @@ class PCAFactorRiskParityOptimizer:
         Returns:
             Tuple of (weights Series, factor volatilities Series)
         """
-        # 1. Fit PCA for each country
-        pca_results = self.pca_analyzer.fit_pca(rebalance_date, n_components=3)
-        
-        # 2. Calculate PCA factor returns
+        risk_factors = self.portfolio.get_risk_factors(use_cache=True)
+        if not isinstance(risk_factors.index, pd.DatetimeIndex):
+            risk_factors.index = pd.to_datetime(risk_factors.index)
+        risk_factors = risk_factors.sort_index()
+
         vol_start = rebalance_date - relativedelta(months=self.vol_lookback_months)
-        pca_factor_returns = self.pca_analyzer.calculate_pca_factor_returns(
-            start_date=vol_start,
-            end_date=rebalance_date
-        )
-        
-        # 3. Calculate factor volatilities using EWMA
-        factor_vols = self._calculate_ewma_volatilities(pca_factor_returns)
+        factor_window = risk_factors.loc[
+            (risk_factors.index >= vol_start) & (risk_factors.index <= rebalance_date)
+        ]
+
+        factor_vols = pd.Series(compute_ewma_factor_vols(
+            factor_window,
+            ewma_lambda=self.ewma_lambda,
+        ))
         self._pca_factor_vols = factor_vols
-        
-        # 4. Build exposure matrix and optimize
+
         weights = self._optimize_weights(factor_vols, risk_budgets=risk_budgets, total_capital=total_capital)
         self._weights = weights
         
@@ -236,10 +238,11 @@ class PCAFactorRiskParityOptimizer:
         for i, asset_name in enumerate(asset_names):
             asset = self.portfolio.assets[asset_name]
             for j, factor_name in enumerate(factor_names):
-                # Map asset factor to PCA factor
-                # e.g., if asset has IRDL.US sensitivity, use that for PCA IRDL.US
                 if factor_name in asset.factors:
-                    exposure_matrix[i, j] = asset.factors[factor_name]
+                    exposure_matrix[i, j] = get_factor_price_beta(
+                        factor_name,
+                        asset.factors[factor_name],
+                    )
         
         return pd.DataFrame(exposure_matrix, index=asset_names, columns=factor_names), asset_names, factor_names
     
@@ -302,7 +305,7 @@ class PCAFactorRiskParityOptimizer:
         if self.portfolio.risk_factor_loader._risk_factors_cache is None:
              self.portfolio.risk_factor_loader.load_risk_factors(use_cache=False)
              
-        rebalance_date = self.portfolio.risk_factor_loader._risk_factors_cache.index.max()
+        rebalance_date = pd.Timestamp(self.portfolio.risk_factor_loader._risk_factors_cache.index.max())
         
         # Fit and Calculate
         weights, factor_vols = self.fit_and_calculate(rebalance_date, risk_budgets=risk_budgets, total_capital=total_capital)

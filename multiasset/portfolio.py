@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 from typing import List, Optional
 from multiasset.assets import Asset
+from multiasset.factor_backtest import factor_level_to_price_return, get_factor_price_beta
 from multiasset.risk_loader import RiskFactorLoader
 
 
@@ -163,46 +164,44 @@ class Portfolio:
         risk_factors_df = self.get_risk_factors(use_cache=use_cache)
         
         # Calculate factor returns (weighted by portfolio exposures)
-        factor_returns = {}
+        factor_return_map = {}
         
         for asset_name, weight in weights.items():
             asset = self.assets[asset_name]
-            asset_return = asset.get_returns(risk_factors_df, use_cache=use_cache)
-            
-            # Decompose asset returns by factor
+
             for factor_name, sensitivity in asset.factors.items():
                 if factor_name not in risk_factors_df.columns:
                     continue
-                
-                # Calculate this factor's contribution to asset returns
-                if 'IRDL' in factor_name or 'IRSL' in factor_name or 'IRCV' in factor_name:
-                    # IR factors are PCA cumulative scores — diff() recovers daily changes
-                    pc_score_changes = risk_factors_df[factor_name].diff()
-                    factor_contrib = sensitivity * pc_score_changes
-                elif 'SPDL' in factor_name or 'SPSL' in factor_name:
-                    # Spread factors are also cumulative sums of daily bp changes —
-                    # must use diff(), NOT pct_change() (which explodes on a cumsum series)
-                    factor_contrib = risk_factors_df[factor_name].diff() * sensitivity
-                elif 'FXDL' in factor_name or 'CMDL' in factor_name:
-                    # FX and commodity factors: stored as price levels, use pct return
-                    factor_contrib = risk_factors_df[factor_name].pct_change() * 100 * sensitivity
-                else:
-                    factor_contrib = risk_factors_df[factor_name].pct_change() * 100 * sensitivity
-                
+
+                factor_series = factor_level_to_price_return(
+                    risk_factors_df[factor_name],
+                    factor_name,
+                    output_in_percent=True,
+                )
+                factor_beta = get_factor_price_beta(factor_name, sensitivity)
+                factor_contrib = factor_beta * factor_series
+
                 # Weight by portfolio weight
                 weighted_contrib = factor_contrib * weight
-                
-                if factor_name not in factor_returns:
-                    factor_returns[factor_name] = weighted_contrib
+
+                if factor_name not in factor_return_map:
+                    factor_return_map[factor_name] = weighted_contrib
                 else:
-                    factor_returns[factor_name] = factor_returns[factor_name] + weighted_contrib
+                    factor_return_map[factor_name] = factor_return_map[factor_name] + weighted_contrib
         
         # Calculate volatility and risk contribution for each factor
         factor_stats = []
         total_risk = 0.0
+        alpha = 1.0 - 0.94
         
-        for factor_name, returns in factor_returns.items():
-            vol = returns.std() * np.sqrt(252)
+        for factor_name, returns in factor_return_map.items():
+            clean_returns = returns.dropna()
+            if len(clean_returns) < 5:
+                continue
+            ewma_var = clean_returns.ewm(alpha=alpha, adjust=False).var().dropna()
+            if ewma_var.empty:
+                continue
+            vol = float(np.sqrt(ewma_var.iloc[-1]) * np.sqrt(252))
             total_risk += vol
             factor_stats.append({
                 'Risk Factor': factor_name,
@@ -211,6 +210,8 @@ class Portfolio:
         
         # Convert to DataFrame and calculate risk contributions
         factor_df = pd.DataFrame(factor_stats)
+        if factor_df.empty or total_risk <= 0:
+            return factor_df
         factor_df['Risk Contribution (%)'] = (factor_df['Volatility (% ann.)'] / total_risk) * 100
         
         return factor_df.sort_values('Risk Contribution (%)', ascending=False)

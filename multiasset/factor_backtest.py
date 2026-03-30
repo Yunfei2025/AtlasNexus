@@ -20,69 +20,88 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from multiasset.pca_analyzer import (
-    DeterministicRiskFactorAnalyzer,
-    DETERMINISTIC_WEIGHTS,
-    DETERMINISTIC_SPREAD_WEIGHTS,
-)
+from multiasset.pca_analyzer import DeterministicRiskFactorAnalyzer
 from multiasset.risk_loader import RiskFactorLoader
 from settings.paths import DIR_INPUT
 
 
-# ── Representative modified durations for factor portfolios ─────────────────
-# These map factor codes → approximate portfolio modified duration (years).
-# Yield factors: duration is the portfolio-weighted duration given the
-# deterministic weight vector across tenors [1Y, 2Y, 5Y, 10Y, 30Y].
-# Tenor durations: [0.97, 1.90, 4.60, 8.80, 20.0]
-_TENOR_DURATIONS = np.array([0.97, 1.90, 4.60, 8.80, 20.0])
-
-_FACTOR_MOD_DURATION: Dict[str, float] = {}
-for _factor_name, _weights in DETERMINISTIC_WEIGHTS.items():
-    _d = float(np.dot(np.abs(_weights), _TENOR_DURATIONS))
-    _prefix = {'Level': 'IRDL', 'Slope': 'IRSL', 'Curvature': 'IRCV'}[_factor_name]
-    _FACTOR_MOD_DURATION[_prefix] = _d
-
-# Spread durations (approximate)
-_SPREAD_TENOR_DURATIONS = {
-    'CDB': np.array([0.97, 1.90, 4.60, 8.80, 20.0]),
-    'IRS': np.array([0.97, 1.90, 4.60]),
-    'ICP': np.array([0.97]),
-}
-for _sp_type, _sp_weights in DETERMINISTIC_SPREAD_WEIGHTS.items():
-    _dur_vec = _SPREAD_TENOR_DURATIONS.get(_sp_type, np.array([1.0]))
-    for _f_name, _w in _sp_weights.items():
-        _d = float(np.dot(np.abs(_w), _dur_vec[:len(_w)]))
-        _prefix = {'Level': 'SPDL', 'Slope': 'SPSL'}[_f_name]
-        _FACTOR_MOD_DURATION[f"{_prefix}.{_sp_type}"] = _d
-
-
 def get_factor_duration(factor_code: str) -> float:
-    """Return the representative modified duration for a factor code.
+    """Return the effective yield-to-price conversion scale for a factor.
 
-    Lookup order:
-      1. Exact match  (e.g. "SPDL.CDB")
-      2. Prefix match (e.g. "IRDL" matches "IRDL.CN")
-    Falls back to 1.0 for price-based factors (FX, Commodities).
+    For deterministic synthetic yield/spread portfolios, the physical position
+    uses notionals proportional to ``w_i / D_i``. That makes the factor return:
+
+      r_t = -sum(w_i * dy_i) / 100 = -d_factor / 100
+
+    so all yield/spread factors map to price return with effective scale 1.0.
+    Price-based factors (FX, commodities) do not use duration conversion.
     """
-    if factor_code in _FACTOR_MOD_DURATION:
-        return _FACTOR_MOD_DURATION[factor_code]
-    prefix = factor_code.split('.')[0]
-    # Check for spread-type factors like SPDL.CDB -> key "SPDL.CDB"
-    if '.' in factor_code:
-        suffix = factor_code.split('.')[1]
-        key = f"{prefix}.{suffix}"
-        if key in _FACTOR_MOD_DURATION:
-            return _FACTOR_MOD_DURATION[key]
-    if prefix in _FACTOR_MOD_DURATION:
-        return _FACTOR_MOD_DURATION[prefix]
-    # FX and Commodities: use pct_change, not duration
-    return 0.0
+    return 1.0 if _is_yield_factor(factor_code) else 0.0
 
 
 def _is_yield_factor(factor_code: str) -> bool:
     """Return True if this factor is yield/spread-based (needs duration conversion)."""
     prefix = factor_code.split('.')[0]
     return prefix in ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL')
+
+
+def factor_level_to_price_return(
+    series: pd.Series,
+    factor_code: str,
+    output_in_percent: bool = False,
+) -> pd.Series:
+    """Convert a factor level series into factor portfolio price returns.
+
+    Returns are emitted in decimal form by default for backtests, and in percent
+    form when ``output_in_percent=True`` for dashboards/optimizer reporting.
+    """
+    if _is_yield_factor(factor_code):
+        returns_pct = -get_factor_duration(factor_code) * series.diff()
+    else:
+        returns_pct = series.pct_change() * 100.0
+    if output_in_percent:
+        return returns_pct
+    return returns_pct / 100.0
+
+
+def get_factor_price_beta(factor_code: str, raw_sensitivity: float) -> float:
+    """Convert a raw factor sensitivity into beta to factor price returns."""
+    if not _is_yield_factor(factor_code):
+        return raw_sensitivity
+    scale = get_factor_duration(factor_code)
+    if scale == 0:
+        return 0.0
+    return -raw_sensitivity / scale
+
+
+def compute_ewma_factor_vols(
+    factor_levels: pd.DataFrame,
+    ewma_lambda: float = 0.94,
+) -> Dict[str, float]:
+    """Compute annualized EWMA vol in non-dimensionalized price-return space."""
+    alpha = 1.0 - ewma_lambda
+    vol_map: Dict[str, float] = {}
+
+    for factor in factor_levels.columns:
+        levels = factor_levels[factor].dropna()
+        if len(levels) < 5:
+            continue
+
+        returns = factor_level_to_price_return(
+            levels,
+            factor,
+            output_in_percent=True,
+        ).dropna()
+        if len(returns) < 5:
+            continue
+
+        ewma_var = returns.ewm(alpha=alpha, adjust=False).var().dropna()
+        if ewma_var.empty:
+            continue
+
+        vol_map[factor] = float(np.sqrt(ewma_var.iloc[-1]) * np.sqrt(252))
+
+    return vol_map
 
 
 # ── Factor series generation ────────────────────────────────────────────────

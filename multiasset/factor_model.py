@@ -24,15 +24,17 @@ Reuses:
 """
 from __future__ import annotations
 
+import glob
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
+import joblib
 import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from settings.paths import DIR_INPUT, DIR_DATA
+from settings.paths import DIR_INPUT, DIR_DATA, DIR_MODELS
 
 # ── Reused components from factors/ ─────────────────────────────────────────
 from factors.engine.selector import FactorSelector
@@ -452,6 +454,7 @@ def run_factor_model_backtest(
     end_date: Optional[str] = None,
     input_dir: Union[str, Path] = DIR_INPUT,
     config: Optional[FactorModelConfig] = None,
+    models_by_month: Optional[Dict] = None,
 ) -> pd.DataFrame:
     """Run walk-forward factor model backtest for a single risk factor.
 
@@ -565,6 +568,21 @@ def run_factor_model_backtest(
         if 'error' in trained:
             continue
 
+        # Collect model artifact keyed by train_end month for .joblib persistence
+        if models_by_month is not None:
+            month_key = train_end.strftime('%Y%m%d')
+            if month_key not in models_by_month:
+                models_by_month[month_key] = {}
+            models_by_month[month_key][factor_code] = {
+                'trained_model': {
+                    'coefficients': trained['coefficients'],
+                    'scaling_factor': trained['scaling_factor'],
+                    'scaler': trained['scaler'],
+                    'feature_names': trained['feature_names'],
+                },
+                'selected_factors': selected,
+            }
+
         # Step 4: Predict out-of-sample
         preds = _predict_ic_model(test_feat, trained)
         if preds.empty:
@@ -640,6 +658,7 @@ def run_factor_model_batch(
     factor_levels = factor_levels.sort_index()
 
     results: Dict[str, pd.DataFrame] = {}
+    models_by_month: Dict[str, Dict] = {}  # month_key -> {factor: model_artifact}
 
     for factor in factors:
         if factor not in factor_levels.columns:
@@ -659,6 +678,7 @@ def run_factor_model_batch(
                 end_date=end_date,
                 input_dir=input_dir,
                 config=config,
+                models_by_month=models_by_month,
             )
             if not df.empty:
                 results[factor] = df
@@ -668,6 +688,7 @@ def run_factor_model_batch(
             traceback.print_exc()
 
     if save and results:
+        # ── Accumulative save to factor-backtest.pkl ──────────────────────
         pkl_path = os.path.join(str(input_dir), 'factor-backtest.pkl')
         existing: Dict = {}
         if os.path.exists(pkl_path):
@@ -676,8 +697,126 @@ def run_factor_model_batch(
             except Exception:
                 existing = {}
 
-        existing['FactorModel'] = results
+        # Merge new factor results into existing (accumulative, not replace)
+        if 'FactorModel' not in existing:
+            existing['FactorModel'] = {}
+
+        for factor_code, new_df in results.items():
+            prev_df = existing['FactorModel'].get(factor_code)
+            if prev_df is not None and not prev_df.empty:
+                # Concat and keep latest rows for overlapping dates
+                merged = pd.concat([prev_df, new_df])
+                merged = merged[~merged.index.duplicated(keep='last')]
+                existing['FactorModel'][factor_code] = merged.sort_index()
+            else:
+                existing['FactorModel'][factor_code] = new_df
+
         pd.to_pickle(existing, pkl_path)
-        print(f"Saved factor-backtest.pkl  (strategy=FactorModel, {len(results)} factors)")
+        print(f"Saved factor-backtest.pkl  (strategy=FactorModel, "
+              f"{len(existing['FactorModel'])} total factors, "
+              f"{len(results)} updated)")
+
+        # ── Save monthly trained-model .joblib files ──────────────────────
+        cfg = config or FactorModelConfig()
+        models_dir = os.path.join(str(input_dir), 'models')
+        os.makedirs(models_dir, exist_ok=True)
+        n_saved = 0
+        for month_key, factor_models in models_by_month.items():
+            joblib_path = os.path.join(
+                models_dir, f'factor_model_{month_key}.joblib'
+            )
+            # Load existing file to merge new factors into it
+            existing_artifact: Dict = {}
+            if os.path.exists(joblib_path):
+                try:
+                    existing_artifact = joblib.load(joblib_path)
+                except Exception:
+                    existing_artifact = {}
+            # Merge factor models (new factors override existing for same key)
+            existing_artifact.update(factor_models)
+            existing_artifact['metadata'] = {
+                'train_end_date': month_key,
+                'created_date': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'config': {
+                    'train_months': cfg.train_months,
+                    'ic_threshold': cfg.ic_threshold,
+                    'top_n': cfg.top_n,
+                    'target_horizon': cfg.target_horizon,
+                    'weighting_method': cfg.weighting_method,
+                },
+                'factors': [k for k in existing_artifact if k != 'metadata'],
+            }
+            joblib.dump(existing_artifact, joblib_path)
+            n_saved += 1
+
+        print(f"Saved {n_saved} monthly factor_model_*.joblib files "
+              f"({len(models_by_month)} months, factors per latest: "
+              f"{len(models_by_month.get(max(models_by_month) if models_by_month else '', {}))}")
 
     return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  6. Prediction from saved model (for PORTFOLIO subtab integration)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def load_latest_factor_model(
+    models_dir: Union[str, Path] = DIR_MODELS,
+) -> Tuple[Optional[Dict], Optional[str]]:
+    """Load the most recent ``factor_model_*.joblib`` from ``input/models/``.
+
+    Returns (artifact_dict, month_key) or (None, None) if no files found.
+    """
+    pattern = os.path.join(str(models_dir), 'factor_model_*.joblib')
+    files = sorted(glob.glob(pattern))
+    if not files:
+        return None, None
+    latest = files[-1]
+    month_key = os.path.basename(latest).replace('factor_model_', '').replace('.joblib', '')
+    return joblib.load(latest), month_key
+
+
+def predict_factor_signals(
+    input_dir: Union[str, Path] = DIR_INPUT,
+    models_dir: Union[str, Path] = DIR_MODELS,
+) -> Dict[str, pd.Series]:
+    """Generate live risk-factor signal series from the latest saved model.
+
+    For each risk factor in the model, builds features from current data
+    and applies the trained IC-weighted model to produce a predicted-return
+    time series.  The PORTFOLIO subtab can feed these into
+    ``compute_signal_snapshot()`` to obtain scalars for risk budgets.
+
+    Returns
+    -------
+    dict  {risk_factor: pd.Series of predicted returns}
+    """
+    artifact, month_key = load_latest_factor_model(models_dir)
+    if artifact is None:
+        return {}
+
+    factor_levels = load_factor_rates(input_dir)
+    if not isinstance(factor_levels.index, pd.DatetimeIndex):
+        factor_levels.index = pd.to_datetime(factor_levels.index)
+    factor_levels = factor_levels.sort_index()
+
+    signals: Dict[str, pd.Series] = {}
+
+    for factor_code, entry in artifact.items():
+        if factor_code == 'metadata':
+            continue
+        trained_model = entry.get('trained_model')
+        if not trained_model:
+            continue
+
+        try:
+            features = build_features(factor_code, factor_levels, input_dir)
+            features = features.ffill().fillna(0)
+            preds = _predict_ic_model(features, trained_model)
+            if not preds.empty:
+                signals[factor_code] = preds
+        except Exception as e:
+            print(f"Warning: prediction failed for {factor_code}: {e}")
+            continue
+
+    return signals
