@@ -371,6 +371,7 @@ def run_factor_backtest(
     # Ensure index is DatetimeIndex for consistent slicing
     if not isinstance(factor_levels.index, pd.DatetimeIndex):
         factor_levels.index = pd.to_datetime(factor_levels.index)
+    factor_levels = factor_levels.sort_index()
 
     # ── Factor Model strategy: delegate to dedicated engine ─────────────
     if strategy == 'FactorModel':
@@ -392,9 +393,9 @@ def run_factor_backtest(
 
     # ── Technical indicator strategies ──────────────────────────────────
     if start_date:
-        factor_levels = factor_levels.loc[pd.Timestamp(start_date):]
+        factor_levels = factor_levels.loc[factor_levels.index >= pd.Timestamp(start_date)]
     if end_date:
-        factor_levels = factor_levels.loc[:pd.Timestamp(end_date)]
+        factor_levels = factor_levels.loc[factor_levels.index <= pd.Timestamp(end_date)]
 
     strategy_fn = STRATEGY_REGISTRY.get(strategy)
     if strategy_fn is None:

@@ -102,6 +102,9 @@ ALLOCATION_RESULTS = {
     'timestamp': None
 }
 
+RISK_BUDGET_VOL_LOOKBACK_YEARS = 1
+RISK_BUDGET_EWMA_LAMBDA = 0.94
+
 # Global state for low-correlation diversification recommendations
 # This persists across tab switches (unlike dcc.Store which is tab-scoped)
 DIVERSIFICATION_RECOMMENDATIONS = {
@@ -118,6 +121,58 @@ SELECTED_FACTOR_POOL = {
     'cmd_factors': ['CMDL.AU', 'CMDL.CU'],
     'timestamp': None
 }
+
+
+def compute_factor_vol_map(
+    factor_names: list[str],
+    lookback_years: int = RISK_BUDGET_VOL_LOOKBACK_YEARS,
+    ewma_lambda: float = RISK_BUDGET_EWMA_LAMBDA,
+) -> dict[str, float]:
+    """Compute annualized EWMA volatilities for selected risk factors."""
+    if not factor_names:
+        return {}
+
+    loader = RiskFactorLoader(DIR_INPUT)
+    factor_levels = loader.load_risk_factors(use_cache=True)
+
+    if factor_levels is None or factor_levels.empty:
+        return {}
+
+    if not isinstance(factor_levels.index, pd.DatetimeIndex):
+        factor_levels.index = pd.to_datetime(factor_levels.index)
+    factor_levels = factor_levels.sort_index()
+
+    available_factors = [factor for factor in factor_names if factor in factor_levels.columns]
+    if not available_factors:
+        return {}
+
+    end_date = factor_levels.index.max()
+    start_date = end_date - relativedelta(years=lookback_years)
+    window = factor_levels.loc[factor_levels.index >= start_date, available_factors]
+
+    alpha = 1.0 - ewma_lambda
+    vol_map: dict[str, float] = {}
+
+    for factor in available_factors:
+        levels = window[factor].dropna()
+        if len(levels) < 5:
+            continue
+
+        if factor.startswith(('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL')):
+            returns = levels.diff().dropna()
+        else:
+            returns = (levels.pct_change() * 100).dropna()
+
+        if len(returns) < 5:
+            continue
+
+        ewma_var = returns.ewm(alpha=alpha, adjust=False).var().dropna()
+        if ewma_var.empty:
+            continue
+
+        vol_map[factor] = float(np.sqrt(ewma_var.iloc[-1]) * np.sqrt(252))
+
+    return vol_map
 
 # ============================================================================
 # Factor to Asset Mapping Table
@@ -708,13 +763,13 @@ def build_multiasset_portfolio_layout():
                             style={'height': '180px', 'overflowY': 'auto', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '4px', 'padding': '6px', 'backgroundColor': THEME['bg_input']},
                         ),
                     ], style={'padding': '12px 14px'}),
-                ], style={'width': '28%', 'borderRight': f'1px solid {THEME["table_header"]}', 'display': 'flex', 'flexDirection': 'column'}),
+                ], style={'width': '45%', 'borderRight': f'1px solid {THEME["table_header"]}', 'display': 'flex', 'flexDirection': 'column'}),
 
                 # ── Right main: Risk Budgets (primary) ───────────────────────────────
                 html.Div([
                     html.Div([
                         html.H6("Risk Budgets", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '0', 'fontSize': '13px', 'fontWeight': 'bold'}),
-                        html.Span("Exposure = RP Max × Coeff  ·  Vol from EWMA factor risk decomposition",
+                        html.Span("Exposure = RP Max × Coeff  ·  Vol auto-updated from 1Y EWMA factor history",
                                   style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '12px'}),
                     ], style={'display': 'flex', 'alignItems': 'baseline', 'marginBottom': '8px'}),
                     # Hidden toggle kept for callback compatibility
@@ -745,7 +800,7 @@ def build_multiasset_portfolio_layout():
                                'borderRadius': '4px', 'padding': '6px 8px',
                                'backgroundColor': THEME['bg_input']},
                     ),
-                    html.Div("Run analysis to update RP Max and Vol from latest risk decomposition.",
+                    html.Div("Vol auto-refreshes from 1Y EWMA factor history. Run analysis to refresh RP Max from portfolio decomposition.",
                              style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '5px', 'textAlign': 'center'}),
                 ], style={'flex': '1', 'padding': '16px 20px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '0 0 8px 0'}),
             ], style={'display': 'flex'}),
@@ -2366,6 +2421,10 @@ def register_multiasset_callbacks(app):
             
             if factor_levels is None or factor_levels.empty:
                 raise ValueError("Cannot load risk factor data")
+
+            if not isinstance(factor_levels.index, pd.DatetimeIndex):
+                factor_levels.index = pd.to_datetime(factor_levels.index)
+            factor_levels = factor_levels.sort_index()
             
             fig = go.Figure()
             x_min_all = None
@@ -2403,14 +2462,16 @@ def register_multiasset_callbacks(app):
 
             # Default to 3M rather than "All" when data exists.
             if x_max_all is not None and x_min_all is not None:
-                default_start = max(x_min_all, pd.Timestamp(x_max_all) - relativedelta(months=3))
-                default_xaxis['range'] = [default_start, x_max_all]
+                x_min_ts = pd.Timestamp(x_min_all)
+                x_max_ts = pd.Timestamp(x_max_all)
+                default_start = max(x_min_ts, x_max_ts - relativedelta(months=3))
+                default_xaxis['range'] = [default_start, x_max_ts]
 
                 y_min, y_max = float('inf'), float('-inf')
                 for factor in selected_factors:
                     if factor in factor_levels.columns:
                         series = factor_levels[factor].dropna()
-                        mask = (series.index >= default_start) & (series.index <= x_max_all)
+                        mask = (series.index >= default_start) & (series.index <= x_max_ts)
                         viz_series = series[mask]
                         if not viz_series.empty:
                             y_min = min(y_min, viz_series.min())
@@ -2955,10 +3016,12 @@ def register_multiasset_callbacks(app):
                 return float(rec.get('scalar', 1.0))
             return 1.0  # default: full long — placeholder until factor model is run
 
-        # ── Factor vol lookup (from latest risk decomposition run) ────────────
-        _vol_map = {}
+        # ── Factor vol lookup (live 1Y EWMA, fallback to latest decomposition) ─
+        _vol_map = compute_factor_vol_map(sorted_factors)
         if _prior_risk is not None and not _prior_risk.empty and 'Volatility (% ann.)' in _prior_risk.columns:
-            _vol_map = dict(zip(_prior_risk['Risk Factor'], _prior_risk['Volatility (% ann.)']))
+            _prior_vol_map = dict(zip(_prior_risk['Risk Factor'], _prior_risk['Volatility (% ann.)']))
+            for factor, vol in _prior_vol_map.items():
+                _vol_map.setdefault(factor, vol)
 
         # ── Build rows ─────────────────────────────────────────────────────────
         rows = []

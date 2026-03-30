@@ -479,6 +479,7 @@ def run_factor_model_backtest(
     # Ensure DatetimeIndex
     if not isinstance(factor_levels.index, pd.DatetimeIndex):
         factor_levels.index = pd.to_datetime(factor_levels.index)
+    factor_levels = factor_levels.sort_index()
 
     # Date filter
     if start_date:
@@ -636,6 +637,7 @@ def run_factor_model_batch(
     factor_levels = load_factor_rates(input_dir)
     if not isinstance(factor_levels.index, pd.DatetimeIndex):
         factor_levels.index = pd.to_datetime(factor_levels.index)
+    factor_levels = factor_levels.sort_index()
 
     results: Dict[str, pd.DataFrame] = {}
 
