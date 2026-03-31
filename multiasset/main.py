@@ -129,13 +129,22 @@ def create_spread_universe(analyzer=None) -> List[Asset]:
 
             if spread_code != 'ICP':
                 slope_factor = f'SPSL.{spread_code}'
+                # SPSL sign convention matches IRSL: short-end positive, belly zero, long-end negative
+                # (spread slope factor rises → short-end spreads widen, long-end spreads tighten)
+                slope_mag = max(duration * 0.5, 0.5)
+                if duration <= 2.0:
+                    signed_slope = slope_mag            # short-end: positive
+                elif duration <= 5.0:
+                    signed_slope = 0.0                  # belly: neutral
+                else:
+                    signed_slope = -min(slope_mag, 3.0) # long-end: negative, capped
                 spreads.append(
                     SlopeSensitiveBondAsset(
                         name=name,
                         level_factor=level_factor,
                         slope_factor=slope_factor,
                         duration=duration,
-                        slope_sensitivity=max(duration * 0.5, 0.5),
+                        slope_sensitivity=signed_slope,
                     )
                 )
             else:
@@ -294,6 +303,111 @@ def run_risk_parity_allocation(total_capital: float = 10_000_000_000,
     optimizer.print_summary(summary, total_capital, factor_exposures, factor_risk_contributions)
     
     return summary, asset_returns, volatilities, factor_exposures, factor_risk_contributions, portfolio
+
+
+# =============================================================================
+# IRDL HEDGE OVERLAY
+# =============================================================================
+
+# Default DV01 (CNY per basis-point) per contract for each country's bond futures.
+# CGB: T (10Y) contract on CFFEX ≈ 800 CNY/bp; TF (5Y) ≈ 450 CNY/bp.
+# These are approximations; override via the UI.
+_DEFAULT_FUTURES_DV01: Dict[str, float] = {
+    'CN': 800.0,    # CFFEX T (10Y CGB futures)
+    'US': 640.0,    # CBOT ZN (10Y UST futures, ~$64 per bp)
+    'DE': 750.0,    # Eurex Bund futures (~€75 per bp ≈ 750 CNY at ~10 USDCNY)
+    'JP': 560.0,    # TSE JGB futures (~¥56,000/bp at ~100 JPYCNY)
+    'UK': 600.0,    # ICE Long Gilt futures (~£60/bp)
+}
+
+# IRS DV01 per 1 million CNY notional, by maturity.
+# Approximation: modified_duration × 1_000_000 / 10_000
+_DEFAULT_IRS_DV01_PER_1M: Dict[str, float] = {
+    '2Y':  180.0,   # ~1.8Y duration × 1M / 10k
+    '5Y':  440.0,   # ~4.4Y duration
+    '10Y': 840.0,   # ~8.4Y duration
+    '30Y': 1800.0,  # ~18Y duration
+}
+
+
+def compute_irdl_hedge(
+    factor_risk_records: List[Dict],
+    total_capital: float,
+    hedge_ratio: float = 1.0,
+    instrument: str = 'futures',
+    dv01_overrides: Dict[str, float] = None,
+    irs_maturity: str = '10Y',
+) -> List[Dict]:
+    """
+    Compute an optional IRDL hedge overlay on top of the RP allocation.
+
+    This is a post-optimisation overlay — it does NOT change portfolio weights.
+    It answers: "given the portfolio's net IRDL exposure, how many futures contracts
+    (or how much IRS notional) do we need to short/pay-fixed to reduce duration risk?"
+
+    Args:
+        factor_risk_records: factor_risk.to_dict('records') from optimizer output.
+            Must contain 'Risk Factor' and 'Net Exposure' fields.
+        total_capital: Portfolio total capital in CNY.
+        hedge_ratio: 0.0–1.0.  1.0 = fully neutralise IRDL per country.
+        instrument: 'futures' → bond futures contracts; 'irs' → pay-fixed IRS notional.
+        dv01_overrides: Override default DV01 per country (for futures) or per maturity (for IRS).
+        irs_maturity: IRS tenor to use when instrument='irs' (default '10Y').
+
+    Returns:
+        List of dicts with keys:
+          Country, Net IRDL Exp, Port DV01 (CNY/bp), Hedge DV01 (CNY/bp),
+          Contracts / IRS Notional (M CNY), Direction, Instrument
+    """
+    dv01_map = dict(_DEFAULT_FUTURES_DV01)
+    if dv01_overrides:
+        dv01_map.update(dv01_overrides)
+
+    irs_dv01 = (_DEFAULT_IRS_DV01_PER_1M.get(irs_maturity, 840.0)
+                if instrument == 'irs'
+                else None)
+
+    tickets = []
+    for row in factor_risk_records:
+        factor = row.get('Risk Factor', '')
+        if not factor.startswith('IRDL.'):
+            continue
+        country = factor.split('.')[1]
+        net_exp = float(row.get('Net Exposure', 0.0))
+        if net_exp == 0.0:
+            continue
+
+        # Portfolio DV01: how many CNY/bp does the portfolio gain/lose on this factor
+        # net_exp is in duration-years; total_capital / 10_000 converts to CNY-per-bp
+        port_dv01 = net_exp * total_capital / 10_000.0   # CNY per bp
+
+        # Hedge size targets net_exp → (1 - hedge_ratio) × net_exp
+        hedge_dv01 = -port_dv01 * hedge_ratio            # negative = short / pay-fixed
+
+        if instrument == 'futures':
+            fv = dv01_map.get(country, 800.0)
+            qty = hedge_dv01 / fv                         # contracts (negative = short)
+            qty_label = f"{int(round(qty)):+d} contracts"
+            direction = 'SHORT' if qty < 0 else 'LONG'
+        else:
+            # IRS: notional in millions CNY
+            notional_m = hedge_dv01 / irs_dv01 if irs_dv01 else 0.0
+            qty = notional_m
+            qty_label = f"{notional_m:+,.1f} M CNY"
+            direction = 'PAY FIXED' if notional_m < 0 else 'RCV FIXED'
+
+        tickets.append({
+            'Country':              country,
+            'Net IRDL Exp (DY)':    round(net_exp, 4),
+            'Port DV01 (CNY/bp)':   round(port_dv01),
+            'Hedge DV01 (CNY/bp)':  round(hedge_dv01),
+            'Quantity':             qty_label,
+            'Direction':            direction,
+            'Instrument':           (f'{country} Bond Futures'
+                                     if instrument == 'futures'
+                                     else f'{irs_maturity} IRS'),
+        })
+    return tickets
 
 
 # =============================================================================

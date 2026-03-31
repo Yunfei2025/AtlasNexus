@@ -287,13 +287,13 @@ def build_tabs_panel():
                         style={"height": "520px"},
                     ),
                     html.Div([
-                        html.Div(id="beta-factor-div",            children=build_multiasset_factor_layout(),     style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
-                        html.Div(id="beta-portfolio-div",         children=build_multiasset_portfolio_layout(),  style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-bond-div",              children=build_multiasset_bond_layout(),       style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-factor-model-bt-div",   children=build_risk_factor_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-backtest-factor-div",   children=build_factor_backtest_layout(),       style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(),  style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                    ], style={"position": "relative", "width": "100%", "minHeight": "500px"}),
+                            html.Div(id="beta-factor-div",            children=build_multiasset_factor_layout(),     style={"display": "block", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-portfolio-div",         children=build_multiasset_portfolio_layout(),  style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-bond-div",              children=build_multiasset_bond_layout(),       style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-factor-model-bt-div",   children=build_risk_factor_backtest_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-backtest-factor-div",   children=build_factor_backtest_layout(),       style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(),  style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                        ], style={"position": "relative", "width": "100%"}),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
             ),
@@ -321,14 +321,14 @@ def build_tabs_panel():
                         style={"height": "520px"},
                     ),
                     html.Div([
-                        html.Div(id="alpha-candidates-div", children=build_candidates_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
-                        html.Div(id="alpha-portfolio-div", children=build_portfolio_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="alpha-backtest-div", children=build_backtest_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="alpha-spreads-div", children=build_spreads_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="alpha-pairs-div", children=build_pairs_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="alpha-volatility-div", children=build_volatility_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
+                            html.Div(id="alpha-candidates-div", children=build_candidates_layout(), style={"display": "block", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-portfolio-div", children=build_portfolio_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-backtest-div", children=build_backtest_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-spreads-div", children=build_spreads_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-pairs-div", children=build_pairs_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-volatility-div", children=build_volatility_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
                         # alpha-basket-div intentionally removed
-                    ], style={"position": "relative", "width": "100%", "minHeight": "500px"}),
+                        ], style={"position": "relative", "width": "100%"}),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
             ),
@@ -355,11 +355,11 @@ def build_tabs_panel():
                         style={"height": "520px"},
                     ),
                     html.Div([
-                        html.Div(id="market-data-div",    children=build_market_data_layout(), style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "block"}),
-                        html.Div(id="market-trend-div",   children=build_trend_layout(),        style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="market-surface-div", children=build_surface_layout(),      style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                        html.Div(id="market-curves-div",  children=build_curves_layout(),       style={"position": "absolute", "top": "0", "left": "16px", "right": "0", "display": "none"}),
-                    ], style={"position": "relative", "width": "100%", "minHeight": "500px"}),
+                            html.Div(id="market-data-div",    children=build_market_data_layout(), style={"display": "block", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-trend-div",   children=build_trend_layout(),        style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-surface-div", children=build_surface_layout(),      style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-curves-div",  children=build_curves_layout(),       style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                        ], style={"position": "relative", "width": "100%"}),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
             ),
@@ -697,7 +697,7 @@ def _update_run_center(n, job_id):
 )
 def _render_beta_subtabs(subtab: str):
     """Show/hide Beta Book subtabs to preserve state."""
-    base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
+    base_style = {"width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}
     keys = ["factor", "portfolio", "bond", "factor-model-bt", "backtest-factor", "backtest-portfolio"]
     return tuple(
         {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
@@ -714,7 +714,7 @@ def _render_beta_subtabs(subtab: str):
 )
 def _render_market_subtabs(subtab: str):
     """Show/hide Market subtabs to preserve state."""
-    base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
+    base_style = {"width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}
     keys = ["data", "trend", "surface", "curves"]
     return tuple(
         {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
@@ -733,7 +733,7 @@ def _render_market_subtabs(subtab: str):
 )
 def _render_alpha_subtabs(subtab: str):
     """Show/hide Alpha Book subtabs to preserve state."""
-    base_style = {"position": "absolute", "top": "0", "left": "16px", "right": "0"}
+    base_style = {"width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}
     keys = ["candidates", "portfolio", "backtest", "spreads", "pairs", "volatility"]
     return tuple(
         {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}

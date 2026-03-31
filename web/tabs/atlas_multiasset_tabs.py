@@ -25,7 +25,7 @@ from multiasset.data import (
 )
 from multiasset.layout import prepare_portfolio_table
 from multiasset.storage import load_last_asset_pool
-from multiasset.main import run_risk_parity_allocation, create_custom_portfolio
+from multiasset.main import run_risk_parity_allocation, create_custom_portfolio, compute_irdl_hedge
 from multiasset.storage import save_asset_pool
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
@@ -750,7 +750,7 @@ def build_multiasset_portfolio_layout():
                 html.Div([
                     html.Div([
                         html.H6("Risk Budgets", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '0', 'fontSize': '13px', 'fontWeight': 'bold'}),
-                        html.Span("Exposure = RP Max × Coeff  ·  Vol auto-updated from 1Y EWMA factor return history",
+                        html.Span("Vol from 1Y EWMA  ·  RP Max = inv-vol weights (or user value)  ·  Exposure = RP Max × Coeff",
                                   style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '12px'}),
                     ], style={'display': 'flex', 'alignItems': 'baseline', 'marginBottom': '8px'}),
                     html.Div([
@@ -759,6 +759,7 @@ def build_multiasset_portfolio_layout():
                             options=[
                                 {'label': ' Pure Risk Parity', 'value': 'risk_parity'},
                                 {'label': ' Factor Model Scaling', 'value': 'factor_scaling'},
+                                {'label': ' User Defined', 'value': 'user_defined'},
                             ],
                             value='risk_parity',
                             inputStyle={'marginRight': '5px'},
@@ -854,6 +855,121 @@ def build_multiasset_portfolio_layout():
 
             html.Div(id='portfolio-table-container')
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'marginBottom': '20px', 'borderRadius': '5px'}),
+
+        # ── IRDL Hedge Overlay (collapsible) ─────────────────────────────────
+        html.Details([
+            html.Summary([
+                html.Span("🛡 IRDL Hedge Overlay",
+                          style={'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '13px'}),
+                html.Span("  ·  optional post-optimisation duration hedge via bond futures or pay-fixed IRS",
+                          style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+            ], style={
+                'padding': '10px 16px', 'cursor': 'pointer',
+                'listStyleType': 'none', 'WebkitAppearance': 'none', 'MozAppearance': 'none',
+                'backgroundColor': THEME['bg_input'], 'borderRadius': '5px', 'userSelect': 'none',
+            }),
+            html.Div([
+                # Controls row
+                html.Div([
+                    # Hedge ratio
+                    html.Div([
+                        html.Label("Hedge Ratio", style={
+                            'color': THEME['text_sub'], 'fontSize': '11px',
+                            'marginBottom': '4px', 'display': 'block',
+                        }),
+                        dcc.Slider(
+                            id='irdl-hedge-ratio',
+                            min=0, max=100, step=5, value=50,
+                            marks={0: '0%', 25: '25%', 50: '50%', 75: '75%', 100: '100%'},
+                            tooltip={'placement': 'bottom', 'always_visible': True},
+                        ),
+                    ], style={'flex': '2', 'minWidth': '220px'}),
+                    # Instrument
+                    html.Div([
+                        html.Label("Instrument", style={
+                            'color': THEME['text_sub'], 'fontSize': '11px',
+                            'marginBottom': '4px', 'display': 'block',
+                        }),
+                        dcc.Dropdown(
+                            id='irdl-hedge-instrument',
+                            options=[
+                                {'label': 'Bond Futures (Short)',   'value': 'futures'},
+                                {'label': 'Pay-fixed IRS',          'value': 'irs'},
+                            ],
+                            value='futures', clearable=False,
+                            style={'fontSize': '12px', 'backgroundColor': THEME['bg_input'],
+                                   'color': THEME['text_main']},
+                        ),
+                    ], style={'flex': '1', 'minWidth': '180px'}),
+                    # IRS maturity (only relevant when IRS selected)
+                    html.Div([
+                        html.Label("IRS Tenor", style={
+                            'color': THEME['text_sub'], 'fontSize': '11px',
+                            'marginBottom': '4px', 'display': 'block',
+                        }),
+                        dcc.Dropdown(
+                            id='irdl-hedge-irs-maturity',
+                            options=[
+                                {'label': '2Y IRS',  'value': '2Y'},
+                                {'label': '5Y IRS',  'value': '5Y'},
+                                {'label': '10Y IRS', 'value': '10Y'},
+                                {'label': '30Y IRS', 'value': '30Y'},
+                            ],
+                            value='10Y', clearable=False,
+                            style={'fontSize': '12px', 'backgroundColor': THEME['bg_input'],
+                                   'color': THEME['text_main']},
+                        ),
+                    ], style={'flex': '0 0 130px'}),
+                ], style={
+                    'display': 'flex', 'gap': '20px', 'alignItems': 'flex-end',
+                    'flexWrap': 'wrap', 'marginBottom': '16px',
+                }),
+                # DV01 overrides (compact row)
+                html.Div([
+                    html.Span("DV01 Override (CNY/bp per contract, blank = default):",
+                              style={'color': THEME['text_sub'], 'fontSize': '11px',
+                                     'marginRight': '12px', 'alignSelf': 'center'}),
+                    *[
+                        html.Div([
+                            html.Label(cty, style={'color': THEME['text_sub'], 'fontSize': '11px',
+                                                   'display': 'block', 'marginBottom': '2px'}),
+                            dcc.Input(
+                                id={'type': 'irdl-dv01-override', 'index': cty},
+                                type='number', placeholder=str(default),
+                                debounce=True,
+                                style={'width': '72px', 'padding': '4px 6px',
+                                       'background': THEME['bg_input'], 'color': THEME['text_main'],
+                                       'border': f'1px solid {THEME["table_header"]}',
+                                       'borderRadius': '4px', 'fontSize': '12px'},
+                            ),
+                        ], style={'textAlign': 'center'})
+                        for cty, default in [('CN', 800), ('US', 640), ('DE', 750),
+                                             ('JP', 560), ('UK', 600)]
+                    ],
+                ], style={
+                    'display': 'flex', 'gap': '12px', 'alignItems': 'flex-end',
+                    'marginBottom': '16px', 'flexWrap': 'wrap',
+                }),
+                # Ticket output
+                dcc.Loading(
+                    type='default',
+                    children=html.Div(id='irdl-hedge-ticket-container',
+                                      style={'minHeight': '60px'}),
+                ),
+                html.Div(
+                    "Hedge overlay is advisory only — it does not change portfolio weights. "
+                    "Negative contracts = short futures; PAY FIXED = pay fixed rate in IRS.",
+                    style={'color': THEME['text_sub'], 'fontSize': '11px',
+                           'marginTop': '8px', 'fontStyle': 'italic'},
+                ),
+            ], style={'padding': '14px 16px', 'borderTop': f'1px solid {THEME["table_header"]}'}),
+        ], style={
+            'backgroundColor': THEME['bg_card'],
+            'borderRadius': '5px',
+            'border': f'1px solid {THEME["table_header"]}',
+            'marginBottom': '20px',
+        }),
+
     ], style={'padding': '10px', 'backgroundColor': THEME['bg_main']})
 
 
@@ -1413,19 +1529,46 @@ def build_multiasset_risk_layout():
             
             # --- Volatility Table Logic ---
             factor_vol_df = factor_risk[factor_risk['Risk Factor'].isin(factor_names)].copy()
-            factor_vol_df = factor_vol_df[['Risk Factor', 'Volatility (% ann.)']].copy()
+            display_cols = ['Risk Factor', 'Volatility (% ann.)']
+            if 'Net Exposure' in factor_vol_df.columns:
+                display_cols.append('Net Exposure')
+            if 'Risk Contribution (%)' in factor_vol_df.columns:
+                display_cols.append('Risk Contribution (%)')
+            factor_vol_df = factor_vol_df[display_cols].copy()
             # Format
             factor_vol_df['Volatility (% ann.)'] = factor_vol_df['Volatility (% ann.)'].apply(lambda x: f"{x:.2f}%")
+            if 'Net Exposure' in factor_vol_df.columns:
+                factor_vol_df['Net Exposure'] = factor_vol_df['Net Exposure'].apply(
+                    lambda x: f"{x:+.3f}"  # always show sign
+                )
+            if 'Risk Contribution (%)' in factor_vol_df.columns:
+                factor_vol_df['Risk Contribution (%)'] = factor_vol_df['Risk Contribution (%)'].apply(lambda x: f"{x:.1f}%")
             factor_vol_df = factor_vol_df.sort_values('Risk Factor')
-            
+
+            tbl_columns = [
+                {'name': 'Risk Factor', 'id': 'Risk Factor'},
+                {'name': 'Vol', 'id': 'Volatility (% ann.)'},
+            ]
+            if 'Net Exposure' in factor_vol_df.columns:
+                tbl_columns.append({'name': 'Net Exp', 'id': 'Net Exposure'})
+            if 'Risk Contribution (%)' in factor_vol_df.columns:
+                tbl_columns.append({'name': 'RC %', 'id': 'Risk Contribution (%)'})
+
             vol_table = dash_table.DataTable(
                 data=factor_vol_df.to_dict('records'),
-                columns=[{'name': 'Risk Factor', 'id': 'Risk Factor'}, {'name': 'Vol', 'id': 'Volatility (% ann.)'}],
-                style_cell={'textAlign': 'center', 'padding': '8px', 'fontSize': '12px', 
+                columns=tbl_columns,
+                style_cell={'textAlign': 'center', 'padding': '8px', 'fontSize': '12px',
                           'backgroundColor': THEME['table_row_odd'], 'color': THEME['text_main'], 'border': 'none'},
                 style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'], 'fontWeight': 'bold', 'border': 'none'},
-                style_data_conditional=[{'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']}],
-                 style_table={'overflowY': 'auto', 'maxHeight': '400px'}
+                style_data_conditional=[
+                    {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                    # Colour Net Exposure: negative = red (short factor), positive = green (long factor)
+                    {'if': {'filter_query': '{Net Exposure} contains "-"', 'column_id': 'Net Exposure'},
+                     'color': THEME.get('danger', '#e74c3c')},
+                    {'if': {'filter_query': '{Net Exposure} contains "+"', 'column_id': 'Net Exposure'},
+                     'color': THEME.get('success', '#27ae60')},
+                ],
+                style_table={'overflowY': 'auto', 'maxHeight': '400px'}
             )
 
         except Exception as e:
@@ -1565,7 +1708,7 @@ def build_multiasset_backtest_layout():
                 dcc.Input(
                     id='backtest-capital-input',
                     type='number',
-                    value=100,
+                    value=10,
                     style={'width': '80px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
                 ),
                 dcc.Dropdown(
@@ -1574,7 +1717,7 @@ def build_multiasset_backtest_layout():
                         {"label": "Million", "value": "million"},
                         {"label": "Billion", "value": "billion"},
                     ],
-                    value="million",
+                    value="billion",
                     clearable=False,
                     style={'width': '100px', 'fontSize': '13px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
                 ),
@@ -1594,7 +1737,7 @@ def build_multiasset_backtest_layout():
                         {'label': '6 Months', 'value': '6M'},
                         {'label': '1 Year', 'value': '1Y'},
                     ],
-                    value='3M',
+                    value='1Y',
                     clearable=False,
                     style={'width': '120px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
                 ),
@@ -1616,6 +1759,22 @@ def build_multiasset_backtest_layout():
             # Performance Metrics Table
             html.Div(id='performance-metrics-container', style={'marginLeft': '20px'}),
         ], style={'marginBottom': '15px', 'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '10px'}),
+
+        # Row 3: Allocation Mode
+        html.Div([
+            html.Label("Allocation Mode:", style={'fontWeight': 'bold', 'marginRight': '12px', 'color': THEME['text_main']}),
+            dcc.RadioItems(
+                id='backtest-alloc-mode',
+                options=[
+                    {'label': ' Pure Risk Parity', 'value': 'risk_parity'},
+                    {'label': ' Factor Model Scaling  (not available — factor backtests pending)', 'value': 'factor_scaling', 'disabled': True},
+                ],
+                value='risk_parity',
+                inline=True,
+                inputStyle={'marginRight': '4px'},
+                labelStyle={'marginRight': '20px', 'color': THEME['text_main'], 'fontSize': '13px'},
+            ),
+        ], style={'marginBottom': '15px', 'display': 'flex', 'alignItems': 'center'}),
 
         html.Div([
             html.Button(
@@ -2843,11 +3002,12 @@ def register_multiasset_callbacks(app):
         Output('risk-budget-container', 'children'),
         [Input('asset-pool-store', 'data'),
          Input('rp-budget-store', 'data'),
-         Input('factor-signals-snapshot-store', 'data')],
+         Input('factor-signals-snapshot-store', 'data'),
+         Input('allocation-mode', 'value')],
         [State('capital-input', 'value'),
          State('capital-unit', 'value')],
     )
-    def update_risk_budget_inputs(asset_pool, rp_budgets, snapshot_data, capital, capital_unit):
+    def update_risk_budget_inputs(asset_pool, rp_budgets, snapshot_data, allocation_mode, capital, capital_unit):
         if not asset_pool:
              return [html.Div("Add assets to see risk factors", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px', 'textAlign': 'center'})]
 
@@ -2902,23 +3062,6 @@ def register_multiasset_callbacks(app):
             total_capital_m = 100.0
         equal_share = round(total_capital_m / n_factors, 2) if n_factors else 1.0
 
-        # Build risk-contribution-based defaults from a prior run (if available)
-        _prior_risk = ALLOCATION_RESULTS['factor_risk']
-        _rc_defaults = {}
-        if _prior_risk is not None and not _prior_risk.empty and 'Risk Contribution (%)' in _prior_risk.columns:
-            _rc_map = dict(zip(_prior_risk['Risk Factor'], _prior_risk['Risk Contribution (%)']))
-            _total_rc = sum(v for v in _rc_map.values() if pd.notna(v) and v > 0)
-            if _total_rc > 0:
-                _rc_defaults = {f: round(total_capital_m * _rc_map.get(f, 0) / _total_rc, 2)
-                                for f in sorted_factors}
-
-        def get_rp_max(factor):
-            if rp_budgets and factor in rp_budgets:
-                return float(rp_budgets[factor])
-            if factor in _rc_defaults:
-                return _rc_defaults[factor]
-            return equal_share
-
         # ── Factor model signal lookup (scalar + colour) ───────────────────────
         SCALAR_META = {
             -1.5: ('Strong Short', THEME.get('danger', '#e74c3c')),
@@ -2942,19 +3085,38 @@ def register_multiasset_callbacks(app):
                 return float(rec.get('scalar', 1.0))
             return 1.0  # default: full long — placeholder until factor model is run
 
-        # ── Factor vol lookup (live 1Y EWMA, fallback to latest decomposition) ─
+        # ── Factor vol lookup (live 1Y EWMA) ─────────────────────────────────
         _vol_map = compute_factor_vol_map(sorted_factors)
-        if _prior_risk is not None and not _prior_risk.empty and 'Volatility (% ann.)' in _prior_risk.columns:
-            _prior_vol_map = dict(zip(_prior_risk['Risk Factor'], _prior_risk['Volatility (% ann.)']))
-            for factor, vol in _prior_vol_map.items():
-                _vol_map.setdefault(factor, vol)
+
+        # ── Inverse-vol proportional RP Max (stable base for risk_parity / factor_scaling) ─
+        _inv_vols = {}
+        for _f in sorted_factors:
+            _v = _vol_map.get(_f)
+            if _v is not None and pd.notna(_v) and _v > 0:
+                _inv_vols[_f] = 1.0 / _v
+        _total_inv_vol = sum(_inv_vols.values())
+        if _total_inv_vol > 0:
+            _inv_vol_budgets = {
+                _f: round(total_capital_m * _inv_vols.get(_f, 0.0) / _total_inv_vol, 2)
+                for _f in sorted_factors
+            }
+        else:
+            _inv_vol_budgets = {_f: equal_share for _f in sorted_factors}
+
+        def get_rp_max(factor):
+            if allocation_mode == 'user_defined':
+                # User Defined: preserve what the user last stored (or equal share on first load)
+                return float(rp_budgets[factor]) if (rp_budgets and factor in rp_budgets) else equal_share
+            # risk_parity and factor_scaling: always deterministic inverse-vol proportional
+            return _inv_vol_budgets.get(factor, equal_share)
 
         # ── Build rows ─────────────────────────────────────────────────────────
         rows = []
         for factor in sorted_factors:
             rp_max = get_rp_max(factor)
             coeff  = get_coeff(factor)
-            suggested = round(rp_max * coeff, 2)
+            # factor_scaling: scale exposure by signal coeff; other modes: exposure = RP Max
+            suggested = round(rp_max * coeff, 2) if allocation_mode == 'factor_scaling' else rp_max
             label, color = SCALAR_META.get(coeff, (f'{coeff:+.1f}×', THEME.get('text_main', '#fff')))
             is_default_coeff = factor not in snapshot_by_rf
 
@@ -3196,22 +3358,23 @@ def register_multiasset_callbacks(app):
                 f"Load failed · {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             )
 
-    # ── 3.8  Auto-fill risk budgets from factor signals ───────────────
+    # ── 3.8  Mode status hint ─────────────────────────────────────────
     @app.callback(
         Output('factor-signals-toggle-status', 'children'),
         [Input('allocation-mode', 'value')],
         [State('factor-signals-snapshot-store', 'data'),
          State('asset-pool-store', 'data')],
-        prevent_initial_call=True,
     )
     def autofill_risk_budgets_status(allocation_mode, snapshot_data, asset_pool):
-        """When Factor Model Scaling is selected and a signal snapshot exists, show guidance.
-        The actual budget values are applied in the Run Analysis callback."""
-        if allocation_mode != 'factor_scaling':
-            return ""
+        """Show a one-line hint for the selected allocation mode."""
+        if allocation_mode == 'risk_parity':
+            return "RP Max = inv-vol weights · same result on every run"
+        if allocation_mode == 'user_defined':
+            return "Edit Exposure inputs directly · re-runs preserve your values"
+        # factor_scaling
         if not snapshot_data:
-            return "⚠ No signal snapshot. Click 'Refresh Signals' in the Factor tab first."
-        return f"✓ {len(snapshot_data)} factor signals will scale risk budgets at run time."
+            return "⚠ No signal snapshot — click 'Refresh Signals' in the Factor tab first."
+        return f"✓ {len(snapshot_data)} factor signals scale RP Max at run time."
 
     # 4. Run Analysis (Portfolio Tab -> Results)
     @app.callback(
@@ -3250,29 +3413,57 @@ def register_multiasset_callbacks(app):
             # Get selected assets
             selected_asset_names = [asset['name'] for asset in asset_pool]
             
-            # Parse Risk Budgets
+            # Build risk budgets based on allocation mode
             risk_budgets = None
-            if budget_ids and budget_values:
-                risk_budgets = {}
-                for val, id_dict in zip(budget_values, budget_ids):
-                    factor_name = id_dict['index']
-                    try:
-                        risk_budgets[factor_name] = float(val) if val is not None else 1.0
-                    except (ValueError, TypeError):
-                        pass
+            rp_budgets_out = {}
+            factor_names_in_pool = [id_dict['index'] for id_dict in (budget_ids or [])]
+            total_capital_m = total_capital_cny / 1e6
 
-            # Mode 2: scale each user-entered RP budget by factor model scalar
-            if allocation_mode == 'factor_scaling' and signal_snapshot:
-                snapshot_by_rf = {rec['risk_factor']: rec for rec in signal_snapshot if rec.get('risk_factor')}
-                if risk_budgets is not None:
+            if allocation_mode == 'risk_parity':
+                # Pure Risk Parity: optimizer runs unconstrained ERC — always deterministic.
+                # rp_budgets_out will be filled from optimizer factor vols after the run.
+                risk_budgets = None
+
+            elif allocation_mode == 'factor_scaling':
+                # Factor Model Scaling: inverse-vol base budgets, scaled by signal scalar.
+                _vm = compute_factor_vol_map(factor_names_in_pool) if factor_names_in_pool else {}
+                _iv = {f: 1.0 / _vm[f] for f in factor_names_in_pool
+                       if _vm.get(f) and pd.notna(_vm[f]) and _vm[f] > 0}
+                _tot = sum(_iv.values())
+                n_pool = len(factor_names_in_pool) or 1
+                _base = (
+                    {f: round(total_capital_m * _iv.get(f, 0.0) / _tot, 2) for f in factor_names_in_pool}
+                    if _tot > 0
+                    else {f: round(total_capital_m / n_pool, 2) for f in factor_names_in_pool}
+                )
+                if signal_snapshot:
+                    _snap = {rec['risk_factor']: rec for rec in signal_snapshot if rec.get('risk_factor')}
+                    risk_budgets = {}
                     scaled_count = 0
-                    for factor in list(risk_budgets.keys()):
-                        rec = snapshot_by_rf.get(factor)
+                    for f, base_val in _base.items():
+                        rec = _snap.get(f)
                         if rec is not None:
-                            scalar = float(rec.get('scalar', 1.0))
-                            risk_budgets[factor] = round(risk_budgets[factor] * scalar, 2)
+                            risk_budgets[f] = round(base_val * float(rec.get('scalar', 1.0)), 2)
                             scaled_count += 1
+                        else:
+                            risk_budgets[f] = base_val
                     print(f"📡 Factor model scaling applied to {scaled_count} risk budgets")
+                else:
+                    risk_budgets = _base
+                # Store unscaled base budgets — same signals → same result → idempotent
+                rp_budgets_out = _base
+
+            else:  # user_defined
+                # User Defined: use input-box values exactly; write them back unchanged.
+                if budget_ids and budget_values:
+                    risk_budgets = {}
+                    for val, id_dict in zip(budget_values, budget_ids):
+                        factor_name = id_dict['index']
+                        try:
+                            risk_budgets[factor_name] = float(val) if val is not None else 1.0
+                        except (ValueError, TypeError):
+                            pass
+                rp_budgets_out = dict(risk_budgets) if risk_budgets else {}
 
             # Run optimization
             summary, returns, vols, factor_exp, factor_risk, portfolio = run_risk_parity_allocation(
@@ -3304,7 +3495,7 @@ def register_multiasset_callbacks(app):
                     asset_type = row['Asset Type']
                     raw_capital = row['Capital (CNY)']
                     
-                    unit = 10_000_000.0 if asset_type == 'Rates' else 1_000_000.0
+                    unit = 10_000_000.0 if asset_type in ('Rates', 'Spread') else 1_000_000.0
                     rounded_capital = np.floor(raw_capital / unit) * unit
                     total_rounded_capital += rounded_capital
                     
@@ -3359,22 +3550,39 @@ def register_multiasset_callbacks(app):
             status_msg = html.Span("✓ Analysis completed successfully!", style={'color': THEME['success'], 'fontWeight': 'bold'})
             timestamp_msg = f"Last updated: {ALLOCATION_RESULTS['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"
 
-            # Compute RP-suggested budget per factor using actual risk contributions
-            total_capital_m = total_capital_cny / 1e6
-            rp_budgets_out = {}
-            if risk_budgets:
-                n_active = len(risk_budgets)
-                rc_map = {}
-                if not factor_risk.empty and 'Risk Contribution (%)' in factor_risk.columns:
-                    rc_map = dict(zip(factor_risk['Risk Factor'], factor_risk['Risk Contribution (%)']))
-                total_rc = sum(v for v in rc_map.values() if pd.notna(v) and v > 0)
-                if total_rc > 0:
-                    rp_budgets_out = {
-                        f: round(total_capital_m * rc_map.get(f, 100.0 / n_active) / total_rc, 2)
-                        for f in risk_budgets
+            # For Pure Risk Parity: derive RP Max from actual factor risk contributions
+            # returned by the full-covariance optimizer (proper ERC attribution).
+            if allocation_mode == 'risk_parity':
+                factor_risk = ALLOCATION_RESULTS.get('factor_risk', pd.DataFrame())
+                if (not factor_risk.empty
+                        and 'Risk Factor' in factor_risk.columns
+                        and 'Risk Contribution (%)' in factor_risk.columns):
+                    rc_map = {
+                        row['Risk Factor']: row['Risk Contribution (%)']
+                        for _, row in factor_risk.iterrows()
+                        if pd.notna(row['Risk Contribution (%)'])
                     }
+                    total_rc = sum(v for v in rc_map.values() if v > 0)
+                    if total_rc > 1e-6:
+                        rp_budgets_out = {
+                            f: round(total_capital_m * v / total_rc, 2)
+                            for f, v in rc_map.items() if v > 0
+                        }
+                    else:
+                        # Fallback: inv-vol proportional
+                        _fnames_erc = list(vols.index) if hasattr(vols, 'index') else []
+                        _iv = {f: 1.0/float(vols[f]) for f in _fnames_erc
+                               if pd.notna(vols.get(f)) and float(vols[f]) > 0}
+                        _tot = sum(_iv.values()) or 1.0
+                        rp_budgets_out = {f: round(total_capital_m * v / _tot, 2) for f, v in _iv.items()}
                 else:
-                    rp_budgets_out = {f: round(total_capital_m / n_active, 2) for f in risk_budgets}
+                    # Fallback: inv-vol proportional
+                    _fnames_erc = list(vols.index) if hasattr(vols, 'index') else []
+                    _iv = {f: 1.0/float(vols[f]) for f in _fnames_erc
+                           if pd.notna(vols.get(f)) and float(vols[f]) > 0}
+                    _tot = sum(_iv.values()) or 1.0
+                    rp_budgets_out = {f: round(total_capital_m * v / _tot, 2) for f, v in _iv.items()}
+            # factor_scaling and user_defined already have rp_budgets_out set above
 
             return (portfolio_table, status_msg, timestamp_msg, {'status': 'success'}, rp_budgets_out)
             
@@ -3465,9 +3673,10 @@ def register_multiasset_callbacks(app):
          State('history-date-range', 'start_date'),
          State('history-date-range', 'end_date'),
          State('backtest-corr-lookback', 'value'),
-         State('backtest-top-pairs', 'value')]
+         State('backtest-top-pairs', 'value'),
+         State('backtest-alloc-mode', 'value')]
     )
-    def update_historical_allocation(n_clicks, total_capital, capital_unit, start_date, end_date, corr_lookback, top_pairs):
+    def update_historical_allocation(n_clicks, total_capital, capital_unit, start_date, end_date, corr_lookback, top_pairs, alloc_mode):
         """
         Correlation-Based Historical Allocation Strategy:
         1. At each month start, run correlation analysis on risk factors
@@ -3486,7 +3695,30 @@ def register_multiasset_callbacks(app):
         
         if n_clicks == 0:
             return empty_fig, empty_fig, None, None
-        
+
+        alloc_mode = alloc_mode or 'risk_parity'
+
+        if alloc_mode == 'factor_scaling':
+            unavail_fig = go.Figure()
+            unavail_fig.update_layout(
+                title="Factor Model Scaling — not available yet",
+                annotations=[{
+                    'text': 'Factor Model Scaling requires per-factor signal backtests which are still in development.<br>'
+                            'Please use Pure Risk Parity.',
+                    'xref': 'paper', 'yref': 'paper', 'x': 0.5, 'y': 0.5,
+                    'showarrow': False, 'font': {'size': 14, 'color': THEME['warning']},
+                    'align': 'center',
+                }],
+                template=THEME['chart_template'],
+                paper_bgcolor=THEME['bg_main'],
+                plot_bgcolor=THEME['bg_main'],
+                font={'color': THEME['text_main']},
+            )
+            return unavail_fig, unavail_fig, None, html.Div(
+                "Factor Model Scaling is not yet available — factor signal backtests are pending.",
+                style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'},
+            )
+
         try:
             # Parse dates
             print(f"\n[DEBUG] Received dates: start_date={start_date}, end_date={end_date}")
@@ -4371,4 +4603,127 @@ def register_multiasset_callbacks(app):
                 html.Div(f"Error: {e}",
                          style={'color': THEME['danger'], 'padding': '20px'}),
                 f"❌ {e}",
+            )
+
+    # ── IRDL Hedge Overlay callback ───────────────────────────────────────────
+    @app.callback(
+        Output('irdl-hedge-ticket-container', 'children'),
+        [
+            Input('portfolio-data-store', 'data'),
+            Input('irdl-hedge-ratio', 'value'),
+            Input('irdl-hedge-instrument', 'value'),
+            Input('irdl-hedge-irs-maturity', 'value'),
+            Input({'type': 'irdl-dv01-override', 'index': ALL}, 'value'),
+        ],
+        [
+            State({'type': 'irdl-dv01-override', 'index': ALL}, 'id'),
+            State('capital-input', 'value'),
+            State('capital-unit', 'value'),
+        ],
+        prevent_initial_call=True,
+    )
+    def update_irdl_hedge_ticket(
+        store_data, hedge_ratio_pct, instrument, irs_maturity,
+        dv01_values, dv01_ids, capital_value, capital_unit,
+    ):
+        factor_risk = ALLOCATION_RESULTS.get('factor_risk')
+        if factor_risk is None or factor_risk.empty:
+            return html.Div(
+                "Run Analysis first to compute portfolio exposures.",
+                style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px'},
+            )
+        if 'Net Exposure' not in factor_risk.columns:
+            return html.Div(
+                "Net Exposure column not available — re-run Analysis.",
+                style={'color': THEME['warning'], 'fontSize': '12px'},
+            )
+
+        try:
+            # Build capital
+            multiplier = 1e9 if capital_unit == 'billion' else 1e6
+            total_capital = float(capital_value or 10) * multiplier
+
+            # Build DV01 overrides dict
+            dv01_overrides = {}
+            for val, id_dict in zip(dv01_values or [], dv01_ids or []):
+                cty = id_dict['index']
+                if val is not None:
+                    try:
+                        dv01_overrides[cty] = float(val)
+                    except (ValueError, TypeError):
+                        pass
+
+            hedge_ratio = (hedge_ratio_pct or 0) / 100.0
+
+            tickets = compute_irdl_hedge(
+                factor_risk_records=factor_risk.to_dict('records'),
+                total_capital=total_capital,
+                hedge_ratio=hedge_ratio,
+                instrument=instrument or 'futures',
+                dv01_overrides=dv01_overrides if dv01_overrides else None,
+                irs_maturity=irs_maturity or '10Y',
+            )
+
+            if not tickets:
+                return html.Div(
+                    "No IRDL factors found in current allocation.",
+                    style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px'},
+                )
+
+            _dir_color = {
+                'SHORT':     THEME.get('danger', '#e74c3c'),
+                'PAY FIXED': THEME.get('danger', '#e74c3c'),
+                'LONG':      THEME.get('success', '#27ae60'),
+                'RCV FIXED': THEME.get('success', '#27ae60'),
+            }
+
+            return html.Div([
+                html.Div(
+                    f"Hedge ratio: {hedge_ratio_pct}%  ·  Instrument: "
+                    f"{'Bond Futures' if instrument == 'futures' else 'Pay-fixed IRS'}  ·  "
+                    f"Capital: {float(capital_value or 10):,.0f} {capital_unit}",
+                    style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'},
+                ),
+                dash_table.DataTable(
+                    data=tickets,
+                    columns=[
+                        {'name': 'Country',            'id': 'Country'},
+                        {'name': 'Net IRDL Exp (DY)',  'id': 'Net IRDL Exp (DY)'},
+                        {'name': 'Port DV01 (CNY/bp)', 'id': 'Port DV01 (CNY/bp)'},
+                        {'name': 'Hedge DV01 (CNY/bp)', 'id': 'Hedge DV01 (CNY/bp)'},
+                        {'name': 'Quantity',           'id': 'Quantity'},
+                        {'name': 'Direction',          'id': 'Direction'},
+                        {'name': 'Instrument',         'id': 'Instrument'},
+                    ],
+                    style_cell={
+                        'textAlign': 'center', 'padding': '8px 10px',
+                        'fontSize': '12px',
+                        'backgroundColor': THEME['table_row_odd'],
+                        'color': THEME['text_main'], 'border': 'none',
+                    },
+                    style_header={
+                        'backgroundColor': THEME['table_header'],
+                        'color': THEME['text_main'],
+                        'fontWeight': 'bold', 'border': 'none',
+                    },
+                    style_data_conditional=[
+                        {'if': {'row_index': 'even'}, 'backgroundColor': THEME['table_row_even']},
+                        *[
+                            {'if': {'filter_query': f'{{Direction}} = "{d}"', 'column_id': 'Direction'},
+                             'color': c, 'fontWeight': 'bold'}
+                            for d, c in _dir_color.items()
+                        ],
+                        {'if': {'filter_query': '{Net IRDL Exp (DY)} > 0', 'column_id': 'Net IRDL Exp (DY)'},
+                         'color': THEME.get('success', '#27ae60')},
+                        {'if': {'filter_query': '{Net IRDL Exp (DY)} < 0', 'column_id': 'Net IRDL Exp (DY)'},
+                         'color': THEME.get('danger', '#e74c3c')},
+                    ],
+                    style_table={'overflowX': 'auto'},
+                ),
+            ])
+
+        except Exception as exc:
+            return html.Div(
+                f"Error computing hedge: {exc}",
+                style={'color': THEME['danger'], 'fontSize': '12px'},
             )

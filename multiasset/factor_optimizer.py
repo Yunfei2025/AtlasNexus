@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 from typing import Optional, Tuple, Dict
 from scipy.optimize import minimize
-from multiasset.factor_backtest import compute_ewma_factor_vols, get_factor_price_beta
+from multiasset.factor_backtest import compute_ewma_factor_vols, compute_ewma_factor_covariance, get_factor_price_beta
 from multiasset.portfolio import Portfolio
 from multiasset.pca_analyzer import PCARiskFactorAnalyzer
 from dateutil.relativedelta import relativedelta
@@ -55,6 +55,7 @@ class FactorRiskParityOptimizer:
         self.ewma_lambda = ewma_lambda
         self._weights: Optional[pd.Series] = None
         self._factor_vols: Optional[pd.Series] = None
+        self._factor_cov: Optional[pd.DataFrame] = None
         self._pca_factor_vols = self._factor_vols
     
     def fit_and_calculate(self, rebalance_date: pd.Timestamp,
@@ -88,9 +89,15 @@ class FactorRiskParityOptimizer:
         self._factor_vols = factor_vols
         self._pca_factor_vols = factor_vols
 
-        weights = self._optimize_weights(factor_vols, risk_budgets=risk_budgets, total_capital=total_capital)
+        factor_cov = compute_ewma_factor_covariance(factor_window, ewma_lambda=self.ewma_lambda)
+        self._factor_cov = factor_cov
+
+        weights = self._optimize_weights(
+            factor_vols, factor_cov=factor_cov,
+            risk_budgets=risk_budgets, total_capital=total_capital,
+        )
         self._weights = weights
-        
+
         return weights, factor_vols
     
     def _calculate_ewma_volatilities(self, factor_returns: pd.DataFrame) -> pd.Series:
@@ -123,113 +130,215 @@ class FactorRiskParityOptimizer:
         return pd.Series(factor_vols)
     
     def _optimize_weights(self, factor_vols: pd.Series,
+                          factor_cov: Optional[pd.DataFrame] = None,
                           risk_budgets: Optional[Dict[str, float]] = None,
                           total_capital: float = 1.0) -> pd.Series:
         """
         Optimize portfolio weights using factor risk parity or risk budgeting.
-        
+
+        Uses the full EWMA factor covariance matrix (Σ = B C_f Bᵀ) when
+        available, so that inter-factor correlations are captured.  Falls back
+        to the diagonal approximation when factor_cov is empty.
+
         Args:
-            factor_vols: Series of factor volatilities
-            risk_budgets: Optional dictionary of risk budgets per factor (in million CNY units)
+            factor_vols: Series of factor volatilities (used for filtering and fallback)
+            factor_cov: Annualised EWMA factor covariance DataFrame (n_factors × n_factors)
+            risk_budgets: Optional dict of risk budgets per factor (in million CNY)
             total_capital: Total capital to allocate (absolute units)
-            
+
         Returns:
             Series of optimal weights
         """
-        # Get asset-factor exposure matrix
         exposure_matrix, asset_names, factor_names = self._build_exposure_matrix(factor_vols)
-        
+
         if exposure_matrix.empty:
-            # Fall back to equal weights
-            return pd.Series(1.0/len(self.portfolio.assets), 
-                           index=list(self.portfolio.assets.keys()))
-        
-        B = exposure_matrix.values
+            return pd.Series(1.0 / len(self.portfolio.assets),
+                             index=list(self.portfolio.assets.keys()))
+
+        B = exposure_matrix.values                                   # (n_assets, n_factors)
         sigma_f = np.array([factor_vols.get(f, 0) for f in factor_names])
-        
-        # Remove factors with zero or nan volatility
+
+        # Keep only factors with non-zero vol
         valid_mask = ~np.isnan(sigma_f) & (sigma_f > 0)
         B = B[:, valid_mask]
-        sigma_f = sigma_f[valid_mask]
-        
-        if len(sigma_f) == 0:
-            return pd.Series(1.0/len(asset_names), index=asset_names)
-            
-        filtered_factor_names = [f for i, f in enumerate(factor_names) if valid_mask[i]]
+        sigma_f_valid = sigma_f[valid_mask]
+        valid_factors = [f for i, f in enumerate(factor_names) if valid_mask[i]]
+
+        if len(sigma_f_valid) == 0:
+            return pd.Series(1.0 / len(asset_names), index=asset_names)
+
         n_assets = len(asset_names)
-        
-        # --- Define Risk Budgets ---
-        constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
-        
-        if risk_budgets:
-            # Two modes:
-            # 1) Legacy (all budgets >= 0): treat inputs as MAX absolute factor-risk budgets.
-            # 2) Directional (any budget < 0): treat inputs as SIGNED factor-risk targets.
-            #    This is useful for expressing slope direction (e.g., IRSL negative).
 
-            has_negative_budget = any(
-                (v is not None) and (float(v) < 0.0) for v in risk_budgets.values()
-            )
-
-            budget_targets = []
-            for f in filtered_factor_names:
-                user_val = risk_budgets.get(f, 0.0)
-                try:
-                    user_val_f = float(user_val)
-                except (ValueError, TypeError):
-                    user_val_f = 0.0
-
-                # Convert '1 unit = 1 million' into fraction of total capital.
-                if total_capital > 1e-6:
-                    target = (user_val_f * 1_000_000.0) / total_capital
-                else:
-                    target = 0.0
-
-                budget_targets.append(target)
-
-            budget_targets = np.array(budget_targets)
-
-            if has_negative_budget:
-                # Signed target matching: factor_risk = sigma * exposure (signed)
-                def objective(w):
-                    factor_exposures = B.T @ w
-                    signed_factor_risks = factor_exposures * sigma_f
-                    return np.sum((signed_factor_risks - budget_targets) ** 2)
-            else:
-                # Legacy max-budget behavior: absolute risks constrained by budgets
-                def objective(w):
-                    factor_exposures = B.T @ w
-                    factor_risks = np.abs(factor_exposures * sigma_f)
-                    return np.sum((factor_risks - budget_targets) ** 2)
-
-                def max_budget_constraint(w):
-                    factor_exposures = B.T @ w
-                    factor_risks = np.abs(factor_exposures * sigma_f)
-                    return budget_targets - factor_risks
-
-                constraints.append({'type': 'ineq', 'fun': max_budget_constraint})
-
+        # ── Build asset covariance Σ = B C_f Bᵀ ──────────────────────────────
+        use_full_cov = (factor_cov is not None and not factor_cov.empty)
+        if use_full_cov:
+            C_f = np.array([
+                [factor_cov.loc[fi, fj]
+                 if (fi in factor_cov.index and fj in factor_cov.columns)
+                 else (sigma_f_valid[ki] ** 2 if ki == kj else 0.0)
+                 for kj, fj in enumerate(valid_factors)]
+                for ki, fi in enumerate(valid_factors)
+            ], dtype=float)
         else:
-            # Legacy/Default Equal Risk Contribution logic
-            # Target = Mean Risk Contribution
-            def objective(w):
-                factor_exposures = B.T @ w
-                factor_risks = np.abs(factor_exposures * sigma_f)
-                target_risk = factor_risks.mean()
-                return np.sum((factor_risks - target_risk) ** 2)
+            C_f = np.diag(sigma_f_valid ** 2)
 
-        bounds = [(0, 1) for _ in range(n_assets)]
+        Sigma = B @ C_f @ B.T
+        Sigma = (Sigma + Sigma.T) / 2 + 1e-8 * np.eye(n_assets)   # symmetrise + regularise
+
+        # ── Helper: asset-level risk contributions ────────────────────────────
+        def _port_vol(w: np.ndarray) -> float:
+            return float(np.sqrt(max(float(w @ Sigma @ w), 1e-12)))
+
+        def _risk_contributions(w: np.ndarray) -> np.ndarray:
+            pv = _port_vol(w)
+            return w * (Sigma @ w) / pv                             # sums to pv
+
+        # ── Helper: factor-level risk contributions ───────────────────────────
+        def _factor_rc_fractions(w: np.ndarray) -> np.ndarray:
+            """Return each factor's share of total portfolio variance (sums to 1)."""
+            e = B.T @ w                                             # (n_valid_factors,)
+            Cfe = C_f @ e
+            rc_var = e * Cfe                                        # contribution to variance
+            total_var = float(rc_var.sum())
+            if total_var < 1e-12:
+                return np.ones(len(valid_factors)) / len(valid_factors)
+            return rc_var / total_var
+
+        # ── Objective ─────────────────────────────────────────────────────────
+        constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
+
+        if risk_budgets:
+            has_negative = any(
+                v is not None and float(v) < 0.0 for v in risk_budgets.values()
+            )
+            if use_full_cov:
+                # Proportional budget mode: match factor-RC fractions to budget fractions
+                raw_budgets = np.array([
+                    float(risk_budgets.get(f, 0.0)) if risk_budgets.get(f) is not None else 0.0
+                    for f in valid_factors
+                ])
+                total_rb = raw_budgets.sum()
+                budget_fracs = raw_budgets / total_rb if total_rb > 0 else np.ones(len(valid_factors)) / len(valid_factors)
+
+                if has_negative:
+                    # Signed RC matching (e.g. short slope exposure)
+                    def objective(w: np.ndarray) -> float:
+                        e = B.T @ w
+                        Cfe = C_f @ e
+                        signed_rc = e * Cfe / max(_port_vol(w), 1e-12)  # signed vol contributions
+                        total_sv = np.abs(signed_rc).sum()
+                        target = budget_fracs * (total_sv if total_sv > 1e-12 else 1.0)
+                        return float(np.sum((signed_rc - target) ** 2))
+                else:
+                    def objective(w: np.ndarray) -> float:
+                        return float(np.sum((_factor_rc_fractions(w) - budget_fracs) ** 2))
+            else:
+                # Legacy diagonal mode: match |e_k σ_k| targets
+                budget_targets = np.array([
+                    (float(risk_budgets.get(f, 0.0)) * 1_000_000.0) / total_capital
+                    if total_capital > 1e-6 else 0.0
+                    for f in valid_factors
+                ])
+                if has_negative:
+                    def objective(w: np.ndarray) -> float:
+                        signed = B.T @ w * sigma_f_valid
+                        return float(np.sum((signed - budget_targets) ** 2))
+                else:
+                    def objective(w: np.ndarray) -> float:
+                        factor_risks = np.abs(B.T @ w * sigma_f_valid)
+                        return float(np.sum((factor_risks - budget_targets) ** 2))
+
+                    def max_budget_constraint(w: np.ndarray) -> np.ndarray:
+                        return budget_targets - np.abs(B.T @ w * sigma_f_valid)
+
+                    constraints.append({'type': 'ineq', 'fun': max_budget_constraint})
+        else:
+            # Pure ERC: equal asset-level risk contributions (respects correlations via Σ)
+            def objective(w: np.ndarray) -> float:
+                RC = _risk_contributions(w)
+                target = _port_vol(w) / n_assets
+                return float(np.sum((RC - target) ** 2))
+
+        bounds = [(0.0, 1.0)] * n_assets
         w0 = np.ones(n_assets) / n_assets
-        
+
         result = minimize(
             objective, w0,
             method='SLSQP',
             bounds=bounds,
             constraints=constraints,
-            options={'maxiter': 1000, 'ftol': 1e-9}
+            options={'maxiter': 1000, 'ftol': 1e-9},
         )
-        
+
         return pd.Series(result.x, index=asset_names)
+
+    def _compute_factor_risk_contributions(
+        self,
+        weights: pd.Series,
+        exposure_matrix: pd.DataFrame,
+        factor_names: list,
+        factor_cov: Optional[pd.DataFrame],
+        factor_vols: pd.Series,
+    ) -> pd.DataFrame:
+        """
+        Compute factor-level risk contributions using the full covariance matrix.
+
+        For each factor k:
+          RC_k = e_k * (C_f @ e)_k  (contribution to portfolio variance)
+          where e = Bᵀ w  (portfolio factor exposures)
+
+        Returns a DataFrame with columns:
+          Risk Factor, Volatility (% ann.), Risk Contribution (%)
+        """
+        if exposure_matrix.empty:
+            return pd.DataFrame()
+
+        w = weights.reindex(exposure_matrix.index).fillna(0.0).values
+        B = exposure_matrix.values                                   # (n_assets, n_factors)
+        sigma_f = np.array([factor_vols.get(f, 0.0) for f in factor_names])
+
+        valid_mask = ~np.isnan(sigma_f) & (sigma_f > 0)
+        B_v = B[:, valid_mask]
+        sigma_v = sigma_f[valid_mask]
+        valid_factors = [f for i, f in enumerate(factor_names) if valid_mask[i]]
+
+        use_full_cov = (factor_cov is not None and not factor_cov.empty)
+        if use_full_cov:
+            C_f = np.array([
+                [factor_cov.loc[fi, fj]
+                 if (fi in factor_cov.index and fj in factor_cov.columns)
+                 else (sigma_v[ki] ** 2 if ki == kj else 0.0)
+                 for kj, fj in enumerate(valid_factors)]
+                for ki, fi in enumerate(valid_factors)
+            ], dtype=float)
+        else:
+            C_f = np.diag(sigma_v ** 2)
+
+        e = B_v.T @ w                                               # (n_valid_factors,)
+        Cfe = C_f @ e
+        port_var = float(e @ Cfe)
+        port_vol_val = float(np.sqrt(max(port_var, 1e-12)))
+
+        rows = []
+        for k, f in enumerate(valid_factors):
+            rc_var = float(e[k] * Cfe[k])
+            rc_pct = rc_var / port_var * 100.0 if port_var > 1e-12 else 0.0
+            # Signed net factor exposure e_k tells you directional bet:
+            #   positive → portfolio gains when factor PRICE rises (e.g. long level = yield falls)
+            #   negative → portfolio gains when factor PRICE falls (e.g. short slope)
+            rows.append({
+                'Risk Factor': f,
+                'Volatility (% ann.)': float(sigma_v[k]),
+                'Net Exposure': float(e[k]),          # signed: + long factor, - short factor
+                'Risk Contribution (%)': rc_pct,      # always >= 0 (variance contribution)
+            })
+
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows)
+        return df.sort_values('Risk Contribution (%)', ascending=False).reset_index(drop=True)
+
     
     def _build_exposure_matrix(self, factor_vols: pd.Series) -> Tuple[pd.DataFrame, list, list]:
         """
@@ -332,11 +441,14 @@ class FactorRiskParityOptimizer:
             'Asset Type': [self.portfolio.assets[a].__class__.__name__ for a in weights.index] # Approx type
         })
         
-        # Compute Risk Contributions
-        factor_risk_contributions = self.portfolio.calculate_factor_risk_contributions(weights, use_cache=use_cache)
-        
-        # Compute Factor Exposures (Long Format)
+        # Compute Factor Exposures (Long Format) and Risk Contributions
         exposure_matrix, asset_names, factor_names = self._build_exposure_matrix(factor_vols)
+
+        # Use full-covariance attribution when available
+        factor_risk_contributions = self._compute_factor_risk_contributions(
+            weights, exposure_matrix, factor_names, self._factor_cov, factor_vols
+        )
+
         factor_exposures_df = pd.DataFrame(exposure_matrix, index=weights.index, columns=factor_names)
         factor_exp_long = factor_exposures_df.reset_index().melt(id_vars='index', var_name='Risk Factor', value_name='Exposure')
         factor_exp_long.rename(columns={'index': 'Asset'}, inplace=True)

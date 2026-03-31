@@ -39,20 +39,33 @@ def get_default_sensitivities(tenor: str) -> dict:
     Returns:
         Dict with default IRDL, IRSL, IRCV, and FXDL sensitivities
     """
-    # Mapping of tenors to approximate durations and curve sensitivities
-    # IRDL: Duration sensitivity to parallel shifts
-    # IRSL: Sensitivity to slope changes (10Y-1Y spread)
-    # IRCV: Sensitivity to curvature changes (2×5Y - 2Y - 10Y butterfly)
-    # FXDL: FX sensitivity (1.0 = full currency exposure)
+    # Sign convention — this value feeds through two negations in the pipeline:
+    #   MultiFactorBondAsset.__init__:  factor_map['IRSL.X'] = -sensitivities['IRSL']
+    #   get_factor_price_beta:          B_entry = -raw_sensitivity / scale
+    #   Net result:                     B_entry = +sensitivities['IRSL']
+    #
+    # So the VALUE stored here is the DIRECT exposure beta in the B matrix.
+    # Use NEGATIVE values where a bond GAINS when the factor level rises:
+    #
+    # IRSL (slope, PCA-style): factor rises → short-end up, long-end down
+    #   1Y, 2Y: lose → positive beta  (short-end yield rises → price falls)
+    #   5Y:     neutral  → zero
+    #   10Y, 30Y: gain → NEGATIVE beta (long-end yield falls → price rises)
+    #
+    # IRCV (curvature butterfly): factor rises → belly up, wings down
+    #   5Y belly: lose → positive beta
+    #   2Y, 10Y wings: gain → NEGATIVE beta
+    #
+    # IRDL: ALL bonds lose when yields rise → positive beta for all tenors (no change)
     defaults = {
-        '1Y': {'IRDL': 0.95, 'IRSL': 0.0, 'IRCV': 0.0, 'FXDL': 1.0},   # Short end: level only
-        '2Y': {'IRDL': 1.90, 'IRSL': 0.15, 'IRCV': -0.5, 'FXDL': 1.0}, # Short: negative curvature exposure
-        '5Y': {'IRDL': 4.50, 'IRSL': 0.50, 'IRCV': 1.0, 'FXDL': 1.0},  # Belly: positive curvature exposure
-        '10Y': {'IRDL': 8.50, 'IRSL': 1.00, 'IRCV': -0.5, 'FXDL': 1.0}, # Long: negative curvature exposure
-        '30Y': {'IRDL': 17.0, 'IRSL': 2.00, 'IRCV': 0.0, 'FXDL': 1.0},  # Ultra long: minimal curvature
+        '1Y':  {'IRDL': 0.95,  'IRSL':  0.50, 'IRCV':  0.0,  'FXDL': 1.0},
+        '2Y':  {'IRDL': 1.90,  'IRSL':  0.30, 'IRCV': -0.50, 'FXDL': 1.0},
+        '5Y':  {'IRDL': 4.50,  'IRSL':  0.0,  'IRCV':  1.0,  'FXDL': 1.0},
+        '10Y': {'IRDL': 8.50,  'IRSL': -0.50, 'IRCV': -0.50, 'FXDL': 1.0},
+        '30Y': {'IRDL': 17.0,  'IRSL': -1.00, 'IRCV':  0.0,  'FXDL': 1.0},
     }
-    
-    return defaults.get(tenor, {'IRDL': 5.0, 'IRSL': 3.0, 'IRCV': 0.0, 'FXDL': 1.0})
+
+    return defaults.get(tenor, {'IRDL': 5.0, 'IRSL': 0.0, 'IRCV': 0.0, 'FXDL': 1.0})
         
 def updatePKL(dictn,file_path,rewrite=False):
     if rewrite:

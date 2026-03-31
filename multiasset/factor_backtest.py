@@ -42,7 +42,7 @@ def get_factor_duration(factor_code: str) -> float:
 def _is_yield_factor(factor_code: str) -> bool:
     """Return True if this factor is yield/spread-based (needs duration conversion)."""
     prefix = factor_code.split('.')[0]
-    return prefix in ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL')
+    return prefix in ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL', 'SPCV')
 
 
 def factor_level_to_price_return(
@@ -102,6 +102,41 @@ def compute_ewma_factor_vols(
         vol_map[factor] = float(np.sqrt(ewma_var.iloc[-1]) * np.sqrt(252))
 
     return vol_map
+
+
+def compute_ewma_factor_covariance(
+    factor_levels: pd.DataFrame,
+    ewma_lambda: float = 0.94,
+) -> pd.DataFrame:
+    """Compute annualized EWMA factor covariance matrix in price-return % space.
+
+    Returns a (n_factors × n_factors) DataFrame.  Off-diagonal terms capture
+    inter-factor correlations so the optimizer can use the full ``Σ = B C_f Bᵀ``
+    asset covariance instead of the diagonal-only approximation.
+    """
+    alpha = 1.0 - ewma_lambda
+    returns: Dict[str, pd.Series] = {}
+
+    for factor in factor_levels.columns:
+        levels = factor_levels[factor].dropna()
+        if len(levels) < 5:
+            continue
+        ret = factor_level_to_price_return(levels, factor, output_in_percent=True).dropna()
+        if len(ret) >= 5:
+            returns[factor] = ret
+
+    if not returns:
+        return pd.DataFrame()
+
+    ret_df = pd.DataFrame(returns).dropna()
+    if len(ret_df) < 5:
+        return pd.DataFrame()
+
+    # pandas ewm().cov() returns a MultiIndex DataFrame; pick the last date slice
+    ewm_cov_full = ret_df.ewm(alpha=alpha, adjust=False).cov()
+    last_date = ewm_cov_full.index.get_level_values(0)[-1]
+    cov_matrix = ewm_cov_full.loc[last_date]          # shape: (n_factors, n_factors)
+    return cov_matrix * 252                            # annualise (daily → annual)
 
 
 # ── Factor series generation ────────────────────────────────────────────────
