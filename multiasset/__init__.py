@@ -3,7 +3,7 @@
 Multi-asset portfolio allocation module.
 
 This module provides OOP-based tools for multi-asset portfolio construction
-and PCA factor-level risk parity allocation.
+and factor-level risk parity allocation.
 
 Classes:
     - Asset: Base class for all assets
@@ -11,11 +11,11 @@ Classes:
     - CommodityAsset: Commodity futures asset
     - RiskFactorLoader: Loads risk factor data
     - Portfolio: Multi-asset portfolio
-    - PCAFactorRiskParityOptimizer: PCA-based factor-level risk parity optimizer
+    - FactorRiskParityOptimizer: factor-level risk parity optimizer
 
 Functions:
     - create_default_portfolio: Create default portfolio configuration
-    - run_risk_parity_allocation: Run PCA factor risk parity allocation
+    - run_risk_parity_allocation: Run factor risk parity allocation
     - mappx2rf: Load risk factors (legacy)
     - calculate_risk_parity_allocation: Calculate allocation (legacy)
 """
@@ -27,7 +27,7 @@ from multiasset.assets import (
 from multiasset.portfolio import Portfolio
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.pca_analyzer import PCARiskFactorAnalyzer
-from multiasset.factor_optimizer import PCAFactorRiskParityOptimizer
+from multiasset.factor_optimizer import FactorRiskParityOptimizer, PCAFactorRiskParityOptimizer
 
 __all__ = [
     # Asset classes
@@ -43,6 +43,7 @@ __all__ = [
     'PCARiskFactorAnalyzer',
     
     # Optimizer classes
+    'FactorRiskParityOptimizer',
     'PCAFactorRiskParityOptimizer',
 ]
 

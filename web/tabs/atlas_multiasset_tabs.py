@@ -28,8 +28,9 @@ from multiasset.storage import load_last_asset_pool
 from multiasset.main import run_risk_parity_allocation, create_custom_portfolio
 from multiasset.storage import save_asset_pool
 from multiasset.risk_loader import RiskFactorLoader
-from multiasset.factor_optimizer import PCAFactorRiskParityOptimizer
+from multiasset.factor_optimizer import FactorRiskParityOptimizer
 from multiasset.factor_backtest import compute_ewma_factor_vols
+from multiasset.config import RiskModelConfig
 from settings.paths import DIR_INPUT, DIR_MODELS
 
 # --- Import from futures.backtest for Backtest-Factor tab ---
@@ -640,19 +641,18 @@ def build_multiasset_portfolio_layout():
                     ),
                     html.Span("CNY", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginRight': '20px'}),
                     
-                    # Risk Factor Model Selection
                     html.Label("Model:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '12px', 'color': THEME['text_main']}),
-                    dcc.RadioItems(
-                        id='risk-model-selector',
-                        options=[
-                            {'label': ' Deterministic', 'value': 'deterministic'},
-                            {'label': ' PCA', 'value': 'pca'},
-                        ],
-                        value='deterministic',
-                        inline=True,
-                        labelStyle={'color': THEME['text_main'], 'marginRight': '12px'},
-                        inputStyle={'marginRight': '4px'},
-                        style={'fontSize': '12px'}
+                    html.Span(
+                        "Deterministic",
+                        style={
+                            'fontSize': '12px',
+                            'fontWeight': 'bold',
+                            'color': THEME['text_main'],
+                            'backgroundColor': THEME['bg_card'],
+                            'padding': '4px 10px',
+                            'borderRadius': '999px',
+                            'border': f'1px solid {THEME["accent"]}',
+                        }
                     ),
                 ], style={'display': 'flex', 'alignItems': 'center'}),
             ], style={'display': 'flex', 'alignItems': 'center', 'padding': '15px 20px', 'backgroundColor': THEME['bg_input'], 'borderBottom': f'1px solid {THEME["table_header"]}', 'borderRadius': '8px 8px 0 0'}),
@@ -750,7 +750,7 @@ def build_multiasset_portfolio_layout():
                 html.Div([
                     html.Div([
                         html.H6("Risk Budgets", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '0', 'fontSize': '13px', 'fontWeight': 'bold'}),
-                        html.Span("Exposure = RP Max × Coeff  ·  Vol auto-updated from 1Y EWMA factor history",
+                        html.Span("Exposure = RP Max × Coeff  ·  Vol auto-updated from 1Y EWMA factor return history",
                                   style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '12px'}),
                     ], style={'display': 'flex', 'alignItems': 'baseline', 'marginBottom': '8px'}),
                     html.Div([
@@ -770,7 +770,7 @@ def build_multiasset_portfolio_layout():
                     # Column headers: Factor | Vol% ann | RP Max | Coeff | Exposure
                     html.Div([
                         html.Span("Factor",   style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0'}),
-                        html.Span("Vol %ann", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '54px', 'textAlign': 'right', 'flexShrink': '0'}),
+                        html.Span("Vol %ann", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '62px', 'textAlign': 'right', 'flexShrink': '0'}),
                         html.Span("RP Max",   style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '54px', 'textAlign': 'right', 'flexShrink': '0'}),
                         html.Span("Coeff",    style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '44px', 'textAlign': 'center', 'flexShrink': '0'}),
                         html.Span("Exposure", style={'color': THEME['text_sub'], 'fontSize': '11px', 'flex': '1', 'textAlign': 'right'}),
@@ -1524,7 +1524,7 @@ def build_multiasset_backtest_layout():
     return html.Div([
         html.H4("Historical Allocation Analysis (Correlation-Based)", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
         html.P(
-            "Strategy: At each month start, run correlation analysis to select diversified assets, then apply PCA Factor Risk Parity allocation.",
+            "Strategy: At each month start, run correlation analysis to select diversified assets, then apply factor risk parity allocation.",
             style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '10px', 'fontStyle': 'italic'}
         ),
         
@@ -2959,7 +2959,7 @@ def register_multiasset_callbacks(app):
             is_default_coeff = factor not in snapshot_by_rf
 
             vol_val = _vol_map.get(factor)
-            vol_str = f"{vol_val:.2f}" if vol_val is not None and pd.notna(vol_val) else "–"
+            vol_str = f"{vol_val:.2f}%" if vol_val is not None and pd.notna(vol_val) else "–"
 
             rows.append(
                 html.Div([
@@ -2969,7 +2969,7 @@ def register_multiasset_callbacks(app):
                     }),
                     html.Span(vol_str, style={
                         'color': THEME.get('text_sub', '#aaa'), 'fontSize': '12px',
-                        'width': '54px', 'textAlign': 'right', 'flexShrink': '0',
+                        'width': '62px', 'textAlign': 'right', 'flexShrink': '0',
                         'fontFamily': 'monospace',
                     }),
                     html.Span(f"{rp_max:.1f}M", style={
@@ -3223,14 +3223,13 @@ def register_multiasset_callbacks(app):
         [Input('run-button', 'n_clicks')],
         [State('capital-input', 'value'),
          State('capital-unit', 'value'),
-         State('risk-model-selector', 'value'),
          State('asset-pool-store', 'data'),
          State({'type': 'risk-budget-input', 'index': ALL}, 'value'),
          State({'type': 'risk-budget-input', 'index': ALL}, 'id'),
          State('allocation-mode', 'value'),
          State('factor-signals-snapshot-store', 'data')]
     )
-    def run_analysis(n_clicks, total_capital, capital_unit, risk_model, asset_pool,
+    def run_analysis(n_clicks, total_capital, capital_unit, asset_pool,
                      budget_values, budget_ids, allocation_mode, signal_snapshot):
         if n_clicks == 0:
             return (html.Div("No data available. Click 'Run Analysis' to start.", style={'color': THEME['text_sub']}),
@@ -3275,13 +3274,10 @@ def register_multiasset_callbacks(app):
                             scaled_count += 1
                     print(f"📡 Factor model scaling applied to {scaled_count} risk budgets")
 
-            # Determine use_deterministic flag
-            use_deterministic = (risk_model == 'deterministic')
-
             # Run optimization
             summary, returns, vols, factor_exp, factor_risk, portfolio = run_risk_parity_allocation(
                 total_capital=total_capital_cny, use_cache=True, selected_assets=selected_asset_names,
-                risk_budgets=risk_budgets, use_deterministic=use_deterministic
+                risk_budgets=risk_budgets, use_deterministic=True
             )
             
             if summary.empty:
@@ -3683,27 +3679,30 @@ def register_multiasset_callbacks(app):
                 selected_asset_names = [a['name'] for a in selected_assets]
                 all_assets_ever.update(selected_asset_names)
                 
-                # --- Step 3: Run PCA Factor Risk Parity Allocation ---
+                # --- Step 3: Run factor risk parity allocation ---
                 # Create portfolio for these assets
                 try:
-                    portfolio = create_custom_portfolio(selected_asset_names)
+                    portfolio = create_custom_portfolio(
+                        selected_asset_names,
+                        use_deterministic=True,
+                    )
                 except Exception as e:
                     print(f"  {rebalance_date.date()}: Portfolio creation failed: {e}")
                     continue
                 
-                # Use PCA Factor Risk Parity optimizer
+                # Use shared factor risk parity optimizer with deterministic factors
                 try:
-                    pca_optimizer = PCAFactorRiskParityOptimizer(
+                    optimizer = FactorRiskParityOptimizer(
                         portfolio=portfolio, 
                         input_dir=str(DIR_INPUT),
-                        pca_lookback_years=1.0, 
-                        vol_lookback_months=3, 
-                        ewma_lambda=0.94
+                        factor_model_lookback_years=1.0,
+                        vol_lookback_months=RiskModelConfig.FACTOR_VOL_LOOKBACK_MONTHS,
+                        ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA,
                     )
-                    weights_series, _ = pca_optimizer.fit_and_calculate(pd.Timestamp(rebalance_date))
+                    weights_series, _ = optimizer.fit_and_calculate(pd.Timestamp(rebalance_date))
                     weights = weights_series.to_dict()
                 except Exception as e:
-                    print(f"  {rebalance_date.date()}: PCA optimization failed: {e}")
+                    print(f"  {rebalance_date.date()}: Factor risk optimization failed: {e}")
                     continue
                 
                 if not weights or sum(weights.values()) == 0:

@@ -3,7 +3,7 @@ Exposure Bucket Mapper — converts continuous factor model signals into
 discrete risk-budget scalars via quantile-based bucketing.
 
 This is the bridge between the factor prediction engine and the Beta Book's
-risk budgeting system.  The ``PCAFactorRiskParityOptimizer`` in
+risk budgeting system.  The ``FactorRiskParityOptimizer`` in
 ``multiasset/factor_optimizer.py`` already supports signed (directional)
 risk budgets — this module feeds it signal-driven scalars.
 

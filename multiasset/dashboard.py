@@ -36,7 +36,7 @@ from multiasset.layout import (
 from multiasset.main import run_risk_parity_allocation, create_custom_portfolio
 from multiasset.storage import save_asset_pool
 from multiasset.risk_loader import RiskFactorLoader
-from multiasset.factor_optimizer import PCAFactorRiskParityOptimizer
+from multiasset.factor_optimizer import FactorRiskParityOptimizer
 from settings.paths import DIR_INPUT
 
 # Initialize Dash app
@@ -576,10 +576,9 @@ def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_un
             total_capital *= 1_000
         
         # Initialize optimizer if needed
-        # Use PCA Factor Risk Parity for optimization
-        pca_optimizer = PCAFactorRiskParityOptimizer(
+        optimizer = FactorRiskParityOptimizer(
             portfolio=portfolio, input_dir=str(DIR_INPUT),
-            pca_lookback_years=1.0, vol_lookback_months=3, ewma_lambda=0.94
+            factor_model_lookback_years=1.0, vol_lookback_months=3, ewma_lambda=0.94
         )
         
         # Calculate allocations for each rebalance date
@@ -588,10 +587,10 @@ def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_un
         
         for date in rebalance_dates:
             try:
-                weights_series, _ = pca_optimizer.fit_and_calculate(pd.Timestamp(date))
+                weights_series, _ = optimizer.fit_and_calculate(pd.Timestamp(date))
                 weights = weights_series.to_dict()
             except Exception as e:
-                print(f"PCA optimization failed at {date}: {e}")
+                print(f"Factor risk optimization failed at {date}: {e}")
                 continue
             
             # Filter out negligible weights (floating point precision artifacts)

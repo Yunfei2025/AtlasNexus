@@ -17,44 +17,51 @@ from dateutil.relativedelta import relativedelta
 from .config import RiskModelConfig  # type: ignore
 
 
-class PCAFactorRiskParityOptimizer:
+class FactorRiskParityOptimizer:
     """
-    Optimizer using PCA-derived risk factors for factor risk parity.
+    Optimizer using portfolio risk factors for factor risk parity.
     
     At each rebalance date:
-    1. Run PCA on each country's yield curve (past 1 year of data)
-    2. Define IRDL (level), IRSL (slope), IRCV (curvature) as PC1, PC2, PC3
+    1. Load the configured portfolio risk factors
+    2. Convert factor levels into price-return-space volatility estimates
     3. Calculate factor volatilities using EWMA
     4. Optimize portfolio weights for equal factor risk contribution
     """
     
     def __init__(self, portfolio: Portfolio, input_dir: str,
-                 pca_lookback_years: float = 1.0,
+                 factor_model_lookback_years: float = 1.0,
                  vol_lookback_months: int = 3,
-                 ewma_lambda: float = 0.94):
+                 ewma_lambda: float = 0.94,
+                 pca_lookback_years: Optional[float] = None):
         """
-        Initialize the PCA-based factor risk parity optimizer.
+        Initialize the factor risk parity optimizer.
         
         Args:
             portfolio: Portfolio instance
             input_dir: Directory containing yield curve data
-            pca_lookback_years: Years of data for PCA fitting
+            factor_model_lookback_years: Years of data for factor-model fitting
             vol_lookback_months: Months of data for EWMA volatility
             ewma_lambda: EWMA decay parameter
+            pca_lookback_years: Legacy alias for factor_model_lookback_years
         """
+        if pca_lookback_years is not None:
+            factor_model_lookback_years = pca_lookback_years
+
         self.portfolio = portfolio
         self.input_dir = input_dir
-        self.pca_analyzer = PCARiskFactorAnalyzer(input_dir, pca_lookback_years)
+        self.factor_analyzer = PCARiskFactorAnalyzer(input_dir, factor_model_lookback_years)
+        self.pca_analyzer = self.factor_analyzer
         self.vol_lookback_months = vol_lookback_months
         self.ewma_lambda = ewma_lambda
         self._weights: Optional[pd.Series] = None
-        self._pca_factor_vols: Optional[pd.Series] = None
+        self._factor_vols: Optional[pd.Series] = None
+        self._pca_factor_vols = self._factor_vols
     
     def fit_and_calculate(self, rebalance_date: pd.Timestamp,
                           risk_budgets: Optional[Dict[str, float]] = None,
                           total_capital: float = 1.0) -> Tuple[pd.Series, pd.Series]:
         """
-        Fit PCA and calculate optimal weights for a given rebalance date.
+        Calculate optimal weights for a given rebalance date.
         
         Args:
             rebalance_date: Date at which to rebalance
@@ -78,6 +85,7 @@ class PCAFactorRiskParityOptimizer:
             factor_window,
             ewma_lambda=self.ewma_lambda,
         ))
+        self._factor_vols = factor_vols
         self._pca_factor_vols = factor_vols
 
         weights = self._optimize_weights(factor_vols, risk_budgets=risk_budgets, total_capital=total_capital)
@@ -87,10 +95,10 @@ class PCAFactorRiskParityOptimizer:
     
     def _calculate_ewma_volatilities(self, factor_returns: pd.DataFrame) -> pd.Series:
         """
-        Calculate EWMA volatilities for PCA factors.
+        Calculate EWMA volatilities for factor return series.
         
         Args:
-            factor_returns: DataFrame of PCA factor returns
+            factor_returns: DataFrame of factor returns
             
         Returns:
             Series of annualized volatilities by factor
@@ -225,9 +233,9 @@ class PCAFactorRiskParityOptimizer:
     
     def _build_exposure_matrix(self, factor_vols: pd.Series) -> Tuple[pd.DataFrame, list, list]:
         """
-        Build asset-factor exposure matrix using PCA factor names.
+        Build asset-factor exposure matrix using factor names.
         
-        Maps asset sensitivities to PCA factors (IRDL.XX, IRSL.XX, IRCV.XX).
+        Maps asset sensitivities to model factors (IRDL.XX, IRSL.XX, IRCV.XX).
         """
         asset_names = list(self.portfolio.assets.keys())
         factor_names = [f for f in factor_vols.index if pd.notna(factor_vols[f])]
@@ -249,7 +257,7 @@ class PCAFactorRiskParityOptimizer:
     def allocate_capital(self, total_capital: float, 
                         rebalance_date: pd.Timestamp) -> pd.Series:
         """
-        Allocate capital using PCA factor risk parity.
+        Allocate capital using factor risk parity.
         
         Args:
             total_capital: Total capital to allocate
@@ -261,12 +269,12 @@ class PCAFactorRiskParityOptimizer:
         weights, _ = self.fit_and_calculate(rebalance_date)
         return weights * total_capital
     
-    def get_pca_diagnostics(self) -> Dict:
-        """Get PCA diagnostics including explained variance ratios."""
+    def get_factor_model_diagnostics(self) -> Dict:
+        """Get factor-model diagnostics including explained variance ratios."""
         diagnostics = {}
         
         for country in ['US', 'JP', 'DE', 'UK', 'CN']:
-            var_ratios = self.pca_analyzer.get_explained_variance(country)
+            var_ratios = self.factor_analyzer.get_explained_variance(country)
             if var_ratios is not None:
                 diagnostics[country] = {
                     'PC1_var': var_ratios[0] if len(var_ratios) > 0 else None,
@@ -276,16 +284,21 @@ class PCAFactorRiskParityOptimizer:
                 }
         
         return diagnostics
+
+    def get_pca_diagnostics(self) -> Dict:
+        """Backward-compatible alias for factor-model diagnostics."""
+        return self.get_factor_model_diagnostics()
     
     def get_factor_loadings(self, country: str) -> Optional[pd.DataFrame]:
         """Get PCA factor loadings for a country."""
-        return self.pca_analyzer.get_factor_loadings(country)
+        return self.factor_analyzer.get_factor_loadings(country)
     
     def clear_cache(self):
         """Clear cached data."""
         self._weights = None
+        self._factor_vols = None
         self._pca_factor_vols = None
-        self.pca_analyzer.clear_cache()
+        self.factor_analyzer.clear_cache()
 
     def optimize(self, total_capital: float, use_cache: bool = True, risk_budgets: Dict[str, float] = None):
         """
@@ -337,3 +350,6 @@ class PCAFactorRiskParityOptimizer:
         """Print summary of optimization results."""
         print(f"Total Capital: {total_capital:,.2f}")
         print(summary)
+
+
+PCAFactorRiskParityOptimizer = FactorRiskParityOptimizer

@@ -5,6 +5,7 @@ Created on Wed Jan 11 10:42:19 2023
 @author: 马云飞
 """
 import os
+import sys
 import numpy as np
 import pandas as pd
 import pickle
@@ -14,6 +15,8 @@ from settings.fixed_income import BondConfig
 from settings.wind import WindConfig
 from curves.utils.calendar import getCalendar
 from dateutil.relativedelta import relativedelta     
+
+sys.modules.setdefault('numpy._core', np.core)
 
 def loadWorkday(start,end,update=False):
     if update:

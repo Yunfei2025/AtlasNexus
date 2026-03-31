@@ -16,6 +16,59 @@ from settings.fixed_income import IRSConfig
 from curves.utils.calendar import getScheduleDays
 
 
+def _instantaneous_forward_from_log_discount(log_discount, tenors):
+    log_discount = np.asarray(log_discount, dtype=float)
+    tau = np.asarray(tenors, dtype=float)
+    if log_discount.size == 0:
+        return pd.Series(dtype=float, name='ForwardRate')
+    if log_discount.size == 1:
+        return pd.Series(np.zeros(1, dtype=float), index=np.round(tau, 10), name='ForwardRate')
+
+    valid = np.isfinite(log_discount) & np.isfinite(tau)
+    if valid.sum() == 0:
+        return pd.Series(dtype=float, name='ForwardRate')
+
+    out = np.full(log_discount.shape, np.nan, dtype=float)
+    if valid.sum() == 1:
+        out[valid] = 0.0
+        return pd.Series(out, index=np.round(tau, 10), name='ForwardRate')
+
+    valid_pos = np.flatnonzero(valid)
+    tau_valid = tau[valid]
+    log_discount_valid = log_discount[valid]
+    order = np.argsort(tau_valid)
+    tau_sorted = tau_valid[order]
+    log_discount_sorted = log_discount_valid[order]
+
+    edge_order = 2 if tau_sorted.size > 2 else 1
+    forward_sorted = -100 * np.gradient(log_discount_sorted, tau_sorted, edge_order=edge_order)
+    if tau_sorted.size >= 5:
+        smooth_window = 5 if tau_sorted.size >= 9 else 3
+        forward_sorted = (
+            pd.Series(forward_sorted)
+            .rolling(window=smooth_window, center=True, min_periods=1)
+            .mean()
+            .to_numpy()
+        )
+    out[valid_pos[order]] = forward_sorted
+    return pd.Series(out, index=np.round(tau, 10), name='ForwardRate')
+
+
+def _instantaneous_forward_from_discount(discount_factors, tenors):
+    discount = np.asarray(discount_factors, dtype=float)
+    clipped = np.clip(discount, 1e-12, None)
+    return _instantaneous_forward_from_log_discount(np.log(clipped), tenors)
+
+
+def _instantaneous_forward_from_spot(spot_rates, tenors):
+    spot = np.asarray(spot_rates, dtype=float)
+    tau = np.asarray(tenors, dtype=float)
+    if spot.size == 0:
+        return pd.Series(dtype=float, name='ForwardRate')
+    log_discount = -spot * tau / 100
+    return _instantaneous_forward_from_log_discount(log_discount, tau)
+
+
 class Curve:
     def __init__(self,d,btype):
         self.day = d
@@ -182,9 +235,9 @@ class Curve:
         df_curve = pd.Series(spot_curve)
         df_curve.index = taus.round(2)
         df_curve.name = 'SpotRate'
-        df_forward = df_curve.diff()/delt*taus+df_curve
-        df_forward.name = 'ForwardRate'
-        df_curves = pd.concat([df_curve,df_forward.shift(-1)],axis=1)
+        discount_curve = np.exp(-np.array(df_curve.values) * np.array(df_curve.index.values) / 100)
+        df_forward = _instantaneous_forward_from_discount(discount_curve, df_curve.index.values)
+        df_curves = pd.concat([df_curve, df_forward], axis=1)
         return df_curves
 
 class IRSCurve:
@@ -244,11 +297,8 @@ class IRSCurve:
          mask_long = ~mask_short
          spot_rate[mask_long] = -100*np.log(df_vals[mask_long])/t[mask_long]
          # Forward rates
-         prev_df = np.concatenate(([1.0], df_vals[:-1]))
-         inter = df['Interval'].values.astype(float)
-         forward_rate = 100*(prev_df/df_vals - 1) / (inter*GeneralConfig.YN/GeneralConfig.YN1)
          df['SpotRate'] = np.round(spot_rate, 4)
-         df['ForwardRate'] = pd.Series(forward_rate, index=df.index).shift(-1)
+         df['ForwardRate'] = _instantaneous_forward_from_discount(df_vals, df.index.values)
          df['SpotRate'] = df['SpotRate'].round(4)
          self.anchor = df
          return self
@@ -284,10 +334,8 @@ class IRSCurve:
         df_curve.name = 'SpotRate'
         df_DF = np.exp(-np.array(df_curve.values) * np.array(df_curve.index) / 100)
         df_DF = pd.Series(df_DF, name='DF',index=df_curve.index)
-        df_forward = df_curve.diff(dy) / delt * taus + df_curve
-        df_forward = df_forward.shift(-dy)
-        df_forward.name = 'ForwardRate'
-        self.curves = pd.concat([df_curve,df_forward.shift(-dy),df_DF],axis=1)
+        df_forward = _instantaneous_forward_from_discount(df_DF.values, df_curve.index.values)
+        self.curves = pd.concat([df_curve, df_forward, df_DF], axis=1)
         return self
      
     def affinePricing(self,irs):
