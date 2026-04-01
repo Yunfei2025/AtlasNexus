@@ -42,14 +42,6 @@ def _instantaneous_forward_from_log_discount(log_discount, tenors):
 
     edge_order = 2 if tau_sorted.size > 2 else 1
     forward_sorted = -100 * np.gradient(log_discount_sorted, tau_sorted, edge_order=edge_order)
-    if tau_sorted.size >= 5:
-        smooth_window = 5 if tau_sorted.size >= 9 else 3
-        forward_sorted = (
-            pd.Series(forward_sorted)
-            .rolling(window=smooth_window, center=True, min_periods=1)
-            .mean()
-            .to_numpy()
-        )
     out[valid_pos[order]] = forward_sorted
     return pd.Series(out, index=np.round(tau, 10), name='ForwardRate')
 
