@@ -10,6 +10,7 @@ Created on Mon Aug 29 22:47:32 2022
 import math
 import numpy as np
 from functools import lru_cache
+from scipy.optimize import brentq
 
 class BootstrapYieldCurve(object):
     
@@ -19,15 +20,6 @@ class BootstrapYieldCurve(object):
         self._maturities_cache = None  # Cache for sorted maturities
         self._zero_rates_arrays = None  # Cache for interpolation arrays
         self._last_calculated_maturity = None  # Track incremental processing
-        
-    def add_instrument(self, par, T, coup, price, freq):
-        """Save instrument info by maturity (tax-agnostic)."""
-        # Store instrument without tax treatment (market/pre-tax cashflows)
-        self.instruments[T] = (par, coup, price, freq)
-        # Invalidate caches when new instruments are added
-        self._maturities_cache = None
-        self._zero_rates_arrays = None
-        self._last_calculated_maturity = None
         
     @lru_cache(maxsize=128)
     def _calculate_discount_factor(self, rate, time):
@@ -46,6 +38,7 @@ class BootstrapYieldCurve(object):
         # Invalidate caches when new instruments are added
         self._maturities_cache = None
         self._zero_rates_arrays = None
+        self._last_calculated_maturity = None
     
         
     def get_zero_rates(self):
@@ -218,9 +211,9 @@ class BootstrapYieldCurve(object):
                     f_hi = pv_with_r(r_hi) - value
                     
                     expand_count = 0
-                    while f_lo * f_hi > 0 and expand_count < 5:  # Reduced iterations
+                    while f_lo * f_hi > 0 and expand_count < 5:
                         r_lo = max(r_lo - 0.1, -0.99)
-                        r_hi = min(r_hi + 0.1, 2.0)  # Add upper bound
+                        r_hi = min(r_hi + 0.1, 2.0)
                         f_lo = pv_with_r(r_lo) - value
                         f_hi = pv_with_r(r_hi) - value
                         expand_count += 1
@@ -232,23 +225,10 @@ class BootstrapYieldCurve(object):
                             value -= per_coupon * np.sum(disc_last)
                         return math.exp(math.log((par + per_coupon) / value) / T) - 1
                     
-                    # Optimized bisection with adaptive tolerance
-                    tolerance = 1e-10
-                    for iteration in range(40):  # Reduced from 60
-                        r_mid = 0.5 * (r_lo + r_hi)
-                        f_mid = pv_with_r(r_mid) - value
-                        
-                        if abs(f_mid) < tolerance or (r_hi - r_lo) < tolerance:
-                            return r_mid
-                            
-                        if f_lo * f_mid <= 0:
-                            r_hi = r_mid
-                            f_hi = f_mid
-                        else:
-                            r_lo = r_mid
-                            f_lo = f_mid
-                    
-                    return 0.5 * (r_lo + r_hi)
+                    try:
+                        return brentq(lambda r: pv_with_r(r) - value, r_lo, r_hi, xtol=1e-12, rtol=1e-12)
+                    except ValueError:
+                        return 0.5 * (r_lo + r_hi)
         
         # Final spot rate calculation (optimized)
         return math.exp(math.log((par + per_coupon) / value) / T) - 1

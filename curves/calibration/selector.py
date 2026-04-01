@@ -316,8 +316,10 @@ class RefBondSelector:
                     prev_bond_issue = bonds['start_date'].loc[prev_bond]
                     try:
                         selected_bond_issue = bonds['start_date'].loc[selected_bond]
-                    except:
-                        import pdb; pdb.set_trace()
+                    except KeyError:
+                        warnings.warn(f'Bond {selected_bond} not found in start_date index, skipping stability check')
+                        day_results[bucket_name] = selected_bond
+                        continue
                     daydiff = (selected_bond_issue - prev_bond_issue).days
                     if daydiff <= 0 and (prev_bond in bucket_bonds) :
                         selected_bond = prev_bond

@@ -7,6 +7,7 @@ Created on Sun Jan 15 16:09:22 2023
 """
 import pandas as pd
 import numpy as np
+import sympy as sp
 from scipy import interpolate
 
 import curves.affine.affine as af
@@ -206,9 +207,7 @@ class Curve:
                 try:
                     quote.loc[b,'收益率'] = yd.pricingYield(self.day,coup,schedule[b],freq,float(price))
                     if abs(quote.loc[b,'收益率']) > 3:
-                        import pdb;
-                        pdb.set_trace()
-                        print('Check forward curve fitting results!')
+                        print(f'WARNING: Abnormal yield {quote.loc[b,"收益率"]:.4f}% for {b} on {self.day}')
                 except:
                     quote.loc[b,'收益率'] = np.nan
                     print('Pricing ',b, ' failed, on ',self.day.strftime("%Y-%m-%d"))
@@ -220,10 +219,17 @@ class Curve:
         # curve
         delt = 0.1
         taus = np.arange(0.1, 10.1, delt)
-        spot_curve = []
-        for tau in taus:
-            y, b = af.Affine(tau, self.factors, self.S2, self.gamma, self.mtype, self.caltype)
-            spot_curve.append(float(y))
+        # Vectorized: compute all taus at once via numpy path
+        S2_flat = tuple(float(self.S2[i,j]) for i in range(3) for j in range(3))
+        gamma_f = float(self.gamma)
+        if isinstance(self.factors, sp.MatrixBase):
+            x_arr = np.array([float(self.factors[i]) for i in range(3)])
+        else:
+            x_arr = np.asarray(self.factors, dtype=float).ravel()
+        spot_curve = np.empty(len(taus))
+        for idx, tau in enumerate(taus):
+            a, B = af.calAB_np(gamma_f, float(tau), S2_flat, self.mtype)
+            spot_curve[idx] = a + B @ x_arr
         df_curve = pd.Series(spot_curve)
         df_curve.index = taus.round(2)
         df_curve.name = 'SpotRate'

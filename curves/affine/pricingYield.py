@@ -9,13 +9,14 @@ Optimized for performance and simplicity
 """
 import math
 import numpy as np
+import sympy as sp
 import pandas as pd
 from scipy import optimize
 from dateutil.relativedelta import relativedelta
 
 from curves.utils.calendar import getNextTradingDate
 from settings.general import GeneralConfig
-from curves.affine.affine import Affine
+from curves.affine.affine import Affine, calAB_np
 
 # Build calendar from config - cached for performance
 Cal = GeneralConfig.load_calendar()
@@ -219,41 +220,56 @@ def pricingAffine(day, coup, tax, schedule, freq, factors, S2, gamma, mtype, cal
     TS = (schedule.loc[i] - schedule.loc[i - 1]).days
     n_flows = len(flow_dates)
     
-    # Initialize pricing variables
-    p = 0.0
-    y_, b_ = Affine(1, factors, S2, gamma, mtype, caltype)
-    s = np.zeros_like(b_)  # Sensitivity vector
-    
-    # Vectorized calculation for better performance
+    # Pre-extract numpy arrays for fast inner loop
+    if isinstance(S2, sp.MatrixBase):
+        S2_flat = tuple(float(S2[r,c]) for r in range(3) for c in range(3))
+    else:
+        S2_flat = tuple(float(v) for v in np.asarray(S2).ravel())
+    gamma_f = float(gamma)
+    if isinstance(factors, sp.MatrixBase):
+        x_arr = np.array([float(factors[j]) for j in range(3)])
+    else:
+        x_arr = np.asarray(factors, dtype=float).ravel()
+
+    # Compute taus in days
     time_indices = np.arange(n_flows)
-    taus = time_indices * TS + dres
-    
+    taus_days = time_indices * TS + dres
+
+    # Vectorized: compute a and B for all cashflow dates
+    p = 0.0
+    s = np.zeros(3)
     for t in range(n_flows):
-        tau = taus[t]
-        y, b = Affine(tau / 365, factors, S2, gamma, mtype, caltype)
-        discount = 1 / (1 + y / freq / 100)
-        discount_factor = discount ** (tau / TS)
+        tau_d = taus_days[t]
+        tau_y = tau_d / 365.0
+        a, B = calAB_np(gamma_f, tau_y, S2_flat, mtype)
+        y = a + B @ x_arr
+        discount = 1.0 / (1.0 + y / freq / 100.0)
+        discount_factor = discount ** (tau_d / TS)
         
         coupon_pv = coup / freq * discount_factor
         p += coupon_pv
-        s -= b * tau / 365 * coupon_pv
+        s -= B * tau_y * coupon_pv
     
-    # Principal payment
-    final_tau = taus[-1]
-    y, b = Affine(final_tau / 365, factors, S2, gamma, mtype, caltype)
-    discount = 1 / (1 + y / freq / 100)
-    principal_discount = discount ** (final_tau / TS)
+    # Principal payment (reuse last computed values)
+    final_tau_d = taus_days[-1]
+    final_tau_y = final_tau_d / 365.0
+    a, B = calAB_np(gamma_f, final_tau_y, S2_flat, mtype)
+    y = a + B @ x_arr
+    discount = 1.0 / (1.0 + y / freq / 100.0)
+    principal_discount = discount ** (final_tau_d / TS)
     
-    p0 = 100 * principal_discount
+    p0 = 100.0 * principal_discount
     p += p0
-    s -= b * final_tau / 365 * p0
+    s -= B * final_tau_y * p0
     
     # Tax adjustment
     if tax > 0:
         p += tax * max(0, coup - y) * principal_discount
     
     # Accrued interest
-    accrued = coup / freq * (1 - dres / TS)
+    accrued = coup / freq * (1.0 - dres / TS)
     clean_price = p - accrued
     
-    return p, clean_price, s / 1e2
+    # Return sensitivity as sympy Matrix(1,3) for backward compatibility
+    s_sp = sp.Matrix([s.tolist()])
+    return p, clean_price, s_sp / 1e2
