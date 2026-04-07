@@ -5,15 +5,130 @@ Created on Wed Aug 10 13:59:10 2022
 @author: 马云飞
 """
 
-import pandas as pd
-import requests
+import datetime as dt
 import json
-import numpy as np
+import pandas as pd
 import re
+import requests
 import warnings
+from chinese_calendar import get_holiday_detail, is_holiday, is_workday
 from dateutil.relativedelta import relativedelta
 
 warnings.filterwarnings("ignore")
+
+_CALENDAR_CACHE = {}
+
+
+def _to_date(value):
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, pd.Timestamp):
+        return value.date()
+    return value
+
+
+def _weekend_is_holiday(target_date):
+    return _to_date(target_date).weekday() >= 5
+
+
+def _build_weekend_calendar(year):
+    dates = pd.date_range(start=f'{year}-01-01', end=f'{year}-12-31', freq='D')
+    holidays = [_weekend_is_holiday(d) for d in dates]
+    details = ['Weekend fallback' if flag else None for flag in holidays]
+    return pd.DataFrame({'Holiday': holidays, 'Detail': details}, index=dates)
+
+
+def _fetch_remote_calendar(year):
+    frames = []
+    up1 = 'https://sp1.baidu.com/8aQDcjqpAAV3otqbppnN2DJv/api.php?tn=wisetpl&format=json&resource_id=39043&query='
+    up2 = '月&t=1642579711570&cb=op_aladdin_callback1642579711570'
+
+    for month in range(1, 13):
+        url = ''.join([up1, str(year), '年', str(month), up2])
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        parts = re.split(r'[()]', response.text, maxsplit=2)
+        if len(parts) < 2:
+            raise ValueError(f'Unexpected calendar payload for {year}-{month:02d}')
+
+        payload = json.loads(parts[1])
+        month_data = pd.DataFrame(payload['data'])
+        almanac = pd.DataFrame(month_data['almanac'][0])
+        almanac = almanac[almanac['month'] == str(month)].copy()
+        almanac['date'] = pd.to_datetime(almanac['year'] + '/' + almanac['month'] + '/' + almanac['day'])
+        almanac['weekday'] = almanac['date'].dt.dayofweek + 1
+
+        if 'status' in almanac.columns:
+            almanac['status'] = pd.to_numeric(almanac['status'], errors='coerce').fillna(0).astype(int)
+            judge = (almanac['weekday'] >= 6).astype(int) + almanac['status']
+            almanac['Holiday'] = ((judge == 1) | (judge == 2)).astype(bool)
+        else:
+            almanac['Holiday'] = (almanac['weekday'] >= 6).astype(bool)
+
+        detail_col = None
+        for candidate in ['term', 'desc', 'cnDay']:
+            if candidate in almanac.columns:
+                detail_col = candidate
+                break
+
+        almanac['Detail'] = almanac[detail_col].where(almanac['Holiday'], None) if detail_col else None
+        frames.append(almanac[['date', 'Holiday', 'Detail']])
+
+    calendar_frame = pd.concat(frames, ignore_index=True).drop_duplicates(subset=['date']).set_index('date').sort_index()
+    return calendar_frame
+
+
+def _get_calendar_frame(year):
+    if year in _CALENDAR_CACHE:
+        return _CALENDAR_CACHE[year]
+
+    try:
+        dates = pd.date_range(start=f'{year}-01-01', end=f'{year}-12-31', freq='D')
+        holidays = [is_holiday(d.date()) for d in dates]
+        details = []
+        for current_date, holiday_flag in zip(dates, holidays):
+            if holiday_flag:
+                details.append(get_holiday_detail(current_date.date())[1])
+            else:
+                details.append(None)
+        frame = pd.DataFrame({'Holiday': holidays, 'Detail': details}, index=dates)
+    except NotImplementedError:
+        try:
+            frame = _fetch_remote_calendar(year)
+        except Exception:
+            frame = _build_weekend_calendar(year)
+
+    _CALENDAR_CACHE[year] = frame
+    return frame
+
+
+def is_cn_holiday(target_date):
+    date_value = _to_date(target_date)
+    try:
+        return is_holiday(date_value)
+    except NotImplementedError:
+        frame = _get_calendar_frame(date_value.year)
+        return bool(frame.loc[pd.Timestamp(date_value), 'Holiday'])
+
+
+def is_cn_workday(target_date):
+    date_value = _to_date(target_date)
+    try:
+        return is_workday(date_value)
+    except NotImplementedError:
+        frame = _get_calendar_frame(date_value.year)
+        return not bool(frame.loc[pd.Timestamp(date_value), 'Holiday'])
+
+
+def get_cn_holiday_detail(target_date):
+    date_value = _to_date(target_date)
+    try:
+        return get_holiday_detail(date_value)
+    except NotImplementedError:
+        frame = _get_calendar_frame(date_value.year)
+        holiday_flag = bool(frame.loc[pd.Timestamp(date_value), 'Holiday'])
+        detail = frame.loc[pd.Timestamp(date_value), 'Detail'] if holiday_flag else None
+        return holiday_flag, detail
 
 def getScheduleDays(day,curve_type,standard=True):
     ends = {}
@@ -47,112 +162,14 @@ def getScheduleDays(day,curve_type,standard=True):
     return days
 
 def getCalendar(year):
-    df=pd.DataFrame()
-    # 获取法定节假日
-    up1='https://sp1.baidu.com/8aQDcjqpAAV3otqbppnN2DJv/api.php?tn=wisetpl&format=json&resource_id=39043&query='
-    up2='月&t=1642579711570&cb=op_aladdin_callback1642579711570'
-    # 2022年接口已经改为按月获取数据，因此循环12个月获取每月数据
-    for i in range(1,13):
-        url="".join([up1,str(year),"年",str(i),up2])
-        r=requests.get(url)
-        rtxt=re.split("[()]", r.text)[1]
-        r_json=json.loads(rtxt)
-        each_d1=pd.DataFrame(r_json['data'])
-        each_d2=pd.DataFrame(each_d1['almanac'][0])
-        ## 筛选当月数据，数据中year\month\day是公立日期，数据会返回3个月的数据
-        each_d3=each_d2[each_d2['month']==str(i)]
-        # ## 由于12月的数据没有status字段（可能是下一年一月放假规定没出来，所以这里进行特殊处理)--结论应该是某些月份没有节假日就没有status字段，所以后面专门针对status进行处理
-        # if i==11:
-        #     each_d3=each_d2[each_d2['month']>=str(i)]
-        # else:
-        #     each_d3=each_d2[each_d2['month']==str(i)]
-        ## 组合真的日期，并标记节假日情况
-        each_d3['公历日期']=pd.to_datetime(each_d3['year']+"/"+each_d3['month']+"/"+each_d3['day'])
-        each_d3['Weekday']=each_d3['公历日期'].dt.dayofweek+1
-        ## 标记是否节假日(即当天是否是法定放假)，其中status中的1表示放假，2表示上班，注意需要处理有没有status列的情况
-        ## 有status的情况
-        if "status" in each_d3.columns:
-            each_d3['status'].fillna(0,inplace=True)
-            each_d3['status']=each_d3['status'].astype('int',errors='ignore')
-            ## 按周几把周末标记成1，周一至周五标记成0，然后通过标记和status的值相加，结果为1和2的就是假期
-            judge=np.where(each_d3['Weekday']<6,0,1)+each_d3['status']
-            each_d3['Holiday']=np.where((judge==1) | (judge==2),True,False)
-            df=df.append(each_d3)
-            # each_d3.to_csv("百度日历.csv",index=False)
-        ## 没有status的情况，直接按周末为节假日
-        else:
-            each_d3['Holiday']=np.where(each_d3['Weekday']>=6,True,False)
-            df=df.append(each_d3)
-    # 重命名列
-    df.rename(columns={'animal':'生肖','avoid':'忌','cnDay':'中文星期','day':'日',
-                       'gzDate':'干支日','gzMonth':'干支月','gzYear':'干支年',
-                       'isBigMonth':'是否为阴历大月','lDate':'中文阴历日','lMonth':'中文阴历月',
-                       'lunarDate':'数字阴历日','lunarMonth':'数字阴历月','lunarYear':'数字阴历年',
-                       'month':'月','oDate':'阳历当天0点','suit':'宜','term':'节气节日',
-                       'type':'各种与节日有关的类型','value':'各种日','year':'年','desc':'一种节日',
-                       'status':'1休假2上班'},
-              inplace=True)
-    df.set_index('公历日期',inplace=True)
-    
-    adjholidays = []
-    adjworkdays = []
-    if year == 2023:        
-        for m in [1,4,5,6,9,10]:
-            if m == 1:
-                hlist = [1,2,21,22,23,24,25,26,27] 
-                wlist = [28,29]
-            elif m == 4:    
-                hlist = [3,4,5,29,30] 
-                wlist = [1,2,9,22]
-            elif m == 5:    
-                hlist = [1,2,3] 
-                wlist = [6]
-            elif m == 6:    
-                hlist = [22,23,24] 
-                wlist = [25]
-            elif m == 9:    
-                hlist = [29,30] 
-                wlist = [23]
-            elif m == 10:    
-                hlist = [1,2,3,4,5,6,7] 
-                wlist = [8]          
-            adjholidays.extend([pd.Timestamp(year,m,d) for d in hlist])
-            adjworkdays.extend([pd.Timestamp(year,m,d) for d in wlist])
-    elif year == 2024:
-        for m in [1,2,4,5,6,9,10]:
-            if m == 1:
-                hlist = [1] 
-                wlist = []
-            elif m == 2:    
-                hlist = [10,11,12,13,14,15,17] 
-                wlist = [18]
-            elif m == 4:    
-                hlist = [4,5,29,30] 
-                wlist = [7,27]
-            elif m == 5:    
-                hlist = [1] 
-                wlist = [4]
-            elif m == 6:    
-                hlist = [10] 
-                wlist = []
-            elif m == 9:    
-                hlist = [17,18] 
-                wlist = [14,21,28]
-            elif m == 10:    
-                hlist = [1,2,3,4,5,6,7] 
-                wlist = [8]          
-            adjholidays.extend([pd.Timestamp(year,m,d) for d in hlist])
-            adjworkdays.extend([pd.Timestamp(year,m,d) for d in wlist])
-            
-    df.loc[adjholidays,'Holiday'] = True
-    df.loc[adjworkdays,'Holiday'] = False
-    return df['Holiday']
+    return _get_calendar_frame(year)['Holiday']
 
-def getNextTradingDate(Cal,datelist):
-    hd = Cal[Cal]
+def getNextTradingDate(Cal,datelist=None):
+    if datelist is None:
+        datelist = Cal
     adjlist = []
-    for i,d in enumerate(datelist):
-        while (d in hd.index):
+    for d in datelist:
+        while not is_cn_workday(pd.Timestamp(d).date()):
             d += relativedelta(days=1)
         adjlist.append(d)
     return adjlist

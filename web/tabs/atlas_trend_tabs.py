@@ -329,7 +329,7 @@ def register_trend_callbacks(app) -> None:
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
 
         try:
-            from settings.general import DIR_INPUT
+            from settings.paths import DIR_INPUT
             path = os.path.join(str(DIR_INPUT), "trend-fig.obj")
             figures = _load_pickle_cached(path)
 

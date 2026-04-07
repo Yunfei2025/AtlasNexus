@@ -22,7 +22,8 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from settings.fixed_income import BondConfig
-from settings.general import DateConfig, DIR_INPUT
+from settings.general import DateConfig
+from settings.paths import DIR_INPUT
 from settings.futures import FuturesConfig
 
 # Setup the app

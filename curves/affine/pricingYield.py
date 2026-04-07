@@ -15,11 +15,8 @@ from scipy import optimize
 from dateutil.relativedelta import relativedelta
 
 from curves.utils.calendar import getNextTradingDate
-from settings.general import GeneralConfig
+from settings.general import DateConfig
 from curves.affine.affine import Affine, calAB_np
-
-# Build calendar from config - cached for performance
-Cal = GeneralConfig.load_calendar()
 
 # Frequency mapping for better performance
 FREQ_MAPPING = {1.0: 12, 2.0: 6, 4.0: 3}
@@ -51,7 +48,7 @@ def scheduleDate(mats, mate, name, f):
             current_date = current_date + relativedelta(months=N)
             schedule.append(current_date)
     
-    schedule = getNextTradingDate(Cal, schedule)
+    schedule = getNextTradingDate(schedule)
     return pd.Series(schedule)
  
 def floaters(mats, mate, f):
@@ -66,13 +63,8 @@ def floaters(mats, mate, f):
     Returns:
         list: Schedule dates
     """
-    wd = Cal[~Cal]
-    idx = wd.index.get_indexer([mats], method="ffill")[0]
-    
-    if mats in wd.index:
-        idx -= 1
-    
-    schedule = [wd.index[idx]]
+    start_date = mats - relativedelta(days=1) if DateConfig.is_cn_workday(mats) else mats
+    schedule = [DateConfig.prev_cn_workday(start_date)]
     current_date = schedule[0]
     
     while current_date + relativedelta(days=f) < mate:

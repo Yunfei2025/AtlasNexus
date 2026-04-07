@@ -34,7 +34,7 @@ if str(project_root) not in sys.path:
 from web.core.server import app
 from web.core.load import t_int, DATA_PATH
 from settings.fixed_income import BondConfig
-from settings.general import DIR_INPUT
+from settings.paths import DIR_INPUT
 from curves.refreshers.irs import IRSRefresher
 from curves.refreshers.rates import BondCurveRefresher
 from curves.refreshers.credit import CreditSpreadRefresher

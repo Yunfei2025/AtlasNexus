@@ -40,17 +40,5 @@ __all__ = [
     'BondConfig', 'IRSConfig', 'InstitutionConfig', 'FuturesConfig', 'WindConfig'
 ]
 
-# Convenience import: keep legacy function name available
-import pandas as _pd
-import os as _os
-import pickle as _pickle
-
-def load_calendar():
-    try:
-        return _pd.read_pickle(_os.path.join(DIR_INPUT, 'Calendar.pkl'))
-    except Exception:
-        with open(_os.path.join(DIR_INPUT, 'Calendar.pkl'), 'rb') as f:
-            return _pickle.load(f)
-
 
 

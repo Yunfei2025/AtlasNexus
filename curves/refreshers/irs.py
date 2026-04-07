@@ -98,8 +98,16 @@ class IRSRefresher:
 			self.curves['close'] = pickle.load(file)
 		logger.info("Successfully loaded close curves")
 
+	def _get_fallback_swap_quotes(self):
+		if self.environment_time_series is None or self.environment_time_series.empty:
+			return pd.Series(dtype=float)
+		if self.previous_bday in self.environment_time_series.index:
+			return self.environment_time_series.loc[self.previous_bday]
+		return self.environment_time_series.iloc[-1]
+
 	def build_instantaneous_curves(self):
 		logger.info("Building instantaneous curves...")
+		fallback_quotes = self._get_fallback_swap_quotes()
 		for tenor_type in ['close', 'inst']:
 			logger.info(f"Processing {tenor_type} curves...")
 			for ctype in IRSConfig.CURVE_TYPES:
@@ -110,7 +118,7 @@ class IRSRefresher:
 			if tenor_type == 'close':
 				logger.info("Building instantaneous curves from close curves...")
 				irs_ref = {'r7d': list(IRSConfig.R7D_LIST.keys()), 's3m': list(IRSConfig.S3M_LIST.keys())}
-				self.curves['inst'] = irs.refIRSCurves(self.environment, self.curves[tenor_type], irs_ref)
+				self.curves['inst'] = irs.refIRSCurves(self.environment, self.curves[tenor_type], irs_ref, fallback_quotes=fallback_quotes)
 				logger.info("Successfully built instantaneous curves")
 
 	def _init_empty_forward_shifts(self):
@@ -225,8 +233,8 @@ class IRSRefresher:
 		self.s3m_forward = self.forward_data['fixing']['s3m'].loc[self.today_date:]
 		logger.info(f"Extracted forward rates: R7D ({len(self.r7d_forward)} periods), S3M ({len(self.s3m_forward)} periods)")
 		
-		swap_rates = self.environment['SwapRT'].loc[IRSConfig.IRS_LIST, ["买价收益率", "卖价收益率"]]
-		self.quote_rate = swap_rates.mean(axis=1)
+		fallback_quotes = self._get_fallback_swap_quotes()
+		self.quote_rate = irs.get_swap_mid_quotes(self.environment['SwapRT'], IRSConfig.IRS_LIST, fallback_quotes=fallback_quotes)
 		logger.info(f"Calculated quote rates for {len(self.quote_rate)} instruments")
 		
 		self.contracts = irs.evalueContract(self.today_date, self.quote_rate, self.forward_data, GeneralConfig.PSHIFT)

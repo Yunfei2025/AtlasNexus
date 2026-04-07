@@ -15,7 +15,7 @@ from dash.exceptions import PreventUpdate
 from settings.general import DateConfig
 from settings.futures import FuturesConfig
 from settings.fixed_income import BondConfig,  SpreadConfig
-from settings.general import DIR_INPUT
+from settings.paths import DIR_INPUT
 
 from web.core.server import app
 from web.core.styles import (

@@ -430,7 +430,7 @@ def register_callbacks(app) -> None:
     import os
     import pickle
     import pandas as pd
-    from settings.general import DIR_INPUT
+    from settings.paths import DIR_INPUT
     from settings.fixed_income import BondConfig
     
     # Import plotting dependencies at function level to catch errors early
@@ -441,7 +441,7 @@ def register_callbacks(app) -> None:
     except Exception as e:
         print(f"Warning: Plotting dependencies not available: {e}")
         PLOTTING_AVAILABLE = False
-        app_color = {"graph_bg": "#082255", "graph_line": "#007ACE"}
+        from settings.general import app_color
         go = None
     
     # Try to import web.core modules (they might fail if data files are missing)

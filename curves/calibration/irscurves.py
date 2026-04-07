@@ -858,10 +858,35 @@ def irsSpreadComposite(spread_list, cost):
                 spread_cost[sp] = (cost[prefix + note[2:4] + t] - irs_ratio[sp][0] * cost[prefix + note[:2] + t] - irs_ratio[sp][1] * cost[prefix + note[4:] + t])
     return spread_cost
 
-def refIRSCurves(env, curves, irs_ref):
+def get_swap_mid_quotes(swap_rt, tickers=None, threshold_bp=10, fallback_quotes=None):
+    """Return swap mid quotes with 成交收益率 and historical fallback for bad bid-offer quotes."""
+    if tickers is None:
+        quote_frame = swap_rt.loc[:, ['买价收益率', '卖价收益率', '成交收益率']].copy()
+    else:
+        quote_frame = swap_rt.loc[tickers, ['买价收益率', '卖价收益率', '成交收益率']].copy()
+
+    mid_quotes = (quote_frame['买价收益率'] + quote_frame['卖价收益率']) / 2
+    quote_spread_bp = (quote_frame['卖价收益率'] - quote_frame['买价收益率']).abs() * 100
+    traded_yield = quote_frame['成交收益率']
+    deviation_bp = (mid_quotes - traded_yield).abs() * 100
+    use_trade_mask = traded_yield.notna() & (mid_quotes.isna() | (deviation_bp > threshold_bp))
+    mid_quotes.loc[use_trade_mask] = traded_yield.loc[use_trade_mask]
+
+    if fallback_quotes is not None:
+        fallback_series = pd.Series(fallback_quotes).reindex(mid_quotes.index)
+        unreasonable_mid = mid_quotes.isna() | ~np.isfinite(mid_quotes) | (mid_quotes < 0) | (mid_quotes > 10)
+        use_fallback_mask = fallback_series.notna() & traded_yield.isna() & (unreasonable_mid | (quote_spread_bp > threshold_bp))
+        mid_quotes.loc[use_fallback_mask] = fallback_series.loc[use_fallback_mask]
+
+    return mid_quotes
+
+def refIRSCurves(env, curves, irs_ref, fallback_quotes=None):
     """Refresh IRS curves with real-time data."""
     d = DateConfig.get_date_mappings()['d'].date()
-    curve_instruments = {ct: (env['SwapRT'].loc[irs_ref[ct]]['买价收益率'] + env['SwapRT'].loc[irs_ref[ct]]['卖价收益率']) / 2 for ct in IRSConfig.CURVE_TYPES}
+    curve_instruments = {
+        ct: get_swap_mid_quotes(env['SwapRT'], irs_ref[ct], fallback_quotes=fallback_quotes)
+        for ct in IRSConfig.CURVE_TYPES
+    }
     for ct in IRSConfig.CURVE_TYPES:
         new_curve = IRSCurve(d, ct)
         new_curve.extractKeySpot(curve_instruments[ct])

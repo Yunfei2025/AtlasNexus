@@ -3,10 +3,10 @@
 """
 General application configuration, including dates and app constants.
 """
-import pandas as pd
 import datetime
 from dateutil.relativedelta import relativedelta
-from .paths import DIR_INPUT
+from curves.utils.calendar import is_cn_workday, is_cn_holiday, get_cn_holiday_detail
+from .paths import PATH, DIR_INPUT, DIR_OUTPUT, DIR_DATA, DIR_MODELS
 
 app_color = {"graph_bg": "#082255", "graph_line": "#007ACE"}
 
@@ -27,21 +27,40 @@ class GeneralConfig:
     YN = 365
     YN1 = 360
 
-    @classmethod
-    def load_calendar(cls) -> pd.DataFrame:
-        return pd.read_pickle(DIR_INPUT.joinpath('calendar.pkl'))
-    
-    # App colors
-    app_color = {"graph_bg": "#082255", "graph_line": "#007ACE"}
-
 
 class DateConfig:
+    @staticmethod
+    def _to_date(dt: datetime.date) -> datetime.date:
+        if isinstance(dt, datetime.datetime):
+            return dt.date()
+        return dt
+
+    @classmethod
+    def is_cn_holiday(cls, dt: datetime.date) -> bool:
+        return is_cn_holiday(cls._to_date(dt))
+
+    @classmethod
+    def is_cn_workday(cls, dt: datetime.date) -> bool:
+        return is_cn_workday(cls._to_date(dt))
+
+    @classmethod
+    def cn_holiday_detail(cls, dt: datetime.date):
+        return get_cn_holiday_detail(cls._to_date(dt))
+
+    @classmethod
+    def prev_cn_workday(cls, dt: datetime.date) -> datetime.date:
+        d = cls._to_date(dt)
+        while not cls.is_cn_workday(d):
+            d -= datetime.timedelta(days=1)
+        return d
+
     @classmethod
     def get_date_mappings(cls):
         today = datetime.datetime.today()
+        d_prev = cls.prev_cn_workday(today - datetime.timedelta(days=1))
         return {
             'd': today,
-            'dp': today - pd.offsets.BDay(GeneralConfig.DSHIFT),
+            'dp': datetime.datetime.combine(d_prev, datetime.time.min),
             'd2d': today - relativedelta(days=2),
             'd7d': today - relativedelta(days=7),
             'd1m': today - relativedelta(months=1),

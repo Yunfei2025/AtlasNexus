@@ -14,7 +14,8 @@ project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 from curves.utils.loader import loadInstrumentDefinition
-from settings.general import DateConfig, DIR_INPUT
+from settings.general import DateConfig
+from settings.paths import DIR_INPUT
 from settings.fixed_income import BondConfig, IRSConfig
 
 def swap_dv01(term_years, rate=0.015, freq=4):

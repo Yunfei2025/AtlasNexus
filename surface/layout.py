@@ -9,8 +9,8 @@ from dateutil.relativedelta import relativedelta
 
 from .config import TERM_LIST
 
-# Import app color from settings
-from settings.general import app_color
+# Import app color from shared web styles
+from web.core.styles import app_color
 
 
 def create_layout():

@@ -17,6 +17,7 @@ import scipy.optimize as opt
 from scipy import interpolate
 from typing import Dict, List, Tuple, Optional, Union
 from settings.fixed_income import BondConfig
+from curves.calibration.irscurves import get_swap_mid_quotes
 
 # Constants
 HEDGE_TERMS = [' 1Y', ' 2Y', ' 5Y', ' 10Y']
@@ -282,7 +283,7 @@ def SwapHedge(stat_his: Dict, env: Dict, ytm_quote: pd.DataFrame) -> Dict:
     # Vectorized calculation where possible
     for bond in ytm_quote.index:
         ttm = env['Def'].loc[bond, '剩余期限']
-        bid_val, ofr_val = _calculate_swap_rates(env, calculator.col_map, ttm)
+        bid_val, ofr_val, mid_val = _calculate_swap_rates(env, calculator.col_map, ttm)
         
         # Update results
         irs_tmp.loc[bond, 'Bid'] = bid_val
@@ -292,7 +293,7 @@ def SwapHedge(stat_his: Dict, env: Dict, ytm_quote: pd.DataFrame) -> Dict:
         
         # Calculate hedge ratios
         if 1.0 <= ttm <= 5.0:
-            _calculate_hedge_ratios(stat_his, bond, ttm, bid_val, ofr_val, jac_matrix)
+            _calculate_hedge_ratios(stat_his, bond, ttm, mid_val, jac_matrix)
         elif ttm > 5.0:
             _set_long_term_ratios(stat_his, bond, ttm)
     
@@ -342,8 +343,7 @@ def flyHedge(stat_his: Dict, cv_ref: pd.DataFrame, bond_sen: pd.DataFrame) -> Di
 # Helper functions for improved modularity
 def _get_anchor_swap_rates(env: Dict, col_map: Dict) -> np.ndarray:
     """Get anchor swap rates for hedge calculation."""
-    return ((env['SwapRT'].loc[ANCHOR_SWAPS, col_map['Bid']] + 
-             env['SwapRT'].loc[ANCHOR_SWAPS, col_map['Ofr']]) / 2).values
+    return get_swap_mid_quotes(env['SwapRT'], ANCHOR_SWAPS).values
 
 
 def _create_jacobian_matrix(irs_anchor: np.ndarray) -> sp.Matrix:
@@ -352,9 +352,10 @@ def _create_jacobian_matrix(irs_anchor: np.ndarray) -> sp.Matrix:
     return jac_matrix.row_insert(0, sp.Matrix(irs_anchor).T)
 
 
-def _calculate_swap_rates(env: Dict, col_map: Dict, ttm: float) -> Tuple[float, float]:
-    """Calculate interpolated swap rates based on TTM."""
+def _calculate_swap_rates(env: Dict, col_map: Dict, ttm: float) -> Tuple[float, float, float]:
+    """Calculate interpolated swap bid/offer and guarded mid based on TTM."""
     swap_rt = env['SwapRT']
+    swap_mid = get_swap_mid_quotes(swap_rt, ANCHOR_SWAPS)
     
     if 1.0 <= ttm < 2.0:
         weight1, weight2 = 2.0 - ttm, ttm - 1.0
@@ -362,25 +363,29 @@ def _calculate_swap_rates(env: Dict, col_map: Dict, ttm: float) -> Tuple[float, 
                   weight2 * swap_rt.loc['FR007S2Y.IR', col_map['Bid']])
         ofr_val = (weight1 * swap_rt.loc['FR007S1Y.IR', col_map['Ofr']] + 
                   weight2 * swap_rt.loc['FR007S2Y.IR', col_map['Ofr']])
+        mid_val = (weight1 * swap_mid.loc['FR007S1Y.IR'] + 
+                   weight2 * swap_mid.loc['FR007S2Y.IR'])
     elif 2.0 <= ttm < 5.0:
         weight1, weight2 = (5.0 - ttm) / 3.0, (ttm - 2.0) / 3.0
         bid_val = (weight1 * swap_rt.loc['FR007S2Y.IR', col_map['Bid']] + 
                   weight2 * swap_rt.loc['FR007S5Y.IR', col_map['Bid']])
         ofr_val = (weight1 * swap_rt.loc['FR007S2Y.IR', col_map['Ofr']] + 
                   weight2 * swap_rt.loc['FR007S5Y.IR', col_map['Ofr']])
+        mid_val = (weight1 * swap_mid.loc['FR007S2Y.IR'] + 
+                   weight2 * swap_mid.loc['FR007S5Y.IR'])
     elif ttm >= 5.0:
         bid_val = swap_rt.loc['FR007S5Y.IR', col_map['Bid']]
         ofr_val = swap_rt.loc['FR007S5Y.IR', col_map['Ofr']]
+        mid_val = swap_mid.loc['FR007S5Y.IR']
     else:
-        bid_val = ofr_val = np.nan
+        bid_val = ofr_val = mid_val = np.nan
     
-    return bid_val, ofr_val
+    return bid_val, ofr_val, mid_val
 
 
 def _calculate_hedge_ratios(stat_his: Dict, bond: str, ttm: float, 
-                          bid_val: float, ofr_val: float, jac_matrix: sp.Matrix) -> None:
+                          irs_mid: float, jac_matrix: sp.Matrix) -> None:
     """Calculate hedge ratios for medium-term bonds."""
-    irs_mid = (bid_val + ofr_val) / 2
     b_r = sp.Matrix([irs_mid, 1, ttm])
     n_r = jac_matrix.inv() * b_r
     

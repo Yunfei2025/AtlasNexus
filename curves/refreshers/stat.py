@@ -22,6 +22,7 @@ from curves.utils import retrieve as rd
 from settings.paths import DIR_INPUT, DIR_OUTPUT
 from settings.general import DateConfig, GeneralConfig
 from settings.fixed_income import IRSConfig, BondConfig
+from curves.calibration import irscurves as irs
 from curves.calibration import hedge as h
 
 class StatRefresher:
@@ -183,10 +184,7 @@ class StatRefresher:
             cvpx = (ytm_quote['Bid'] + ytm_quote['Ofr']) / 2
 
             # IRS RT mid and interpolation terms
-            px_irs_rt = (
-                env['SwapRT'].loc[self.filtered_irs, '买价收益率']
-                + env['SwapRT'].loc[self.filtered_irs, '卖价收益率']
-            ) / 2
+            px_irs_rt = irs.get_swap_mid_quotes(env['SwapRT'], self.filtered_irs)
 
             self.px_irs_rt = px_irs_rt
             _dates = DateConfig.get_date_mappings()

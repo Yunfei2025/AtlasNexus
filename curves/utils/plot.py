@@ -9,7 +9,7 @@ import plotly.graph_objs as go
 import plotly.io as pio
 import plotly.express as px
 from plotly.subplots import make_subplots
-from settings.general import GeneralConfig
+from settings.general import GeneralConfig, app_color
 
 try:
     from plotly.validators.scatter.marker import SymbolValidator
@@ -122,8 +122,8 @@ def plotCurve(btype, dict_plot):
         yaxis_title='%',
         title={'text': title + '<br> Realtime Curves: ' + d.strftime("%Y-%m-%d %H:%M:%S"), \
                'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
-        plot_bgcolor=GeneralConfig.app_color["graph_bg"],
-        paper_bgcolor=GeneralConfig.app_color["graph_bg"],
+        plot_bgcolor=app_color["graph_bg"],
+        paper_bgcolor=app_color["graph_bg"],
         font={"color": "#fff"},
         xaxis={
             "showgrid": True,
@@ -447,8 +447,8 @@ def plotTrend(dfp, dfv, dff):
             "yanchor": "top",
         },
         legend=dict(x=0.01, y=0.88, traceorder="normal"),
-        plot_bgcolor=GeneralConfig.app_color["graph_bg"],
-        paper_bgcolor=GeneralConfig.app_color["graph_bg"],
+        plot_bgcolor=app_color["graph_bg"],
+        paper_bgcolor=app_color["graph_bg"],
         font={"color": "#fff"},
     )
     fig.update_xaxes(**bgx)
@@ -632,8 +632,8 @@ def plotIRSSpotCurve(fixings, curve_dict):
                'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
         legend=dict(x=0.01, y=1.0,
                     traceorder="normal"),
-        plot_bgcolor=GeneralConfig.app_color["graph_bg"],
-        paper_bgcolor=GeneralConfig.app_color["graph_bg"],
+        plot_bgcolor=app_color["graph_bg"],
+        paper_bgcolor=app_color["graph_bg"],
         font={"color": "#fff"},
     )
     fig = go.Figure(data=data, layout=layout)
@@ -840,8 +840,8 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
                'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
         legend=dict(x=0.01, y=1.0,
                     traceorder="normal"),
-        plot_bgcolor=GeneralConfig.app_color["graph_bg"],
-        paper_bgcolor=GeneralConfig.app_color["graph_bg"],
+        plot_bgcolor=app_color["graph_bg"],
+        paper_bgcolor=app_color["graph_bg"],
         font={"color": "#fff"},
     )
     fig = go.Figure(data=data, layout=layout)

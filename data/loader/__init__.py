@@ -11,6 +11,7 @@ import pickle
 import datetime as dt
 from tools.config import DIR_INPUT, BondConfig, WindConfig
 import tools.calcn as cd
+from curves.utils.calendar import is_cn_workday
 from dateutil.relativedelta import relativedelta     
 
 def is_pickle_corrupted(file_path):
@@ -46,20 +47,9 @@ def is_pickle_corrupted(file_path):
 
 
 def loadWorkday(start,end,update=False):
-    if update:
-        cal_dict = {}
-        for y in range(2016,2040):
-            cal_dict[y] = cd.getCalendar(y)  
-        Cal = pd.concat(cal_dict,axis=0).droplevel(0)
-        Cal.index = [ dt.date(d.year,d.month,d.day) for d in Cal.index ]
-        with open(os.path.join(DIR_INPUT,'Calendar.pkl'), 'wb') as file:
-            pickle.dump(Cal, file, protocol=pickle.HIGHEST_PROTOCOL)
-    else:
-        Cal = safe_load_pickle(os.path.join(DIR_INPUT,'Calendar.pkl'))
-        if Cal is None:
-            raise FileNotFoundError("Calendar.pkl is missing or corrupted and update=False")
-    wd = Cal[Cal==False].loc[start:end].index
-    return wd
+    date_range = pd.date_range(start=start, end=end, freq='D')
+    workdays = [d.date() for d in date_range if is_cn_workday(d.date())]
+    return pd.Index(workdays)
 
 def loadCNBDTS():
     # Direct load to avoid unnecessary read-write in updatePKL when input dict is empty

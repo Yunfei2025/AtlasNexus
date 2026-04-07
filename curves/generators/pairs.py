@@ -16,7 +16,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from curves.utils.loader import loadInstrumentDefinition
-from settings.general import DIR_INPUT
+from settings.paths import DIR_INPUT
 from settings.fixed_income import BondConfig, IRSConfig
 
 

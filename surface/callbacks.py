@@ -7,9 +7,9 @@ from dash import Dash
 from dash.dependencies import Input, Output, State
 
 try:
-    from settings.general import app_color
+    from web.core.styles import app_color
 except ImportError:
-    app_color = {"graph_bg": "#082255", "graph_line": "#007ACE"}
+    from settings.general import app_color
 
 from .config import UPS, CENTERS, EYES, TEXTS, COLORSCALE
 from .data import genCurveData
