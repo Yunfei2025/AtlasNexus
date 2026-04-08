@@ -225,19 +225,18 @@ def getTraceAdd(df1: Mapping[int, pd.Series], stype: str) -> List[Any]:
                 "dash" :'dash',
                 }
         )]
-    # elif stype == 'SwapSpread':
-    #     c = 'Carry(3m,bp)'
-    #     trace2 = [go.Scatter(
-    #         name = c,
-    #         x=df1[0].index,
-    #         y=100*df1[0],  # Convert to basis points
-    #         yaxis='y3',
-    #         line={
-    #             "width": 1,
-    #             "color": px.colors.diverging.balance[3],
-    #             "dash" :'dash',
-    #             }
-    #     )]
+    elif stype == 'SwapSpread':
+        trace2 = [go.Scatter(
+            name = 'CR(3m,bp)',
+            x=df1[0].index,
+            y=100 * df1[0],
+            yaxis='y3',
+            line={
+                "width": 1,
+                "color": px.colors.diverging.balance[3],
+                "dash": 'dash',
+            }
+        )]
     elif stype == 'NetBasis':
         c = 'Implied Repo Rate'
         trace2 = [go.Scatter(

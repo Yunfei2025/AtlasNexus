@@ -25,7 +25,7 @@ def updatePKL(dictn,file_path,rewrite=False):
                 union_cols = target_df.columns.union(new_df.columns)
                 target_df = target_df.reindex(index=union_idx, columns=union_cols)
                 target_df.loc[new_df.index, new_df.columns] = new_df
-                target_df = target_df.sort_index().dropna(axis=0, how="all")
+                target_df = target_df.sort_index().ffill().dropna(axis=0, how="all")
                 return target_df
 
             def _update_series(target_ser, new_ser):

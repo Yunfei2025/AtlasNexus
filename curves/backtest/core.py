@@ -211,8 +211,8 @@ class CurveManager:
             cdm = irs.CurveDataManager()
             tenor_conv = irs.TenorConverter()
             gen = irs.CurveGenerator(cdm, tenor_conv)
-            # Ensure timewindow is a DatetimeIndex as expected by the generator
-            timewindow = pd.DatetimeIndex(price_range)
+            # Keep price_range as datetime.date list to match env index type
+            timewindow = price_range
             for ct in IRSConfig.CURVE_TYPES:
                 gen._extract_historical_spots(curve_ts[ct], timewindow, ct)
             # Persist results
@@ -344,8 +344,15 @@ class PricingEngine:
     def _parse_date_range(self, price_range: List) -> Tuple[datetime.date, datetime.date]:
         """Parse date range from various input formats."""
         if isinstance(price_range[0], str):
-            start = datetime.strptime(price_range[0], "%Y%m%d").date()
-            end = datetime.strptime(price_range[1], "%Y%m%d").date()
+            for fmt in ("%Y%m%d", "%Y-%m-%d"):
+                try:
+                    start = datetime.strptime(price_range[0], fmt).date()
+                    end = datetime.strptime(price_range[1], fmt).date()
+                    break
+                except ValueError:
+                    continue
+            else:
+                raise ValueError(f"Cannot parse date strings: {price_range[0]}, {price_range[1]}")
         else:
             if len(price_range) == 1:
                 start = end = price_range[0]

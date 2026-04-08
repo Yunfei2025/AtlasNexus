@@ -64,8 +64,10 @@ class IRSGenerator:
 
     def evaluate_contracts(self) -> None:
         """Evaluate IRS contracts"""
-        quotes_today = self.environment_ts.loc[self.pricing_date, IRSConfig.IRS_LIST]
+        available = [c for c in IRSConfig.IRS_LIST if c in self.environment_ts.columns]
+        quotes_today = self.environment_ts.reindex(columns=IRSConfig.IRS_LIST).loc[self.pricing_date]
         self.contracts = evalueContract(self.pricing_date, quotes_today, self.forward_data, 1)
+        self._available_quote_instruments = available
 
     def update_curve_px_timeseries(self) -> None:
         """Update curve price time series"""
@@ -79,10 +81,25 @@ class IRSGenerator:
             # Vectorized assignment into wide DataFrames
             if 'ytm_act' in curve_px and 'ytm_quo' in curve_px:
                 contracts = IRSConfig.IRS_LIST
-                act_values = self.contracts['value'].loc[contracts, 'Quote'].values
+                act_values = self.contracts['value'].loc[contracts, 'Quote']
                 quo_values = self.contracts['value'].loc[contracts, 'FixRate'].values
-                curve_px['ytm_act'].loc[self.pricing_date, contracts] = act_values
+                # Only write ytm_act for instruments with a real market quote
+                act_instruments = getattr(self, '_available_quote_instruments', contracts)
+                act_instruments_with_data = [c for c in act_instruments if pd.notna(act_values.loc[c])]
+                if act_instruments_with_data:
+                    curve_px['ytm_act'].loc[self.pricing_date, act_instruments_with_data] = act_values.loc[act_instruments_with_data].values
+                elif self.pricing_date not in curve_px['ytm_act'].index:
+                    # No quotes available; write NaN placeholder so updatePKL can forward-fill from the prior date
+                    curve_px['ytm_act'].loc[self.pricing_date] = float('nan')
                 curve_px['ytm_quo'].loc[self.pricing_date, contracts] = quo_values
+
+            # Update carry3m and roll3m time series so StatGenerator can build CarryRoll3m
+            for key, col in [('carry3m', 'Carry(3m,bp)'), ('roll3m', 'Roll(3m,bp)')]:
+                if col in self.contracts['value'].columns:
+                    values = self.contracts['value'].loc[IRSConfig.IRS_LIST, col].values / 100
+                    if key not in curve_px:
+                        curve_px[key] = pd.DataFrame(columns=IRSConfig.IRS_LIST)
+                    curve_px[key].loc[self.pricing_date, IRSConfig.IRS_LIST] = values
         except Exception as e:
             print(f'Error: Failed vectorized assignment into curve price TS: {e}')
             raise
