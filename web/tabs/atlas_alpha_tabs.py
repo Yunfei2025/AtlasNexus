@@ -1534,19 +1534,28 @@ def register_alpha_callbacks(app) -> None:
 
         # Compute stop-loss and profit-target columns (in spread bp units)
         df_all = df_all.copy()
-        # Normalise spread/mean/vol to bp for bond-type spreads stored in yield %.
+        # Normalise spread/mean/vol/risk_vol_63d to bp for bond-type spreads stored in yield %.
         # SwapSpread, NetBasis, TermBasis, PCASpread, BinarySpread are already in bp.
         _PCT_TYPES = {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap', 'TenorSpread'}
         if 'spread_type' in df_all.columns:
             _pct_mask = df_all['spread_type'].isin(_PCT_TYPES)
-            for _col in ('spread', 'mean', 'vol'):
+            for _col in ('spread', 'mean', 'vol', 'risk_vol_63d'):
                 if _col in df_all.columns:
                     df_all.loc[_pct_mask, _col] = (
                         pd.to_numeric(df_all.loc[_pct_mask, _col], errors='coerce') * 100.0
                     )
         _spread_v = pd.to_numeric(df_all.get('spread', pd.Series(dtype=float)), errors='coerce')
         _mean_v   = pd.to_numeric(df_all.get('mean',   pd.Series(dtype=float)), errors='coerce')
-        _vol_v    = pd.to_numeric(df_all.get('vol',    pd.Series(dtype=float)), errors='coerce').abs()
+        # Prefer risk_vol_63d (3m rolling daily-diff std) for stop/target sizing:
+        # it reflects actual realised spread volatility rather than the OU long-run vol.
+        # Fall back to OU vol only when risk_vol_63d is unavailable.
+        _risk_vol = (
+            pd.to_numeric(df_all['risk_vol_63d'], errors='coerce').abs()
+            if 'risk_vol_63d' in df_all.columns
+            else pd.Series(np.nan, index=df_all.index, dtype=float)
+        )
+        _ou_vol   = pd.to_numeric(df_all.get('vol', pd.Series(dtype=float)), errors='coerce').abs()
+        _vol_v    = _risk_vol.where(_risk_vol.gt(0) & _risk_vol.notna(), _ou_vol)
         _style_v  = df_all.get('style', pd.Series(dtype=str)).astype(str).str.strip().str.lower()
         _is_mr_v  = _style_v.eq('meanreversion')
         _dist_v   = (_spread_v - _mean_v).abs()
