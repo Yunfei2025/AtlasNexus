@@ -1532,19 +1532,72 @@ def register_alpha_callbacks(app) -> None:
         elif 'abs_zscore' in df_all.columns:
             df_all = df_all.sort_values('abs_zscore', ascending=False)
 
-        # Display columns
-        display_cols = [
-            'ID', 'spread_type', 'category', 'style', 'direction',
-            'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'stationary',
-            'score', 'selected_lowcorr'
+        # Compute stop-loss and profit-target columns (in spread bp units)
+        df_all = df_all.copy()
+        # Normalise spread/mean/vol to bp for bond-type spreads stored in yield %.
+        # SwapSpread, NetBasis, TermBasis, PCASpread, BinarySpread are already in bp.
+        _PCT_TYPES = {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap', 'TenorSpread'}
+        if 'spread_type' in df_all.columns:
+            _pct_mask = df_all['spread_type'].isin(_PCT_TYPES)
+            for _col in ('spread', 'mean', 'vol'):
+                if _col in df_all.columns:
+                    df_all.loc[_pct_mask, _col] = (
+                        pd.to_numeric(df_all.loc[_pct_mask, _col], errors='coerce') * 100.0
+                    )
+        _spread_v = pd.to_numeric(df_all.get('spread', pd.Series(dtype=float)), errors='coerce')
+        _mean_v   = pd.to_numeric(df_all.get('mean',   pd.Series(dtype=float)), errors='coerce')
+        _vol_v    = pd.to_numeric(df_all.get('vol',    pd.Series(dtype=float)), errors='coerce').abs()
+        _style_v  = df_all.get('style', pd.Series(dtype=str)).astype(str).str.strip().str.lower()
+        _is_mr_v  = _style_v.eq('meanreversion')
+        _dist_v   = (_spread_v - _mean_v).abs()
+        _z_v      = pd.to_numeric(df_all.get('Zscore', pd.Series(dtype=float)), errors='coerce')
+        _dir_v    = df_all.get('direction', pd.Series(dtype=str)).astype(str).str.strip().str.upper()
+        _dir_sign_v = pd.Series(1.0, index=df_all.index, dtype=float)
+        _dir_sign_v[_dir_v.eq('SELL')] = -1.0
+
+        # MR stop: entry distance + 1.5σ further; MR profit target: full reversion to mean (dist_v)
+        # Trend stop: 2σ adverse move
+        # Trend profit target: remaining distance to the threshold z-score level in the trend direction
+        #   BUY trend  → target z = +ZSCORE_ENTRY_THRESHOLD  → dist = (threshold - z) * vol
+        #   SELL trend → target z = -ZSCORE_ENTRY_THRESHOLD  → dist = (z - (-threshold)) * vol
+        #   Unified:  |dir_sign * ZSCORE_ENTRY_THRESHOLD - z| * vol
+        _trend_target_bp = (_dir_sign_v * ZSCORE_ENTRY_THRESHOLD - _z_v).abs() * _vol_v
+
+        df_all['stop_loss'] = np.where(
+            _is_mr_v,
+            (_dist_v + 1.5 * _vol_v).round(3),
+            (2.0 * _vol_v).round(3),
+        )
+        df_all['profit_target'] = np.where(
+            _is_mr_v,
+            _dist_v.round(3),
+            _trend_target_bp.round(3),
+        )
+
+        # MR display columns: halflife is meaningful (OU mean-reversion speed)
+        # Trend display columns: halflife omitted (OU fit on non-stationary series is not meaningful)
+        # spread/mean/vol units: % for bond types (BondCurve/BondSwap/TenorSpread), bp for IRS types
+        _mr_display_cols = [
+            'ID', 'spread_type', 'direction',
+            'Zscore', 'spread', 'mean', 'vol', 'halflife', 'carry_roll',
+            'score', 'stop_loss', 'profit_target',
         ]
+        _trend_display_cols = [
+            'ID', 'spread_type', 'direction',
+            'Zscore', 'spread', 'mean', 'vol', 'carry_roll',
+            'score', 'stop_loss', 'profit_target',
+        ]
+
+        # Still need full df_display for downstream uses (portfolio store etc.)
+        _all_display_cols = list(dict.fromkeys(_mr_display_cols + _trend_display_cols + ['style']))
         df_display = df_all.copy()
         if 'ID' not in df_display.columns and df_display.index.name == 'ID':
             df_display = df_display.reset_index()
-        available_cols = [c for c in display_cols if c in df_display.columns]
-        df_display = df_display[available_cols].copy()
+        available_all = [c for c in _all_display_cols if c in df_display.columns]
+        df_display = df_display[available_all].copy()
 
-        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score']:
+        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score',
+                    'stop_loss', 'profit_target']:
             if col in df_display.columns:
                 df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(3)
 
@@ -1561,8 +1614,10 @@ def register_alpha_callbacks(app) -> None:
                 style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'},
             )
 
-            df_mr = df_display[df_display['style'].astype(str).str.lower().eq('meanreversion')].copy()
-            df_trend = df_display[df_display['style'].astype(str).str.lower().isin(['carry', 'trend', 'trendfollowing'])].copy()
+            _mr_avail = [c for c in _mr_display_cols if c in df_display.columns]
+            _trend_avail = [c for c in _trend_display_cols if c in df_display.columns]
+            df_mr = df_display[df_display['style'].astype(str).str.lower().eq('meanreversion')][_mr_avail].copy()
+            df_trend = df_display[df_display['style'].astype(str).str.lower().isin(['carry', 'trend', 'trendfollowing'])][_trend_avail].copy()
 
         # Shared table styling
         _table_style_table = {'overflowX': 'auto', 'maxHeight': '300px', 'overflowY': 'auto'}
@@ -1582,9 +1637,20 @@ def register_alpha_callbacks(app) -> None:
         _table_style_data_conditional = [  # type: ignore[arg-type]
             {'if': {'filter_query': '{direction} = "BUY"'}, 'backgroundColor': 'rgba(0, 204, 150, 0.15)'},
             {'if': {'filter_query': '{direction} = "SELL"'}, 'backgroundColor': 'rgba(239, 85, 59, 0.15)'},
-            {'if': {'filter_query': '{selected_lowcorr} = True'}, 'backgroundColor': 'rgba(52, 152, 219, 0.18)'},
             {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['table_row_odd']},
         ]
+        # Friendly display names for column headers
+        _col_labels = {
+            'spread_type': 'type',
+            'carry_roll': 'carry+roll(bp)',
+            'stop_loss': 'stop(bp)',
+            'profit_target': 'target(bp)',
+            'spread': 'spread(bp)',
+            'mean': 'mean(bp)',
+            'vol': 'vol(bp)',
+        }
+        def _col_defs(df):
+            return [{'name': _col_labels.get(c, c), 'id': c} for c in df.columns]
 
         # MR candidates table (always render; show empty-state when none)
         mr_body = html.Div(
@@ -1594,7 +1660,7 @@ def register_alpha_callbacks(app) -> None:
         if not df_mr.empty:
             mr_body = dash_table.DataTable(
                 id='alpha-candidates-table-mr',
-                columns=[{'name': c, 'id': c} for c in df_mr.columns],
+                columns=_col_defs(df_mr),
                 data=df_mr.head(20).to_dict('records'),  # type: ignore[arg-type]
                 row_selectable='multi',
                 selected_rows=[],
@@ -1627,7 +1693,7 @@ def register_alpha_callbacks(app) -> None:
         if not df_trend.empty:
             trend_body = dash_table.DataTable(
                 id='alpha-candidates-table-trend',
-                columns=[{'name': c, 'id': c} for c in df_trend.columns],
+                columns=_col_defs(df_trend),
                 data=df_trend.head(20).to_dict('records'),  # type: ignore[arg-type]
                 row_selectable='multi',
                 selected_rows=[],
