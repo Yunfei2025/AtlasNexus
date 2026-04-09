@@ -503,18 +503,19 @@ def register_callbacks(app) -> None:
 
     @app.callback(
         [Output("pairs-plots-container", "children"), Output("pairs-last-updated", "children")],
-        [Input("pairs-content-loader", "children"), Input("pairs-refresh-btn", "n_clicks")],
-        [State("pairs-leg1-1", "value"), State("pairs-leg2-1", "value"),
-         State("pairs-leg1-2", "value"), State("pairs-leg2-2", "value"),
-         State("pairs-leg1-3", "value"), State("pairs-leg2-3", "value"),
-         State("pairs-leg1-4", "value"), State("pairs-leg2-4", "value"),
-         State("pairs-days-input", "value")],
+        [Input("pairs-content-loader", "children"), Input("pairs-refresh-btn", "n_clicks"),
+         Input("pairs-leg1-1", "value"), Input("pairs-leg2-1", "value"),
+         Input("pairs-leg1-2", "value"), Input("pairs-leg2-2", "value"),
+         Input("pairs-leg1-3", "value"), Input("pairs-leg2-3", "value"),
+         Input("pairs-leg1-4", "value"), Input("pairs-leg2-4", "value"),
+         Input("pairs-days-input", "value")],
     )
     def _load_pairs_content(_, n_clicks, leg1_1, leg2_1, leg1_2, leg2_2, leg1_3, leg2_3, leg1_4, leg2_4, window_days):
         # Re-run pairs analysis using input parameters when refresh clicked
+        trigger_id = None
         if callback_context.triggered:
-            trigger_id = callback_context.triggered[0]["prop_id"]
-            if "pairs-refresh-btn" in trigger_id and n_clicks and n_clicks > 0:
+            trigger_id = callback_context.triggered[0]["prop_id"].split(".")[0]
+            if trigger_id == "pairs-refresh-btn" and n_clicks and n_clicks > 0:
                 try:
                     from pairs.manager import PairManager
                     from pairs.dashboard import Dashboard
@@ -545,7 +546,7 @@ def register_callbacks(app) -> None:
                     analyses = manager.prepare_analysis()
                     
                     # Generate dashboard HTML
-                    project_root = Path(__file__).resolve().parents[1]
+                    project_root = Path(__file__).resolve().parents[2]
                     output_path = project_root / "pairs" / "regression_plots.html"
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     
@@ -570,6 +571,14 @@ def register_callbacks(app) -> None:
                     print(f"Pairs analysis error: {error_msg}")
                     print(traceback.format_exc())
                     last_updated = f"Error: {str(e)[:120]} at {datetime.datetime.now().strftime('%H:%M:%S')}"
+            elif trigger_id in {
+                "pairs-leg1-1", "pairs-leg2-1",
+                "pairs-leg1-2", "pairs-leg2-2",
+                "pairs-leg1-3", "pairs-leg2-3",
+                "pairs-leg1-4", "pairs-leg2-4",
+                "pairs-days-input",
+            }:
+                last_updated = "Pending changes - click Refresh Plots"
             else:
                 last_updated = f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         else:
@@ -577,7 +586,7 @@ def register_callbacks(app) -> None:
 
         # Prefer local file if available
         try:
-            project_root = Path(__file__).resolve().parents[1]
+            project_root = Path(__file__).resolve().parents[2]
             pairs_html_path = project_root / "pairs" / "regression_plots.html"
             if pairs_html_path.exists():
                 cache_buster = f"?v={datetime.datetime.now().timestamp()}"

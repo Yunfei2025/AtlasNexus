@@ -53,6 +53,21 @@ class RegressionResults:
 
 class StatisticalAnalyzer:
     """Class for performing statistical analysis on time series data"""
+
+    @staticmethod
+    def normalize_numeric_series(series: pd.Series) -> pd.Series:
+        """Return a numeric series, decoding bytes/strings and coercing invalid values to NaN."""
+        if pd.api.types.is_numeric_dtype(series):
+            return pd.to_numeric(series, errors='coerce')
+
+        normalized = series.map(
+            lambda value: value.decode('utf-8', errors='ignore').strip()
+            if isinstance(value, (bytes, bytearray))
+            else value.strip()
+            if isinstance(value, str)
+            else value
+        )
+        return pd.to_numeric(normalized, errors='coerce')
     
     @staticmethod
     def run_regression(spread_df: pd.DataFrame) -> RegressionResults:
@@ -125,6 +140,9 @@ class StatisticalAnalyzer:
     @staticmethod
     def calculate_spread(leg1_data: pd.Series, leg2_data: pd.Series) -> pd.DataFrame:
         """Calculate spread between two time series in basis points (bp)"""
+        leg1_data = StatisticalAnalyzer.normalize_numeric_series(leg1_data)
+        leg2_data = StatisticalAnalyzer.normalize_numeric_series(leg2_data)
+
         # Convert to DataFrames for alignment
         df1 = leg1_data.reset_index()
         df1.columns = ['date', 'ret1']
