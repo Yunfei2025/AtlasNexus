@@ -1651,7 +1651,7 @@ def register_alpha_callbacks(app) -> None:
         # Friendly display names for column headers
         _col_labels = {
             'spread_type': 'type',
-            'carry_roll': 'carry+roll(bp)',
+            'carry_roll': 'carry+roll(3m,bp)',
             'stop_loss': 'stop(bp)',
             'profit_target': 'target(bp)',
             'spread': 'spread(bp)',

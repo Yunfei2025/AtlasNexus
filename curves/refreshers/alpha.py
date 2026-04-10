@@ -49,6 +49,7 @@ _REG_LOOKBACK_DAYS: int = 30         # regression window for slope & z-score (~1
 _RISK_VOL_WINDOW: int = 90           # 3-month risk normalisation window (calendar-day approximation)
 _CARRY_BASIS_DAYS: float = 90.0      # carry_roll is stored as a ~3-month quantity
 _ANNUAL_CARRY_BASIS_DAYS: float = 360.0
+_BOND_CURVE_BORROW_COST_BP_ANNUAL: float = 30.0
 _SWAP_SPREAD_BUTTERFLY_PATTERN = re.compile(r"^(?:Repo|Shi3M)-(?:\d+[my]){3,}$", re.IGNORECASE)
 
 
@@ -187,12 +188,17 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		if isinstance(df_bc, pd.DataFrame) and not df_bc.empty:
 			df_bc = _normalize_index(df_bc)
 			df_bc = _ensure_numeric(df_bc, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
-			if "Carry(3m,bp)" in df_bc.columns:
-				df_bc["carry_3m_bp"] = pd.to_numeric(df_bc["Carry(3m,bp)"], errors="coerce")
-			if "Roll(3m,bp)" in df_bc.columns:
-				df_bc["roll_3m_bp"] = pd.to_numeric(df_bc["Roll(3m,bp)"], errors="coerce")
-			if "Carry(3m,bp)" in df_bc.columns and "Roll(3m,bp)" in df_bc.columns:
-				df_bc["carry_roll"] = df_bc["Carry(3m,bp)"] + df_bc["Roll(3m,bp)"]
+			spread_bp = pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce") * 100.0
+			borrow_cost_bp = pd.Series(
+				_BOND_CURVE_BORROW_COST_BP_ANNUAL * (_CARRY_BASIS_DAYS / _ANNUAL_CARRY_BASIS_DAYS),
+				index=df_bc.index,
+				dtype=float,
+			)
+			df_bc["carry_bp"] = spread_bp
+			df_bc["roll_bp"] = 0.0
+			df_bc["borrow_cost_bp"] = -borrow_cost_bp
+			df_bc["carry_roll"] = df_bc["carry_bp"] + df_bc["roll_bp"] + df_bc["borrow_cost_bp"]
+			df_bc["carry_basis_days"] = _CARRY_BASIS_DAYS
 			df_bc["spread_type"] = f"{prefix}Curve"
 			df_bc["category"] = "Bond-Curve"
 			out[f"{prefix}Curve"] = df_bc
@@ -584,11 +590,15 @@ def _add_unified_score_preview(
 		errors="coerce",
 	)
 	carry_bp = pd.to_numeric(
-		out["carry_3m_bp"] if "carry_3m_bp" in out.columns else out.get("Carry(3m,bp)", pd.Series(np.nan, index=out.index)),
+		out["carry_bp"]
+		if "carry_bp" in out.columns
+		else out["carry_3m_bp"] if "carry_3m_bp" in out.columns else out.get("Carry(3m,bp)", pd.Series(np.nan, index=out.index)),
 		errors="coerce",
 	)
 	roll_bp = pd.to_numeric(
-		out["roll_3m_bp"] if "roll_3m_bp" in out.columns else out.get("Roll(3m,bp)", pd.Series(np.nan, index=out.index)),
+		out["roll_bp"]
+		if "roll_bp" in out.columns
+		else out["roll_3m_bp"] if "roll_3m_bp" in out.columns else out.get("Roll(3m,bp)", pd.Series(np.nan, index=out.index)),
 		errors="coerce",
 	)
 	vol = pd.to_numeric(
