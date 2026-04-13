@@ -94,10 +94,10 @@ def run_atlasnexus_daily_app():
         init_status = run_initialise()
         logger.info(f"AtlasNexus startup initialisation: {init_status}")
 
-        Timer(1.5, lambda: webbrowser.open_new("http://127.0.0.1:8080/")).start()
+        Timer(1.5, lambda: webbrowser.open_new("http://0.0.0.0:8080/")).start()
 
         try:
-            atlasnexus_daily.app.run(host="127.0.0.1", port=8080, debug=False, use_reloader=False)
+            atlasnexus_daily.app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False)
         except KeyboardInterrupt:
             logger.info("AtlasNexus Daily Console stopped by user")
         except Exception as e:
@@ -117,11 +117,10 @@ def run_atlasnexus_intraday_app():
         from web.apps import atlasnexus_intraday
 
         logger.info("🚀 Starting AtlasNexus Intraday Console")
-        logger.info("Starting server on 127.0.0.1:8081...")
         logger.info("Web server starting... Press Ctrl+C to stop and return to main menu")
 
         try:
-            atlasnexus_intraday.app.run(host="127.0.0.1", port=8081, debug=False, use_reloader=False)
+            atlasnexus_intraday.app.run(host="0.0.0.0", port=8081, debug=False, use_reloader=False)
         except KeyboardInterrupt:
             logger.info("👋 AtlasNexus Intraday Console stopped by user")
         except Exception as e:

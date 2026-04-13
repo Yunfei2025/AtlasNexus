@@ -171,9 +171,7 @@ def _card(title: str, content: Any) -> html.Div:
 # Instruments to show in the money-market panel (in order)
 _REPO_INSTRUMENTS = ["FR001.IR", "FR007.IR", "SHIBOR3M.IR"]
 _SWAP_INSTRUMENTS = [
-    "FR007S3M.IR", "FR007S6M.IR", "FR007S9M.IR",
-    "FR007S1Y.IR", "FR007S2Y.IR",
-    "FR007S5Y.IR",
+    "FR007S1Y.IR", "FR007S5Y.IR",
     "SHI3MS1Y.IR", "SHI3MS5Y.IR",
 ]
 _MM_INSTRUMENTS   = _REPO_INSTRUMENTS + _SWAP_INSTRUMENTS

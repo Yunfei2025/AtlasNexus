@@ -78,6 +78,11 @@ from web.tabs.atlas_market_data_tab import (
     register_market_data_callbacks,
 )
 
+from web.tabs.atlas_pricer_tab import (
+    build_pricer_layout,
+    register_pricer_callbacks,
+)
+
 
 GRAPH_INTERVAL = int(os.environ.get("GRAPH_INTERVAL", 30 * 60_000))
 
@@ -113,6 +118,7 @@ register_volatility_callbacks(app)
 # register_factor_backtest_callbacks(app)  # replaced by rfbt- callbacks in multiasset
 register_trend_callbacks(app)
 register_market_data_callbacks(app)
+register_pricer_callbacks(app)
 
 
 def build_header():
@@ -349,6 +355,7 @@ def build_tabs_panel():
                         children=[
                             dcc.Tab(label="DATA",    value="data",    style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="TREND",   value="trend",   style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="PRICER",  value="pricer",  style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="SURFACE", value="surface", style=tab_style, selected_style=tab_selected_style),
                             dcc.Tab(label="CURVES",  value="curves",  style=tab_style, selected_style=tab_selected_style),
                         ],
@@ -357,6 +364,7 @@ def build_tabs_panel():
                     html.Div([
                             html.Div(id="market-data-div",    children=build_market_data_layout(), style={"display": "block", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
                             html.Div(id="market-trend-div",   children=build_trend_layout(),        style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-pricer-div",  children=build_pricer_layout(),       style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
                             html.Div(id="market-surface-div", children=build_surface_layout(),      style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
                             html.Div(id="market-curves-div",  children=build_curves_layout(),       style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
                         ], style={"position": "relative", "width": "100%"}),
@@ -708,6 +716,7 @@ def _render_beta_subtabs(subtab: str):
 @app.callback(
     [Output("market-data-div",    "style"),
      Output("market-trend-div",   "style"),
+     Output("market-pricer-div",  "style"),
      Output("market-surface-div", "style"),
      Output("market-curves-div",  "style")],
     Input("an-market-subtabs", "value"),
@@ -715,7 +724,7 @@ def _render_beta_subtabs(subtab: str):
 def _render_market_subtabs(subtab: str):
     """Show/hide Market subtabs to preserve state."""
     base_style = {"width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}
-    keys = ["data", "trend", "surface", "curves"]
+    keys = ["data", "trend", "pricer", "surface", "curves"]
     return tuple(
         {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
         for k in keys

@@ -39,7 +39,7 @@ REM Change to correct directory
 cd /d "%~dp0"
 
 echo [3/3] Starting AtlasNexus Daily Console...
-echo Server will start at: http://127.0.0.1:8080
+echo Server will start at: http://0.0.0.0:8080
 echo Browser window will open automatically
 echo.
 echo Press Ctrl+C to stop the server
