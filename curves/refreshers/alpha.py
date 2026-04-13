@@ -129,6 +129,47 @@ def _ensure_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 	return out
 
 
+def _append_snapshot_spread_to_series(
+	s: pd.Series,
+	spread_value: float | int | None,
+	*,
+	asof: pd.Timestamp | None = None,
+) -> pd.Series:
+	"""Return historical spread series updated with the latest snapshot spread.
+
+	This keeps regression-based z-scores aligned with the realtime snapshot used
+	by the UI when the historical spread pickle has not yet been updated for the
+	latest session.
+	"""
+	s_clean = pd.to_numeric(s, errors="coerce").dropna()
+	if s_clean.empty:
+		idx = pd.DatetimeIndex([])
+	else:
+		idx = pd.to_datetime(pd.Index(s_clean.index))
+	s_clean = pd.Series(s_clean.to_numpy(dtype=float), index=idx, name=s.name, dtype=float).sort_index()
+	spread_num = pd.to_numeric(pd.Series([spread_value]), errors="coerce").iloc[0]
+	if pd.isna(spread_num):
+		return s_clean
+
+	if s_clean.empty:
+		stamp = pd.Timestamp(asof).normalize() if asof is not None else pd.Timestamp.now().normalize()
+		return pd.Series([float(spread_num)], index=pd.DatetimeIndex([stamp]), name=s.name, dtype=float)
+
+	last_idx = pd.Timestamp(s_clean.index[-1])
+	stamp = pd.Timestamp(asof).normalize() if asof is not None else pd.Timestamp.now().normalize()
+	if stamp <= last_idx:
+		stamp = last_idx
+	elif last_idx.normalize() < stamp:
+		stamp = stamp
+	else:
+		stamp = last_idx + pd.Timedelta(days=1)
+
+	new_point = pd.Series([float(spread_num)], index=pd.DatetimeIndex([stamp]), name=s.name, dtype=float)
+	out = pd.concat([s_clean, new_point], axis=0)
+	out = out[~out.index.duplicated(keep="last")]
+	return out.sort_index()
+
+
 def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
 	"""Build tenor spread time series from CNBD key-rate history."""
 	if not isinstance(cnbd_data, dict) or "CGB" not in cnbd_data or "CDB" not in cnbd_data:
@@ -188,6 +229,10 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		if isinstance(df_bc, pd.DataFrame) and not df_bc.empty:
 			df_bc = _normalize_index(df_bc)
 			df_bc = _ensure_numeric(df_bc, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+			df_bc["Zscore"] = (
+				pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce") -
+				pd.to_numeric(df_bc.get("mean", pd.Series(0.0, index=df_bc.index)), errors="coerce")
+			) / pd.to_numeric(df_bc.get("vol", pd.Series(np.nan, index=df_bc.index)), errors="coerce").replace(0, np.nan)
 			spread_bp = pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce") * 100.0
 			borrow_cost_bp = pd.Series(
 				_BOND_CURVE_BORROW_COST_BP_ANNUAL * (_CARRY_BASIS_DAYS / _ANNUAL_CARRY_BASIS_DAYS),
@@ -353,7 +398,7 @@ def save_alpha_spreads_snapshot(
 ) -> Path:
 	"""Build and save snapshot to DIR_INPUT/Alpha-spreadsrt.pkl."""
 	paths = AlphaSnapshotPaths(Path(dir_input))
-	snapshot = build_alpha_spreads_snapshot(dir_input=paths.dir_input)
+	snapshot: Dict[str, object] = dict(build_alpha_spreads_snapshot(dir_input=paths.dir_input))
 	
 	# Add time series data under '_timeseries' key
 	timeseries = build_alpha_timeseries(dir_input=paths.dir_input)
@@ -472,7 +517,9 @@ def _enrich_candidates_with_regression(
 		key = f"{row['spread_type']}|{row['ID']}"
 		s = series_map.get(key)
 		if isinstance(s, pd.Series) and len(s.dropna()) >= 10:
-			slope, rvol, rmean, rvolresid = _compute_trend_metrics(s)
+			spread_now = row.get("spread", np.nan)
+			s_enriched = _append_snapshot_spread_to_series(s, spread_now)
+			slope, rvol, rmean, rvolresid = _compute_trend_metrics(s_enriched)
 		else:
 			slope, rvol, rmean, rvolresid = np.nan, np.nan, np.nan, np.nan
 		reg_slopes.append(slope)

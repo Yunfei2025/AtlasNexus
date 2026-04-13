@@ -197,11 +197,13 @@ class StatRefresher:
             px_bs_rt = self._np_interp(bond_term, terms, px_irs_rt.values)
 
             self.px_bond_rt[btype] = (env['BondRT']['买价收益率'] + env['BondRT']['卖价收益率']) / 2
-            spreads['BondCurve']['spread'] = self.px_bond_rt[btype] - cvpx
+            spreads['BondCurve']['CloseYield'] = self.px_bond_rt[btype]
+            spreads['BondCurve']['CurveYield'] = cvpx
+            spreads['BondCurve']['spread'] = spreads['BondCurve']['CloseYield'] - spreads['BondCurve']['CurveYield']
             spreads['BondSwap']['spread'] = self.px_bond_rt[btype] - px_bs_rt
 
             for k in spreads.keys():
-                mean_ = 0 if k == 'BondCurve' else spreads[k]['mean']
+                mean_ = spreads[k]['mean'] if 'mean' in spreads[k].columns else 0
                 spreads[k]['Zscore'] = (spreads[k]['spread'] - mean_) / spreads[k]['vol']
 
             write_to_sheet[btype] = stat_his['BondCurve']
