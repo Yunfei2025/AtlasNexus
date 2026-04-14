@@ -44,7 +44,7 @@ if __name__ == "__main__":
 
 
     # TBond cvpx demo
-    file_path = os.path.join(DIR_INPUT, 'IRS-pxspds.pkl')
+    file_path = os.path.join(DIR_INPUT, 'IRS-spdsrt.pkl')
     key = 'Volume'
     date_str = '2025-08-01'
     bond = ['180206.IB','2202002.IB']

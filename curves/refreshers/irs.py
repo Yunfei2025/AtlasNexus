@@ -51,6 +51,7 @@ class IRSRefresher:
 		self.r7d_forward = None
 		self.s3m_forward = None
 		self.quote_rate = None
+		self.quote_frame = None
 		self.contracts = None
 		self.contracts_adjusted = None
 		self.cv_irs = None
@@ -234,14 +235,15 @@ class IRSRefresher:
 		logger.info(f"Extracted forward rates: R7D ({len(self.r7d_forward)} periods), S3M ({len(self.s3m_forward)} periods)")
 		
 		fallback_quotes = self._get_fallback_swap_quotes()
-		self.quote_rate = irs.get_swap_mid_quotes(self.environment['SwapRT'], IRSConfig.IRS_LIST, fallback_quotes=fallback_quotes)
+		self.quote_frame = irs.get_swap_quote_frame(self.environment['SwapRT'], IRSConfig.IRS_LIST, fallback_quotes=fallback_quotes)
+		self.quote_rate = self.quote_frame['Mid']
 		logger.info(f"Calculated quote rates for {len(self.quote_rate)} instruments")
 		
 		self.contracts = irs.evalueContract(self.today_date, self.quote_rate, self.forward_data, GeneralConfig.PSHIFT)
 		logger.info("Evaluated IRS contracts")
 		
 		self.cv_irs = self.contracts['value'].loc[IRSConfig.IRS_LIST, 'FixRate'].to_frame().T
-		self.qt_irs = self.quote_rate.to_frame().T
+		self.qt_irs = pd.DataFrame([self.quote_rate.values], index=[0], columns=self.quote_rate.index)
 		self.cv_spreads = irs.irsSpreads(self.cv_irs)
 		self.qt_spreads = irs.irsSpreads(self.qt_irs)
 		self.spreads_list = self.cv_spreads.columns
@@ -327,6 +329,14 @@ class IRSRefresher:
 		spreads.loc[self.spreads_list, 'CvPx'] = self.cv_spreads.loc['FixRate']
 		spreads.loc[IRSConfig.IRS_LIST, 'QtPx'] = self.qt_irs.loc[0]
 		spreads.loc[self.spreads_list, 'QtPx'] = self.qt_spreads.loc[0]
+		if self.quote_frame is not None and not self.quote_frame.empty:
+			spreads.loc[IRSConfig.IRS_LIST, 'Bid'] = self.quote_frame['Bid']
+			spreads.loc[IRSConfig.IRS_LIST, 'Ofr'] = self.quote_frame['Ofr']
+			try:
+				spreads.loc[self.spreads_list, 'Bid'] = irs.irsSpreadComposite(self.spreads_list, self.quote_frame['Bid']).round(4)
+				spreads.loc[self.spreads_list, 'Ofr'] = irs.irsSpreadComposite(self.spreads_list, self.quote_frame['Ofr']).round(4)
+			except Exception as exc:
+				logger.warning(f"Could not derive IRS spread bid/ofr quotes: {exc}")
 		
 		# Calculate spreads and Z-scores
 		spreads['spread'] = spreads['QtPx']
@@ -482,8 +492,13 @@ class IRSRefresher:
 
 	def save_rt_pickle(self, spreads):
 		logger.info("Saving real-time data to pickle file...")
+		swaps_rt = self.contracts['value'].copy()
+		if self.quote_frame is not None and not self.quote_frame.empty:
+			for col in ['Bid', 'Ofr']:
+				swaps_rt.loc[self.quote_frame.index, col] = self.quote_frame[col]
+			swaps_rt.loc[self.quote_frame.index, 'Quote'] = self.quote_frame['Mid']
 		irs_rt = {
-			'swaps': self.contracts['value'],
+			'swaps': swaps_rt,
 			'spreads': spreads
 		}
 		with open(os.path.join(DIR_INPUT, 'IRS-spdsrt.pkl'), 'wb') as file:
