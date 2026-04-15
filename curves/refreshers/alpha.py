@@ -36,6 +36,8 @@ sys.path.insert(0, str(project_root))
 
 
 from curves.calibration.stat import OU_calibrate
+from curves.calibration.regime import SpreadRegimeClassifier
+from curves.calibration.trend import compute_trend_signal
 from curves.utils.file import updatePKL
 from settings.paths import DIR_INPUT
 
@@ -507,12 +509,25 @@ def _enrich_candidates_with_regression(
 		out["risk_vol_63d"] = np.nan
 		out["reg_mean"] = np.nan
 		out["reg_vol_resid"] = np.nan
+		out["regime"] = "unknown"
+		out["regime_confidence"] = np.nan
+		out["efficiency_ratio"] = np.nan
+		out["hurst"] = np.nan
+		out["trend_state"] = 0.0
+		out["trend_momentum"] = np.nan
 		return out
 	out = df.copy()
 	reg_slopes: list[float] = []
 	risk_vols: list[float] = []
 	reg_means: list[float] = []
 	reg_vols_resid: list[float] = []
+	regimes: list[str] = []
+	regime_confs: list[float] = []
+	eff_ratios: list[float] = []
+	hursts: list[float] = []
+	trend_states: list[float] = []
+	trend_moms: list[float] = []
+	regime_clf = SpreadRegimeClassifier()
 	for _, row in out.iterrows():
 		key = f"{row['spread_type']}|{row['ID']}"
 		s = series_map.get(key)
@@ -520,8 +535,34 @@ def _enrich_candidates_with_regression(
 			spread_now = row.get("spread", np.nan)
 			s_enriched = _append_snapshot_spread_to_series(s, spread_now)
 			slope, rvol, rmean, rvolresid = _compute_trend_metrics(s_enriched)
+			# ── Regime classification ──
+			try:
+				reg_result = regime_clf.classify(s_enriched)
+				regimes.append(reg_result.get("regime", "unknown"))
+				regime_confs.append(reg_result.get("regime_score", np.nan))
+				eff_ratios.append(reg_result.get("efficiency_ratio", np.nan))
+				hursts.append(reg_result.get("hurst", np.nan))
+			except Exception:
+				regimes.append("unknown")
+				regime_confs.append(np.nan)
+				eff_ratios.append(np.nan)
+				hursts.append(np.nan)
+			# ── Trend signal ──
+			try:
+				ts = compute_trend_signal(s_enriched)
+				trend_states.append(ts.get("state", 0.0))
+				trend_moms.append(ts.get("momentum_20d", np.nan))
+			except Exception:
+				trend_states.append(0.0)
+				trend_moms.append(np.nan)
 		else:
 			slope, rvol, rmean, rvolresid = np.nan, np.nan, np.nan, np.nan
+			regimes.append("unknown")
+			regime_confs.append(np.nan)
+			eff_ratios.append(np.nan)
+			hursts.append(np.nan)
+			trend_states.append(0.0)
+			trend_moms.append(np.nan)
 		reg_slopes.append(slope)
 		risk_vols.append(rvol)
 		reg_means.append(rmean)
@@ -530,6 +571,12 @@ def _enrich_candidates_with_regression(
 	out["risk_vol_63d"] = risk_vols
 	out["reg_mean"] = reg_means
 	out["reg_vol_resid"] = reg_vols_resid
+	out["regime"] = regimes
+	out["regime_confidence"] = regime_confs
+	out["efficiency_ratio"] = eff_ratios
+	out["hurst"] = hursts
+	out["trend_state"] = trend_states
+	out["trend_momentum"] = trend_moms
 	return out
 
 
@@ -763,6 +810,31 @@ def _add_unified_score_preview(
 	expected_return_H = dir_sign * pnl_buy          # always ≥ 0
 	out["expected_return_H"] = expected_return_H
 	score = (expected_return_H / risk_return).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+	# ── Regime-conditional score adjustment ────────────────────────────────────
+	# trending:       boost if trend_state aligns with direction, else penalise
+	# mean_reverting: keep OU-based score as-is (already well-suited)
+	# uncertain:      dampen score (lower conviction)
+	regime_col = out["regime"] if "regime" in out.columns else pd.Series("unknown", index=out.index)
+	trend_st = pd.to_numeric(
+		out["trend_state"] if "trend_state" in out.columns else pd.Series(0.0, index=out.index),
+		errors="coerce",
+	).fillna(0.0)
+
+	is_trending = regime_col.eq("trending")
+	is_uncertain = regime_col.eq("uncertain")
+	# For trending regime: check if trend signal agrees with trade direction
+	# trend_state > 0 means spread trending up (SELL), < 0 means trending down (BUY)
+	# dir_sign +1 = BUY (spread expected to fall), −1 = SELL (spread expected to rise)
+	# Agreement: trend_state < 0 AND dir_sign == +1, or trend_state > 0 AND dir_sign == −1
+	trend_agrees = (trend_st * dir_sign) < 0  # opposite signs = agreement (spread direction)
+	trend_boost = pd.Series(1.0, index=out.index)
+	trend_boost.loc[is_trending & trend_agrees] = 1.3          # 30% conviction boost
+	trend_boost.loc[is_trending & ~trend_agrees & trend_st.ne(0)] = 0.6  # 40% penalisation
+	trend_boost.loc[is_uncertain] = 0.5                        # low-conviction dampening
+
+	score = score * trend_boost
+	out["regime_boost"] = trend_boost
 	out["score"] = score
 	return out
 

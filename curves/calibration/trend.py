@@ -6,6 +6,7 @@ Created on Mon Mar 14 22:46:07 2022
 @author: mayunfei
 """
 
+import numpy as np
 import pandas as pd
 
 def generate(data, d):
@@ -59,6 +60,164 @@ def generate(data, d):
     p['Date'] = data.index
     p.set_index('Date',inplace=True)
     return p['Event']
+
+def generate_absolute(data, theta_abs):
+    """Generates directional change events using an absolute threshold.
+
+    Same algorithm as :func:`generate` but triggers on
+    ``abs(price - extremum) >= theta_abs`` instead of a relative move.
+    This is necessary for spread series that can hover near zero where
+    a relative threshold is undefined or unstable.
+
+    Args:
+        data: pandas.Series of spread levels (index = dates/timestamps).
+        theta_abs: Absolute threshold in the same units as *data*
+                   (e.g. 0.02 for 2 bp when data is in %).
+
+    Returns:
+        pandas.Series of Directional Change Events (same format as :func:`generate`).
+    """
+    p = pd.DataFrame({"Price": data.values})
+    p["Event"] = ''
+    event = 'upturn'
+    ext = p['Price'].iloc[0]
+    n_ext = 0
+
+    for i in range(len(p)):
+        price = p['Price'].iloc[i]
+        if event == 'upturn':
+            if (price - ext) <= -theta_abs:
+                event = 'downturn'
+                p.at[n_ext, 'Event'] = 'Local Max'
+                p.at[i, 'Event'] = 'Downward Trend Confirmed'
+                ext = price
+                n_ext = i
+            else:
+                if price > ext:
+                    ext = price
+                    n_ext = i
+        else:
+            if (price - ext) >= theta_abs:
+                event = 'upturn'
+                p.at[n_ext, 'Event'] = 'Local Min'
+                p.at[i, 'Event'] = 'Upward Trend Confirmed'
+                ext = price
+                n_ext = i
+            else:
+                if price < ext:
+                    ext = price
+                    n_ext = i
+
+    p = p.dropna()
+    p['Date'] = data.index
+    p.set_index('Date', inplace=True)
+    return p['Event']
+
+
+def trend_state_machine(events):
+    """Convert directional-change events into a +1/0/−1 trend state series.
+
+    Args:
+        events: pandas.Series of DC events (output of :func:`generate` or
+                :func:`generate_absolute`).  Index = dates.
+
+    Returns:
+        pandas.Series with the same index as *events*:
+            +1 after 'Upward Trend Confirmed',
+            −1 after 'Downward Trend Confirmed',
+             0 before the first event.
+    """
+    state = pd.Series(0, index=events.index, dtype=int)
+    current = 0
+    for idx, ev in events.items():
+        if ev == 'Upward Trend Confirmed':
+            current = 1
+        elif ev == 'Downward Trend Confirmed':
+            current = -1
+        state.at[idx] = current
+    return state
+
+
+def compute_trend_signal(
+    spread_series,
+    theta_abs=0.02,
+    momentum_window=20,
+    vol_window=60,
+    momentum_threshold=0.5,
+    carry_buffer=0.0,
+):
+    """Compute the full trend signal for a spread series.
+
+    Combines directional-change trend state, momentum confirmation,
+    and carry filter into a single composite signal.
+
+    Args:
+        spread_series: pandas.Series of spread levels.
+        theta_abs: Absolute DC threshold (spread units).
+        momentum_window: Lookback for momentum (days).
+        vol_window: Lookback for volatility normalisation (days).
+        momentum_threshold: Normalised momentum threshold (|m| >= this).
+        carry_buffer: Minimum spread level for carry-ok (long side).
+
+    Returns:
+        dict with keys:
+            trend_state: int (+1/−1/0)
+            momentum_20d: float (raw 20d change)
+            momentum_norm: float (normalised momentum)
+            carry_ok: bool
+            signal: int (+1/−1/0 final composite)
+            events: pd.Series of DC events
+    """
+    s = pd.to_numeric(spread_series, errors="coerce").dropna()
+    result = {
+        "trend_state": 0,
+        "momentum_20d": 0.0,
+        "momentum_norm": 0.0,
+        "carry_ok": False,
+        "signal": 0,
+        "events": pd.Series(dtype=str),
+    }
+    if len(s) < momentum_window + 10:
+        return result
+
+    events = generate_absolute(s, theta_abs)
+    result["events"] = events
+
+    # Trend state from DC events
+    if len(events) == 0:
+        return result
+    states = trend_state_machine(events)
+    # Forward-fill to spread index
+    state_full = states.reindex(s.index).ffill().fillna(0).astype(int)
+    trend_state = int(state_full.iloc[-1])
+    result["trend_state"] = trend_state
+
+    # Momentum confirmation
+    m20 = float(s.iloc[-1] - s.iloc[-momentum_window]) if len(s) >= momentum_window else 0.0
+    result["momentum_20d"] = m20
+    changes = s.diff().dropna()
+    sigma = float(changes.iloc[-vol_window:].std()) if len(changes) >= vol_window else float(changes.std())
+    m_norm = m20 / sigma if sigma > 0 else 0.0
+    result["momentum_norm"] = m_norm
+
+    # Carry filter
+    carry_ok = float(s.iloc[-1]) >= carry_buffer
+    result["carry_ok"] = carry_ok
+
+    # Composite signal
+    momentum_confirmed = (
+        np.sign(m20) == trend_state and abs(m_norm) >= momentum_threshold
+    ) if trend_state != 0 else False
+
+    if trend_state == 1 and carry_ok and momentum_confirmed:
+        result["signal"] = 1
+    elif trend_state == -1 and momentum_confirmed:
+        result["signal"] = -1
+    else:
+        result["signal"] = 0
+
+    return result
+
 
 def TSSampling(vT):
     vm = vT.resample('5min').mean()

@@ -1587,14 +1587,14 @@ def register_alpha_callbacks(app) -> None:
         # Trend display columns: halflife omitted (OU fit on non-stationary series is not meaningful)
         # spread/mean/vol units: % for bond types (BondCurve/BondSwap/TenorSpread), bp for IRS types
         _mr_display_cols = [
-            'ID', 'spread_type', 'direction',
+            'ID', 'spread_type', 'direction', 'regime',
             'Zscore', 'spread', 'mean', 'vol', 'halflife', 'carry_roll',
             'score', 'stop_loss', 'profit_target',
         ]
         _trend_display_cols = [
-            'ID', 'spread_type', 'direction',
+            'ID', 'spread_type', 'direction', 'regime',
             'Zscore', 'spread', 'mean', 'vol', 'carry_roll',
-            'score', 'stop_loss', 'profit_target',
+            'score', 'trend_state', 'stop_loss', 'profit_target',
         ]
 
         # Still need full df_display for downstream uses (portfolio store etc.)
@@ -1606,7 +1606,8 @@ def register_alpha_callbacks(app) -> None:
         df_display = df_display[available_all].copy()
 
         for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score',
-                    'stop_loss', 'profit_target']:
+                    'stop_loss', 'profit_target', 'trend_state', 'regime_confidence',
+                    'efficiency_ratio', 'hurst']:
             if col in df_display.columns:
                 df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(3)
 
@@ -1647,6 +1648,9 @@ def register_alpha_callbacks(app) -> None:
             {'if': {'filter_query': '{direction} = "BUY"'}, 'backgroundColor': 'rgba(0, 204, 150, 0.15)'},
             {'if': {'filter_query': '{direction} = "SELL"'}, 'backgroundColor': 'rgba(239, 85, 59, 0.15)'},
             {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['table_row_odd']},
+            {'if': {'filter_query': '{regime} = "trending"', 'column_id': 'regime'}, 'color': '#FF9800', 'fontWeight': 'bold'},
+            {'if': {'filter_query': '{regime} = "mean_reverting"', 'column_id': 'regime'}, 'color': '#4CAF50', 'fontWeight': 'bold'},
+            {'if': {'filter_query': '{regime} = "uncertain"', 'column_id': 'regime'}, 'color': '#9E9E9E'},
         ]
         # Friendly display names for column headers
         _col_labels = {
@@ -1657,6 +1661,9 @@ def register_alpha_callbacks(app) -> None:
             'spread': 'spread(bp)',
             'mean': 'mean(bp)',
             'vol': 'vol(bp)',
+            'regime': 'regime',
+            'trend_state': 'trend',
+            'regime_confidence': 'reg.conf',
         }
         def _col_defs(df):
             return [{'name': _col_labels.get(c, c), 'id': c} for c in df.columns]
