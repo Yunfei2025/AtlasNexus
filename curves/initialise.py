@@ -10,6 +10,7 @@ Author: Yunfei Ma
 """
 
 import datetime
+import json
 import pathlib
 import sys
 import traceback
@@ -29,6 +30,71 @@ from settings.paths import DIR_INPUT
 
 # Import generators dynamically to avoid dependency issues at module load time
 import importlib
+
+
+_PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
+_INITIALISE_STATE_DIR = _PROJECT_ROOT / "cache" / "curve_initialise"
+_REQUIRED_DAILY_INPUTS = {
+    "instrument_definitions": DIR_INPUT / "futures-InstrumentInfo.pkl",
+    "bond_database": DIR_INPUT / "database-px.pkl",
+    "futures_database": DIR_INPUT / "futures-px.pkl",
+}
+
+
+def _initialise_marker_path(asof: datetime.date) -> pathlib.Path:
+    return _INITIALISE_STATE_DIR / f"{asof:%Y%m%d}.json"
+
+
+def _daily_inputs_ready(asof: datetime.date) -> tuple[bool, list[str]]:
+    pending: list[str] = []
+    for label, path in _REQUIRED_DAILY_INPUTS.items():
+        mtime = get_mtime_date(path)
+        if mtime != asof:
+            state = "missing" if mtime is None else f"dated {mtime.isoformat()}"
+            pending.append(f"{label} ({path.name}: {state})")
+    return (len(pending) == 0, pending)
+
+
+def _load_marker(asof: datetime.date) -> dict | None:
+    marker_path = _initialise_marker_path(asof)
+    if not marker_path.exists():
+        return None
+    try:
+        with marker_path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+
+def _generation_completed_today(asof: datetime.date) -> bool:
+    marker = _load_marker(asof)
+    if not marker:
+        return False
+    return marker.get("status") == "completed"
+
+
+def _write_completion_marker(
+    asof: datetime.date,
+    *,
+    generators: list[str],
+    pairs_generated: bool,
+) -> None:
+    _INITIALISE_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    marker = {
+        "date": asof.isoformat(),
+        "status": "completed",
+        "completed_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "generators": generators,
+        "pairs_generated": pairs_generated,
+        "required_inputs": {
+            label: str(path) for label, path in _REQUIRED_DAILY_INPUTS.items()
+        },
+    }
+    marker_path = _initialise_marker_path(asof)
+    with marker_path.open("w", encoding="utf-8") as handle:
+        json.dump(marker, handle, indent=2)
+
+
 def run_data_updates() -> None:
     """Run database updates if needed (INFO/WARNING logging only)."""
     try:
@@ -61,10 +127,22 @@ def main() -> None:
     """Main curve generation workflow (INFO/WARNING only)."""
     print("INFO: Starting curve generation...")
     print(f"INFO: curves package path: {pathlib.Path(__file__).resolve().parent}")
+    asof = datetime.datetime.today().date()
     
     try:
         # Step 1: Update databases
         run_data_updates()
+
+        ready, pending_inputs = _daily_inputs_ready(asof)
+        if not ready:
+            print("INFO: Skipping curve generation until today's prerequisite files are ready:")
+            for item in pending_inputs:
+                print(f"INFO:   - {item}")
+            return
+
+        if _generation_completed_today(asof):
+            print(f"INFO: Curve generation already completed for {asof.isoformat()} — skipping rerun.")
+            return
         
         # Step 2: Run generators in order
         generators = [
@@ -76,6 +154,7 @@ def main() -> None:
         ]
         
         success_count = 0
+        completed_generators: list[str] = []
         for generator_name, module_name in generators:
             try:
                 print(f"INFO: Running {generator_name}...")
@@ -97,6 +176,7 @@ def main() -> None:
                 
                 print(f"INFO: {generator_name} completed successfully")
                 success_count += 1
+                completed_generators.append(generator_name)
 
             except ImportError as e:
                 print(f"WARNING: Could not import {generator_name}: {e}")
@@ -104,12 +184,20 @@ def main() -> None:
                 print(f"ERROR: Error running {generator_name}: {e}")
                 
         print(f"INFO: Summary: {success_count}/{len(generators)} generators completed successfully")
-        
-        from curves.generators.pairs import main
-        main(min_cr=30.0, lookback_days=60, write_to_excel=True)
-        print(f"INFO: Top CR pairs generated.")
-        
+
+        pairs_generated = False
         if success_count == len(generators):
+            from curves.generators.pairs import main
+            main(min_cr=30.0, lookback_days=60, write_to_excel=True)
+            pairs_generated = True
+            print("INFO: Top CR pairs generated.")
+
+        if success_count == len(generators) and pairs_generated:
+            _write_completion_marker(
+                asof,
+                generators=completed_generators,
+                pairs_generated=pairs_generated,
+            )
             print("INFO: All curve generation tasks completed!")
         else:
             print("WARNING: Some generators failed - check logs above for details")
