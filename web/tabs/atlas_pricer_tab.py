@@ -29,6 +29,7 @@ import pandas as pd
 from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output
 
+from settings.fixed_income import IRSConfig
 from settings.paths import DIR_INPUT
 
 # ── Shared theme ──────────────────────────────────────────────────────────────
@@ -83,11 +84,14 @@ _BUTTERFLY_RE   = re.compile(r"^(?:Repo|Shi3M)-(?:\d+[my]){3,}$", re.IGNORECASE)
 _PAIR_REPO_RE   = re.compile(r"^Repo-(?:\d+[my]){2}$", re.IGNORECASE)
 _PAIR_SHI3M_RE  = re.compile(r"^Shi3M-(?:\d+[my]){2}$", re.IGNORECASE)
 _BOX_RE         = re.compile(r"^(?:Repo|Shi3M)-(?:\d+[my]){4,}$|^Box-", re.IGNORECASE)
+_IRS_ORDER      = {ticker: rank for rank, ticker in enumerate(IRSConfig.IRS_LIST)}
 
 
 def _swap_category(name: str) -> str:
     """Map an IRS spread instrument name to its UI sub-category."""
     n = str(name)
+    if n.lower().startswith("basis"):
+        return "Box"
     if _BUTTERFLY_RE.match(n):
         return "RepoButterflies" if n.lower().startswith("repo") else "Shi3MButterflies"
     if _PAIR_REPO_RE.match(n):
@@ -97,6 +101,17 @@ def _swap_category(name: str) -> str:
     if _BOX_RE.match(n):
         return "Box"
     return "Swaps"
+
+
+def _sort_swap_tickers(tickers: list[str], subtype: str) -> list[str]:
+    """Return PRICER swap tickers in the intended UI order."""
+    if subtype != "Swaps":
+        return tickers
+
+    return sorted(
+        tickers,
+        key=lambda ticker: (_IRS_ORDER.get(str(ticker), len(_IRS_ORDER)), str(ticker)),
+    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -473,7 +488,7 @@ def _build_swap_rows(subtype: str) -> list[dict]:
         return []
 
     rows: list[dict] = []
-    for ticker in df.index:
+    for ticker in _sort_swap_tickers([str(idx) for idx in df.index], subtype):
         row = df.loc[ticker]
 
         def _v(key: str, n: int = 4):
