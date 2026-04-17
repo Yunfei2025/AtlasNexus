@@ -85,6 +85,7 @@ _PAIR_REPO_RE   = re.compile(r"^Repo-(?:\d+[my]){2}$", re.IGNORECASE)
 _PAIR_SHI3M_RE  = re.compile(r"^Shi3M-(?:\d+[my]){2}$", re.IGNORECASE)
 _BOX_RE         = re.compile(r"^(?:Repo|Shi3M)-(?:\d+[my]){4,}$|^Box-", re.IGNORECASE)
 _IRS_ORDER      = {ticker: rank for rank, ticker in enumerate(IRSConfig.IRS_LIST)}
+_ROW_KEY_COL    = "__row_key"
 
 
 def _swap_category(name: str) -> str:
@@ -150,6 +151,22 @@ def _row_val(row: pd.Series, *keys) -> object:
     return None
 
 
+def _with_row_keys(rows: list[dict]) -> list[dict]:
+    """Attach a hidden stable row key so style rules survive client-side sorting."""
+    keyed_rows: list[dict] = []
+    for idx, row in enumerate(rows):
+        keyed = dict(row)
+        keyed[_ROW_KEY_COL] = str(idx)
+        keyed_rows.append(keyed)
+    return keyed_rows
+
+
+def _style_row_filter(row_key: object, col: str) -> dict[str, dict[str, str]]:
+    """Return a Dash DataTable filter binding a style rule to one logical row."""
+    safe_row_key = str(row_key).replace("\\", "\\\\").replace('"', '\\"')
+    return {"if": {"filter_query": f'{{{_ROW_KEY_COL}}} = "{safe_row_key}"', "column_id": col}}
+
+
 # ── Bar / highlight style helpers ────────────────────────────────────────────
 
 def _bar_styles_gradient(
@@ -165,13 +182,15 @@ def _bar_styles_gradient(
     span = vmax - vmin
     if span <= 0:
         return styles
-    for i, val in enumerate(df[col]):
+    if _ROW_KEY_COL not in df.columns:
+        return styles
+    for row_key, val in zip(df[_ROW_KEY_COL], df[col]):
         try:
             pct = max(0.0, min(100.0, (float(val) - vmin) / span * 100))
         except (TypeError, ValueError):
             continue
         styles.append({
-            "if": {"row_index": i, "column_id": col},
+            **_style_row_filter(row_key, col),
             "background": (
                 f"linear-gradient(to right, {color} {pct:.1f}%, {bg} {pct:.1f}%)"
             ),
@@ -188,7 +207,9 @@ def _bar_styles_zscore(
     styles: list[dict] = []
     pos_color = "rgba(39,174,96,0.60)"
     neg_color = "rgba(231,76,60,0.60)"
-    for i, val in enumerate(df[col]):
+    if _ROW_KEY_COL not in df.columns:
+        return styles
+    for row_key, val in zip(df[_ROW_KEY_COL], df[col]):
         try:
             v = float(val)
         except (TypeError, ValueError):
@@ -208,7 +229,7 @@ def _bar_styles_zscore(
                 f"transparent 50%"
             )
         styles.append({
-            "if": {"row_index": i, "column_id": col},
+            **_style_row_filter(row_key, col),
             "background": f"linear-gradient(to right, {grad})",
         })
     return styles
@@ -220,7 +241,7 @@ def _compute_pricer_styles(rows: list[dict], include_zscore: bool = True) -> lis
     if not rows:
         return styles
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(_with_row_keys(rows))
 
     # Odd-row stripe
     styles.append({"if": {"row_index": "odd"}, "backgroundColor": THEME["bg_input"]})
@@ -262,14 +283,22 @@ def _make_table(
     rows: list[dict],
     extra_styles: list[dict] | None = None,
 ) -> dash_table.DataTable:
-    cols = [{"name": c, "id": c} for c in rows[0].keys()] if rows else []
+    keyed_rows = _with_row_keys(rows)
+    cols = []
+    hidden_cols: list[str] = []
+    if keyed_rows:
+        for col in keyed_rows[0].keys():
+            cols.append({"name": col, "id": col})
+            if str(col).startswith("__"):
+                hidden_cols.append(col)
     cond: list[dict] = extra_styles if extra_styles is not None else [
         {"if": {"row_index": "odd"}, "backgroundColor": THEME["bg_input"]}
     ]
     return dash_table.DataTable(
         id=id_,
         columns=cols,
-        data=rows,
+        data=keyed_rows,
+        hidden_columns=hidden_cols,
         sort_action="native",
         filter_action="native",
         page_size=50,
