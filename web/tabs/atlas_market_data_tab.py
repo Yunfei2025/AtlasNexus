@@ -38,6 +38,33 @@ THEME = {
     "negative":      "#e74c3c",
 }
 
+_ROW_KEY_COL = "__row_key"
+
+
+def _with_row_keys_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of *df* with a stable hidden row key column."""
+    if _ROW_KEY_COL in df.columns:
+        return df
+    keyed_df = df.copy()
+    keyed_df[_ROW_KEY_COL] = [str(i) for i in range(len(keyed_df))]
+    return keyed_df
+
+
+def _with_row_keys_records(data: list[dict]) -> list[dict]:
+    """Attach hidden stable row keys to table records when needed."""
+    keyed_records: list[dict] = []
+    for idx, row in enumerate(data):
+        keyed_row = dict(row)
+        keyed_row.setdefault(_ROW_KEY_COL, str(idx))
+        keyed_records.append(keyed_row)
+    return keyed_records
+
+
+def _style_row_filter(row_key: object, col: str) -> dict[str, dict[str, str]]:
+    """Build a DataTable style filter tied to one logical row."""
+    safe_row_key = str(row_key).replace("\\", "\\\\").replace('"', '\\"')
+    return {"if": {"filter_query": f'{{{_ROW_KEY_COL}}} = "{safe_row_key}"', "column_id": col}}
+
 # ── Bar-in-cell helpers ───────────────────────────────────────────────────────
 
 def _bar_styles_gradient(
@@ -53,13 +80,14 @@ def _bar_styles_gradient(
     span = vmax - vmin
     if span <= 0:
         return styles
-    for i, val in enumerate(df[col]):
+    keyed_df = _with_row_keys_df(df)
+    for row_key, val in zip(keyed_df[_ROW_KEY_COL], keyed_df[col]):
         try:
             pct = max(0.0, min(100.0, (float(val) - vmin) / span * 100))
         except (TypeError, ValueError):
             continue
         styles.append({
-            "if": {"row_index": i, "column_id": col},
+            **_style_row_filter(row_key, col),
             "background": (
                 f"linear-gradient(to right, {color} {pct:.1f}%, {bg} {pct:.1f}%)"
             ),
@@ -76,7 +104,8 @@ def _bar_styles_zscore(
     styles: list[dict] = []
     pos_color = "rgba(39,174,96,0.55)"
     neg_color = "rgba(231,76,60,0.55)"
-    for i, val in enumerate(df[col]):
+    keyed_df = _with_row_keys_df(df)
+    for row_key, val in zip(keyed_df[_ROW_KEY_COL], keyed_df[col]):
         try:
             v = float(val)
         except (TypeError, ValueError):
@@ -96,7 +125,7 @@ def _bar_styles_zscore(
                 f"transparent 50%"
             )
         styles.append({
-            "if": {"row_index": i, "column_id": col},
+            **_style_row_filter(row_key, col),
             "background": f"linear-gradient(to right, {grad})",
         })
     return styles
@@ -109,13 +138,20 @@ def _dt_style(
     data: list[dict],
     extra_styles: list[dict] | None = None,
 ) -> dash_table.DataTable:
+    keyed_data = _with_row_keys_records(data)
+    keyed_columns = list(columns)
+    hidden_columns: list[str] = []
+    if keyed_data and all(col.get("id") != _ROW_KEY_COL for col in keyed_columns):
+        keyed_columns.append({"name": _ROW_KEY_COL, "id": _ROW_KEY_COL})
+        hidden_columns.append(_ROW_KEY_COL)
     cond_styles = [{"if": {"row_index": "odd"}, "backgroundColor": THEME["bg_input"]}]
     if extra_styles:
         cond_styles.extend(extra_styles)
     return dash_table.DataTable(
         id=id_,
-        columns=columns,
-        data=data,
+        columns=keyed_columns,
+        data=keyed_data,
+        hidden_columns=hidden_columns,
         style_table={"overflowX": "auto", "borderRadius": "4px"},
         style_header={
             "backgroundColor": THEME["table_header"],
