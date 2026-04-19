@@ -77,7 +77,7 @@ def build_spreads_layout():
         {"label": "Futures Net Basis",      "value": "NetBasis"},
     ]
 
-    _DD_STYLE = {"fontSize": "12px", "color": "#000"}
+    _DD_STYLE = {"fontSize": "12px", "color": "#fff"}
 
     def _chart_label(text):
         return html.Div(
@@ -199,7 +199,7 @@ def build_curves_layout():
                                 value="TBond",
                                 id="curve-selection",
                                 className="custom-dropdown",
-                                style={'color': '#000'}
+                                style={'color': '#fff'}
                             ),
                             # dcc.Interval(id="data-refresh", interval=int(GRAPH_INTERVAL), n_intervals=0), # Moved to apps/atlasnexus_daily.py
                         ],

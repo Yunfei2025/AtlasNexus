@@ -79,10 +79,21 @@ def _compute_x_range(spread_type: str, series: pd.Series) -> Dict[str, Any]:
     return dict(start=dates["d1y"], end=dates["d"])
 
 
-def _compute_y_range(spread_type: str, series: pd.Series) -> Dict[str, Any]:
+def _compute_y_range(
+    spread_type: str,
+    series: pd.Series,
+    x_range: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     if spread_type == "InsPos":
-        return dict(low=min(series["Volume"]), up=(series["Volume"]))
-    return dict(low=min(series) - 1, up=max(series) + 1)
+        return dict(low=min(series["Volume"]), up=max(series["Volume"]))
+    if x_range is not None:
+        try:
+            filtered = series.loc[x_range["start"]:x_range["end"]].dropna()
+            if len(filtered) > 0:
+                series = filtered
+        except Exception:
+            pass
+    return dict(low=float(series.min()) - 1, up=float(series.max()) + 1)
 
 
 def _select_layout(
@@ -332,6 +343,26 @@ def spreadts(stype, inst, season, b):
         data = trace_main + trace_fs + trace_add
 
     xrg = _compute_x_range(stype, df)
-    yrg = _compute_y_range(stype, df)
+    yrg = _compute_y_range(stype, df, x_range=xrg)
     layout = _select_layout(stype, title, yunits[stype], xrg, yrg, lineinfo)
+
+    # Explicitly scope yaxis2 (fixing overlay) and yaxis3 (CR 3m) ranges to the
+    # visible x-window so both right axes scale to 1Y data, not full history.
+    _axis_sources = [("yaxis2", trace_fs), ("yaxis3", trace_add)]
+    for axis_key, traces in _axis_sources:
+        if axis_key not in layout:
+            continue
+        _vals: List[float] = []
+        _tag = "y2" if axis_key == "yaxis2" else "y3"
+        for t in traces:
+            if getattr(t, "yaxis", None) == _tag and t.x is not None and t.y is not None:
+                try:
+                    s = pd.Series(list(t.y), index=pd.to_datetime(list(t.x))).dropna()
+                    s = s.loc[xrg["start"]:xrg["end"]]
+                    _vals.extend(s.values.tolist())
+                except Exception:
+                    pass
+        if _vals:
+            layout[axis_key]["range"] = [min(_vals) - 1, max(_vals) + 1]
+
     return dict(data=data, layout=layout)

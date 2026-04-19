@@ -1535,8 +1535,10 @@ def register_alpha_callbacks(app) -> None:
         # Compute stop-loss and profit-target columns (in spread bp units)
         df_all = df_all.copy()
         # Normalise spread/mean/vol/risk_vol_63d to bp for bond-type spreads stored in yield %.
-        # SwapSpread, NetBasis, TermBasis, PCASpread, BinarySpread are already in bp.
-        _PCT_TYPES = {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap', 'TenorSpread'}
+        # SwapSpread (Repo-/Shi3M-/Basis-) stores spread/mean/vol in % points (same as IRS-spdsrt.pkl),
+        # so it also needs ×100 to reach bp. carry_roll is already in bp and is NOT in this loop.
+        # NetBasis, TermBasis, PCASpread, BinarySpread are already in bp.
+        _PCT_TYPES = {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap', 'TenorSpread', 'SwapSpread'}
         if 'spread_type' in df_all.columns:
             _pct_mask = df_all['spread_type'].isin(_PCT_TYPES)
             for _col in ('spread', 'mean', 'vol', 'risk_vol_63d'):
@@ -1584,7 +1586,7 @@ def register_alpha_callbacks(app) -> None:
         )
 
         # MR display columns: halflife is meaningful (OU mean-reversion speed)
-        # Trend display columns: halflife omitted (OU fit on non-stationary series is not meaningful)
+        # Carry & Momentum display columns: halflife omitted (OU fit on non-stationary series is not meaningful)
         # spread/mean/vol units: % for bond types (BondCurve/BondSwap/TenorSpread), bp for IRS types
         _mr_display_cols = [
             'ID', 'spread_type', 'direction', 'regime',
@@ -1611,23 +1613,45 @@ def register_alpha_callbacks(app) -> None:
             if col in df_display.columns:
                 df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(3)
 
-        # Split candidates into MR and Trend/Carry
+        # Split candidates into MR and Carry & Momentum using regime classification.
+        # mean_reverting → MR table only; trending → Carry & Momentum table only;
+        # uncertain → both tables (regime ambiguous, let score decide);
+        # unknown (no historical series) → fall back to style column.
         df_mr = pd.DataFrame()
         df_trend = pd.DataFrame()
 
-        style_summary_div = html.Div()
-        if 'style' in df_display.columns:
-            style_counts = df_display['style'].astype(str).str.strip().value_counts(dropna=False)
-            style_summary = ', '.join([f"{k}: {int(v)}" for k, v in style_counts.items()])
-            style_summary_div = html.Div(
-                f"Styles found: {style_summary}",
-                style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'},
-            )
+        _mr_avail = [c for c in _mr_display_cols if c in df_display.columns]
+        _trend_avail = [c for c in _trend_display_cols if c in df_display.columns]
 
-            _mr_avail = [c for c in _mr_display_cols if c in df_display.columns]
-            _trend_avail = [c for c in _trend_display_cols if c in df_display.columns]
-            df_mr = df_display[df_display['style'].astype(str).str.lower().eq('meanreversion')][_mr_avail].copy()
-            df_trend = df_display[df_display['style'].astype(str).str.lower().isin(['carry', 'trend', 'trendfollowing'])][_trend_avail].copy()
+        regime_s = (
+            df_display['regime'].astype(str).str.strip().str.lower().replace('nan', 'unknown')
+            if 'regime' in df_display.columns
+            else pd.Series('unknown', index=df_display.index, dtype=str)
+        )
+        style_s = (
+            df_display['style'].astype(str).str.strip().str.lower()
+            if 'style' in df_display.columns
+            else pd.Series('', index=df_display.index, dtype=str)
+        )
+
+        mr_by_regime    = regime_s.eq('mean_reverting')
+        trend_by_regime = regime_s.eq('trending')
+        uncertain_mask  = regime_s.eq('uncertain')
+        no_regime       = ~mr_by_regime & ~trend_by_regime & ~uncertain_mask
+        # Style fallback for rows where regime couldn't be computed
+        style_mr    = no_regime & style_s.eq('meanreversion')
+        style_trend = no_regime & style_s.isin({'carry', 'trend', 'trendfollowing'})
+
+        df_mr    = df_display[mr_by_regime    | uncertain_mask | style_mr   ][_mr_avail   ].copy()
+        df_trend = df_display[trend_by_regime | uncertain_mask | style_trend][_trend_avail].copy()
+
+        # Summary banner: regime distribution
+        regime_counts  = regime_s.value_counts(dropna=False)
+        regime_summary = ', '.join([f"{k}: {int(v)}" for k, v in regime_counts.items()])
+        style_summary_div = html.Div(
+            f"Regime: {regime_summary}",
+            style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'},
+        )
 
         # Shared table styling
         _table_style_table = {'overflowX': 'auto', 'maxHeight': '300px', 'overflowY': 'auto'}
@@ -1686,7 +1710,6 @@ def register_alpha_callbacks(app) -> None:
                 style_data_conditional=_table_style_data_conditional,  # type: ignore[arg-type]
                 page_size=20,
                 sort_action='native',
-                filter_action='native',
             )
 
         table_mr = html.Div(
@@ -1701,9 +1724,9 @@ def register_alpha_callbacks(app) -> None:
             style={'marginBottom': '20px'},
         )
 
-        # Trend/Carry candidates table (always render; show empty-state when none)
+        # Carry & Momentum candidates table (always render; show empty-state when none)
         trend_body = html.Div(
-            "No carry/trend candidates under current filters.",
+            "No carry & momentum candidates under current filters.",
             style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '8px'},
         )
         if not df_trend.empty:
@@ -1719,13 +1742,12 @@ def register_alpha_callbacks(app) -> None:
                 style_data_conditional=_table_style_data_conditional,  # type: ignore[arg-type]
                 page_size=20,
                 sort_action='native',
-                filter_action='native',
             )
 
         table_trend = html.Div(
             [
                 html.H6(
-                    f"Carry/Trend Candidates (max 20) - {len(df_trend)} found",
+                    f"Carry & Momentum Candidates (max 20) - {len(df_trend)} found",
                     style={'color': THEME['text_main'], 'marginBottom': '8px'},
                 ),
                 style_summary_div,

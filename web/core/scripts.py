@@ -253,7 +253,10 @@ def refresh(interval):
 
     irs_rt = Utils.load_pickle_cached(os.path.join(DIR_INPUT,"IRS-spdsrt.pkl"))
     if isinstance(irs_rt, Mapping):
-        data_rt['SwapSpread'] = irs_rt['spreads']
+        _irs_spreads = irs_rt['spreads']
+        if hasattr(_irs_spreads, 'index'):
+            _irs_spreads = _irs_spreads[~_irs_spreads.index.str.endswith('.IR')]
+        data_rt['SwapSpread'] = _irs_spreads
 
     for btype in BondConfig.INCLUDE_FILTERS.keys():
         spd = Utils.load_pickle_cached(os.path.join(DIR_INPUT,f"{btype}-spdsrt.pkl"))

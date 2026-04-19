@@ -102,3 +102,76 @@
 .Select-arrow-zone:hover > .Select-arrow {
     border-top-color: #3498db !important;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Dash 4 dcc.Dropdown dark-mode overrides                                    */
+/* Class names sourced from dash/dcc/async-dropdown.js bundle (Dash 4.1.0)   */
+/* -------------------------------------------------------------------------- */
+
+/* Trigger button (the closed/selected state) */
+.dash-dropdown {
+    background: #112e66 !important;
+    color: #ffffff !important;
+    border-color: rgba(180, 180, 180, 0.4) !important;
+}
+
+/* Selected value text */
+.dash-dropdown-value,
+.dash-dropdown-value-item {
+    color: #ffffff !important;
+}
+
+/* Placeholder text */
+.dash-dropdown-placeholder {
+    color: #aab0c0 !important;
+}
+
+/* Dropdown/arrow icons */
+.dash-dropdown-trigger-icon,
+.dash-dropdown-value-count {
+    color: #aab0c0 !important;
+    fill: #aab0c0 !important;
+}
+
+/* Open menu popup container */
+.dash-dropdown-content {
+    background: #0c2b64 !important;
+    border-color: #3498db !important;
+    color: #ffffff !important;
+}
+
+/* Options scroll container */
+.dash-dropdown-options {
+    background: #0c2b64 !important;
+}
+
+/* Individual option row */
+.dash-dropdown-option {
+    background: #0c2b64 !important;
+    color: #ffffff !important;
+}
+
+.dash-dropdown-option:hover,
+.dash-dropdown-option:focus-within {
+    background: #1a3a7a !important;
+    color: #ffffff !important;
+}
+
+/* Search input area */
+.dash-dropdown-search-container {
+    background: #112e66 !important;
+    border-color: rgba(180, 180, 180, 0.4) !important;
+}
+
+.dash-dropdown-search {
+    color: #ffffff !important;
+}
+
+/* Select-all / deselect-all buttons inside open menu */
+.dash-dropdown-action-button {
+    color: #aab0c0 !important;
+}
+
+.dash-dropdown-action-button:hover {
+    color: #3498db !important;
+}

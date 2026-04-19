@@ -152,6 +152,10 @@ def _dt_style(
         columns=keyed_columns,
         data=keyed_data,
         hidden_columns=hidden_columns,
+        css=[
+            {"selector": ".show-hide", "rule": "display: none;"},
+            {"selector": ".dash-spreadsheet-menu", "rule": "display: none;"},
+        ],
         style_table={"overflowX": "auto", "borderRadius": "4px"},
         style_header={
             "backgroundColor": THEME["table_header"],

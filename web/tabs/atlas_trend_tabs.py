@@ -146,7 +146,7 @@ def build_trend_layout() -> html.Div:
                                 optionHeight=28,
                                 style={
                                     "backgroundColor": THEME["bg_input"],
-                                    "color": "#000",
+                                    "color": THEME["text_main"],
                                     "fontSize": "12px",
                                     "marginBottom": "14px",
                                 },

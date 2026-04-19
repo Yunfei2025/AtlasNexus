@@ -184,10 +184,11 @@ input[type="button"] {
   display: flex;
 }
 
-/* Custom dropdown styling for curve selection */
+/* Custom dropdown styling for curve selection (dark theme) */
 .custom-dropdown .Select-control {
     background-color: #082255 !important;
     border-color: rgba(180, 180, 180, 0.4) !important;
+    color: #FFFFFF !important;
 }
 
 .custom-dropdown .Select-value-label {
@@ -199,17 +200,18 @@ input[type="button"] {
 }
 
 .custom-dropdown .Select-menu-outer {
-    background-color: #FFFFFF !important;
+    background-color: #0c2b64 !important;
+    border: 1px solid rgba(180, 180, 180, 0.3) !important;
 }
 
 .custom-dropdown .Select-option {
-    background-color: #FFFFFF !important;
-    color: #000000 !important;
+    background-color: #0c2b64 !important;
+    color: #FFFFFF !important;
 }
 
 .custom-dropdown .Select-option.is-focused {
-    background-color: #E8F4F8 !important;
-    color: #000000 !important;
+    background-color: #1a3a7a !important;
+    color: #FFFFFF !important;
 }
 
 .custom-dropdown .Select-option.is-selected {
@@ -217,44 +219,34 @@ input[type="button"] {
     color: #FFFFFF !important;
 }
 
-/* React-Select v2+ dropdown styling - comprehensive coverage */
-#curve-selection .Select-value-label,
-#curve-selection .css-1uccc91-singleValue,
-#curve-selection div[class*="singleValue"] {
+/* Dash 4 dcc.Dropdown dark-mode overrides for #curve-selection */
+#curve-selection .dash-dropdown {
+    background: #082255 !important;
     color: #FFFFFF !important;
-}
-
-#curve-selection .css-yk16xz-control,
-#curve-selection .css-1pahdxg-control,
-#curve-selection div[class*="control"] {
-    background-color: #082255 !important;
     border-color: rgba(180, 180, 180, 0.4) !important;
 }
 
-#curve-selection .css-26l3qy-menu,
-#curve-selection div[class*="menu"] {
-    background-color: #FFFFFF !important;
+#curve-selection .dash-dropdown-value,
+#curve-selection .dash-dropdown-value-item,
+#curve-selection .dash-dropdown-placeholder,
+#curve-selection .dash-dropdown-trigger-icon {
+    color: #FFFFFF !important;
+    fill: #FFFFFF !important;
 }
 
-/* All dropdown options - BLACK text */
-#curve-selection .css-1n7v3ny-option,
-#curve-selection .css-9gakcf-option,
-#curve-selection .css-1gl4k7y,
-#curve-selection div[class*="option"] {
-    color: #000000 !important;
-    background-color: #FFFFFF !important;
+#curve-selection .dash-dropdown-content {
+    background: #0c2b64 !important;
+    border-color: rgba(180, 180, 180, 0.3) !important;
 }
 
-/* Hovered/focused option */
-#curve-selection div[class*="option"][class*="focused"],
-#curve-selection .css-9gakcf-option {
-    background-color: #E8F4F8 !important;
-    color: #000000 !important;
+#curve-selection .dash-dropdown-option {
+    background: #0c2b64 !important;
+    color: #FFFFFF !important;
 }
 
-/* Selected option in dropdown */
-#curve-selection div[class*="option"][class*="selected"] {
-    background-color: #007ACE !important;
+#curve-selection .dash-dropdown-option:hover,
+#curve-selection .dash-dropdown-option:focus-within {
+    background: #1a3a7a !important;
     color: #FFFFFF !important;
 }
 
