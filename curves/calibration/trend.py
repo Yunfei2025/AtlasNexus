@@ -230,7 +230,7 @@ def TSSampling(vT):
     for d in vD.index:
         v = pd.concat([vm.loc[d+h0:d+h1],vm.loc[d+h2:d+h3]],axis=0)
         vTn = pd.concat([vTn,v],axis=0)
-    vTn = vTn.fillna(method='ffill')
+    vTn = vTn.ffill()
     # vTn.index.name = 'Time'
     # vTn = vTn.reset_index()
     # vTn.index.name = 'Tick No.'

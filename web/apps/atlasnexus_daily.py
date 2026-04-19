@@ -19,7 +19,15 @@ project_root = Path(__file__).parent.parent.parent.resolve()
 sys.path.insert(0, str(project_root))
 
 # Import lightweight style constants (do not import web.core which triggers data loads).
-from web.tabs.atlas_styles import tab_style, tabs_styles, tab_selected_style
+from web.tabs.atlas_styles import (
+    tab_style, tabs_styles, tab_selected_style,
+    ATLAS_PLOTLY_TEMPLATE,
+)
+
+# Register AtlasNexus Plotly theme globally so all figures pick it up.
+import plotly.io as _pio
+_pio.templates["atlas"] = ATLAS_PLOTLY_TEMPLATE
+_pio.templates.default = "plotly_dark+atlas"
 
 # We intentionally create a new Dash instance to avoid interfering with existing apps.
 from dash import Dash as _Dash
@@ -86,8 +94,23 @@ from web.tabs.atlas_pricer_tab import (
 
 GRAPH_INTERVAL = int(os.environ.get("GRAPH_INTERVAL", 30 * 60_000))
 
+# ---------------------------------------------------------------------------
+# Module-level style constants (shared across all layout builders)
+# ---------------------------------------------------------------------------
+_BTN_STYLE: dict = {
+    'background': '#1a3a6e', 'color': '#ffffff', 'border': '1px solid #2a5298',
+    'borderRadius': '4px', 'padding': '6px 14px', 'cursor': 'pointer', 'fontSize': '13px',
+}
+_LBL_STYLE: dict = {
+    'color': '#aab0c0', 'fontSize': '11px', 'marginBottom': '4px', 'display': 'block',
+}
+_INPUT_STYLE: dict = {
+    'background': '#112e66', 'color': '#ffffff', 'border': '1px solid #2a5298',
+    'borderRadius': '4px', 'padding': '5px 8px', 'width': '100%', 'fontSize': '13px',
+}
+_DD_STYLE: dict = {'fontSize': '13px'}
+_DD_THEME: dict = {'backgroundColor': '#112e66', 'optionHeight': 30}
 
-project_root = pathlib.Path(__file__).resolve().parents[2]
 assets_folder = str(project_root / "web" / "assets")
 
 app = _Dash(
@@ -124,19 +147,25 @@ register_pricer_callbacks(app)
 def build_header():
     return html.Div(
         [
+            # ---- Left: title + timestamps ----
             html.Div(
                 [
                     html.H4("AtlasNexus · Daily", className="app__header__title"),
-                    html.P(id="an-refresh-time", className="app__header__title--grey"),
-                    html.P(id="an-latest-run", className="app__header__title--grey"),
+                    html.P(id="an-refresh-time", className="app__header__title--grey",
+                           style={"fontSize": "11px", "margin": "0"}),
+                    html.P(id="an-latest-run", className="app__header__title--grey",
+                           style={"fontSize": "11px", "margin": "0"}),
                 ],
                 className="app__header__desc",
             ),
+            # ---- Right: live status strip ----
             html.Div(
                 [
                     dcc.Store(id="an-job-id", storage_type="memory"),
+                    html.Div(id="an-header-status", className="an-header-status"),
                 ],
-                className="app__dropdown",
+                style={"display": "flex", "flexDirection": "column",
+                       "alignItems": "flex-end", "justifyContent": "center", "gap": "6px"},
             ),
         ],
         className="app__header",
@@ -145,20 +174,11 @@ def build_header():
 
 def build_tabs_panel():
     # Pre-build all main tab contents to preserve state
-    _btn_style = {
-        'background': '#1a3a6e', 'color': '#ffffff', 'border': '1px solid #2a5298',
-        'borderRadius': '4px', 'padding': '6px 14px', 'cursor': 'pointer', 'fontSize': '13px',
-    }
-    _lbl_style = {'color': '#aab0c0', 'fontSize': '11px', 'marginBottom': '4px', 'display': 'block'}
-    _input_style = {
-        'background': '#112e66', 'color': '#ffffff', 'border': '1px solid #2a5298',
-        'borderRadius': '4px', 'padding': '5px 8px', 'width': '100%', 'fontSize': '13px',
-    }
-    _dd_style = {'fontSize': '13px'}
-    _dd_theme = {
-        'backgroundColor': '#112e66',
-        'optionHeight': 30,
-    }
+    _btn_style   = _BTN_STYLE
+    _lbl_style   = _LBL_STYLE
+    _input_style = _INPUT_STYLE
+    _dd_style    = _DD_STYLE
+    _dd_theme    = _DD_THEME
 
     run_center_content = html.Div(
         [
@@ -341,7 +361,12 @@ def build_tabs_panel():
         ]
     )
     
-    risk_content = build_multiasset_risk_layout()
+    risk_content = dcc.Loading(
+        id="an-risk-loading",
+        type="circle",
+        color="#2e86c1",
+        children=build_multiasset_risk_layout(),
+    )
 
     market_content = html.Div(
         [
@@ -378,21 +403,8 @@ def build_tabs_panel():
         [
             # Shared stores for persisting content across tab switches
             dcc.Store(id='alpha-selected-candidates', data=[]),
-            dcc.Store(id='alpha-candidates-content', storage_type='session'),
-            dcc.Store(id='alpha-portfolio-content', storage_type='session'),
-            dcc.Store(id='alpha-backtest-content', storage_type='session'),
-            dcc.Store(id='alpha-basket-content', storage_type='session'),
-            dcc.Store(id='alpha-spreads-content', storage_type='session'),
-            dcc.Store(id='alpha-pairs-content', storage_type='session'),
-            dcc.Store(id='alpha-curves-content', storage_type='session'),
-            dcc.Store(id='alpha-volatility-content', storage_type='session'),
-            dcc.Store(id='beta-factor-content', storage_type='session'),
-            dcc.Store(id='beta-portfolio-content', storage_type='session'),
-            dcc.Store(id='beta-factor-model-bt-content', storage_type='session'),
-            dcc.Store(id='beta-backtest-factor-content', storage_type='session'),
-            dcc.Store(id='beta-backtest-portfolio-content', storage_type='session'),
-            dcc.Store(id='beta-surface-content', storage_type='session'),
-            dcc.Store(id='beta-trend-content', storage_type='session'),
+            # NOTE: per-tab content stores removed — state is preserved via
+            # the keep-alive show/hide DOM pattern; session stores were unused.
             dcc.Store(id='an-autoruns1-status', storage_type='memory'),
             dcc.Store(id='an-autoruns2-status', storage_type='memory'),
             
@@ -443,43 +455,118 @@ def create_layout():
 app.layout = create_layout()
 
 
+# ---------------------------------------------------------------------------
+# Generic show/hide tab-switcher factory
+# ---------------------------------------------------------------------------
+def _make_tab_switcher(input_id: str, div_ids: list[str], keys: list[str]):
+    """Register a show/hide callback that maps *input_id* tab value to div visibility."""
+    base = {"width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}
+
+    @app.callback(
+        [Output(did, "style") for did in div_ids],
+        Input(input_id, "value"),
+    )
+    def _switcher(active):
+        return tuple(
+            {**base, "display": "block"} if active == k else {**base, "display": "none"}
+            for k in keys
+        )
+
+    return _switcher
+
+
+
 @app.callback(
     Output("an-refresh-time", "children"),
     Output("an-latest-run", "children"),
     Input("an-interval", "n_intervals"),
 )
 def _tick(n):
+    import datetime
+    now = datetime.datetime.now().strftime("%H:%M:%S")
     meta = find_latest_run(mode="eod")
     return (
-        f"Refresh tick: {n}",
-        f"Latest EOD run: {format_run_meta(meta)}",
+        f"Updated {now}",
+        f"Latest EOD: {format_run_meta(meta)}",
     )
 
 
 @app.callback(
-    Output("an-autoruns1-status", "data"),
-    Input("data-refresh", "n_intervals"),
+    Output("an-header-status", "children"),
+    Input("an-interval", "n_intervals"),
+    State("an-job-id", "data"),
 )
-def _run_core_autoruns1(n_intervals):
-    try:
-        from web.core.scripts import autoruns1 as core_autoruns1
+def _header_status(n, job_id):
+    """Render the right-side status pill strip in the header."""
+    import datetime
 
-        return core_autoruns1(n_intervals, "AtlasNexus Daily active")
-    except Exception as exc:
-        return f"autoruns1 failed: {exc}"
+    pills = []
+
+    # ---- Wind connectivity ----
+    try:
+        from data.providers.retrieve import _WIND_AVAILABLE
+        if _WIND_AVAILABLE is True:
+            wind_cls, wind_dot, wind_txt = "ok",    "dot", "Wind \u2713"
+        elif _WIND_AVAILABLE is False:
+            wind_cls, wind_dot, wind_txt = "warn",  "dot", "Wind offline"
+        else:
+            wind_cls, wind_dot, wind_txt = "idle",  "dot", "Wind \u2014"
+    except Exception:
+        wind_cls, wind_dot, wind_txt = "idle", "dot", "Wind ?"
+
+    pills.append(html.Span(
+        [html.Span(className=f"dot"), wind_txt],
+        className=f"an-status-pill {wind_cls}",
+    ))
+
+    # ---- Active job ----
+    running = list_running_jobs()
+    if running:
+        jtype = _cmd_type(running[0].get("cmd", [])) or "job"
+        pills.append(html.Span(
+            [html.Span(className="dot"), f"\u25b6 {jtype}"],
+            className="an-status-pill warn",
+        ))
+    elif job_id:
+        status = finalize_job_if_done(job_id)
+        state = (status or {}).get("state", "")
+        if state == "FINISHED":
+            pills.append(html.Span(
+                [html.Span(className="dot"), "Done"],
+                className="an-status-pill ok",
+            ))
+        elif state == "FAILED":
+            pills.append(html.Span(
+                [html.Span(className="dot"), "Failed"],
+                className="an-status-pill error",
+            ))
+
+    # ---- Timestamp ----
+    now = datetime.datetime.now().strftime("%H:%M")
+    pills.append(html.Span(now, className="an-status-pill idle",
+                           style={"fontVariantNumeric": "tabular-nums"}))
+
+    return pills
 
 
 @app.callback(
+    Output("an-autoruns1-status", "data"),
     Output("an-autoruns2-status", "data"),
     Input("data-refresh", "n_intervals"),
 )
-def _run_core_autoruns2(n_intervals):
+def _run_core_autoruns(n_intervals):
+    """Fire both autorun pipelines in one callback to avoid duplicate interval triggers."""
     try:
-        from web.core.scripts import autoruns2 as core_autoruns2
-
-        return core_autoruns2(n_intervals, "AtlasNexus Daily active")
+        from web.core.scripts import autoruns1 as _ar1
+        r1 = _ar1(n_intervals, "AtlasNexus Daily active")
     except Exception as exc:
-        return f"autoruns2 failed: {exc}"
+        r1 = f"autoruns1 failed: {exc}"
+    try:
+        from web.core.scripts import autoruns2 as _ar2
+        r2 = _ar2(n_intervals, "AtlasNexus Daily active")
+    except Exception as exc:
+        r2 = f"autoruns2 failed: {exc}"
+    return r1, r2
 
 
 @app.callback(
@@ -532,18 +619,33 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt,
     raise __import__("dash").exceptions.PreventUpdate
 
 
-@app.callback(
-    [Output("market-div", "style"),
-     Output("beta-div", "style"),
-     Output("alpha-div", "style"),
-     Output("risk-div", "style"),
-     Output("run-center-div", "style")],
-    Input("an-tabs", "value"),
+# ---------------------------------------------------------------------------
+# Tab show/hide callbacks — generated by _make_tab_switcher
+# ---------------------------------------------------------------------------
+_make_tab_switcher(
+    "an-tabs",
+    ["market-div", "beta-div", "alpha-div", "risk-div", "run-center-div"],
+    ["market",     "beta",     "alpha",     "risk",     "run-center"],
 )
-def _render_tab(tab):
-    """Show/hide main tabs to preserve state."""
-    tabs = ["market", "beta", "alpha", "risk", "run-center"]
-    return tuple({"display": "block"} if tab == t else {"display": "none"} for t in tabs)
+_make_tab_switcher(
+    "an-beta-subtabs",
+    ["beta-factor-div", "beta-portfolio-div", "beta-bond-div",
+     "beta-factor-model-bt-div", "beta-backtest-factor-div", "beta-backtest-portfolio-div"],
+    ["factor",          "portfolio",          "bond",
+     "factor-model-bt", "backtest-factor",     "backtest-portfolio"],
+)
+_make_tab_switcher(
+    "an-market-subtabs",
+    ["market-data-div", "market-trend-div", "market-pricer-div", "market-surface-div", "market-curves-div"],
+    ["data",            "trend",            "pricer",            "surface",            "curves"],
+)
+_make_tab_switcher(
+    "an-alpha-subtabs",
+    ["alpha-candidates-div", "alpha-portfolio-div", "alpha-backtest-div",
+     "alpha-spreads-div",    "alpha-pairs-div",     "alpha-volatility-div"],
+    ["candidates",           "portfolio",           "backtest",
+     "spreads",              "pairs",               "volatility"],
+)
 
 
 @app.callback(
@@ -694,60 +796,7 @@ def _update_run_center(n, job_id):
         )
 
 
-@app.callback(
-    [Output("beta-factor-div", "style"),
-     Output("beta-portfolio-div", "style"),
-     Output("beta-bond-div", "style"),
-     Output("beta-factor-model-bt-div", "style"),
-     Output("beta-backtest-factor-div", "style"),
-     Output("beta-backtest-portfolio-div", "style")],
-    Input("an-beta-subtabs", "value"),
-)
-def _render_beta_subtabs(subtab: str):
-    """Show/hide Beta Book subtabs to preserve state."""
-    base_style = {"width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}
-    keys = ["factor", "portfolio", "bond", "factor-model-bt", "backtest-factor", "backtest-portfolio"]
-    return tuple(
-        {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
-        for k in keys
-    )
-
-
-@app.callback(
-    [Output("market-data-div",    "style"),
-     Output("market-trend-div",   "style"),
-     Output("market-pricer-div",  "style"),
-     Output("market-surface-div", "style"),
-     Output("market-curves-div",  "style")],
-    Input("an-market-subtabs", "value"),
-)
-def _render_market_subtabs(subtab: str):
-    """Show/hide Market subtabs to preserve state."""
-    base_style = {"width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}
-    keys = ["data", "trend", "pricer", "surface", "curves"]
-    return tuple(
-        {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
-        for k in keys
-    )
-
-
-@app.callback(
-    [Output("alpha-candidates-div", "style"),
-     Output("alpha-portfolio-div", "style"),
-     Output("alpha-backtest-div", "style"),
-     Output("alpha-spreads-div", "style"),
-     Output("alpha-pairs-div", "style"),
-     Output("alpha-volatility-div", "style")],
-    Input("an-alpha-subtabs", "value"),
-)
-def _render_alpha_subtabs(subtab: str):
-    """Show/hide Alpha Book subtabs to preserve state."""
-    base_style = {"width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}
-    keys = ["candidates", "portfolio", "backtest", "spreads", "pairs", "volatility"]
-    return tuple(
-        {**base_style, "display": "block"} if subtab == k else {**base_style, "display": "none"}
-        for k in keys
-    )
+# (tab-switcher callbacks registered above via _make_tab_switcher)
 
 
 

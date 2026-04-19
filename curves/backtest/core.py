@@ -36,7 +36,7 @@ from curves.calibration.selector import RefBondSelector, compute_spot_term_panel
 from curves.calibration import irscurves as irs
 from curves.utils.plot import plotBondTS
 from curves.calibration.stat import statAnalysis_BC
-from curves.utils.file import updatePKL
+from curves.utils.file import updatePKL, loadPKL
 
 # Configure logging using centralized setup
 from utils.log_window import get_logger
@@ -94,7 +94,7 @@ class PositionSignalGenerator:
             action = (df_price['long']
                      .fillna(df_price['short'])
                      .fillna(df_price['close']))
-            df_price['position'] = action.fillna(method='ffill')
+            df_price['position'] = action.ffill()
             
             return df_price
             
@@ -133,8 +133,8 @@ class CurveManager:
         curve_data_file = os.path.join(DIR_INPUT, f'{self.bond_type}-cvdata.pkl')
 
         # Load existing curves
-        dict_curve = updatePKL({}, curve_obj_file)
-        curve_data = updatePKL({}, curve_data_file)
+        dict_curve = loadPKL(curve_obj_file)
+        curve_data = loadPKL(curve_data_file)
         logger.info(f"Calculating {len(price_range)} missing days")
 
         if 'spot' not in curve_data.keys():
@@ -189,9 +189,9 @@ class CurveManager:
         extended_start = (pd.Timestamp(start_date) - relativedelta(months=self.lookback)).date()
         window_range = [extended_start, end_date]
         logger.info("Precomputing reference bonds & spot/term panels (single pass)...")
-        # update set to true, if we want to renew reference bonds
+        # update=False: skip dates already present in cvref.pkl, recompute only new ones
         selector = RefBondSelector()
-        botr_full = selector.select_reference_bonds(env, window_range, self.bond_type, daily=False,update=True)
+        botr_full = selector.select_reference_bonds(env, window_range, self.bond_type, daily=False, update=False)
         ref_full = compute_spot_term_panels(env, window_range, botr_full, self.bond_type, price_type="hist")
         # import pdb; pdb.set_trace()
         self._cache.update({
@@ -333,7 +333,7 @@ class PricingEngine:
         if self.bond_type == 'IRS':
             return self._price_irs(dict_curve, env, period)
         else:
-            return self._price_bonds(dict_curve, env, period)
+            return self._price_bonds(dict_curve, env, period, price_range)
     
     def _get_pricing_period(self, dict_curve: Dict, price_range: List) -> pd.Series:
         """Get the pricing period based on available curves."""
@@ -387,24 +387,33 @@ class PricingEngine:
         return {k: v.astype(float) for k, v in results.items()}
     
     def _price_bonds(self, dict_curve: Dict, env: Dict, 
-                     period: pd.Series) -> Dict[str, pd.DataFrame]:
+                     period: pd.Series, price_range: List = None) -> Dict[str, pd.DataFrame]:
         """Price bond instruments."""
         tenor_keys = [1.0, 2.0, 3.0, 4.0, 5.0]
         bonds = env['Def'].index.intersection(env['Close'].columns)
         period = env['Close'].index.intersection(period)
+        
+        # ytm_act = Close for all dates in price_range present in env['Close'],
+        # independent of whether curve calibration succeeded for those dates.
+        if price_range is not None:
+            start, end = self._parse_date_range(price_range)
+            close_period = env['Close'].loc[start:end].index
+        else:
+            close_period = period
         
         # Initialize result dataframes
         data_types = ['ytm_act', 'ytm_quo', 'dur_level', 'dur_slope', 'dur_curva']
         results = {dtype: pd.DataFrame(dtype=float, index=period, columns=bonds) 
                   for dtype in data_types}
         results['ytm_spot'] = pd.DataFrame(columns=tenor_keys)
-        results['ytm_act'] = env['Close'].loc[period, bonds]
+        results['ytm_act'] = env['Close'].loc[close_period, bonds]
         
         info_pool = env['Def'].copy()
+        _bt_config = BacktestConfig()  # instantiate once, reuse across all dates
         for date in period:
             # try:
             logger.info(f"Pricing bonds for {date}:")
-            bonds_filtered = self._filter_bonds_by_maturity(env, date, info_pool)
+            bonds_filtered = self._filter_bonds_by_maturity(env, date, info_pool, _bt_config)
             quote, sensitivity = dict_curve[date].affinePricing(env['Def'], bonds_filtered)
 
             # Store results
@@ -421,24 +430,24 @@ class PricingEngine:
         
         return {k: v.astype(float) for k, v in results.items()}
     
-    def _filter_bonds_by_maturity(self, env: Dict, date: datetime, 
-                                  info_pool: pd.DataFrame) -> pd.Index:
+    def _filter_bonds_by_maturity(self, env: Dict, date: datetime,
+                                  info_pool: pd.DataFrame,
+                                  config: BacktestConfig) -> pd.Index:
         """Filter bonds by maturity criteria."""
-        config = BacktestConfig()  # Use default config
         ttm = env['Def']['到期日期'] - date
         ttm_years = pd.Series([t.days / 365 for t in ttm], index=ttm.index)
-        
+
         valid_bonds = ttm_years[
-            (ttm_years > config.min_maturity) & 
+            (ttm_years > config.min_maturity) &
             (ttm_years < config.max_maturity)
         ].index
-        
+
         env['Def'] = info_pool.loc[valid_bonds]
-        
+
         # Calculate remaining maturity
         maturity = env['Def']['到期日期'] - date
         env['Def']['剩余期限'] = [m.days / 365 for m in maturity]
-        
+
         return env['Def'][
             (env['Def']['剩余期限'] > config.min_maturity) &
             (env['Def']['剩余期限'] < config.max_maturity)

@@ -126,7 +126,7 @@ def train_model(factors: pd.DataFrame, returns: pd.Series,
         if len(common_dates) < 20:
             return {'error': 'Insufficient common data points'}
         
-        X = factor_data.loc[common_dates].fillna(method='ffill').fillna(0)
+        X = factor_data.loc[common_dates].ffill().fillna(0)
         y = future_returns.loc[common_dates]
         
         # Use IC-weighted approach (default for our system)

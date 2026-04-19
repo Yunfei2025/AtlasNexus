@@ -17,7 +17,7 @@ from settings.fixed_income import BondConfig
 from settings.general import DateConfig
 import curves.affine.bootstrap as bs
 import curves.affine.pricingYield as yd
-from ..utils.file import updatePKL
+from ..utils.file import updatePKL, loadPKL
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
@@ -150,8 +150,8 @@ class RefBondSelector:
         term_buckets = BondConfig.TERM_BUCKETS
   
         # Load existing results
-        file_path = os.path.join(DIR_INPUT, f'{bond_type}-cvref.pkl')
-        existing_data = updatePKL({}, file_path)
+        ref_file = os.path.join(DIR_INPUT, f'{bond_type}-cvref.pkl')
+        existing_data = loadPKL(ref_file)
 
         if 'RefBond' in existing_data:
             result_df = existing_data['RefBond'].sort_index()
@@ -163,8 +163,8 @@ class RefBondSelector:
         if daily:
             dates_to_process = [DateConfig.get_date_mappings()['dp'].date()]
         else:
-            file_path = os.path.join(DIR_DATA, f'{bond_type}-px.pkl')
-            datelist = updatePKL({}, file_path)['Close'].index
+            px_file = os.path.join(DIR_DATA, f'{bond_type}-px.pkl')
+            datelist = loadPKL(px_file)['Close'].index
             mask = (datelist >= date_range[0]) & (datelist <= date_range[1])
             dates_to_process = datelist[mask]
 
@@ -172,24 +172,29 @@ class RefBondSelector:
         if not update and len(result_df) > 0:
             dates_to_process = [d for d in dates_to_process if d not in result_df.index]
 
-        # Process each date
+        # Collect new rows in a dict and concat once instead of cell-by-cell assignment
+        new_rows: dict = {}
         for i, current_date in enumerate(dates_to_process):
             if self.verbose and i % max(1, len(dates_to_process) // 10) == 0:
                 progress = 100 * i / len(dates_to_process)
                 print(f"Progress: {progress:.1f}% - Processing {current_date}")
-             
+
             day_results = self._process_single_date(
                 bonds, current_date, bond_type, term_buckets, result_df
             )
-
+            new_rows[current_date] = day_results
+            # Keep result_df up-to-date so stability logic can see the row
             for bucket_name, selected_bond in day_results.items():
                 result_df.loc[current_date, bucket_name] = selected_bond
-        
-        # Clean and save results
-        result_df = result_df.fillna(method='ffill').dropna(how='all').sort_index()
-        file_path = os.path.join(DIR_INPUT, f'{bond_type}-cvref.pkl')
+
+        # Merge new rows (if any) and persist
+        if new_rows:
+            result_df = pd.concat(
+                [result_df, pd.DataFrame(new_rows).T]
+            ).loc[lambda df: ~df.index.duplicated(keep='last')]
+        result_df = result_df.ffill().dropna(how='all').sort_index()
         final_data = {'RefBond': result_df}
-        final_data = updatePKL(final_data, file_path)
+        final_data = updatePKL(final_data, ref_file)
         if self.verbose:
             end_time = time.time()
             print(f"Completed in {end_time - start_time:.2f} seconds")
@@ -265,12 +270,10 @@ class RefBondSelector:
         if len(available_bonds) == 0:
             return day_results
         
-        # Calculate terms
-        date_str = current_date.strftime('%Y-%m-%d')
-        terms = pd.Series([
-            calculate_term(date_str, mat.strftime('%Y-%m-%d'))
-            for mat in bonds['maturity'][available_bonds]
-        ], index=available_bonds)
+        # Calculate terms — direct date arithmetic avoids strftime round-trips
+        terms = (bonds['maturity'][available_bonds] - current_date).apply(
+            lambda d: d.days / 365
+        )
         
         # Get turnover for this date
         date_turnover = pd.Series(dtype=float)
@@ -400,7 +403,7 @@ def compute_spot_term_panels(
     
     # Load existing data
     file_path = os.path.join(DIR_INPUT, f'{bond_type}-cvref.pkl')
-    existing_data = updatePKL({}, file_path)
+    existing_data = loadPKL(file_path)
     existing_spot = existing_data.get('RefSpot', None)
     existing_term = existing_data.get('RefTerm', None)
 

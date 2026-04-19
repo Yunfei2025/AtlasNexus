@@ -74,9 +74,11 @@ def retrieveWindBacktestPool(btype, prange):
     ds = d.strftime("%Y%m%d")
     
     pool = {}
+    any_new = False
     for di in [dps,ds]:
         file_path = os.path.join(DIR_DATA, 'pool', btype + 'Pool' + di + '.pkl')
         if not (os.path.exists(file_path)):
+            any_new = True
             temp = updateInstrumentPool(btype, di, hist=True)
             if temp.shape[0] <= 2:
                 print("This is a holiday, choose another day.")
@@ -88,6 +90,13 @@ def retrieveWindBacktestPool(btype, prange):
                 pool[di] = temp
         else:
             pool[di] = pd.read_pickle(file_path)
+
+    # If all pool files were already cached and the final bondpool.pkl exists,
+    # skip the Wind API call entirely — no new data is needed.
+    bondpool_file = os.path.join(DIR_DATA, btype + r'-bondpool.pkl')
+    if not any_new and os.path.exists(bondpool_file):
+        return
+
     # Filtering by start and end date
     wdinfo = WindConfig.WDINFO
     bond_info_dict = {}

@@ -3,7 +3,22 @@ import os
 import pandas as pd
 import pickle
 
-def updatePKL(dictn,file_path,rewrite=False):
+
+def loadPKL(file_path: str) -> dict:
+    """Load a pickle file without any merge/sort/ffill overhead.
+
+    Use this instead of ``updatePKL({}, file_path)`` when you only need to
+    read the stored object — the merge path in ``updatePKL`` is unnecessary
+    and does O(N) work on every DataFrame key even when nothing changes.
+    Returns an empty dict if the file does not exist.
+    """
+    if os.path.exists(file_path):
+        obj = pd.read_pickle(file_path)
+        return obj if obj is not None else {}
+    return {}
+
+
+def updatePKL(dictn, file_path, rewrite=False):
     if rewrite:
         with open(file_path, 'wb') as file:
             pickle.dump(dictn, file, protocol=pickle.HIGHEST_PROTOCOL)
