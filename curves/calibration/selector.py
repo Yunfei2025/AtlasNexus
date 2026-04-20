@@ -139,7 +139,14 @@ class RefBondSelector:
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
     
-    def select_reference_bonds(self, env: dict, date_range: list, bond_type: str, daily: bool, update: bool = True) -> pd.DataFrame:
+    def select_reference_bonds(
+        self,
+        env: dict,
+        date_range: list,
+        bond_type: str,
+        daily: bool,
+        update: bool = True,
+    ) -> pd.DataFrame:
         """Select reference bonds for given date range and bond type."""
         if self.verbose:
             print(f"Starting reference bond selection for {bond_type}...")
@@ -168,7 +175,19 @@ class RefBondSelector:
             mask = (datelist >= date_range[0]) & (datelist <= date_range[1])
             dates_to_process = datelist[mask]
 
-        # Skip existing dates if not updating
+        if update and len(result_df) > 0:
+            refresh_mask = (
+                (result_df.index >= date_range[0])
+                & (result_df.index <= date_range[1])
+            )
+            existing_result_df = result_df.drop(
+                index=result_df.index[refresh_mask],
+                errors='ignore'
+            )
+            result_df = pd.DataFrame(columns=result_df.columns, dtype=object)
+        else:
+            existing_result_df = result_df
+
         if not update and len(result_df) > 0:
             dates_to_process = [d for d in dates_to_process if d not in result_df.index]
 
@@ -190,8 +209,10 @@ class RefBondSelector:
         # Merge new rows (if any) and persist
         if new_rows:
             result_df = pd.concat(
-                [result_df, pd.DataFrame(new_rows).T]
+                [existing_result_df, pd.DataFrame(new_rows).T]
             ).loc[lambda df: ~df.index.duplicated(keep='last')]
+        else:
+            result_df = existing_result_df
         result_df = result_df.ffill().dropna(how='all').sort_index()
         final_data = {'RefBond': result_df}
         final_data = updatePKL(final_data, ref_file)
@@ -344,7 +365,15 @@ class YieldCurveBuilder:
         results = pd.DataFrame(index=bond_ref.values, columns=['ttm', 'spot'])
         
         for bond_id in bond_ref:
+            if pd.isna(bond_id):
+                continue
+
             # Extract bond information
+            if bond_id not in env['Def'].index:
+                warnings.warn(
+                    f"Skipping reference bond {bond_id} on {date}: not found in env['Def']"
+                )
+                continue
             bond_data = env['Def'].loc[bond_id]
             bond_info = extract_bond_info(bond_data)
 
@@ -410,7 +439,8 @@ def compute_spot_term_panels(
     if update:
         missing_dates = list(date_index)
     else:
-        missing_dates = [d for d in date_index if d not in existing_spot.index]
+        existing_spot_index = existing_spot.index if existing_spot is not None else pd.Index([])
+        missing_dates = [d for d in date_index if d not in existing_spot_index]
 
     if price_type in ['hist','close']:
         if len(missing_dates) == 0:

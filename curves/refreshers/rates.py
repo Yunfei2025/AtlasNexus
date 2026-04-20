@@ -83,15 +83,24 @@ class BondCurveRefresher:
 
     def refresh_market_data(self, calc_date: date) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], pd.DataFrame, pd.DataFrame]:
         try:
+            print(f"[rates] {self.bond_type}: refresh_market_data -> retrieveEnvRT start")
             env = retrieveEnvRT(self.env, self.bond_type)
+            print(f"[rates] {self.bond_type}: refresh_market_data -> retrieveEnvRT done")
+            print(f"[rates] {self.bond_type}: refresh_market_data -> loadStatData start")
             stat = loadStatData(self.bond_type)
+            print(f"[rates] {self.bond_type}: refresh_market_data -> loadStatData done")
+            print(f"[rates] {self.bond_type}: refresh_market_data -> loadRefData start")
             ref = loadRefData(self.bond_type)
+            print(f"[rates] {self.bond_type}: refresh_market_data -> loadRefData done")
             # Use compute_spot_term_panels for single date computation
             price_range = [calc_date, calc_date]
+            print(f"[rates] {self.bond_type}: refresh_market_data -> compute_spot_term_panels start")
             self.bond_ref_df = compute_spot_term_panels(env, price_range, ref['RefBond'], self.bond_type, 'inst', update=False)
+            print(f"[rates] {self.bond_type}: refresh_market_data -> compute_spot_term_panels done")
             self.env, self.stat, self.ref = env, stat, ref
             return env, stat, ref
         except Exception as e:
+            print(f"[rates] {self.bond_type}: refresh_market_data failed: {e}")
             logger.error(f"Error refreshing market data: {e}")
             raise
 
@@ -161,16 +170,20 @@ class BondCurveRefresher:
         # calculation date
         d = DateConfig.get_date_mappings()['d']
         logger.info(f"Refresh Market Data for {self.bond_type} at: {d.strftime('%H:%M:%S')}")
+        print(f"[rates] {self.bond_type}: run started at {d.strftime('%H:%M:%S')}")
         calc_date = d.date()
 
         # load and refresh
         self.load_curve_and_env()
+        print(f"[rates] {self.bond_type}: curve/env loaded")
         env, stat, ref = self.refresh_market_data(calc_date)
-
+        print(f"[rates] {self.bond_type}: realtime/stat/ref data refreshed")
+        import pdb; pdb.set_trace()
         # bond ref and set members
 
         # self.bond_ref_df = pd.Series(spoti.values, index=termi.values) #create_bond_reference(spoti, termi)
         self.compute_quoted_bonds()
+        print(f"[rates] {self.bond_type}: quote universe prepared ({len(self.env_quo)} bonds)")
 
         # price both sides
         quotedict: Dict[str, pd.DataFrame] = {}
@@ -185,6 +198,7 @@ class BondCurveRefresher:
 
         sen = (sendict.get('Bid', pd.DataFrame()) + sendict.get('Ofr', pd.DataFrame())) / 2
         refspot_avg = ((self.bond_ref_df['Bid'] + self.bond_ref_df['Ofr']) / 2).to_frame()
+        print(f"[rates] {self.bond_type}: building pxrt payload")
         pxrt = {
             'Curve': (curvedict['Bid'] + curvedict['Ofr']) / 2,
             'RefSpot': refspot_avg,
@@ -194,8 +208,10 @@ class BondCurveRefresher:
 
         # plot and save
         figure = plotCurve(self.bond_type, pxrt)
+        print(f"[rates] {self.bond_type}: plot generated, saving outputs")
         self._save_results(self.curve, pxrt, self.bond_type, figure)
 
+        print(f"[rates] {self.bond_type}: refresh completed successfully")
         logger.info(f"Finished refreshing {self.bond_type} Curve at: {datetime.now().strftime('%H:%M:%S')}")
         return pxrt
 
@@ -212,12 +228,14 @@ class BondCurveRefresher:
     @staticmethod
     def _save_results(curve: Any, pxrt: Dict[str, Any], btype: str, figure: Any) -> None:
         try:
+            print(f"[rates] {btype}: writing outputs into {DIR_INPUT}")
             with open(os.path.join(DIR_INPUT, f'{btype}-cvrt.obj'), 'wb') as f:
                 pickle.dump(curve, f)
             with open(os.path.join(DIR_INPUT, f'{btype}-fig.obj'), 'wb') as f:
                 pickle.dump(figure, f)
             with open(os.path.join(DIR_INPUT, f'{btype}-rtquo.pkl'), 'wb') as f:
                 pickle.dump(pxrt, f)
+            print(f"[rates] {btype}: wrote {btype}-cvrt.obj, {btype}-fig.obj, {btype}-rtquo.pkl")
         except Exception as e:
             logger.error(f"Error saving results: {e}")
             raise
@@ -228,6 +246,6 @@ def main(bond_type='CBond', max_workers=None):
     except Exception as e:
         logger.error(f"Error in main execution: {e}")
         sys.exit(1)
-
+#%%
 if __name__ == '__main__':
     main()

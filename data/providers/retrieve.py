@@ -8,6 +8,7 @@ import pandas as pd
 import pickle
 import threading
 import datetime as dt
+from typing import Optional
 from settings.general import DateConfig
 from settings.wind import WindConfig
 from factors.config import config_manager
@@ -23,9 +24,60 @@ _date_strs = DateConfig.get_date_strings()
 # Override this at module level before the first Wind call if needed:
 #   import data.providers.retrieve as r; r.WIND_CONNECT_TIMEOUT = 60
 WIND_CONNECT_TIMEOUT: float = 20.0
+WSQ_CALL_TIMEOUT: float = 10.0
+WSQ_CHUNK_SIZE: int = 200
 
 _WIND_AVAILABLE: bool | None = None  # None = not yet probed
 _WIND_LOCK = threading.Lock()
+
+
+def _normalize_codes(codes) -> list[str]:
+    if isinstance(codes, str):
+        return [code.strip() for code in codes.split(',') if code.strip()]
+    return list(codes)
+
+
+def _normalize_fields(fields: str) -> list[str]:
+    return [field.strip() for field in fields.split(',') if field.strip()]
+
+
+def _empty_wsq_frame(codes, fields) -> pd.DataFrame:
+    code_list = _normalize_codes(codes)
+    field_list = _normalize_fields(fields)
+    return pd.DataFrame(index=code_list, columns=field_list, dtype=float)
+
+
+def _wsq_single_call(codes, fields) -> pd.DataFrame:
+    template = _empty_wsq_frame(codes, fields)
+    result_holder = [template]
+    exc_holder: list[Optional[Exception]] = [None]
+
+    def _do_wsq():
+        try:
+            from WindPy import w
+            result_holder[0] = w.wsq(codes, fields, usedf=True)[1]
+        except Exception as ex:
+            exc_holder[0] = ex
+
+    t = threading.Thread(target=_do_wsq, daemon=True)
+    t.start()
+    t.join(timeout=WSQ_CALL_TIMEOUT)
+
+    if t.is_alive():
+        print(
+            f"[Wind] wsq timeout after {WSQ_CALL_TIMEOUT:.0f}s "
+            f"for {len(template.index)} codes; returning NaN frame."
+        )
+        return template
+
+    if exc_holder[0] is not None:
+        print('Wind wsq error:', exc_holder[0])
+        return template
+
+    result = result_holder[0]
+    if not isinstance(result, pd.DataFrame):
+        return template
+    return result.reindex(index=template.index)
 
 
 def _try_start_wind() -> bool:
@@ -45,7 +97,7 @@ def _try_start_wind() -> bool:
             return _WIND_AVAILABLE
 
         success = [False]
-        exc_holder = [None]
+        exc_holder: list[Optional[Exception]] = [None]
 
         def _do_start():
             try:
@@ -121,13 +173,26 @@ def _wsd(codes, fields, start, end, options=""):
 
 def _wsq(codes, fields):
     if not _try_start_wind():
-        return pd.DataFrame()
-    try:
-        from WindPy import w
-        return w.wsq(codes, fields, usedf=True)[1]
-    except Exception as ex:
-        print('Wind wsq error:', ex)
-        return pd.DataFrame()
+        return _empty_wsq_frame(codes, fields)
+
+    code_list = _normalize_codes(codes)
+    if len(code_list) <= WSQ_CHUNK_SIZE:
+        return _wsq_single_call(code_list, fields)
+
+    frames = []
+    for start in range(0, len(code_list), WSQ_CHUNK_SIZE):
+        chunk = code_list[start:start + WSQ_CHUNK_SIZE]
+        chunk_no = start // WSQ_CHUNK_SIZE + 1
+        total_chunks = (len(code_list) + WSQ_CHUNK_SIZE - 1) // WSQ_CHUNK_SIZE
+        print(
+            f"[Wind] wsq chunk {chunk_no}/{total_chunks}: "
+            f"{len(chunk)} codes"
+        )
+        frames.append(_wsq_single_call(chunk, fields))
+
+    if not frames:
+        return _empty_wsq_frame(code_list, fields)
+    return pd.concat(frames, axis=0)
 
 def _wsi(codes, fields, start, end, options="", options2=None):
     if not _try_start_wind():

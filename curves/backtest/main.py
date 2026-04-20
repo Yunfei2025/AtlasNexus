@@ -19,15 +19,15 @@ from utils.log_window import get_logger
 logger = get_logger(__name__)
 
 # Instrument type: 'TBond', 'CBond', or 'IRS'
-btype = "IRS"
+btype = "CBond"
 # Update flags: list of strings from ['pool', 'bonds', 'cbts']
-update_list = ['cbts']
+update_list = ['pool']
 
-start = '2026-04-01'  # Backtest start date
-end = '2026-04-07'    # Backtest end date
+start = '2026-03-01'  # Backtest start date
+end = '2026-04-16'    # Backtest end date
 
 # Performance settings
-processes = 4    # Number of parallel workers
+processes = 4   # Number of parallel workers
 serial = False   # Force serial run (for debugging)
 
 def main():

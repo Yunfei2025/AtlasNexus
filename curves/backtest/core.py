@@ -189,10 +189,22 @@ class CurveManager:
         extended_start = (pd.Timestamp(start_date) - relativedelta(months=self.lookback)).date()
         window_range = [extended_start, end_date]
         logger.info("Precomputing reference bonds & spot/term panels (single pass)...")
-        # update=False: skip dates already present in cvref.pkl, recompute only new ones
         selector = RefBondSelector()
-        botr_full = selector.select_reference_bonds(env, window_range, self.bond_type, daily=False, update=False)
-        ref_full = compute_spot_term_panels(env, window_range, botr_full, self.bond_type, price_type="hist")
+        botr_full = selector.select_reference_bonds(
+            env,
+            window_range,
+            self.bond_type,
+            daily=False,
+            update=True,
+        )
+        ref_full = compute_spot_term_panels(
+            env,
+            window_range,
+            botr_full,
+            self.bond_type,
+            price_type="hist",
+            update=True,
+        )
         # import pdb; pdb.set_trace()
         self._cache.update({
             'botr': botr_full,

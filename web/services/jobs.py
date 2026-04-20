@@ -6,7 +6,7 @@ import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +83,67 @@ def _is_pid_running(pid: int) -> bool:
         return False
 
 
+def _parse_status_time(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _get_process_started_at(pid: int) -> datetime | None:
+    try:
+        if sys.platform.startswith("win"):
+            import ctypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return None
+            try:
+                creation_time = ctypes.c_ulonglong(0)
+                exit_time = ctypes.c_ulonglong(0)
+                kernel_time = ctypes.c_ulonglong(0)
+                user_time = ctypes.c_ulonglong(0)
+                ok = ctypes.windll.kernel32.GetProcessTimes(
+                    handle,
+                    ctypes.byref(creation_time),
+                    ctypes.byref(exit_time),
+                    ctypes.byref(kernel_time),
+                    ctypes.byref(user_time),
+                )
+                if not ok:
+                    return None
+                windows_epoch = 116444736000000000
+                seconds = (creation_time.value - windows_epoch) / 10_000_000
+                return datetime.fromtimestamp(seconds, tz=timezone.utc)
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        return None
+    return None
+
+
+def _matches_recorded_process(status: dict[str, Any], pid: int) -> bool:
+    if not _is_pid_running(pid):
+        return False
+
+    expected_start = _parse_status_time(
+        status.get("pid_started_at") or status.get("started_at") or status.get("created_at")
+    )
+    actual_start = _get_process_started_at(pid)
+
+    if expected_start is None or actual_start is None:
+        return True
+
+    tolerance = timedelta(seconds=10) if status.get("pid_started_at") else timedelta(minutes=1)
+    return abs(actual_start - expected_start) <= tolerance
+
+
 def finalize_job_if_done(job_id: str) -> dict[str, Any] | None:
     """If a job is marked RUNNING but its PID is dead, mark it FINISHED on disk.
 
@@ -94,7 +155,17 @@ def finalize_job_if_done(job_id: str) -> dict[str, Any] | None:
     if status.get("state") != "RUNNING":
         return status
     pid = status.get("pid")
-    if pid and not _is_pid_running(int(pid)):
+    should_finalize = False
+    if not pid:
+        should_finalize = True
+        status["error"] = status.get("error") or "RUNNING job record had no PID; marked stale."
+    else:
+        try:
+            should_finalize = not _matches_recorded_process(status, int(pid))
+        except Exception:
+            should_finalize = True
+
+    if should_finalize:
         status["state"] = "FINISHED"
         status["ended_at"] = now_iso()
         p = jobs_dir() / job_id / "status.json"
@@ -188,9 +259,9 @@ def start_engine_job(*, argv: list[str]) -> JobInfo:
 
     status = {
         "job_id": job_id,
-        "state": "RUNNING",
+        "state": "STARTING",
         "created_at": now_iso(),
-        "started_at": now_iso(),
+        "started_at": None,
         "ended_at": None,
         "cmd": cmd,
         "returncode": None,
@@ -200,16 +271,31 @@ def start_engine_job(*, argv: list[str]) -> JobInfo:
 
     # Start subprocess, redirect stdout/stderr to log file.
     log_f = log_path.open("w", encoding="utf-8")
-    p = subprocess.Popen(
-        cmd,
-        cwd=str(root),
-        stdout=log_f,
-        stderr=subprocess.STDOUT,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform.startswith("win") else 0,
-    )
+    try:
+        p = subprocess.Popen(
+            cmd,
+            cwd=str(root),
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform.startswith("win") else 0,
+        )
+    except Exception as exc:
+        log_f.write(f"Failed to start job: {exc}\n")
+        log_f.flush()
+        log_f.close()
+        status["state"] = "FAILED"
+        status["ended_at"] = now_iso()
+        status["error"] = str(exc)
+        status_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
+        raise
 
     # Store PID in status (best effort)
+    status["state"] = "RUNNING"
+    status["started_at"] = now_iso()
     status["pid"] = p.pid
+    proc_started_at = _get_process_started_at(p.pid)
+    if proc_started_at is not None:
+        status["pid_started_at"] = proc_started_at.isoformat()
     status_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
 
     return JobInfo(

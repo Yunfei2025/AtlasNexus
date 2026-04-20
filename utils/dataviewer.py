@@ -37,7 +37,7 @@ if __name__ == "__main__":
 
 
     # CBond reference demo
-    file_path = os.path.join(DIR_INPUT, 'CBond-cvpx.pkl')
+    file_path = os.path.join(DIR_INPUT, 'TBond-rtquo.pkl')
     data = pd.read_pickle(file_path)
     key = 'BondCurve'
     bond_data = data[key]
@@ -52,6 +52,10 @@ if __name__ == "__main__":
     d = pd.to_datetime(date_str).date()
     bond_data = data[key]
     af = bond_data[bond]#.dropna()
+
+    file_path = os.path.join(DIR_DATA, "pool", "CBondPool20260416.pkl")
+    data = pd.read_pickle(file_path)
+    bond_data = data.loc[bond].dropna()
 
     # CBond bondpool demo
     file_path = os.path.join(DIR_INPUT, 'futures-dailyK_con.pkl')

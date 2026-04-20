@@ -65,16 +65,18 @@ def statAdjust(quote,env,stat):
     quote_adj = pd.DataFrame()
     for k in quote.keys():
         quote_adj[k] = quote[k]['收益率']+stat['mean']
-    quote_mid = (env['BondRT']['卖价收益率']+env['BondRT']['买价收益率'])/2
-    df_stat = pd.concat([env['Def']['估价收益率:%(中债)'],quote_mid,stat[['max','min','vol']]],axis=1)
+    rt_bid = env['BondRT']['买价收益率']
+    rt_ofr = env['BondRT']['卖价收益率']
+    quote_mid = (rt_ofr + rt_bid) / 2
+    df_stat = pd.concat([env['Def']['估价收益率:%(中债)'], quote_mid, rt_bid, rt_ofr, stat[['max','min','vol']]], axis=1)
     df_quote = pd.concat([quote_adj,df_stat],axis=1).dropna(how='all',axis=0)
     bonds = env['Def'].index.intersection(df_quote.index)
     df_quote = df_quote.loc[bonds]
     df_quote.index.name = 'ID'
     df_quote.reset_index(inplace=True)
     df_quote.index = env['Def'].loc[bonds,'剩余期限'].values.round(4)
-    df_quote.columns = ['ID','Bid','Ofr','CNBD','RT','max','min','vol']
-    df_quote = df_quote[df_quote['Bid'].notna()]
+    df_quote.columns = ['ID','CvBid','CvOfr','CNBD','RT','Bid','Ofr','max','min','vol']
+    df_quote = df_quote[df_quote['CvBid'].notna()]
     return df_quote.sort_index().round(4)
 
 def OU_calibrate(ts):
