@@ -50,7 +50,8 @@ def _wsq_until_nonempty(symbols, fields, *, retry_delay: float = 0.5):
         time.sleep(retry_delay)
         
 def filterInstrument(bond_info,btype,hist=False):
-    bond_info = bond_info[bond_info['CLAUSE'].isna()]
+    if 'CLAUSE' in bond_info.columns:
+        bond_info = bond_info[bond_info['CLAUSE'].isna()]
     bond_info = bond_info[~bond_info['FULLNAME'].str.contains('|'.join(BondConfig.EXCLUDE_KEYWORDS))]
     bond_info = bond_info[~bond_info['INTERESTTYPE'].str.contains('浮动')]
     bond_info['INTERESTFREQUENCY'] = bond_info['INTERESTFREQUENCY'].fillna(1)
@@ -108,7 +109,6 @@ def retrieveWindBacktestPool(btype, prange):
     else:
         # Fallback: if column missing, prefer keeping the last occurrence (usually latest date)
         bond_info = bond_info[~bond_info.index.duplicated(keep='last')]
-    
     bond_info = filterInstrument(bond_info, btype, hist=True)
     col_map = BondConfig.get_column_mapping()
     bond_info.columns = [col_map[c] for c in bond_info.columns]

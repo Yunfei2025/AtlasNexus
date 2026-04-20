@@ -43,7 +43,7 @@ echo "Python in dev environment:"
 
 echo
 echo "[3/3] Starting AtlasNexus Daily Console..."
-echo "Server will start at: ttp://127.0.0.1:8080"
+echo "Server will start at: http://127.0.0.1:8080"
 echo "Press Ctrl+C to stop the server"
 echo "============================================================"
 echo

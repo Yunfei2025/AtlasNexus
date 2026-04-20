@@ -21,9 +21,9 @@ logger = get_logger(__name__)
 # Instrument type: 'TBond', 'CBond', or 'IRS'
 btype = "CBond"
 # Update flags: list of strings from ['pool', 'bonds', 'cbts']
-update_list = ['pool']
+update_list = []
 
-start = '2026-03-01'  # Backtest start date
+start = '2026-01-01'  # Backtest start date
 end = '2026-04-16'    # Backtest end date
 
 # Performance settings

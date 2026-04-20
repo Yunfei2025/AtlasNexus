@@ -300,9 +300,9 @@ def _make_table(
         data=keyed_rows,
         hidden_columns=hidden_cols,
         sort_action="native",
-        filter_action="native",
         page_size=50,
         style_table={"overflowX": "auto", "borderRadius": "4px"},
+        css=[{"selector": ".show-hide", "rule": "display: none;"}],
         style_header={
             "backgroundColor": THEME["table_header"],
             "color":           THEME["text_main"],
@@ -449,10 +449,10 @@ def _build_bond_rows(btype: str, term_range: str) -> list[dict]:
         else:
             mid = _v("CurveYield", 4)
 
-        # dYld = (mid − close) × 100  [in basis points]
-        if mid != "—" and close != "—":
+        # dYld = (mid − yield_cnbd) × 100  [in basis points]
+        if mid != "—" and yield_cnbd != "—":
             try:
-                dyld = round((float(mid) - float(close)) * 100, 2)
+                dyld = round((float(mid) - float(yield_cnbd)) * 100, 2)
             except Exception:
                 dyld = "—"
         else:
