@@ -4,7 +4,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-bash "$SCRIPT_DIR/START_ATLASNEXUS.sh"
+bash "$SCRIPT_DIR/START.sh"
 EXIT_CODE=$?
 
 if [[ $EXIT_CODE -ne 0 ]]; then
