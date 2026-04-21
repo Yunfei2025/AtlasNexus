@@ -16,7 +16,7 @@ class GeneralConfig:
     DSHIFT = 1
     PSHIFT = 1
     STAT_WINDOW = 3
-    SIGMA_WINDOW_MONTHS = 1
+    SIGMA_WINDOW_MONTHS = 3
     MIN_MATURITY = 0.7
     MAX_MATURITY = 10.0
     OUTER = 1.0

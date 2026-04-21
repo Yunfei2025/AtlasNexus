@@ -159,14 +159,16 @@ class BondCurveGenerator:
         """update curve parameters"""
         try:
             # update implied volatility
-            ref['ImpliedVol'].loc[dp, 'level'] = curve.S2[0, 0]
-            ref['ImpliedVol'].loc[dp, 'slope'] = curve.S2[1, 1]
-            ref['ImpliedVol'].loc[dp, 'curvature'] = curve.S2[2, 2]
+            # float() is required: curve.S2 elements are sympy Floats, which
+            # pandas 2.x rejects when assigning into dtype='float64' columns.
+            ref['ImpliedVol'].loc[dp, 'level'] = float(curve.S2[0, 0])
+            ref['ImpliedVol'].loc[dp, 'slope'] = float(curve.S2[1, 1])
+            ref['ImpliedVol'].loc[dp, 'curvature'] = float(curve.S2[2, 2])
             
             # update factors
-            ref['Factors'].loc[dp, 'level'] = curve.factors[0]
-            ref['Factors'].loc[dp, 'slope'] = curve.factors[1]
-            ref['Factors'].loc[dp, 'curvature'] = curve.factors[2]
+            ref['Factors'].loc[dp, 'level'] = float(curve.factors[0])
+            ref['Factors'].loc[dp, 'slope'] = float(curve.factors[1])
+            ref['Factors'].loc[dp, 'curvature'] = float(curve.factors[2])
             
             # update spot curve
             tenor = list(np.linspace(1, 10, self.config.tenor_points))
@@ -326,11 +328,11 @@ class BondCurveGenerator:
             # update bond prices
             self.update_bond_prices(quote0, sen0, env, dp)
             
-            # build final curve
+            # build final curve — reuse the 1-month S2 already calibrated in curve0
+            # (curve0 uses start0 = dp - months(sigma_window_months); do NOT
+            #  re-calibrate from self.config.start_date which is only 7 days)
             curve = Curve(self.config.calculation_date, self.config.bond_type)
-            final_term_slice = safe_slice(term, self.config.start_date, self.config.calculation_date)
-            final_spot_slice = safe_slice(spot, self.config.start_date, self.config.calculation_date)
-            curve.calibrate(final_term_slice, final_spot_slice)
+            curve.S2 = curve0.S2
             curve.extractFactors(df_ref, bond_ref)
             
             # save final result
@@ -375,7 +377,7 @@ class BondCurveGenerator:
         return True
 
 
-def main(bond_type = 'TBond'):
+def main(bond_type = 'CBond'):
     print(f"🚀 Starting {bond_type} curve generation.")
     try:
         success = BondCurveGenerator.main(bond_type=bond_type)

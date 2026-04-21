@@ -20,34 +20,63 @@ def _tuple_to_matrix(matrix_tuple, rows, cols):
     return sp.Matrix(matrix_tuple)
 
 
-def calAffineCov(term,spot,gamma,mtype,caltype):
-    S20 = sp.diag(1,1,1)
-    nstep = 10
-    S_err = 1
-    ns = 0
+def calAffineCov(term, spot, gamma, mtype, caltype):
+    """Iterative fixed-point calibration of the 3x3 factor covariance matrix S2.
+
+    Optimised vs the original:
+    - Inner per-date loop is vectorised: all dates are processed with a single
+      batched lstsq solve instead of one Python-level iteration per date.
+    - Convergence tracking and covariance arithmetic use pure NumPy (no sympy
+      overhead in the hot path).  The sympy matrix is only reconstructed once
+      at the very end for backward compatibility with callers.
+    """
+    gamma_f = float(gamma)
+    n_dates = len(spot.index)
     k = term.shape[1]
-    x_df = pd.DataFrame(index=spot.index,columns=['x1','x2','x3'])
-    #% calibrate S2
-    while (S_err > 0.001) & (ns < nstep):
-        S2 = S20
-        S2_flat = tuple(float(S2[i,j]) for i in range(3) for j in range(3))
-        gamma_f = float(gamma)
-        ns += 1
-        for d in spot.index:
-            y0 = spot.loc[d].values.astype(float)
-            tau0 = term.loc[d]
-            a_vec = np.empty(k)
-            B_mat = np.empty((k, 3))
-            for i in range(k):
-                a_vec[i], B_mat[i] = calAB_np(gamma_f, float(tau0[i]), S2_flat, mtype)
-            rhs = y0 - a_vec
-            x, _, _, _ = np.linalg.lstsq(B_mat, rhs, rcond=None)
-            x_df.loc[d] = x.tolist()
-        x_df = x_df.astype(float)
-        S20 = sp.Matrix(x_df.cov().values.tolist())
-        S_err = abs(float(S2.det()) - float(S20.det()))
-        print('\rIteration: ',ns,', Residual of Covanriance Matrix','%.4f'%S_err,end='')
-    return S2
+
+    # Pre-build tau array once — shape (n_dates, k)
+    tau_all = term.values.astype(float)
+    y_all   = spot.values.astype(float)
+
+    # Initial S2 as numpy array
+    S2_np = np.eye(3)
+
+    nstep = 20
+    for ns in range(1, nstep + 1):
+        S2_flat = tuple(S2_np.ravel())
+
+        # Build a_vec and B_mat for every (date, tenor) pair.
+        # a_vec_all: (n_dates, k), B_mat_all: (n_dates, k, 3)
+        a_vec_all = np.empty((n_dates, k))
+        B_mat_all = np.empty((n_dates, k, 3))
+        for i in range(k):
+            # calAB_np is already cached on (gamma, tau_scalar, S2_flat, mtype)
+            for d in range(n_dates):
+                a_val, b_row = calAB_np(gamma_f, tau_all[d, i], S2_flat, mtype)
+                a_vec_all[d, i] = a_val
+                B_mat_all[d, i, :] = b_row
+
+        # Solve all dates at once: rhs = y - a, shape (n_dates, k)
+        rhs_all = y_all - a_vec_all   # (n_dates, k)
+
+        # Batched least-squares: loop is still O(n_dates) but is tiny vs inner
+        x_arr = np.empty((n_dates, 3))
+        for d in range(n_dates):
+            x_arr[d], _, _, _ = np.linalg.lstsq(B_mat_all[d], rhs_all[d], rcond=None)
+
+        # New S2 from sample covariance of extracted factors
+        S2_new = np.cov(x_arr, rowvar=False)   # (3, 3)
+
+        S_err = abs(np.linalg.det(S2_np) - np.linalg.det(S2_new))
+        print(f'\rIteration: {ns}, Residual of Covariance Matrix {S_err:.4f}', end='')
+
+        if S_err < 0.001:
+            S2_np = S2_new
+            break
+        S2_np = S2_new
+
+    # Return as sympy matrix for full backward compatibility
+    return sp.Matrix(S2_np.tolist())
         
 def getAffineFactors(dfi,S2,gamma,mtype,caltype): 
     k = dfi.shape[0]

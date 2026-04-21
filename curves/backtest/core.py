@@ -108,7 +108,7 @@ class CurveManager:
     
     def __init__(self, bond_type: str):
         self.bond_type = bond_type
-        self.lookback = 1 # 1 months
+        self.lookback = 3 # 3 months
         # Internal caches to avoid recomputation across dates
         self._cache = {
             'botr': None,   # Reference bonds history
@@ -299,11 +299,11 @@ class CurveParameterExtractor:
                 
                 # Extract implied volatility
                 results['ImpliedVol'].loc[date] = [
-                    curve.S2[0, 0], curve.S2[1, 1], curve.S2[2, 2]
+                    float(curve.S2[0, 0]), float(curve.S2[1, 1]), float(curve.S2[2, 2])
                 ]
                 
                 # Extract factors
-                results['Factors'].loc[date] = curve.factors[:3]
+                results['Factors'].loc[date] = [float(f) for f in curve.factors[:3]]
                 
                 # Extract spot rates
                 spot_curve = curve.fitting()['SpotRate'].loc[tenor]

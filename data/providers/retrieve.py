@@ -45,28 +45,22 @@ def _empty_wsq_frame(codes, fields) -> pd.DataFrame:
     return pd.DataFrame(index=code_list, columns=field_list, dtype=float)
 
 
-def _normalize_wind_value(value):
-    if isinstance(value, (bytes, bytearray)):
-        text = value.decode('utf-8', errors='ignore').strip()
-        return np.nan if text == '' else text
-    if isinstance(value, str):
-        text = value.strip()
-        return np.nan if text == '' else text
-    return value
-
-
 def _normalize_wind_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return frame
-
-    object_columns = frame.select_dtypes(include=['object']).columns
-    if len(object_columns) == 0:
+    obj_cols = frame.select_dtypes(include=['object']).columns
+    if not len(obj_cols):
         return frame
 
+    def _clean(v):
+        if isinstance(v, (bytes, bytearray)):
+            v = v.decode('utf-8', errors='ignore').strip()
+        elif isinstance(v, str):
+            v = v.strip()
+        return np.nan if v == '' else v
+
     normalized = frame.copy()
-    normalized[object_columns] = normalized[object_columns].apply(
-        lambda column: column.map(_normalize_wind_value)
-    )
+    normalized[obj_cols] = normalized[obj_cols].apply(lambda col: col.map(_clean))
     return normalized
 
 
@@ -120,13 +114,7 @@ def _ensure_wind() -> bool:
 
 
 def reset_wind_connection():
-    """Force a fresh connectivity probe on the next Wind call.
-
-    Useful if Wind becomes available after the process has been running
-    (e.g. the user logs in mid-session).
-    """
-    # No cached probe state is kept in the simplified startup flow.
-    # Attempt a fresh start so subsequent calls use a restarted Wind session.
+    """Force a fresh Wind session restart."""
     try:
         from WindPy import w
         w.start()
@@ -137,38 +125,38 @@ def reset_wind_connection():
 # ---------------------------------------------------------------------------
 # WindPy safe wrappers
 # ---------------------------------------------------------------------------
-def _wset(api, options):
+def _wind_call(func_name: str, *args) -> pd.DataFrame:
+    """Generic Wind API call: ensures connection, calls func, normalizes result."""
     if not _ensure_wind():
         return pd.DataFrame()
     try:
         from WindPy import w
-        result = w.wset(api, options, usedf=True)[1]
+        result = getattr(w, func_name)(*args, usedf=True)[1]
         return _normalize_wind_frame(result)
     except Exception as ex:
-        print('Wind wset error:', api, ex)
+        print(f'Wind {func_name} error:', ex)
         return pd.DataFrame()
+
+
+def _wset(api, options):
+    return _wind_call("wset", api, options)
 
 def _wss(codes, fields, options=""):
-    if not _ensure_wind():
-        return pd.DataFrame()
-    try:
-        from WindPy import w
-        result = w.wss(codes, fields, options, usedf=True)[1]
-        return _normalize_wind_frame(result)
-    except Exception as ex:
-        print('Wind wss error:', ex)
-        return pd.DataFrame()
+    return _wind_call("wss", codes, fields, options)
 
 def _wsd(codes, fields, start, end, options=""):
-    if not _ensure_wind():
-        return pd.DataFrame()
-    try:
-        from WindPy import w
-        result = w.wsd(codes, fields, start, end, options, usedf=True)[1]
-        return _normalize_wind_frame(result)
-    except Exception as ex:
-        print('Wind wsd error:', ex)
-        return pd.DataFrame()
+    return _wind_call("wsd", codes, fields, start, end, options)
+
+def _wsi(codes, fields, start, end, options="", options2=None):
+    extra = (options2,) if options2 is not None else ()
+    return _wind_call("wsi", codes, fields, start, end, options, *extra)
+
+def _wst(codes, fields, ds):
+    return _wind_call("wst", codes, fields, ds + " 09:00:00", ds + " 17:00:00", "")
+
+def _edb(ids, start, end, options="Fill=Previous"):
+    return _wind_call("edb", ids, start, end, options)
+
 
 def _wsq(codes, fields):
     if not _ensure_wind():
@@ -178,56 +166,12 @@ def _wsq(codes, fields):
     if len(code_list) <= WSQ_CHUNK_SIZE:
         return _wsq_single_call(code_list, fields)
 
+    chunks = [code_list[i:i + WSQ_CHUNK_SIZE] for i in range(0, len(code_list), WSQ_CHUNK_SIZE)]
     frames = []
-    for start in range(0, len(code_list), WSQ_CHUNK_SIZE):
-        chunk = code_list[start:start + WSQ_CHUNK_SIZE]
-        chunk_no = start // WSQ_CHUNK_SIZE + 1
-        total_chunks = (len(code_list) + WSQ_CHUNK_SIZE - 1) // WSQ_CHUNK_SIZE
-        print(
-            f"[Wind] wsq chunk {chunk_no}/{total_chunks}: "
-            f"{len(chunk)} codes"
-        )
+    for i, chunk in enumerate(chunks, 1):
+        print(f"[Wind] wsq chunk {i}/{len(chunks)}: {len(chunk)} codes")
         frames.append(_wsq_single_call(chunk, fields))
-
-    if not frames:
-        return _empty_wsq_frame(code_list, fields)
-    return pd.concat(frames, axis=0)
-
-def _wsi(codes, fields, start, end, options="", options2=None):
-    if not _ensure_wind():
-        return pd.DataFrame()
-    try:
-        from WindPy import w
-        if options2 is not None:
-            result = w.wsi(codes, fields, start, end, options, options2, usedf=True)[1]
-        else:
-            result = w.wsi(codes, fields, start, end, options, usedf=True)[1]
-        return _normalize_wind_frame(result)
-    except Exception as ex:
-        print('Wind wsi error:', ex)
-        return pd.DataFrame()
-
-def _wst(codes, fields, ds):
-    if not _ensure_wind():
-        return pd.DataFrame()
-    try:
-        from WindPy import w
-        result = w.wst(codes, fields, ds + " 09:00:00", ds + " 17:00:00", "", usedf=True)[1]
-        return _normalize_wind_frame(result)
-    except Exception as ex:
-        print('Wind wst error:', ex)
-        return pd.DataFrame()
-
-def _edb(ids, start, end, options="Fill=Previous"):
-    if not _ensure_wind():
-        return pd.DataFrame()
-    try:
-        from WindPy import w
-        result = w.edb(ids, start, end, options, usedf=True)[1]
-        return _normalize_wind_frame(result)
-    except Exception as ex:
-        print('Wind edb error:', ex)
-        return pd.DataFrame()
+    return pd.concat(frames, axis=0) if frames else _empty_wsq_frame(code_list, fields)
 
 def _save_pickle(obj, path):
     with open(path, 'wb') as f:

@@ -262,6 +262,43 @@ def retrieveFuturesTS():
         futures_ts['ctd'][b] = _wsd(futures['Bucket'][b], "tbf_CTD2", starts, dps, "exchangeType=NIB;bondPriceType=1")
     futures_ts = updatePKL(futures_ts, os.path.join(DIR_INPUT, 'futures-px.pkl'))
     
+def _is_trading_hours() -> bool:
+    """Return True if current local time is within China trading hours (Mon–Fri 09:00–17:00)."""
+    now = dt.now()
+    if now.weekday() >= 5:          # Saturday = 5, Sunday = 6
+        return False
+    t = now.time()
+    import datetime
+    return datetime.time(9, 0) <= t <= datetime.time(17, 0)
+
+
+_WINDRT_CACHE = os.path.join(DIR_INPUT, 'windrt.pkl')
+
+
+def _save_windrt_cache(btype: str, bond_rt) -> None:
+    """Persist the processed RT result to windrt.pkl under key btype."""
+    try:
+        cache = {}
+        if os.path.exists(_WINDRT_CACHE):
+            with open(_WINDRT_CACHE, 'rb') as f:
+                cache = pickle.load(f)
+        cache[btype] = bond_rt
+        with open(_WINDRT_CACHE, 'wb') as f:
+            pickle.dump(cache, f)
+    except Exception as e:
+        print(f"[Cache] Failed to save windrt.pkl: {e}")
+
+
+def _load_windrt_cache(btype: str):
+    """Load cached RT result for btype from windrt.pkl. Returns None if unavailable."""
+    try:
+        with open(_WINDRT_CACHE, 'rb') as f:
+            cache = pickle.load(f)
+        return cache.get(btype)
+    except Exception:
+        return None
+
+
 def retrieveWindRT(btype):
     with open(os.path.join(DIR_INPUT,btype+'-InstrumentInfo.pkl'), 'rb') as file:
         bond_info = pickle.load(file)
@@ -285,6 +322,7 @@ def retrieveWindRT(btype):
         col_map_rt = BondConfig.get_column_mapping()
         bond_rt.columns = [ col_map_rt[c] for c in bond_rt.columns]
         bond_rt = bond_rt.replace(0,np.nan)
+    _save_windrt_cache(btype, bond_rt)
     return bond_rt
 
 def retrieveEnvRT(env,btype):
@@ -296,7 +334,19 @@ def retrieveEnvRT(env,btype):
             cols = bond_rt['bonds'].columns
             env['DeliveryPool'][f].loc[bonds,cols] = bond_rt['bonds'].loc[bonds]
     else:
-        env['BondRT'] = retrieveWindRT(btype)
+        online = _is_trading_hours()
+        if online:
+            env['BondRT'] = retrieveWindRT(btype)
+        else:
+            print(f"[Offline] Outside trading hours — loading windrt.pkl for {btype}.")
+            cached = _load_windrt_cache(btype)
+            if cached is not None:
+                env['BondRT'] = cached
+            else:
+                cnbd = env['Def']['估价收益率:%(中债)']
+                print(f"[Offline] windrt.pkl not found for {btype}, using CNBD yields.")
+                env['BondRT'] = pd.DataFrame({'买价收益率': cnbd, '卖价收益率': cnbd})
+
         # Use CNBD price as fallback for NaN values or values very close to 0
         fallback_count = 0
         for k in env['BondRT'].index:
@@ -307,12 +357,16 @@ def retrieveEnvRT(env,btype):
                     env['BondRT'].loc[k,p] = px_cnbd
                     fallback_count += 1
 
-        env['SwapRT'] = retrieveWindRT('IRS')
-        if btype in ['TBond','CBond']:
-            fixings = ['FR001.IR','FR007.IR','SHIBOR3M.IR']
-            for c in ['买价收益率','卖价收益率']:
-                fs = env['SwapRT'].loc[fixings,'成交收益率']
-                env['SwapRT'].loc[fixings,c]=fs.values
+        if online:
+            env['SwapRT'] = retrieveWindRT('IRS')
+            if btype in ['TBond','CBond']:
+                fixings = ['FR001.IR','FR007.IR','SHIBOR3M.IR']
+                for c in ['买价收益率','卖价收益率']:
+                    fs = env['SwapRT'].loc[fixings,'成交收益率']
+                    env['SwapRT'].loc[fixings,c]=fs.values
+        else:
+            cached_irs = _load_windrt_cache('IRS')
+            env['SwapRT'] = cached_irs if cached_irs is not None else pd.DataFrame()
     return env
 
 
