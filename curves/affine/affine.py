@@ -23,50 +23,57 @@ def _tuple_to_matrix(matrix_tuple, rows, cols):
 def calAffineCov(term, spot, gamma, mtype, caltype):
     """Iterative fixed-point calibration of the 3x3 factor covariance matrix S2.
 
-    Optimised vs the original:
-    - Inner per-date loop is vectorised: all dates are processed with a single
-      batched lstsq solve instead of one Python-level iteration per date.
-    - Convergence tracking and covariance arithmetic use pure NumPy (no sympy
-      overhead in the hot path).  The sympy matrix is only reconstructed once
-      at the very end for backward compatibility with callers.
+    Key optimisation: B (factor loadings) and I (drift integrals) depend only on
+    (gamma, tau), NOT on S2.  We therefore pre-compute them once before the
+    convergence loop and cache them via _compute_IB_cached.  Each iteration is
+    then a pure NumPy einsum + batched pseudo-inverse multiply — no Python loops.
     """
     gamma_f = float(gamma)
-    n_dates = len(spot.index)
     k = term.shape[1]
 
-    # Pre-build tau array once — shape (n_dates, k)
-    tau_all = term.values.astype(float)
-    y_all   = spot.values.astype(float)
+    tau_all = term.values.astype(float)   # (n_dates, k)
+    y_all   = spot.values.astype(float)   # (n_dates, k)
 
-    # Initial S2 as numpy array
+    # Drop dates where any tau or spot value is NaN — ensures only complete
+    # observations feed into the covariance estimate.
+    valid_mask = np.isfinite(tau_all).all(axis=1) & np.isfinite(y_all).all(axis=1)
+    tau_all = tau_all[valid_mask]
+    y_all   = y_all[valid_mask]
+    n_dates = tau_all.shape[0]
+    if n_dates < 4:
+        raise ValueError(f"calAffineCov: too few valid dates ({n_dates}) after NaN filter.")
+
+    # ------------------------------------------------------------------
+    # Pre-compute I matrices and B vectors — done ONCE, S2-independent.
+    # I_mat_all : (n_dates, k, 3, 3)
+    # B_mat_all : (n_dates, k, 3)
+    #
+    # Safe to cache on (gamma, tau, mtype) only because B and I are purely
+    # geometric — they have no dependence on S2 or market data.
+    # ------------------------------------------------------------------
+    I_mat_all = np.empty((n_dates, k, 3, 3))
+    B_mat_all = np.empty((n_dates, k, 3))
+    for d in range(n_dates):
+        for i in range(k):
+            I_flat, B_vec = _compute_IB_cached(gamma_f, tau_all[d, i], mtype)
+            I_mat_all[d, i] = np.array(I_flat).reshape(3, 3)
+            B_mat_all[d, i] = np.array(B_vec)
+
+    # Pre-compute batched pseudo-inverse of B — shape (n_dates, 3, k), also ONCE.
+    B_pinv_all = np.linalg.pinv(B_mat_all)
+
     S2_np = np.eye(3)
-
     nstep = 20
     for ns in range(1, nstep + 1):
-        S2_flat = tuple(S2_np.ravel())
+        # a_vec: contract S2 with pre-computed I matrices — no Python loop
+        a_vec_all = np.einsum('ij,dkij->dk', S2_np, I_mat_all)  # (n_dates, k)
 
-        # Build a_vec and B_mat for every (date, tenor) pair.
-        # a_vec_all: (n_dates, k), B_mat_all: (n_dates, k, 3)
-        a_vec_all = np.empty((n_dates, k))
-        B_mat_all = np.empty((n_dates, k, 3))
-        for i in range(k):
-            # calAB_np is already cached on (gamma, tau_scalar, S2_flat, mtype)
-            for d in range(n_dates):
-                a_val, b_row = calAB_np(gamma_f, tau_all[d, i], S2_flat, mtype)
-                a_vec_all[d, i] = a_val
-                B_mat_all[d, i, :] = b_row
+        rhs_all = y_all - a_vec_all  # (n_dates, k)
 
-        # Solve all dates at once: rhs = y - a, shape (n_dates, k)
-        rhs_all = y_all - a_vec_all   # (n_dates, k)
+        # Batched solve via pre-computed pseudo-inverse — no per-date loop
+        x_arr = (B_pinv_all @ rhs_all[:, :, None]).squeeze(-1)  # (n_dates, 3)
 
-        # Batched least-squares: loop is still O(n_dates) but is tiny vs inner
-        x_arr = np.empty((n_dates, 3))
-        for d in range(n_dates):
-            x_arr[d], _, _, _ = np.linalg.lstsq(B_mat_all[d], rhs_all[d], rcond=None)
-
-        # New S2 from sample covariance of extracted factors
-        S2_new = np.cov(x_arr, rowvar=False)   # (3, 3)
-
+        S2_new = np.cov(x_arr, rowvar=False)  # (3, 3)
         S_err = abs(np.linalg.det(S2_np) - np.linalg.det(S2_new))
         print(f'\rIteration: {ns}, Residual of Covariance Matrix {S_err:.4f}', end='')
 
@@ -253,9 +260,18 @@ def intI(n,gamma,tau):
 # Pure-NumPy fast path (no SymPy overhead)
 # ---------------------------------------------------------------------------
 
-@lru_cache(maxsize=128)
-def _calAB_np_cached(gamma, tau, S2_flat, mtype):
-    """Pure float/numpy calAB. S2_flat is a 9-element tuple (row-major 3x3)."""
+@lru_cache(maxsize=512)
+def _compute_IB_cached(gamma, tau, mtype):
+    """Compute I-matrix (drift integrals) and B-vector (factor loadings) for (gamma, tau).
+
+    Cached on model geometry only — S2-independent.  This gives high cache-hit
+    rates across the sliding-window in calAffineCov because the same (gamma, tau)
+    values repeat across adjacent backtest dates.
+
+    Returns:
+        (I_flat, B_tuple) where I_flat is a 9-element tuple (row-major 3x3)
+        and B_tuple is a 3-element tuple.
+    """
     I = np.zeros((3, 3))
     II0 = _intI_cached(0, gamma, tau)
     II1 = _intI_cached(1, gamma, tau)
@@ -294,9 +310,6 @@ def _calAB_np_cached(gamma, tau, S2_flat, mtype):
     else:
         raise ValueError(f'Model type {mtype} not implemented')
 
-    S2_arr = np.array(S2_flat).reshape(3, 3)
-    a = float(np.sum(S2_arr * I))
-
     x = gamma * tau
     ex = math.exp(-x)
     I1 = (1.0 - ex) / x
@@ -313,7 +326,17 @@ def _calAB_np_cached(gamma, tau, S2_flat, mtype):
     else:
         raise ValueError(f'Model type {mtype} not implemented')
 
-    return a, tuple(B)
+    return tuple(I.ravel()), tuple(B)
+
+
+@lru_cache(maxsize=128)
+def _calAB_np_cached(gamma, tau, S2_flat, mtype):
+    """Pure float/numpy calAB. S2_flat is a 9-element tuple (row-major 3x3)."""
+    I_flat, B_tuple = _compute_IB_cached(gamma, tau, mtype)
+    S2_arr = np.array(S2_flat).reshape(3, 3)
+    I_mat = np.array(I_flat).reshape(3, 3)
+    a = float(np.sum(S2_arr * I_mat))
+    return a, B_tuple
 
 
 def calAB_np(gamma, tau, S2_flat, mtype):
