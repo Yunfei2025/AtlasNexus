@@ -199,7 +199,19 @@ class PairsGenerator:
             llist = set(cr_df[cr_df['LongType'] == t]['Long'])
             slist = set(cr_df[cr_df['ShortType'] == t]['Short'])
             blist = list(llist.union(slist))
-            ts[t] = pd.read_pickle(os.path.join(DIR_INPUT, f"{t}-cvpx.pkl"))["ytm_act"][blist].iloc[-self.lookback_days:]
+            frame = pd.read_pickle(os.path.join(DIR_INPUT, f"{t}-cvpx.pkl"))["ytm_act"][blist].iloc[-self.lookback_days:]
+            ts[t] = frame.apply(
+                lambda column: pd.to_numeric(
+                    column.map(
+                        lambda value: value.decode('utf-8', errors='ignore').strip()
+                        if isinstance(value, (bytes, bytearray))
+                        else value.strip()
+                        if isinstance(value, str)
+                        else value
+                    ),
+                    errors='coerce'
+                )
+            )
         ts_all = pd.concat(ts, axis=1)
         ts_all.columns = ts_all.columns.droplevel(0)
         return ts_all
@@ -244,7 +256,10 @@ class PairsGenerator:
             df1 = ts_all[cr_df.loc[i, 'Long']]
             df2 = ts_all[cr_df.loc[i, 'Short']]
             # Spread series aligned on common dates; drop NaNs so x,y sync
-            spd = (df1 - df2).dropna()
+            try:
+                spd = (df1 - df2).dropna()
+            except:
+                import pdb; pdb.set_trace()
             n = int(len(spd))
             if n >= 2:
                 x = np.arange(n, dtype=float)

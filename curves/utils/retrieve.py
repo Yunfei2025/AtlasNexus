@@ -41,10 +41,8 @@ def _wsq_until_nonempty(symbols, fields, *, retry_delay: float = 0.5):
     attempt = 0
     while True:
         attempt += 1
-        print(f"[retrieve] WSQ request attempt {attempt}: {len(symbols)} symbols, fields={fields}")
         result = _wsq(symbols, fields)
         if isinstance(result, pd.DataFrame) and not result.empty:
-            print(f"[retrieve] WSQ request succeeded on attempt {attempt} with shape={result.shape}")
             return result
         print(f"WSQ returned empty data on attempt {attempt}; retrying...")
         time.sleep(retry_delay)
@@ -265,15 +263,11 @@ def retrieveFuturesTS():
     futures_ts = updatePKL(futures_ts, os.path.join(DIR_INPUT, 'futures-px.pkl'))
     
 def retrieveWindRT(btype):
-    print(f"[retrieve] retrieveWindRT start: btype={btype}")
     with open(os.path.join(DIR_INPUT,btype+'-InstrumentInfo.pkl'), 'rb') as file:
         bond_info = pickle.load(file)
-    print(f"[retrieve] loaded instrument info for {btype}: {len(bond_info.index) if hasattr(bond_info, 'index') else 'n/a'} rows")
     if btype == 'IRS':
-        print(f"[retrieve] requesting IRS realtime quotes")
         bond_rt = _wsq_until_nonempty(list(bond_info.index), "rt_bid1,rt_ask1,rt_last_ytm")
     elif btype == 'futures':
-        print(f"[retrieve] requesting futures realtime quotes")
         bond_rt = {}
         bond_rt['futures'] = _wsq_until_nonempty(list(FuturesConfig.get_ticker_list()), "rt_bid1,rt_ask1,rt_last")
         with open(os.path.join(DIR_INPUT, btype + '-InstrumentInfo.pkl'), 'rb') as file:
@@ -282,10 +276,8 @@ def retrieveWindRT(btype):
         for t in futures_dp.keys():
             bond_list.extend(list(futures_dp[t].index))
         bond_list = list(set(bond_list))
-        print(f"[retrieve] requesting futures delivery-bond realtime quotes: {len(bond_list)} bonds")
         bond_rt['bonds'] = _wsq_until_nonempty(bond_list, "rt_ask1,rt_bid1,rt_latest")
     else:
-        print(f"[retrieve] requesting bond realtime quotes for {btype}")
         bond_rt = _wsq_until_nonempty(list(bond_info.index), "rt_bid_price1ytm,rt_ask_price1ytm")
 
     if btype != 'futures':
@@ -293,11 +285,9 @@ def retrieveWindRT(btype):
         col_map_rt = BondConfig.get_column_mapping()
         bond_rt.columns = [ col_map_rt[c] for c in bond_rt.columns]
         bond_rt = bond_rt.replace(0,np.nan)
-        print(f"[retrieve] retrieveWindRT done: btype={btype}, shape={bond_rt.shape}")
     return bond_rt
 
 def retrieveEnvRT(env,btype):
-    print(f"[retrieve] retrieveEnvRT start: btype={btype}")
     if btype == 'futures':
         bond_rt = retrieveWindRT('futures')
         env['Def'] = pd.concat([env['Def'],bond_rt['futures']],axis=1)
@@ -307,7 +297,6 @@ def retrieveEnvRT(env,btype):
             env['DeliveryPool'][f].loc[bonds,cols] = bond_rt['bonds'].loc[bonds]
     else:
         env['BondRT'] = retrieveWindRT(btype)
-        print(f"[retrieve] BondRT loaded for {btype}: shape={env['BondRT'].shape}")
         # Use CNBD price as fallback for NaN values or values very close to 0
         fallback_count = 0
         for k in env['BondRT'].index:
@@ -317,17 +306,13 @@ def retrieveEnvRT(env,btype):
                 if np.isnan(px) or (px < 1e-4) or (px > 10) :
                     env['BondRT'].loc[k,p] = px_cnbd
                     fallback_count += 1
-        print(f"[retrieve] BondRT fallback replacements for {btype}: {fallback_count}")
 
         env['SwapRT'] = retrieveWindRT('IRS')
-        print(f"[retrieve] SwapRT loaded: shape={env['SwapRT'].shape}")
         if btype in ['TBond','CBond']:
             fixings = ['FR001.IR','FR007.IR','SHIBOR3M.IR']
             for c in ['买价收益率','卖价收益率']:
                 fs = env['SwapRT'].loc[fixings,'成交收益率']
                 env['SwapRT'].loc[fixings,c]=fs.values
-            print(f"[retrieve] applied fixing quote copy for {btype}: {fixings}")
-    print(f"[retrieve] retrieveEnvRT done: btype={btype}")
     return env
 
 

@@ -8,6 +8,7 @@ import pandas as pd
 import pickle
 import threading
 import datetime as dt
+import numpy as np
 from typing import Optional
 from settings.general import DateConfig
 from settings.wind import WindConfig
@@ -27,9 +28,6 @@ WIND_CONNECT_TIMEOUT: float = 20.0
 WSQ_CALL_TIMEOUT: float = 10.0
 WSQ_CHUNK_SIZE: int = 200
 
-_WIND_AVAILABLE: bool | None = None  # None = not yet probed
-_WIND_LOCK = threading.Lock()
-
 
 def _normalize_codes(codes) -> list[str]:
     if isinstance(codes, str):
@@ -45,6 +43,31 @@ def _empty_wsq_frame(codes, fields) -> pd.DataFrame:
     code_list = _normalize_codes(codes)
     field_list = _normalize_fields(fields)
     return pd.DataFrame(index=code_list, columns=field_list, dtype=float)
+
+
+def _normalize_wind_value(value):
+    if isinstance(value, (bytes, bytearray)):
+        text = value.decode('utf-8', errors='ignore').strip()
+        return np.nan if text == '' else text
+    if isinstance(value, str):
+        text = value.strip()
+        return np.nan if text == '' else text
+    return value
+
+
+def _normalize_wind_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+
+    object_columns = frame.select_dtypes(include=['object']).columns
+    if len(object_columns) == 0:
+        return frame
+
+    normalized = frame.copy()
+    normalized[object_columns] = normalized[object_columns].apply(
+        lambda column: column.map(_normalize_wind_value)
+    )
+    return normalized
 
 
 def _wsq_single_call(codes, fields) -> pd.DataFrame:
@@ -77,55 +100,23 @@ def _wsq_single_call(codes, fields) -> pd.DataFrame:
     result = result_holder[0]
     if not isinstance(result, pd.DataFrame):
         return template
-    return result.reindex(index=template.index)
+    result = result.reindex(index=template.index)
+    return _normalize_wind_frame(result)
 
 
-def _try_start_wind() -> bool:
-    """Start the Wind terminal connection with a timeout.
+def _ensure_wind() -> bool:
+    """Simple start for Wind terminal.
 
-    Probes only once per process and caches the result.  If Wind does not
-    respond within *WIND_CONNECT_TIMEOUT* seconds the function returns False
-    immediately, letting all callers fall back to cached data without hanging.
+    This directly imports WindPy and calls `w.start()`; returns True on
+    success, False on failure. Intentionally does not use timeouts or caching.
     """
-    global _WIND_AVAILABLE
-    if _WIND_AVAILABLE is not None:
-        return _WIND_AVAILABLE
-
-    with _WIND_LOCK:
-        # Re-check inside the lock in case another thread already probed.
-        if _WIND_AVAILABLE is not None:
-            return _WIND_AVAILABLE
-
-        success = [False]
-        exc_holder: list[Optional[Exception]] = [None]
-
-        def _do_start():
-            try:
-                from WindPy import w
-                w.start()
-                success[0] = True
-            except Exception as e:
-                exc_holder[0] = e
-
-        t = threading.Thread(target=_do_start, daemon=True)
-        t.start()
-        t.join(timeout=WIND_CONNECT_TIMEOUT)
-
-        if t.is_alive():
-            print(
-                f"[Wind] Terminal did not respond within {WIND_CONNECT_TIMEOUT:.0f}s "
-                "— running in offline mode (cached data only)."
-            )
-            _WIND_AVAILABLE = False
-        elif exc_holder[0] is not None:
-            print(f"[Wind] Failed to start: {exc_holder[0]} — running in offline mode.")
-            _WIND_AVAILABLE = False
-        else:
-            _WIND_AVAILABLE = success[0]
-            if not _WIND_AVAILABLE:
-                print("[Wind] Start returned False — running in offline mode.")
-
-    return _WIND_AVAILABLE
+    try:
+        from WindPy import w
+        w.start()
+        return True
+    except Exception as e:
+        print(f"[Wind] Failed to start: {e} — running in offline mode.")
+        return False
 
 
 def reset_wind_connection():
@@ -134,45 +125,53 @@ def reset_wind_connection():
     Useful if Wind becomes available after the process has been running
     (e.g. the user logs in mid-session).
     """
-    global _WIND_AVAILABLE
-    _WIND_AVAILABLE = None
+    # No cached probe state is kept in the simplified startup flow.
+    # Attempt a fresh start so subsequent calls use a restarted Wind session.
+    try:
+        from WindPy import w
+        w.start()
+    except Exception as e:
+        print(f"[Wind] Failed to restart: {e}")
 
 
 # ---------------------------------------------------------------------------
 # WindPy safe wrappers
 # ---------------------------------------------------------------------------
 def _wset(api, options):
-    if not _try_start_wind():
+    if not _ensure_wind():
         return pd.DataFrame()
     try:
         from WindPy import w
-        return w.wset(api, options, usedf=True)[1]
+        result = w.wset(api, options, usedf=True)[1]
+        return _normalize_wind_frame(result)
     except Exception as ex:
         print('Wind wset error:', api, ex)
         return pd.DataFrame()
 
 def _wss(codes, fields, options=""):
-    if not _try_start_wind():
+    if not _ensure_wind():
         return pd.DataFrame()
     try:
         from WindPy import w
-        return w.wss(codes, fields, options, usedf=True)[1]
+        result = w.wss(codes, fields, options, usedf=True)[1]
+        return _normalize_wind_frame(result)
     except Exception as ex:
         print('Wind wss error:', ex)
         return pd.DataFrame()
 
 def _wsd(codes, fields, start, end, options=""):
-    if not _try_start_wind():
+    if not _ensure_wind():
         return pd.DataFrame()
     try:
         from WindPy import w
-        return w.wsd(codes, fields, start, end, options, usedf=True)[1]
+        result = w.wsd(codes, fields, start, end, options, usedf=True)[1]
+        return _normalize_wind_frame(result)
     except Exception as ex:
         print('Wind wsd error:', ex)
         return pd.DataFrame()
 
 def _wsq(codes, fields):
-    if not _try_start_wind():
+    if not _ensure_wind():
         return _empty_wsq_frame(codes, fields)
 
     code_list = _normalize_codes(codes)
@@ -195,33 +194,37 @@ def _wsq(codes, fields):
     return pd.concat(frames, axis=0)
 
 def _wsi(codes, fields, start, end, options="", options2=None):
-    if not _try_start_wind():
+    if not _ensure_wind():
         return pd.DataFrame()
     try:
         from WindPy import w
         if options2 is not None:
-            return w.wsi(codes, fields, start, end, options, options2, usedf=True)[1]
-        return w.wsi(codes, fields, start, end, options, usedf=True)[1]
+            result = w.wsi(codes, fields, start, end, options, options2, usedf=True)[1]
+        else:
+            result = w.wsi(codes, fields, start, end, options, usedf=True)[1]
+        return _normalize_wind_frame(result)
     except Exception as ex:
         print('Wind wsi error:', ex)
         return pd.DataFrame()
 
 def _wst(codes, fields, ds):
-    if not _try_start_wind():
+    if not _ensure_wind():
         return pd.DataFrame()
     try:
         from WindPy import w
-        return w.wst(codes, fields, ds + " 09:00:00", ds + " 17:00:00", "", usedf=True)[1]
+        result = w.wst(codes, fields, ds + " 09:00:00", ds + " 17:00:00", "", usedf=True)[1]
+        return _normalize_wind_frame(result)
     except Exception as ex:
         print('Wind wst error:', ex)
         return pd.DataFrame()
 
 def _edb(ids, start, end, options="Fill=Previous"):
-    if not _try_start_wind():
+    if not _ensure_wind():
         return pd.DataFrame()
     try:
         from WindPy import w
-        return w.edb(ids, start, end, options, usedf=True)[1]
+        result = w.edb(ids, start, end, options, usedf=True)[1]
+        return _normalize_wind_frame(result)
     except Exception as ex:
         print('Wind edb error:', ex)
         return pd.DataFrame()

@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, date
 from multiprocessing import Pool
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple, List, Optional, cast
 import logging
 
 # local libraries
@@ -34,8 +34,8 @@ from utils.log_window import get_logger
 logger = get_logger(__name__)
 
 # --- Worker globals for multiprocessing (reduces pickling overhead on Windows) ---
-_WORKER_ENV_DEF = None
-_WORKER_CURVE = None
+_WORKER_ENV_DEF: Optional[pd.DataFrame] = None
+_WORKER_CURVE: Any = None
 
 
 def _init_worker(env_def, curve):
@@ -45,23 +45,25 @@ def _init_worker(env_def, curve):
 
 
 def _price_bucket(bucket):
+    if _WORKER_ENV_DEF is None or _WORKER_CURVE is None:
+        raise RuntimeError("Pricing worker is not initialized")
     return _WORKER_CURVE.affinePricing(_WORKER_ENV_DEF, bucket)
 
 
 class BondCurveRefresher:
     """Refresh curve prices in an object-oriented, performant way."""
 
-    def __init__(self, bond_type: str, max_workers: int = None, min_maturity: float = GeneralConfig.MIN_MATURITY, max_maturity: float = GeneralConfig.MAX_MATURITY):
+    def __init__(self, bond_type: str, max_workers: Optional[int] = None, min_maturity: float = GeneralConfig.MIN_MATURITY, max_maturity: float = GeneralConfig.MAX_MATURITY):
         self.bond_type = bond_type
         self.max_workers = max_workers if max_workers is not None else GeneralConfig.N_CORE
         self.min_maturity = min_maturity
         self.max_maturity = max_maturity
-        self.curve = None
-        self.env = None
-        self.stat = None
-        self.ref = None
-        self.bond_ref_df = None
-        self.env_quo = None
+        self.curve: Any = None
+        self.env: Optional[Dict[str, Any]] = None
+        self.stat: Optional[Dict[str, Any]] = None
+        self.ref: Optional[Dict[str, Any]] = None
+        self.bond_ref_df: Optional[pd.DataFrame] = None
+        self.env_quo: Optional[pd.Index] = None
 
     # ---- IO / Loading ----
     def load_curve_and_env(self) -> Tuple[Any, Dict[str, Any]]:
@@ -81,30 +83,28 @@ class BondCurveRefresher:
             logger.error(f"Error loading curve/env: {e}")
             raise
 
-    def refresh_market_data(self, calc_date: date) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], pd.DataFrame, pd.DataFrame]:
+    def refresh_market_data(self, calc_date: date) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
         try:
-            print(f"[rates] {self.bond_type}: refresh_market_data -> retrieveEnvRT start")
-            env = retrieveEnvRT(self.env, self.bond_type)
-            print(f"[rates] {self.bond_type}: refresh_market_data -> retrieveEnvRT done")
-            print(f"[rates] {self.bond_type}: refresh_market_data -> loadStatData start")
-            stat = loadStatData(self.bond_type)
-            print(f"[rates] {self.bond_type}: refresh_market_data -> loadStatData done")
-            print(f"[rates] {self.bond_type}: refresh_market_data -> loadRefData start")
-            ref = loadRefData(self.bond_type)
-            print(f"[rates] {self.bond_type}: refresh_market_data -> loadRefData done")
+            if self.env is None:
+                raise ValueError("Environment must be loaded before refresh")
+            env = cast(Dict[str, Any], retrieveEnvRT(self.env, self.bond_type))
+            stat = cast(Dict[str, Any], loadStatData(self.bond_type))
+            ref = cast(Dict[str, Any], loadRefData(self.bond_type))
             # Use compute_spot_term_panels for single date computation
             price_range = [calc_date, calc_date]
-            print(f"[rates] {self.bond_type}: refresh_market_data -> compute_spot_term_panels start")
-            self.bond_ref_df = compute_spot_term_panels(env, price_range, ref['RefBond'], self.bond_type, 'inst', update=False)
-            print(f"[rates] {self.bond_type}: refresh_market_data -> compute_spot_term_panels done")
+            self.bond_ref_df = cast(
+                pd.DataFrame,
+                compute_spot_term_panels(env, price_range, ref['RefBond'], self.bond_type, 'inst', update=False),
+            )
             self.env, self.stat, self.ref = env, stat, ref
             return env, stat, ref
         except Exception as e:
-            print(f"[rates] {self.bond_type}: refresh_market_data failed: {e}")
             logger.error(f"Error refreshing market data: {e}")
             raise
 
     def compute_quoted_bonds(self) -> pd.Index:
+        if self.env is None or self.curve is None:
+            raise ValueError("Curve and environment must be loaded before computing quoted bonds")
         # ensure 剩余期限 exists or derive it
         if '剩余期限' not in self.env['Def'].columns:
             if '到期日期' in self.env['Def'].columns:
@@ -126,9 +126,12 @@ class BondCurveRefresher:
         return [b for b in buckets if len(b) > 0]
 
     # ---- Pricing ----
-    def _price_one_side(self, price_type: str) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+    def _price_one_side(self, price_type: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         logger.info(f"Processing {price_type} curve...")
         # update curve factors for the side; sanitize NaNs
+
+        if self.bond_ref_df is None or self.curve is None or self.env is None or self.env_quo is None:
+            raise ValueError("Pricing inputs are not initialized")
 
         ref_series = self.bond_ref_df[price_type].dropna()
         self.curve.extractFactors(ref_series, self.curve.reference)
@@ -170,25 +173,20 @@ class BondCurveRefresher:
         # calculation date
         d = DateConfig.get_date_mappings()['d']
         logger.info(f"Refresh Market Data for {self.bond_type} at: {d.strftime('%H:%M:%S')}")
-        print(f"[rates] {self.bond_type}: run started at {d.strftime('%H:%M:%S')}")
         calc_date = d.date()
 
         # load and refresh
         self.load_curve_and_env()
-        print(f"[rates] {self.bond_type}: curve/env loaded")
         env, stat, ref = self.refresh_market_data(calc_date)
-        print(f"[rates] {self.bond_type}: realtime/stat/ref data refreshed")
-        import pdb; pdb.set_trace()
         # bond ref and set members
 
         # self.bond_ref_df = pd.Series(spoti.values, index=termi.values) #create_bond_reference(spoti, termi)
         self.compute_quoted_bonds()
-        print(f"[rates] {self.bond_type}: quote universe prepared ({len(self.env_quo)} bonds)")
 
         # price both sides
         quotedict: Dict[str, pd.DataFrame] = {}
         sendict: Dict[str, pd.DataFrame] = {}
-        curvedict: Dict[str, Dict[str, Any]] = {}
+        curvedict: Dict[str, pd.DataFrame] = {}
         
         for side in ['Bid', 'Ofr']:
             q, s, cfit = self._price_one_side(side)
@@ -196,9 +194,11 @@ class BondCurveRefresher:
             sendict[side] = s
             curvedict[side] = cfit
 
+        if self.bond_ref_df is None:
+            raise ValueError("Bond reference data is not initialized")
+
         sen = (sendict.get('Bid', pd.DataFrame()) + sendict.get('Ofr', pd.DataFrame())) / 2
         refspot_avg = ((self.bond_ref_df['Bid'] + self.bond_ref_df['Ofr']) / 2).to_frame()
-        print(f"[rates] {self.bond_type}: building pxrt payload")
         pxrt = {
             'Curve': (curvedict['Bid'] + curvedict['Ofr']) / 2,
             'RefSpot': refspot_avg,
@@ -208,15 +208,13 @@ class BondCurveRefresher:
 
         # plot and save
         figure = plotCurve(self.bond_type, pxrt)
-        print(f"[rates] {self.bond_type}: plot generated, saving outputs")
         self._save_results(self.curve, pxrt, self.bond_type, figure)
 
-        print(f"[rates] {self.bond_type}: refresh completed successfully")
         logger.info(f"Finished refreshing {self.bond_type} Curve at: {datetime.now().strftime('%H:%M:%S')}")
         return pxrt
 
     @classmethod
-    def main(cls, bond_type='CBond', max_workers=None):
+    def main(cls, bond_type='CBond', max_workers: Optional[int] = None):
         """Main entry point for the BondCurveRefresher"""
         try:
             instance = cls(bond_type=bond_type, max_workers=max_workers)
@@ -228,19 +226,17 @@ class BondCurveRefresher:
     @staticmethod
     def _save_results(curve: Any, pxrt: Dict[str, Any], btype: str, figure: Any) -> None:
         try:
-            print(f"[rates] {btype}: writing outputs into {DIR_INPUT}")
             with open(os.path.join(DIR_INPUT, f'{btype}-cvrt.obj'), 'wb') as f:
                 pickle.dump(curve, f)
             with open(os.path.join(DIR_INPUT, f'{btype}-fig.obj'), 'wb') as f:
                 pickle.dump(figure, f)
             with open(os.path.join(DIR_INPUT, f'{btype}-rtquo.pkl'), 'wb') as f:
                 pickle.dump(pxrt, f)
-            print(f"[rates] {btype}: wrote {btype}-cvrt.obj, {btype}-fig.obj, {btype}-rtquo.pkl")
         except Exception as e:
             logger.error(f"Error saving results: {e}")
             raise
 
-def main(bond_type='CBond', max_workers=None):
+def main(bond_type='CBond', max_workers: Optional[int] = None):
     try:
         BondCurveRefresher.main(bond_type=bond_type, max_workers=max_workers)
     except Exception as e:
