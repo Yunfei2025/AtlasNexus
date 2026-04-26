@@ -1,0 +1,300 @@
+/* ============================================================
+   AtlasNexus — Mobile / Phone Responsive Styles
+   Automatically applied when viewport width ≤ 768 px.
+   Desktop layout is fully unchanged above that breakpoint.
+   ============================================================ */
+
+/* ── Base: prevent horizontal overflow on small screens ── */
+html, body {
+  overflow-x: hidden;
+}
+
+/* ──────────────────────────────────────────────────────────
+   Phone breakpoint  (≤ 768 px — covers iPhone and Android)
+   ────────────────────────────────────────────────────────── */
+@media only screen and (max-width: 768px) {
+
+  /* ── App container: tighter margins ───────────────────── */
+  .app__container {
+    margin: 2% 2% !important;
+  }
+
+  /* ── Header: stack title + status vertically ──────────── */
+  .app__header {
+    flex-direction: column !important;
+    gap: 8px;
+    padding-bottom: 6px;
+  }
+
+  .app__header__title {
+    font-size: 1.1rem !important;
+    letter-spacing: 0.08rem !important;
+  }
+
+  .app__header__desc {
+    order: 0;
+  }
+
+  .an-header-status {
+    justify-content: flex-start !important;
+    flex-wrap: wrap !important;
+  }
+
+  .an-status-pill {
+    font-size: 10px !important;
+    padding: 2px 7px !important;
+    white-space: nowrap;
+  }
+
+  /* ── App content area: vertical stack ─────────────────── */
+  .app__content {
+    flex-direction: column !important;
+    margin-top: 10px !important;
+  }
+
+  /* ── Column grid: all columns full-width on mobile ─────── */
+  .one-fourth.column,
+  .three-fourths.column,
+  .one-third.column,
+  .two-thirds.column,
+  .one-half.column,
+  .four.columns,
+  .six.columns,
+  .eight.columns,
+  .twelve.columns {
+    width: 100% !important;
+    float: none !important;
+    margin-left: 0 !important;
+    margin-bottom: 10px;
+  }
+
+  /* ── Spread / filter sidebar ───────────────────────────── */
+  .histogram__container {
+    margin-left: 0 !important;
+    margin-bottom: 10px;
+  }
+
+  /* ── Main panel containers ─────────────────────────────── */
+  .futures__price__container {
+    width: 100% !important;
+    overflow-x: hidden;
+    padding: 4px !important;
+  }
+
+  /* ── Outer tab strip: allow horizontal scroll ──────────── */
+  .tab__title {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+
+  /* ── dcc.Tabs top-level strip ──────────────────────────── */
+  /* Ensure the tab bar itself scrolls horizontally if needed */
+  .tab-container {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Top-level tab bar: use smaller font + tighter padding */
+  .dash-tab,
+  [role="tab"] {
+    font-size: 11px !important;
+    padding: 5px 8px !important;
+    min-width: 64px;
+    white-space: nowrap;
+  }
+
+  /* ── Vertical sub-tabs → horizontal scrollable strip ──── */
+  /*
+   * When dcc.Tabs(vertical=True) is used, Dash adds the class
+   * "tab-container--vert" to the outer wrapper and lays tabs
+   * on the left side.  On mobile we flip the whole thing to a
+   * column so tabs appear on top and content below.
+   */
+  .tab-container--vert {
+    flex-direction: column !important;
+  }
+
+  /* The tabs list inside a vertical container */
+  .tab-container--vert > .tab-container,
+  .tab-container--vert > div[role="tablist"],
+  .tab-container--vert .tabs {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    height: auto !important;
+    width: 100% !important;
+    min-height: unset !important;
+    max-height: none !important;
+  }
+
+  /* Individual tabs inside a formerly-vertical list */
+  .tab-container--vert .dash-tab,
+  .tab-container--vert [role="tab"] {
+    flex-shrink: 0;
+    writing-mode: horizontal-tb !important;
+    width: auto !important;
+    min-width: 72px;
+    text-align: center;
+  }
+
+  /* Content pane next to vertical tabs → full width below */
+  .tab-container--vert > .tab-content,
+  .tab-container--vert > div.tab-content {
+    width: 100% !important;
+    padding-left: 0 !important;
+    margin-top: 8px;
+  }
+
+  /* ── Hide excessively-tall inline heights set by Python ── */
+  /* The "height": "520px" on the Tabs node needs to be reset */
+  .tab-container--vert .dash-tabs[style],
+  [class*="tab-container--vert"] .dash-tabs {
+    height: auto !important;
+  }
+
+  /* ── Plotly graphs: full width, shorter height ─────────── */
+  .js-plotly-plot,
+  .plot-container,
+  .plotly-graph-div {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  /* Override auto-sizing container that caps graph width */
+  .dash-graph,
+  ._dash-graph {
+    width: 100% !important;
+  }
+
+  /* Shorten graph heights for phone screen */
+  .js-plotly-plot .svg-container {
+    height: 260px !important;
+  }
+
+  /* ── DataTable: horizontal scroll ─────────────────────── */
+  .dash-table-container {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dash-spreadsheet-container {
+    overflow-x: auto !important;
+  }
+
+  .dash-spreadsheet-inner td,
+  .dash-spreadsheet-inner th {
+    font-size: 11px !important;
+    padding: 4px 6px !important;
+    white-space: nowrap;
+  }
+
+  /* ── Dropdowns / selects ───────────────────────────────── */
+  .Select-control {
+    font-size: 12px !important;
+  }
+
+  .Select-menu-outer {
+    font-size: 12px !important;
+  }
+
+  /* Dash-new-style multi-select */
+  .dash-dropdown,
+  .VirtualizedSelectOption {
+    font-size: 12px !important;
+  }
+
+  /* ── Radio items: stack vertically ────────────────────── */
+  #spread-type > div {
+    flex-direction: column !important;
+    flex-wrap: unset !important;
+    gap: 4px;
+  }
+
+  /* ── Buttons: full width on small screens ─────────────── */
+  .app__container button {
+    font-size: 12px !important;
+    padding: 5px 10px !important;
+  }
+
+  /* Run-center buttons: wrap on narrow screens */
+  .app__container div > button,
+  .app__container div > a > button {
+    margin-bottom: 6px;
+  }
+
+  /* ── Input fields inside Run Center ───────────────────── */
+  .app__container input[type="text"],
+  .app__container input[type="number"] {
+    font-size: 12px !important;
+  }
+
+  /* ── Graph title text ──────────────────────────────────── */
+  .graph__title {
+    font-size: 0.8em !important;
+    padding: 10px 10px !important;
+    letter-spacing: 0.15rem !important;
+  }
+
+  /* ── AtlasNexus card panels ────────────────────────────── */
+  .an-card {
+    padding: 10px 12px !important;
+  }
+
+  /* ── Section titles ────────────────────────────────────── */
+  .an-section-title {
+    font-size: 10px !important;
+  }
+
+  /* ── Scrollbar: always show on mobile for overflow ─────── */
+  .tab-container::-webkit-scrollbar,
+  .tab-container--vert .tabs::-webkit-scrollbar {
+    height: 3px;
+  }
+  .tab-container::-webkit-scrollbar-thumb,
+  .tab-container--vert .tabs::-webkit-scrollbar-thumb {
+    background: #2a5298;
+    border-radius: 3px;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────
+   Extra-small screens  (≤ 480 px — older/smaller phones)
+   ────────────────────────────────────────────────────────── */
+@media only screen and (max-width: 480px) {
+
+  .app__container {
+    margin: 1% 1% !important;
+  }
+
+  .app__header__title {
+    font-size: 0.95rem !important;
+  }
+
+  .dash-tab,
+  [role="tab"] {
+    font-size: 10px !important;
+    padding: 4px 6px !important;
+    min-width: 56px;
+  }
+
+  .js-plotly-plot .svg-container {
+    height: 220px !important;
+  }
+
+  .dash-spreadsheet-inner td,
+  .dash-spreadsheet-inner th {
+    font-size: 10px !important;
+    padding: 3px 5px !important;
+  }
+
+  /* H4/H5 headings inside the app */
+  .app__container h4 {
+    font-size: 1rem !important;
+  }
+  .app__container h5 {
+    font-size: 0.85rem !important;
+  }
+}
