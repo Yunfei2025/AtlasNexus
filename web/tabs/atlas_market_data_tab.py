@@ -494,8 +494,60 @@ def build_market_data_layout() -> html.Div:
                         style={"flex": "1 1 auto", "minWidth": "450px"},
                     ),
                     html.Div(
-                        _card("IRS FORWARD RATES",
-                              html.Div(id="mkt-data-irs-table")),
+                        _card(
+                            "IRS FORWARD RATES",
+                            html.Div([
+                                # ── Shift controls ────────────────────────
+                                html.Div(
+                                    [
+                                        html.Span(
+                                            "R7D shift (bp):",
+                                            style={"color": THEME["text_sub"], "fontSize": "11px",
+                                                   "marginRight": "6px", "whiteSpace": "nowrap"},
+                                        ),
+                                        dcc.Input(
+                                            id="irs-fwd-r7d-shift",
+                                            type="number",
+                                            value=0,
+                                            step=0.25,
+                                            debounce=True,
+                                            style={
+                                                "width": "70px", "fontSize": "12px",
+                                                "backgroundColor": THEME["bg_input"],
+                                                "color": THEME["text_main"],
+                                                "border": f'1px solid {THEME["accent"]}',
+                                                "borderRadius": "3px", "padding": "2px 6px",
+                                                "textAlign": "right",
+                                            },
+                                        ),
+                                        html.Span(
+                                            "S3M shift (bp):",
+                                            style={"color": THEME["text_sub"], "fontSize": "11px",
+                                                   "marginLeft": "16px", "marginRight": "6px",
+                                                   "whiteSpace": "nowrap"},
+                                        ),
+                                        dcc.Input(
+                                            id="irs-fwd-s3m-shift",
+                                            type="number",
+                                            value=0,
+                                            step=0.25,
+                                            debounce=True,
+                                            style={
+                                                "width": "70px", "fontSize": "12px",
+                                                "backgroundColor": THEME["bg_input"],
+                                                "color": THEME["text_main"],
+                                                "border": f'1px solid {THEME["accent"]}',
+                                                "borderRadius": "3px", "padding": "2px 6px",
+                                                "textAlign": "right",
+                                            },
+                                        ),
+                                    ],
+                                    style={"display": "flex", "alignItems": "center",
+                                           "marginBottom": "10px"},
+                                ),
+                                html.Div(id="mkt-data-irs-table"),
+                            ]),
+                        ),
                         style={"flex": "1.2 1 auto", "minWidth": "0"},
                     ),
                 ],
@@ -518,9 +570,13 @@ def register_market_data_callbacks(app) -> None:
             Output("mkt-data-irs-table",     "children"),
             Output("market-data-timestamp",  "children"),
         ],
-        Input("market-data-refresh-btn", "n_clicks"),
+        [
+            Input("market-data-refresh-btn", "n_clicks"),
+            Input("irs-fwd-r7d-shift",       "value"),
+            Input("irs-fwd-s3m-shift",       "value"),
+        ],
     )
-    def _refresh_market_data(n_clicks):
+    def _refresh_market_data(n_clicks, r7d_shift, s3m_shift):
         from datetime import datetime
         ts = datetime.now().strftime("Updated %H:%M:%S")
 
@@ -579,20 +635,47 @@ def register_market_data_callbacks(app) -> None:
             tbl_irs = html.Span("IRS-forward.pkl not yet generated — run today's IRS refresh.",
                                 style={"color": THEME["text_sub"], "fontSize": "12px"})
         else:
-            col_labels = {"Term": "Term", "Date": "Date",
-                          "R7D_Forward": "R7D Fwd", "S3M_Forward": "S3M Fwd"}
-            cols_irs = [{"name": col_labels.get(c, c), "id": c} for c in df_irs.columns]
-            # Build gradient bars for both forward-rate columns
+            # Apply manual shift (basis points → same unit as forward rates, i.e. /100)
+            r7d_bp = float(r7d_shift or 0)
+            s3m_bp = float(s3m_shift or 0)
+
+            df_irs = df_irs.copy()
+            if "R7D_Forward" in df_irs.columns:
+                df_irs["R7D_Shifted"] = (pd.to_numeric(df_irs["R7D_Forward"], errors="coerce")
+                                         + r7d_bp / 100).round(4)
+            if "S3M_Forward" in df_irs.columns:
+                df_irs["S3M_Shifted"] = (pd.to_numeric(df_irs["S3M_Forward"], errors="coerce")
+                                         + s3m_bp / 100).round(4)
+
+            col_labels = {
+                "Term":         "Term",
+                "Date":         "Date",
+                "R7D_Forward":  "R7D Fwd",
+                "R7D_Shifted":  f"R7D+{r7d_bp:+.2f}bp",
+                "S3M_Forward":  "S3M Fwd",
+                "S3M_Shifted":  f"S3M+{s3m_bp:+.2f}bp",
+            }
+            display_cols = [c for c in ["Term", "Date", "R7D_Forward", "R7D_Shifted",
+                                         "S3M_Forward", "S3M_Shifted"] if c in df_irs.columns]
+            cols_irs = [{"name": col_labels.get(c, c), "id": c} for c in display_cols]
+            df_irs = df_irs[display_cols]
+
+            # Build gradient bars for base and shifted columns
             irs_styles: list[dict] = []
-            for fwd_col in ["R7D_Forward", "S3M_Forward"]:
-                if fwd_col in df_irs.columns:
-                    vals = pd.to_numeric(df_irs[fwd_col], errors="coerce").dropna()
-                    if len(vals):
-                        irs_styles += _bar_styles_gradient(
-                            df_irs, fwd_col, vals.min(), vals.max(),
-                            color="rgba(52,152,219,0.45)",
-                            bg=THEME["bg_card"],
-                        )
+            bar_cols_pairs = [
+                ("R7D_Forward", "R7D_Shifted"),
+                ("S3M_Forward", "S3M_Shifted"),
+            ]
+            for base_col, shifted_col in bar_cols_pairs:
+                for col in (base_col, shifted_col):
+                    if col in df_irs.columns:
+                        vals = pd.to_numeric(df_irs[col], errors="coerce").dropna()
+                        if len(vals):
+                            irs_styles += _bar_styles_gradient(
+                                df_irs, col, vals.min(), vals.max(),
+                                color="rgba(52,152,219,0.45)",
+                                bg=THEME["bg_card"],
+                            )
             tbl_irs = _dt_style("mkt-dt-irs", cols_irs, df_irs.to_dict("records"),
                                 extra_styles=irs_styles)
 

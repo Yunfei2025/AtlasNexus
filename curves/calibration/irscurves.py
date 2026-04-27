@@ -7,6 +7,7 @@ Author: 马云飞 (refactored)
 """
 
 import os
+import re
 from typing import Dict, List, Tuple, Optional, Union
 from datetime import date
 import pandas as pd
@@ -836,6 +837,55 @@ def irsSpreadsRatio(spread_list):
             t1, t2, t3 = IRSConfig.TERM_MAP[note[2:4]], IRSConfig.TERM_MAP[note[:2]], IRSConfig.TERM_MAP[note[4:]]
             ratio[s] = [t1 / t2 / 2, t1 / t3 / 2]
     return ratio
+
+def _irs_quote_spread_weights(sp):
+    """Return quote weights matching the spread definitions used in QtPx."""
+    f, s, t = 'FR007S', 'SHI3MS', '.IR'
+    stype, note = sp.split('-')
+    tenors = [token.upper() for token in re.findall(r'\d+[my]', note.lower())]
+
+    if stype in ['Repo', 'Shi3M']:
+        prefix = f if stype == 'Repo' else s
+        if len(tenors) == 2:
+            return {
+                prefix + tenors[1] + t: 1.0,
+                prefix + tenors[0] + t: -1.0,
+            }
+        if len(tenors) == 3:
+            return {
+                prefix + tenors[1] + t: 2.0,
+                prefix + tenors[0] + t: -1.0,
+                prefix + tenors[2] + t: -1.0,
+            }
+    if stype == 'Basis':
+        if len(tenors) == 1:
+            return {
+                s + tenors[0] + t: 1.0,
+                f + tenors[0] + t: -1.0,
+            }
+        if len(tenors) == 2:
+            later = _irs_quote_spread_weights(f'Basis-{tenors[1].lower()}')
+            earlier = _irs_quote_spread_weights(f'Basis-{tenors[0].lower()}')
+            merged = later.copy()
+            for instrument, weight in earlier.items():
+                merged[instrument] = merged.get(instrument, 0.0) - weight
+            return merged
+    raise KeyError(f'Unsupported IRS quote spread: {sp}')
+
+def irsQuoteComposite(spread_list, cost, *, quote_side, opposite_cost):
+    """Calculate tradable bid/ofr quotes for IRS spreads using crossed-side legs."""
+    spread_cost = pd.Series(index=spread_list, dtype=float)
+    for sp in spread_list:
+        weights = _irs_quote_spread_weights(sp)
+        value = 0.0
+        for instrument, weight in weights.items():
+            if quote_side == 'Bid':
+                series = cost if weight > 0 else opposite_cost
+            else:
+                series = cost if weight > 0 else opposite_cost
+            value += weight * series[instrument]
+        spread_cost[sp] = value
+    return spread_cost
 
 def irsSpreadComposite(spread_list, cost):
     """Calculate composite spread costs."""

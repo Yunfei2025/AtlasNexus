@@ -29,6 +29,7 @@ import pandas as pd
 from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output
 
+from curves.calibration.irscurves import irsQuoteComposite
 from settings.fixed_income import IRSConfig
 from settings.paths import DIR_INPUT
 
@@ -113,6 +114,29 @@ def _sort_swap_tickers(tickers: list[str], subtype: str) -> list[str]:
         tickers,
         key=lambda ticker: (_IRS_ORDER.get(str(ticker), len(_IRS_ORDER)), str(ticker)),
     )
+
+
+def _derive_swap_bid_ofr(
+    ticker: str,
+    base_bid: pd.Series,
+    base_ofr: pd.Series,
+) -> tuple[float | str, float | str]:
+    """Rebuild tradable spread bid/ofr from outright IRS quotes when possible."""
+    if ticker in IRSConfig.IRS_LIST:
+        bid = base_bid.get(ticker)
+        ofr = base_ofr.get(ticker)
+        return (
+            _safe_round(bid, 4) if pd.notna(bid) else "—",
+            _safe_round(ofr, 4) if pd.notna(ofr) else "—",
+        )
+
+    try:
+        bid_val = irsQuoteComposite([ticker], base_bid, quote_side="Bid", opposite_cost=base_ofr).iloc[0]
+        ofr_val = irsQuoteComposite([ticker], base_ofr, quote_side="Ofr", opposite_cost=base_bid).iloc[0]
+    except Exception:
+        return "—", "—"
+
+    return _safe_round(bid_val, 4), _safe_round(ofr_val, 4)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -516,6 +540,10 @@ def _build_swap_rows(subtype: str) -> list[dict]:
     if df.empty:
         return []
 
+    outright_rows = irs_rt.get("spreads", pd.DataFrame()).reindex(IRSConfig.IRS_LIST)
+    base_bid = pd.to_numeric(outright_rows.get("Bid"), errors="coerce") if not outright_rows.empty else pd.Series(dtype=float)
+    base_ofr = pd.to_numeric(outright_rows.get("Ofr"), errors="coerce") if not outright_rows.empty else pd.Series(dtype=float)
+
     rows: list[dict] = []
     for ticker in _sort_swap_tickers([str(idx) for idx in df.index], subtype):
         row = df.loc[ticker]
@@ -535,6 +563,10 @@ def _build_swap_rows(subtype: str) -> list[dict]:
         # IRS typically has no separate bid/ofr — leave as "—" unless present
         bid = _v("Bid", 4)
         ofr = _v("Ofr", 4)
+        derived_bid, derived_ofr = _derive_swap_bid_ofr(ticker, base_bid, base_ofr)
+        if derived_bid != "—" and derived_ofr != "—":
+            bid = derived_bid
+            ofr = derived_ofr
 
         # dYld (bp) = (mid − close) × 100
         if mid != "—" and close != "—":

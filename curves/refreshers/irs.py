@@ -179,42 +179,14 @@ class IRSRefresher:
 		return pd.Index(days)
 
 	def load_forward_shift_from_dashboard(self):
-		"""Load forward shift adjustments from dashboard with robust error handling."""
-		logger.info("Loading forward shift adjustments from dashboard...")
-		dashboard_file = PATH.parent.joinpath(r'Dashboard.xlsm').resolve()
-		logger.info(f"Reading dashboard file: {dashboard_file}")
+		"""Forward shifts are now managed via the web UI panel.
 		
-		if not dashboard_file.exists():
-			logger.warning(f"Dashboard file not found: {dashboard_file}")
-			self._init_empty_forward_shifts()
-			return
-		
-		try:
-			# Read forward shifts for R7D and S3M from the dashboard
-			df1 = pd.read_excel(
-				dashboard_file, sheet_name='Main', usecols=[12, 18],
-				skiprows=1, index_col='Term'
-			).squeeze().dropna()
-			
-			df2 = pd.read_excel(
-				dashboard_file, sheet_name='Main', usecols=[12, 19],
-				skiprows=1, index_col='Term'
-			).squeeze().dropna()
-			
-			# Convert index from labels (e.g., '7D', '1M') to integer days relative to today
-			df1.index = self._index_to_days(df1.index)
-			df2.index = self._index_to_days(df2.index)
-			
-			self.forward_shift['r7d'] = df1
-			self.forward_shift['s3m'] = df2
-			
-			logger.info(f"Loaded R7D shifts: {len(self.forward_shift['r7d'])} terms")
-			logger.info(f"Loaded S3M shifts: {len(self.forward_shift['s3m'])} terms")
-			
-		except Exception as e:
-			logger.error(f"Error loading forward shifts from dashboard: {e}")
-			logger.exception("Full traceback:")
-			self._init_empty_forward_shifts()
+		This method is kept for backward compatibility but always initialises
+		empty shifts so the refresher does not depend on Dashboard.xlsm being
+		available or unlocked.
+		"""
+		logger.info("Using empty forward shifts (managed via web UI panel)")
+		self._init_empty_forward_shifts()
 
 
 	def apply_forward_shift_adjustments(self): 
@@ -333,8 +305,18 @@ class IRSRefresher:
 			spreads.loc[IRSConfig.IRS_LIST, 'Bid'] = self.quote_frame['Bid']
 			spreads.loc[IRSConfig.IRS_LIST, 'Ofr'] = self.quote_frame['Ofr']
 			try:
-				spreads.loc[self.spreads_list, 'Bid'] = irs.irsSpreadComposite(self.spreads_list, self.quote_frame['Bid']).round(4)
-				spreads.loc[self.spreads_list, 'Ofr'] = irs.irsSpreadComposite(self.spreads_list, self.quote_frame['Ofr']).round(4)
+				spreads.loc[self.spreads_list, 'Bid'] = irs.irsQuoteComposite(
+					self.spreads_list,
+					self.quote_frame['Bid'],
+					quote_side='Bid',
+					opposite_cost=self.quote_frame['Ofr'],
+				).round(4)
+				spreads.loc[self.spreads_list, 'Ofr'] = irs.irsQuoteComposite(
+					self.spreads_list,
+					self.quote_frame['Ofr'],
+					quote_side='Ofr',
+					opposite_cost=self.quote_frame['Bid'],
+				).round(4)
 			except Exception as exc:
 				logger.warning(f"Could not derive IRS spread bid/ofr quotes: {exc}")
 		
@@ -400,13 +382,18 @@ class IRSRefresher:
 		return spreads, time_based_df
 
 	def save_to_dashboard(self, spreads, time_based_df):
-		"""Save spreads and forward rates to Dashboard.xlsm."""
+		"""Save spreads and forward rates to Dashboard.xlsm (optional).
+		
+		Skipped silently when the file is absent or locked — all web-facing
+		pickle files (IRS-forward.pkl, IRS-spdsrt.pkl) are already written
+		by this point and do not depend on Excel.
+		"""
 		logger.info("Writing data to Dashboard.xlsm...")
 		dashboard_path = PATH.parent.joinpath('Dashboard.xlsm').resolve()
 		
 		if not dashboard_path.exists():
-			logger.error(f"Dashboard file not found: {dashboard_path}")
-			raise FileNotFoundError(f"Dashboard file not found: {dashboard_path}")
+			logger.warning(f"Dashboard.xlsm not found — skipping Excel write: {dashboard_path}")
+			return
 		
 		# Check if file is already open by another Excel instance
 		try:
@@ -487,8 +474,7 @@ class IRSRefresher:
 						pass
 						
 		except Exception as e:
-			logger.error(f"Error in save_to_dashboard: {e}")
-			raise
+			logger.warning(f"Could not write to Dashboard.xlsm (skipping): {e}")
 
 	def save_rt_pickle(self, spreads):
 		logger.info("Saving real-time data to pickle file...")
