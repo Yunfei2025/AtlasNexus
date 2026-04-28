@@ -362,10 +362,37 @@ class IRSCurve:
 
     def adjFittingbyDate(self,fwd):
         # curve
-        fwd.loc[self.curves.index[-1]] = self.curves['ForwardRate'].iloc[-1]
-        f = interpolate.interp1d(fwd.index, fwd.values, kind='linear')
-        df_forward = pd.Series(f(self.curves.index))
-        df_forward.index = self.curves.index
+        base_forward = self.curves['ForwardRate'].astype(float).copy()
+        curve_index = base_forward.index.astype(float)
+
+        fwd = pd.Series(fwd, copy=True).dropna()
+        if fwd.empty:
+            df_forward = base_forward.copy()
+        else:
+            fwd = fwd.astype(float)
+            fwd.index = fwd.index.astype(float)
+            fwd = fwd.groupby(level=0).last().sort_index()
+
+            start_x = float(curve_index[0])
+            end_x = float(curve_index[-1])
+            if start_x not in fwd.index:
+                fwd.loc[start_x] = float(base_forward.iloc[0])
+            if end_x not in fwd.index:
+                fwd.loc[end_x] = float(base_forward.iloc[-1])
+            fwd = fwd.sort_index()
+
+            if len(fwd) == 1:
+                df_forward = pd.Series(float(fwd.iloc[0]), index=self.curves.index)
+            else:
+                f = interpolate.interp1d(
+                    fwd.index.values,
+                    fwd.values,
+                    kind='linear',
+                    bounds_error=False,
+                    fill_value=(float(fwd.iloc[0]), float(fwd.iloc[-1])),
+                    assume_sorted=True,
+                )
+                df_forward = pd.Series(f(self.curves.index), index=self.curves.index)
         df_spot = fwd2spt(df_forward)
         self.adjcurves = pd.concat([df_spot,df_forward],axis=1)
         self.adjcurves.columns=['SpotRate','ForwardRate']
