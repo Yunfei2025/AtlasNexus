@@ -210,9 +210,14 @@ def manage_asset_pool(add_rates_clicks, add_comm_clicks, clear_clicks, asset_typ
     [Input('run-button', 'n_clicks')],
     [State('capital-input', 'value'),
      State('capital-unit', 'value'),
-     State('asset-pool-store', 'data')]
+     State('asset-pool-store', 'data'),
+     State('hedge-instruments-checklist', 'value'),
+     State('irdl-target', 'value'),
+     State('irsl-target', 'value'),
+     State('ircv-target', 'value')]
 )
-def run_analysis(n_clicks, total_capital, capital_unit, asset_pool):
+def run_analysis(n_clicks, total_capital, capital_unit, asset_pool,
+                 hedge_instruments, irdl_pct, irsl_pct, ircv_pct):
     """Run portfolio analysis and update visualizations."""
     if n_clicks == 0:
         empty_fig = go.Figure()
@@ -241,10 +246,31 @@ def run_analysis(n_clicks, total_capital, capital_unit, asset_pool):
         
         # Get selected assets
         selected_asset_names = [asset['name'] for asset in asset_pool]
-        
+
+        # ── Build risk_budgets from factor-target inputs ───────────────────
+        # If the user specifies % targets for any CN rate factor, pass them as
+        # risk_budgets so the optimizer uses the budget-matching objective
+        # instead of pure equal risk contribution.
+        risk_budgets = None
+        raw_targets = {
+            'IRDL.CN': irdl_pct,
+            'IRSL.CN': irsl_pct,
+            'IRCV.CN': ircv_pct,
+        }
+        filled_targets = {k: float(v) for k, v in raw_targets.items() if v is not None and str(v).strip() != ''}
+        if filled_targets:
+            total_pct = sum(filled_targets.values())
+            if total_pct > 0:
+                # Normalise so values sum to 1 (proportional fractions)
+                risk_budgets = {k: v / total_pct for k, v in filled_targets.items()}
+
+        # ── Hedge instruments ──────────────────────────────────────────────
+        hedge_asset_names = [h for h in (hedge_instruments or []) if h]
+
         # Run optimization
         summary, returns, vols, factor_exp, factor_risk, portfolio = run_risk_parity_allocation(
-            total_capital=total_capital_cny, use_cache=True, selected_assets=selected_asset_names
+            total_capital=total_capital_cny, use_cache=True, selected_assets=selected_asset_names,
+            risk_budgets=risk_budgets, hedge_asset_names=hedge_asset_names or None,
         )
         
         if summary.empty:
@@ -265,17 +291,27 @@ def run_analysis(n_clicks, total_capital, capital_unit, asset_pool):
         portfolio_df = prepare_portfolio_table(summary, factor_exp, portfolio)
         portfolio_enhanced = []
         total_rounded_capital = 0.0
-        
+
         if not portfolio_df.empty:
             for idx, row in portfolio_df.iterrows():
                 record = row.to_dict()
                 asset_type = row['Asset Type']
                 raw_capital = row['Capital (CNY)']
-                
-                unit = 10_000_000.0 if asset_type == 'Rates' else 1_000_000.0
-                rounded_capital = np.floor(raw_capital / unit) * unit
+
+                # Hedge instruments can have negative allocations (short positions);
+                # round toward zero to avoid flipping sign.
+                if asset_type == 'Hedge':
+                    unit = 1_000_000.0
+                    sign = -1 if raw_capital < 0 else 1
+                    rounded_capital = sign * np.floor(abs(raw_capital) / unit) * unit
+                elif asset_type == 'Rates':
+                    unit = 10_000_000.0
+                    rounded_capital = np.floor(raw_capital / unit) * unit
+                else:
+                    unit = 1_000_000.0
+                    rounded_capital = np.floor(raw_capital / unit) * unit
+
                 total_rounded_capital += rounded_capital
-                
                 record['Capital (CNY)'] = f"{rounded_capital / 1_000_000:,.2f}"
                 record['Weight (%)'] = f"{row['Weight (%)']:.2f}%"
                 portfolio_enhanced.append(record)
@@ -306,13 +342,16 @@ def run_analysis(n_clicks, total_capital, capital_unit, asset_pool):
             style_header={'backgroundColor': '#3498db', 'color': 'white', 'fontWeight': 'bold', 'textAlign': 'center'},
             style_data_conditional=[
                 {'if': {'filter_query': '{Asset Type} = "TOTAL"'}, 'backgroundColor': '#2c3e50', 'color': 'white', 'fontWeight': 'bold'},
+                {'if': {'filter_query': '{Asset Type} = "Hedge"'}, 'backgroundColor': '#fef3cd', 'color': '#856404', 'fontStyle': 'italic'},
                 {'if': {'row_index': 'odd'}, 'backgroundColor': '#ecf0f1'}
             ],
             style_table={'overflowX': 'auto'}
         )
         
-        # Create sensitivity heatmap
-        assets_with_allocation = summary[summary['Allocation (CNY)'] >= 1000].nlargest(15, 'Allocation (CNY)')
+        # Create sensitivity heatmap — include hedge assets regardless of sign
+        summary_abs = summary.copy()
+        summary_abs['_abs_alloc'] = summary_abs['Allocation (CNY)'].abs()
+        assets_with_allocation = summary_abs[summary_abs['_abs_alloc'] >= 1000].nlargest(15, '_abs_alloc')
         factor_names = sorted([f for f in factor_exp['Risk Factor'].unique() if f.startswith(('IRDL', 'IRSL', 'IRCV', 'FXDL', 'CMDL'))])
         asset_names = assets_with_allocation['Asset'].tolist()
         

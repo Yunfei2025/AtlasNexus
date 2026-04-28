@@ -35,8 +35,9 @@ def prepare_portfolio_table(summary_df, factor_exposures_df, portfolio=None):
     for idx, row in summary_df.iterrows():
         asset_name = row['Asset']
         
-        # Skip assets with zero allocation
-        if row['Allocation (CNY)'] < 1000:  # Less than 1000 CNY
+        # Skip assets with zero or negligible allocation
+        # Hedge instruments can have negative allocation (short position)
+        if abs(row['Allocation (CNY)']) < 1000:
             continue
         
         record = {
@@ -390,7 +391,69 @@ def create_layout():
                                 ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'height': '80%'})
                             ], style={'width': '30%', 'padding': '20px', 'backgroundColor': '#f8f9fa', 'borderRadius': '0 0 8px 0'}),
                         ], style={'display': 'flex'}),
-                        
+
+                        # ── Section 3: Hedge Instruments & Factor Risk Targets ─────────────
+                        html.Hr(style={'margin': '0', 'borderColor': '#eee'}),
+                        html.Div([
+                            # Column A: Hedge Instruments
+                            html.Div([
+                                html.H5("5. Hedge Instruments (Optional)",
+                                        style={'color': '#34495e', 'marginTop': '0', 'marginBottom': '8px', 'fontSize': '14px'}),
+                                html.P("Selected instruments can take short positions to offset factor risk.",
+                                       style={'fontSize': '11px', 'color': '#7f8c8d', 'marginBottom': '8px'}),
+                                dcc.Checklist(
+                                    id='hedge-instruments-checklist',
+                                    options=[
+                                        {'label': ' 1Y IRS Swap (CN)',  'value': 'HEDGE_IRS_1Y'},
+                                        {'label': ' 5Y IRS Swap (CN)',  'value': 'HEDGE_IRS_5Y'},
+                                        {'label': ' 10Y CGB Bond (CN)', 'value': 'HEDGE_CGB_10Y'},
+                                        {'label': ' 30Y CGB Bond (CN)', 'value': 'HEDGE_CGB_30Y'},
+                                    ],
+                                    value=[],
+                                    inline=False,
+                                    inputStyle={'marginRight': '6px'},
+                                    style={'fontSize': '13px', 'lineHeight': '2'},
+                                ),
+                            ], style={'width': '40%', 'padding': '15px 20px', 'borderRight': '1px solid #eee'}),
+
+                            # Column B: Factor Risk Targets
+                            html.Div([
+                                html.H5("6. Factor Risk Targets (Optional)",
+                                        style={'color': '#34495e', 'marginTop': '0', 'marginBottom': '8px', 'fontSize': '14px'}),
+                                html.P("Set desired % risk contribution per CN rate factor. Leave blank for equal risk parity.",
+                                       style={'fontSize': '11px', 'color': '#7f8c8d', 'marginBottom': '8px'}),
+                                html.Div([
+                                    html.Div([
+                                        html.Label("IRDL.CN (Level):",
+                                                   style={'fontSize': '12px', 'width': '130px', 'fontWeight': 'bold'}),
+                                        dcc.Input(id='irdl-target', type='number', min=0, max=100,
+                                                  placeholder='e.g. 60', debounce=True,
+                                                  style={'width': '80px', 'padding': '3px', 'borderRadius': '4px',
+                                                         'border': '1px solid #ddd', 'fontSize': '12px'}),
+                                        html.Span("%", style={'marginLeft': '4px', 'fontSize': '12px', 'color': '#7f8c8d'}),
+                                    ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '6px'}),
+                                    html.Div([
+                                        html.Label("IRSL.CN (Slope):",
+                                                   style={'fontSize': '12px', 'width': '130px', 'fontWeight': 'bold'}),
+                                        dcc.Input(id='irsl-target', type='number', min=0, max=100,
+                                                  placeholder='e.g. 25', debounce=True,
+                                                  style={'width': '80px', 'padding': '3px', 'borderRadius': '4px',
+                                                         'border': '1px solid #ddd', 'fontSize': '12px'}),
+                                        html.Span("%", style={'marginLeft': '4px', 'fontSize': '12px', 'color': '#7f8c8d'}),
+                                    ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '6px'}),
+                                    html.Div([
+                                        html.Label("IRCV.CN (Curvature):",
+                                                   style={'fontSize': '12px', 'width': '130px', 'fontWeight': 'bold'}),
+                                        dcc.Input(id='ircv-target', type='number', min=0, max=100,
+                                                  placeholder='e.g. 15', debounce=True,
+                                                  style={'width': '80px', 'padding': '3px', 'borderRadius': '4px',
+                                                         'border': '1px solid #ddd', 'fontSize': '12px'}),
+                                        html.Span("%", style={'marginLeft': '4px', 'fontSize': '12px', 'color': '#7f8c8d'}),
+                                    ], style={'display': 'flex', 'alignItems': 'center'}),
+                                ]),
+                            ], style={'width': '60%', 'padding': '15px 20px'}),
+                        ], style={'display': 'flex', 'backgroundColor': '#fafcff'}),
+
                     ], style={'backgroundColor': '#ffffff', 'marginBottom': '20px', 'border': '1px solid #bdc3c7', 'borderRadius': '8px', 'boxShadow': '0 4px 6px rgba(0,0,0,0.05)'}),
                     
                     # Portfolio Table
@@ -471,8 +534,9 @@ def create_layout():
             ]),
         ]),
         
-        # Hidden div to store portfolio object reference
+        # Hidden stores
         dcc.Store(id='portfolio-data-store'),
-        dcc.Store(id='asset-pool-store', data=initial_pool)
+        dcc.Store(id='asset-pool-store', data=initial_pool),
+        dcc.Store(id='hedge-pool-store', data=[]),
         
     ], style={'backgroundColor': '#f5f5f5', 'padding': '20px', 'fontFamily': 'Arial, sans-serif'})

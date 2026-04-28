@@ -60,7 +60,8 @@ class FactorRiskParityOptimizer:
     
     def fit_and_calculate(self, rebalance_date: pd.Timestamp,
                           risk_budgets: Optional[Dict[str, float]] = None,
-                          total_capital: float = 1.0) -> Tuple[pd.Series, pd.Series]:
+                          total_capital: float = 1.0,
+                          hedge_asset_names: Optional[list] = None) -> Tuple[pd.Series, pd.Series]:
         """
         Calculate optimal weights for a given rebalance date.
         
@@ -68,6 +69,8 @@ class FactorRiskParityOptimizer:
             rebalance_date: Date at which to rebalance
             risk_budgets: Optional dictionary mapping factor names to risk budgets
             total_capital: Total capital for absolute risk budget calculation
+            hedge_asset_names: Optional list of asset names that are allowed to
+                take short positions (bounds [-0.3, 0.3] instead of [0, 1]).
             
         Returns:
             Tuple of (weights Series, factor volatilities Series)
@@ -95,6 +98,7 @@ class FactorRiskParityOptimizer:
         weights = self._optimize_weights(
             factor_vols, factor_cov=factor_cov,
             risk_budgets=risk_budgets, total_capital=total_capital,
+            hedge_asset_names=hedge_asset_names,
         )
         self._weights = weights
 
@@ -132,7 +136,8 @@ class FactorRiskParityOptimizer:
     def _optimize_weights(self, factor_vols: pd.Series,
                           factor_cov: Optional[pd.DataFrame] = None,
                           risk_budgets: Optional[Dict[str, float]] = None,
-                          total_capital: float = 1.0) -> pd.Series:
+                          total_capital: float = 1.0,
+                          hedge_asset_names: Optional[list] = None) -> pd.Series:
         """
         Optimize portfolio weights using factor risk parity or risk budgeting.
 
@@ -145,6 +150,9 @@ class FactorRiskParityOptimizer:
             factor_cov: Annualised EWMA factor covariance DataFrame (n_factors × n_factors)
             risk_budgets: Optional dict of risk budgets per factor (in million CNY)
             total_capital: Total capital to allocate (absolute units)
+            hedge_asset_names: Optional list of asset names allowed to take short
+                positions; they receive bounds (-0.3, 0.3) while regular assets
+                stay long-only (0.0, 1.0).
 
         Returns:
             Series of optimal weights
@@ -259,7 +267,18 @@ class FactorRiskParityOptimizer:
                 target = _port_vol(w) / n_assets
                 return float(np.sum((RC - target) ** 2))
 
-        bounds = [(0.0, 1.0)] * n_assets
+        # ── Per-asset bounds ─────────────────────────────────────────────────
+        # Hedge instruments are allowed to take short positions so that the
+        # optimizer can offset large factor concentrations.  Regular (long-only)
+        # assets stay in [0, 1].  Maximum absolute hedge weight = 30% per
+        # instrument, mirroring the half-total-DV01 cap used in portfolio/.
+        _MAX_HEDGE_WT = 0.30
+        _hedge_set = set(hedge_asset_names) if hedge_asset_names else set()
+        bounds = [
+            (-_MAX_HEDGE_WT, _MAX_HEDGE_WT) if name in _hedge_set else (0.0, 1.0)
+            for name in asset_names
+        ]
+
         w0 = np.ones(n_assets) / n_assets
 
         result = minimize(
@@ -269,6 +288,20 @@ class FactorRiskParityOptimizer:
             constraints=constraints,
             options={'maxiter': 1000, 'ftol': 1e-9},
         )
+
+        # ── If the primary solve did not converge, retry without hedge shorts ─
+        # This mirrors portfolio/portfolio.py's two-stage fallback logic.
+        if not result.success and _hedge_set:
+            fallback_bounds = [(0.0, 1.0)] * n_assets
+            result_fb = minimize(
+                objective, w0,
+                method='SLSQP',
+                bounds=fallback_bounds,
+                constraints=constraints,
+                options={'maxiter': 1000, 'ftol': 1e-9},
+            )
+            if result_fb.success or result_fb.fun < result.fun:
+                result = result_fb
 
         return pd.Series(result.x, index=asset_names)
 
@@ -409,7 +442,9 @@ class FactorRiskParityOptimizer:
         self._pca_factor_vols = None
         self.factor_analyzer.clear_cache()
 
-    def optimize(self, total_capital: float, use_cache: bool = True, risk_budgets: Dict[str, float] = None):
+    def optimize(self, total_capital: float, use_cache: bool = True,
+                 risk_budgets: Dict[str, float] = None,
+                 hedge_asset_names: list = None):
         """
         Run the optimization and return detailed results.
         
@@ -417,6 +452,7 @@ class FactorRiskParityOptimizer:
             total_capital: Total capital to allocate
             use_cache: Whether to use cached data
             risk_budgets: Optional risk budgets per factor
+            hedge_asset_names: Optional list of asset names with short-allowed bounds
             
         Returns:
             Tuple of (summary, asset_returns, volatilities, factor_exposures, factor_risk_contributions)
@@ -430,7 +466,12 @@ class FactorRiskParityOptimizer:
         rebalance_date = pd.Timestamp(self.portfolio.risk_factor_loader._risk_factors_cache.index.max())
         
         # Fit and Calculate
-        weights, factor_vols = self.fit_and_calculate(rebalance_date, risk_budgets=risk_budgets, total_capital=total_capital)
+        weights, factor_vols = self.fit_and_calculate(
+            rebalance_date,
+            risk_budgets=risk_budgets,
+            total_capital=total_capital,
+            hedge_asset_names=hedge_asset_names,
+        )
         
         # Construct summary
         allocation = weights * total_capital

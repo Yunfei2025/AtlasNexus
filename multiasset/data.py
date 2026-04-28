@@ -37,6 +37,8 @@ def load_raw_market_data():
 
 def get_asset_type(asset_name):
     """Categorize asset by type."""
+    if asset_name.startswith('HEDGE_'):
+        return 'Hedge'
     if asset_name in ['Gold', 'Aluminium', 'Copper', 'Crude_Oil']:
         return 'Commodities'
     elif any(x in asset_name for x in ['IRS', 'CDB', 'ICP']):
@@ -49,6 +51,8 @@ def get_asset_type(asset_name):
 
 def get_universe(asset_name):
     """Get the universe/country for the asset."""
+    if asset_name.startswith('HEDGE_'):
+        return 'IRS Swap' if 'IRS' in asset_name else 'CGB Treasury'
     if 'US' in asset_name:
         return 'US Gov Bond'
     elif 'EU' in asset_name:
@@ -73,7 +77,7 @@ def get_universe(asset_name):
 
 def get_sector(asset_name):
     """Get the sector/tenor for the asset."""
-    for tenor in ['1Y', '2Y', '5Y', '10Y', '30Y']:
+    for tenor in ['30Y', '10Y', '5Y', '2Y', '1Y']:  # longest first to avoid '1Y' matching '10Y'
         if tenor in asset_name:
             return tenor
     return 'N/A'

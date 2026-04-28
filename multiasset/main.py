@@ -34,6 +34,17 @@ except Exception as e:
 
 from settings.paths import DIR_INPUT
 
+# ── Hedge instrument catalogue ────────────────────────────────────────────────
+# Each entry: name → (instrument_type, cn_tenor_or_none, irs_duration_or_none)
+#   IRS_SWAP  – modelled as pure IRDL.CN exposure with given modified duration
+#   CGB_BOND  – full MultiFactorBondAsset with CN PCA sensitivities
+_HEDGE_INSTRUMENT_DEFS: Dict[str, dict] = {
+    'HEDGE_IRS_1Y':  {'type': 'IRS_SWAP', 'duration': 0.95,  'label': '1Y IRS Swap'},
+    'HEDGE_IRS_5Y':  {'type': 'IRS_SWAP', 'duration': 4.50,  'label': '5Y IRS Swap'},
+    'HEDGE_CGB_10Y': {'type': 'CGB_BOND', 'tenor':   '10Y',  'label': '10Y CGB Bond'},
+    'HEDGE_CGB_30Y': {'type': 'CGB_BOND', 'tenor':   '30Y',  'label': '30Y CGB Bond'},
+}
+
 # Shared risk factor loader to avoid recomputing PCA on every call
 _SHARED_LOADER: RiskFactorLoader | None = None
 
@@ -159,6 +170,54 @@ def create_spread_universe(analyzer=None) -> List[Asset]:
     return spreads
 
 
+def create_hedge_instruments(hedge_names: List[str], analyzer=None) -> List[Asset]:
+    """
+    Create hedge instrument assets from the predefined catalogue.
+
+    Hedge instruments are added to the portfolio with short-allowed bounds in the
+    optimizer so the solver can short them to offset specific factor exposures.
+
+    Args:
+        hedge_names: List of names from _HEDGE_INSTRUMENT_DEFS
+            (e.g. ['HEDGE_IRS_1Y', 'HEDGE_CGB_10Y'])
+        analyzer: Optional risk-factor analyzer; passed to MultiFactorBondAsset
+            for PCA-derived CN sensitivities.
+
+    Returns:
+        List of Asset objects for use in Portfolio and FactorRiskParityOptimizer.
+    """
+    instruments: List[Asset] = []
+    for name in hedge_names:
+        defn = _HEDGE_INSTRUMENT_DEFS.get(name)
+        if defn is None:
+            print(f"Warning: unknown hedge instrument '{name}', skipping")
+            continue
+        if defn['type'] == 'IRS_SWAP':
+            # Model IRS as a plain-vanilla rate exposure: price ≈ −duration × Δ(IRDL.CN)
+            asset: Asset = BondAsset(
+                name=name,
+                factor='IRDL.CN',
+                duration=defn['duration'],
+            )
+        else:  # CGB_BOND
+            sensitivities = None
+            if analyzer is not None:
+                raw = analyzer.get_tenor_sensitivities('CN', defn['tenor'])
+                if raw:
+                    defaults = get_default_sensitivities(defn['tenor'])
+                    duration = defaults.get('IRDL', 5.0)
+                    sensitivities = {k: -duration * v for k, v in raw.items()}
+            asset = MultiFactorBondAsset(
+                name=name,
+                country='CN',
+                tenor=defn['tenor'],
+                sensitivities=None,
+                pca_sensitivities=sensitivities,
+            )
+        instruments.append(asset)
+    return instruments
+
+
 def create_commodity_universe() -> List[CommodityAsset]:
     """
     Create commodity universe.
@@ -219,54 +278,57 @@ def create_default_portfolio(use_cache: bool = True, use_deterministic: bool = T
     return portfolio
 
 
-def create_custom_portfolio(selected_asset_names: List[str], use_cache: bool = True, use_deterministic: bool = True) -> Portfolio:
+def create_custom_portfolio(selected_asset_names: List[str], use_cache: bool = True,
+                            use_deterministic: bool = True,
+                            hedge_asset_names: List[str] = None) -> Portfolio:
     """
     Create a custom portfolio based on a list of asset names.
-    
+
     Args:
         selected_asset_names: List of asset names to include
         use_cache: Whether to use cached factor-model calculations (default: True)
         use_deterministic: If True, use deterministic factors; if False, use PCA-derived factors
-        
+        hedge_asset_names: Optional list of hedge instrument names from _HEDGE_INSTRUMENT_DEFS
+
     Returns:
-        Portfolio with only the selected assets
+        Portfolio with selected assets (and hedge instruments when provided)
     """
-    # Use shared loader to avoid recomputing factor-model inputs
     loader = _get_shared_loader(use_deterministic=use_deterministic)
-    
-    # Trigger factor calculation to get sensitivities
     loader.load_risk_factors(use_cache=use_cache)
-    
-    # Select the appropriate analyzer based on configuration
     analyzer = loader.det_analyzer if loader.use_deterministic else loader.factor_analyzer
-    
-    # Generate all possible assets with derived sensitivities
+
     all_bonds = create_bond_universe(analyzer=analyzer)
     all_spreads = create_spread_universe(analyzer=analyzer)
     all_commodities = create_commodity_universe()
-    all_possible_assets = all_bonds + all_spreads + all_commodities # type: ignore
-    
-    # Filter assets based on names
+    all_possible_assets = all_bonds + all_spreads + all_commodities  # type: ignore
+
     selected_assets = [
-        asset for asset in all_possible_assets 
+        asset for asset in all_possible_assets
         if asset.name in selected_asset_names
     ]
-    
+
     if not selected_assets:
         print("Warning: No valid assets found matching the selection. Using default portfolio.")
         return create_default_portfolio()
-        
-    # Create portfolio
-    portfolio = Portfolio(selected_assets, loader)
-    
-    return portfolio
+
+    # Append hedge instruments (duplicates filtered by name)
+    if hedge_asset_names:
+        existing_names = {a.name for a in selected_assets}
+        hedges = create_hedge_instruments(
+            [n for n in hedge_asset_names if n not in existing_names],
+            analyzer=analyzer,
+        )
+        selected_assets = selected_assets + hedges  # type: ignore
+
+    return Portfolio(selected_assets, loader)
 
 
 def run_risk_parity_allocation(total_capital: float = 10_000_000_000,
                                 use_cache: bool = True,
                                 selected_assets: List[str] = None,
                                 risk_budgets: Dict[str, float] | None = None,
-                                use_deterministic: bool = True) -> tuple:
+                                use_deterministic: bool = True,
+                                hedge_asset_names: List[str] = None) -> tuple:
     """
     Run factor-level risk parity allocation using OOP interface.
     
@@ -285,23 +347,29 @@ def run_risk_parity_allocation(total_capital: float = 10_000_000_000,
     print(f"[DEBUG] Starting run_risk_parity_allocation with {len(selected_assets) if selected_assets else 0} assets")
     if selected_assets and len(selected_assets) > 0:
         print(f"[DEBUG] Creating custom portfolio for: {selected_assets}")
-        portfolio = create_custom_portfolio(selected_assets, use_cache=use_cache, use_deterministic=use_deterministic)
+        portfolio = create_custom_portfolio(
+            selected_assets,
+            use_cache=use_cache,
+            use_deterministic=use_deterministic,
+            hedge_asset_names=hedge_asset_names,
+        )
     else:
         print("[DEBUG] Creating default portfolio")
         portfolio = create_default_portfolio(use_cache=use_cache, use_deterministic=use_deterministic)
-    
+
     print(f"[DEBUG] Portfolio created with {len(portfolio.assets)} assets")
     print("[DEBUG] Creating optimizer...")
     optimizer = FactorRiskParityOptimizer(portfolio=portfolio, input_dir=str(DIR_INPUT))
-    
+
     print("[DEBUG] Running optimization...")
     summary, asset_returns, volatilities, factor_exposures, factor_risk_contributions = optimizer.optimize(
-        total_capital, use_cache=use_cache, risk_budgets=risk_budgets
+        total_capital, use_cache=use_cache, risk_budgets=risk_budgets,
+        hedge_asset_names=hedge_asset_names,
     )
-    
+
     print("[DEBUG] Optimization complete")
     optimizer.print_summary(summary, total_capital, factor_exposures, factor_risk_contributions)
-    
+
     return summary, asset_returns, volatilities, factor_exposures, factor_risk_contributions, portfolio
 
 
