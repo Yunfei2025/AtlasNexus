@@ -66,6 +66,15 @@ def create_layout():
                         style={"background": "#007ACE", "color": "white", "border": "none", "padding": "8px 16px", "border-radius": "4px", "cursor": "pointer"}),
                 ], style={"marginBottom": "20px"}),
                 html.Div([
+                    html.Button("↻ Refresh Data", id="surface-refresh-btn", n_clicks=0,
+                        style={"background": "#082255", "color": "#44C8F5", "border": "1px solid #007ACE", "padding": "8px 16px", "border-radius": "4px", "cursor": "pointer", "margin-right": "12px"}),
+                    html.Span(
+                        id="surface-refresh-status",
+                        children="Loading latest surface data…",
+                        style={"color": "#A9C7E8", "fontSize": "12px"},
+                    ),
+                ], style={"display": "flex", "alignItems": "center", "marginBottom": "20px", "flexWrap": "wrap", "rowGap": "8px"}),
+                html.Div([
                     dcc.Markdown(id="surface-text", style={"color": "#FFFFFF", "fontSize": "13px", "lineHeight": "1.6", "borderTop": "1px solid #007ACE", "paddingTop": "15px", "marginTop": "10px"})
                 ]),
             ], className="graph__title"),

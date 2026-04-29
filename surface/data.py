@@ -3,7 +3,88 @@
 from __future__ import annotations
 
 
+from datetime import datetime, timedelta
+import os
 import re
+
+import pandas as pd
+
+from settings.general import DateConfig
+from settings.paths import DIR_INPUT
+
+
+def _surface_file_path() -> str:
+    return os.path.join(DIR_INPUT, "surface-ts.pkl")
+
+
+def _normalize_surface_index(surface_dict: dict) -> dict:
+    normalized = surface_dict or {}
+    for key, df in normalized.items():
+        if isinstance(df, pd.DataFrame) and not isinstance(df.index, pd.DatetimeIndex):
+            normalized[key] = df.copy()
+            normalized[key].index = pd.to_datetime(normalized[key].index)
+    return normalized
+
+
+def _latest_surface_date(surface_dict: dict) -> pd.Timestamp | None:
+    latest_dates: list[pd.Timestamp] = []
+    for value in (surface_dict or {}).values():
+        if isinstance(value, pd.DataFrame) and not value.empty:
+            index = value.index
+            if not isinstance(index, pd.DatetimeIndex):
+                index = pd.to_datetime(index)
+            latest_dates.append(index.max())
+    if not latest_dates:
+        return None
+    return max(latest_dates)
+
+
+def _expected_surface_asof() -> datetime.date:
+    today = datetime.today()
+    return DateConfig.prev_cn_workday(today - timedelta(days=1))
+
+
+def load_surface_data(refresh: bool = False) -> tuple[dict, dict]:
+    from surface.retrieve import get_surface_cache_status, retrieveSurface
+
+    file_path = _surface_file_path()
+    cached_dict = pd.read_pickle(file_path) if os.path.exists(file_path) else {}
+    cached_dict = _normalize_surface_index(cached_dict)
+    cache_status = get_surface_cache_status(file_path)
+    cached_latest = _latest_surface_date(cached_dict)
+    expected_asof = cache_status["expected_asof"]
+    gap_backfill_start = cache_status["gap_backfill_start"]
+    cache_is_stale = cached_latest is None or cached_latest.date() < expected_asof
+    cache_has_gap = gap_backfill_start is not None
+    refresh_attempted = refresh
+    refresh_mode = "manual" if refresh else "cached"
+    refresh_error = None
+
+    surface_dict = cached_dict
+    if refresh_attempted:
+        try:
+            surface_dict = retrieveSurface(force=True)
+        except Exception as exc:
+            refresh_error = str(exc)
+            if not cached_dict:
+                raise
+
+    if surface_dict is None and os.path.exists(file_path):
+        surface_dict = pd.read_pickle(file_path)
+
+    surface_dict = _normalize_surface_index(surface_dict or {})
+    latest_asof = _latest_surface_date(surface_dict)
+
+    return surface_dict, {
+        "refresh_attempted": refresh_attempted,
+        "refresh_mode": refresh_mode,
+        "refresh_error": refresh_error,
+        "expected_asof": expected_asof.isoformat(),
+        "latest_asof": latest_asof.date().isoformat() if latest_asof is not None else None,
+        "gap_backfill_start": gap_backfill_start.isoformat() if gap_backfill_start is not None else None,
+        "cache_is_stale": cache_is_stale,
+        "cache_has_gap": cache_has_gap,
+    }
 
 def extractTerms(strlist: list[str]) -> list[str]:
     """Extract term information from Wind data column names.
@@ -39,7 +120,7 @@ def extractTerms(strlist: list[str]) -> list[str]:
     return ns
 
 
-def genCurveData(start: str, end: str = None, country: str = 'CN') -> dict:
+def genCurveData(start: str, end: str = None, country: str = 'CN', refresh: bool = False) -> dict:
     """Generate yield curve data for the surface visualization.
     
     Args:
@@ -50,16 +131,8 @@ def genCurveData(start: str, end: str = None, country: str = 'CN') -> dict:
     Returns:
         Dictionary containing plot list data and key points.
     """
-    import os
-    from datetime import datetime
-    import pandas as pd
-    from settings.paths import DIR_INPUT
-    from surface.retrieve import retrieveSurface
     d = datetime.today()
-    # retrieveSurface()
-    
-    file_path = os.path.join(DIR_INPUT, "surface-ts.pkl")
-    surface_dict = pd.read_pickle(file_path)
+    surface_dict, metadata = load_surface_data(refresh=refresh)
     
     # Select data based on country
     if country == 'US':
@@ -69,7 +142,7 @@ def genCurveData(start: str, end: str = None, country: str = 'CN') -> dict:
     
     if df is None or df.empty:
         # Return empty data structure if no data available
-        return dict(plist={"x": [], "y": [], "z": []}, points={})
+        return dict(plist={"x": [], "y": [], "z": []}, points={}, metadata=metadata)
     
     # Ensure index is DatetimeIndex for proper comparison
     if not isinstance(df.index, pd.DatetimeIndex):
@@ -85,7 +158,7 @@ def genCurveData(start: str, end: str = None, country: str = 'CN') -> dict:
     
     if df.empty:
         # Return empty data structure if no data in range
-        return dict(plist={"x": [], "y": [], "z": []}, points={})
+        return dict(plist={"x": [], "y": [], "z": []}, points={}, metadata=metadata)
     
     xlist = extractTerms(df.columns)
     ylist = [d.strftime("%Y-%m-%d") for d in df.index]
@@ -95,11 +168,9 @@ def genCurveData(start: str, end: str = None, country: str = 'CN') -> dict:
         index, data = row
         zlist.append(data.tolist())
 
-    # Get the date for today's point annotation (use last date in filtered data)
-    # Format must match ylist format (%Y-%m-%d)
     today_date = df.index[-1].strftime("%Y-%m-%d") if hasattr(df.index[-1], 'strftime') else str(df.index[-1])
-    
-    idx = df.index.get_indexer([d], method='nearest')[0]
+
+    idx = len(df) - 1
     df.columns = xlist
     
     # Use appropriate key terms based on country
@@ -112,4 +183,4 @@ def genCurveData(start: str, end: str = None, country: str = 'CN') -> dict:
         "P-Short": {"x": key_terms[0], "y": today_date, "z": df[key_terms[0]].iloc[idx]},
         "P-Long": {"x": key_terms[1], "y": today_date, "z": df[key_terms[1]].iloc[idx]},
     }
-    return dict(plist={"x": xlist, "y": ylist, "z": zlist}, points=points)
+    return dict(plist={"x": xlist, "y": ylist, "z": zlist}, points=points, metadata=metadata)

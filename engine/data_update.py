@@ -18,7 +18,6 @@ DEFAULT_RETRIEVER_MODULES: list[str] = [
     "data.providers.retrieve",
     # Curves / surfaces
     "curves.utils.retrieve",
-    "surface.retrieve",
     # Multiasset
     "multiasset.retrieve",
     # Futures intraday

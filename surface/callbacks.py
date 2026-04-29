@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from dash import Dash
+from dash import Dash, ctx
 from dash.dependencies import Input, Output, State
 
 try:
@@ -19,20 +19,61 @@ def register_callbacks(app: Dash) -> None:
     
     @app.callback(
         Output("surface-graph", "figure"),
+        Output("surface-refresh-status", "children"),
         Input("surface-slider", "value"),
         Input("surface-date-picker-range", "start_date"),
         Input("surface-date-picker-range", "end_date"),
         Input("surface-country-selection", "value"),
+        Input("surface-refresh-btn", "n_clicks"),
     )
-    def make_surface_graph(value, start_date, end_date, country):
-        curve_data = genCurveData(start_date, end_date, country)
+    def make_surface_graph(value, start_date, end_date, country, refresh_clicks):
+        refresh_requested = ctx.triggered_id == "surface-refresh-btn" and (refresh_clicks or 0) > 0
+        curve_data = genCurveData(start_date, end_date, country, refresh=refresh_requested)
         xlist = curve_data["plist"]["x"]
         ylist = curve_data["plist"]["y"]
         zlist = curve_data["plist"]["z"]
         points = curve_data["points"]
+        metadata = curve_data.get("metadata", {})
+
+        latest_asof = metadata.get("latest_asof") or "unknown"
+        expected_asof = metadata.get("expected_asof") or "unknown"
+        refresh_error = metadata.get("refresh_error")
+        cache_is_stale = metadata.get("cache_is_stale")
+        cache_has_gap = metadata.get("cache_has_gap")
+
+        if refresh_error:
+            status = f"Refresh failed; showing cached data through {latest_asof} (target {expected_asof})."
+        elif refresh_requested:
+            status = f"Surface data refreshed through {latest_asof}."
+        elif cache_is_stale or cache_has_gap:
+            status = f"Cached surface data through {latest_asof}; click Refresh Data to update toward {expected_asof}."
+        else:
+            status = f"Surface data through {latest_asof}."
         
         if value is None:
             value = 0
+
+        if not xlist or not ylist or not zlist or not points:
+            layout = dict(
+                autosize=True,
+                font=dict(size=12, color="#E0E0E0"),
+                margin=dict(t=5, l=5, b=5, r=5),
+                showlegend=False,
+                paper_bgcolor=app_color["graph_bg"],
+                plot_bgcolor=app_color["graph_bg"],
+                annotations=[
+                    dict(
+                        text="No surface data available for the selected range.",
+                        x=0.5,
+                        y=0.5,
+                        xref="paper",
+                        yref="paper",
+                        showarrow=False,
+                        font=dict(color="#E0E0E0", size=14),
+                    )
+                ],
+            )
+            return dict(data=[], layout=layout), status
 
         if value in [0, 2, 3]:
             z_secondary_beginning = [z[1] for z in zlist if z[0] == "None"]
@@ -89,7 +130,7 @@ def register_callbacks(app: Dash) -> None:
                     "zeroline": False, "backgroundcolor": app_color["graph_bg"], "color": "#E0E0E0"},
             ),
         )
-        return dict(data=data, layout=layout)
+        return dict(data=data, layout=layout), status
 
     @app.callback(Output("surface-text", "children"), [Input("surface-slider", "value")])
     def make_surface_text(value):
