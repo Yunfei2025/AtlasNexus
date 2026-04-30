@@ -382,17 +382,30 @@
 /* -------------------------------------------------------------------------- */
 /* dcc.Input dark-mode fix (Dash 4.x)                                         */
 /*                                                                             */
-/* In Dash 4.x the `style` prop on dcc.Input is applied to the wrapper <div>, */
-/* not the inner <input> element. Skeleton CSS (app.css) then forces           */
-/* background-color:#fff on the <input>, while color:#fff is inherited from    */
-/* the wrapper — producing invisible white-on-white text.                      */
+/* In Dash 4.x, dcc.Input renders as:                                         */
+/*   <div class="dash-input-container" style="[Python style props]">          */
+/*     <input class="dash-input-element" />                                    */
+/*   </div>                                                                    */
+/* The Python `style` prop lands on the wrapper div. Dash 4.x injects its own */
+/* CSS: .dash-input-container { background: #fff; color: inherit } and        */
+/* .dash-input-element { color: inherit; background: inherit }. Without       */
+/* !important the inherited color from .app__container (#fff) can win over    */
+/* the container's inline color value, producing white-on-white text.         */
 /*                                                                             */
-/* Fix: let every text/number input inherit bg-color and color from its        */
-/* nearest ancestor (the Dash wrapper div that carries the inline style).      */
-/* Inline styles on the <input> itself (Dash 3.x path) still win because       */
-/* they have specificity 1000 — this rule only activates when no inline style  */
-/* is present on the element itself.                                            */
+/* Fix A: target .dash-input-element directly with !important so it always    */
+/* inherits from the immediate .dash-input-container (which carries the        */
+/* Python inline style with the correct color/background values).             */
+/* Fix B: also keep the generic input rule for Skeleton CSS override.         */
 /* -------------------------------------------------------------------------- */
+
+/* Fix A – Dash 4.x: force .dash-input-element to inherit from its container */
+.dash-input-element {
+    color: inherit !important;
+    background: inherit !important;
+    background-color: inherit !important;
+}
+
+/* Fix B – generic fallback (also handles Skeleton CSS background-color:#fff) */
 input[type="email"],
 input[type="number"],
 input[type="password"],

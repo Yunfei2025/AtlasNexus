@@ -1298,7 +1298,9 @@ def build_candidates_layout() -> html.Div:
                     min=1,
                     max=50,
                     step=1,
-                    style={'width': '80px', 'marginRight': '20px', 'padding': '5px', 'borderRadius': '4px'}
+                    style={'width': '80px', 'marginRight': '20px', 'padding': '5px', 'borderRadius': '4px',
+                           'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
+                           'border': f'1px solid {THEME["table_header"]}'}
                 ),
             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
             html.Div(id='alpha-diversified-trades-display'),
