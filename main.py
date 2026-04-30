@@ -7,6 +7,7 @@ Main entry point for FIEngine - Financial Engineering Platform
 import sys
 import logging
 import argparse
+import socket
 from datetime import datetime
 from pathlib import Path
 
@@ -16,6 +17,28 @@ sys.path.insert(0, str(project_root))
 
 # Module-level logger placeholder; configured in __main__
 logger = logging.getLogger(__name__)
+
+
+def _resolve_browser_host() -> str:
+    """Return a browser-friendly host for local app launch.
+
+    The web server may bind to ``0.0.0.0`` so it listens on all interfaces,
+    but browsers cannot navigate to that address. Prefer a real local IPv4
+    address and fall back to localhost.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            host = sock.getsockname()[0]
+        if host and not host.startswith("127.") and host != "0.0.0.0":
+            return host
+    except OSError:
+        pass
+    return "127.0.0.1"
+
+
+def _browser_url(port: int) -> str:
+    return f"http://{_resolve_browser_host()}:{port}/"
 
 
 def _parse_date(s: str) -> str:
@@ -94,7 +117,9 @@ def run_atlasnexus_daily_app():
         init_status = run_initialise()
         logger.info(f"AtlasNexus startup initialisation: {init_status}")
 
-        Timer(1.5, lambda: webbrowser.open_new("http://0.0.0.0:8080/")).start()
+        browser_url = _browser_url(8080)
+        logger.info(f"Opening AtlasNexus Daily Console in browser: {browser_url}")
+        Timer(1.5, lambda: webbrowser.open_new(browser_url)).start()
 
         try:
             atlasnexus_daily.app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False)

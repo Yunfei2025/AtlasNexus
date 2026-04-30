@@ -618,7 +618,7 @@ class IRSContract:
             
             # Calculate floating rate
             if self.curve_type == 'r7d':
-                r0 = self._calculate_r7d_floating(fs, s1, fdays)
+                r0 = self._calculate_r7d_floating(s, s1, fs, fdays)
             elif self.curve_type == 's3m':
                 r0 = 1 + fs.iloc[0] * interval * GeneralConfig.YN / GeneralConfig.YN1 / 100
             
@@ -683,13 +683,16 @@ class IRSContract:
         self.cashflow = cashflow
         self.pv_sum = pv_sum
     
-    def _calculate_r7d_floating(self, fs: pd.Series, s1: date, fdays: List[date]) -> float:
-        """Calculate R7D floating rate (compounded daily repo)."""
+    def _calculate_r7d_floating(self, s: date, s1: date, fs: pd.Series, fdays: List[date]) -> float:
+        """Calculate R7D floating accrual using actual overlap days for each reset."""
         r0 = 1.0
-        for j in range(fs.shape[0] - 1):
-            r0 *= (1 + fs.iloc[j] * 7 / GeneralConfig.YN1 / 100)
-        dres = (s1 - fdays[-1]).days - 1
-        r0 *= (1 + fs.iloc[-1] * dres / GeneralConfig.YN1 / 100)
+        for fixing_date, rate in zip(fdays, fs):
+            period_start = max(s, fixing_date)
+            period_end = min(s1, fixing_date + relativedelta(days=7))
+            day_count = (period_end - period_start).days
+            if day_count <= 0:
+                continue
+            r0 *= (1 + rate * day_count / GeneralConfig.YN1 / 100)
         return r0
     
     @property

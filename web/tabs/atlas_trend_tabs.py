@@ -324,6 +324,7 @@ def register_trend_callbacks(app) -> None:
     )
     def _update_trend(n_intervals, ctype):
         import datetime
+        import plotly.graph_objs as go
 
         label = _LABEL_MAP.get(ctype, ctype)
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
@@ -339,6 +340,13 @@ def register_trend_callbacks(app) -> None:
                     _empty_figure(f"No data for: {label}"),
                     f"Series not found in trend-fig.obj: {ctype}",
                 )
+
+            fig = go.Figure(fig)
+            legacy_td_prefixes = ("TD ", "TDST ")
+            fig.data = tuple(
+                trace for trace in fig.data
+                if not (getattr(trace, "name", "") or "").startswith(legacy_td_prefixes)
+            )
 
             # Convert to dict for safe mutation
             if hasattr(fig, "to_dict"):
@@ -359,7 +367,6 @@ def register_trend_callbacks(app) -> None:
                 "font": {"color": THEME["text_main"], "size": 14},
             }
             layout["margin"] = {"l": 60, "r": 20, "t": 40, "b": 40}
-
             info = f"Updated {timestamp}  ·  {label}"
             return fig, info
 

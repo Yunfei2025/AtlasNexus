@@ -34,6 +34,7 @@ import importlib
 
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 _INITIALISE_STATE_DIR = _PROJECT_ROOT / "cache" / "curve_initialise"
+_COMPLETION_ARTIFACT = DIR_INPUT / "MNote-spds.pkl"
 _REQUIRED_DAILY_INPUTS = {
     "instrument_definitions": DIR_INPUT / "futures-InstrumentInfo.pkl",
     "bond_database": DIR_INPUT / "database-px.pkl",
@@ -67,10 +68,16 @@ def _load_marker(asof: datetime.date) -> dict | None:
 
 
 def _generation_completed_today(asof: datetime.date) -> bool:
+    if not _completion_artifact_ready(asof):
+        return False
     marker = _load_marker(asof)
     if not marker:
-        return False
+        return True
     return marker.get("status") == "completed"
+
+
+def _completion_artifact_ready(asof: datetime.date) -> bool:
+    return get_mtime_date(_COMPLETION_ARTIFACT) == asof
 
 
 def _write_completion_marker(
@@ -86,6 +93,7 @@ def _write_completion_marker(
         "completed_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "generators": generators,
         "pairs_generated": pairs_generated,
+        "completion_artifact": str(_COMPLETION_ARTIFACT),
         "required_inputs": {
             label: str(path) for label, path in _REQUIRED_DAILY_INPUTS.items()
         },
@@ -123,13 +131,20 @@ def run_data_updates() -> None:
     except Exception as e:
         print(f"WARNING: Data updates failed: {e}")
 
-def main() -> None:
+def main() -> str:
     """Main curve generation workflow (INFO/WARNING only)."""
     print("INFO: Starting curve generation...")
     print(f"INFO: curves package path: {pathlib.Path(__file__).resolve().parent}")
     asof = datetime.datetime.today().date()
     
     try:
+        if _generation_completed_today(asof):
+            print(
+                f"INFO: Curve generation already completed for {asof.isoformat()} "
+                f"({_COMPLETION_ARTIFACT.name} updated today) — skipping rerun."
+            )
+            return "Skipped: MNote-spds.pkl already updated today"
+
         # Step 1: Update databases
         run_data_updates()
 
@@ -138,12 +153,8 @@ def main() -> None:
             print("INFO: Skipping curve generation until today's prerequisite files are ready:")
             for item in pending_inputs:
                 print(f"INFO:   - {item}")
-            return
+            return "Skipped: prerequisite inputs not ready"
 
-        if _generation_completed_today(asof):
-            print(f"INFO: Curve generation already completed for {asof.isoformat()} — skipping rerun.")
-            return
-        
         # Step 2: Run generators in order
         generators = [
             ("TrendGenerator", "trend"),
@@ -192,15 +203,23 @@ def main() -> None:
             pairs_generated = True
             print("INFO: Top CR pairs generated.")
 
-        if success_count == len(generators) and pairs_generated:
+        if success_count == len(generators) and pairs_generated and _completion_artifact_ready(asof):
             _write_completion_marker(
                 asof,
                 generators=completed_generators,
                 pairs_generated=pairs_generated,
             )
             print("INFO: All curve generation tasks completed!")
+            return "Completed curve generation"
+        if success_count == len(generators) and pairs_generated:
+            print(
+                f"WARNING: {_COMPLETION_ARTIFACT.name} was not updated for {asof.isoformat()} "
+                "so the completion marker was not written"
+            )
+            return "Warning: completion artifact not updated"
         else:
             print("WARNING: Some generators failed - check logs above for details")
+            return "Warning: some generators failed"
               
     except Exception as e:
         print(f"CRITICAL: Fatal error: {e}")

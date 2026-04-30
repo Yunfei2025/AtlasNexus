@@ -523,6 +523,11 @@ def _build_swap_rows(subtype: str) -> list[dict]:
     except Exception:
         return []
 
+    try:
+        irs_cvpx = pd.read_pickle(str(DIR_INPUT / "IRS-cvpx.pkl"))
+    except Exception:
+        irs_cvpx = None
+
     if not isinstance(irs_rt, dict):
         return []
 
@@ -544,6 +549,13 @@ def _build_swap_rows(subtype: str) -> list[dict]:
     base_bid = pd.to_numeric(outright_rows.get("Bid"), errors="coerce") if not outright_rows.empty else pd.Series(dtype=float)
     base_ofr = pd.to_numeric(outright_rows.get("Ofr"), errors="coerce") if not outright_rows.empty else pd.Series(dtype=float)
 
+    outright_close = pd.Series(dtype=float)
+    if subtype == "Swaps" and isinstance(irs_cvpx, dict):
+        try:
+            outright_close = pd.to_numeric(irs_cvpx.get("ytm_act", pd.DataFrame()).iloc[-1], errors="coerce")
+        except Exception:
+            outright_close = pd.Series(dtype=float)
+
     rows: list[dict] = []
     for ticker in _sort_swap_tickers([str(idx) for idx in df.index], subtype):
         row = df.loc[ticker]
@@ -552,8 +564,13 @@ def _build_swap_rows(subtype: str) -> list[dict]:
             val = _row_val(row, key)
             return _safe_round(val, n) if val is not None else "—"
 
-        # Close = curve/model price (CvPx)
-        close = _v("CvPx", 4)
+        # Outright swaps: use historical market close.
+        # Spread subtypes: keep curve/model price from StatInfo.
+        if subtype == "Swaps":
+            close_val = outright_close.get(ticker)
+            close = _safe_round(close_val, 4) if close_val is not None and pd.notna(close_val) else _v("CvPx", 4)
+        else:
+            close = _v("CvPx", 4)
 
         # Mid = quoted/market price (QtPx or Quote)
         mid = _v("QtPx", 4)

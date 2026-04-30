@@ -404,16 +404,31 @@ def plotTrend(dfp, dfv, dff):
             line={"width": 3, "color": _palette_color(px.colors.qualitative.Set1, i + 1)},
         ), row=1, col=1)
 
+    marker_styles = {
+        'Local Max': {'symbol': 'triangle-down', 'color': '#f39c12', 'size': 10},
+        'Local Min': {'symbol': 'triangle-up', 'color': '#2ecc71', 'size': 10},
+        'Downward Trend Confirmed': {'symbol': 'x', 'color': '#e74c3c', 'size': 9},
+        'Upward Trend Confirmed': {'symbol': 'cross', 'color': '#3498db', 'size': 9},
+    }
     for i in range(dfm.shape[1]):
+        col = dfm.columns[i]
+        style = marker_styles.get(
+            col,
+            {
+                'symbol': _symbol(1 + i * 4),
+                'color': _palette_color(px.colors.qualitative.Set1, i),
+                'size': 10,
+            },
+        )
         fig.add_trace(go.Scatter(
-            name=dfm.columns[i],
+            name=col,
             x=dfm.index,
             y=dfm.iloc[:, i],
             mode='markers',
             marker=dict(
-                symbol=_symbol(1 + i * 4),
-                color=_palette_color(px.colors.qualitative.Set1, i),
-                size=10,
+                symbol=style['symbol'],
+                color=style['color'],
+                size=style['size'],
             ),
         ), row=1, col=1)
 

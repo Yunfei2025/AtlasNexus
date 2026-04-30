@@ -7,6 +7,153 @@ import pandas as pd
 import numpy as np
 
 
+def _finalize_strategy(df):
+    df['position'] = df['signal'].diff()
+    df['returns'] = df['close'].pct_change()
+    df['strategy_returns'] = df['signal'].shift(1).fillna(0) * df['returns']
+    df['cumulative_returns'] = (1 + df['strategy_returns'].fillna(0)).cumprod()
+    return df
+
+
+def _buy_setup_perfected(lows: pd.Series) -> bool:
+    if len(lows) < 9:
+        return False
+    ref = min(lows.iloc[5], lows.iloc[6])
+    return bool(lows.iloc[7] <= ref or lows.iloc[8] <= ref)
+
+
+def _sell_setup_perfected(highs: pd.Series) -> bool:
+    if len(highs) < 9:
+        return False
+    ref = max(highs.iloc[5], highs.iloc[6])
+    return bool(highs.iloc[7] >= ref or highs.iloc[8] >= ref)
+
+
+def compute_demark_indicators(data, lookback=4, setup_length=9, countdown_length=13):
+    df = data.copy()
+    close = pd.to_numeric(df['close'], errors='coerce')
+    high = pd.to_numeric(df['high'], errors='coerce') if 'high' in df.columns else close.copy()
+    low = pd.to_numeric(df['low'], errors='coerce') if 'low' in df.columns else close.copy()
+
+    df['buy_setup'] = 0
+    df['sell_setup'] = 0
+    df['buy_setup_complete'] = 0
+    df['sell_setup_complete'] = 0
+    df['buy_setup_perfected'] = 0
+    df['sell_setup_perfected'] = 0
+    df['buy_countdown'] = 0
+    df['sell_countdown'] = 0
+    df['buy_countdown_complete'] = 0
+    df['sell_countdown_complete'] = 0
+    df['tdst_support'] = np.nan
+    df['tdst_resistance'] = np.nan
+
+    buy_setup = 0
+    sell_setup = 0
+    buy_countdown = 0
+    sell_countdown = 0
+    buy_countdown_active = False
+    sell_countdown_active = False
+    tdst_support = np.nan
+    tdst_resistance = np.nan
+
+    for i in range(len(df)):
+        price = close.iat[i]
+        if pd.isna(price):
+            continue
+
+        if i >= lookback and pd.notna(close.iat[i - lookback]):
+            ref = close.iat[i - lookback]
+            if price < ref:
+                buy_setup = buy_setup + 1 if buy_setup > 0 else 1
+                sell_setup = 0
+            elif price > ref:
+                sell_setup = sell_setup + 1 if sell_setup > 0 else 1
+                buy_setup = 0
+            else:
+                buy_setup = 0
+                sell_setup = 0
+
+            if buy_setup == setup_length:
+                lows = low.iloc[i - setup_length + 1:i + 1]
+                if lows.notna().any():
+                    tdst_support = float(lows.min())
+                df.iat[i, df.columns.get_loc('buy_setup_complete')] = 1
+                df.iat[i, df.columns.get_loc('buy_setup_perfected')] = int(_buy_setup_perfected(lows))
+                buy_countdown = 0
+                buy_countdown_active = True
+                sell_countdown = 0
+                sell_countdown_active = False
+
+            if sell_setup == setup_length:
+                highs = high.iloc[i - setup_length + 1:i + 1]
+                if highs.notna().any():
+                    tdst_resistance = float(highs.max())
+                df.iat[i, df.columns.get_loc('sell_setup_complete')] = 1
+                df.iat[i, df.columns.get_loc('sell_setup_perfected')] = int(_sell_setup_perfected(highs))
+                sell_countdown = 0
+                sell_countdown_active = True
+                buy_countdown = 0
+                buy_countdown_active = False
+
+        if i >= 2:
+            if buy_countdown_active and pd.notna(low.iat[i - 2]) and price <= low.iat[i - 2]:
+                buy_countdown += 1
+                if buy_countdown >= countdown_length:
+                    df.iat[i, df.columns.get_loc('buy_countdown_complete')] = 1
+                    buy_countdown_active = False
+
+            if sell_countdown_active and pd.notna(high.iat[i - 2]) and price >= high.iat[i - 2]:
+                sell_countdown += 1
+                if sell_countdown >= countdown_length:
+                    df.iat[i, df.columns.get_loc('sell_countdown_complete')] = 1
+                    sell_countdown_active = False
+
+        df.iat[i, df.columns.get_loc('buy_setup')] = buy_setup
+        df.iat[i, df.columns.get_loc('sell_setup')] = sell_setup
+        df.iat[i, df.columns.get_loc('buy_countdown')] = buy_countdown if buy_countdown_active or buy_countdown > 0 else 0
+        df.iat[i, df.columns.get_loc('sell_countdown')] = sell_countdown if sell_countdown_active or sell_countdown > 0 else 0
+        df.iat[i, df.columns.get_loc('tdst_support')] = tdst_support
+        df.iat[i, df.columns.get_loc('tdst_resistance')] = tdst_resistance
+
+    return df
+
+
+def run_demark_strategy(data, lookback=4, setup_length=9, countdown_length=13, require_perfected=True):
+    """OHLC-based DeMark reversal strategy using Setup/Countdown and TDST levels."""
+    df = compute_demark_indicators(data, lookback, setup_length, countdown_length)
+    high = pd.to_numeric(df['high'], errors='coerce') if 'high' in df.columns else pd.to_numeric(df['close'], errors='coerce')
+    low = pd.to_numeric(df['low'], errors='coerce') if 'low' in df.columns else pd.to_numeric(df['close'], errors='coerce')
+
+    signal = 0
+    signals = []
+    for i in range(len(df)):
+        buy_ready = bool(df['buy_setup_complete'].iat[i]) and (not require_perfected or bool(df['buy_setup_perfected'].iat[i]))
+        sell_ready = bool(df['sell_setup_complete'].iat[i]) and (not require_perfected or bool(df['sell_setup_perfected'].iat[i]))
+
+        if buy_ready:
+            signal = 1
+        elif sell_ready:
+            signal = -1
+        else:
+            support = df['tdst_support'].iat[i]
+            resistance = df['tdst_resistance'].iat[i]
+            if signal == 1 and pd.notna(support) and pd.notna(low.iat[i]) and low.iat[i] < support:
+                signal = 0
+            elif signal == -1 and pd.notna(resistance) and pd.notna(high.iat[i]) and high.iat[i] > resistance:
+                signal = 0
+
+            if bool(df['buy_countdown_complete'].iat[i]):
+                signal = 1
+            elif bool(df['sell_countdown_complete'].iat[i]):
+                signal = -1
+
+        signals.append(signal)
+
+    df['signal'] = signals
+    return _finalize_strategy(df)
+
+
 def run_ma_strategy(data, short_window, long_window):
     """MA crossover strategy"""
     df = data.copy()
@@ -14,11 +161,7 @@ def run_ma_strategy(data, short_window, long_window):
     df['ma_long'] = df['close'].rolling(window=long_window).mean()
     df['signal'] = np.where(df['ma_short'] > df['ma_long'], 1, -1)
     df.iloc[:long_window, df.columns.get_loc('signal')] = 0
-    df['position'] = df['signal'].diff()
-    df['returns'] = df['close'].pct_change()
-    df['strategy_returns'] = df['signal'].shift(1) * df['returns']
-    df['cumulative_returns'] = (1 + df['strategy_returns']).cumprod()
-    return df
+    return _finalize_strategy(df)
 
 
 def run_bollinger_strategy(data, window, num_std, exit_at_ma=False):
@@ -56,11 +199,7 @@ def run_bollinger_strategy(data, window, num_std, exit_at_ma=False):
         signals.append(position)
         
     df['signal'] = signals
-    df['position'] = df['signal'].diff()
-    df['returns'] = df['close'].pct_change()
-    df['strategy_returns'] = df['signal'].shift(1) * df['returns']
-    df['cumulative_returns'] = (1 + df['strategy_returns']).cumprod()
-    return df
+    return _finalize_strategy(df)
 
 
 def run_vwap_strategy(data, window):
@@ -77,11 +216,7 @@ def run_vwap_strategy(data, window):
     is_last_bar_of_day = np.r_[dates[:-1] != dates[1:], True]
     df.loc[is_last_bar_of_day, 'signal'] = 0
     
-    df['position'] = df['signal'].diff()
-    df['returns'] = df['close'].pct_change()
-    df['strategy_returns'] = df['signal'].shift(1) * df['returns']
-    df['cumulative_returns'] = (1 + df['strategy_returns']).cumprod()
-    return df
+    return _finalize_strategy(df)
 
 
 def run_intraday_momentum_strategy(data, window=14, vwap_window=20):
@@ -144,11 +279,7 @@ def run_intraday_momentum_strategy(data, window=14, vwap_window=20):
         signals.append(position)
     
     df['signal'] = signals
-    df['position'] = df['signal'].diff()
-    df['returns'] = df['close'].pct_change()
-    df['strategy_returns'] = df['signal'].shift(1) * df['returns']
-    df['cumulative_returns'] = (1 + df['strategy_returns']).cumprod()
-    return df
+    return _finalize_strategy(df)
 
 
 def run_atr_mean_reversion_strategy(data, ema_window=11, atr_window=14, atr_mult=2.0, exit_at_ema=True):
@@ -204,11 +335,7 @@ def run_atr_mean_reversion_strategy(data, ema_window=11, atr_window=14, atr_mult
         signals.append(position)
 
     df['signal'] = signals
-    df['position'] = df['signal'].diff()
-    df['returns'] = df['close'].pct_change()
-    df['strategy_returns'] = df['signal'].shift(1) * df['returns']
-    df['cumulative_returns'] = (1 + df['strategy_returns']).cumprod()
-    return df
+    return _finalize_strategy(df)
 
 
 def run_atr_band_strategy(data, ema_window=20, atr_window=20):
@@ -270,14 +397,7 @@ def run_atr_band_strategy(data, ema_window=20, atr_window=20):
     df['signal'] = s1 + s2 + s3
     
     # 5. Calculate returns
-    df['position'] = df['signal'].diff()
-    df['returns'] = df['close'].pct_change()
-    # Note: This assumes N units yield N times returns. If capital is limited, normalization is needed.
-    # Here we simply treat it as leveraged/multiple returns.
-    df['strategy_returns'] = df['signal'].shift(1) * df['returns']
-    df['cumulative_returns'] = (1 + df['strategy_returns']).cumprod()
-    
-    return df
+    return _finalize_strategy(df)
 
 
 def run_sar_strategy(data, acceleration=0.02, maximum=0.2):
@@ -383,9 +503,4 @@ def run_sar_strategy(data, acceleration=0.02, maximum=0.2):
     df['signal'] = np.where(df['close'] > df['sar'], 1, -1)
     
     # Calculate returns
-    df['position'] = df['signal'].diff()
-    df['returns'] = df['close'].pct_change()
-    df['strategy_returns'] = df['signal'].shift(1) * df['returns']
-    df['cumulative_returns'] = (1 + df['strategy_returns']).cumprod()
-    
-    return df
+    return _finalize_strategy(df)

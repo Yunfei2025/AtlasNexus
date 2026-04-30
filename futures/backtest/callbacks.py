@@ -24,7 +24,8 @@ from strategies import (
     run_intraday_momentum_strategy,
     run_atr_band_strategy,
     run_atr_mean_reversion_strategy,
-    run_sar_strategy
+    run_sar_strategy,
+    run_demark_strategy,
 )
 from metrics import calculate_metrics, run_rolling_best_strategy
 from layout import create_metric_card, CARD_STYLE
@@ -324,12 +325,16 @@ def register_callbacks(app):
         need_mom = ('Momentum' in selected_strategies) or (mr_enabled and mr_trending == 'Momentum')
         need_boll = ('Boll' in selected_strategies) or (mr_enabled and mr_meanrev == 'Boll')
         need_atr = ('ATR' in selected_strategies) or (mr_enabled and mr_meanrev == 'ATR')
+        need_demark = 'DeMark' in selected_strategies
 
         if need_ma:
             results['MA'] = run_ma_strategy(df_resampled, ma_s, ma_l)
 
         if need_sar:
             results['SAR'] = run_sar_strategy(df_resampled, sar_af, sar_max_af)
+
+        if need_demark:
+            results['DeMark'] = run_demark_strategy(df_resampled)
 
         if need_boll:
             exit_at_ma = 'exit' in (boll_exit or [])
@@ -375,6 +380,7 @@ def register_callbacks(app):
         strategy_meta = [
             ('MA', "MA Crossover"),
             ('SAR', "SAR"),
+            ('DeMark', "DeMark TD Sequential"),
             ('Boll', "Bollinger Bands"),
             ('ATR', "ATR"),
             ('MarketRegime', "Market Regime Based"),
@@ -418,6 +424,35 @@ def register_callbacks(app):
         if 'SAR' in results and 'SAR' in selected_strategies:
             df_sar = results['SAR']
             fig.add_trace(go.Scatter(x=x_index, y=df_sar['sar'], name='SAR', mode='markers', marker=dict(color='gray', size=3), visible='legendonly'), row=1, col=1)
+
+        if 'DeMark' in results and 'DeMark' in selected_strategies:
+            df_demark = results['DeMark']
+            for col, color in [('tdst_support', '#2ecc71'), ('tdst_resistance', '#e74c3c')]:
+                series = df_demark[col].dropna()
+                if not series.empty:
+                    fig.add_trace(go.Scatter(
+                        x=series.index.strftime('%Y-%m-%d<br>%H:%M'),
+                        y=series.values,
+                        name='TDST Support' if col == 'tdst_support' else 'TDST Resistance',
+                        line=dict(color=color, width=1.2, dash='dot')
+                    ), row=1, col=1)
+
+            marker_map = [
+                ('buy_setup_complete', 'TD Buy Setup 9', 'triangle-up', '#27ae60', 'low'),
+                ('sell_setup_complete', 'TD Sell Setup 9', 'triangle-down', '#c0392b', 'high'),
+                ('buy_countdown_complete', 'TD Buy Countdown 13', 'star', '#2ecc71', 'low'),
+                ('sell_countdown_complete', 'TD Sell Countdown 13', 'star', '#e74c3c', 'high'),
+            ]
+            for flag_col, name, symbol, color, price_col in marker_map:
+                mask = df_demark[flag_col].eq(1)
+                if mask.any():
+                    fig.add_trace(go.Scatter(
+                        x=df_demark.index[mask].strftime('%Y-%m-%d<br>%H:%M'),
+                        y=df_demark.loc[mask, price_col],
+                        name=name,
+                        mode='markers',
+                        marker=dict(symbol=symbol, color=color, size=10),
+                    ), row=1, col=1)
             
         if 'Boll' in results and 'Boll' in selected_strategies:
             df_boll = results['Boll']
@@ -477,7 +512,7 @@ def register_callbacks(app):
         )
 
         # Row 3: Cumulative Returns
-        colors = {'MA': 'blue', 'Boll': 'orange', 'VWAP': 'purple', 'Momentum': 'cyan', 'ATR': 'brown', 'SAR': 'pink', 'MarketRegime': 'red'}
+        colors = {'MA': 'blue', 'Boll': 'orange', 'VWAP': 'purple', 'Momentum': 'cyan', 'ATR': 'brown', 'SAR': 'pink', 'DeMark': '#16a085', 'MarketRegime': 'red'}
         widths = {'MarketRegime': 3}
         
         for key, title in strategy_meta:

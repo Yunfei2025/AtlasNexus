@@ -42,7 +42,8 @@ try:
     )
     from futures.backtest.strategies import (
         run_ma_strategy, run_bollinger_strategy, run_vwap_strategy,
-        run_intraday_momentum_strategy, run_atr_band_strategy, run_sar_strategy
+        run_intraday_momentum_strategy, run_atr_band_strategy, run_sar_strategy,
+        run_demark_strategy
     )
     from futures.backtest.metrics import calculate_metrics
     from futures.backtest.regime import RegimeDetector
@@ -2126,6 +2127,7 @@ def build_factor_backtest_layout():
                 id='bf-strategy-selector',
                 options=[
                     {'label': ' MA', 'value': 'MA'},
+                    {'label': ' DeMark', 'value': 'DeMark'},
                     {'label': ' Bollinger', 'value': 'Boll'},
                     {'label': ' VWAP', 'value': 'VWAP'},
                     {'label': ' Momentum', 'value': 'Momentum'},
@@ -4325,6 +4327,8 @@ def register_multiasset_callbacks(app):
             results = {}
             if 'MA' in selected_strategies:
                 results['MA'] = run_ma_strategy(df_resampled, ma_s, ma_l)
+            if 'DeMark' in selected_strategies:
+                results['DeMark'] = run_demark_strategy(df_resampled)
             if 'Boll' in selected_strategies:
                 exit_at_ma = 'exit' in (boll_exit or [])
                 results['Boll'] = run_bollinger_strategy(df_resampled, boll_w, boll_std, exit_at_ma)
@@ -4348,6 +4352,38 @@ def register_multiasset_callbacks(app):
                 low=df_resampled['low'], close=df_resampled['close'],
                 name='Price'
             ), row=1, col=1)
+
+            if 'DeMark' in results:
+                df_demark = results['DeMark']
+                for col, color, name in [
+                    ('tdst_support', '#2ecc71', 'TDST Support'),
+                    ('tdst_resistance', '#e74c3c', 'TDST Resistance'),
+                ]:
+                    series = df_demark[col].dropna()
+                    if not series.empty:
+                        fig.add_trace(go.Scatter(
+                            x=series.index,
+                            y=series.values,
+                            mode='lines',
+                            name=name,
+                            line=dict(color=color, width=1.2, dash='dot')
+                        ), row=1, col=1)
+
+                for flag_col, name, symbol, color, price_col in [
+                    ('buy_setup_complete', 'TD Buy Setup 9', 'triangle-up', '#27ae60', 'low'),
+                    ('sell_setup_complete', 'TD Sell Setup 9', 'triangle-down', '#c0392b', 'high'),
+                    ('buy_countdown_complete', 'TD Buy Countdown 13', 'star', '#2ecc71', 'low'),
+                    ('sell_countdown_complete', 'TD Sell Countdown 13', 'star', '#e74c3c', 'high'),
+                ]:
+                    mask = df_demark[flag_col].eq(1)
+                    if mask.any():
+                        fig.add_trace(go.Scatter(
+                            x=df_demark.index[mask],
+                            y=df_demark.loc[mask, price_col],
+                            mode='markers',
+                            name=name,
+                            marker=dict(symbol=symbol, color=color, size=10)
+                        ), row=1, col=1)
             
             # Strategy Equity Curves
             for name, res in results.items():

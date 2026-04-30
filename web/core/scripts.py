@@ -136,7 +136,9 @@ def run_initialise() -> str:
             print("Updating database and running generators...")
             try:
                 from curves import initialise as curves_initialise
-                curves_initialise.main()
+                status = curves_initialise.main()
+                if isinstance(status, str) and status:
+                    return status
             except ImportError as e:
                 error_msg = f"Could not import curves.initialise: {e}"
                 print(error_msg)

@@ -239,16 +239,28 @@ def TSSampling(vT):
     return vTn
 
 def genTrendLine(vT,theta):
-    event = generate(vT.dropna(), theta)
-    allevents = ['Local Max','Local Min','Downward Trend Confirmed','Upward Trend Confirmed']
+    clean = vT.dropna()
+    event = generate(clean, theta)
+    allevents = [
+        'Local Max',
+        'Local Min',
+        'Downward Trend Confirmed',
+        'Upward Trend Confirmed',
+    ]
     df_eve = pd.DataFrame(columns=allevents,index=vT.index)
     for e in df_eve.columns:
-        edates = event[event==e].index
-        df_eve.loc[edates,e] = vT.loc[edates].values
+        if e in event.unique():
+            edates = event[event==e].index
+            df_eve.loc[edates,e] = vT.loc[edates].values
+
     df_eve = df_eve.astype(float)
     upend  = df_eve[df_eve['Local Max'].notna()]['Local Max']
     downend  = df_eve[df_eve['Local Min'].notna()]['Local Min']
     exts = pd.concat([upend,downend],axis=0).sort_index()
     exts.name = 'Trend Line'
-    dfp = {'Line1':vT.to_frame(),'Line2':exts.to_frame(),'Marker':df_eve}
+    dfp = {
+        'Line1':vT.to_frame(),
+        'Line2':exts.to_frame(),
+        'Marker':df_eve,
+    }
     return dfp

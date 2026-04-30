@@ -177,6 +177,7 @@ def create_sidebar():
                         options=[
                             {'label': ' MA', 'value': 'MA'},
                             {'label': ' SAR', 'value': 'SAR'},
+                            {'label': ' DeMark', 'value': 'DeMark'},
                             {'label': ' Bollinger', 'value': 'Boll'},
                             {'label': ' ATR', 'value': 'ATR'},
                             {'label': ' VWAP', 'value': 'VWAP'},
