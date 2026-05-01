@@ -13,6 +13,9 @@ import numpy as np
 import pandas as pd
 from typing import Dict, Optional, Tuple
 
+
+DEFAULT_REGIME_WINDOW = 120
+
 # Reuse helper functions from the futures regime module
 from futures.backtest.regime import (
     _estimate_hurst,
@@ -27,7 +30,7 @@ from futures.backtest.regime import (
 def compute_regime_features(
     spread_series: pd.Series,
     *,
-    window: int = 20,
+    window: int = DEFAULT_REGIME_WINDOW,
 ) -> Dict[str, float]:
     """Compute the latest regime feature snapshot for a single spread series.
 
@@ -115,7 +118,7 @@ def compute_regime_features(
 def compute_regime_features_series(
     spread_series: pd.Series,
     *,
-    window: int = 20,
+    window: int = DEFAULT_REGIME_WINDOW,
 ) -> pd.DataFrame:
     """Rolling regime features over the full history.
 
@@ -179,12 +182,12 @@ class SpreadRegimeClassifier:
 
     Usage::
 
-        clf = SpreadRegimeClassifier(window=20)
+        clf = SpreadRegimeClassifier(window=DEFAULT_REGIME_WINDOW)
         result = clf.classify(spread_series)
         # result = {'regime': 'trending', 'regime_confidence': 0.75, ...}
     """
 
-    def __init__(self, window: int = 20):
+    def __init__(self, window: int = DEFAULT_REGIME_WINDOW):
         self.window = window
 
     def classify(self, spread_series: pd.Series) -> Dict[str, float]:

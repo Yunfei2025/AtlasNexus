@@ -39,7 +39,8 @@ def _force_update_requested(cfg=None) -> bool:
 
 def retrieveTick(date, futures):
     from WindPy import w
-    w.start()
+    if not w.isconnected():
+        w.start()
     tick = w.wst(
         futures,
         "last,ask,bid,volume",

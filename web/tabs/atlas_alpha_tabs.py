@@ -248,6 +248,51 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
     return None
 
 
+def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
+    """Load daily 3m carry+roll time series for each instrument (in bp).
+
+    Source per type
+    ---------------
+    TBondSwap / CBondSwap  : `*Bond-spds.pkl['BondSwap']['BondCarry']`
+                             Already in bp = (YTM - FR007_3m) × 100.
+    SwapSpread             : `IRS-pxspds.pkl['CarryRoll3m']`
+                             Stored as %-units (bp/100); multiplied by 100 here.
+    TBondCurve / CBondCurve: `*Bond-spds.pkl['BondCurve']['Spread']`
+                             Spread in % → × 100 for bp (coupon pick-up ≈ spread).
+    Others                 : None (no carry history available).
+    """
+    dir_input = _get_input_dir()
+
+    if spread_type in ('TBondSwap', 'CBondSwap'):
+        prefix = 'TBond' if spread_type == 'TBondSwap' else 'CBond'
+        data = _load_pickle_safe(dir_input / f'{prefix}-spds.pkl')
+        if isinstance(data, dict):
+            carry = data.get('BondSwap', {}).get('BondCarry')
+            if isinstance(carry, pd.DataFrame) and not carry.empty:
+                return carry.apply(pd.to_numeric, errors='coerce')
+        return None
+
+    if spread_type in ('TBondCurve', 'CBondCurve'):
+        prefix = 'TBond' if spread_type == 'TBondCurve' else 'CBond'
+        data = _load_pickle_safe(dir_input / f'{prefix}-spds.pkl')
+        if isinstance(data, dict):
+            spd = data.get('BondCurve', {}).get('Spread')
+            if isinstance(spd, pd.DataFrame) and not spd.empty:
+                return spd.apply(pd.to_numeric, errors='coerce') * 100.0
+        return None
+
+    if spread_type == 'SwapSpread':
+        data = _load_pickle_safe(dir_input / 'IRS-pxspds.pkl')
+        if isinstance(data, dict):
+            cr = data.get('CarryRoll3m')
+            if isinstance(cr, pd.DataFrame) and not cr.empty:
+                # carry3m/roll3m stored as bp/100 (%-units); differences retain those units.
+                return cr.apply(pd.to_numeric, errors='coerce') * 100.0
+        return None
+
+    return None
+
+
 def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
     """Load historical spread time series for correlation analysis."""
     dir_input = _get_input_dir()
@@ -1330,6 +1375,8 @@ def build_candidates_layout() -> html.Div:
         
         # Hidden stores for correlation data
         dcc.Store(id='alpha-corr-pairs-store', data=[]),
+        # Regime results from most recent scan: {"spread_type|ID": {"regime": ..., "score": ...}}
+        dcc.Store(id='alpha-regime-store', storage_type='session', data={}),
         
     ], style={'padding': '10px'})
 
@@ -1434,7 +1481,8 @@ def register_alpha_callbacks(app) -> None:
         [Output('alpha-candidates-table-container', 'children'),
          Output('alpha-scan-status', 'children'),
          Output('alpha-selected-candidates', 'data'),
-         Output('alpha-diversified-trades-display', 'children')],
+         Output('alpha-diversified-trades-display', 'children'),
+         Output('alpha-regime-store', 'data')],
         Input('alpha-scan-btn', 'n_clicks'),
         [State('alpha-spread-categories', 'value'),
          State('alpha-zscore-threshold', 'value'),
@@ -1443,7 +1491,7 @@ def register_alpha_callbacks(app) -> None:
     )
     def scan_candidates(n_clicks, categories, zscore_thd, direction):
         if not n_clicks or not categories:
-            return html.Div("Select spread categories and click Scan.", style={'color': THEME['text_sub']}), "", [], html.Div()
+            return html.Div("Select spread categories and click Scan.", style={'color': THEME['text_sub']}), "", [], html.Div(), {}
 
         try:
             z_thd = float(zscore_thd) if zscore_thd is not None else float(ZSCORE_ENTRY_THRESHOLD)
@@ -1487,7 +1535,8 @@ def register_alpha_callbacks(app) -> None:
                 ),
                 f"Scanned at {scanned_time}",
                 [],
-                html.Div()
+                html.Div(),
+                {},
             )
 
         # Direction filter (applied after generator selection)
@@ -1511,7 +1560,8 @@ def register_alpha_callbacks(app) -> None:
                 ),
                 f"Scanned at {scanned_time}",
                 [],
-                html.Div()
+                html.Div(),
+                {},
             )
 
         # Add direction label (only if not provided by generator)
@@ -1803,6 +1853,21 @@ def register_alpha_callbacks(app) -> None:
         status = f"Found {len(df_all)} candidates at {scanned_time}"
 
         candidate_data = df_display.to_dict('records')
+
+        # Build regime store: {"spread_type|ID": {"regime": ..., "score": ...}}
+        # This is consumed by the Backtest subtab so it uses the SAME regime result
+        # that was just computed live here.
+        regime_store: dict = {}
+        if 'regime' in df_all.columns and 'ID' in df_all.columns and 'spread_type' in df_all.columns:
+            for _, _r in df_all.iterrows():
+                _key = f"{_r.get('spread_type', '')}|{_r.get('ID', '')}"
+                _reg = str(_r.get('regime', '')).strip().lower()
+                _conf = _r.get('regime_confidence', np.nan)
+                try:
+                    _conf_f = float(_conf)
+                except Exception:
+                    _conf_f = float('nan')
+                regime_store[_key] = {'regime': _reg, 'score': _conf_f}
         
         # Build diversified trades display (shows recommended low-correlation trades)
         diversified_display = html.Div()
@@ -1848,7 +1913,7 @@ def register_alpha_callbacks(app) -> None:
                 style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'}
             )
         
-        return table_out, status, candidate_data, diversified_display
+        return table_out, status, candidate_data, diversified_display, regime_store
     
     # -------------------------------------------------------------------------
     # CANDIDATES: Replace Strategy Pool with Diversified Trades
@@ -2503,40 +2568,183 @@ def register_alpha_callbacks(app) -> None:
         return macro_options + options
 
     # -------------------------------------------------------------------------
-    # BACKTEST: Update Trade Style based on Spread Type (auto-assign default)
+    # BACKTEST: Auto-detect regime and set trade style from instrument
+    # -------------------------------------------------------------------------
+    _BT_BASE_OPTIONS = [
+        {'label': ' Mean-Reversion', 'value': 'mr'},
+        {'label': ' Carry', 'value': 'carry'},
+        {'label': ' Trend (Directional-Change)', 'value': 'trend'},
+    ]
+    _BT_DISABLED_OPTIONS = [
+        {'label': ' Mean-Reversion', 'value': 'mr', 'disabled': True},
+        {'label': ' Carry', 'value': 'carry', 'disabled': True},
+        {'label': ' Trend (Directional-Change)', 'value': 'trend', 'disabled': True},
+    ]
+
+    _BT_STYLE_DIV_HIDDEN  = {'marginBottom': '5px', 'display': 'none'}
+    _BT_STYLE_DIV_VISIBLE = {'marginBottom': '5px'}
+
+    @app.callback(
+        [Output('bt-trade-style', 'value'),
+         Output('bt-trade-style', 'options'),
+         Output('bt-regime-badge', 'children'),
+         Output('bt-trade-style-div', 'style')],
+        [Input('bt-spread-type', 'value'),
+         Input('bt-instrument', 'value')],
+        [State('alpha-regime-store', 'data')],
+    )
+    def update_trade_style_and_regime(spread_type, instrument, regime_store):
+        # Derive spread-type default style
+        style_key = 'mr'
+        if spread_type:
+            for _, info in SPREAD_CATEGORIES.items():
+                if spread_type in info.get('types', []):
+                    s = info.get('style', 'MeanReversion')
+                    if s == 'Trend':
+                        style_key = 'trend'
+                    elif s == 'Carry' or (
+                        s == 'Mixed' and spread_type in ['TBondSwap', 'CBondSwap', 'TenorSpread']
+                    ):
+                        style_key = 'carry'
+                    break
+
+        if not instrument or not spread_type:
+            return style_key, _BT_BASE_OPTIONS, "", _BT_STYLE_DIV_HIDDEN
+
+        # Load instrument series and compute regime
+        try:
+            from curves.calibration.regime import DEFAULT_REGIME_WINDOW, compute_regime_features
+            regime = 'uncertain'
+            score = 0.0
+            regime_source = 'time-series'
+
+            # Priority 1: regime from the most recent live candidates scan.
+            # This guarantees the backtest tab always sees the SAME regime that
+            # the candidates table computed.
+            _store_key = f"{spread_type}|{instrument}"
+            _store_entry = (regime_store or {}).get(_store_key)
+            if _store_entry and isinstance(_store_entry, dict):
+                _stored_regime = str(_store_entry.get('regime', '')).strip().lower()
+                if _stored_regime in {'mean_reverting', 'trending', 'uncertain'}:
+                    regime = _stored_regime
+                    regime_source = 'candidates'
+                    try:
+                        score = float(_store_entry.get('score', np.nan))
+                    except Exception:
+                        score = np.nan
+
+            # Priority 2: stale snapshot (only when no scan has been run yet).
+            if regime_source == 'time-series' and not (
+                isinstance(instrument, str) and instrument.startswith(MACRO_PREFIX)
+            ):
+                snap_df = load_spread_data(spread_type)
+                if isinstance(snap_df, pd.DataFrame) and not snap_df.empty:
+                    row = None
+                    if instrument in snap_df.index:
+                        row = snap_df.loc[instrument]
+                    elif 'ID' in snap_df.columns:
+                        m = snap_df[snap_df['ID'].astype(str) == str(instrument)]
+                        if not m.empty:
+                            row = m.iloc[0]
+                    if row is not None and isinstance(row, (pd.Series, pd.DataFrame)):
+                        if isinstance(row, pd.DataFrame):
+                            row = row.iloc[0]
+                        snap_regime = str(row.get('regime', '')).strip().lower()
+                        if snap_regime in {'mean_reverting', 'trending', 'uncertain'}:
+                            regime = snap_regime
+                            regime_source = 'snapshot'
+                            snap_score = row.get('regime_confidence', np.nan)
+                            try:
+                                score = float(snap_score)
+                            except Exception:
+                                score = np.nan
+
+            ts = None
+            if regime_source == 'time-series':
+                if isinstance(instrument, str) and instrument.startswith(MACRO_PREFIX):
+                    macro_name = instrument[len(MACRO_PREFIX):]
+                    ts = load_macro_series(macro_name)
+                else:
+                    spread_df = load_spread_timeseries(spread_type)
+                    if spread_df is not None and instrument in spread_df.columns:
+                        ts = spread_df[instrument].dropna()
+
+                if ts is None or len(ts) < DEFAULT_REGIME_WINDOW + 5:
+                    return style_key, _BT_BASE_OPTIONS, html.Span(
+                        "Not enough history for regime detection.",
+                        style={'color': THEME['warning'], 'fontSize': '12px'},
+                    ), _BT_STYLE_DIV_VISIBLE
+
+                regime_info = compute_regime_features(ts, window=DEFAULT_REGIME_WINDOW)
+                regime = regime_info.get('regime', 'uncertain')
+                score = regime_info.get('regime_score', 0.0)
+            if np.isnan(score):
+                score = 0.0
+
+            regime_color = {
+                'mean_reverting': THEME['success'],
+                'trending': THEME['accent'],
+                'uncertain': THEME['warning'],
+            }.get(regime, THEME['text_sub'])
+
+            if regime == 'mean_reverting':
+                style_key = 'mr'
+                auto_options = _BT_DISABLED_OPTIONS
+            elif regime == 'trending':
+                style_key = 'trend'
+                auto_options = _BT_DISABLED_OPTIONS
+            else:
+                # uncertain — do not auto-lock; let user select manually
+                auto_options = _BT_BASE_OPTIONS
+                # keep spread-type default as a suggestion but leave it editable
+
+            badge_extra = (
+                html.Span("  — please select trade style manually",
+                          style={'color': THEME['warning'], 'fontSize': '11px'})
+                if regime == 'uncertain' else
+                html.Span(f"  (score: {score:+.2f}, source: {regime_source})",
+                          style={'color': THEME['text_sub'], 'fontSize': '11px'})
+            )
+            badge = html.Div([
+                html.Span("Auto-detected regime: ",
+                          style={'color': THEME['text_sub'], 'fontSize': '12px'}),
+                html.Span(
+                    regime.upper().replace('_', '-'),
+                    style={'color': regime_color, 'fontWeight': 'bold', 'fontSize': '13px'},
+                ),
+                badge_extra,
+            ])
+            return style_key, auto_options, badge, _BT_STYLE_DIV_VISIBLE
+
+        except Exception as exc:
+            err_badge = html.Span(
+                f"Regime detection error: {exc}",
+                style={'color': THEME['warning'], 'fontSize': '11px'},
+            )
+            return style_key, _BT_BASE_OPTIONS, err_badge, _BT_STYLE_DIV_VISIBLE
+
+    # -------------------------------------------------------------------------
+    # BACKTEST: Show/hide parameter panels based on trade style
     # -------------------------------------------------------------------------
     @app.callback(
-        Output('bt-trade-style', 'value'),
-        Input('bt-spread-type', 'value')
+        [Output('bt-mr-params-div', 'style'),
+         Output('bt-trend-params-div', 'style')],
+        Input('bt-trade-style', 'value'),
     )
-    def update_backtest_trade_style(spread_type):
-        if not spread_type:
-            return 'mr'
-
-        # Default fallback
-        style_key = 'mr'
-
-        # Look up from categories
-        for _, info in SPREAD_CATEGORIES.items():
-            if spread_type in info.get('types', []):
-                s = info.get('style', 'MeanReversion') 
-                if s == 'MeanReversion':
-                    style_key = 'mr'
-                elif s == 'Carry':
-                    style_key = 'carry'
-                elif s == 'Trend': 
-                    style_key = 'trend'
-                elif s == 'Mixed':
-                    # Heuristics for mixed types
-                    if spread_type in ['TBondSwap', 'CBondSwap']:
-                        style_key = 'carry'
-                    elif spread_type == 'SwapSpread':
-                        style_key = 'mr'
-                    elif spread_type == 'TenorSpread':
-                        style_key = 'carry'
-                break
-        
-        return style_key
+    def toggle_backtest_params(style):
+        base_mr = {
+            'backgroundColor': THEME['bg_card'], 'padding': '15px',
+            'borderRadius': '5px', 'marginBottom': '15px',
+        }
+        base_trend = {
+            'backgroundColor': THEME['bg_card'], 'padding': '15px',
+            'borderRadius': '5px', 'marginBottom': '15px',
+        }
+        if style == 'trend':
+            base_mr['display'] = 'none'
+        else:
+            base_trend['display'] = 'none'
+        return base_mr, base_trend
 
     # -------------------------------------------------------------------------
     # BACKTEST: Run Individual Backtest
@@ -2591,30 +2799,89 @@ def register_alpha_callbacks(app) -> None:
         if ts is None or len(ts.dropna()) < 60:
             return html.Div("Insufficient data for backtest.", style={'color': THEME['warning']}), ""
 
+        # Load carry+roll: prefer daily time series for accurate accrual;
+        # fall back to the snapshot scalar.
+        carry_roll_ts_instrument: Optional[pd.Series] = None
+        carry_roll_bp = 0.0
+        if not (isinstance(instrument, str) and instrument.startswith(MACRO_PREFIX)):
+            try:
+                # --- Daily time series (primary) ---
+                cr_df = load_carry_roll_timeseries(spread_type)
+                if isinstance(cr_df, pd.DataFrame) and not cr_df.empty:
+                    # Match column to instrument name
+                    if instrument in cr_df.columns:
+                        carry_roll_ts_instrument = cr_df[instrument].dropna()
+                    else:
+                        # Try case-insensitive / strip match
+                        cols_lower = {c.strip().lower(): c for c in cr_df.columns}
+                        key_lower = str(instrument).strip().lower()
+                        if key_lower in cols_lower:
+                            carry_roll_ts_instrument = cr_df[cols_lower[key_lower]].dropna()
+
+                # --- Snapshot scalar (fallback) ---
+                snap_df = load_spread_data(spread_type)
+                if isinstance(snap_df, pd.DataFrame) and not snap_df.empty:
+                    row = None
+                    if instrument in snap_df.index:
+                        row = snap_df.loc[instrument]
+                    elif 'ID' in snap_df.columns:
+                        _m = snap_df['ID'].astype(str) == str(instrument)
+                        if _m.any():
+                            row = snap_df.loc[_m].iloc[0]
+
+                    if row is not None:
+                        for c in ['carry_roll', 'carry', 'CarryRoll3m', 'CarryRoll', 'Carry', 'carry_roll_3m']:
+                            if c in row.index:
+                                v = row.get(c)
+                                if v is not None and np.isfinite(float(v)):
+                                    carry_roll_bp = float(v)
+                                    break
+            except Exception:
+                carry_roll_ts_instrument = None
+                carry_roll_bp = 0.0
+
         style = style or 'mr'
-        if style == 'trend':
-            results = run_trend_backtest_dc(
-                spread_ts=ts,
-                theta=float(theta) if theta is not None else 0.02,
-                mom_window=int(mom_window) if mom_window is not None else 20,
-                vol_window=int(vol_window) if vol_window is not None else 60,
-                trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
-                carry_buffer=float(carry_buffer) if carry_buffer is not None else 0.0,
-                max_hold=int(max_hold) if max_hold is not None else 60,
-                allow_short=bool(allow_short and 'allow' in allow_short),
-            )
-        else:
-            results = run_spread_backtest(
-                spread_ts=ts,
-                entry_z=entry_z or 2.0,
-                exit_z=exit_z or 0.5,
-                stop_z=stop_z or 4.0,
-                max_hold=max_hold or 60,
-                trade_style=style,
-            )
+        try:
+            if style == 'trend':
+                results = run_trend_backtest_dc(
+                    spread_ts=ts,
+                    theta=float(theta) if theta is not None else 0.02,
+                    mom_window=int(mom_window) if mom_window is not None else 20,
+                    vol_window=int(vol_window) if vol_window is not None else 60,
+                    trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
+                    carry_buffer=float(carry_buffer) if carry_buffer is not None else 0.0,
+                    max_hold=int(max_hold) if max_hold is not None else 60,
+                    allow_short=bool(allow_short and 'allow' in allow_short),
+                    carry_roll_ts=carry_roll_ts_instrument,
+                    carry_roll_bp=carry_roll_bp,
+                )
+            else:
+                results = run_spread_backtest(
+                    spread_ts=ts,
+                    entry_z=entry_z or 2.0,
+                    exit_z=exit_z or 0.5,
+                    stop_z=stop_z or 4.0,
+                    max_hold=max_hold or 60,
+                    trade_style=style,
+                    carry_roll_ts=carry_roll_ts_instrument,
+                    carry_roll_bp=carry_roll_bp,
+                )
+        except Exception as exc:
+            import traceback
+            return html.Div(
+                f"Backtest engine error: {exc}\n{traceback.format_exc(limit=8)}",
+                style={'color': THEME['warning'], 'whiteSpace': 'pre-wrap', 'fontSize': '11px', 'padding': '10px'},
+            ), f"Error at {datetime.now().strftime('%H:%M:%S')}"
         
         status = f"Backtest completed at {datetime.now().strftime('%H:%M:%S')}"
-        display = build_backtest_results_display(results, title=f"Backtest: {display_instrument} ({spread_type})")
+        try:
+            display = build_backtest_results_display(results, title=f"Backtest: {display_instrument} ({spread_type})")
+        except Exception as exc:
+            import traceback
+            display = html.Div(
+                f"Display error: {exc}\n{traceback.format_exc(limit=6)}",
+                style={'color': THEME['warning'], 'whiteSpace': 'pre-wrap', 'fontSize': '11px', 'padding': '10px'},
+            )
         
         return display, status
 
@@ -3206,7 +3473,7 @@ def build_individual_backtest_panel() -> html.Div:
                 ], style={'marginRight': '20px'}),
             ], style={'display': 'flex', 'marginBottom': '15px'}),
             
-            # Trade Style Selection
+            # Trade Style Selection — hidden until an instrument is chosen
             html.Div([
                 html.Label("Trade Style:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginBottom': '5px', 'display': 'block'}),
                 dcc.RadioItems(
@@ -3220,10 +3487,12 @@ def build_individual_backtest_panel() -> html.Div:
                     inline=True,
                     labelStyle={'color': THEME['text_main'], 'marginRight': '15px'},
                 ),
-            ], style={'marginBottom': '0px'}),
+            ], id='bt-trade-style-div', style={'marginBottom': '5px', 'display': 'none'}),
+            # Regime badge: auto-populated when an instrument is selected
+            html.Div(id='bt-regime-badge', style={'marginTop': '8px', 'minHeight': '22px'}),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
         
-        # Strategy Parameters
+        # Strategy Parameters (MR / Carry)
         html.Div([
             html.H6("Strategy Parameters", style={'color': THEME['accent'], 'marginBottom': '15px'}),
             
@@ -3270,9 +3539,9 @@ def build_individual_backtest_panel() -> html.Div:
                     style={'width': '150px'},
                 ),
             ], style={'display': 'flex', 'alignItems': 'center'}),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
+        ], id='bt-mr-params-div', style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
 
-        # Trend Parameters (used when Trade Style = Trend)
+        # Trend Parameters (visible when Trade Style = Trend)
         html.Div([
             html.H6("Trend Parameters (Directional-Change)", style={'color': THEME['accent'], 'marginBottom': '15px'}),
 
@@ -3316,7 +3585,7 @@ def build_individual_backtest_panel() -> html.Div:
                     labelStyle={'color': THEME['text_main'], 'fontSize': '13px'},
                 ),
             ], style={'marginTop': '10px'}),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
+        ], id='bt-trend-params-div', style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px', 'display': 'none'}),
         
         # Run Button
         html.Div([
@@ -3449,6 +3718,43 @@ def build_portfolio_backtest_panel() -> html.Div:
 # Backtest Engine Functions
 # ---------------------------------------------------------------------------
 
+def _carry_accrual(
+    position: int,
+    entry_date: pd.Timestamp,
+    exit_date: pd.Timestamp,
+    days_held: int,
+    carry_roll_ts: Optional[pd.Series],
+    carry_roll_bp: float,
+) -> float:
+    """Compute carry accrual for a trade.
+
+    Prefers averaging the daily time series over [entry_date, exit_date] when
+    available; falls back to the scalar `carry_roll_bp` if the TS has no data.
+    Units: bp (3-month carry+roll).  Accrual = mean_rate × days / 90.
+    """
+    if carry_roll_ts is not None and len(carry_roll_ts) > 0:
+        try:
+            ts = carry_roll_ts
+            # Normalise to tz-naive to avoid comparison errors with pickled tz-aware indexes
+            if hasattr(ts.index, 'tz') and ts.index.tz is not None:
+                ts = ts.copy()
+                ts.index = ts.index.tz_localize(None)
+            t0 = pd.Timestamp(entry_date)
+            t1 = pd.Timestamp(exit_date)
+            if t0.tzinfo is not None:
+                t0 = t0.tz_localize(None)
+            if t1.tzinfo is not None:
+                t1 = t1.tz_localize(None)
+            window = ts.loc[t0:t1]
+            if len(window) > 0 and window.notna().any():
+                mean_rate = float(window.mean(skipna=True))
+                return position * mean_rate * max(days_held, 0) / 90.0
+        except Exception:
+            pass  # fall through to scalar fallback
+    # Fallback: snapshot scalar
+    return position * carry_roll_bp * max(days_held, 0) / 90.0
+
+
 def run_spread_backtest(
     spread_ts: pd.Series,
     entry_z: float = 2.0,
@@ -3456,37 +3762,67 @@ def run_spread_backtest(
     stop_z: float = 4.0,
     max_hold: int = 60,
     trade_style: str = 'mr',
+    carry_roll_ts: Optional[pd.Series] = None,
+    carry_roll_bp: float = 0.0,
 ) -> Dict[str, Any]:
     """Run backtest on a single spread time series.
-    
+
     Args:
-        spread_ts: Time series of spread values (in bp or %)
-        entry_z: Z-score threshold for entry
-        exit_z: Z-score threshold for exit (mean-reversion to mean)
-        stop_z: Z-score threshold for stop-loss
-        max_hold: Maximum holding period in days
-        trade_style: 'mr' for mean-reversion, 'carry' for carry trades
-    
-    Returns:
-        Dictionary with backtest results and metrics
+        spread_ts:     Time series of spread values (in bp or %)
+        entry_z:       Z-score threshold for entry
+        exit_z:        Z-score threshold for exit (mean-reversion to mean)
+        stop_z:        Z-score threshold for stop-loss
+        max_hold:      Maximum holding period in days
+        trade_style:   'mr' for mean-reversion, 'carry' for carry trades
+        carry_roll_ts: Daily 3m carry+roll time series in bp (one column for
+                       the instrument). When provided, the mean carry over each
+                       holding period is used for accrual (more accurate than a
+                       fixed snapshot value). Falls back to carry_roll_bp.
+        carry_roll_bp: Fallback 3m carry+roll scalar in bp (snapshot value).
     """
-    if spread_ts is None or len(spread_ts) < 60:
+    if spread_ts is None or len(spread_ts) < 130:
         return {'error': 'Insufficient data'}
     
     spread_ts = spread_ts.dropna()
     
-    # Calculate rolling statistics (60-day lookback)
-    lookback = 60
+    # Calculate rolling statistics (120-day lookback, consistent with regime detection)
+    lookback = 120
     rolling_mean = spread_ts.rolling(lookback).mean()
     rolling_std = spread_ts.rolling(lookback).std()
     zscore = (spread_ts - rolling_mean) / rolling_std
     
     # Initialize tracking
+    # ---- Carry-adjusted composite signal ----------------------------------------
+    # Shift z-score by carry income expressed in sigma units over a 30-day horizon.
+    # composite_signal = z - carry_sigma
+    #   z             = (spread - mean) / std   (positive = spread above mean → SELL)
+    #   carry_sigma   = carry_rate * 30 / 90 / std
+    #                 (positive carry favours LONG, lowers effective long-entry threshold)
+    # Entry/exit targets use composite_signal; stop-loss uses raw z (pure price protection).
+    _score_horizon = 30
+    try:
+        _cr_fallback = carry_roll_bp if np.isfinite(carry_roll_bp) else 0.0
+        _cr_aligned = pd.Series(_cr_fallback, index=spread_ts.index, dtype=float)
+        if carry_roll_ts is not None and len(carry_roll_ts) > 0:
+            _ts_cr = carry_roll_ts.copy()
+            if hasattr(_ts_cr.index, 'tz') and _ts_cr.index.tz is not None:
+                _ts_cr.index = _ts_cr.index.tz_localize(None)
+            _cr_aligned = _ts_cr.reindex(spread_ts.index, method='ffill').fillna(_cr_fallback)
+        _safe_std = rolling_std.replace(0, np.nan).fillna(1.0)
+        carry_sigma_ts = (_cr_aligned * _score_horizon / 90.0) / _safe_std
+        composite_signal = zscore - carry_sigma_ts
+    except Exception:
+        composite_signal = zscore.copy()
+    # ---- End carry-adjusted composite signal ------------------------------------
+
     trades = []
     position = 0  # 0 = flat, 1 = long spread, -1 = short spread
     entry_date = None
     entry_price = None
     entry_zscore = None
+    realized_pnl = 0.0
+    equity_dates: List[pd.Timestamp] = []
+    equity_values: List[float] = []
     
     # Iterate through time series
     for i in range(lookback, len(spread_ts)):
@@ -3494,6 +3830,9 @@ def run_spread_backtest(
         price = spread_ts.iloc[i]
         z = zscore.iloc[i]
         
+        cs_raw = composite_signal.iloc[i]
+        cs = cs_raw if np.isfinite(cs_raw) else z  # carry-adjusted signal; fallback to raw z
+
         if np.isnan(z):
             continue
         
@@ -3507,22 +3846,23 @@ def run_spread_backtest(
             
             if trade_style == 'mr':
                 # Mean-reversion: exit when z-score reverts toward 0
-                if position == 1 and z >= -exit_z:  # Long position, z was negative
+                # Use carry-adjusted signal: stay in trade longer when carry is still supporting
+                if position == 1 and cs >= -exit_z:  # Long position
                     exit_signal = True
                     exit_reason = 'target'
-                elif position == -1 and z <= exit_z:  # Short position, z was positive
+                elif position == -1 and cs <= exit_z:  # Short position
                     exit_signal = True
                     exit_reason = 'target'
             else:
                 # Carry: exit on reversal or time
-                if position == 1 and z > entry_zscore + 1:
+                if position == 1 and cs > entry_zscore + 1:
                     exit_signal = True
                     exit_reason = 'reversal'
-                elif position == -1 and z < entry_zscore - 1:
+                elif position == -1 and cs < entry_zscore - 1:
                     exit_signal = True
                     exit_reason = 'reversal'
             
-            # Stop loss
+            # Stop loss: raw z-score only (pure price protection, not carry-adjusted)
             if position == 1 and z < -stop_z:
                 exit_signal = True
                 exit_reason = 'stop_loss'
@@ -3536,7 +3876,13 @@ def run_spread_backtest(
                 exit_reason = 'max_hold'
             
             if exit_signal:
-                pnl = (price - entry_price) * position  # In spread units (bp)
+                price_pnl = (price - entry_price) * position  # spread price change (bp/%)
+                carry_income = _carry_accrual(
+                    position, entry_date, date, days_held,
+                    carry_roll_ts, carry_roll_bp,
+                )
+                pnl = price_pnl + carry_income
+                realized_pnl += pnl
                 trades.append({
                     'entry_date': entry_date,
                     'exit_date': date,
@@ -3546,6 +3892,7 @@ def run_spread_backtest(
                     'entry_z': entry_zscore,
                     'exit_z': z,
                     'pnl_bp': pnl,
+                    'carry_bp': carry_income,
                     'days_held': days_held,
                     'exit_reason': exit_reason,
                 })
@@ -3557,29 +3904,39 @@ def run_spread_backtest(
         # Check for entry conditions
         if position == 0:
             if trade_style == 'mr':
-                # Mean-reversion: enter when z-score is extreme
-                if z <= -entry_z:
+                # Mean-reversion: enter when carry-adjusted signal is extreme
+                if cs <= -entry_z:
                     position = 1  # Long spread (expect it to rise)
                     entry_date = date
                     entry_price = price
-                    entry_zscore = z
-                elif z >= entry_z:
+                    entry_zscore = cs
+                elif cs >= entry_z:
                     position = -1  # Short spread (expect it to fall)
                     entry_date = date
                     entry_price = price
-                    entry_zscore = z
+                    entry_zscore = cs
             else:
                 # Carry: same entry logic but different exit
-                if z <= -entry_z:
+                if cs <= -entry_z:
                     position = 1
                     entry_date = date
                     entry_price = price
-                    entry_zscore = z
-                elif z >= entry_z:
+                    entry_zscore = cs
+                elif cs >= entry_z:
                     position = -1
                     entry_date = date
                     entry_price = price
-                    entry_zscore = z
+                    entry_zscore = cs
+
+        # Daily mark-to-market equity (realized + unrealized for open position)
+        if position != 0 and entry_price is not None:
+            mtm = realized_pnl + (price - entry_price) * position
+        else:
+            mtm = realized_pnl
+        equity_dates.append(pd.Timestamp(date))
+        equity_values.append(float(mtm))
+
+    equity_ts = pd.Series(equity_values, index=pd.DatetimeIndex(equity_dates), name='equity_bp')
     
     # Calculate metrics
     if not trades:
@@ -3594,6 +3951,11 @@ def run_spread_backtest(
             'max_drawdown': 0,
             'spread_ts': spread_ts,
             'zscore_ts': zscore,
+            'composite_signal_ts': composite_signal,
+            'equity_ts': equity_ts,
+            'entry_z': entry_z,
+            'exit_z': exit_z,
+            'stop_z': stop_z,
         }
     
     trades_df = pd.DataFrame(trades)
@@ -3629,7 +3991,12 @@ def run_spread_backtest(
         'max_drawdown': max_drawdown,
         'spread_ts': spread_ts,
         'zscore_ts': zscore,
+        'composite_signal_ts': composite_signal,
         'cum_pnl': cum_pnl,
+        'equity_ts': equity_ts,
+        'entry_z': entry_z,
+        'exit_z': exit_z,
+        'stop_z': stop_z,
     }
 
 
@@ -3672,8 +4039,15 @@ def run_trend_backtest_dc(
     carry_buffer: float = 0.0,
     max_hold: int = 60,
     allow_short: bool = True,
+    carry_roll_ts: Optional[pd.Series] = None,
+    carry_roll_bp: float = 0.0,
 ) -> Dict[str, Any]:
-    """Trend/carry backtest using directional-change trend confirmation."""
+    """Trend/carry backtest using directional-change trend confirmation.
+
+    carry_roll_ts: Daily 3m carry+roll time series in bp for the instrument.
+                   Mean over each holding period used for carry accrual.
+    carry_roll_bp: Fallback scalar if TS not available.
+    """
     if spread_ts is None or len(spread_ts) < 60:
         return {'error': 'Insufficient data'}
 
@@ -3691,6 +4065,9 @@ def run_trend_backtest_dc(
     entry_date = None
     entry_price = None
     best_fav = None
+    realized_pnl = 0.0
+    equity_dates: List[pd.Timestamp] = []
+    equity_values: List[float] = []
 
     start_i = max(vol_window, mom_window) + 1
     for i in range(start_i, len(s)):
@@ -3727,7 +4104,13 @@ def run_trend_backtest_dc(
             time_stop = days_held >= max_hold
 
             if trailing_stop or carry_bad or flip or time_stop:
-                pnl = (px - entry_price) * position
+                price_pnl = (px - entry_price) * position
+                carry_income = _carry_accrual(
+                    position, entry_date, date, days_held,
+                    carry_roll_ts, carry_roll_bp,
+                )
+                pnl = price_pnl + carry_income
+                realized_pnl += pnl
                 trades.append({
                     'entry_date': entry_date,
                     'exit_date': date,
@@ -3735,6 +4118,7 @@ def run_trend_backtest_dc(
                     'entry_price': entry_price,
                     'exit_price': px,
                     'pnl_bp': pnl,
+                    'carry_bp': carry_income,
                     'days_held': days_held,
                     'exit_reason': 'trailing' if trailing_stop else ('carry' if carry_bad else ('flip' if flip else 'max_hold')),
                 })
@@ -3756,6 +4140,16 @@ def run_trend_backtest_dc(
                 entry_price = px
                 best_fav = px
 
+        # Daily mark-to-market equity (realized + unrealized)
+        if position != 0 and entry_price is not None:
+            mtm = realized_pnl + (px - entry_price) * position
+        else:
+            mtm = realized_pnl
+        equity_dates.append(pd.Timestamp(date))
+        equity_values.append(float(mtm))
+
+    equity_ts = pd.Series(equity_values, index=pd.DatetimeIndex(equity_dates), name='equity_bp')
+
     if not trades:
         return {
             'trades': [],
@@ -3771,6 +4165,7 @@ def run_trend_backtest_dc(
             'trend_state_ts': trend_state,
             'norm_mom_ts': norm_mom,
             'cum_pnl': np.array([]),
+            'equity_ts': equity_ts,
         }
 
     trades_df = pd.DataFrame(trades)
@@ -3801,6 +4196,7 @@ def run_trend_backtest_dc(
         'trend_state_ts': trend_state,
         'norm_mom_ts': norm_mom,
         'cum_pnl': cum_pnl,
+        'equity_ts': equity_ts,
     }
 
 
@@ -3848,114 +4244,259 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '20px'}),
     ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'})
 
-    # Instrument chart (first chart): show underlying spread/macro series used in backtest.
+    # Derive key state used across all chart sections
+    is_trend = 'trend_state_ts' in results
+    trades_df = results.get('trades_df')
+
+    # Common x-axis start: trim Instrument History to match Score/PnL charts.
+    # Score and equity series start after the warmup window; raw spread_ts includes
+    # the warmup period, making the x-axes misaligned.
+    _score_raw = results.get('norm_mom_ts') if is_trend else results.get('zscore_ts')
+    _equity_raw = results.get('equity_ts')
+    x_start = None
+    if _score_raw is not None and len(_score_raw.dropna()) > 0:
+        x_start = _score_raw.dropna().index[0]
+    elif isinstance(_equity_raw, pd.Series) and len(_equity_raw.dropna()) > 0:
+        x_start = _equity_raw.dropna().index[0]
+
+    # ---- Instrument history with entry/exit markers ----
     instrument_fig = go.Figure()
     if 'spread_ts' in results and results['spread_ts'] is not None:
         spread_ts = results['spread_ts'].dropna()
+        if x_start is not None:
+            spread_ts = spread_ts.loc[spread_ts.index >= x_start]
         if len(spread_ts) > 0:
             instrument_fig.add_trace(go.Scatter(
                 x=spread_ts.index,
                 y=spread_ts.values,
                 mode='lines',
-                name='Instrument',
-                line=dict(color=THEME['accent'], width=2),
+                name='Spread',
+                line=dict(color=THEME['accent'], width=1.5),
+                showlegend=False,
+            ))
+
+    if trades_df is not None and len(trades_df) > 0:
+        long_entries = trades_df[trades_df['direction'] == 'LONG']
+        short_entries = trades_df[trades_df['direction'] == 'SHORT']
+        profit_exits = trades_df[trades_df['pnl_bp'] > 0]
+        loss_exits = trades_df[trades_df['pnl_bp'] <= 0]
+        if len(long_entries) > 0:
+            instrument_fig.add_trace(go.Scatter(
+                x=long_entries['entry_date'], y=long_entries['entry_price'],
+                mode='markers', name='Long Entry',
+                marker=dict(symbol='triangle-up', size=10, color=THEME['success'],
+                            line=dict(width=1, color='white')),
+                showlegend=True,
+            ))
+        if len(short_entries) > 0:
+            instrument_fig.add_trace(go.Scatter(
+                x=short_entries['entry_date'], y=short_entries['entry_price'],
+                mode='markers', name='Short Entry',
+                marker=dict(symbol='triangle-down', size=10, color=THEME['danger'],
+                            line=dict(width=1, color='white')),
+                showlegend=True,
+            ))
+        if len(profit_exits) > 0:
+            instrument_fig.add_trace(go.Scatter(
+                x=profit_exits['exit_date'], y=profit_exits['exit_price'],
+                mode='markers', name='Exit (profit)',
+                marker=dict(symbol='circle', size=7, color=THEME['success'], opacity=0.85),
+                showlegend=True,
+            ))
+        if len(loss_exits) > 0:
+            instrument_fig.add_trace(go.Scatter(
+                x=loss_exits['exit_date'], y=loss_exits['exit_price'],
+                mode='markers', name='Exit (stop/loss)',
+                marker=dict(symbol='x', size=9, color=THEME['danger'], opacity=0.85),
+                showlegend=True,
             ))
 
     instrument_fig.update_layout(
         title='Instrument History',
-        height=250,
+        height=300,
         margin=dict(l=50, r=20, t=40, b=40),
         plot_bgcolor=THEME['bg_main'],
         paper_bgcolor=THEME['bg_main'],
         font=dict(color=THEME['text_main']),
         xaxis=dict(gridcolor=THEME['bg_card']),
-        yaxis=dict(title='Value', gridcolor=THEME['bg_card']),
-        showlegend=False,
+        yaxis=dict(title='Spread (bp)', gridcolor=THEME['bg_card']),
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1,
+                    font=dict(size=10), bgcolor='rgba(0,0,0,0)'),
     )
 
     instrument_div = html.Div([
-        dcc.Graph(figure=instrument_fig, style={'height': '250px'}),
+        dcc.Graph(figure=instrument_fig, style={'height': '300px'}),
     ], style={'marginBottom': '15px'})
-    
-    # Equity curve chart
-    equity_fig = go.Figure()
-    
-    if 'cum_pnl' in results and len(results['cum_pnl']) > 0:
-        trades_df = results.get('trades_df')
-        if trades_df is not None and len(trades_df) > 0:
-            equity_fig.add_trace(go.Scatter(
-                x=list(range(len(results['cum_pnl']))),
-                y=results['cum_pnl'],
-                mode='lines',
-                name='Cumulative PnL',
-                line=dict(color=THEME['success'], width=2),
+
+    # ---- Score History (universal: z-score for MR/carry, norm_mom for trend) ----
+    score_div = html.Div()
+    _raw_score = results.get('norm_mom_ts') if is_trend else (
+        results.get('composite_signal_ts') or results.get('zscore_ts')
+    )
+    if _raw_score is not None and len(_raw_score.dropna()) > 0:
+        score_ts_display = _raw_score.dropna()
+        score_label = 'Norm Momentum (σ)' if is_trend else (
+            'Carry-Adj Z (120d)' if results.get('composite_signal_ts') is not None else 'Z-Score (120d)'
+        )
+
+        signal_fig = go.Figure()
+
+        # For trend: draw trend_state background shading behind score line
+        if is_trend and 'trend_state_ts' in results and results['trend_state_ts'] is not None:
+            _tst = results['trend_state_ts'].reindex(score_ts_display.index).ffill().fillna(0.0)
+            signal_fig.add_trace(go.Scatter(
+                x=score_ts_display.index, y=(_tst * 2.0).values,
+                mode='lines', name='Trend State (×2)',
+                line=dict(color='rgba(255,165,0,0.45)', width=1, shape='hv'),
+                fill='tozeroy', fillcolor='rgba(255,165,0,0.07)',
+                showlegend=False,
             ))
-    
+
+        # Score line
+        score_plot = score_ts_display.clip(-4, 4) if is_trend else score_ts_display
+        signal_fig.add_trace(go.Scatter(
+            x=score_plot.index, y=score_plot.values,
+            mode='lines', name=score_label,
+            line=dict(color=THEME['accent'], width=1.2),
+            showlegend=False,
+        ))
+
+        # Zero line
+        signal_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
+
+        # Threshold lines depend on style
+        if is_trend:
+            signal_fig.add_hline(y=0.5,  line_dash='dash', line_color='rgba(0,204,150,0.55)',
+                                 annotation_text='+0.5σ entry')
+            signal_fig.add_hline(y=-0.5, line_dash='dash', line_color='rgba(239,85,59,0.55)',
+                                 annotation_text='-0.5σ entry')
+        else:
+            _ez  = float(results.get('entry_z', 2.0))
+            _sz  = float(results.get('stop_z', 4.0))
+            _xz  = float(results.get('exit_z', 0.5))
+            signal_fig.add_hline(y=_ez,  line_dash='dash', line_color=THEME['danger'],
+                                 annotation_text=f'+{_ez}\u03c3 entry')
+            signal_fig.add_hline(y=-_ez, line_dash='dash', line_color=THEME['success'],
+                                 annotation_text=f'-{_ez}\u03c3 entry')
+            signal_fig.add_hline(y=_sz,  line_dash='dot',
+                                 line_color='rgba(239,85,59,0.5)',
+                                 annotation_text=f'+{_sz}\u03c3 stop')
+            signal_fig.add_hline(y=-_sz, line_dash='dot',
+                                 line_color='rgba(239,85,59,0.5)',
+                                 annotation_text=f'-{_sz}\u03c3 stop')
+            signal_fig.add_hline(y=_xz,  line_dash='dot',
+                                 line_color='rgba(0,204,150,0.4)',
+                                 annotation_text=f'+{_xz}\u03c3 exit')
+            signal_fig.add_hline(y=-_xz, line_dash='dot',
+                                 line_color='rgba(0,204,150,0.4)',
+                                 annotation_text=f'-{_xz}\u03c3 exit')
+
+        # Entry/exit markers — look up score at trade dates (works for all styles)
+        if trades_df is not None and len(trades_df) > 0:
+            def _score_at(df, date_col):
+                dates = pd.DatetimeIndex(pd.to_datetime(df[date_col]))
+                return score_ts_display.clip(-4, 4).reindex(dates, method='nearest').values
+
+            long_e  = trades_df[trades_df['direction'] == 'LONG']
+            short_e = trades_df[trades_df['direction'] == 'SHORT']
+            prof_x  = trades_df[trades_df['pnl_bp'] > 0]
+            loss_x  = trades_df[trades_df['pnl_bp'] <= 0]
+
+            if len(long_e) > 0:
+                signal_fig.add_trace(go.Scatter(
+                    x=long_e['entry_date'], y=_score_at(long_e, 'entry_date'),
+                    mode='markers',
+                    marker=dict(symbol='triangle-up', size=9, color=THEME['success'],
+                                line=dict(width=1, color='white')),
+                    showlegend=False,
+                ))
+            if len(short_e) > 0:
+                signal_fig.add_trace(go.Scatter(
+                    x=short_e['entry_date'], y=_score_at(short_e, 'entry_date'),
+                    mode='markers',
+                    marker=dict(symbol='triangle-down', size=9, color=THEME['danger'],
+                                line=dict(width=1, color='white')),
+                    showlegend=False,
+                ))
+            if len(prof_x) > 0:
+                signal_fig.add_trace(go.Scatter(
+                    x=prof_x['exit_date'], y=_score_at(prof_x, 'exit_date'),
+                    mode='markers',
+                    marker=dict(symbol='circle', size=7, color=THEME['success'], opacity=0.8),
+                    showlegend=False,
+                ))
+            if len(loss_x) > 0:
+                signal_fig.add_trace(go.Scatter(
+                    x=loss_x['exit_date'], y=_score_at(loss_x, 'exit_date'),
+                    mode='markers',
+                    marker=dict(symbol='x', size=8, color=THEME['danger'], opacity=0.8),
+                    showlegend=False,
+                ))
+
+        signal_fig.update_layout(
+            title=f'Score History ({score_label})',
+            height=230,
+            margin=dict(l=50, r=20, t=40, b=40),
+            plot_bgcolor=THEME['bg_main'],
+            paper_bgcolor=THEME['bg_main'],
+            font=dict(color=THEME['text_main']),
+            xaxis=dict(gridcolor=THEME['bg_card']),
+            yaxis=dict(
+                title='Norm Mom (σ)' if is_trend else 'Z-Score',
+                gridcolor=THEME['bg_card'],
+            ),
+            showlegend=False,
+        )
+        score_div = html.Div([
+            dcc.Graph(figure=signal_fig, style={'height': '230px'}),
+        ], style={'marginBottom': '15px'})
+
+    # ---- Cumulative PnL (daily mark-to-market when available) ----
+    equity_fig = go.Figure()
+    equity_ts = results.get('equity_ts')
+    if isinstance(equity_ts, pd.Series) and len(equity_ts.dropna()) > 0:
+        equity_fig.add_trace(go.Scatter(
+            x=equity_ts.index,
+            y=equity_ts.values,
+            mode='lines',
+            name='Cumulative PnL (Daily MtM)',
+            line=dict(color=THEME['success'], width=2),
+            fill='tozeroy',
+            fillcolor='rgba(0, 204, 150, 0.08)',
+        ))
+        equity_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
+    elif 'cum_pnl' in results and len(results['cum_pnl']) > 0 and trades_df is not None and len(trades_df) > 0:
+        # Fallback to trade-exit step if daily mark-to-market is unavailable.
+        exit_dates = pd.to_datetime(trades_df['exit_date']).tolist()
+        cum_vals = list(results['cum_pnl'])
+        first_entry = pd.to_datetime(trades_df['entry_date'].iloc[0])
+        equity_fig.add_trace(go.Scatter(
+            x=[first_entry] + exit_dates,
+            y=[0.0] + cum_vals,
+            mode='lines',
+            name='Cumulative PnL',
+            line=dict(color=THEME['success'], width=2),
+            fill='tozeroy',
+            fillcolor='rgba(0, 204, 150, 0.08)',
+        ))
+        equity_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
+
     equity_fig.update_layout(
         title='Cumulative PnL (bp)',
-        height=250,
-        margin=dict(l=50, r=20, t=40, b=40),
-        plot_bgcolor=THEME['bg_main'],
-        paper_bgcolor=THEME['bg_main'],
-        font=dict(color=THEME['text_main']),
-        xaxis=dict(title='Trade #', gridcolor=THEME['bg_card']),
-        yaxis=dict(title='Cumulative PnL (bp)', gridcolor=THEME['bg_card']),
-    )
-    
-    equity_div = html.Div([
-        dcc.Graph(figure=equity_fig, style={'height': '250px'}),
-    ], style={'marginBottom': '15px'})
-    
-    # Signal chart: Z-score (MR/Carry) or Trend State (Trend)
-    signal_fig = go.Figure()
-    signal_title = 'Signal'
-
-    if 'zscore_ts' in results and results['zscore_ts'] is not None:
-        zscore_ts = results['zscore_ts'].dropna()
-        if len(zscore_ts) > 0:
-            signal_title = 'Z-Score History'
-            signal_fig.add_trace(go.Scatter(
-                x=zscore_ts.index,
-                y=zscore_ts.values,
-                mode='lines',
-                name='Z-Score',
-                line=dict(color=THEME['accent'], width=1),
-            ))
-            signal_fig.add_hline(y=2, line_dash='dash', line_color=THEME['danger'], annotation_text='+2σ')
-            signal_fig.add_hline(y=-2, line_dash='dash', line_color=THEME['success'], annotation_text='-2σ')
-            signal_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
-    elif 'trend_state_ts' in results and results['trend_state_ts'] is not None:
-        st = results['trend_state_ts'].dropna()
-        if len(st) > 0:
-            signal_title = 'Trend State (Directional-Change)'
-            signal_fig.add_trace(go.Scatter(
-                x=st.index,
-                y=st.values,
-                mode='lines',
-                name='TrendState',
-                line=dict(color=THEME['accent'], width=2),
-            ))
-            signal_fig.add_hline(y=1, line_dash='dash', line_color=THEME['success'], annotation_text='Up')
-            signal_fig.add_hline(y=-1, line_dash='dash', line_color=THEME['danger'], annotation_text='Down')
-            signal_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
-
-    signal_fig.update_layout(
-        title=signal_title,
-        height=200,
+        height=230,
         margin=dict(l=50, r=20, t=40, b=40),
         plot_bgcolor=THEME['bg_main'],
         paper_bgcolor=THEME['bg_main'],
         font=dict(color=THEME['text_main']),
         xaxis=dict(gridcolor=THEME['bg_card']),
-        yaxis=dict(title='Signal', gridcolor=THEME['bg_card']),
-        showlegend=False,
+        yaxis=dict(title='Cumulative PnL (bp)', gridcolor=THEME['bg_card']),
     )
 
-    signal_div = html.Div([
-        dcc.Graph(figure=signal_fig, style={'height': '200px'}),
+    equity_div = html.Div([
+        dcc.Graph(figure=equity_fig, style={'height': '230px'}),
     ], style={'marginBottom': '15px'})
-    
-    # Trades table
+
+    # ---- Trades table ----
     trades_table = html.Div()
     if 'trades_df' in results and results['trades_df'] is not None and len(results['trades_df']) > 0:
         df = results['trades_df'].copy()
@@ -3964,7 +4505,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         for col in ['entry_price', 'exit_price', 'pnl_bp', 'entry_z', 'exit_z']:
             if col in df.columns:
                 df[col] = df[col].round(2)
-        
+
         trades_table = html.Div([
             html.H6("Trade History", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
             dash_table.DataTable(
@@ -3990,11 +4531,11 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
                 sort_action='native',
             ),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'})
-    
+
     return html.Div([
         metrics_div,
         instrument_div,
-        equity_div,
-        signal_div,
+        score_div,    # Z-Score (MR/Carry only)
+        equity_div,   # Cumulative PnL
         trades_table,
     ])

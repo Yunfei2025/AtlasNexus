@@ -6,13 +6,25 @@ import datetime as dt
 
 import pandas as pd
 import plotly.graph_objs as go
-from WindPy import w
 import re
 
 from .load import tick_dfp
 from settings.general import DateConfig
 
-w.start()
+
+def _get_wind():
+    """Return a connected Wind instance, starting it if not already connected."""
+    from WindPy import w as _w
+    if not _w.isconnected():
+        _w.start()
+    return _w
+
+
+# Module-level alias used by callbacks in this file.
+try:
+    from WindPy import w
+except ImportError:
+    w = None  # type: ignore
 
 
 def get_current_time() -> int:
@@ -104,6 +116,7 @@ def getVolInfo(tick: pd.DataFrame, csinterval: str):
 
 
 def queryPriceVolumeData(date: str, futures: str, csinterval: str):
+    w = _get_wind()
     tick = w.wst(
         futures,
         "last,ask,bid,volume",
