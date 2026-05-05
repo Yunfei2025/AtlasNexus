@@ -258,7 +258,7 @@ class IRSCurve:
         df['Days'] = daylist
         df = df.sort_values(by='Days')
         df['DelDays'] = df['Days'].diff()# days_del.values
-        df['DelDays'][0] = df['Days'][0]
+        df.loc[df.index[0], 'DelDays'] = df['Days'].iloc[0]
         
         run_sum = 0.0
         for i in range(df.shape[0]):
@@ -269,7 +269,9 @@ class IRSCurve:
                 df_val = 0
             else:
                 if i == 0:
-                    df_val = 1/(1+r*ds/GeneralConfig.YN1) # Fixing discount use 360
+                    # ACT/365 for r7d (FR007 compounding), ACT/360 for s3m (SHIBOR3M simple)
+                    yn_first = GeneralConfig.YN if self.type == 'r7d' else GeneralConfig.YN1
+                    df_val = 1/(1+r*ds/yn_first)
                 else:
                     df_val = (1-r*run_sum)/(1+r*ds/GeneralConfig.YN)
             df.loc[l,'DF'] = df_val

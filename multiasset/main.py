@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 # Ensure parent directory (containing the `factors` package) is on sys.path
 project_root = Path(__file__).resolve().parents[1]
@@ -46,7 +46,7 @@ _HEDGE_INSTRUMENT_DEFS: Dict[str, dict] = {
 }
 
 # Shared risk factor loader to avoid recomputing PCA on every call
-_SHARED_LOADER: RiskFactorLoader | None = None
+_SHARED_LOADER: Optional[RiskFactorLoader] = None
 
 def _get_shared_loader(use_deterministic: bool = True) -> RiskFactorLoader:
     """Get or create the shared RiskFactorLoader instance."""

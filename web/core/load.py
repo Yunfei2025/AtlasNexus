@@ -120,11 +120,15 @@ def _load_bond_refs(btypes):
     return bond_ref, term_ref, factors
 
 def _load_fixing_ts(spread_ts):
-    fixing_ts_all = _load_pickle(os.path.join(DIR_INPUT,"database-px.pkl"))["IRS"]
-    datelist = spread_ts["SwapSpread"]["Spread"].index.intersection(fixing_ts_all.index)
-    fixing_ts = fixing_ts_all.loc[datelist, ["FR007.IR", "SHIBOR3M.IR"]]
-    fixing_ts["S-R.IR"] = fixing_ts["SHIBOR3M.IR"] - fixing_ts["FR007.IR"]
-    return fixing_ts
+    try:
+        fixing_ts_all = _load_pickle(os.path.join(DIR_INPUT, "database-px.pkl"))["IRS"]
+        datelist = spread_ts["SwapSpread"]["Spread"].index.intersection(fixing_ts_all.index)
+        fixing_ts = fixing_ts_all.loc[datelist, ["FR007.IR", "SHIBOR3M.IR"]]
+        fixing_ts["S-R.IR"] = fixing_ts["SHIBOR3M.IR"] - fixing_ts["FR007.IR"]
+        return fixing_ts
+    except Exception as exc:
+        logger.warning("Failed to load fixing_ts from database-px.pkl: %s", exc)
+        return pd.DataFrame(columns=["FR007.IR", "SHIBOR3M.IR", "S-R.IR"])
 
 def _load_fut_ticks(tickers):
     fut_tick = {}

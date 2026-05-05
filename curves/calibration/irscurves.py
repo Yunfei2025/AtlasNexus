@@ -521,10 +521,22 @@ class CurveGenerator:
             fr.index = self.tenor_converter.to_string(fr.index.tolist())
             forward_data[target_date] = fr
         
-        # Update curve data manager
+        # Update curve data manager — append new rows, do not overwrite existing history
         curve_data = self.curve_data_manager.load()
-        curve_data[curve_type]['spot'] = pd.concat(spot_data, axis=1).T
-        curve_data[curve_type]['forward'] = pd.concat(forward_data, axis=1).T
+        new_spot = pd.concat(spot_data, axis=1).T
+        new_forward = pd.concat(forward_data, axis=1).T
+        existing_spot = curve_data[curve_type]['spot']
+        existing_forward = curve_data[curve_type]['forward']
+        add_mask_spot = ~new_spot.index.isin(existing_spot.index)
+        add_mask_fwd  = ~new_forward.index.isin(existing_forward.index)
+        if add_mask_spot.any():
+            curve_data[curve_type]['spot'] = pd.concat(
+                [existing_spot, new_spot[add_mask_spot]]
+            ).sort_index()
+        if add_mask_fwd.any():
+            curve_data[curve_type]['forward'] = pd.concat(
+                [existing_forward, new_forward[add_mask_fwd]]
+            ).sort_index()
 
 
 # ============================================================
@@ -639,21 +651,31 @@ class IRSContract:
         cashflow['DF'] = 1.0
         cashflow['TermRes'] = 0.0
         cashflow['SpotRate'] = 0.0
-        
+
+        # Maintain a running sum that mirrors the original
+        # `(cashflow['Interval'].iloc[:i] * cashflow['DF'].iloc[:i]).sum()` —
+        # incremental update keeps the bootstrap O(N) instead of O(N^2).
+        interval_vals = cashflow['Interval'].to_numpy(dtype=float)
+        df_vals = cashflow['DF'].to_numpy(dtype=float).copy()
+        fwd_offset = len(cashflow) - len(schedule_fwd)
+        sum_term = 0.0
+
         for i, s in enumerate(schedule_fwd):
             s1 = cashflow.loc[s, 'PayDate']
             res = (s1 - valuation_date).days / GeneralConfig.YN
             cashflow.loc[s, 'TermRes'] = res
-            
+
             idx = spot_series.index.get_indexer([s1], method="ffill")[0]
             spot = spot_series.iloc[idx] / 100
             cashflow.loc[s, 'SpotRate'] = spot * 100
-            
+
             if i == 0:
-                cashflow.loc[s, 'DF'] = 1 / (1 + spot * res * GeneralConfig.YN / GeneralConfig.YN1)
+                new_df = 1 / (1 + spot * res * GeneralConfig.YN / GeneralConfig.YN1)
             else:
-                sum_term = (cashflow['Interval'].iloc[:i] * cashflow['DF'].iloc[:i]).sum()
-                cashflow.loc[s, 'DF'] = (1 - spot * sum_term) / (1 + spot * cashflow.loc[s, 'Interval'])
+                new_df = (1 - spot * sum_term) / (1 + spot * cashflow.loc[s, 'Interval'])
+            cashflow.loc[s, 'DF'] = new_df
+            df_vals[fwd_offset + i] = new_df
+            sum_term += interval_vals[i] * df_vals[i]
         
         # Present values
         cashflow['PV(Float)'] = cashflow['CashFlow(Float)'] * cashflow['DF']

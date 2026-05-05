@@ -114,8 +114,16 @@ def run_atlasnexus_daily_app():
         logger.info("Starting AtlasNexus Daily Console")
         logger.info("Web server starting... Press Ctrl+C to stop and return to main menu")
 
-        init_status = run_initialise()
-        logger.info(f"AtlasNexus startup initialisation: {init_status}")
+        # Run initialise in a background thread so the Dash server starts
+        # immediately and the page is accessible while data updates run.
+        import threading
+        def _bg_init():
+            try:
+                status = run_initialise()
+                logger.info(f"AtlasNexus startup initialisation: {status}")
+            except Exception as exc:
+                logger.warning(f"AtlasNexus background initialisation error: {exc}")
+        threading.Thread(target=_bg_init, daemon=True).start()
 
         browser_url = _browser_url(8080)
         logger.info(f"Opening AtlasNexus Daily Console in browser: {browser_url}")

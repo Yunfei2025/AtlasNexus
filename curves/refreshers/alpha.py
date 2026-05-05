@@ -528,11 +528,18 @@ def _enrich_candidates_with_regression(
 	trend_states: list[float] = []
 	trend_moms: list[float] = []
 	regime_clf = SpreadRegimeClassifier()
-	for _, row in out.iterrows():
-		key = f"{row['spread_type']}|{row['ID']}"
+	# Pre-extract row data once to avoid per-row pandas Series construction.
+	keys = (out["spread_type"].astype(str) + "|" + out["ID"].astype(str)).to_numpy()
+	spreads = (
+		out["spread"].to_numpy()
+		if "spread" in out.columns
+		else np.full(len(out), np.nan)
+	)
+	for i in range(len(out)):
+		key = keys[i]
 		s = series_map.get(key)
 		if isinstance(s, pd.Series) and len(s.dropna()) >= 10:
-			spread_now = row.get("spread", np.nan)
+			spread_now = spreads[i]
 			s_enriched = _append_snapshot_spread_to_series(s, spread_now)
 			slope, rvol, rmean, rvolresid = _compute_trend_metrics(s_enriched)
 			# ── Regime classification ──
@@ -967,7 +974,7 @@ def select_low_corr_basket(
 	# Build key column mapping to corr matrix columns
 	work = candidates.copy()
 	if "corr_key" not in work.columns:
-		work["corr_key"] = work.apply(lambda r: f"{r['spread_type']}|{r['ID']}", axis=1)
+		work["corr_key"] = work["spread_type"].astype(str) + "|" + work["ID"].astype(str)
 
 	work = work[work["corr_key"].isin(corr.columns)].copy()
 	if work.empty:
@@ -1210,7 +1217,7 @@ def build_alpha_candidates(
 
 	corr, _ = compute_candidate_correlation(series_map)
 	# Add correlation key to candidates (even if corr is None)
-	candidates["corr_key"] = candidates.apply(lambda r: f"{r['spread_type']}|{r['ID']}", axis=1)
+	candidates["corr_key"] = candidates["spread_type"].astype(str) + "|" + candidates["ID"].astype(str)
 
 	selected_lowcorr = pd.DataFrame()
 	if corr is not None and not corr.empty:

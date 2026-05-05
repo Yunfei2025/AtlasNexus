@@ -248,6 +248,85 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Duration multiplier helpers
+# ---------------------------------------------------------------------------
+
+def _tenor_to_duration(tenor: str) -> float:
+    """Convert a tenor string (e.g. '3m', '1y', '5y') to approximate modified duration.
+
+    Uses the flat-curve approximation:  duration ≈ tenor_years × 0.92
+    (A par bond paying semi-annual coupons near market rates has MD ≈ tenor × 0.92.)
+    Short-end tenors (<= 1y) use MD = tenor_years directly (near-zero coupon effect).
+    """
+    tenor = tenor.strip().lower()
+    m = re.match(r'^(\d+(?:\.\d+)?)(m|y)$', tenor)
+    if m is None:
+        return 1.0  # unknown → default 1
+    val, unit = float(m.group(1)), m.group(2)
+    years = val / 12.0 if unit == 'm' else val
+    if years <= 1.0:
+        return round(years, 4)
+    # Approximate modified duration for a par bond at ~current CNY rates
+    return round(years * 0.92, 4)
+
+
+def _get_duration_mult(instrument: str, spread_type: str) -> float:
+    """Return the duration multiplier for a spread instrument.
+
+    Rules
+    -----
+    SwapSpread (Repo-*, Shi3M-*, Basis-*, FR007S*.IR, etc.)
+        Parse the tenor suffix after the first '-'.
+        Single leg  (1 tenor):  duration of that tenor.
+        Pair        (2 tenors): duration of the **last** (longer) tenor.
+        Fly         (3 tenors): duration of the **middle** tenor.
+
+    TBondCurve / TBondSwap / CBondCurve / CBondSwap
+        Bond IDs (e.g. '240018.IB').  Look up ttm from the snapshot table;
+        duration ≈ ttm × 0.92.  Falls back to 1.0 if not found.
+
+    All other types: 1.0 (no scaling).
+    """
+    if spread_type in ('TBondCurve', 'TBondSwap', 'CBondCurve', 'CBondSwap'):
+        try:
+            snap = load_spread_data(spread_type)
+            if isinstance(snap, pd.DataFrame) and instrument in snap.index and 'ttm' in snap.columns:
+                ttm = float(snap.loc[instrument, 'ttm'])
+                if ttm > 0:
+                    return round(ttm * 0.92 if ttm > 1.0 else ttm, 4)
+        except Exception:
+            pass
+        return 1.0
+
+    if spread_type in ('SwapSpread', 'TenorSpread'):
+        # Tenor part is everything after the first '-'
+        # e.g. 'Repo-3m1y' → '3m1y', 'Basis-1y2y' → '1y2y', 'Repo-2y3y5y' → '2y3y5y'
+        dash_pos = instrument.find('-')
+        if dash_pos == -1:
+            # FR007S1Y.IR style — treat as single tenor from the instrument name
+            m = re.search(r'(\d+[MY])', instrument, re.IGNORECASE)
+            if m:
+                return _tenor_to_duration(m.group(1).lower())
+            return 1.0
+
+        tenor_part = instrument[dash_pos + 1:]
+        tenors = re.findall(r'\d+(?:\.\d+)?[mMyY]', tenor_part)
+        if len(tenors) == 0:
+            return 1.0
+        elif len(tenors) == 1:
+            return _tenor_to_duration(tenors[0].lower())
+        elif len(tenors) == 2:
+            # Pair: use second (longer) leg
+            return _tenor_to_duration(tenors[1].lower())
+        else:
+            # Fly: use middle leg (index 1)
+            return _tenor_to_duration(tenors[1].lower())
+
+    # Default for all other spread types
+    return 1.0
+
+
 def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
     """Load daily 3m carry+roll time series for each instrument (in bp).
 
@@ -256,7 +335,9 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
     TBondSwap / CBondSwap  : `*Bond-spds.pkl['BondSwap']['BondCarry']`
                              Already in bp = (YTM - FR007_3m) × 100.
     SwapSpread             : `IRS-pxspds.pkl['CarryRoll3m']`
-                             Stored as %-units (bp/100); multiplied by 100 here.
+                             Stored in %-units (same as the spread series). Returned
+                             as-is so that carry_sigma = carry/std is dimensionally
+                             consistent. Do NOT multiply by 100.
     TBondCurve / CBondCurve: `*Bond-spds.pkl['BondCurve']['Spread']`
                              Spread in % → × 100 for bp (coupon pick-up ≈ spread).
     Others                 : None (no carry history available).
@@ -286,8 +367,11 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         if isinstance(data, dict):
             cr = data.get('CarryRoll3m')
             if isinstance(cr, pd.DataFrame) and not cr.empty:
-                # carry3m/roll3m stored as bp/100 (%-units); differences retain those units.
-                return cr.apply(pd.to_numeric, errors='coerce') * 100.0
+                # CarryRoll3m is stored in %-units, the same units as the SwapSpread
+                # spread series.  Do NOT multiply by 100 — that would create a 100×
+                # unit mismatch when dividing by rolling_std (also in %-units) inside
+                # run_spread_backtest, inflating carry_sigma by ~100×.
+                return cr.apply(pd.to_numeric, errors='coerce')
         return None
 
     return None
@@ -1628,13 +1712,13 @@ def register_alpha_callbacks(app) -> None:
 
         df_all['stop_loss'] = np.where(
             _is_mr_v,
-            (_dist_v + 1.5 * _vol_v).round(3),
-            (2.0 * _vol_v).round(3),
+            (_dist_v + 1.5 * _vol_v).round(4),
+            (2.0 * _vol_v).round(4),
         )
         df_all['profit_target'] = np.where(
             _is_mr_v,
-            _dist_v.round(3),
-            _trend_target_bp.round(3),
+            _dist_v.round(4),
+            _trend_target_bp.round(4),
         )
 
         # MR display columns: halflife is meaningful (OU mean-reversion speed)
@@ -1663,7 +1747,7 @@ def register_alpha_callbacks(app) -> None:
                     'stop_loss', 'profit_target', 'trend_state', 'regime_confidence',
                     'efficiency_ratio', 'hurst']:
             if col in df_display.columns:
-                df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(3)
+                df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(4)
 
         # Split candidates into MR and Carry & Momentum using regime classification.
         # mean_reverting → MR table only; trending → Carry & Momentum table only;
@@ -1818,7 +1902,7 @@ def register_alpha_callbacks(app) -> None:
             df_low_disp = df_low_disp[low_cols].copy()
             for col in ['Zscore', 'carry_roll', 'score']:
                 if col in df_low_disp.columns:
-                    df_low_disp[col] = pd.to_numeric(df_low_disp[col], errors='coerce').round(3)
+                    df_low_disp[col] = pd.to_numeric(df_low_disp[col], errors='coerce').round(4)
 
             low_table = dash_table.DataTable(
                 id='alpha-lowcorr-table',
@@ -2160,8 +2244,8 @@ def register_alpha_callbacks(app) -> None:
             heatmap_div = html.Div("Not enough assets for heatmap.", style={'color': THEME['text_sub']})
         
         # Low correlation pairs table
-        low_corr_pairs['Correlation'] = low_corr_pairs['Correlation'].round(3)
-        low_corr_pairs['AbsCorr'] = low_corr_pairs['AbsCorr'].round(3)
+        low_corr_pairs['Correlation'] = low_corr_pairs['Correlation'].round(4)
+        low_corr_pairs['AbsCorr'] = low_corr_pairs['AbsCorr'].round(4)
         
         pairs_table = dash_table.DataTable(
             columns=[{'name': c, 'id': c} for c in ['Asset A', 'Asset B', 'Correlation', 'AbsCorr']],
@@ -2386,7 +2470,7 @@ def register_alpha_callbacks(app) -> None:
             # Round numeric columns
             for col in df_display.columns:
                 if df_display[col].dtype in ['float64', 'float32']:
-                    df_display[col] = df_display[col].round(2)
+                    df_display[col] = df_display[col].round(4)
             
             # Build scored table
             # Conditional styling only if direction column exists
@@ -2842,6 +2926,11 @@ def register_alpha_callbacks(app) -> None:
 
         style = style or 'mr'
         try:
+            # Determine duration multiplier for this instrument.
+            # SwapSpread pairs → second-leg duration; flies → middle-leg; singles → own tenor.
+            # BondCurve/BondSwap → ttm × 0.92 from snapshot. Others default to 1.0.
+            duration_mult = _get_duration_mult(instrument, spread_type)
+
             if style == 'trend':
                 results = run_trend_backtest_dc(
                     spread_ts=ts,
@@ -2854,6 +2943,7 @@ def register_alpha_callbacks(app) -> None:
                     allow_short=bool(allow_short and 'allow' in allow_short),
                     carry_roll_ts=carry_roll_ts_instrument,
                     carry_roll_bp=carry_roll_bp,
+                    duration_mult=duration_mult,
                 )
             else:
                 results = run_spread_backtest(
@@ -2865,6 +2955,7 @@ def register_alpha_callbacks(app) -> None:
                     trade_style=style,
                     carry_roll_ts=carry_roll_ts_instrument,
                     carry_roll_bp=carry_roll_bp,
+                    duration_mult=duration_mult,
                 )
         except Exception as exc:
             import traceback
@@ -3227,11 +3318,10 @@ def register_alpha_callbacks(app) -> None:
                 pos_raw = pd.Series(positions, index=ts.index)
                 trades_diff = pos_raw.diff().abs().fillna(0)
                 
-                # Daily PnL
-                # PnL = (Position_yesterday * Price_Change_today) - (Trade_Volume * Cost)
-                # Trade Volume = trades_diff (0->1 is 1 unit, 1->-1 is 2 units)
-                
-                daily_pnl_series = (pos_series * delta) - (trades_diff * txn_cost_bp)
+                # Daily PnL in basis points.
+                # delta is in percent units (e.g. 0.001 = 0.1bp), so multiply by 100
+                # to convert to bp before subtracting transaction costs which are in bp.
+                daily_pnl_series = (pos_series * delta * 100) - (trades_diff * txn_cost_bp)
                 daily_pnls[asset] = daily_pnl_series
 
             # 3. Calculate Portfolio PnL (Weighted Sum)
@@ -3728,15 +3818,23 @@ def _carry_accrual(
 ) -> float:
     """Compute carry accrual for a trade.
 
-    Prefers averaging the daily time series over [entry_date, exit_date] when
-    available; falls back to the scalar `carry_roll_bp` if the TS has no data.
-    Units: bp (3-month carry+roll).  Accrual = mean_rate × days / 90.
+    Accumulates daily carry by summing each observed daily carry rate over the
+    window [entry_date, exit_date] and dividing by 90 (3m convention).
+    This correctly handles a changing carry rate rather than assuming a constant
+    mean rate × calendar days.  Falls back to scalar `carry_roll_bp` if the TS
+    has no data in the window.
+    Units: bp (3-month carry+roll).  Accrual = sum(rate_i) / 90.
     """
     if carry_roll_ts is not None and len(carry_roll_ts) > 0:
         try:
             ts = carry_roll_ts
-            # Normalise to tz-naive to avoid comparison errors with pickled tz-aware indexes
-            if hasattr(ts.index, 'tz') and ts.index.tz is not None:
+            # Normalise index to tz-naive DatetimeIndex — pickled data may use
+            # datetime.date objects, which cause ts.loc[pd.Timestamp:pd.Timestamp]
+            # to raise TypeError (caught silently → carry falls back to 0.0).
+            if not isinstance(ts.index, pd.DatetimeIndex):
+                ts = ts.copy()
+                ts.index = pd.to_datetime(ts.index)
+            elif hasattr(ts.index, 'tz') and ts.index.tz is not None:
                 ts = ts.copy()
                 ts.index = ts.index.tz_localize(None)
             t0 = pd.Timestamp(entry_date)
@@ -3745,14 +3843,15 @@ def _carry_accrual(
                 t0 = t0.tz_localize(None)
             if t1.tzinfo is not None:
                 t1 = t1.tz_localize(None)
-            window = ts.loc[t0:t1]
-            if len(window) > 0 and window.notna().any():
-                mean_rate = float(window.mean(skipna=True))
-                return position * mean_rate * max(days_held, 0) / 90.0
+            window = ts.loc[t0:t1].dropna()
+            if len(window) > 0:
+                # Sum each day's carry contribution: rate_i / 90 per day
+                return position * float(window.sum()) / 90.0
         except Exception:
             pass  # fall through to scalar fallback
-    # Fallback: snapshot scalar
-    return position * carry_roll_bp * max(days_held, 0) / 90.0
+    # Fallback: do NOT use snapshot scalar (unknown provenance) — return 0.0
+    # The UI/analyst should be explicit when using snapshot carry values.
+    return 0.0
 
 
 def run_spread_backtest(
@@ -3764,6 +3863,7 @@ def run_spread_backtest(
     trade_style: str = 'mr',
     carry_roll_ts: Optional[pd.Series] = None,
     carry_roll_bp: float = 0.0,
+    duration_mult: float = 1.0,
 ) -> Dict[str, Any]:
     """Run backtest on a single spread time series.
 
@@ -3785,6 +3885,13 @@ def run_spread_backtest(
     
     spread_ts = spread_ts.dropna()
     
+    # Normalise index to DatetimeIndex — pickled data may use datetime.date objects
+    # which cause 'Invalid comparison between dtype=datetime64[s] and date' errors
+    # when the equity_ts (DatetimeIndex) is compared to x_start derived from zscore.
+    if not isinstance(spread_ts.index, pd.DatetimeIndex):
+        spread_ts = spread_ts.copy()
+        spread_ts.index = pd.to_datetime(spread_ts.index)
+
     # Calculate rolling statistics (120-day lookback, consistent with regime detection)
     lookback = 120
     rolling_mean = spread_ts.rolling(lookback).mean()
@@ -3810,6 +3917,8 @@ def run_spread_backtest(
             _cr_aligned = _ts_cr.reindex(spread_ts.index, method='ffill').fillna(_cr_fallback)
         _safe_std = rolling_std.replace(0, np.nan).fillna(1.0)
         carry_sigma_ts = (_cr_aligned * _score_horizon / 90.0) / _safe_std
+        # Cap carry adjustment at ±1.5σ — prevents data spikes from distorting signal
+        carry_sigma_ts = carry_sigma_ts.clip(-1.5, 1.5)
         composite_signal = zscore - carry_sigma_ts
     except Exception:
         composite_signal = zscore.copy()
@@ -3862,21 +3971,24 @@ def run_spread_backtest(
                     exit_signal = True
                     exit_reason = 'reversal'
             
-            # Stop loss: raw z-score only (pure price protection, not carry-adjusted)
-            if position == 1 and z < -stop_z:
-                exit_signal = True
-                exit_reason = 'stop_loss'
-            elif position == -1 and z > stop_z:
-                exit_signal = True
-                exit_reason = 'stop_loss'
+            # Stop loss: raw z-score only (pure price protection, not carry-adjusted).
+            # Only applies if a target/reversal exit hasn't already been identified.
+            if not exit_signal:
+                if position == 1 and z < -stop_z:
+                    exit_signal = True
+                    exit_reason = 'stop_loss'
+                elif position == -1 and z > stop_z:
+                    exit_signal = True
+                    exit_reason = 'stop_loss'
             
-            # Max holding period
+            # Max holding period — only label as max_hold if no other exit reason set
             if days_held >= max_hold:
                 exit_signal = True
-                exit_reason = 'max_hold'
+                if exit_reason is None:
+                    exit_reason = 'max_hold'
             
             if exit_signal:
-                price_pnl = (price - entry_price) * position  # spread price change (bp/%)
+                price_pnl = (price - entry_price) * position * duration_mult  # spread price change scaled by duration
                 carry_income = _carry_accrual(
                     position, entry_date, date, days_held,
                     carry_roll_ts, carry_roll_bp,
@@ -3928,9 +4040,16 @@ def run_spread_backtest(
                     entry_price = price
                     entry_zscore = cs
 
-        # Daily mark-to-market equity (realized + unrealized for open position)
+        # Daily mark-to-market equity (realized + unrealized for open position).
+        # Carry accrual is included so the equity curve is consistent with the
+        # closed-trade PnL which also adds carry at exit.
         if position != 0 and entry_price is not None:
-            mtm = realized_pnl + (price - entry_price) * position
+            days_open = (date - entry_date).days if entry_date else 0
+            daily_carry = _carry_accrual(
+                position, entry_date, date, days_open,
+                carry_roll_ts, carry_roll_bp,
+            )
+            mtm = realized_pnl + (price - entry_price) * position * duration_mult + daily_carry
         else:
             mtm = realized_pnl
         equity_dates.append(pd.Timestamp(date))
@@ -3958,7 +4077,12 @@ def run_spread_backtest(
             'stop_z': stop_z,
         }
     
+    # Normalize trade PnL/carry units to basis points for consistency
     trades_df = pd.DataFrame(trades)
+    if not trades_df.empty:
+        # original pnl values were in percent (e.g. 0.1457 == 0.1457%), convert to bp
+        trades_df['pnl_bp'] = trades_df['pnl_bp'].astype(float) * 100.0
+        trades_df['carry_bp'] = trades_df.get('carry_bp', 0.0).astype(float) * 100.0
     pnls = trades_df['pnl_bp'].values
     
     n_trades = len(trades)
@@ -3979,8 +4103,17 @@ def run_spread_backtest(
     drawdowns = running_max - cum_pnl
     max_drawdown = drawdowns.max() if len(drawdowns) > 0 else 0
     
+    # Return trades as records with pnl in bp
+    trades_out = trades_df.to_dict('records') if not trades_df.empty else []
+
+    # Ensure equity series is in basis points (was percent internally)
+    try:
+        equity_ts = equity_ts * 100.0
+    except Exception:
+        pass
+
     return {
-        'trades': trades,
+        'trades': trades_out,
         'trades_df': trades_df,
         'n_trades': n_trades,
         'total_pnl': total_pnl,
@@ -3994,6 +4127,7 @@ def run_spread_backtest(
         'composite_signal_ts': composite_signal,
         'cum_pnl': cum_pnl,
         'equity_ts': equity_ts,
+        'carry_roll_ts': carry_roll_ts,
         'entry_z': entry_z,
         'exit_z': exit_z,
         'stop_z': stop_z,
@@ -4041,6 +4175,7 @@ def run_trend_backtest_dc(
     allow_short: bool = True,
     carry_roll_ts: Optional[pd.Series] = None,
     carry_roll_bp: float = 0.0,
+    duration_mult: float = 1.0,
 ) -> Dict[str, Any]:
     """Trend/carry backtest using directional-change trend confirmation.
 
@@ -4052,6 +4187,9 @@ def run_trend_backtest_dc(
         return {'error': 'Insufficient data'}
 
     s = pd.to_numeric(spread_ts, errors='coerce').dropna().copy()
+    # Normalise index to DatetimeIndex so all derived series share the same dtype
+    if not isinstance(s.index, pd.DatetimeIndex):
+        s.index = pd.to_datetime(s.index)
     if len(s) < max(60, vol_window + 5, mom_window + 5):
         return {'error': 'Insufficient data'}
 
@@ -4104,7 +4242,7 @@ def run_trend_backtest_dc(
             time_stop = days_held >= max_hold
 
             if trailing_stop or carry_bad or flip or time_stop:
-                price_pnl = (px - entry_price) * position
+                price_pnl = (px - entry_price) * position * duration_mult
                 carry_income = _carry_accrual(
                     position, entry_date, date, days_held,
                     carry_roll_ts, carry_roll_bp,
@@ -4142,7 +4280,7 @@ def run_trend_backtest_dc(
 
         # Daily mark-to-market equity (realized + unrealized)
         if position != 0 and entry_price is not None:
-            mtm = realized_pnl + (px - entry_price) * position
+            mtm = realized_pnl + (px - entry_price) * position * duration_mult
         else:
             mtm = realized_pnl
         equity_dates.append(pd.Timestamp(date))
@@ -4168,7 +4306,11 @@ def run_trend_backtest_dc(
             'equity_ts': equity_ts,
         }
 
+    # Normalize trade PnL/carry units to basis points for consistency
     trades_df = pd.DataFrame(trades)
+    if not trades_df.empty:
+        trades_df['pnl_bp'] = trades_df['pnl_bp'].astype(float) * 100.0
+        trades_df['carry_bp'] = trades_df.get('carry_bp', 0.0).astype(float) * 100.0
     pnls = trades_df['pnl_bp'].values
     n_trades = int(len(trades_df))
     total_pnl = float(np.nansum(pnls))
@@ -4182,8 +4324,15 @@ def run_trend_backtest_dc(
     drawdowns = running_max - cum_pnl
     max_drawdown = float(drawdowns.max()) if len(drawdowns) > 0 else 0.0
 
+    # Return trades as records with pnl in bp and convert equity to bp
+    trades_out = trades_df.to_dict('records') if not trades_df.empty else []
+    try:
+        equity_ts = equity_ts * 100.0
+    except Exception:
+        pass
+
     return {
-        'trades': trades,
+        'trades': trades_out,
         'trades_df': trades_df,
         'n_trades': n_trades,
         'total_pnl': total_pnl,
@@ -4259,6 +4408,21 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     elif isinstance(_equity_raw, pd.Series) and len(_equity_raw.dropna()) > 0:
         x_start = _equity_raw.dropna().index[0]
 
+    # Common x-axis end: use last date from score or equity series
+    x_end = None
+    _last_src = _score_raw if _score_raw is not None else _equity_raw
+    if _last_src is not None and len(_last_src.dropna()) > 0:
+        x_end = _last_src.dropna().index[-1]
+
+    # Normalise to pd.Timestamp — pickled series may have datetime.date index values
+    # which cause 'Cannot compare Timestamp with datetime.date' when filtering by x_start.
+    if x_start is not None:
+        x_start = pd.Timestamp(x_start)
+    if x_end is not None:
+        x_end = pd.Timestamp(x_end)
+
+    _xaxis_range = dict(range=[x_start, x_end]) if x_start is not None else {}
+
     # ---- Instrument history with entry/exit markers ----
     instrument_fig = go.Figure()
     if 'spread_ts' in results and results['spread_ts'] is not None:
@@ -4278,8 +4442,10 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     if trades_df is not None and len(trades_df) > 0:
         long_entries = trades_df[trades_df['direction'] == 'LONG']
         short_entries = trades_df[trades_df['direction'] == 'SHORT']
-        profit_exits = trades_df[trades_df['pnl_bp'] > 0]
-        loss_exits = trades_df[trades_df['pnl_bp'] <= 0]
+        # Classify exits by reason, not PnL sign
+        _exit_reason_inst = trades_df.get('exit_reason', pd.Series([''] * len(trades_df), index=trades_df.index))
+        profit_exits = trades_df[_exit_reason_inst.isin(['target', 'reversal'])]
+        loss_exits   = trades_df[_exit_reason_inst.isin(['stop_loss', 'max_hold'])]
         if len(long_entries) > 0:
             instrument_fig.add_trace(go.Scatter(
                 x=long_entries['entry_date'], y=long_entries['entry_price'],
@@ -4311,6 +4477,27 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
                 showlegend=True,
             ))
 
+    # ---- Carry/roll time series overlay on secondary y-axis ----
+    _cr_ts = results.get('carry_roll_ts')
+    if _cr_ts is not None and len(_cr_ts) > 0:
+        cr_plot = _cr_ts.copy()
+        if not isinstance(cr_plot.index, pd.DatetimeIndex):
+            cr_plot.index = pd.to_datetime(cr_plot.index)
+        elif hasattr(cr_plot.index, 'tz') and cr_plot.index.tz is not None:
+            cr_plot.index = cr_plot.index.tz_localize(None)
+        if x_start is not None:
+            cr_plot = cr_plot.loc[cr_plot.index >= x_start]
+        if len(cr_plot) > 0:
+            instrument_fig.add_trace(go.Scatter(
+                x=cr_plot.index,
+                y=cr_plot.values,
+                mode='lines',
+                name='Carry+Roll (3m)',
+                line=dict(color='rgba(243,156,18,0.75)', width=1, dash='dot'),
+                yaxis='y2',
+                showlegend=True,
+            ))
+
     instrument_fig.update_layout(
         title='Instrument History',
         height=300,
@@ -4318,8 +4505,15 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         plot_bgcolor=THEME['bg_main'],
         paper_bgcolor=THEME['bg_main'],
         font=dict(color=THEME['text_main']),
-        xaxis=dict(gridcolor=THEME['bg_card']),
-        yaxis=dict(title='Spread (bp)', gridcolor=THEME['bg_card']),
+        xaxis=dict(gridcolor=THEME['bg_card'], tickformat='%b\n%Y', hoverformat='%Y-%m-%d', **_xaxis_range),
+        yaxis=dict(title='Spread', gridcolor=THEME['bg_card']),
+        yaxis2=dict(
+            title=dict(text='Carry+Roll (3m)', font=dict(color='rgba(243,156,18,0.85)')),
+            overlaying='y',
+            side='right',
+            showgrid=False,
+            tickfont=dict(color='rgba(243,156,18,0.85)'),
+        ),
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1,
                     font=dict(size=10), bgcolor='rgba(0,0,0,0)'),
     )
@@ -4330,13 +4524,14 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
 
     # ---- Score History (universal: z-score for MR/carry, norm_mom for trend) ----
     score_div = html.Div()
+    _composite = results.get('composite_signal_ts')
     _raw_score = results.get('norm_mom_ts') if is_trend else (
-        results.get('composite_signal_ts') or results.get('zscore_ts')
+        _composite if _composite is not None else results.get('zscore_ts')
     )
     if _raw_score is not None and len(_raw_score.dropna()) > 0:
         score_ts_display = _raw_score.dropna()
         score_label = 'Norm Momentum (σ)' if is_trend else (
-            'Carry-Adj Z (120d)' if results.get('composite_signal_ts') is not None else 'Z-Score (120d)'
+            'Carry-Adj Z (120d)' if _composite is not None else 'Z-Score (120d)'
         )
 
         signal_fig = go.Figure()
@@ -4399,8 +4594,12 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
 
             long_e  = trades_df[trades_df['direction'] == 'LONG']
             short_e = trades_df[trades_df['direction'] == 'SHORT']
-            prof_x  = trades_df[trades_df['pnl_bp'] > 0]
-            loss_x  = trades_df[trades_df['pnl_bp'] <= 0]
+            # Classify exits by reason, not PnL sign:
+            # target/reversal = signal hit exit threshold (circle)
+            # stop_loss/max_hold = forced exit (x)
+            _exit_reason = trades_df.get('exit_reason', pd.Series([''] * len(trades_df), index=trades_df.index))
+            prof_x  = trades_df[_exit_reason.isin(['target', 'reversal'])]
+            loss_x  = trades_df[_exit_reason.isin(['stop_loss', 'max_hold'])]
 
             if len(long_e) > 0:
                 signal_fig.add_trace(go.Scatter(
@@ -4440,7 +4639,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             plot_bgcolor=THEME['bg_main'],
             paper_bgcolor=THEME['bg_main'],
             font=dict(color=THEME['text_main']),
-            xaxis=dict(gridcolor=THEME['bg_card']),
+            xaxis=dict(gridcolor=THEME['bg_card'], tickformat='%b\n%Y', hoverformat='%Y-%m-%d', **_xaxis_range),
             yaxis=dict(
                 title='Norm Mom (σ)' if is_trend else 'Z-Score',
                 gridcolor=THEME['bg_card'],
@@ -4455,6 +4654,8 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     equity_fig = go.Figure()
     equity_ts = results.get('equity_ts')
     if isinstance(equity_ts, pd.Series) and len(equity_ts.dropna()) > 0:
+        if x_start is not None:
+            equity_ts = equity_ts[equity_ts.index >= x_start]
         equity_fig.add_trace(go.Scatter(
             x=equity_ts.index,
             y=equity_ts.values,
@@ -4488,7 +4689,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         plot_bgcolor=THEME['bg_main'],
         paper_bgcolor=THEME['bg_main'],
         font=dict(color=THEME['text_main']),
-        xaxis=dict(gridcolor=THEME['bg_card']),
+        xaxis=dict(gridcolor=THEME['bg_card'], tickformat='%b\n%Y', hoverformat='%Y-%m-%d', **_xaxis_range),
         yaxis=dict(title='Cumulative PnL (bp)', gridcolor=THEME['bg_card']),
     )
 
@@ -4502,9 +4703,9 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         df = results['trades_df'].copy()
         df['entry_date'] = pd.to_datetime(df['entry_date']).dt.strftime('%Y-%m-%d')
         df['exit_date'] = pd.to_datetime(df['exit_date']).dt.strftime('%Y-%m-%d')
-        for col in ['entry_price', 'exit_price', 'pnl_bp', 'entry_z', 'exit_z']:
+        for col in ['entry_price', 'exit_price', 'pnl_bp', 'carry_bp', 'entry_z', 'exit_z']:
             if col in df.columns:
-                df[col] = df[col].round(2)
+                df[col] = df[col].round(4)
 
         trades_table = html.Div([
             html.H6("Trade History", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
