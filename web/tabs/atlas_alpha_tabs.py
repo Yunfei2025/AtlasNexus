@@ -1176,10 +1176,10 @@ def select_diversified_trades(
 
 
 def build_diversified_trades_display(trades: List[Dict]) -> html.Div:
-    """Build display for diversified trade recommendations."""
+    """Build display for diversification suggestions."""
     if not trades or len(trades) == 0:
         return html.Div(
-            "No diversified trades available. Run scan to generate recommendations.",
+            "No diversification suggestions available. Run scan to generate them.",
             style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '10px'}
         )
     
@@ -1232,7 +1232,7 @@ def build_diversified_trades_display(trades: List[Dict]) -> html.Div:
     
     return html.Div([
         html.P(
-            f"Based on scan results, {len(trades)} diversified trades are recommended:",
+            f"Based on scan results, {len(trades)} trades are available for diversification:",
             style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '10px'}
         ),
         html.Div(summary_items, style={'marginBottom': '12px'}),
@@ -1410,12 +1410,12 @@ def build_candidates_layout() -> html.Div:
             ),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'}),
         
-        # Diversified Trade Recommendation Panel
+        # Diversification helper panel
         html.Div([
             html.Hr(style={'borderColor': THEME['text_sub'], 'margin': '20px 0'}),
-            html.H6("📊 Diversified Trade Recommendation", style={'color': THEME['success'], 'marginBottom': '10px'}),
+            html.H6("📊 Diversification Suggestions", style={'color': THEME['success'], 'marginBottom': '10px'}),
             html.P(
-                "Select top N trades from the Lowest Correlation Pairs (from Correlation Check above).",
+                "Use the lowest-correlation pairs above to seed the diversification pool.",
                 style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '10px'}
             ),
             html.Div([
@@ -1892,44 +1892,7 @@ def register_alpha_callbacks(app) -> None:
             style={'marginBottom': '20px'},
         )
 
-        # Low-correlation top-10 table (if available)
-        low_corr_div = html.Div()
-        if isinstance(df_low, pd.DataFrame) and not df_low.empty:
-            df_low_disp = df_low.copy()
-            if 'ID' not in df_low_disp.columns and df_low_disp.index.name == 'ID':
-                df_low_disp = df_low_disp.reset_index()
-            low_cols = [c for c in ['basket_rank', 'ID', 'spread_type', 'category', 'style', 'Zscore', 'carry_roll', 'score'] if c in df_low_disp.columns]
-            df_low_disp = df_low_disp[low_cols].copy()
-            for col in ['Zscore', 'carry_roll', 'score']:
-                if col in df_low_disp.columns:
-                    df_low_disp[col] = pd.to_numeric(df_low_disp[col], errors='coerce').round(4)
-
-            low_table = dash_table.DataTable(
-                id='alpha-lowcorr-table',
-                columns=[{'name': c, 'id': c} for c in df_low_disp.columns],
-                data=df_low_disp.to_dict('records'),  # type: ignore[arg-type]
-                style_table={'overflowX': 'auto', 'maxHeight': '220px', 'overflowY': 'auto'},
-                style_header={
-                    'backgroundColor': THEME['table_header'],
-                    'color': THEME['text_main'],
-                    'fontWeight': 'bold',
-                },
-                style_cell={
-                    'backgroundColor': THEME['bg_card'],
-                    'color': THEME['text_main'],
-                    'fontSize': '11px',
-                    'padding': '6px',
-                },
-                page_size=10,
-            )
-            low_corr_div = html.Div([
-                html.H6('Recommended Low-Correlation Top 10', style={'color': THEME['text_main'], 'marginBottom': '8px'}),
-                html.Div('Greedy selection using spread-change correlations (lookback 252d).', style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'}),
-                low_table,
-            ], style={'marginBottom': '15px'})
-
         table_out = html.Div([
-            low_corr_div,
             table_mr,
             table_trend,
         ])
@@ -1953,7 +1916,7 @@ def register_alpha_callbacks(app) -> None:
                     _conf_f = float('nan')
                 regime_store[_key] = {'regime': _reg, 'score': _conf_f}
         
-        # Build diversified trades display (shows recommended low-correlation trades)
+        # Build diversification suggestions display (uses low-correlation trades)
         diversified_display = html.Div()
         if isinstance(df_low, pd.DataFrame) and not df_low.empty:
             # Add direction column to df_low if not present
@@ -1983,17 +1946,17 @@ def register_alpha_callbacks(app) -> None:
             
             diversified_display = html.Div([
                 html.Div(
-                    f"✓ {len(df_low_enriched)} low-correlation trades recommended for diversification",
+                    f"✓ {len(df_low_enriched)} trades prepared for diversification",
                     style={'color': THEME['success'], 'fontWeight': 'bold', 'marginBottom': '8px', 'fontSize': '12px'}
                 ),
                 html.Div(trade_items, style={'maxHeight': '150px', 'overflowY': 'auto', 'backgroundColor': THEME['bg_input'], 'padding': '8px', 'borderRadius': '4px'})
             ])
         else:
-            # No low-correlation trades available
+            # No diversification suggestions available
             DIVERSIFIED_TRADE_RECOMMENDATIONS['trades'] = []
             DIVERSIFIED_TRADE_RECOMMENDATIONS['timestamp'] = None
             diversified_display = html.Div(
-                "Run scan to generate diversified trade recommendations",
+                "Run scan to generate diversification suggestions",
                 style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'}
             )
         
