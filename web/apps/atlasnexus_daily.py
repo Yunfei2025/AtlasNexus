@@ -10,7 +10,7 @@ Port: 8080
 from __future__ import annotations
 import sys
 import os
-from dash import dcc, html
+from dash import dcc, html, no_update
 from dash.dependencies import Input, Output, State
 
 from pathlib import Path
@@ -151,10 +151,10 @@ def build_header():
             html.Div(
                 [
                     html.H4("AtlasNexus · Daily", className="app__header__title"),
+                    html.P(id="an-latest-run",
+                           style={"fontSize": "12px", "margin": "0", "color": "#ffffff", "fontWeight": "500"}),
                     html.P(id="an-refresh-time", className="app__header__title--grey",
-                           style={"fontSize": "11px", "margin": "0"}),
-                    html.P(id="an-latest-run", className="app__header__title--grey",
-                           style={"fontSize": "11px", "margin": "0"}),
+                           style={"fontSize": "10px", "margin": "0", "opacity": "0.6"}),
                 ],
                 className="app__header__desc",
             ),
@@ -180,22 +180,30 @@ def build_tabs_panel():
     _dd_style    = _DD_STYLE
     _dd_theme    = _DD_THEME
 
+    _card_style: dict = {
+        'padding': '14px 15px', 'background': '#0c2b64',
+        'margin': '10px 12px', 'borderRadius': '6px',
+    }
+    _card_hdr: dict = {
+        'color': '#aab0c0', 'fontSize': '11px', 'fontWeight': '600',
+        'letterSpacing': '0.08em', 'marginBottom': '10px',
+    }
+
     run_center_content = html.Div(
         [
-            # ── Engine jobs row ──────────────────────────────────────────────
+            # ── Daily Pipeline card ──────────────────────────────────────────
             html.Div([
-                html.A(html.Button("Update Data",       id="an-btn-update",     n_clicks=0, style={**_btn_style, 'marginRight': '10px'})),
-                html.A(html.Button("Run EOD",           id="an-btn-eod",        n_clicks=0, style={**_btn_style, 'marginRight': '10px'})),
-                html.A(html.Button("Run EOD (+update)", id="an-btn-eod-update", n_clicks=0, style=_btn_style)),
-            ], style={'padding': '15px 15px 8px 15px'}),
+                html.Div("DAILY PIPELINE", style=_card_hdr),
+                html.Div([
+                    html.Button("Update Data",       id="an-btn-update",     n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
+                    html.Button("Run EOD",           id="an-btn-eod",        n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
+                    html.Button("Run EOD (+update)", id="an-btn-eod-update", n_clicks=0, style=_btn_style),
+                ]),
+            ], style=_card_style),
 
-            # ── Curve Backtest panel ─────────────────────────────────────────
-            html.Hr(style={'borderColor': '#1a3a6e', 'margin': '0 12px 0 12px'}),
+            # ── Curve Backtest card ─────────────────────────────────────────
             html.Div([
-                html.Div("CURVE BACKTEST", style={
-                    'color': '#aab0c0', 'fontSize': '11px', 'fontWeight': '600',
-                    'letterSpacing': '0.08em', 'marginBottom': '12px',
-                }),
+                html.Div("CURVE BACKTEST", style={**_card_hdr, 'marginBottom': '12px'}),
                 html.Div([
                     # Instrument type
                     html.Div([
@@ -265,37 +273,35 @@ def build_tabs_panel():
                             style=_input_style,
                         ),
                     ], style={'minWidth': '80px', 'flex': '0 0 80px'}),
-                    # Run button (aligned to bottom of row)
+                    # Run button — aligned to bottom via flex alignSelf
                     html.Div([
                         html.Button(
                             "▶  Run Backtest",
                             id="an-btn-backtest",
                             n_clicks=0,
-                            style={**_btn_style, 'background': '#1a5276', 'borderColor': '#2e86c1',
-                                   'fontWeight': '600', 'marginTop': '18px'},
+                            style={**_btn_style, 'background': '#1a5276', 'borderColor': '#2e86c1', 'fontWeight': '600'},
                         ),
-                    ]),
+                    ], style={'alignSelf': 'flex-end'}),
                 ], style={
                     'display': 'flex', 'flexDirection': 'row', 'gap': '12px',
                     'alignItems': 'flex-end', 'flexWrap': 'wrap',
                 }),
-            ], style={
-                'padding': '14px 15px', 'background': '#0c2b64',
-                'margin': '10px 12px', 'borderRadius': '6px',
-            }),
+            ], style=_card_style),
 
-            # ── Status + log ─────────────────────────────────────────────────
-            html.Div(id="an-job-status", children="No job running.",
-                     style={'padding': '4px 15px', 'fontStyle': 'italic', 'color': '#aab0c0', 'fontSize': '12px'}),
-            html.Div(id="an-run-center-content"),
+            # ── Status & Logs card ───────────────────────────────────────────
+            html.Div([
+                html.Div("STATUS & LOGS", style=_card_hdr),
+                html.Div(id="an-job-status", children="No job running.",
+                         style={'fontStyle': 'italic', 'color': '#aab0c0', 'fontSize': '12px', 'marginBottom': '8px'}),
+                html.Div(id="an-run-center-content"),
+            ], style=_card_style),
+
             dcc.Interval(id="an-run-center-interval", interval=5_000, n_intervals=0),
         ]
     )
     
     beta_content = html.Div(
         [
-            html.H5("Beta Book (Top-down)"),
-            html.P("Planned: factor/regime → portfolio construction → risk-managed execution."),
             html.Div(
                 [
                     dcc.Tabs(
@@ -303,23 +309,23 @@ def build_tabs_panel():
                         value="factor",
                         vertical=True,
                         children=[
-                            dcc.Tab(label="FACTOR",    value="factor",            style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="PORTFOLIO", value="portfolio",         style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="REBALANCE", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="BOND",      value="bond",              style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="BACKTEST",  value="factor-model-bt",   style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="FUTURES",   value="backtest-factor",   style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Factor",    value="factor",            style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Portfolio", value="portfolio",         style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Rebalance", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Bond",      value="bond",              style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Backtest",  value="factor-model-bt",   style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Futures",   value="backtest-factor",   style=tab_style, selected_style=tab_selected_style),
                         ],
-                        style={"height": "520px"},
+                        style={"minHeight": "520px"},
                     ),
-                    html.Div([
+                    dcc.Loading(type="circle", color="#2e86c1", children=html.Div([
                             html.Div(id="beta-factor-div",            children=build_multiasset_factor_layout(),     style={"display": "block", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-portfolio-div",         children=build_multiasset_portfolio_layout(),  style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-bond-div",              children=build_multiasset_bond_layout(),       style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-factor-model-bt-div",   children=build_risk_factor_backtest_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-backtest-factor-div",   children=build_factor_backtest_layout(),       style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(),  style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                        ], style={"position": "relative", "width": "100%"}),
+                            html.Div(id="beta-portfolio-div",          children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-bond-div",               children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-factor-model-bt-div",    children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-backtest-factor-div",    children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-backtest-portfolio-div",  children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                        ], style={"position": "relative", "width": "100%"})),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
             ),
@@ -328,8 +334,6 @@ def build_tabs_panel():
     
     alpha_content = html.Div(
         [
-            html.H5("Alpha Book (Bottom-up)"),
-            html.P("Relative value alpha: candidates → correlation check → scoring → risk parity sizing → basket."),
             html.Div(
                 [
                     dcc.Tabs(
@@ -337,24 +341,24 @@ def build_tabs_panel():
                         value="candidates",
                         vertical=True,
                         children=[
-                            dcc.Tab(label="CANDIDATES", value="candidates", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="PORTFOLIO", value="portfolio", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="BACKTEST", value="backtest", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="SPREAD", value="spreads", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="PAIRS", value="pairs", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="VOLATILITY", value="volatility", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Candidates", value="candidates", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Portfolio",  value="portfolio",  style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Backtest",   value="backtest",   style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Spread",     value="spreads",    style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Pairs",      value="pairs",      style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Volatility", value="volatility", style=tab_style, selected_style=tab_selected_style),
                         ],
-                        style={"height": "520px"},
+                        style={"minHeight": "520px"},
                     ),
-                    html.Div([
+                    dcc.Loading(type="circle", color="#2e86c1", children=html.Div([
                             html.Div(id="alpha-candidates-div", children=build_candidates_layout(), style={"display": "block", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-portfolio-div", children=build_portfolio_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-backtest-div", children=build_backtest_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-spreads-div", children=build_spreads_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-pairs-div", children=build_pairs_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-volatility-div", children=build_volatility_layout(), style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-portfolio-div",  children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-backtest-div",   children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-spreads-div",    children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-pairs-div",      children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-volatility-div", children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
                         # alpha-basket-div intentionally removed
-                        ], style={"position": "relative", "width": "100%"}),
+                        ], style={"position": "relative", "width": "100%"})),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
             ),
@@ -370,7 +374,6 @@ def build_tabs_panel():
 
     market_content = html.Div(
         [
-            html.H5("Market"),
             html.Div(
                 [
                     dcc.Tabs(
@@ -378,20 +381,20 @@ def build_tabs_panel():
                         value="data",
                         vertical=True,
                         children=[
-                            dcc.Tab(label="DATA",    value="data",    style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="TREND",   value="trend",   style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="PRICER",  value="pricer",  style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="SURFACE", value="surface", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="CURVES",  value="curves",  style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Data",    value="data",    style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Trend",   value="trend",   style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Pricer",  value="pricer",  style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Surface", value="surface", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Curves",  value="curves",  style=tab_style, selected_style=tab_selected_style),
                         ],
-                        style={"height": "520px"},
+                        style={"minHeight": "520px"},
                     ),
                     html.Div([
                             html.Div(id="market-data-div",    children=build_market_data_layout(), style={"display": "block", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-trend-div",   children=build_trend_layout(),        style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-pricer-div",  children=build_pricer_layout(),       style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-surface-div", children=build_surface_layout(),      style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-curves-div",  children=build_curves_layout(),       style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-trend-div",   children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-pricer-div",  children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-surface-div", children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-curves-div",  children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
                         ], style={"position": "relative", "width": "100%"}),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
@@ -475,6 +478,38 @@ def _make_tab_switcher(input_id: str, div_ids: list[str], keys: list[str]):
     return _switcher
 
 
+def _make_lazy_tab_switcher(input_id: str, div_ids: list[str], keys: list[str], builders: dict):
+    """Show/hide + lazy-build: populate children on first activation.
+
+    Pass builders as {key: callable} for sub-tabs that start with children=[].
+    Omit a key if its div is pre-populated (the default active tab).
+    Once built, children are never overwritten (no_update keeps DOM mounted).
+    """
+    base = {"width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}
+
+    @app.callback(
+        [Output(did, "style") for did in div_ids] +
+        [Output(did, "children") for did in div_ids],
+        Input(input_id, "value"),
+        [State(did, "children") for did in div_ids],
+    )
+    def _switcher(active, *current_children):
+        styles = tuple(
+            {**base, "display": "block"} if active == k else {**base, "display": "none"}
+            for k in keys
+        )
+        new_children = []
+        for k, current in zip(keys, current_children):
+            if active == k and not current:
+                builder = builders.get(k)
+                new_children.append(builder() if builder else [])
+            else:
+                new_children.append(no_update)
+        return styles + tuple(new_children)
+
+    return _switcher
+
+
 
 @app.callback(
     Output("an-refresh-time", "children"),
@@ -540,11 +575,6 @@ def _header_status(n, job_id):
                 [html.Span(className="dot"), "Failed"],
                 className="an-status-pill error",
             ))
-
-    # ---- Timestamp ----
-    now = datetime.datetime.now().strftime("%H:%M")
-    pills.append(html.Span(now, className="an-status-pill idle",
-                           style={"fontVariantNumeric": "tabular-nums"}))
 
     return pills
 
@@ -627,24 +657,44 @@ _make_tab_switcher(
     ["market-div", "beta-div", "alpha-div", "risk-div", "run-center-div"],
     ["market",     "beta",     "alpha",     "risk",     "run-center"],
 )
-_make_tab_switcher(
+_make_lazy_tab_switcher(
     "an-beta-subtabs",
     ["beta-factor-div", "beta-portfolio-div", "beta-bond-div",
      "beta-factor-model-bt-div", "beta-backtest-factor-div", "beta-backtest-portfolio-div"],
     ["factor",          "portfolio",          "bond",
      "factor-model-bt", "backtest-factor",     "backtest-portfolio"],
+    {
+        "portfolio":          build_multiasset_portfolio_layout,
+        "bond":               build_multiasset_bond_layout,
+        "factor-model-bt":    build_risk_factor_backtest_layout,
+        "backtest-factor":    build_factor_backtest_layout,
+        "backtest-portfolio": build_multiasset_backtest_layout,
+    },
 )
-_make_tab_switcher(
+_make_lazy_tab_switcher(
     "an-market-subtabs",
     ["market-data-div", "market-trend-div", "market-pricer-div", "market-surface-div", "market-curves-div"],
     ["data",            "trend",            "pricer",            "surface",            "curves"],
+    {
+        "trend":   build_trend_layout,
+        "pricer":  build_pricer_layout,
+        "surface": build_surface_layout,
+        "curves":  build_curves_layout,
+    },
 )
-_make_tab_switcher(
+_make_lazy_tab_switcher(
     "an-alpha-subtabs",
     ["alpha-candidates-div", "alpha-portfolio-div", "alpha-backtest-div",
      "alpha-spreads-div",    "alpha-pairs-div",     "alpha-volatility-div"],
     ["candidates",           "portfolio",           "backtest",
      "spreads",              "pairs",               "volatility"],
+    {
+        "portfolio":  build_portfolio_layout,
+        "backtest":   build_backtest_layout,
+        "spreads":    build_spreads_layout,
+        "pairs":      build_pairs_layout,
+        "volatility": build_volatility_layout,
+    },
 )
 
 

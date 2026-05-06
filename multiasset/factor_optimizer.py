@@ -193,6 +193,10 @@ class FactorRiskParityOptimizer:
         Sigma = B @ C_f @ B.T
         Sigma = (Sigma + Sigma.T) / 2 + 1e-8 * np.eye(n_assets)   # symmetrise + regularise
 
+        # Pre-compute transpose once so every scipy.minimize iteration avoids
+        # recomputing it inside the closure.
+        BT = B.T
+
         # ── Helper: asset-level risk contributions ────────────────────────────
         def _port_vol(w: np.ndarray) -> float:
             return float(np.sqrt(max(float(w @ Sigma @ w), 1e-12)))
@@ -204,7 +208,7 @@ class FactorRiskParityOptimizer:
         # ── Helper: factor-level risk contributions ───────────────────────────
         def _factor_rc_fractions(w: np.ndarray) -> np.ndarray:
             """Return each factor's share of total portfolio variance (sums to 1)."""
-            e = B.T @ w                                             # (n_valid_factors,)
+            e = BT @ w                                              # (n_valid_factors,)
             Cfe = C_f @ e
             rc_var = e * Cfe                                        # contribution to variance
             total_var = float(rc_var.sum())
@@ -231,7 +235,7 @@ class FactorRiskParityOptimizer:
                 if has_negative:
                     # Signed RC matching (e.g. short slope exposure)
                     def objective(w: np.ndarray) -> float:
-                        e = B.T @ w
+                        e = BT @ w
                         Cfe = C_f @ e
                         signed_rc = e * Cfe / max(_port_vol(w), 1e-12)  # signed vol contributions
                         total_sv = np.abs(signed_rc).sum()
@@ -249,15 +253,15 @@ class FactorRiskParityOptimizer:
                 ])
                 if has_negative:
                     def objective(w: np.ndarray) -> float:
-                        signed = B.T @ w * sigma_f_valid
+                        signed = BT @ w * sigma_f_valid
                         return float(np.sum((signed - budget_targets) ** 2))
                 else:
                     def objective(w: np.ndarray) -> float:
-                        factor_risks = np.abs(B.T @ w * sigma_f_valid)
+                        factor_risks = np.abs(BT @ w * sigma_f_valid)
                         return float(np.sum((factor_risks - budget_targets) ** 2))
 
                     def max_budget_constraint(w: np.ndarray) -> np.ndarray:
-                        return budget_targets - np.abs(B.T @ w * sigma_f_valid)
+                        return budget_targets - np.abs(BT @ w * sigma_f_valid)
 
                     constraints.append({'type': 'ineq', 'fun': max_budget_constraint})
         else:

@@ -38,6 +38,7 @@ sys.path.insert(0, str(project_root))
 from curves.calibration.stat import OU_calibrate
 from curves.calibration.regime import SpreadRegimeClassifier
 from curves.calibration.trend import compute_trend_signal
+from utils.io import load_frame as _io_load_frame
 from curves.utils.file import updatePKL
 from settings.paths import DIR_INPUT
 
@@ -105,7 +106,7 @@ class AlphaSnapshotPaths:
 def _read_pickle(path: Path) -> object:
 	if not path.exists():
 		raise FileNotFoundError(str(path))
-	return pd.read_pickle(path)
+	return _io_load_frame(str(path))
 
 
 def _last_values(df: pd.DataFrame) -> pd.Series:

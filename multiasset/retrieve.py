@@ -9,6 +9,8 @@ import pandas as pd
 import datetime
 import pathlib
 
+from data.providers.retrieve import _is_trading_hours
+
 
 CURVE_ARTIFACT_NAMES = ("curve_ts.pkl", "fxcurve_ts.pkl")
 
@@ -28,6 +30,8 @@ def retrieveFXIRCurves():
     valid_mtimes = [mtime for mtime in mtimes if mtime is not None]
     latest_mtime = max(valid_mtimes) if valid_mtimes else None
     if latest_mtime != t.date() or any(not os.path.exists(path) for path in file_paths):
+        if not _is_trading_hours():
+            return
         from settings.general import DateConfig
         from multiasset.config import ticker_dict, tenorlist
         from multiasset.utils import updatePKL 

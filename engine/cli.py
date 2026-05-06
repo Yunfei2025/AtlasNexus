@@ -6,8 +6,6 @@ from datetime import date, datetime
 from pathlib import Path
 
 from engine.context import build_run_config
-from engine.pipeline import eod as eod_pipeline
-from engine.pipeline import intraday as intraday_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -83,11 +81,13 @@ def main(argv: list[str] | None = None, *, project_root: Path | None = None) -> 
     project_root = project_root or Path(__file__).resolve().parents[1]
 
     if args.cmd == "eod":
+        from engine.pipeline import eod as eod_pipeline
         cfg = build_run_config(project_root=project_root, mode="eod", asof=args.asof)
         eod_pipeline.run(cfg, update_data=args.update_data)
         return 0
 
     if args.cmd == "intraday":
+        from engine.pipeline import intraday as intraday_pipeline
         cfg = build_run_config(project_root=project_root, mode="intraday", asof=args.asof)
         intraday_pipeline.run(cfg, update_data=args.update_data)
         return 0
@@ -102,6 +102,7 @@ def main(argv: list[str] | None = None, *, project_root: Path | None = None) -> 
         from engine.scheduler import TradingHoursScheduler
 
         if args.mode == "intraday":
+            from engine.pipeline import intraday as intraday_pipeline
             def _pipeline(c: "RunConfig") -> None:
                 intraday_pipeline.run(c, update_data=True)
         else:

@@ -101,6 +101,17 @@ def getVolInfo(tick: pd.DataFrame, csinterval: str):
 def queryPriceVolumeData(date: str, futures: str, csinterval: str):
     from futures.intraday.retrieve import retrieveTick
     tick = retrieveTick(date, futures)
+    empty_frame = pd.DataFrame()
+    empty_series = pd.Series(dtype=float)
+    if tick.empty:
+        return dict(
+            price=empty_frame,
+            vol=empty_frame,
+            vwap=empty_series,
+            vol_prof=empty_series,
+            bf_lst_vol=empty_series,
+            vol_last_min=empty_series,
+        )
     df, vwap, vol, vprof = getVolInfo(tick, csinterval)
     last_min = tick.index.max()
     tick_last_min = tick.loc[last_min.strftime('%Y-%m-%d')].between_time(

@@ -3283,18 +3283,19 @@ def register_multiasset_callbacks(app):
                 if 'short' in label_lower: return '#c0392b'
                 return THEME['text_sub']
 
-            rows = []
-            for _, row in snapshot.iterrows():
-                rows.append(html.Tr([
-                    html.Td(row['risk_factor'], style={'fontWeight': 'bold'}),
-                    html.Td(f"{row['signal']:.4f}"),
-                    html.Td(row['bucket_label'],
-                             style={'color': _bucket_color(row['bucket_label']),
+            rows = [
+                html.Tr([
+                    html.Td(r['risk_factor'], style={'fontWeight': 'bold'}),
+                    html.Td(f"{r['signal']:.4f}"),
+                    html.Td(r['bucket_label'],
+                             style={'color': _bucket_color(r['bucket_label']),
                                     'fontWeight': 'bold'}),
-                    html.Td(f"{row['scalar']:+.1f}×"),
-                    html.Td(f"{row['risk_budget']:+.2f} M"),
-                    html.Td(f"{row['confidence']:.0%}"),
-                ], style={'fontSize': '12px'}))
+                    html.Td(f"{r['scalar']:+.1f}×"),
+                    html.Td(f"{r['risk_budget']:+.2f} M"),
+                    html.Td(f"{r['confidence']:.0%}"),
+                ], style={'fontSize': '12px'})
+                for r in snapshot.to_dict('records')
+            ]
 
             table = html.Table(
                 [html.Thead(html.Tr([
@@ -3492,18 +3493,17 @@ def register_multiasset_callbacks(app):
             total_rounded_capital = 0.0
             
             if not portfolio_df.empty:
-                for idx, row in portfolio_df.iterrows():
-                    record = row.to_dict()
-                    asset_type = row['Asset Type']
-                    raw_capital = row['Capital (CNY)']
-                    
-                    unit = 10_000_000.0 if asset_type in ('Rates', 'Spread') else 1_000_000.0
-                    rounded_capital = np.floor(raw_capital / unit) * unit
-                    total_rounded_capital += rounded_capital
-                    
-                    record['Capital (CNY)'] = f"{rounded_capital / 1_000_000:,.2f}"
-                    record['Weight (%)'] = f"{row['Weight (%)']:.2f}%"
-                    portfolio_enhanced.append(record)
+                _units = np.where(
+                    portfolio_df['Asset Type'].isin(('Rates', 'Spread')),
+                    10_000_000.0,
+                    1_000_000.0,
+                )
+                _rounded = np.floor(portfolio_df['Capital (CNY)'].values / _units) * _units
+                total_rounded_capital = float(_rounded.sum())
+                _display_df = portfolio_df.copy()
+                _display_df['Capital (CNY)'] = [f"{v / 1_000_000:,.2f}" for v in _rounded]
+                _display_df['Weight (%)'] = portfolio_df['Weight (%)'].map(lambda v: f"{v:.2f}%")
+                portfolio_enhanced = _display_df.to_dict('records')
             
             portfolio_table_df = pd.DataFrame(portfolio_enhanced)
             
@@ -3559,11 +3559,8 @@ def register_multiasset_callbacks(app):
                 if (not factor_risk.empty
                         and 'Risk Factor' in factor_risk.columns
                         and 'Risk Contribution (%)' in factor_risk.columns):
-                    rc_map = {
-                        row['Risk Factor']: row['Risk Contribution (%)']
-                        for _, row in factor_risk.iterrows()
-                        if pd.notna(row['Risk Contribution (%)'])
-                    }
+                    _valid_rc = factor_risk[pd.notna(factor_risk['Risk Contribution (%)'])]
+                    rc_map = dict(zip(_valid_rc['Risk Factor'], _valid_rc['Risk Contribution (%)']))
                     total_rc = sum(v for v in rc_map.values() if v > 0)
                     if total_rc > 1e-6:
                         rp_budgets_out = {

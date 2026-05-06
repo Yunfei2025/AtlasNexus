@@ -8,23 +8,19 @@ import pandas as pd
 import plotly.graph_objs as go
 import re
 
+from data.providers.retrieve import _is_trading_hours
 from .load import tick_dfp
 from settings.general import DateConfig
 
 
 def _get_wind():
     """Return a connected Wind instance, starting it if not already connected."""
+    if not _is_trading_hours():
+        return None
     from WindPy import w as _w
     if not _w.isconnected():
         _w.start()
     return _w
-
-
-# Module-level alias used by callbacks in this file.
-try:
-    from WindPy import w
-except ImportError:
-    w = None  # type: ignore
 
 
 def get_current_time() -> int:
@@ -117,6 +113,17 @@ def getVolInfo(tick: pd.DataFrame, csinterval: str):
 
 def queryPriceVolumeData(date: str, futures: str, csinterval: str):
     w = _get_wind()
+    empty_frame = pd.DataFrame()
+    empty_series = pd.Series(dtype=float)
+    if w is None:
+        return dict(
+            price=empty_frame,
+            vol=empty_frame,
+            vwap=empty_series,
+            vol_prof=empty_series,
+            bf_lst_vol=empty_series,
+            vol_last_min=empty_series,
+        )
     tick = w.wst(
         futures,
         "last,ask,bid,volume",
@@ -125,6 +132,15 @@ def queryPriceVolumeData(date: str, futures: str, csinterval: str):
         "",
         usedf=True,
     )[1]
+    if tick.empty:
+        return dict(
+            price=empty_frame,
+            vol=empty_frame,
+            vwap=empty_series,
+            vol_prof=empty_series,
+            bf_lst_vol=empty_series,
+            vol_last_min=empty_series,
+        )
     tick = tick.drop(tick.index[0])
     tick = tick.set_index(pd.DatetimeIndex(pd.to_datetime(tick.index)))
     tick['volume'] = tick['volume'].diff(1)

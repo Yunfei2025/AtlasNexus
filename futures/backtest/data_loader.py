@@ -10,22 +10,19 @@ from datetime import datetime
 import functools
 from settings.paths import DIR_DATA, DIR_INPUT
 
-# Try importing WindPy
-try:
-    from WindPy import w
-    wind_available = True
-except ImportError:
-    wind_available = False
-    print("WindPy library not installed. Install with: pip install WindPy")
-
+from data.providers.retrieve import _is_trading_hours
 
 def init_wind():
     """Initialize Wind API connection"""
-    if wind_available:
-        if not w.isconnected():
-            w.start()
-        return True
-    return False
+    if not _is_trading_hours():
+        return False
+    try:
+        from WindPy import w
+    except ImportError:
+        return False
+    if not w.isconnected():
+        w.start()
+    return True
 
 
 @functools.lru_cache(maxsize=32)
@@ -35,6 +32,7 @@ def load_wind_data(symbol, start_date, end_date):
         return None, "Wind API connection failed"
         
     try:
+        from WindPy import w
         # w.wsi returns a WindData object
         wind_data = w.wsi(symbol, "open,high,low,close,volume", start_date, end_date, "")
         

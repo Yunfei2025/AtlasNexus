@@ -15,7 +15,7 @@ if str(project_root) not in sys.path:
 from settings.futures import FuturesConfig
 from settings.paths import DIR_DATA, DIR_INPUT
 from curves.utils.file import updatePKL
-from data.providers.retrieve import _wst, _wss, _wsd
+from data.providers.retrieve import _wst, _wss, _wsd, _is_trading_hours
 from settings.general import DateConfig, GeneralConfig
 
 # Localized new-config convenience variables
@@ -38,6 +38,8 @@ def _force_update_requested(cfg=None) -> bool:
 
 
 def retrieveTick(date, futures):
+    if not _is_trading_hours():
+        return pd.DataFrame()
     from WindPy import w
     if not w.isconnected():
         w.start()

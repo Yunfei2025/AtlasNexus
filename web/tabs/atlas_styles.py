@@ -22,7 +22,6 @@ tabs_styles: Dict[str, Any] = {
 
 tab_selected_style: Dict[str, Any] = {
     "background": "#082255",
-    "text-transform": "uppercase",
     "color": "white",
     "border": "grey",
     "font-size": "14px",
@@ -31,11 +30,11 @@ tab_selected_style: Dict[str, Any] = {
     "justify-content": "center",
     "border-radius": "4px",
     "padding": "6px",
+    "borderLeft": "3px solid #2e86c1",
 }
 
 tab_style: Dict[str, Any] = {
     "background": "#425476",
-    "text-transform": "uppercase",
     "color": "white",
     "font-size": "14px",
     "font-weight": 600,

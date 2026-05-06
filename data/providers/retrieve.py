@@ -29,6 +29,17 @@ WSQ_CALL_TIMEOUT: float = 10.0
 WSQ_CHUNK_SIZE: int = 200
 
 
+def _is_trading_hours(now: Optional[dt.datetime] = None) -> bool:
+    now = now or dt.datetime.now()
+    if now.weekday() >= 5:
+        return False
+    current_time = now.time()
+    return dt.time(9, 0) <= current_time <= dt.time(17, 0)
+
+
+_WIND_AVAILABLE: Optional[bool] = None if _is_trading_hours() else False
+
+
 def _normalize_codes(codes) -> list[str]:
     if isinstance(codes, str):
         return [code.strip() for code in codes.split(',') if code.strip()]
@@ -104,21 +115,33 @@ def _ensure_wind() -> bool:
     This directly imports WindPy and calls `w.start()`; returns True on
     success, False on failure. Intentionally does not use timeouts or caching.
     """
+    global _WIND_AVAILABLE
+    if not _is_trading_hours():
+        _WIND_AVAILABLE = False
+        return False
     try:
         from WindPy import w
         w.start()
+        _WIND_AVAILABLE = True
         return True
     except Exception as e:
+        _WIND_AVAILABLE = False
         print(f"[Wind] Failed to start: {e} — running in offline mode.")
         return False
 
 
 def reset_wind_connection():
     """Force a fresh Wind session restart."""
+    global _WIND_AVAILABLE
+    if not _is_trading_hours():
+        _WIND_AVAILABLE = False
+        return
     try:
         from WindPy import w
         w.start()
+        _WIND_AVAILABLE = True
     except Exception as e:
+        _WIND_AVAILABLE = False
         print(f"[Wind] Failed to restart: {e}")
 
 

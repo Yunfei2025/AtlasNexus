@@ -26,46 +26,46 @@ def prepare_portfolio_table(summary_df, factor_exposures_df, portfolio=None):
     if summary_df is None or summary_df.empty:
         return pd.DataFrame()
     
-    # Create a copy of summary
-    portfolio_data = []
-    
     # Get all unique risk factors for sensitivity columns
     risk_factors = sorted([f for f in factor_exposures_df['Risk Factor'].values if f.startswith(('IRDL', 'IRSL', 'IRCV', 'FXDL', 'CMDL'))])
-    
-    for idx, row in summary_df.iterrows():
-        asset_name = row['Asset']
-        
-        # Skip assets with zero or negligible allocation
-        # Hedge instruments can have negative allocation (short position)
-        if abs(row['Allocation (CNY)']) < 1000:
-            continue
-        
-        record = {
-            'Asset Type': get_asset_type(asset_name),
-            'Universe': get_universe(asset_name),
-            'Sector': get_sector(asset_name),
-            'Asset Name': asset_name,
-            'Capital (CNY)': row['Allocation (CNY)'],
-            'Weight (%)': row['Weight (%)'],
+
+    # Filter out negligible allocations
+    mask = summary_df['Allocation (CNY)'].abs() >= 1000
+    filtered = summary_df[mask].copy()
+
+    if filtered.empty:
+        return pd.DataFrame()
+
+    # Build classification columns (vectorized via .map)
+    asset_col = filtered['Asset']
+    filtered = filtered.assign(
+        **{
+            'Asset Type': asset_col.map(get_asset_type),
+            'Universe':   asset_col.map(get_universe),
+            'Sector':     asset_col.map(get_sector),
+            'Asset Name': asset_col,
+            'Capital (CNY)': filtered['Allocation (CNY)'],
         }
-        
-        # Add sensitivity columns
-        if portfolio and asset_name in portfolio.assets:
-            asset = portfolio.assets[asset_name]
-            for factor in risk_factors:
-                record[factor] = asset.factors.get(factor, 0.0)
-        else:
-            for factor in risk_factors:
-                record[factor] = 0.0
-        
-        portfolio_data.append(record)
-    
-    portfolio_df = pd.DataFrame(portfolio_data)
-    
-    # Sort by Asset Type, Universe, and Sector
-    if not portfolio_df.empty:
-        portfolio_df = portfolio_df.sort_values(['Asset Type', 'Universe', 'Sector'])
-    
+    )
+
+    # Build sensitivity matrix from portfolio object
+    if portfolio:
+        for factor in risk_factors:
+            filtered[factor] = filtered['Asset'].map(
+                lambda a, f=factor: (
+                    portfolio.assets[a].factors.get(f, 0.0)
+                    if a in portfolio.assets else 0.0
+                )
+            )
+    else:
+        for factor in risk_factors:
+            filtered[factor] = 0.0
+
+    cols = ['Asset Type', 'Universe', 'Sector', 'Asset Name',
+            'Capital (CNY)', 'Weight (%)'] + risk_factors
+    portfolio_df = filtered[cols].sort_values(['Asset Type', 'Universe', 'Sector'])
+    portfolio_df = portfolio_df.reset_index(drop=True)
+
     return portfolio_df
 
 
@@ -86,19 +86,17 @@ def create_portfolio_table_with_sensitivities(portfolio_df, portfolio_obj):
     # Get sensitivity columns
     sensitivity_cols = [col for col in portfolio_df.columns if col.startswith(('IRDL', 'IRSL', 'IRCV', 'FXDL', 'CMDL'))]
     
-    for idx, row in portfolio_df.iterrows():
-        asset_name = row['Asset Name']
-        weight = row['Weight (%)'] / 100.0
-        
-        # Get asset from portfolio
-        if asset_name in portfolio_obj.assets:
-            asset = portfolio_obj.assets[asset_name]
-            
-            # Fill in sensitivities
-            for factor_name, sensitivity in asset.factors.items():
-                if factor_name in sensitivity_cols:
-                    # Weighted sensitivity
-                    portfolio_df.at[idx, factor_name] = weight * sensitivity
+    # Build weighted-sensitivity matrix from portfolio object (vectorized)
+    if sensitivity_cols and portfolio_obj:
+        weight_series = portfolio_df['Weight (%)'] / 100.0
+        name_to_idx = {name: i for i, name in enumerate(portfolio_df['Asset Name'])}
+        for factor_name in sensitivity_cols:
+            sens_values = portfolio_df[factor_name].values.copy()
+            for asset_name, asset in portfolio_obj.assets.items():
+                if asset_name in name_to_idx and factor_name in asset.factors:
+                    i = name_to_idx[asset_name]
+                    sens_values[i] = weight_series.iloc[i] * asset.factors[factor_name]
+            portfolio_df[factor_name] = sens_values
     
     # Add totals row
     totals = {

@@ -18,6 +18,7 @@ if str(project_root) not in sys.path:
 from curves.utils.loader import loadInstrumentDefinition
 from settings.paths import DIR_INPUT
 from settings.fixed_income import BondConfig, IRSConfig
+from utils.io import load_frame
 
 
 def swap_dv01(term_years, rate=0.015, freq=4):
@@ -89,7 +90,7 @@ class PairsGenerator:
 
         for btype in btype_list:
             out[btype] = pd.DataFrame()
-            results = pd.read_pickle(os.path.join(DIR_INPUT, f"{btype}-spdsrt.pkl"))
+            results = load_frame(os.path.join(DIR_INPUT, f"{btype}-spdsrt.pkl"))
             if btype in ["TBond", "CBond"]:
                 spreads = results["BondCurve"]
                 new_list = pd.read_pickle(os.path.join(DIR_INPUT, f"{btype}-cvref.pkl"))['RefBond'].iloc[-1][-4:]

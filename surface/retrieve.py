@@ -11,6 +11,7 @@ import os
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 
+from data.providers.retrieve import _is_trading_hours
 from utils.file import updatePKL, get_mtime_date
 from settings.paths import DIR_INPUT
 
@@ -119,6 +120,9 @@ def retrieveSurface(force: bool = False):
     )
 
     if needs_update:
+            if not _is_trading_hours():
+                print("INFO: Outside trading hours — skipping Wind refresh for surface data.")
+                return surface_dict or {}
         print("INFO: Updating time series...")
         from WindPy import w
         w.start()

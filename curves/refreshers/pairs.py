@@ -17,6 +17,7 @@ from curves.utils.loader import loadInstrumentDefinition
 from settings.general import DateConfig
 from settings.paths import DIR_INPUT
 from settings.fixed_income import BondConfig, IRSConfig
+from utils.io import load_frame
 
 def swap_dv01(term_years, rate=0.015, freq=4):
     """Approximate swap DV01 using a simple annuity formula."""
@@ -63,7 +64,7 @@ def _prepare_instruments(mdur_irs: pd.Series) -> tuple:
             return []
 
     for btype in btype_list:
-        results = pd.read_pickle(os.path.join(DIR_INPUT, f"{btype}-spdsrt.pkl"))
+        results = load_frame(os.path.join(DIR_INPUT, f"{btype}-spdsrt.pkl"))
         if btype in ["TBond", "CBond"]:
             spreads = results["BondCurve"]
             new_list = pd.read_pickle(os.path.join(DIR_INPUT, f"{btype}-cvref.pkl"))['RefBond'].iloc[-1][-4:]

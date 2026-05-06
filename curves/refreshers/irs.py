@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 
 from curves.utils.loader import loadInstrumentDefinition, loadCNBDTS
 from curves.utils.retrieve  import retrieveEnvRT
+from utils.io import save_frame
 from settings.paths import DIR_INPUT
 from settings.general import GeneralConfig, DateConfig
 from settings.fixed_income import IRSConfig
@@ -487,8 +488,7 @@ class IRSRefresher:
 			'swaps': swaps_rt,
 			'spreads': spreads
 		}
-		with open(os.path.join(DIR_INPUT, 'IRS-spdsrt.pkl'), 'wb') as file:
-			pickle.dump(irs_rt, file)
+		save_frame(irs_rt, os.path.join(DIR_INPUT, 'IRS-spdsrt.pkl'))
 		logger.info("Real-time data saved to IRS-spdsrt.pkl")
 
 	def run(self):

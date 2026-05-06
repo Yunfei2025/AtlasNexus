@@ -18,6 +18,7 @@ PATH = pathlib.Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PATH))
 
 from curves.utils import loader as ld
+from utils.io import save_frame
 from curves.utils import retrieve as rd
 from settings.paths import DIR_INPUT, DIR_OUTPUT
 from settings.general import DateConfig, GeneralConfig
@@ -157,8 +158,8 @@ class StatRefresher:
 
 
     def _write_pickle(self, obj, filename: str) -> None:
-        with open(os.path.join(DIR_INPUT, filename), 'wb') as f:
-            pickle.dump(obj, f)
+        path = os.path.join(DIR_INPUT, filename)
+        save_frame(obj, path)
 
     def refresh_bonds_and_swaps(self) -> None:
         print('\nRefresh spreads at：', self.now.strftime('%H:%M:%S'))

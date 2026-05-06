@@ -14,7 +14,6 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from typing import Tuple, Dict
 from settings.paths import DIR_DATA
-from WindPy import w
 
 from ..config import config_manager
 

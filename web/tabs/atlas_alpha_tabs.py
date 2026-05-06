@@ -26,8 +26,9 @@ import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 
-from dash import dcc, html, dash_table, callback_context
-from dash.dependencies import Input, Output, State
+from dash import dcc, html, dash_table, callback_context, no_update
+from dash.dependencies import Input, Output, State, ALL
+from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
 
 # ---------------------------------------------------------------------------
@@ -694,7 +695,7 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     if len(spread_series) < 2:
         print("⚠ Insufficient historical data for risk parity, using inverse volatility")
         n = len(df_candidates)
-        weights = {row['ID']: 1/n for _, row in df_candidates.iterrows()}
+        weights = dict(zip(df_candidates['ID'], [1/n] * n))
         risk_contrib = np.ones(n) / n
         return weights, risk_contrib
     
@@ -704,7 +705,7 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     if len(spread_df) < 20:
         print("⚠ Too few common dates for covariance, using inverse volatility")
         n = len(df_candidates)
-        weights = {row['ID']: 1/n for _, row in df_candidates.iterrows()}
+        weights = dict(zip(df_candidates['ID'], [1/n] * n))
         risk_contrib = np.ones(n) / n
         return weights, risk_contrib
     
@@ -1291,7 +1292,7 @@ def build_candidates_layout() -> html.Div:
         html.Div([
             # Z-score threshold
             html.Div([
-                html.Label("Z-Score Entry Threshold:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
+                html.Label("Z-Score Threshold (MR candidates only):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
                 dcc.Slider(
                     id='alpha-zscore-threshold',
                     min=1.0,
@@ -1410,71 +1411,116 @@ def build_candidates_layout() -> html.Div:
             ),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'}),
         
-        # Diversification helper panel
-        html.Div([
-            html.Hr(style={'borderColor': THEME['text_sub'], 'margin': '20px 0'}),
-            html.H6("📊 Diversification Suggestions", style={'color': THEME['success'], 'marginBottom': '10px'}),
-            html.P(
-                "Use the lowest-correlation pairs above to seed the diversification pool.",
-                style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '10px'}
-            ),
-            html.Div([
-                html.Label("Number of trades (N):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                dcc.Input(
-                    id='alpha-diversified-n',
-                    type='number',
-                    value=10,
-                    min=1,
-                    max=50,
-                    step=1,
-                    style={'width': '80px', 'marginRight': '20px', 'padding': '5px', 'borderRadius': '4px',
-                           'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
-                           'border': f'1px solid {THEME["table_header"]}'}
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
-            html.Div(id='alpha-diversified-trades-display'),
-            html.Div([
-                html.Button(
-                    "🔄 Replace Strategy Pool with Selected Trades",
-                    id='alpha-replace-pool-btn',
-                    n_clicks=0,
-                    style={
-                        'backgroundColor': THEME['success'],
-                        'color': 'white',
-                        'padding': '10px 25px',
-                        'border': 'none',
-                        'borderRadius': '5px',
-                        'cursor': 'pointer',
-                        'fontWeight': 'bold',
-                        'fontSize': '14px',
-                        'marginTop': '10px',
-                    }
-                ),
-                html.Span(
-                    id='alpha-replace-pool-status',
-                    style={'marginLeft': '15px', 'color': THEME['text_sub'], 'fontSize': '12px'}
-                ),
-            ]),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginTop': '15px'}),
-        
         # Hidden stores for correlation data
         dcc.Store(id='alpha-corr-pairs-store', data=[]),
+        dcc.Store(id='alpha-corr-matrix-store', storage_type='memory', data={}),
+        dcc.Store(id='alpha-curated-instruments-store', storage_type='memory', data=[]),
         # Regime results from most recent scan: {"spread_type|ID": {"regime": ..., "score": ...}}
         dcc.Store(id='alpha-regime-store', storage_type='session', data={}),
-        
+
     ], style={'padding': '10px'})
 
 
 def build_portfolio_layout() -> html.Div:
-    """Build the PORTFOLIO subtab layout."""
-    
+    """Build the PORTFOLIO subtab layout.
+
+    Workflow:
+      1. Instrument Selection & Correlation  — populated automatically from
+         the lowest-correlation pairs computed in the Candidates subtab
+         (no button needed; data flows via dcc.Store).
+      2. Configuration                       — capital & risk limits.
+      3. Portfolio Allocation Results        — run optimisation.
+    """
+
     return html.Div([
-        # Configuration Panel
+        # Hidden inputs for removed features (keep for callback compatibility)
+        html.Div([
+            dcc.Input(id='alpha-mom-k', type='number', value=1.0, style={'display': 'none'}),
+            dcc.Input(id='alpha-mom-window', type='number', value=20, style={'display': 'none'}),
+            dcc.Input(id='alpha-alloc-method', type='text', value='risk_parity', style={'display': 'none'}),
+            dcc.Checklist(id='alpha-enforce-corr', options=[], value=[], style={'display': 'none'}),
+        ], style={'display': 'none'}),
+
+        # ── Step 1: Instrument Selection & Correlation ────────────────────────
+        # Populated automatically when the user runs Check Correlation in the
+        # Candidates subtab — no extra button required.
+        # ─────────────────────────────────────────────────────────────────────
+        html.Div([
+            html.H5("Step 1 — Instrument Selection & Correlation",
+                    style={'color': THEME['text_main'], 'marginBottom': '6px', 'fontSize': '15px'}),
+            html.P(
+                "Run Check Correlation in the Candidates subtab first. "
+                "The lowest-correlation pairs are transferred here automatically. "
+                "Add or remove instruments to customise your trade set.",
+                style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '14px'},
+            ),
+
+            # Add controls row
+            html.Div([
+                html.Div([
+                    html.Label("Spread Type",
+                               style={'color': THEME['text_sub'], 'fontSize': '11px',
+                                      'marginBottom': '4px', 'display': 'block'}),
+                    dcc.Dropdown(
+                        id='alpha-add-spread-type',
+                        options=[
+                            {'label': stype, 'value': stype}
+                            for cat_info in SPREAD_CATEGORIES.values()
+                            for stype in cat_info['types']
+                        ],
+                        placeholder='Select type…',
+                        clearable=False,
+                        style={'width': '170px', 'fontSize': '13px'},
+                    ),
+                ]),
+                html.Div([
+                    html.Label("Instrument",
+                               style={'color': THEME['text_sub'], 'fontSize': '11px',
+                                      'marginBottom': '4px', 'display': 'block'}),
+                    dcc.Dropdown(
+                        id='alpha-add-instrument',
+                        options=[],
+                        placeholder='Select instrument…',
+                        clearable=False,
+                        style={'width': '210px', 'fontSize': '13px'},
+                    ),
+                ]),
+                html.Button(
+                    "+ Add Trade",
+                    id='alpha-add-trade-btn',
+                    n_clicks=0,
+                    style={
+                        'backgroundColor': THEME['success'],
+                        'color': 'white',
+                        'border': 'none',
+                        'borderRadius': '4px',
+                        'padding': '6px 16px',
+                        'cursor': 'pointer',
+                        'fontWeight': '600',
+                        'fontSize': '13px',
+                        'alignSelf': 'flex-end',
+                    },
+                ),
+            ], style={'display': 'flex', 'gap': '12px', 'alignItems': 'flex-end',
+                      'marginBottom': '14px', 'flexWrap': 'wrap'}),
+
+            # Instrument table (rendered by callback)
+            html.Div(id='alpha-curated-table-div'),
+
+            # Curated correlation view (rendered by callback)
+            html.Div(id='alpha-curated-corr-div', style={'marginTop': '16px'}),
+
+        ], id='alpha-curated-panel',
+           style={'backgroundColor': THEME['bg_card'], 'padding': '20px',
+                  'marginBottom': '20px', 'borderRadius': '5px'}),
+
+        # ── Step 2: Configuration ─────────────────────────────────────────────
         html.Div([
             html.Div([
-                html.H5("Configuration", style={'margin': '0', 'color': THEME['text_main'], 'fontSize': '16px'}),
+                html.H5("Step 2 — Configuration",
+                        style={'margin': '0', 'color': THEME['text_main'], 'fontSize': '15px'}),
             ], style={'flex': '1'}),
-            
+
             html.Div([
                 html.Label("Total Capital:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
                 dcc.Input(
@@ -1485,7 +1531,7 @@ def build_portfolio_layout() -> html.Div:
                     style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
                 ),
                 html.Span("Billion CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
-                
+
                 html.Label("Max DV01 per Trade:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
                 dcc.Input(
                     id='alpha-max-dv01',
@@ -1496,24 +1542,20 @@ def build_portfolio_layout() -> html.Div:
                     style={'width': '120px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
                 ),
                 html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
-                
+
                 html.Label("Method:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
                 html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '14px', 'fontWeight': 'bold'}),
             ], style={'display': 'flex', 'alignItems': 'center'}),
-        ], style={'display': 'flex', 'alignItems': 'center', 'padding': '15px 20px', 'backgroundColor': THEME['bg_input'], 'borderBottom': f'1px solid {THEME["table_header"]}', 'borderRadius': '8px 8px 0 0', 'marginBottom': '20px'}),
-        
-        # Hidden inputs for removed features (keep for callback compatibility)
-        html.Div([
-            dcc.Input(id='alpha-mom-k', type='number', value=1.0, style={'display': 'none'}),
-            dcc.Input(id='alpha-mom-window', type='number', value=20, style={'display': 'none'}),
-            dcc.Input(id='alpha-alloc-method', type='text', value='risk_parity', style={'display': 'none'}),
-            dcc.Checklist(id='alpha-enforce-corr', options=[], value=[], style={'display': 'none'}),
-        ], style={'display': 'none'}),
-        
-        # Portfolio Allocation Results
+        ], style={'display': 'flex', 'alignItems': 'center', 'padding': '15px 20px',
+                  'backgroundColor': THEME['bg_input'],
+                  'borderBottom': f'1px solid {THEME["table_header"]}',
+                  'borderRadius': '8px 8px 0 0', 'marginBottom': '20px'}),
+
+        # ── Step 3: Portfolio Allocation Results ──────────────────────────────
         html.Div([
             html.Div([
-                html.H4("Portfolio Allocation Results", style={'color': THEME['text_main'], 'marginBottom': '15px', 'flex': '1'}),
+                html.H4("Step 3 — Portfolio Allocation Results",
+                        style={'color': THEME['text_main'], 'marginBottom': '15px', 'flex': '1'}),
                 html.Div([
                     html.Button(
                         'RUN OPTIMIZATION',
@@ -1523,16 +1565,16 @@ def build_portfolio_layout() -> html.Div:
                     ),
                 ], style={'marginLeft': '20px'})
             ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between'}),
-            
+
             # Current Strategy Pool Display
             html.Div([
                 html.Div(id='alpha-pool-status', style={'fontSize': '13px', 'color': THEME['text_sub'], 'marginBottom': '10px'}),
                 html.Div(id='alpha-pool-preview', style={'fontSize': '11px', 'color': THEME['text_main']}),
             ]),
-            
+
             # Hidden store to persist optimized weights for Backtest tab
             dcc.Store(id='alpha-optimized-weights', storage_type='session'),
-            
+
             html.Div([
                 html.Div(id='alpha-score-status', style={'fontSize': '13px', 'color': THEME['text_main'], 'marginRight': '20px'}),
                 html.Div(id='alpha-portfolio-summary', style={'color': THEME['text_sub'], 'fontSize': '11px'})
@@ -1547,7 +1589,7 @@ def build_portfolio_layout() -> html.Div:
                 ]
             )
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'marginBottom': '20px', 'borderRadius': '5px'}),
-        
+
     ], style={'padding': '10px'})
 
 
@@ -1565,7 +1607,6 @@ def register_alpha_callbacks(app) -> None:
         [Output('alpha-candidates-table-container', 'children'),
          Output('alpha-scan-status', 'children'),
          Output('alpha-selected-candidates', 'data'),
-         Output('alpha-diversified-trades-display', 'children'),
          Output('alpha-regime-store', 'data')],
         Input('alpha-scan-btn', 'n_clicks'),
         [State('alpha-spread-categories', 'value'),
@@ -1575,7 +1616,7 @@ def register_alpha_callbacks(app) -> None:
     )
     def scan_candidates(n_clicks, categories, zscore_thd, direction):
         if not n_clicks or not categories:
-            return html.Div("Select spread categories and click Scan.", style={'color': THEME['text_sub']}), "", [], html.Div(), {}
+            return html.Div("Select spread categories and click Scan.", style={'color': THEME['text_sub']}), "", [], {}
 
         try:
             z_thd = float(zscore_thd) if zscore_thd is not None else float(ZSCORE_ENTRY_THRESHOLD)
@@ -1619,7 +1660,6 @@ def register_alpha_callbacks(app) -> None:
                 ),
                 f"Scanned at {scanned_time}",
                 [],
-                html.Div(),
                 {},
             )
 
@@ -1644,7 +1684,6 @@ def register_alpha_callbacks(app) -> None:
                 ),
                 f"Scanned at {scanned_time}",
                 [],
-                html.Div(),
                 {},
             )
 
@@ -1916,174 +1955,16 @@ def register_alpha_callbacks(app) -> None:
                     _conf_f = float('nan')
                 regime_store[_key] = {'regime': _reg, 'score': _conf_f}
         
-        # Build diversification suggestions display (uses low-correlation trades)
-        diversified_display = html.Div()
-        if isinstance(df_low, pd.DataFrame) and not df_low.empty:
-            # Add direction column to df_low if not present
-            df_low_enriched = df_low.copy()
-            if 'direction' not in df_low_enriched.columns and 'Zscore' in df_low_enriched.columns:
-                df_low_enriched['direction'] = df_low_enriched['Zscore'].apply(lambda z: 'BUY' if float(z) > 0 else 'SELL')
-            
-            # Store recommended trades in global variable for "Replace Pool" button
-            DIVERSIFIED_TRADE_RECOMMENDATIONS['trades'] = df_low_enriched.to_dict('records')
-            DIVERSIFIED_TRADE_RECOMMENDATIONS['timestamp'] = datetime.now()
-            
-            trade_items = []
-            for idx, row in df_low_enriched.iterrows():
-                trade_id = row.get('ID', idx)
-                spread_type = row.get('spread_type', 'N/A')
-                style = row.get('style', 'N/A')
-                zscore = row.get('Zscore', 0)
-                direction = row.get('direction', 'N/A')
-                dir_color = THEME['success'] if direction == 'BUY' else THEME['danger']
-                trade_items.append(
-                    html.Div([
-                        html.Span(f"• {trade_id} ({spread_type} - {style}) ", style={'color': THEME['text_main']}),
-                        html.Span(f"{direction}", style={'color': dir_color, 'fontWeight': 'bold'}),
-                        html.Span(f" | Z={zscore:.2f}", style={'color': THEME['text_main']}),
-                    ], style={'fontSize': '11px', 'padding': '2px 0'})
-                )
-            
-            diversified_display = html.Div([
-                html.Div(
-                    f"✓ {len(df_low_enriched)} trades prepared for diversification",
-                    style={'color': THEME['success'], 'fontWeight': 'bold', 'marginBottom': '8px', 'fontSize': '12px'}
-                ),
-                html.Div(trade_items, style={'maxHeight': '150px', 'overflowY': 'auto', 'backgroundColor': THEME['bg_input'], 'padding': '8px', 'borderRadius': '4px'})
-            ])
-        else:
-            # No diversification suggestions available
-            DIVERSIFIED_TRADE_RECOMMENDATIONS['trades'] = []
-            DIVERSIFIED_TRADE_RECOMMENDATIONS['timestamp'] = None
-            diversified_display = html.Div(
-                "Run scan to generate diversification suggestions",
-                style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'}
-            )
-        
-        return table_out, status, candidate_data, diversified_display, regime_store
-    
-    # -------------------------------------------------------------------------
-    # CANDIDATES: Replace Strategy Pool with Diversified Trades
-    # -------------------------------------------------------------------------
-    @app.callback(
-        [Output('alpha-replace-pool-status', 'children'),
-         Output('alpha-selected-candidates', 'data', allow_duplicate=True),
-         Output('alpha-diversified-trades-display', 'children', allow_duplicate=True)],
-        Input('alpha-replace-pool-btn', 'n_clicks'),
-        [State('alpha-corr-pairs-store', 'data'),
-         State('alpha-diversified-n', 'value'),
-         State('alpha-selected-candidates', 'data')],
-        prevent_initial_call=True
-    )
-    def replace_strategy_pool(n_clicks, corr_pairs_data, n_trades, all_candidates):
-        """Replace the strategy pool with top N trades from lowest correlation pairs."""
-        if not n_clicks or n_clicks == 0:
-            return "", [], html.Div()
-        
-        # Validate inputs
-        if not corr_pairs_data or len(corr_pairs_data) == 0:
-            return "⚠ No correlation pairs available. Please run 'Check Correlation' first.", [], html.Div(
-                "Run 'Check Correlation' to generate low-correlation pairs.",
-                style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'}
-            )
-        
-        if not all_candidates or len(all_candidates) == 0:
-            return "⚠ No candidates available. Please run scan first.", [], html.Div(
-                "Run scan to generate candidates.",
-                style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'}
-            )
-        
-        try:
-            # Get top N pairs
-            n = int(n_trades) if n_trades else 10
-            top_pairs = corr_pairs_data[:n]
-            
-            # Extract asset names from pairs
-            selected_asset_names = set()
-            for pair in top_pairs:
-                selected_asset_names.add(pair.get('Asset A', ''))
-                selected_asset_names.add(pair.get('Asset B', ''))
-            
-            # Debug output
-            print(f"[DEBUG] Top {n} correlation pairs:")
-            print(f"[DEBUG] Selected asset names from pairs: {selected_asset_names}")
-            
-            # Match with candidates using ID
-            df_candidates = pd.DataFrame(all_candidates)
-            if 'ID' not in df_candidates.columns:
-                return "⚠ Candidate data missing ID column.", [], html.Div()
-            
-            # Debug output
-            print(f"[DEBUG] Candidate IDs available: {set(df_candidates['ID'].tolist())}")
-            
-            # Filter candidates that are in the selected low-correlation pairs
-            selected_trades = []
-            for _, row in df_candidates.iterrows():
-                trade_id = row.get('ID', '')
-                if trade_id in selected_asset_names:
-                    trade_dict = row.to_dict()
-                    # Ensure direction column exists
-                    if 'direction' not in trade_dict and 'Zscore' in trade_dict:
-                        zscore = float(trade_dict['Zscore'])
-                        trade_dict['direction'] = 'BUY' if zscore > 0 else 'SELL'
-                    selected_trades.append(trade_dict)
-            
-            print(f"[DEBUG] Matched {len(selected_trades)} trades")
-            
-            if len(selected_trades) == 0:
-                return "⚠ No matching trades found in candidates.", [], html.Div(
-                    "Could not match correlation pairs to scanned candidates.",
-                    style={'color': THEME['warning'], 'fontSize': '11px'}
-                )
-            
-            # Count trades by type for status message
-            type_counts = {}
-            for trade in selected_trades:
-                t_type = trade.get('spread_type', 'Other')
-                type_counts[t_type] = type_counts.get(t_type, 0) + 1
-            
-            type_summary = ", ".join([f"{count} {t}" for t, count in type_counts.items()])
-            status_msg = f"✓ Replaced strategy pool with {len(selected_trades)} trades ({type_summary}). Switch to Portfolio tab to allocate capital."
-            
-            # Build display
-            trade_items = []
-            for trade in selected_trades:
-                trade_id = trade.get('ID', 'N/A')
-                spread_type = trade.get('spread_type', 'N/A')
-                style = trade.get('style', 'N/A')
-                zscore = trade.get('Zscore', 0)
-                direction = trade.get('direction', 'N/A')
-                dir_color = THEME['success'] if direction == 'BUY' else THEME['danger']
-                trade_items.append(
-                    html.Div([
-                        html.Span(f"• {trade_id} ({spread_type} - {style}) ", style={'color': THEME['text_main']}),
-                        html.Span(f"{direction}", style={'color': dir_color, 'fontWeight': 'bold'}),
-                        html.Span(f" | Z={zscore:.2f}", style={'color': THEME['text_main']}),
-                    ], style={'fontSize': '11px', 'padding': '2px 0'})
-                )
-            
-            diversified_display = html.Div([
-                html.Div(
-                    f"✓ {len(selected_trades)} low-correlation trades selected from correlation analysis",
-                    style={'color': THEME['success'], 'fontWeight': 'bold', 'marginBottom': '8px', 'fontSize': '12px'}
-                ),
-                html.Div(trade_items, style={'maxHeight': '150px', 'overflowY': 'auto', 'backgroundColor': THEME['bg_input'], 'padding': '8px', 'borderRadius': '4px'})
-            ])
-            
-            return status_msg, selected_trades, diversified_display
-            
-        except Exception as e:
-            print(f"Error replacing strategy pool: {e}")
-            import traceback
-            traceback.print_exc()
-            return f"❌ Error: {str(e)[:50]}", [], html.Div()
+        return table_out, status, candidate_data, regime_store
     
     # -------------------------------------------------------------------------
     # CANDIDATES: Correlation Check
     # -------------------------------------------------------------------------
     @app.callback(
         [Output('alpha-corr-results', 'children'),
-         Output('alpha-corr-pairs-store', 'data')],
+         Output('alpha-corr-pairs-store', 'data'),
+         Output('alpha-corr-matrix-store', 'data'),
+         Output('alpha-curated-instruments-store', 'data')],
         Input('alpha-corr-btn', 'n_clicks'),
         [State('alpha-spread-categories', 'value'),
          State('alpha-corr-lookback', 'value'),
@@ -2093,7 +1974,7 @@ def register_alpha_callbacks(app) -> None:
     )
     def check_correlation(n_clicks, categories, lookback, max_corr, all_candidates):
         if not n_clicks or not categories:
-            return html.Div("Select categories and click Check Correlation.", style={'color': THEME['text_sub']}), []
+            return html.Div("Select categories and click Check Correlation.", style={'color': THEME['text_sub']}), [], {}, []
         
         # If we have scanned candidates, use those for correlation analysis
         if all_candidates and len(all_candidates) > 0:
@@ -2147,7 +2028,7 @@ def register_alpha_callbacks(app) -> None:
                     spread_types.extend(SPREAD_CATEGORIES[cat]['types'])
             
             if len(spread_types) == 0:
-                return html.Div("No spread types selected.", style={'color': THEME['warning']}), []
+                return html.Div("No spread types selected.", style={'color': THEME['warning']}), [], {}, []
             
             # First try to load pre-computed correlation from Alpha-candidates.pkl
             dir_input = _get_input_dir()
@@ -2163,10 +2044,10 @@ def register_alpha_callbacks(app) -> None:
                 corr_matrix, _ = compute_spread_correlation(spread_types, lookback_days=lookback)
         
         if corr_matrix is None or corr_matrix.empty:
-            return html.Div("Insufficient data for correlation analysis. Need at least 2 instruments with historical data.", style={'color': THEME['warning']}), []
+            return html.Div("Insufficient data for correlation analysis. Need at least 2 instruments with historical data.", style={'color': THEME['warning']}), [], {}, []
         
         # Rank low correlation pairs
-        low_corr_pairs = rank_low_correlation_pairs(corr_matrix, top_n=15)
+        low_corr_pairs = rank_low_correlation_pairs(corr_matrix, top_n=10)
         
         # Find high correlation pairs (potential duplicates)
         high_corr = low_corr_pairs[low_corr_pairs['AbsCorr'] > max_corr]
@@ -2247,14 +2128,295 @@ def register_alpha_callbacks(app) -> None:
         
         # Store pairs data for later use
         pairs_data = low_corr_pairs.to_dict('records') if isinstance(low_corr_pairs, pd.DataFrame) else []
-        
+
+        # Build id → spread_type map from scanned candidates
+        id_to_type: dict = {}
+        if all_candidates:
+            for c in all_candidates:
+                if 'ID' in c and 'spread_type' in c:
+                    id_to_type[c['ID']] = c['spread_type']
+
+        # Initialize curated list from unique instruments in lowest-correlation pairs
+        # Cap at 10 instruments total — same as top_n for the pairs table.
+        seen_insts: set = set()
+        curated_instruments: list = []
+        for _, pair_row in low_corr_pairs.iterrows():
+            for col in ['Asset A', 'Asset B']:
+                inst = pair_row[col]
+                if inst not in seen_insts and inst in corr_matrix.columns:
+                    seen_insts.add(inst)
+                    curated_instruments.append({
+                        'spread_type': id_to_type.get(inst, 'Unknown'),
+                        'instrument': inst,
+                    })
+                    if len(curated_instruments) >= 10:
+                        break
+            if len(curated_instruments) >= 10:
+                break
+
         return html.Div([
             heatmap_div,
             html.H6("Lowest Correlation Pairs", style={'color': THEME['text_main'], 'marginTop': '15px', 'marginBottom': '10px'}),
             pairs_table,
             warning_div,
-        ]), pairs_data
-    
+        ]), pairs_data, corr_matrix.to_dict(), curated_instruments
+
+    # -------------------------------------------------------------------------
+    # CANDIDATES: Cascade instrument dropdown from spread type
+    # -------------------------------------------------------------------------
+    @app.callback(
+        [Output('alpha-add-instrument', 'options'),
+         Output('alpha-add-instrument', 'value')],
+        Input('alpha-add-spread-type', 'value'),
+        [State('alpha-corr-matrix-store', 'data'),
+         State('alpha-selected-candidates', 'data')],
+    )
+    def cascade_add_instrument(spread_type, matrix_data, all_candidates):
+        if not spread_type:
+            return [], None
+
+        matrix_cols = set(matrix_data.keys()) if matrix_data else set()
+
+        # Instruments of this spread_type from the last scan
+        cand_insts: list[str] = []
+        if all_candidates:
+            cand_insts = [
+                c['ID'] for c in all_candidates
+                if c.get('spread_type') == spread_type and 'ID' in c
+            ]
+
+        if cand_insts:
+            in_matrix = [i for i in cand_insts if i in matrix_cols]
+            not_in_matrix = [i for i in cand_insts if i not in matrix_cols]
+            opts = (
+                [{'label': i, 'value': i} for i in sorted(set(in_matrix))] +
+                [{'label': f'{i} (no corr data)', 'value': i} for i in sorted(set(not_in_matrix))]
+            )
+        else:
+            # No candidates for this type — load directly from spread data
+            df = load_spread_data(spread_type)
+            if df is not None:
+                opts = [
+                    {'label': i if i in matrix_cols else f'{i} (no corr data)', 'value': i}
+                    for i in sorted(df.index.tolist())
+                ]
+            else:
+                opts = []
+
+        return opts, (opts[0]['value'] if opts else None)
+
+    # -------------------------------------------------------------------------
+    # CANDIDATES: Add / delete instruments in curated list
+    # -------------------------------------------------------------------------
+    @app.callback(
+        Output('alpha-curated-instruments-store', 'data'),
+        [Input('alpha-add-trade-btn', 'n_clicks'),
+         Input({'type': 'curated-del', 'index': ALL}, 'n_clicks')],
+        [State('alpha-curated-instruments-store', 'data'),
+         State('alpha-add-spread-type', 'value'),
+         State('alpha-add-instrument', 'value')],
+        prevent_initial_call=True,
+    )
+    def mutate_curated_instruments(add_clicks, del_clicks, current, spread_type, instrument):
+        ctx = callback_context
+        if not ctx.triggered:
+            raise PreventUpdate
+
+        current = current or []
+        triggered_id = ctx.triggered_id  # str for regular ids, dict for pattern-matching
+
+        if triggered_id == 'alpha-add-trade-btn':
+            if not spread_type or not instrument:
+                raise PreventUpdate
+            if any(e['instrument'] == instrument for e in current):
+                raise PreventUpdate  # already in list
+            return current + [{'spread_type': spread_type, 'instrument': instrument}]
+
+        if isinstance(triggered_id, dict) and triggered_id.get('type') == 'curated-del':
+            # Guard against the callback firing when the button is first rendered (n_clicks=0)
+            if not any(nc for nc in del_clicks if nc):
+                raise PreventUpdate
+            idx = triggered_id['index']
+            return [e for i, e in enumerate(current) if i != idx]
+
+        raise PreventUpdate
+
+    # -------------------------------------------------------------------------
+    # CANDIDATES: Render curated instrument table + curated correlation view
+    # -------------------------------------------------------------------------
+    @app.callback(
+        [Output('alpha-curated-table-div', 'children'),
+         Output('alpha-curated-corr-div', 'children')],
+        [Input('alpha-curated-instruments-store', 'data'),
+         Input('an-alpha-subtabs', 'value')],
+        State('alpha-corr-matrix-store', 'data'),
+    )
+    def render_curated_content(instruments, active_subtab, matrix_data):
+        # Only render when Portfolio tab is active; otherwise the output components
+        # may not exist yet (lazy-loaded) and Dash would silently drop the write.
+        if active_subtab is not None and active_subtab != 'portfolio':
+            raise PreventUpdate
+
+        _sub = {'color': THEME['text_sub'], 'fontSize': '12px', 'fontStyle': 'italic'}
+
+        if not instruments:
+            return html.Div("No instruments in list — run Check Correlation in the Candidates subtab first.", style=_sub), html.Div()
+
+        matrix_cols = set(matrix_data.keys()) if matrix_data else set()
+
+        # ── Instrument table with per-row delete buttons ──────────────────────
+        _cell = {'padding': '6px 10px', 'fontSize': '12px', 'color': THEME['text_main']}
+        _hdr = {**_cell, 'color': THEME['text_sub'], 'fontWeight': '600', 'fontSize': '11px',
+                'borderBottom': f"1px solid {THEME['table_header']}"}
+
+        header_row = html.Tr([
+            html.Th("Spread Type", style=_hdr),
+            html.Th("Instrument",  style=_hdr),
+            html.Th("In Matrix",   style={**_hdr, 'textAlign': 'center'}),
+            html.Th("",            style=_hdr),
+        ])
+
+        body_rows = []
+        for i, entry in enumerate(instruments):
+            stype = entry.get('spread_type', '')
+            inst  = entry.get('instrument', '')
+            in_m  = inst in matrix_cols
+            indicator = (
+                html.Span("✓", style={'color': THEME['success']}) if in_m
+                else html.Span("—", style={'color': THEME['text_sub']})
+            )
+            body_rows.append(html.Tr([
+                html.Td(stype, style=_cell),
+                html.Td(inst,  style={**_cell, 'fontWeight': '500'}),
+                html.Td(indicator, style={**_cell, 'textAlign': 'center'}),
+                html.Td(
+                    html.Button(
+                        "×",
+                        id={'type': 'curated-del', 'index': i},
+                        n_clicks=0,
+                        style={
+                            'background': 'none',
+                            'border': f"1px solid {THEME['danger']}",
+                            'color': THEME['danger'],
+                            'borderRadius': '3px',
+                            'cursor': 'pointer',
+                            'padding': '1px 7px',
+                            'fontSize': '13px',
+                            'lineHeight': '1.2',
+                        },
+                    ),
+                    style={'textAlign': 'center'},
+                ),
+            ], style={'borderBottom': 'rgba(42,82,152,0.25) solid 1px'}))
+
+        table_div = html.Div(
+            html.Table(
+                [html.Thead(header_row), html.Tbody(body_rows)],
+                style={'width': '100%', 'borderCollapse': 'collapse'},
+            ),
+            style={
+                'overflowY': 'auto', 'maxHeight': '240px',
+                'border': f"1px solid {THEME['table_header']}",
+                'borderRadius': '4px',
+            },
+        )
+
+        # ── Curated correlation view ──────────────────────────────────────────
+        valid_ids = [e['instrument'] for e in instruments if e['instrument'] in matrix_cols]
+
+        if matrix_data and len(valid_ids) >= 2:
+            # Reconstruct sub-matrix from stored dict (no recomputation)
+            sub_dict = {
+                col: {row: matrix_data[col].get(row, np.nan) for row in valid_ids}
+                for col in valid_ids if col in matrix_data
+            }
+            sub_matrix = pd.DataFrame(sub_dict).reindex(index=valid_ids, columns=valid_ids)
+
+            # Heatmap
+            corr_vals = sub_matrix.values.copy()
+            mask_upper = np.triu(np.ones(corr_vals.shape), k=1).astype(bool)
+            corr_vals[mask_upper] = np.nan
+
+            hm = go.Figure(data=go.Heatmap(
+                z=corr_vals,
+                x=sub_matrix.columns.tolist(),
+                y=sub_matrix.index.tolist(),
+                colorscale='RdBu',
+                zmin=-1, zmax=1,
+                hovertemplate='%{y} vs %{x}<br>Corr: %{z:.3f}<extra></extra>',
+            ))
+            hm.update_layout(
+                title='Curated Instrument Correlation',
+                height=max(260, 28 * len(valid_ids) + 100),
+                margin=dict(l=110, r=20, t=40, b=80),
+                plot_bgcolor=THEME['bg_main'],
+                paper_bgcolor=THEME['bg_main'],
+                font=dict(color=THEME['text_main'], size=10),
+                xaxis=dict(tickangle=45),
+            )
+
+            # Pairs table (pure lookup — rank_low_correlation_pairs on sub-matrix)
+            curated_pairs = rank_low_correlation_pairs(sub_matrix, top_n=len(valid_ids) * 3)
+            curated_pairs['Correlation'] = curated_pairs['Correlation'].round(4)
+            curated_pairs['AbsCorr']     = curated_pairs['AbsCorr'].round(4)
+
+            pairs_tbl = dash_table.DataTable(
+                columns=[{'name': c, 'id': c} for c in ['Asset A', 'Asset B', 'Correlation', 'AbsCorr']],
+                data=curated_pairs[['Asset A', 'Asset B', 'Correlation', 'AbsCorr']].to_dict('records'),
+                style_table={'overflowX': 'auto', 'maxHeight': '180px'},
+                style_header={
+                    'backgroundColor': THEME['table_header'],
+                    'color': THEME['text_sub'],
+                    'fontWeight': '600',
+                    'fontSize': '11px',
+                    'padding': '6px 10px',
+                },
+                style_cell={
+                    'backgroundColor': THEME['bg_card'],
+                    'color': THEME['text_main'],
+                    'fontSize': '12px',
+                    'padding': '6px 10px',
+                },
+                page_size=15,
+            )
+
+            not_in_count = len(instruments) - len(valid_ids)
+            notice = (
+                html.P(
+                    f"ℹ️ {not_in_count} instrument(s) marked '—' are not in the stored matrix "
+                    "and are excluded from the correlation view.",
+                    style={**_sub, 'marginTop': '6px'},
+                ) if not_in_count > 0 else html.Div()
+            )
+
+            corr_div = html.Div([
+                html.H6("Curated Correlation Matrix",
+                        style={'color': THEME['text_main'], 'marginBottom': '8px'}),
+                dcc.Graph(figure=hm),
+                html.H6("Curated Pairs — Lowest Correlation",
+                        style={'color': THEME['text_main'], 'marginTop': '14px', 'marginBottom': '8px'}),
+                pairs_tbl,
+                notice,
+            ])
+
+        elif len(valid_ids) < 2 and valid_ids:
+            corr_div = html.Div(
+                "Add at least 2 instruments that are in the correlation matrix to see the curated view.",
+                style=_sub,
+            )
+        elif not matrix_data:
+            corr_div = html.Div(
+                "Run 'Check Correlation' first to populate the matrix, then the curated view will update automatically.",
+                style=_sub,
+            )
+        else:
+            corr_div = html.Div(
+                "None of the curated instruments are present in the stored correlation matrix.",
+                style=_sub,
+            )
+
+        return table_div, corr_div
+
     # -------------------------------------------------------------------------
     # PORTFOLIO: Display Current Strategy Pool
     # -------------------------------------------------------------------------
