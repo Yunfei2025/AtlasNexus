@@ -26,6 +26,8 @@ import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 
+import json as _json
+
 from dash import dcc, html, dash_table, callback_context, no_update
 from dash.dependencies import Input, Output, State, ALL
 from dash.exceptions import PreventUpdate
@@ -644,52 +646,25 @@ def risk_parity_weights(
 
 
 def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str, float], np.ndarray]:
-    """Compute risk parity weights for alpha candidates using historical spread data.
-    
-    Args:
-        df_candidates: DataFrame with candidate trades (must have 'ID', 'spread_type' columns)
-    
-    Returns:
-        Tuple of (weights_dict, risk_contribution_array)
-        - weights_dict: {trade_id: weight}
-        - risk_contribution_array: risk contribution for each trade
-    """
+    """Compute risk parity weights for alpha candidates using historical spread data."""
     from scipy.optimize import minimize
-    
-    # Load historical spread time series for each candidate
-    dir_input = _get_input_dir()
-    spread_series = {}
-    
-    for idx, row in df_candidates.iterrows():
+
+    # Use load_spread_timeseries (uses Alpha-spreadsrt.pkl) — same source as correlation analysis
+    spread_series: Dict[str, pd.Series] = {}
+    loaded_types: set = set()
+    ts_cache: Dict[str, Any] = {}
+
+    for _, row in df_candidates.iterrows():
         trade_id = row['ID']
         spread_type = row.get('spread_type', '')
-        
-        # Try to load spread time series
         try:
-            # Load the spread data file
-            if spread_type in ['TBondCurve', 'TBondSwap']:
-                data = _load_pickle_safe(dir_input / 'TBond-spds.pkl')
-                key = 'BondCurve' if spread_type == 'TBondCurve' else 'BondSwap'
-            elif spread_type in ['CBondCurve', 'CBondSwap']:
-                data = _load_pickle_safe(dir_input / 'CBond-spds.pkl')
-                key = 'BondCurve' if spread_type == 'CBondCurve' else 'BondSwap'
-            elif spread_type == 'SwapSpread':
-                data = _load_pickle_safe(dir_input / 'IRS-pxspds.pkl')
-                key = 'Spread'
-            elif spread_type in ['NetBasis', 'TermBasis']:
-                data = _load_pickle_safe(dir_input / 'futures-spds.pkl')
-                key = spread_type
-            else:
-                data = _load_pickle_safe(dir_input / 'Misc-spds.pkl')
-                key = 'Spread'
-            
-            if data and key in data:
-                spread_df = data[key].get('Spread')
-                if spread_df is not None and trade_id in spread_df.columns:
-                    # Use last 252 days (1 year) for covariance
-                    spread_series[trade_id] = spread_df[trade_id].dropna().tail(252)
+            if spread_type not in ts_cache:
+                ts_cache[spread_type] = load_spread_timeseries(spread_type)
+            ts = ts_cache[spread_type]
+            if ts is not None and isinstance(ts, pd.DataFrame) and trade_id in ts.columns:
+                spread_series[trade_id] = ts[trade_id].dropna().tail(252)
         except Exception as e:
-            print(f"Warning: Could not load spread data for {trade_id}: {e}")
+            print(f"Warning: Could not load spread time-series for {trade_id}: {e}")
     
     # If we don't have enough historical data, fall back to simplified method
     if len(spread_series) < 2:
@@ -719,28 +694,33 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     
     # Risk parity optimization
     def _risk_contribution(w, cov):
-        """Calculate risk contribution for each asset."""
+        """Fractional risk contribution per asset (sums to 1, scale-independent)."""
         port_var = w.T @ cov @ w
         if port_var < 1e-12:
             return np.ones(len(w)) / len(w)
         marginal_risk = cov @ w
-        return (w * marginal_risk) / np.sqrt(port_var)
-    
+        # Use port_var (not sqrt) so RC_i = w_i*(Σw)_i / (w'Σw) — sums to 1
+        # and stays in 0-1 range regardless of spread vol magnitude.
+        return (w * marginal_risk) / port_var
+
     def _objective(w, cov):
-        """Objective: minimize variance of risk contributions."""
+        """Objective: minimize variance of fractional risk contributions."""
         rc = _risk_contribution(w, cov)
         target = 1.0 / len(w)
         return np.sum((rc - target) ** 2)
     
     # Constraints: weights sum to 1
     constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
-    
-    # Bounds: no short positions, max 30% in any single trade (reduced from 50% for better diversification)
-    bounds = [(0.0, 0.3) for _ in range(n)]
-    
+
+    # Enforce a minimum floor of 1/(3n) so every curated instrument gets
+    # at least one-third of its equal-weight share regardless of correlations.
+    min_w = 1.0 / (3 * n)
+    max_w = min(0.5, 1.0 - min_w * (n - 1))  # keep feasible
+    bounds = [(min_w, max_w) for _ in range(n)]
+
     # Initial guess: equal weight
     w0 = np.ones(n) / n
-    
+
     # Optimize
     result = minimize(
         _objective,
@@ -751,24 +731,26 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
         constraints=constraints,
         options={'maxiter': 1000, 'ftol': 1e-9}
     )
-    
+
     if not result.success:
         print(f"⚠ Risk parity optimization did not converge: {result.message}")
-        # Fall back to equal weights
         weights_array = np.ones(n) / n
     else:
         weights_array = result.x
-    
+
+    # Post-process: clip to floor and renormalise (handles any tiny numerical violations)
+    weights_array = np.clip(weights_array, min_w, max_w)
+    weights_array = weights_array / weights_array.sum()
+
     # Calculate final risk contributions
     risk_contrib = _risk_contribution(weights_array, cov)
-    
+
     # Create weights dictionary
     weights_dict = {col: w for col, w in zip(spread_df.columns, weights_array)}
-    
-    print(f"✓ Risk parity optimization completed:")
-    print(f"  - Weights std: {weights_array.std():.4f}")
-    print(f"  - Risk contribution std: {risk_contrib.std():.4f}")
-    
+
+    print(f"✓ Risk parity optimised: weight std={weights_array.std():.4f}, "
+          f"RC std={risk_contrib.std():.4f}, min_w={weights_array.min():.4f}")
+
     return weights_dict, risk_contrib
 
 
@@ -1447,7 +1429,7 @@ def build_portfolio_layout() -> html.Div:
         # ─────────────────────────────────────────────────────────────────────
         html.Div([
             html.H5("Step 1 — Instrument Selection & Correlation",
-                    style={'color': THEME['text_main'], 'marginBottom': '6px', 'fontSize': '15px'}),
+                    style={'color': THEME['text_main'], 'marginBottom': '6px'}),
             html.P(
                 "Run Check Correlation in the Candidates subtab first. "
                 "The lowest-correlation pairs are transferred here automatically. "
@@ -1510,6 +1492,27 @@ def build_portfolio_layout() -> html.Div:
             # Curated correlation view (rendered by callback)
             html.Div(id='alpha-curated-corr-div', style={'marginTop': '16px'}),
 
+            # Recalculate correlation for current curated list
+            html.Div([
+                html.Button(
+                    "↻ Recalculate Correlation",
+                    id='alpha-curated-recalc-btn',
+                    n_clicks=0,
+                    style={
+                        'backgroundColor': THEME['warning'],
+                        'color': 'white',
+                        'border': 'none',
+                        'borderRadius': '4px',
+                        'padding': '6px 16px',
+                        'cursor': 'pointer',
+                        'fontWeight': '600',
+                        'fontSize': '13px',
+                    },
+                ),
+                html.Span(id='alpha-curated-recalc-status',
+                          style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginLeft': '12px'}),
+            ], style={'marginTop': '14px', 'display': 'flex', 'alignItems': 'center'}),
+
         ], id='alpha-curated-panel',
            style={'backgroundColor': THEME['bg_card'], 'padding': '20px',
                   'marginBottom': '20px', 'borderRadius': '5px'}),
@@ -1518,7 +1521,7 @@ def build_portfolio_layout() -> html.Div:
         html.Div([
             html.Div([
                 html.H5("Step 2 — Configuration",
-                        style={'margin': '0', 'color': THEME['text_main'], 'fontSize': '15px'}),
+                        style={'margin': '0', 'color': THEME['text_main']}),
             ], style={'flex': '1'}),
 
             html.Div([
@@ -1528,7 +1531,7 @@ def build_portfolio_layout() -> html.Div:
                     type='number',
                     value=10,
                     min=1,
-                    style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
+                    style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #4a6f9f', 'backgroundColor': '#2a3f5f', 'color': '#fff'}
                 ),
                 html.Span("Billion CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
 
@@ -1539,7 +1542,7 @@ def build_portfolio_layout() -> html.Div:
                     value=5,
                     min=1,
                     step=1,
-                    style={'width': '120px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
+                    style={'width': '120px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #4a6f9f', 'backgroundColor': '#2a3f5f', 'color': '#fff'}
                 ),
                 html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
 
@@ -1554,7 +1557,7 @@ def build_portfolio_layout() -> html.Div:
         # ── Step 3: Portfolio Allocation Results ──────────────────────────────
         html.Div([
             html.Div([
-                html.H4("Step 3 — Portfolio Allocation Results",
+                html.H5("Step 3 — Portfolio Allocation Results",
                         style={'color': THEME['text_main'], 'marginBottom': '15px', 'flex': '1'}),
                 html.Div([
                     html.Button(
@@ -2177,31 +2180,12 @@ def register_alpha_callbacks(app) -> None:
 
         matrix_cols = set(matrix_data.keys()) if matrix_data else set()
 
-        # Instruments of this spread_type from the last scan
-        cand_insts: list[str] = []
-        if all_candidates:
-            cand_insts = [
-                c['ID'] for c in all_candidates
-                if c.get('spread_type') == spread_type and 'ID' in c
-            ]
-
-        if cand_insts:
-            in_matrix = [i for i in cand_insts if i in matrix_cols]
-            not_in_matrix = [i for i in cand_insts if i not in matrix_cols]
-            opts = (
-                [{'label': i, 'value': i} for i in sorted(set(in_matrix))] +
-                [{'label': f'{i} (no corr data)', 'value': i} for i in sorted(set(not_in_matrix))]
-            )
+        # Always show every instrument available for this spread type.
+        df = load_spread_data(spread_type)
+        if df is not None:
+            opts = [{'label': i, 'value': i} for i in sorted(df.index.tolist())]
         else:
-            # No candidates for this type — load directly from spread data
-            df = load_spread_data(spread_type)
-            if df is not None:
-                opts = [
-                    {'label': i if i in matrix_cols else f'{i} (no corr data)', 'value': i}
-                    for i in sorted(df.index.tolist())
-                ]
-            else:
-                opts = []
+            opts = []
 
         return opts, (opts[0]['value'] if opts else None)
 
@@ -2223,20 +2207,28 @@ def register_alpha_callbacks(app) -> None:
             raise PreventUpdate
 
         current = current or []
-        triggered_id = ctx.triggered_id  # str for regular ids, dict for pattern-matching
 
-        if triggered_id == 'alpha-add-trade-btn':
+        # Parse triggered component ID in a way compatible with all Dash versions.
+        # Pattern-matching IDs arrive as JSON strings; regular IDs as plain strings.
+        raw_prop = ctx.triggered[0]['prop_id']          # e.g. 'alpha-add-trade-btn.n_clicks'
+        raw_id   = raw_prop.rsplit('.', 1)[0]           # e.g. 'alpha-add-trade-btn'
+        try:
+            trig_dict = _json.loads(raw_id)             # dict for pattern-matching components
+        except (ValueError, TypeError):
+            trig_dict = None
+
+        if raw_id == 'alpha-add-trade-btn':
             if not spread_type or not instrument:
                 raise PreventUpdate
             if any(e['instrument'] == instrument for e in current):
                 raise PreventUpdate  # already in list
             return current + [{'spread_type': spread_type, 'instrument': instrument}]
 
-        if isinstance(triggered_id, dict) and triggered_id.get('type') == 'curated-del':
-            # Guard against the callback firing when the button is first rendered (n_clicks=0)
+        if trig_dict and trig_dict.get('type') == 'curated-del':
+            # Guard against firing when buttons are first rendered (n_clicks == 0 on all)
             if not any(nc for nc in del_clicks if nc):
                 raise PreventUpdate
-            idx = triggered_id['index']
+            idx = trig_dict['index']
             return [e for i, e in enumerate(current) if i != idx]
 
         raise PreventUpdate
@@ -2248,8 +2240,8 @@ def register_alpha_callbacks(app) -> None:
         [Output('alpha-curated-table-div', 'children'),
          Output('alpha-curated-corr-div', 'children')],
         [Input('alpha-curated-instruments-store', 'data'),
-         Input('an-alpha-subtabs', 'value')],
-        State('alpha-corr-matrix-store', 'data'),
+         Input('an-alpha-subtabs', 'value'),
+         Input('alpha-corr-matrix-store', 'data')],
     )
     def render_curated_content(instruments, active_subtab, matrix_data):
         # Only render when Portfolio tab is active; otherwise the output components
@@ -2383,8 +2375,8 @@ def register_alpha_callbacks(app) -> None:
             not_in_count = len(instruments) - len(valid_ids)
             notice = (
                 html.P(
-                    f"ℹ️ {not_in_count} instrument(s) marked '—' are not in the stored matrix "
-                    "and are excluded from the correlation view.",
+                    f"ℹ️ {not_in_count} instrument(s) marked '—' are not yet in the matrix. "
+                    "Click ↻ Recalculate Correlation below to rebuild the matrix including all curated instruments.",
                     style={**_sub, 'marginTop': '6px'},
                 ) if not_in_count > 0 else html.Div()
             )
@@ -2399,23 +2391,54 @@ def register_alpha_callbacks(app) -> None:
                 notice,
             ])
 
-        elif len(valid_ids) < 2 and valid_ids:
+        elif len(valid_ids) < 2:
             corr_div = html.Div(
-                "Add at least 2 instruments that are in the correlation matrix to see the curated view.",
-                style=_sub,
-            )
-        elif not matrix_data:
-            corr_div = html.Div(
-                "Run 'Check Correlation' first to populate the matrix, then the curated view will update automatically.",
-                style=_sub,
-            )
-        else:
-            corr_div = html.Div(
-                "None of the curated instruments are present in the stored correlation matrix.",
+                "Click ↻ Recalculate Correlation to build the matrix for your curated instruments.",
                 style=_sub,
             )
 
         return table_div, corr_div
+
+    # -------------------------------------------------------------------------
+    # PORTFOLIO: Recalculate correlation matrix for the curated instrument list
+    # -------------------------------------------------------------------------
+    @app.callback(
+        [Output('alpha-corr-matrix-store', 'data', allow_duplicate=True),
+         Output('alpha-curated-recalc-status', 'children')],
+        Input('alpha-curated-recalc-btn', 'n_clicks'),
+        [State('alpha-curated-instruments-store', 'data'),
+         State('alpha-corr-lookback', 'value')],
+        prevent_initial_call=True,
+    )
+    def recalc_curated_correlation(n_clicks, instruments, lookback):
+        if not instruments:
+            raise PreventUpdate
+
+        lookback = lookback or 252
+
+        all_spreads = {}
+        for entry in instruments:
+            inst = entry.get('instrument', '')
+            spread_type = entry.get('spread_type', '')
+            if not inst or not spread_type:
+                continue
+            ts = load_spread_timeseries(spread_type)
+            if ts is not None and isinstance(ts, pd.DataFrame) and inst in ts.columns:
+                all_spreads[inst] = ts[inst]
+
+        if len(all_spreads) < 2:
+            return no_update, "⚠ Need ≥ 2 instruments with time-series data."
+
+        df_spreads = pd.DataFrame(all_spreads).tail(lookback)
+        df_changes = df_spreads.diff().dropna()
+
+        if len(df_changes) < 20:
+            return no_update, "⚠ Insufficient history (< 20 days)."
+
+        corr_matrix = df_changes.corr()
+        ts_now = pd.Timestamp.now().strftime('%H:%M:%S')
+        status = f"✓ Recalculated at {ts_now} ({len(all_spreads)} instruments, {len(df_changes)} days)"
+        return corr_matrix.to_dict(), status
 
     # -------------------------------------------------------------------------
     # PORTFOLIO: Display Current Strategy Pool
@@ -2483,10 +2506,11 @@ def register_alpha_callbacks(app) -> None:
          State('alpha-total-capital', 'value'),
          State('alpha-max-dv01', 'value'),
          State('alpha-alloc-method', 'value'),
-         State('alpha-enforce-corr', 'value')],
+         State('alpha-enforce-corr', 'value'),
+         State('alpha-curated-instruments-store', 'data')],
         prevent_initial_call=True
     )
-    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, max_dv01, alloc_method, enforce_corr):
+    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, max_dv01, alloc_method, enforce_corr, curated_instruments):
         
         if not n_clicks:
             return html.Div(), html.Div(), "", html.Div(), []
@@ -2501,47 +2525,87 @@ def register_alpha_callbacks(app) -> None:
             )
         
         try:
-            print(f"[DEBUG] run_scoring: received {len(candidates)} candidates")
-            print(f"[DEBUG] total_capital={total_capital}, max_dv01={max_dv01}, alloc_method={alloc_method}")
-            
-            df = pd.DataFrame(candidates)
-            print(f"[DEBUG] df columns: {df.columns.tolist()}")
-            
-            # Handle None values with defaults
-            total_capital = float(total_capital) if total_capital is not None else 10000.0  # Default 10B
-            max_dv01 = float(max_dv01) if max_dv01 is not None else 5000000.0  # Default 5M
-            
-            # Use the pre-computed `score` from alpha.py (_add_unified_score_preview).
-            # score = expected_return_H / (TTM × risk_vol)  ≥ 0
-            # direction encodes BUY/SELL; score is always non-negative.
-            df_scored = df.copy()
-            if 'score' not in df_scored.columns:
-                df_scored['score'] = 0.0
-            df_scored['score'] = pd.to_numeric(df_scored['score'], errors='coerce').fillna(0.0)
+            # Unit conventions:
+            #   total_capital  — user enters billions CNY  (UI label: "Billion CNY")
+            #   max_dv01       — user enters millions CNY  (UI label: "Million CNY")
+            #   notional_mm    — stored in millions CNY
+            #   suggested_dv01 — stored in millions CNY (clipped at max_dv01)
+            total_capital = float(total_capital) if total_capital is not None else 10.0   # default 10 B
+            max_dv01      = float(max_dv01)      if max_dv01      is not None else 5.0    # default 5 M
+            total_capital_mm = total_capital * 1000  # convert B → M
 
-            df_scored = df_scored.sort_values('score', ascending=False)
-            
-            # Filter out zero-score trades (no edge)
-            min_score_threshold = 0.001
-            df_scored = df_scored[df_scored['score'] > min_score_threshold].copy()
-            
-            print(f"[DEBUG] After filtering zero-score trades: {len(df_scored)} remaining (threshold={min_score_threshold})")
-            
-            # Allocation
+            df = pd.DataFrame(candidates)
+
+            # If the user has built a curated instrument list in Step 1, restrict
+            # optimisation to those instruments only.
+            if curated_instruments:
+                curated_ids = {e['instrument'] for e in curated_instruments}
+                df_curated = df[df['ID'].isin(curated_ids)].copy()
+                # For curated instruments not present in the scan, add placeholder rows
+                # so they still appear in the result (equal-weight share will be assigned).
+                present_ids = set(df_curated['ID'].tolist())
+                median_score = df_curated['score'].median() if len(df_curated) > 0 and 'score' in df_curated.columns else 0.01
+                extra_rows = []
+                # Cache snapshots per spread_type to avoid redundant loads
+                _snap_cache: Dict[str, Any] = {}
+                _snap_cols = ['Zscore', 'spread', 'vol', 'halflife', 'stationary',
+                              'carry_roll', 'mean', 'reg_slope_per_day',
+                              'expected_return_H', 'risk', 'direction', 'style',
+                              'score', 'ttm_used', 'category']
+                for entry in curated_instruments:
+                    if entry['instrument'] not in present_ids:
+                        inst  = entry['instrument']
+                        stype = entry['spread_type']
+                        # Determine category from SPREAD_CATEGORIES
+                        cat = next(
+                            (c for c, info in SPREAD_CATEGORIES.items()
+                             if stype in info.get('types', [])),
+                            stype,
+                        )
+                        inst_row: Dict[str, Any] = {
+                            'ID': inst, 'spread_type': stype, 'category': cat,
+                        }
+                        # Load snapshot and fill available columns
+                        if stype not in _snap_cache:
+                            _snap_cache[stype] = load_spread_data(stype)
+                        snap = _snap_cache[stype]
+                        if snap is not None and inst in snap.index:
+                            snap_row = snap.loc[inst]
+                            for col in _snap_cols:
+                                if col in snap_row.index and pd.notna(snap_row.get(col)):
+                                    inst_row[col] = snap_row[col]
+                        # Ensure mandatory fields have sensible defaults
+                        inst_row.setdefault('score', median_score)
+                        inst_row.setdefault('direction', 'N/A')
+                        extra_rows.append(inst_row)
+                if extra_rows:
+                    df_curated = pd.concat([df_curated, pd.DataFrame(extra_rows)], ignore_index=True)
+                df = df_curated
+
+            print(f"[DEBUG] run_scoring: {len(df)} candidates after curated filter")
+
+            # Ensure score column exists
+            if 'score' not in df.columns:
+                df['score'] = 0.0
+            df['score'] = pd.to_numeric(df['score'], errors='coerce').fillna(0.0)
+            df_scored = df.sort_values('score', ascending=False)
+
+            # Filter out zero-score trades only when NOT using a curated list
+            # (curated instruments may have been added manually without scan scores)
+            if not curated_instruments:
+                min_score_threshold = 0.001
+                df_scored = df_scored[df_scored['score'] > min_score_threshold].copy()
+
             n_trades = len(df_scored)
             if n_trades == 0:
                 return (
-                    html.Div("No candidates with positive expected edge. All trades filtered out (score ≤ 0).", style={'color': THEME['warning']}),
-                    html.Div(),
-                    "",
-                    html.Div(),
-                    []
+                    html.Div("No candidates with positive expected edge. Run Scan in Candidates tab first.", style={'color': THEME['warning']}),
+                    html.Div(), "", html.Div(), []
                 )
-            
-            # Determine allocation method
+
+            # ── Allocation ────────────────────────────────────────────────────
             alloc_method = alloc_method or 'risk_parity'
-            print(f"[DEBUG] Using allocation method: {alloc_method}")
-            
+
             if alloc_method == 'equal':
                 df_scored['weight'] = 1 / n_trades
             elif alloc_method == 'score':
@@ -2556,25 +2620,27 @@ def register_alpha_callbacks(app) -> None:
             else:  # risk_parity (default)
                 try:
                     weights_dict, risk_contrib = _compute_risk_parity_weights(df_scored)
-                    df_scored['weight'] = df_scored['ID'].map(weights_dict).fillna(0)
-                    df_scored['risk_contribution'] = df_scored['ID'].map(dict(zip(df_scored['ID'], risk_contrib))).fillna(0)
+                    df_scored['weight'] = df_scored['ID'].map(weights_dict).fillna(1 / n_trades)
+                    # risk_contrib is a fractional contribution (sums to 1) aligned with weights_dict.keys()
+                    rc_map = dict(zip(weights_dict.keys(), risk_contrib))
+                    df_scored['risk_contribution'] = df_scored['ID'].map(rc_map).fillna(df_scored['weight'])
                 except Exception as e:
-                    print(f"⚠ Risk parity optimization failed: {e}, falling back to equal weights")
+                    print(f"⚠ Risk parity failed: {e}, falling back to equal weights")
                     df_scored['weight'] = 1 / n_trades
                     df_scored['risk_contribution'] = 1 / n_trades
-            
-            # Normalize weights to sum to 1
+
+            # Normalise
             weight_sum = df_scored['weight'].sum()
-            if weight_sum > 0 and weight_sum != 1.0:
+            if weight_sum > 0 and abs(weight_sum - 1.0) > 1e-9:
                 df_scored['weight'] = df_scored['weight'] / weight_sum
-            
-            # Calculate notional
-            df_scored['notional_mm'] = df_scored['weight'] * total_capital
-            
-            # Calculate suggested DV01 based on notional and typical bond duration
-            # Assume average duration ~ 5 years for bond spreads
-            avg_duration = 5.0
-            df_scored['suggested_dv01'] = (df_scored['notional_mm'] * 1e6 * avg_duration * 0.0001).clip(upper=max_dv01)
+
+            # ── Notional & DV01 (all in million CNY) ─────────────────────────
+            df_scored['notional_mm'] = (df_scored['weight'] * total_capital_mm).round(1)
+            avg_duration = 5.0  # proxy for spread leg duration
+            # DV01 (MM CNY) = notional_MM × duration / 10 000
+            df_scored['suggested_dv01'] = (
+                df_scored['notional_mm'] * avg_duration / 10_000
+            ).clip(upper=max_dv01).round(4)
             
             # Store optimized results (Filter out zero/negligible weights for cleaner backtesting)
             df_nonzero = df_scored[df_scored['weight'] > 0.0001].copy()
@@ -2646,7 +2712,7 @@ def register_alpha_callbacks(app) -> None:
                     ], style={'marginRight': '30px'}),
                     html.Div([
                         html.Strong("Capital Allocated: ", style={'color': THEME['text_sub']}),
-                        html.Span(f"{total_capital:.1f} MM", style={'color': THEME['text_main']}),
+                        html.Span(f"{total_capital:.1f} B CNY", style={'color': THEME['text_main']}),
                     ], style={'marginRight': '30px'}),
                     html.Div([
                         html.Strong("Avg Score: ", style={'color': THEME['text_sub']}),

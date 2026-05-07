@@ -10,7 +10,7 @@ Port: 8080
 from __future__ import annotations
 import sys
 import os
-from dash import dcc, html, no_update
+from dash import dcc, html
 from dash.dependencies import Input, Output, State
 
 from pathlib import Path
@@ -318,14 +318,14 @@ def build_tabs_panel():
                         ],
                         style={"minHeight": "520px"},
                     ),
-                    dcc.Loading(type="circle", color="#2e86c1", children=html.Div([
-                            html.Div(id="beta-factor-div",            children=build_multiasset_factor_layout(),     style={"display": "block", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-portfolio-div",          children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-bond-div",               children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-factor-model-bt-div",    children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-backtest-factor-div",    children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-backtest-portfolio-div",  children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                        ], style={"position": "relative", "width": "100%"})),
+                    html.Div([
+                            html.Div(id="beta-factor-div",            children=build_multiasset_factor_layout(),     style={"display": "block", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-portfolio-div",         children=build_multiasset_portfolio_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-bond-div",              children=build_multiasset_bond_layout(),       style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-factor-model-bt-div",   children=build_risk_factor_backtest_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-backtest-factor-div",   children=build_factor_backtest_layout(),       style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                        ], style={"position": "relative", "flex": "1", "minWidth": "0"}),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
             ),
@@ -350,15 +350,15 @@ def build_tabs_panel():
                         ],
                         style={"minHeight": "520px"},
                     ),
-                    dcc.Loading(type="circle", color="#2e86c1", children=html.Div([
-                            html.Div(id="alpha-candidates-div", children=build_candidates_layout(), style={"display": "block", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-portfolio-div",  children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-backtest-div",   children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-spreads-div",    children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-pairs-div",      children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-volatility-div", children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                    html.Div([
+                            html.Div(id="alpha-candidates-div", children=build_candidates_layout(), style={"display": "block", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-portfolio-div",  children=build_portfolio_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-backtest-div",   children=build_backtest_layout(),   style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-spreads-div",    children=build_spreads_layout(),    style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-pairs-div",      children=build_pairs_layout(),      style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="alpha-volatility-div", children=build_volatility_layout(), style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
                         # alpha-basket-div intentionally removed
-                        ], style={"position": "relative", "width": "100%"})),
+                        ], style={"position": "relative", "flex": "1", "minWidth": "0"}),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
             ),
@@ -390,12 +390,12 @@ def build_tabs_panel():
                         style={"minHeight": "520px"},
                     ),
                     html.Div([
-                            html.Div(id="market-data-div",    children=build_market_data_layout(), style={"display": "block", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-trend-div",   children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-pricer-div",  children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-surface-div", children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-curves-div",  children=[], style={"display": "none", "width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                        ], style={"position": "relative", "width": "100%"}),
+                            html.Div(id="market-data-div",    children=build_market_data_layout(), style={"display": "block", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-trend-div",   children=build_trend_layout(),   style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-pricer-div",  children=build_pricer_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-surface-div", children=build_surface_layout(), style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                            html.Div(id="market-curves-div",  children=build_curves_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
+                        ], style={"position": "relative", "flex": "1", "minWidth": "0"}),
                 ],
                 style={"display": "flex", "flexDirection": "row", "gap": "12px"},
             ),
@@ -463,7 +463,7 @@ app.layout = create_layout()
 # ---------------------------------------------------------------------------
 def _make_tab_switcher(input_id: str, div_ids: list[str], keys: list[str]):
     """Register a show/hide callback that maps *input_id* tab value to div visibility."""
-    base = {"width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}
+    base = {"paddingLeft": "16px", "boxSizing": "border-box"}
 
     @app.callback(
         [Output(did, "style") for did in div_ids],
@@ -478,36 +478,6 @@ def _make_tab_switcher(input_id: str, div_ids: list[str], keys: list[str]):
     return _switcher
 
 
-def _make_lazy_tab_switcher(input_id: str, div_ids: list[str], keys: list[str], builders: dict):
-    """Show/hide + lazy-build: populate children on first activation.
-
-    Pass builders as {key: callable} for sub-tabs that start with children=[].
-    Omit a key if its div is pre-populated (the default active tab).
-    Once built, children are never overwritten (no_update keeps DOM mounted).
-    """
-    base = {"width": "100%", "paddingLeft": "16px", "boxSizing": "border-box"}
-
-    @app.callback(
-        [Output(did, "style") for did in div_ids] +
-        [Output(did, "children") for did in div_ids],
-        Input(input_id, "value"),
-        [State(did, "children") for did in div_ids],
-    )
-    def _switcher(active, *current_children):
-        styles = tuple(
-            {**base, "display": "block"} if active == k else {**base, "display": "none"}
-            for k in keys
-        )
-        new_children = []
-        for k, current in zip(keys, current_children):
-            if active == k and not current:
-                builder = builders.get(k)
-                new_children.append(builder() if builder else [])
-            else:
-                new_children.append(no_update)
-        return styles + tuple(new_children)
-
-    return _switcher
 
 
 
@@ -657,44 +627,24 @@ _make_tab_switcher(
     ["market-div", "beta-div", "alpha-div", "risk-div", "run-center-div"],
     ["market",     "beta",     "alpha",     "risk",     "run-center"],
 )
-_make_lazy_tab_switcher(
+_make_tab_switcher(
     "an-beta-subtabs",
     ["beta-factor-div", "beta-portfolio-div", "beta-bond-div",
      "beta-factor-model-bt-div", "beta-backtest-factor-div", "beta-backtest-portfolio-div"],
     ["factor",          "portfolio",          "bond",
      "factor-model-bt", "backtest-factor",     "backtest-portfolio"],
-    {
-        "portfolio":          build_multiasset_portfolio_layout,
-        "bond":               build_multiasset_bond_layout,
-        "factor-model-bt":    build_risk_factor_backtest_layout,
-        "backtest-factor":    build_factor_backtest_layout,
-        "backtest-portfolio": build_multiasset_backtest_layout,
-    },
 )
-_make_lazy_tab_switcher(
+_make_tab_switcher(
     "an-market-subtabs",
     ["market-data-div", "market-trend-div", "market-pricer-div", "market-surface-div", "market-curves-div"],
     ["data",            "trend",            "pricer",            "surface",            "curves"],
-    {
-        "trend":   build_trend_layout,
-        "pricer":  build_pricer_layout,
-        "surface": build_surface_layout,
-        "curves":  build_curves_layout,
-    },
 )
-_make_lazy_tab_switcher(
+_make_tab_switcher(
     "an-alpha-subtabs",
     ["alpha-candidates-div", "alpha-portfolio-div", "alpha-backtest-div",
      "alpha-spreads-div",    "alpha-pairs-div",     "alpha-volatility-div"],
     ["candidates",           "portfolio",           "backtest",
      "spreads",              "pairs",               "volatility"],
-    {
-        "portfolio":  build_portfolio_layout,
-        "backtest":   build_backtest_layout,
-        "spreads":    build_spreads_layout,
-        "pairs":      build_pairs_layout,
-        "volatility": build_volatility_layout,
-    },
 )
 
 
