@@ -107,7 +107,7 @@ def run_atlasnexus_daily_app():
     logger.info("Initializing AtlasNexus Daily Console...")
     try:
         from web.apps import atlasnexus_daily
-        from web.core.scripts import run_initialise
+        from web.core.scripts import run_initialise, start_periodic_refresh
         import webbrowser
         from threading import Timer
 
@@ -124,6 +124,12 @@ def run_atlasnexus_daily_app():
             except Exception as exc:
                 logger.warning(f"AtlasNexus background initialisation error: {exc}")
         threading.Thread(target=_bg_init, daemon=True).start()
+
+        # Drive periodic refreshers from a plain daemon thread instead of
+        # Dash background callbacks. DiskcacheManager spawns a worker via
+        # `multiprocess` which deadlocks on Windows because spawn re-imports
+        # this module; the in-process thread behaves the same on every OS.
+        start_periodic_refresh()
 
         browser_url = _browser_url(8080)
         logger.info(f"Opening AtlasNexus Daily Console in browser: {browser_url}")

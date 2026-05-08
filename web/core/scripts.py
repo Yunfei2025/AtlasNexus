@@ -22,8 +22,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Mapping
 
 import pandas as pd
-import diskcache
-from dash import DiskcacheManager
 from dash.dependencies import Input, Output, State
 
 # Setup paths
@@ -46,8 +44,6 @@ print("✅ Refresher modules loaded successfully")
 if os.environ.get('WEB_LOG_TIMINGS','0') == '1':
     logger.info('web.core.scripts import took %.3fs', time.time() - _import_start)
 
-cache = diskcache.Cache("./cache")
-background_callback_manager = DiskcacheManager(cache)
 _PICKLE_CACHE: dict[str, tuple[float, Any]] = {}
 BOND_TYPES = ("TBond", "CBond")
 
@@ -57,7 +53,28 @@ _locks = {
     "autoruns2": threading.Lock(),
 }
 
+# Cached status strings exposed to UI callbacks. The periodic refresh thread
+# writes here; Dash callbacks just read. Replaces the old DiskcacheManager
+# subprocess flow, which deadlocked on Windows because multiprocess spawn
+# re-imports this module in a fresh interpreter.
+_status_state: dict[str, Any] = {
+    "initialise": "",
+    "autoruns1": "Initialising...",
+    "autoruns2": None,
+}
+_status_lock = threading.Lock()
+
 DIRECT_CALLS_AVAILABLE = REFRESHERS_AVAILABLE
+
+
+def _set_status(key: str, value: Any) -> None:
+    with _status_lock:
+        _status_state[key] = value
+
+
+def _get_status(key: str) -> Any:
+    with _status_lock:
+        return _status_state.get(key)
 
 
 class Utils:
@@ -154,91 +171,165 @@ def run_initialise() -> str:
         except RuntimeError:
             pass
 
+def _autoruns1_tick() -> None:
+    """One iteration of the periodic refresh — safe to call from a thread.
+
+    Body of the original ``autoruns1`` Dash callback, hoisted out so it runs
+    in a plain daemon thread instead of a Dash background-callback subprocess
+    (which is unreliable on Windows under DiskcacheManager).
+    """
+    if not _locks["autoruns1"].acquire(blocking=False):
+        return
+    try:
+        if not DIRECT_CALLS_AVAILABLE:
+            _set_status("autoruns1", "Error: Direct API calls not available")
+            return
+
+        t = datetime.datetime.today()
+        date_m = Utils.get_mtime_date(os.path.join(DIR_INPUT, "futures-spds.pkl"))
+        in_window = (t.hour >= 9) and (t.hour <= 17) and (t.date() == date_m)
+        in_credit_window = (t.hour >= 10) and (t.hour <= 12) and (t.date() == date_m)
+
+        if in_window:
+            Utils.run_parallel_tasks([
+                lambda btype=btype: BondCurveRefresher.main(bond_type=btype)
+                for btype in BOND_TYPES
+            ])
+
+        if in_credit_window:
+            Utils.run_parallel_tasks([
+                lambda obtype=obtype: CreditSpreadRefresher.main(other_bond_type=obtype)
+                for obtype in BondConfig.INCLUDE_FILTERS.keys()
+            ])
+
+        if in_window:
+            IRSRefresher.main()
+            StatRefresher.main()
+            _set_status(
+                "autoruns1",
+                "This app generates prices and statistics of Bonds and Swaps every "
+                + str(int(t_int / 60e3))
+                + "min. Data refreshed at: "
+                + datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+    except Exception as e:
+        error_msg = f"Auto refresh failed: {e}"
+        print(error_msg)
+        _set_status("autoruns1", error_msg)
+    finally:
+        try:
+            _locks["autoruns1"].release()
+        except RuntimeError:
+            pass
+
+
+def _autoruns2_tick() -> None:
+    """Long-interval refresh tick. Currently a no-op (legacy body disabled)."""
+    if not _locks["autoruns2"].acquire(blocking=False):
+        return
+    try:
+        if not DIRECT_CALLS_AVAILABLE:
+            _set_status("autoruns2", "Error: Direct API calls not available")
+            return
+        # Legacy body intentionally left empty — preserves the previous
+        # commented-out behavior of autoruns2.
+    except Exception as e:
+        error_msg = f"Long auto refresh failed: {e}"
+        print(error_msg)
+        _set_status("autoruns2", error_msg)
+    finally:
+        try:
+            _locks["autoruns2"].release()
+        except RuntimeError:
+            pass
+
+
+_periodic_thread_started = threading.Event()
+
+
+def start_periodic_refresh(interval_seconds: float | None = None) -> None:
+    """Launch the daemon thread that drives autoruns1/autoruns2 periodically.
+
+    Idempotent — calling more than once is a no-op. Runs entirely in-process,
+    so it behaves identically on macOS and Windows (no subprocess spawn).
+    """
+    if _periodic_thread_started.is_set():
+        return
+    _periodic_thread_started.set()
+
+    if interval_seconds is None:
+        interval_seconds = max(1.0, t_int / 1000.0)
+
+    long_interval_seconds = max(interval_seconds, 4.0 * interval_seconds)
+
+    def _loop() -> None:
+        # Defer the first tick so startup `_bg_init` can finish first.
+        time.sleep(min(30.0, interval_seconds))
+        last_long_tick = 0.0
+        while True:
+            try:
+                _autoruns1_tick()
+                now = time.monotonic()
+                if now - last_long_tick >= long_interval_seconds:
+                    _autoruns2_tick()
+                    last_long_tick = now
+            except Exception as exc:
+                logger.warning(f"Periodic refresh tick failed: {exc}")
+            time.sleep(interval_seconds)
+
+    threading.Thread(
+        target=_loop,
+        daemon=True,
+        name="atlas-periodic-refresh",
+    ).start()
+
+
 @app.callback(
     Output("container-button-1", "children"),
     Input("generate-button", "n_clicks"),
-    background=True,
-    manager=background_callback_manager,
 )
 def initialise(n_clicks):
-    return run_initialise()
+    """Manual re-init trigger. Runs work in a thread so the click returns fast."""
+    if not n_clicks:
+        return _get_status("initialise") or ""
+
+    if not _locks["initialise"].locked():
+        def _run() -> None:
+            try:
+                _set_status("initialise", run_initialise())
+            except Exception as exc:
+                _set_status("initialise", f"Initialisation failed: {exc}")
+
+        threading.Thread(
+            target=_run,
+            daemon=True,
+            name="atlas-manual-initialise",
+        ).start()
+
+    return _get_status("initialise") or "Initialising..."
+
 
 @app.callback(
     Output("refresh-time", "children"),
     Input("data-refresh", "n_intervals"),
     State("container-button-1", "children"),
-    background=True,
-    manager=background_callback_manager,
 )
 def autoruns1(interval, status_text):
-    if status_text and _locks["autoruns1"].acquire(blocking=False):
-        try:
-            if not DIRECT_CALLS_AVAILABLE:
-                return "Error: Direct API calls not available"
-
-            t = datetime.datetime.today()
-            date_m = Utils.get_mtime_date(os.path.join(DIR_INPUT,"futures-spds.pkl"))
-            if (t.hour >= 9) and (t.hour <= 17) and (t.date() == date_m):
-                Utils.run_parallel_tasks([
-                    lambda btype=btype: BondCurveRefresher.main(bond_type=btype)
-                    for btype in BOND_TYPES
-                ])
-
-            if (t.hour >= 10) and (t.hour <= 12) and (t.date() == date_m):
-                Utils.run_parallel_tasks([
-                    lambda obtype=obtype: CreditSpreadRefresher.main(other_bond_type=obtype)
-                    for obtype in BondConfig.INCLUDE_FILTERS.keys()
-                ])
-            if (t.hour >= 9) and (t.hour <= 17) and (t.date() == date_m):
-                IRSRefresher.main()
-                StatRefresher.main()
-
-                return (
-                    "This app generates prices and statistics of Bonds and Swaps every "
-                    + str(int(t_int / 60e3))
-                    + "min. Data refreshed at: "
-                    + datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S")
-                )
-        except Exception as e:
-            error_msg = f"Auto refresh failed: {str(e)}"
-            print(error_msg)
-            return error_msg
-        finally:
-            try:
-                _locks["autoruns1"].release()
-            except RuntimeError:
-                pass
-    return "Initialising..."
+    """UI-facing read of the latest periodic-refresh status."""
+    if not status_text:
+        return "Initialising..."
+    return _get_status("autoruns1") or "Initialising..."
 
 
 @app.callback(
     Output("hidden-div", "children"),
     Input("data-refresh-long", "n_intervals"),
     State("container-button-1", "children"),
-    background=True,
-    manager=background_callback_manager,
 )
 def autoruns2(interval, status_text):
-    if status_text and _locks["autoruns2"].acquire(blocking=False):
-        try:
-            if not DIRECT_CALLS_AVAILABLE:
-                return "Error: Direct API calls not available"
-            # t = datetime.datetime.today()
-            # date_m = Utils.get_mtime_date(os.path.join(DIR_INPUT,"MNote-spds.pkl"))
-            # if (t.hour >= 10) and (t.hour <= 12) and (t.date() == date_m):
-            #     Utils.run_parallel_tasks([
-            #         lambda obtype=obtype: CreditSpreadRefresher.main(other_bond_type=obtype)
-            #         for obtype in BondConfig.INCLUDE_FILTERS.keys()
-            #     ])
-        except Exception as e:
-            error_msg = f"Long auto refresh failed: {str(e)}"
-            print(error_msg)
-            return error_msg
-        finally:
-            try:
-                _locks["autoruns2"].release()
-            except RuntimeError:
-                pass
+    if not status_text:
+        return None
+    return _get_status("autoruns2")
 
 
 @app.callback(
