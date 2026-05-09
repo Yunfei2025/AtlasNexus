@@ -122,6 +122,20 @@ app = _Dash(
 
 app.title = "AtlasNexus Daily Console"
 
+# Diagnostic request log (opt-in via env var). Set ATLAS_LOG_REQUESTS=1 to
+# print every HTTP path hitting this Dash app — useful for verifying that
+# tab clicks actually dispatch /_dash-update-component POSTs on Windows.
+if os.environ.get("ATLAS_LOG_REQUESTS", "0") == "1":
+    from flask import request as _flask_request
+
+    @app.server.before_request
+    def _atlas_log_request():
+        try:
+            print(f"[atlas-req] {_flask_request.method} {_flask_request.path}")
+        except Exception:
+            pass
+
+
 # Serve the pairs regression plots HTML as a static-like endpoint so iframes
 # can access it from the Dash app (matches web/core/server.py behavior).
 @app.server.route("/pairs/regression_plots.html")
