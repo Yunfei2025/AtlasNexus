@@ -1318,6 +1318,63 @@ def build_multiasset_risk_layout():
                      ], style={'fontSize': '11px', 'color': THEME['text_sub'], 'backgroundColor': 'rgba(255,255,255,0.05)', 'padding': '5px', 'borderRadius': '4px'})
                  ], style=card_style()),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'center', 'alignItems': 'stretch'}),
+
+            html.Hr(style={'borderColor': THEME['table_header'], 'margin': '18px 0 12px 0'}),
+
+            # Portfolio Allocation Snapshot tabs
+            html.Div([
+                html.Div([
+                    html.Span("Portfolio Allocation Snapshot",
+                              style={'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '13px'}),
+                    html.Div([
+                        html.Button("Refresh", id='summary-refresh-btn', n_clicks=0,
+                                    style={'fontSize': '11px', 'padding': '3px 10px',
+                                           'backgroundColor': THEME['bg_input'],
+                                           'color': THEME['text_main'],
+                                           'border': f'1px solid {THEME["accent"]}',
+                                           'borderRadius': '4px', 'cursor': 'pointer'}),
+                        html.Span(id='summary-refresh-status',
+                                  style={'fontSize': '11px', 'color': THEME['text_sub'],
+                                         'fontStyle': 'italic'}),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+                ], style={'display': 'flex', 'justifyContent': 'space-between',
+                          'alignItems': 'center', 'marginBottom': '8px'}),
+
+                dcc.Tabs(
+                    id='summary-book-tabs',
+                    value='beta',
+                    children=[
+                        dcc.Tab(label='Beta Book', value='beta',
+                                style={'backgroundColor': THEME['bg_input'],
+                                       'color': THEME['text_sub'], 'fontSize': '12px',
+                                       'padding': '6px 16px', 'border': 'none'},
+                                selected_style={'backgroundColor': THEME['bg_card'],
+                                                'color': THEME['accent'], 'fontSize': '12px',
+                                                'padding': '6px 16px',
+                                                'borderTop': f'2px solid {THEME["accent"]}',
+                                                'borderBottom': 'none'}),
+                        dcc.Tab(label='Alpha Book', value='alpha',
+                                style={'backgroundColor': THEME['bg_input'],
+                                       'color': THEME['text_sub'], 'fontSize': '12px',
+                                       'padding': '6px 16px', 'border': 'none'},
+                                selected_style={'backgroundColor': THEME['bg_card'],
+                                                'color': THEME['danger'], 'fontSize': '12px',
+                                                'padding': '6px 16px',
+                                                'borderTop': f'2px solid {THEME["danger"]}',
+                                                'borderBottom': 'none'}),
+                    ],
+                    colors={'border': THEME['table_header'],
+                            'primary': THEME['accent'],
+                            'background': THEME['bg_input']},
+                    style={'marginBottom': '0'},
+                ),
+
+                html.Div(id='summary-book-table-container',
+                         style={'minHeight': '60px', 'paddingTop': '10px'}),
+
+            ], style={'backgroundColor': THEME['bg_main'], 'padding': '12px',
+                      'borderRadius': '4px', 'marginTop': '4px'}),
+
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px', 'marginBottom': '30px'}),
 
         # 2. Exposure Section
