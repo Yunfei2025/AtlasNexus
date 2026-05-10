@@ -39,7 +39,6 @@ from curves.refreshers.credit import CreditSpreadRefresher
 from curves.refreshers.stat import StatRefresher
 
 REFRESHERS_AVAILABLE = True
-print("✅ Refresher modules loaded successfully")
 
 if os.environ.get('WEB_LOG_TIMINGS','0') == '1':
     logger.info('web.core.scripts import took %.3fs', time.time() - _import_start)

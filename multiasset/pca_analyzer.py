@@ -16,7 +16,10 @@ def _load_fx_curve_artifact(input_dir: str) -> dict:
     for file_name in ("fxcurve_ts.pkl", "curve_ts.pkl"):
         file_path = os.path.join(input_dir, file_name)
         if os.path.exists(file_path):
-            return pd.read_pickle(file_path)
+            try:
+                return pd.read_pickle(file_path)
+            except Exception as exc:
+                print(f"Warning: could not load curve artifact {file_path}: {exc}")
     raise FileNotFoundError("Neither fxcurve_ts.pkl nor curve_ts.pkl exists in the input directory")
 
 
@@ -102,16 +105,45 @@ class DeterministicRiskFactorAnalyzer:
             if spread_type not in SPREAD_CONFIG:
                 # Handle ICP separately (from database-px.pkl)
                 if spread_type == 'ICP':
-                    data = pd.read_pickle(os.path.join(self.input_dir, 'database-px.pkl'))
-                    if 'ICP' in data:
-                        icp_col = '中债商业银行同业存单到期收益率(AAA):1年'
-                        if icp_col in data['ICP'].columns:
-                            return data['ICP'][[icp_col]]
+                    for file_name, key in (('database-px.pkl', 'ICP'), ('IRS-cvpx.pkl', 'ytm_act')):
+                        file_path = os.path.join(self.input_dir, file_name)
+                        if not os.path.exists(file_path):
+                            continue
+                        try:
+                            data = pd.read_pickle(file_path)
+                            if file_name == 'database-px.pkl' and 'ICP' in data:
+                                icp_col = '中债商业银行同业存单到期收益率(AAA):1年'
+                                if icp_col in data['ICP'].columns:
+                                    return data['ICP'][[icp_col]]
+                            if file_name == 'IRS-cvpx.pkl' and isinstance(data, dict) and key in data:
+                                frame = data[key]
+                                icp_col = 'FR007S1Y.IR'
+                                if icp_col in frame.columns:
+                                    return frame[[icp_col]]
+                        except Exception as exc:
+                            print(f"Warning: could not load spread fallback {file_path}: {exc}")
                 return None
             
             pkl_file, pkl_key, cols = SPREAD_CONFIG[spread_type]
-            data = pd.read_pickle(os.path.join(self.input_dir, pkl_file))
-            data = data[pkl_key]
+            file_path = os.path.join(self.input_dir, pkl_file)
+            try:
+                data = pd.read_pickle(file_path)
+                data = data[pkl_key]
+            except Exception as exc:
+                print(f"Warning: Could not load spread data for {spread_type} from {file_path}: {exc}")
+                if spread_type == 'IRS':
+                    fallback_path = os.path.join(self.input_dir, 'IRS-cvpx.pkl')
+                    if os.path.exists(fallback_path):
+                        try:
+                            fallback = pd.read_pickle(fallback_path)
+                            data = fallback.get('ytm_act') if isinstance(fallback, dict) else None
+                        except Exception as fallback_exc:
+                            print(f"Warning: Could not load IRS fallback {fallback_path}: {fallback_exc}")
+                            return None
+                    else:
+                        return None
+                else:
+                    return None
             
             available = [c for c in cols if c in data.columns]
             if len(available) < 1:

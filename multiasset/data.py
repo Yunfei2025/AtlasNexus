@@ -14,8 +14,32 @@ def _load_fx_curve_artifact():
     for file_name in ("fxcurve_ts.pkl", "curve_ts.pkl"):
         file_path = os.path.join(DIR_INPUT, file_name)
         if os.path.exists(file_path):
-            return pd.read_pickle(file_path)
+            try:
+                return pd.read_pickle(file_path)
+            except Exception as exc:
+                print(f"Warning: could not load curve artifact {file_path}: {exc}")
     raise FileNotFoundError("Neither fxcurve_ts.pkl nor curve_ts.pkl exists in DIR_INPUT")
+
+
+def _load_macro_artifact():
+    macro_path = os.path.join(DIR_INPUT, 'macro-px.pkl')
+    try:
+        return pd.read_pickle(macro_path)
+    except Exception as exc:
+        print(f"Warning: could not load macro data from {macro_path}: {exc}")
+        return {
+            "fx": pd.DataFrame(),
+            "commodity": pd.DataFrame(),
+        }
+
+
+def _get_macro_frame(macro_data, key: str) -> pd.DataFrame:
+    if not isinstance(macro_data, dict):
+        return pd.DataFrame()
+    frame = macro_data.get(key)
+    if isinstance(frame, pd.DataFrame):
+        return frame
+    return pd.DataFrame()
 
 
 def load_raw_market_data():
@@ -30,7 +54,7 @@ def load_raw_market_data():
         cn_data[k] = cn_data_ts[k]
     
     # Load Macro Data (FX and Commodities)
-    macro_data = pd.read_pickle(os.path.join(DIR_INPUT, 'macro-px.pkl'))
+    macro_data = _load_macro_artifact()
     
     return fx_curves, cn_data, macro_data
 
@@ -102,8 +126,9 @@ def get_asset_yield_series(asset_name, market_data):
             'Crude_Oil': 'SC.INE'
         }
         ticker = ticker_map.get(asset_name)
-        if ticker:
-            return macro_data["commodity"][ticker], 0, None, False
+        commodity_data = _get_macro_frame(macro_data, "commodity")
+        if ticker and ticker in commodity_data.columns:
+            return commodity_data[ticker], 0, None, False
         return None, 0, None, False
         
     elif asset_type == 'Rates':
@@ -188,6 +213,7 @@ def get_asset_yield_series(asset_name, market_data):
 def get_fx_series(country, market_data):
     """Get FX series for a country."""
     _, _, macro_data = market_data
+    fx_data = _get_macro_frame(macro_data, "fx")
     fx_map = {
         'US': 'USDCNY.IB',
         'EU': 'EURCNY.IB',
@@ -195,8 +221,8 @@ def get_fx_series(country, market_data):
         'JP': 'JPYCNY.IB'
     }
     fx_ticker = fx_map.get(country)
-    if fx_ticker and fx_ticker in macro_data["fx"].columns:
-        return macro_data["fx"][fx_ticker]
+    if fx_ticker and fx_ticker in fx_data.columns:
+        return fx_data[fx_ticker]
     return None
 
 
@@ -306,7 +332,11 @@ def calculate_asset_monthly_return(asset_name, start_date, end_date, market_data
         if not ticker:
             return 0.0, 0.0, 0.0, 0.0
             
-        price_series = macro_data["commodity"][ticker]
+        commodity_data = _get_macro_frame(macro_data, "commodity")
+        if ticker not in commodity_data.columns:
+            return 0.0, 0.0, 0.0, 0.0
+
+        price_series = commodity_data[ticker]
         
         # Get prices
         try:
@@ -391,8 +421,9 @@ def calculate_asset_monthly_return(asset_name, start_date, end_date, market_data
                     'JP': 'JPYCNY.IB'
                 }
                 fx_ticker = fx_map.get(country)
-                if fx_ticker:
-                    fx_series = macro_data["fx"][fx_ticker]
+                fx_data = _get_macro_frame(macro_data, "fx")
+                if fx_ticker and fx_ticker in fx_data.columns:
+                    fx_series = fx_data[fx_ticker]
                     fx_start = fx_series.asof(start_date)
                     fx_end = fx_series.asof(end_date)
                     if not pd.isna(fx_start) and not pd.isna(fx_end):

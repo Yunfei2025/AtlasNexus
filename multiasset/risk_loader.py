@@ -9,6 +9,18 @@ from pathlib import Path
 from multiasset.pca_analyzer import PCARiskFactorAnalyzer, DeterministicRiskFactorAnalyzer
 
 
+def _load_macro_artifact(input_dir: str):
+    macro_path = os.path.join(input_dir, 'macro-px.pkl')
+    try:
+        return pd.read_pickle(macro_path)
+    except Exception as exc:
+        print(f"Warning: could not load macro data from {macro_path}: {exc}")
+        return {
+            "fx": pd.DataFrame(),
+            "commodity": pd.DataFrame(),
+        }
+
+
 class RiskFactorLoader:
     """Loads and caches risk factor data."""
     
@@ -46,7 +58,7 @@ class RiskFactorLoader:
         if use_cache and self._risk_factors_cache is not None:
             return self._risk_factors_cache
         
-        macro_data = pd.read_pickle(os.path.join(self.input_dir, 'macro-px.pkl'))
+        macro_data = _load_macro_artifact(self.input_dir)
         risk_factors = pd.DataFrame()
         
         # Interest rate factors
@@ -195,17 +207,34 @@ class RiskFactorLoader:
     def _load_fx_factors(self, risk_factors: pd.DataFrame, 
                          macro_data: Dict) -> pd.DataFrame:
         """Load FX factors."""
+        fx_data = macro_data.get("fx") if isinstance(macro_data, dict) else None
+        if not isinstance(fx_data, pd.DataFrame) or fx_data.empty:
+            print("Warning: FX macro data unavailable; skipping FX factors")
+            return risk_factors
+
         for currency in ["USD", "EUR", "JPY", "GBP"]:
-            risk_factors[f"FXDL.{currency}CNY"] = macro_data["fx"][f"{currency}CNY.IB"]
+            column_name = f"{currency}CNY.IB"
+            if column_name in fx_data.columns:
+                risk_factors[f"FXDL.{currency}CNY"] = fx_data[column_name]
+            else:
+                print(f"Warning: FX column {column_name} missing; skipping FXDL.{currency}CNY")
         
         return risk_factors
     
     def _load_commodity_factors(self, risk_factors: pd.DataFrame,
                                 macro_data: Dict) -> pd.DataFrame:
         """Load commodity factors."""
+        commodity_data = macro_data.get("commodity") if isinstance(macro_data, dict) else None
+        if not isinstance(commodity_data, pd.DataFrame) or commodity_data.empty:
+            print("Warning: commodity macro data unavailable; skipping commodity factors")
+            return risk_factors
+
         for commodity in ["AU.SHF", "AL.SHF", "CU.SHF", "SC.INE"]:
             ticker = commodity.split(".")[0]
-            risk_factors[f"CMDL.{ticker}"] = macro_data["commodity"][commodity]
+            if commodity in commodity_data.columns:
+                risk_factors[f"CMDL.{ticker}"] = commodity_data[commodity]
+            else:
+                print(f"Warning: commodity column {commodity} missing; skipping CMDL.{ticker}")
         
         return risk_factors
     

@@ -31,7 +31,7 @@ from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
 from multiasset.factor_backtest import compute_ewma_factor_vols
 from multiasset.config import RiskModelConfig
-from settings.paths import DIR_INPUT, DIR_MODELS
+from settings.paths import DIR_INPUT, DIR_MODELS, DIR_OUTPUT
 
 # --- Import from futures.backtest for Backtest-Factor tab ---
 import dash_bootstrap_components as dbc
@@ -115,6 +115,39 @@ DIVERSIFICATION_RECOMMENDATIONS = {
     'assets': [],       # List of recommended asset dictionaries
     'timestamp': None   # When the analysis was run
 }
+
+# ── Summary tab: portfolio snapshot file paths ─────────────────────────────
+_SUMMARY_BETA_PARQUET  = str(DIR_INPUT / 'summary_beta_portfolio.parquet')
+_SUMMARY_ALPHA_PARQUET = str(DIR_OUTPUT / 'summary_alpha_portfolio.parquet')
+
+# Map asset-name prefix → primary risk factor (used for close-price lookup)
+_ASSET_PREFIX_TO_FACTOR: dict[str, str] = {
+    'CN':  'IRDL.CN',  'US':  'IRDL.US',  'EU':  'IRDL.DE',
+    'JP':  'IRDL.JP',  'UK':  'IRDL.UK',
+    'IRS': 'SPDL.IRS', 'CDB': 'SPDL.CDB', 'ICP': 'SPDL.ICP',
+}
+
+
+def _get_beta_close_prices() -> dict[str, float]:
+    """Return {asset_name_prefix: last_factor_level} for Beta-Book close prices.
+
+    Uses the most-recent row of the risk-factor level time series as a proxy.
+    IR / Spread factors are reported in %; FX / Commodity not yet supported.
+    """
+    try:
+        loader = RiskFactorLoader(DIR_INPUT)
+        factor_levels = loader.load_risk_factors(use_cache=True)
+        if factor_levels is None or factor_levels.empty:
+            return {}
+        last_row = factor_levels.iloc[-1]
+        return {
+            prefix: round(float(last_row[factor]), 4)
+            for prefix, factor in _ASSET_PREFIX_TO_FACTOR.items()
+            if factor in last_row.index and pd.notna(last_row[factor])
+        }
+    except Exception:
+        return {}
+
 
 # Global state for selected factor pool (shared between Factor tab and Backtest tab)
 SELECTED_FACTOR_POOL = {
@@ -1629,6 +1662,71 @@ def build_multiasset_risk_layout():
                      ], style={'fontSize': '11px', 'color': THEME['text_sub'], 'backgroundColor': 'rgba(255,255,255,0.05)', 'padding': '5px', 'borderRadius': '4px'})
                  ], style=card_style()),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'center', 'alignItems': 'stretch'}),
+
+            # ── Portfolio detail tabs (Beta / Alpha) ──────────────────────────
+            html.Hr(style={'borderColor': THEME['table_header'], 'margin': '20px 0 15px 0'}),
+            html.Div([
+                html.Div([
+                    html.H6("Portfolio Allocations", style={
+                        'color': THEME['text_main'], 'margin': '0',
+                        'fontSize': '13px', 'fontWeight': 'bold',
+                    }),
+                    html.Span(
+                        "Snapshots saved when you click RUN ANALYSIS (Beta) or RUN OPTIMIZATION (Alpha).",
+                        style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '10px'},
+                    ),
+                ], style={'flex': '1', 'display': 'flex', 'alignItems': 'center'}),
+                html.Button(
+                    "↻ Refresh",
+                    id='summary-refresh-btn',
+                    n_clicks=0,
+                    style={
+                        'backgroundColor': THEME['bg_input'],
+                        'color': THEME['accent'],
+                        'border': f'1px solid {THEME["accent"]}',
+                        'borderRadius': '4px',
+                        'padding': '4px 14px',
+                        'cursor': 'pointer',
+                        'fontSize': '12px',
+                        'fontWeight': 'bold',
+                    },
+                ),
+                html.Span(id='summary-refresh-status', style={
+                    'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '10px',
+                }),
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
+            dcc.Tabs(
+                id='summary-book-tabs',
+                value='beta',
+                children=[
+                    dcc.Tab(
+                        label='Beta Book',
+                        value='beta',
+                        style={'backgroundColor': THEME['bg_card'], 'color': THEME['text_sub'],
+                               'padding': '6px 16px', 'border': 'none', 'fontSize': '13px'},
+                        selected_style={'backgroundColor': THEME['warning'], 'color': 'white',
+                                        'padding': '6px 16px', 'border': 'none',
+                                        'fontWeight': 'bold', 'fontSize': '13px'},
+                    ),
+                    dcc.Tab(
+                        label='Alpha Book',
+                        value='alpha',
+                        style={'backgroundColor': THEME['bg_card'], 'color': THEME['text_sub'],
+                               'padding': '6px 16px', 'border': 'none', 'fontSize': '13px'},
+                        selected_style={'backgroundColor': THEME['danger'], 'color': 'white',
+                                        'padding': '6px 16px', 'border': 'none',
+                                        'fontWeight': 'bold', 'fontSize': '13px'},
+                    ),
+                ],
+                style={'marginBottom': '0'},
+            ),
+            dcc.Loading(
+                type='default',
+                children=html.Div(
+                    id='summary-book-table-container',
+                    style={'minHeight': '120px', 'paddingTop': '10px'},
+                ),
+            ),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px', 'marginBottom': '30px'}),
 
         # 2. Exposure Section
@@ -2772,49 +2870,47 @@ def register_multiasset_callbacks(app):
             top_pairs = int(top_pairs) if top_pairs else 10
             bottom_pairs = corr_stacked.sort_values('AbsCorrelation', ascending=True).head(top_pairs)
 
-            # Get unique factors from the lowest correlation pairs
-            top_factors = set(bottom_pairs['Factor A']).union(set(bottom_pairs['Factor B']))
-            
-            # If we ended up with more than 10 factors (which is likely if pairs are disjoint),
-            # we might want to just pick the factors from the very top few pairs to limit to ~10 factors max 
-            # for a 10x10 matrix, OR just show all factors involved in the top 10 pairs.
-            # Usually top 10 pairs involve at most 20 factors. Let's filter the matrix to these factors.
-            top_factors_list = sorted(list(top_factors))
-            
-            # Filter the correlation matrix
-            filtered_corr_matrix = corr_matrix.loc[top_factors_list, top_factors_list]
-            
-            # Mask upper triangle (show lower only)
-            corr_values = filtered_corr_matrix.values.copy()
-            # Set upper triangle to NaN (keep diagonal? np.triu k=1 masks strict upper. k=0 masks diagonal too.)
-            # Usually diagonal is 1. User said "avoid repetition". Diagonal is unique.
-            # But normally lower triangle heatmaps include diagonal.
+            # ── Heatmap: show ALL selected factors (not just low-corr pairs) ────
+            all_factors_list = list(corr_matrix.columns)
+
+            # Mask upper triangle for the full matrix
+            corr_values = corr_matrix.values.copy()
             mask_upper = np.triu(np.ones(corr_values.shape), k=1).astype(bool)
             corr_values[mask_upper] = np.nan
-            
+
+            n_factors = len(all_factors_list)
+            # Scale height so labels are readable regardless of how many factors
+            heatmap_height = max(500, min(900, 80 + n_factors * 40))
+
             # --- Heatmap Plot ---
             heatmap_fig = go.Figure(data=go.Heatmap(
                 z=corr_values,
-                x=filtered_corr_matrix.columns,
-                y=filtered_corr_matrix.index,
-                colorscale='RdBu', 
+                x=all_factors_list,
+                y=all_factors_list,
+                colorscale='RdBu',
                 zmin=-1, zmax=1,
-                hovertemplate='Factor A: %{y}<br>Factor B: %{x}<br>Correlation: %{z:.3f}<extra></extra>',
-                xgap=1, ygap=1 # Add small gap for better definition
+                hovertemplate='%{y} / %{x}<br>Correlation: %{z:.3f}<extra></extra>',
+                xgap=1, ygap=1,
+                text=[[f"{v:.2f}" if not np.isnan(v) else "" for v in row] for row in corr_values],
+                texttemplate="%{text}",
             ))
-            
+
             heatmap_fig.update_layout(
-                title=f"Correlation Matrix (Lower Triangle) - Factors from Lowest Abs Correlation Pairs - {period}",
-                height=600,
+                title=f"Rank Correlation Matrix — {n_factors} factors · {period}",
+                height=heatmap_height,
                 template=THEME['chart_template'],
                 paper_bgcolor=THEME['bg_card'],
                 plot_bgcolor=THEME['bg_card'],
-                font={'color': THEME['text_main']},
-                margin=dict(l=150, r=50, t=80, b=100),
+                font={'color': THEME['text_main'], 'size': 11},
+                margin=dict(l=160, r=50, t=70, b=120),
                 xaxis={'side': 'bottom', 'tickangle': -45},
-                yaxis={'autorange': 'reversed'} # Standard matrix view
+                yaxis={'autorange': 'reversed'},
             )
-            
+
+            # Low-corr pairs still drive diversification recommendations
+            top_factors = set(bottom_pairs['Factor A']).union(set(bottom_pairs['Factor B']))
+            top_factors_list = sorted(list(top_factors))
+
             # Get the assets corresponding to these low-correlation factors
             diversified_assets = get_assets_from_factors(top_factors_list)
             
@@ -3582,6 +3678,23 @@ def register_multiasset_callbacks(app):
                     _tot = sum(_iv.values()) or 1.0
                     rp_budgets_out = {f: round(total_capital_m * v / _tot, 2) for f, v in _iv.items()}
             # factor_scaling and user_defined already have rp_budgets_out set above
+
+            # ── Save Beta snapshot for Summary tab ────────────────────────────
+            try:
+                import pathlib
+                pathlib.Path(_SUMMARY_BETA_PARQUET).parent.mkdir(parents=True, exist_ok=True)
+                _snap = portfolio_df.copy()
+                _snap['_timestamp'] = datetime.now().isoformat()
+                _snap['_capital_cny'] = _snap['Capital (CNY)']
+                # Ensure all factor-sensitivity columns are float (serialisable)
+                for _c in _snap.columns:
+                    if _c not in ('Asset Type', 'Universe', 'Sector', 'Asset Name',
+                                  '_timestamp', '_capital_cny'):
+                        _snap[_c] = pd.to_numeric(_snap[_c], errors='coerce')
+                _snap.to_parquet(_SUMMARY_BETA_PARQUET, index=False)
+                print(f"✓ Beta portfolio snapshot saved → {_SUMMARY_BETA_PARQUET}")
+            except Exception as _se:
+                print(f"Warning: Could not save Beta snapshot: {_se}")
 
             return (portfolio_table, status_msg, timestamp_msg, {'status': 'success'}, rp_budgets_out)
             
@@ -4760,3 +4873,170 @@ def register_multiasset_callbacks(app):
                 f"Error computing hedge: {exc}",
                 style={'color': THEME['danger'], 'fontSize': '12px'},
             )
+
+    # ── Summary tab: Beta / Alpha portfolio table callback ────────────────────
+    @app.callback(
+        [Output('summary-book-table-container', 'children'),
+         Output('summary-refresh-status', 'children')],
+        [Input('summary-book-tabs', 'value'),
+         Input('summary-refresh-btn', 'n_clicks')],
+    )
+    def update_summary_book_table(tab_value, _n_clicks):
+        """Load the saved parquet snapshot and render a styled table with
+        Close Price and Market Value columns."""
+        import os as _os
+
+        def _no_data(msg: str):
+            return (
+                html.Div(msg, style={
+                    'color': THEME['text_sub'], 'fontStyle': 'italic',
+                    'padding': '30px', 'textAlign': 'center', 'fontSize': '13px',
+                }),
+                "",
+            )
+
+        # ── Beta tab ──────────────────────────────────────────────────────────
+        if tab_value == 'beta':
+            if not _os.path.exists(_SUMMARY_BETA_PARQUET):
+                return _no_data(
+                    "No Beta snapshot found. Click RUN ANALYSIS in the Beta Book → Portfolio tab first."
+                )
+            try:
+                df = pd.read_parquet(_SUMMARY_BETA_PARQUET)
+                ts = df['_timestamp'].iloc[0] if '_timestamp' in df.columns else "unknown"
+
+                # Close Price: look up last factor level for each asset's primary factor
+                close_prices = _get_beta_close_prices()
+
+                def _close_price_for(asset_name: str) -> float | None:
+                    """Match asset name prefix to a factor-level proxy."""
+                    for prefix, price in close_prices.items():
+                        if asset_name.upper().startswith(prefix.upper()):
+                            return price
+                    return None
+
+                capital_col = '_capital_cny' if '_capital_cny' in df.columns else 'Capital (CNY)'
+                display_rows = []
+                for _, row in df.iterrows():
+                    asset = str(row.get('Asset Name', ''))
+                    if asset == 'TOTAL':
+                        continue
+                    cap_cny = float(row.get(capital_col, 0) or 0)
+                    cap_mm  = round(cap_cny / 1e6, 2)
+                    wt      = round(float(row.get('Weight (%)', 0) or 0), 2)
+                    cp      = _close_price_for(asset)
+                    mv_mm   = cap_mm   # bonds at ~par → market value ≈ notional
+
+                    display_rows.append({
+                        'Asset Type':        row.get('Asset Type', ''),
+                        'Universe':          row.get('Universe', ''),
+                        'Asset Name':        asset,
+                        'Close Price (%)':   f"{cp:.4f}" if cp is not None else 'N/A',
+                        'Capital (MM CNY)':  f"{cap_mm:,.2f}",
+                        'Market Value (MM)': f"{mv_mm:,.2f}",
+                        'Weight (%)':        f"{wt:.2f}%",
+                    })
+
+                if not display_rows:
+                    return _no_data("Beta snapshot is empty.")
+
+                table = dash_table.DataTable(
+                    data=display_rows,
+                    columns=[{'name': c, 'id': c} for c in display_rows[0].keys()],
+                    style_cell={
+                        'textAlign': 'center', 'padding': '8px',
+                        'backgroundColor': THEME['table_row_odd'],
+                        'color': THEME['text_main'], 'border': 'none',
+                        'fontSize': '12px',
+                    },
+                    style_header={
+                        'backgroundColor': THEME['table_header'],
+                        'color': THEME['text_main'],
+                        'fontWeight': 'bold', 'border': 'none',
+                    },
+                    style_data_conditional=[
+                        {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                    ],
+                    style_table={'overflowX': 'auto'},
+                    sort_action='native',
+                    page_size=20,
+                )
+                status = f"Beta snapshot from {ts[:19]}"
+                return table, status
+
+            except Exception as exc:
+                return _no_data(f"Error loading Beta snapshot: {exc}")
+
+        # ── Alpha tab ─────────────────────────────────────────────────────────
+        elif tab_value == 'alpha':
+            if not _os.path.exists(_SUMMARY_ALPHA_PARQUET):
+                return _no_data(
+                    "No Alpha snapshot found. Click RUN OPTIMIZATION in the Alpha Book → Portfolio tab first."
+                )
+            try:
+                df = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
+                ts = df['_timestamp'].iloc[0] if '_timestamp' in df.columns else "unknown"
+
+                display_rows = []
+                for _, row in df.iterrows():
+                    trade_id = str(row.get('ID', ''))
+                    if trade_id in ('TOTAL', ''):
+                        continue
+                    spread_val = row.get('spread', None)
+                    cp_bp      = round(float(spread_val), 4) if pd.notna(spread_val) else None
+                    notional   = float(row.get('notional_mm', 0) or 0)
+                    dv01_k     = float(row.get('DV01_k', 0) or 0)
+                    # Mark-to-market = DV01 × current spread level
+                    mv_mm = round(dv01_k * float(cp_bp) / 1000, 3) if cp_bp is not None else None
+
+                    display_rows.append({
+                        'ID':                  trade_id,
+                        'Spread Type':         row.get('spread_type', ''),
+                        'Style':               row.get('style', ''),
+                        'Direction':           row.get('direction', ''),
+                        'Z-Score':             f"{float(row.get('Zscore', 0) or 0):.2f}",
+                        'Close Price (bp)':    f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
+                        'Notional (MM CNY)':   f"{notional:,.1f}",
+                        'DV01 (k CNY/bp)':     f"{dv01_k:.1f}",
+                        'MtM Value (MM CNY)':  f"{mv_mm:,.3f}" if mv_mm is not None else 'N/A',
+                        'Weight (%)':          f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
+                    })
+
+                if not display_rows:
+                    return _no_data("Alpha snapshot is empty.")
+
+                dir_styles = [
+                    {'if': {'filter_query': '{Direction} = "BUY"'},
+                     'backgroundColor': 'rgba(0, 204, 150, 0.12)'},
+                    {'if': {'filter_query': '{Direction} = "SELL"'},
+                     'backgroundColor': 'rgba(239, 85, 59, 0.12)'},
+                ]
+                table = dash_table.DataTable(
+                    data=display_rows,
+                    columns=[{'name': c, 'id': c} for c in display_rows[0].keys()],
+                    style_cell={
+                        'textAlign': 'center', 'padding': '8px',
+                        'backgroundColor': THEME['table_row_odd'],
+                        'color': THEME['text_main'], 'border': 'none',
+                        'fontSize': '12px',
+                    },
+                    style_header={
+                        'backgroundColor': THEME['table_header'],
+                        'color': THEME['text_main'],
+                        'fontWeight': 'bold', 'border': 'none',
+                    },
+                    style_data_conditional=[
+                        {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                        *dir_styles,
+                    ],
+                    style_table={'overflowX': 'auto'},
+                    sort_action='native',
+                    page_size=20,
+                )
+                status = f"Alpha snapshot from {ts[:19]}"
+                return table, status
+
+            except Exception as exc:
+                return _no_data(f"Error loading Alpha snapshot: {exc}")
+
+        return _no_data("Select a tab above.")
