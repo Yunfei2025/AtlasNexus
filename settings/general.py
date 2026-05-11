@@ -11,6 +11,15 @@ from .paths import PATH, DIR_INPUT, DIR_OUTPUT, DIR_DATA, DIR_MODELS
 app_color = {"graph_bg": "#082255", "graph_line": "#007ACE"}
 
 
+class TradingHoursConfig:
+    START_HOUR: int = 9
+    END_HOUR: int = 17
+    CREDIT_START_HOUR: int = 10
+    CREDIT_END_HOUR: int = 12
+    INIT_END_HOUR: int = 18
+    WEEKDAYS_ONLY: bool = True
+
+
 class GeneralConfig:
     N_CORE = 6
     DSHIFT = 1

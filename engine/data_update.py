@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 from dataclasses import replace
 from datetime import date, datetime
@@ -84,15 +85,29 @@ def _try_register_module(module_name: str) -> None:
 
     # Convention 2: legacy codebase often uses retrieveXxx() functions.
     # Register each callable that starts with 'retrieve' (excluding the plain 'retrieve' which is already handled above).
+    # Skip functions with required positional arguments — those are helpers, not standalone retrievers.
     for attr in dir(mod):
         if not attr.startswith("retrieve"):
             continue
         if attr in ("retrieve",):
             continue
         fn = getattr(mod, attr, None)
-        if callable(fn):
-            register_retriever(f"{module_name}:{attr}", fn)
-            registered_any = True
+        if not callable(fn):
+            continue
+        try:
+            sig = inspect.signature(fn)
+            required = [
+                p for p in sig.parameters.values()
+                if p.default is inspect.Parameter.empty
+                and p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            ]
+            if required:
+                logger.debug("Skipping retriever with required args: %s:%s%s", module_name, attr, sig)
+                continue
+        except (ValueError, TypeError):
+            pass
+        register_retriever(f"{module_name}:{attr}", fn)
+        registered_any = True
 
     if registered_any:
         return

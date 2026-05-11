@@ -22,6 +22,7 @@ from settings.general import GeneralConfig, DateConfig
 from settings.futures import FuturesConfig
 
 class StatGenerator:
+    
     """Generate daily statistics with OOP structure and performance improvements."""
 
     def __init__(self) -> None:

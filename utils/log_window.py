@@ -225,11 +225,20 @@ def setup_logging(show_window: bool = True, level: int = logging.INFO):
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
 
-    # Add console handler
+    # Add console handler with immediate flushing
     console = logging.StreamHandler()
     console.setLevel(level)
+    console.flush_on_emit = True  # Flush after each log message
     formatter = logging.Formatter("%(levelname)s: %(message)s")
     console.setFormatter(formatter)
+
+    # Override emit to flush immediately
+    original_emit = console.emit
+    def emit_with_flush(record):
+        original_emit(record)
+        console.flush()
+    console.emit = emit_with_flush
+
     logger.addHandler(console)
 
     # Mute noisy HTTP access logs (Werkzeug / Flask dev server)
@@ -254,7 +263,24 @@ def setup_logging(show_window: bool = True, level: int = logging.INFO):
 
     if show_window and tk is not None and is_main_process:
         if sys.platform == 'darwin':
-            logger.warning("GUI Log Window disabled on macOS due to threading restrictions. Output will be shown in console.")
+            logger.warning("GUI Log Window disabled on macOS due to threading restrictions. Output will be shown in console and logs/app.log")
+            # Add file logging on macOS for better visibility
+            try:
+                logs_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
+                os.makedirs(logs_dir, exist_ok=True)
+                log_file = os.path.join(logs_dir, 'app.log')
+                file_handler = logging.FileHandler(log_file, encoding='utf-8')
+                file_handler.setLevel(level)
+                file_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+                logger.addHandler(file_handler)
+                logger.info(f"Log file: {log_file}")
+            except Exception as e:
+                logger.warning(f"Could not set up file logging: {e}")
+
+            # Redirect stdout/stderr on macOS too so print() is captured
+            import sys as _sys
+            _sys.stdout = _BufferedRedirect(logger, logging.INFO)  # type: ignore
+            _sys.stderr = _BufferedRedirect(logger, logging.ERROR)  # type: ignore
         else:
             log_q: queue.Queue[str] = queue.Queue(maxsize=10000)
             gui_handler = QueueHandler(log_q)

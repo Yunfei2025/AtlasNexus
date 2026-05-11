@@ -10,7 +10,7 @@ import threading
 import datetime as dt
 import numpy as np
 from typing import Optional
-from settings.general import DateConfig
+from settings.general import DateConfig, TradingHoursConfig
 from settings.wind import WindConfig
 from factors.config import config_manager
 
@@ -31,10 +31,10 @@ WSQ_CHUNK_SIZE: int = 200
 
 def _is_trading_hours(now: Optional[dt.datetime] = None) -> bool:
     now = now or dt.datetime.now()
-    if now.weekday() >= 5:
+    if TradingHoursConfig.WEEKDAYS_ONLY and now.weekday() >= 5:
         return False
     current_time = now.time()
-    return dt.time(9, 0) <= current_time <= dt.time(17, 0)
+    return dt.time(TradingHoursConfig.START_HOUR, 0) <= current_time <= dt.time(TradingHoursConfig.END_HOUR, 0)
 
 
 _WIND_AVAILABLE: Optional[bool] = None if _is_trading_hours() else False

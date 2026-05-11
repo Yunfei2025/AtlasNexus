@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable
 
 from engine.context import build_run_config, RunConfig
+from settings.general import TradingHoursConfig
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,8 @@ class TradingHoursScheduler:
         pipeline_fn: Callable[[RunConfig], object],
         project_root: Path,
         interval_seconds: int = 300,
-        start_hour: int = 9,
-        end_hour: int = 16,
+        start_hour: int = TradingHoursConfig.START_HOUR,
+        end_hour: int = TradingHoursConfig.END_HOUR,
         start_minute: int = 0,
         end_minute: int = 30,
         weekdays_only: bool = True,

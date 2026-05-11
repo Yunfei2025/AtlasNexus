@@ -13,7 +13,7 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime as dt
 from dateutil.relativedelta import relativedelta 
-from data.providers.retrieve import _wsd, _wset, _wss, _edb, _wsq, _wst
+from data.providers.retrieve import _wsd, _wset, _wss, _edb, _wsq, _wst, _is_trading_hours
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent.parent
@@ -26,6 +26,9 @@ from settings.fixed_income import BondConfig, IRSConfig
 from settings.wind import WindConfig
 from settings.paths import DIR_INPUT, DIR_DATA
 from curves.utils.file import updatePKL
+from utils.log_window import get_logger
+
+logger = get_logger(__name__)
 
 # Localized new-config convenience variables
 _dates = DateConfig.get_date_mappings()
@@ -36,16 +39,22 @@ def _save_pickle(obj, path):
         pickle.dump(obj, f)
 
 
-def _wsq_until_nonempty(symbols, fields, *, retry_delay: float = 0.5):
-    """Retry realtime WSQ requests until a non-empty DataFrame is returned."""
-    attempt = 0
-    while True:
-        attempt += 1
+def _wsq_until_nonempty(symbols, fields, *, retry_delay: float = 0.5, max_retries: int = 5):
+    """Retry realtime WSQ requests until a non-empty DataFrame is returned.
+
+    Returns the last result (possibly empty) after max_retries so callers
+    can fall back to cached data instead of looping forever.
+    """
+    result = pd.DataFrame()
+    for attempt in range(1, max_retries + 1):
         result = _wsq(symbols, fields)
         if isinstance(result, pd.DataFrame) and not result.empty:
+            logger.info("WSQ succeeded on attempt %d/%d (%d symbols)", attempt, max_retries, len(result))
             return result
-        print(f"WSQ returned empty data on attempt {attempt}; retrying...")
+        logger.warning("WSQ returned empty data on attempt %d/%d — retrying...", attempt, max_retries)
         time.sleep(retry_delay)
+    logger.warning("WSQ still empty after %d attempts — returning empty frame.", max_retries)
+    return result
         
 def filterInstrument(bond_info,btype,hist=False):
     if 'CLAUSE' in bond_info.columns:
@@ -262,15 +271,6 @@ def retrieveFuturesTS():
         futures_ts['ctd'][b] = _wsd(futures['Bucket'][b], "tbf_CTD2", starts, dps, "exchangeType=NIB;bondPriceType=1")
     futures_ts = updatePKL(futures_ts, os.path.join(DIR_INPUT, 'futures-px.pkl'))
     
-def _is_trading_hours() -> bool:
-    """Return True if current local time is within China trading hours (Mon–Fri 09:00–17:00)."""
-    now = dt.now()
-    if now.weekday() >= 5:          # Saturday = 5, Sunday = 6
-        return False
-    t = now.time()
-    import datetime
-    return datetime.time(9, 0) <= t <= datetime.time(17, 0)
-
 
 _WINDRT_CACHE = os.path.join(DIR_INPUT, 'windrt.pkl')
 
@@ -300,6 +300,7 @@ def _load_windrt_cache(btype: str):
 
 
 def retrieveWindRT(btype):
+    logger.info("Fetching Wind real-time data for %s...", btype)
     with open(os.path.join(DIR_INPUT,btype+'-InstrumentInfo.pkl'), 'rb') as file:
         bond_info = pickle.load(file)
     if btype == 'IRS':
@@ -323,6 +324,8 @@ def retrieveWindRT(btype):
         bond_rt.columns = [ col_map_rt[c] for c in bond_rt.columns]
         bond_rt = bond_rt.replace(0,np.nan)
     _save_windrt_cache(btype, bond_rt)
+    n = len(bond_rt) if isinstance(bond_rt, pd.DataFrame) else sum(len(v) for v in bond_rt.values())
+    logger.info("Wind real-time data fetched for %s: %d records", btype, n)
     return bond_rt
 
 def retrieveEnvRT(env,btype):
@@ -336,15 +339,29 @@ def retrieveEnvRT(env,btype):
     else:
         online = _is_trading_hours()
         if online:
-            env['BondRT'] = retrieveWindRT(btype)
+            bond_rt = retrieveWindRT(btype)
+            if bond_rt is not None and not bond_rt.empty:
+                env['BondRT'] = bond_rt
+                logger.info("BondRT source: Wind live data (%d bonds)", len(bond_rt))
+            else:
+                logger.warning("Wind returned empty data for %s — falling back to cache.", btype)
+                cached = _load_windrt_cache(btype)
+                if cached is not None:
+                    env['BondRT'] = cached
+                    logger.info("BondRT source: cache (windrt.pkl) for %s", btype)
+                else:
+                    cnbd = env['Def']['估价收益率:%(中债)']
+                    logger.warning("No cache for %s — using CNBD yields as fallback.", btype)
+                    env['BondRT'] = pd.DataFrame({'买价收益率': cnbd, '卖价收益率': cnbd})
         else:
-            print(f"[Offline] Outside trading hours — loading windrt.pkl for {btype}.")
+            logger.info("Outside trading hours — loading windrt.pkl for %s.", btype)
             cached = _load_windrt_cache(btype)
             if cached is not None:
                 env['BondRT'] = cached
+                logger.info("BondRT source: cache (windrt.pkl) for %s", btype)
             else:
                 cnbd = env['Def']['估价收益率:%(中债)']
-                print(f"[Offline] windrt.pkl not found for {btype}, using CNBD yields.")
+                logger.warning("No cache for %s — using CNBD yields as fallback.", btype)
                 env['BondRT'] = pd.DataFrame({'买价收益率': cnbd, '卖价收益率': cnbd})
 
         # Use CNBD price as fallback for NaN values or values very close to 0
@@ -357,6 +374,9 @@ def retrieveEnvRT(env,btype):
                     env['BondRT'].loc[k,p] = px_cnbd
                     fallback_count += 1
 
+        if fallback_count:
+            logger.info("CNBD fallback applied to %d price entries for %s.", fallback_count, btype)
+
         if online:
             env['SwapRT'] = retrieveWindRT('IRS')
             if btype in ['TBond','CBond']:
@@ -366,7 +386,12 @@ def retrieveEnvRT(env,btype):
                     env['SwapRT'].loc[fixings,c]=fs.values
         else:
             cached_irs = _load_windrt_cache('IRS')
-            env['SwapRT'] = cached_irs if cached_irs is not None else pd.DataFrame()
+            if cached_irs is not None:
+                env['SwapRT'] = cached_irs
+                logger.info("SwapRT source: cache (windrt.pkl)")
+            else:
+                logger.warning("No IRS cache found — SwapRT will be empty.")
+                env['SwapRT'] = pd.DataFrame()
     return env
 
 

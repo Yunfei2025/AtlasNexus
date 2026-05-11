@@ -6,6 +6,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from engine.context import build_run_config
+from settings.general import TradingHoursConfig
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     # ── Scheduler ──────────────────────────────────────────────────────
     sched = sub.add_parser("scheduler", help="Start periodic refresh scheduler during trading hours")
     sched.add_argument("--interval", type=int, default=300, help="Seconds between refresh ticks (default: 300)")
-    sched.add_argument("--start-hour", type=int, default=9, help="Trading window start hour (default: 9)")
-    sched.add_argument("--end-hour", type=int, default=16, help="Trading window end hour (default: 16)")
+    sched.add_argument("--start-hour", type=int, default=TradingHoursConfig.START_HOUR, help=f"Trading window start hour (default: {TradingHoursConfig.START_HOUR})")
+    sched.add_argument("--end-hour", type=int, default=TradingHoursConfig.END_HOUR, help=f"Trading window end hour (default: {TradingHoursConfig.END_HOUR})")
     sched.add_argument(
         "--mode",
         choices=["refresh", "intraday"],

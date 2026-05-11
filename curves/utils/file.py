@@ -4,6 +4,28 @@ import pandas as pd
 import pickle
 
 
+def _safe_read_pickle(file_path: str):
+    """Load a pickle, handling pandas version incompatibility gracefully.
+
+    Falls back to renaming the broken file and returning None so callers
+    can treat it as missing and rebuild from fresh data.
+    """
+    try:
+        return pd.read_pickle(file_path)
+    except Exception as e:
+        msg = str(e)
+        if "manager items" in msg or "block items" in msg or "BlockManager" in msg:
+            broken = file_path + ".incompatible"
+            os.rename(file_path, broken)
+            print(
+                f"WARNING: {os.path.basename(file_path)} was saved with an incompatible "
+                f"pandas version and has been renamed to {os.path.basename(broken)}. "
+                f"It will be rebuilt on the next data retrieval run."
+            )
+            return None
+        raise
+
+
 def loadPKL(file_path: str) -> dict:
     """Load a pickle file without any merge/sort/ffill overhead.
 
@@ -13,7 +35,7 @@ def loadPKL(file_path: str) -> dict:
     Returns an empty dict if the file does not exist.
     """
     if os.path.exists(file_path):
-        obj = pd.read_pickle(file_path)
+        obj = _safe_read_pickle(file_path)
         return obj if obj is not None else {}
     return {}
 
@@ -26,7 +48,7 @@ def updatePKL(dictn, file_path, rewrite=False):
     else:
         if os.path.exists(file_path):
             # Load existing object using safe loading
-            dict_ = pd.read_pickle(file_path)
+            dict_ = _safe_read_pickle(file_path)
             if dict_ is None:
                 print(f"Starting with empty dictionary for {file_path}")
                 dict_ = {}

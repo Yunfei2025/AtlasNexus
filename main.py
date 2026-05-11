@@ -11,6 +11,10 @@ import socket
 from datetime import datetime
 from pathlib import Path
 
+# Make stdout/stderr unbuffered for immediate log output on all platforms
+sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf8', buffering=1)
+sys.stderr = open(sys.stderr.fileno(), mode='w', encoding='utf8', buffering=1)
+
 # Add project root to Python path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
@@ -243,7 +247,7 @@ if __name__ == "__main__":
     try:
         from utils.log_window import setup_logging, get_logger
         # Ensure only the main process creates the GUI log window
-        setup_logging(show_window=False)
+        setup_logging(show_window=True)
         logger = get_logger(__name__)
     except Exception:
         # Fallback: continue without GUI logging

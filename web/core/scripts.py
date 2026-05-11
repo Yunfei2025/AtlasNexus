@@ -32,6 +32,7 @@ if str(project_root) not in sys.path:
 from web.core.server import app  # noqa: E402
 from web.core.load import t_int, DATA_PATH
 from settings.fixed_income import BondConfig
+from settings.general import TradingHoursConfig
 from settings.paths import DIR_INPUT
 from curves.refreshers.irs import IRSRefresher
 from curves.refreshers.rates import BondCurveRefresher
@@ -148,7 +149,7 @@ def run_initialise() -> str:
         except Exception as e:
             print(f"WARNING: Daily required data refresh failed: {e}")
 
-        if (t.hour >= 9) and (t.hour <= 18) and (t.weekday() <= 5):
+        if (t.hour >= TradingHoursConfig.START_HOUR) and (t.hour <= TradingHoursConfig.INIT_END_HOUR) and (t.weekday() <= 4):
             print("Updating database and running generators...")
             try:
                 from curves import initialise as curves_initialise
@@ -185,9 +186,9 @@ def _autoruns1_tick() -> None:
             return
 
         t = datetime.datetime.today()
-        date_m = Utils.get_mtime_date(os.path.join(DIR_INPUT, "futures-spds.pkl"))
-        in_window = (t.hour >= 9) and (t.hour <= 17) and (t.date() == date_m)
-        in_credit_window = (t.hour >= 10) and (t.hour <= 12) and (t.date() == date_m)
+        date_m = Utils.get_mtime_date(os.path.join(DIR_INPUT, "macro-px.pkl"))#MNote-cvpx.pkl
+        in_window = (t.hour >= TradingHoursConfig.START_HOUR) and (t.hour <= TradingHoursConfig.END_HOUR) and (t.date() == date_m)
+        in_credit_window = (t.hour >= TradingHoursConfig.CREDIT_START_HOUR) and (t.hour <= TradingHoursConfig.CREDIT_END_HOUR) and (t.date() == date_m)
 
         if in_window:
             Utils.run_parallel_tasks([

@@ -1,0 +1,853 @@
+INFO: Log file: /Users/mayunfei/Documents/FIEngine/bin-v4.0/utils/../logs/app.log
+INFO: ============================================================
+INFO:  AtlasNexus - Systematic Investment Platform
+INFO: ============================================================
+INFO: Initializing AtlasNexus Daily Console...
+INFO: Starting AtlasNexus Daily Console
+INFO: Web server starting... Press Ctrl+C to stop and return to main menu
+INFO: Opening AtlasNexus Daily Console in browser: http://192.168.2.160:8080/
+INFO: Dash is running on http://0.0.0.0:8080/
+
+INFO:  * Serving Flask app 'web.apps.atlasnexus_daily'
+INFO:  * Debug mode: off
+INFO: Daily required data already up to date for 2026-05-11
+INFO: AtlasNexus startup initialisation: Finished Curve Initialisation.
+INFO: Log file: /Users/mayunfei/Documents/FIEngine/bin-v4.0/utils/../logs/app.log
+INFO: ============================================================
+INFO:  AtlasNexus - Systematic Investment Platform
+INFO: ============================================================
+INFO: Initializing AtlasNexus Daily Console...
+INFO: Starting AtlasNexus Daily Console
+INFO: Web server starting... Press Ctrl+C to stop and return to main menu
+INFO: Opening AtlasNexus Daily Console in browser: http://192.168.2.160:8080/
+INFO: Dash is running on http://0.0.0.0:8080/
+
+INFO:  * Serving Flask app 'web.apps.atlasnexus_daily'
+INFO:  * Debug mode: off
+INFO: Daily required data already up to date for 2026-05-11
+INFO: AtlasNexus startup initialisation: Finished Curve Initialisation.
+INFO: Log file: /Users/mayunfei/Documents/FIEngine/bin-v4.0/utils/../logs/app.log
+INFO: ============================================================
+INFO:  AtlasNexus - Systematic Investment Platform
+INFO: ============================================================
+INFO: Note: NumExpr detected 16 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 8.
+INFO: NumExpr defaulting to 8 threads.
+ERROR: Traceback (most recent call last):
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/main.py", line 255, in <module>
+ERROR:     main()
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/main.py", line 207, in main
+ERROR:     from engine.cli import main as engine_main
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/cli.py", line 9, in <module>
+ERROR:     from settings.general import TradingHoursConfig
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/settings/general.py", line 8, in <module>
+ERROR:     from curves.utils.calendar import is_cn_workday, is_cn_holiday, get_cn_holiday_detail
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/curves/utils/calendar.py", line 14, in <module>
+ERROR:     from chinese_calendar import get_holiday_detail, is_holiday, is_workday
+ERROR: ModuleNotFoundError: No module named 'chinese_calendar'
+INFO: Log file: /Users/mayunfei/Documents/FIEngine/bin-v4.0/utils/../logs/app.log
+INFO: ============================================================
+INFO:  AtlasNexus - Systematic Investment Platform
+INFO: ============================================================
+INFO: Available retrievers: curves.utils.retrieve:retrieveCNBDTS, curves.utils.retrieve:retrieveEnvRT, curves.utils.retrieve:retrieveFuturesTS, curves.utils.retrieve:retrieveWindBacktestPool, curves.utils.retrieve:retrieveWindBondTS, curves.utils.retrieve:retrieveWindCNBDCurveTS, curves.utils.retrieve:retrieveWindRT, derivatives.vol.retrieve:retrieveFuturesVol, factors.utils.retrieve:retrieveFuturesDailyK, factors.utils.retrieve:retrieveMarcoPx, futures.intraday.retrieve:retrieveFuturesDailyK, futures.intraday.retrieve:retrieveFuturesTick, futures.intraday.retrieve:retrieveMarcoPx, futures.intraday.retrieve:retrieveTick, multiasset.retrieve:retrieveFXIRCurves
+INFO: Running data retriever: curves.utils.retrieve:retrieveCNBDTS
+INFO: Updating irs and china bond time series...
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Running data retriever: curves.utils.retrieve:retrieveEnvRT
+ERROR: Retriever failed: curves.utils.retrieve:retrieveEnvRT (retrieveEnvRT() missing 2 required positional arguments: 'env' and 'btype')
+Traceback (most recent call last):
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 153, in run_data_update
+    fn(effective_cfg)
+    ~~^^^^^^^^^^^^^^^
+TypeError: retrieveEnvRT() missing 1 required positional argument: 'btype'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 155, in run_data_update
+    fn()
+    ~~^^
+TypeError: retrieveEnvRT() missing 2 required positional arguments: 'env' and 'btype'
+INFO: Running data retriever: curves.utils.retrieve:retrieveFuturesTS
+INFO: Updating bond futures time series...
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: WARNING: futures-px.pkl was saved with an incompatible pandas version and has been renamed to futures-px.pkl.incompatible. It will be rebuilt on the next data retrieval run.
+INFO: Starting with empty dictionary for /Users/mayunfei/Documents/FIEngine/input/futures-px.pkl
+ERROR: Retriever failed: curves.utils.retrieve:retrieveFuturesTS (Invalid value '<ArrowStringArray>
+['250025.IB', '250025.IB', '250025.IB']
+Length: 3, dtype: str' for dtype 'float64')
+Traceback (most recent call last):
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 153, in run_data_update
+    fn(effective_cfg)
+    ~~^^^^^^^^^^^^^^^
+TypeError: retrieveFuturesTS() takes 0 positional arguments but 1 was given
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/blocks.py", line 1115, in setitem
+    casted = np_can_hold_element(values.dtype, value)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/dtypes/cast.py", line 1775, in np_can_hold_element
+    raise LossySetitemError
+pandas.errors.LossySetitemError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 155, in run_data_update
+    fn()
+    ~~^^
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/curves/utils/retrieve.py", line 263, in retrieveFuturesTS
+    futures_ts = updatePKL(futures_ts, os.path.join(DIR_INPUT, 'futures-px.pkl'))
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/curves/utils/file.py", line 102, in updatePKL
+    dict_[k] = _update_dict(dict_.get(k), v)
+               ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/curves/utils/file.py", line 87, in _update_dict
+    target_dict[sub_key] = _update_dataframe(sub_old, sub_new)
+                           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/curves/utils/file.py", line 64, in _update_dataframe
+    target_df.loc[new_df.index, new_df.columns] = new_df
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexing.py", line 938, in __setitem__
+    iloc._setitem_with_indexer(indexer, value, self.name)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexing.py", line 1953, in _setitem_with_indexer
+    self._setitem_with_indexer_split_path(indexer, value, name)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexing.py", line 1988, in _setitem_with_indexer_split_path
+    self._setitem_with_indexer_frame_value(indexer, value, name)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexing.py", line 2120, in _setitem_with_indexer_frame_value
+    self._setitem_single_column(loc, val, pi)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexing.py", line 2181, in _setitem_single_column
+    self.obj._mgr.column_setitem(loc, plane_indexer, value)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/managers.py", line 1520, in column_setitem
+    new_mgr = col_mgr.setitem((idx,), value)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/managers.py", line 604, in setitem
+    return self.apply("setitem", indexer=indexer, value=value)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/managers.py", line 442, in apply
+    applied = getattr(b, f)(**kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/blocks.py", line 1118, in setitem
+    nb = self.coerce_to_target_dtype(value, raise_on_upcast=True)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/blocks.py", line 468, in coerce_to_target_dtype
+    raise TypeError(f"Invalid value '{other}' for dtype '{self.values.dtype}'")
+TypeError: Invalid value '<ArrowStringArray>
+['250025.IB', '250025.IB', '250025.IB']
+Length: 3, dtype: str' for dtype 'float64'
+INFO: Running data retriever: curves.utils.retrieve:retrieveWindBacktestPool
+ERROR: Retriever failed: curves.utils.retrieve:retrieveWindBacktestPool (retrieveWindBacktestPool() missing 2 required positional arguments: 'btype' and 'prange')
+Traceback (most recent call last):
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 153, in run_data_update
+    fn(effective_cfg)
+    ~~^^^^^^^^^^^^^^^
+TypeError: retrieveWindBacktestPool() missing 1 required positional argument: 'prange'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 155, in run_data_update
+    fn()
+    ~~^^
+TypeError: retrieveWindBacktestPool() missing 2 required positional arguments: 'btype' and 'prange'
+INFO: Running data retriever: curves.utils.retrieve:retrieveWindBondTS
+ERROR: Retriever failed: curves.utils.retrieve:retrieveWindBondTS (retrieveWindBondTS() missing 2 required positional arguments: 'bondlist' and 'prange')
+Traceback (most recent call last):
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 153, in run_data_update
+    fn(effective_cfg)
+    ~~^^^^^^^^^^^^^^^
+TypeError: retrieveWindBondTS() missing 1 required positional argument: 'prange'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 155, in run_data_update
+    fn()
+    ~~^^
+TypeError: retrieveWindBondTS() missing 2 required positional arguments: 'bondlist' and 'prange'
+INFO: Running data retriever: curves.utils.retrieve:retrieveWindCNBDCurveTS
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+ERROR: Retriever failed: curves.utils.retrieve:retrieveWindCNBDCurveTS ('OUTMESSAGE')
+Traceback (most recent call last):
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 153, in run_data_update
+    fn(effective_cfg)
+    ~~^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/curves/utils/retrieve.py", line 129, in retrieveWindCNBDCurveTS
+    curve_ts.columns = [WindConfig.CV_ID_MAP[c] for c in curve_ts.columns]
+                        ~~~~~~~~~~~~~~~~~~~~^^^
+KeyError: 'OUTMESSAGE'
+INFO: Running data retriever: curves.utils.retrieve:retrieveWindRT
+ERROR: Retriever failed: curves.utils.retrieve:retrieveWindRT (retrieveWindRT() missing 1 required positional argument: 'btype')
+Traceback (most recent call last):
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 153, in run_data_update
+    fn(effective_cfg)
+    ~~^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/curves/utils/retrieve.py", line 294, in retrieveWindRT
+    with open(os.path.join(DIR_INPUT,btype+'-InstrumentInfo.pkl'), 'rb') as file:
+                                     ~~~~~^~~~~~~~~~~~~~~~~~~~~~
+TypeError: unsupported operand type(s) for +: 'RunConfig' and 'str'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 155, in run_data_update
+    fn()
+    ~~^^
+TypeError: retrieveWindRT() missing 1 required positional argument: 'btype'
+INFO: Running data retriever: derivatives.vol.retrieve:retrieveFuturesVol
+INFO: /Users/mayunfei/Documents/FIEngine/input/futures-volpx.pkl was updated today, skipping retrieveFuturesVol().
+INFO: Running data retriever: factors.utils.retrieve:retrieveFuturesDailyK
+INFO: /Users/mayunfei/Documents/FIEngine/input/futures-dailyK_con.pkl was updated today, skipping futuresDailyK().
+INFO: Running data retriever: factors.utils.retrieve:retrieveMarcoPx
+INFO: /Users/mayunfei/Documents/FIEngine/input/macro-px.pkl was updated today, skipping retrieveMarcoPx().
+INFO: Running data retriever: futures.intraday.retrieve:retrieveFuturesDailyK
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Running data retriever: futures.intraday.retrieve:retrieveFuturesTick
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-13
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-14
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-15
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-16
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-17
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-20
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-21
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-22
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-23
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-24
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-27
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-28
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-29
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-04-30
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-05-01
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-05-04
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-05-05
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-05-06
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-05-07
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  T2606.CFE 2026-05-08
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Saving  T2606.CFE
+INFO: Error updating /Users/mayunfei/Documents/FIEngine/database/futures/T2606.pkl: cannot reindex on an axis with duplicate labels
+INFO: Updating  TL2606.CFE 2026-04-13
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-14
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-15
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-16
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-17
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-20
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-21
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-22
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-23
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-24
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-27
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-28
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-29
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-04-30
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-05-01
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-05-04
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-05-05
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-05-06
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-05-07
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TL2606.CFE 2026-05-08
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Saving  TL2606.CFE
+INFO: Error updating /Users/mayunfei/Documents/FIEngine/database/futures/TL2606.pkl: cannot reindex on an axis with duplicate labels
+INFO: Updating  TF2606.CFE 2026-04-13
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-14
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-15
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-16
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-17
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-20
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-21
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-22
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-23
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-24
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-27
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-28
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-29
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-04-30
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-05-01
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-05-04
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-05-05
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-05-06
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-05-07
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TF2606.CFE 2026-05-08
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Saving  TF2606.CFE
+INFO: Error updating /Users/mayunfei/Documents/FIEngine/database/futures/TF2606.pkl: cannot reindex on an axis with duplicate labels
+INFO: Updating  TS2606.CFE 2026-04-13
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-14
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-15
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-16
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-17
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-20
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-21
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-22
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-23
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-24
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-27
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-28
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-29
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-04-30
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-05-01
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-05-04
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-05-05
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-05-06
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-05-07
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  TS2606.CFE 2026-05-08
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Saving  TS2606.CFE
+INFO: Error updating /Users/mayunfei/Documents/FIEngine/database/futures/TS2606.pkl: cannot reindex on an axis with duplicate labels
+INFO: Updating  IF2606.CFE 2026-04-13
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-14
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-15
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-16
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-17
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-20
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-21
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-22
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-23
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-24
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-27
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-28
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-29
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-04-30
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-05-01
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-05-04
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-05-05
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-05-06
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-05-07
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IF2606.CFE 2026-05-08
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Saving  IF2606.CFE
+INFO: Error updating /Users/mayunfei/Documents/FIEngine/database/futures/IF2606.pkl: cannot reindex on an axis with duplicate labels
+INFO: Updating  IC2606.CFE 2026-04-13
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-14
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-15
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-16
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-17
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-20
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-21
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-22
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-23
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-24
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-27
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-28
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-29
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-04-30
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-05-01
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+INFO: Updating  IC2606.CFE 2026-05-04
+INFO: Welcome to use Wind Quant API for Python (WindPy)!
+INFO: COPYRIGHT (C) 2021 WIND INFORMATION CO., LTD. ALL RIGHTS RESERVED.
+INFO: IN NO CIRCUMSTANCE SHALL WIND BE RESPONSIBLE FOR ANY DAMAGES OR LOSSES CAUSED BY USING WIND QUANT API FOR Python.
+ERROR: Traceback (most recent call last):
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 153, in run_data_update
+ERROR:     fn(effective_cfg)
+ERROR:     ~~^^^^^^^^^^^^^^^
+ERROR: TypeError: retrieveFuturesTick() takes 0 positional arguments but 1 was given
+ERROR: During handling of the above exception, another exception occurred:
+ERROR: Traceback (most recent call last):
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/main.py", line 255, in <module>
+ERROR:     main()
+ERROR:     ~~~~^^
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/main.py", line 226, in main
+ERROR:     engine_main(engine_argv, project_root=project_root)
+ERROR:     ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/cli.py", line 130, in main
+ERROR:     run_data_update(cfg, names=args.retrievers, force=args.force)
+ERROR:     ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/engine/data_update.py", line 155, in run_data_update
+ERROR:     fn()
+ERROR:     ~~^^
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/futures/intraday/retrieve.py", line 73, in retrieveFuturesTick
+ERROR:     temp = _wst(f, "last,ask,bid,volume", ds)
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/data/providers/retrieve.py", line 178, in _wst
+ERROR:     return _wind_call("wst", codes, fields, ds + " 09:00:00", ds + " 17:00:00", "")
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/data/providers/retrieve.py", line 157, in _wind_call
+ERROR:     result = getattr(w, func_name)(*args, usedf=True)[1]
+ERROR:              ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+ERROR:   File "/Users/mayunfei/.local/lib/python3.13/site-packages/WindPy.py", line 926, in wst
+ERROR:     apiout=w.c_wst(w.setEncode(codes),w.setEncode(fields),w.setEncode(beginTime),w.setEncode(endTime),w.setEncode(options))
+ERROR: KeyboardInterrupt
+INFO: Log file: /Users/mayunfei/Documents/FIEngine/bin-v4.0/utils/../logs/app.log
+INFO: ============================================================
+INFO:  AtlasNexus - Systematic Investment Platform
+INFO: ============================================================
+INFO: Initializing AtlasNexus Daily Console...
+INFO: Starting AtlasNexus Daily Console
+INFO: Web server starting... Press Ctrl+C to stop and return to main menu
+INFO: Opening AtlasNexus Daily Console in browser: http://192.168.2.160:8080/
+INFO: Dash is running on http://0.0.0.0:8080/
+
+INFO:  * Serving Flask app 'web.apps.atlasnexus_daily'
+INFO:  * Debug mode: off
+INFO: Daily required data already up to date for 2026-05-11
+INFO: AtlasNexus startup initialisation: Finished Curve Initialisation.
+INFO: Refresh Market Data for TBond at: 22:20:46
+INFO: Refresh Market Data for CBond at: 22:20:46
