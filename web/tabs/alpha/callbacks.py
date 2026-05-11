@@ -288,8 +288,6 @@ def register_alpha_callbacks(app) -> None:
         if all_candidates and len(all_candidates) > 0:
             df_candidates = pd.DataFrame(all_candidates)
             if 'ID' in df_candidates.columns and 'spread_type' in df_candidates.columns:
-                print(f"[DEBUG] Using {len(df_candidates)} scanned candidates for correlation analysis")
-
                 all_spreads = {}
                 for _, row in df_candidates.iterrows():
                     trade_id = row.get('ID', '')
@@ -299,8 +297,6 @@ def register_alpha_callbacks(app) -> None:
                     ts = load_spread_timeseries(spread_type)
                     if ts is not None and isinstance(ts, pd.DataFrame) and trade_id in ts.columns:
                         all_spreads[trade_id] = ts[trade_id]
-
-                print(f"[DEBUG] Loaded time series for {len(all_spreads)} candidates")
 
                 if len(all_spreads) >= 2:
                     df_spreads = pd.DataFrame(all_spreads).tail(lookback)
@@ -312,10 +308,7 @@ def register_alpha_callbacks(app) -> None:
                 else:
                     corr_matrix = None
 
-                if corr_matrix is not None and not corr_matrix.empty:
-                    print(f"[DEBUG] Built correlation matrix from candidates: {corr_matrix.shape}")
-                else:
-                    print("[DEBUG] Insufficient candidate data, falling back to category analysis")
+                if corr_matrix is None or corr_matrix.empty:
                     corr_matrix = None
 
         if corr_matrix is None:
@@ -332,10 +325,8 @@ def register_alpha_callbacks(app) -> None:
 
             if candidates_data and isinstance(candidates_data, dict):
                 corr_matrix = candidates_data.get('corr')
-                print(f"[DEBUG] Loaded correlation from Alpha-candidates.pkl: {type(corr_matrix)}, shape: {corr_matrix.shape if isinstance(corr_matrix, pd.DataFrame) else 'N/A'}")
 
             if corr_matrix is None or not isinstance(corr_matrix, pd.DataFrame) or corr_matrix.empty:
-                print(f"[DEBUG] Computing correlation for spread_types: {spread_types}")
                 corr_matrix, _ = compute_spread_correlation(spread_types, lookback_days=lookback)
 
         if corr_matrix is None or corr_matrix.empty:
@@ -705,8 +696,6 @@ def register_alpha_callbacks(app) -> None:
                 if extra_rows:
                     df_curated = pd.concat([df_curated, pd.DataFrame(extra_rows)], ignore_index=True)
                 df = df_curated
-
-            print(f"[DEBUG] run_scoring: {len(df)} candidates after curated filter")
 
             if 'score' not in df.columns:
                 df['score'] = 0.0
@@ -1265,8 +1254,6 @@ def register_alpha_callbacks(app) -> None:
             weights = {}
             valid_assets = []
 
-            print(f"[DEBUG] Portfolio Backtest: Loading data for {len(optimized_data)} assets")
-
             for item in optimized_data:
                 full_id = item.get('ID')
                 weight = float(item.get('weight', 0.0))
@@ -1301,8 +1288,6 @@ def register_alpha_callbacks(app) -> None:
                 df_prices = df_prices.iloc[-lookback_days:]
             if df_prices.empty:
                 return html.Div("No overlapping historical data found for the selected portfolio.", style={'color': THEME['danger']}), "Data align failed"
-
-            print(f"[DEBUG] Backtest aligned data shape: {df_prices.shape}")
 
             # --- Per-trade signal-driven backtests, combined by portfolio weight ---
             item_lookup = {_i.get('ID'): _i for _i in optimized_data if _i.get('ID')}

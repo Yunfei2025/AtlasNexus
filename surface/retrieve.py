@@ -120,9 +120,9 @@ def retrieveSurface(force: bool = False):
     )
 
     if needs_update:
-            if not _is_trading_hours():
-                print("INFO: Outside trading hours — skipping Wind refresh for surface data.")
-                return surface_dict or {}
+        if not _is_trading_hours():
+            print("INFO: Outside trading hours — skipping Wind refresh for surface data.")
+            return surface_dict or {}
         print("INFO: Updating time series...")
         from WindPy import w
         w.start()

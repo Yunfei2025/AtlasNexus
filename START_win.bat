@@ -24,7 +24,7 @@ if "%CONDA_BAT%"=="" (
     exit /b 1
 )
 
-call "%CONDA_BAT%" activate dev
+call "%CONDA_BAT%" activate prod
 if errorlevel 1 (
     echo ERROR: Failed to activate conda environment 'dev'
     echo Please ensure the 'dev' environment exists: conda create -n dev python=3.13

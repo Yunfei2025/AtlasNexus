@@ -20,21 +20,17 @@ def compute_spread_correlation(
 
     for stype in spread_types:
         ts = load_spread_timeseries(stype)
-        print(f"[DEBUG] load_spread_timeseries({stype}) returned: {type(ts)}, shape: {ts.shape if isinstance(ts, pd.DataFrame) else 'N/A'}")
         if ts is not None and isinstance(ts, pd.DataFrame):
             ts = ts.tail(lookback_days)
-            print(f"[DEBUG] After tail({lookback_days}): shape={ts.shape}, columns={list(ts.columns)[:5]}")
             for col in ts.columns:
                 all_spreads[f"{stype}|{col}"] = ts[col]
 
-    print(f"[DEBUG] Total spreads collected: {len(all_spreads)}")
     if len(all_spreads) < 2:
         return None, None
 
     df_spreads = pd.DataFrame(all_spreads)
     df_changes = df_spreads.diff().dropna()
 
-    print(f"[DEBUG] df_changes shape: {df_changes.shape}")
     if df_changes.shape[0] < 20:
         return None, None
 

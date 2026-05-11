@@ -340,23 +340,18 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                     cols = pd.Index(ts.columns.astype(str))
                     ts = ts.loc[:, ~cols.str.endswith('.IR')].copy()
                     ts = ts.loc[:, _exclude_swapspread_butterflies(pd.Index(ts.columns))].copy()
-                print(f"[DEBUG] Loaded {spread_type} from Alpha-spreadsrt['_timeseries'], shape={ts.shape}")
                 return ts
 
     if spread_type in ['TBondCurve', 'TBondSwap']:
         filepath = dir_input / 'TBond-spds.pkl'
         data = _load_pickle_safe(filepath)
         if data is None:
-            print(f"[DEBUG] {filepath} returned None")
             return None
         key = 'BondCurve' if spread_type == 'TBondCurve' else 'BondSwap'
-        print(f"[DEBUG] TBond-spds.pkl keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
         if isinstance(data, dict) and key in data:
             nested = data[key]
-            print(f"[DEBUG] data['{key}'] type: {type(nested)}, keys: {list(nested.keys()) if isinstance(nested, dict) else 'N/A'}")
             if isinstance(nested, dict) and 'Spread' in nested:
                 result = nested['Spread']
-                print(f"[DEBUG] data['{key}']['Spread'] type: {type(result)}, shape: {result.shape if isinstance(result, pd.DataFrame) else 'N/A'}")
                 return result
         return None
 
@@ -364,16 +359,12 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         filepath = dir_input / 'CBond-spds.pkl'
         data = _load_pickle_safe(filepath)
         if data is None:
-            print(f"[DEBUG] {filepath} returned None")
             return None
         key = 'BondCurve' if spread_type == 'CBondCurve' else 'BondSwap'
-        print(f"[DEBUG] CBond-spds.pkl keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
         if isinstance(data, dict) and key in data:
             nested = data[key]
-            print(f"[DEBUG] data['{key}'] type: {type(nested)}, keys: {list(nested.keys()) if isinstance(nested, dict) else 'N/A'}")
             if isinstance(nested, dict) and 'Spread' in nested:
                 result = nested['Spread']
-                print(f"[DEBUG] data['{key}']['Spread'] type: {type(result)}, shape: {result.shape if isinstance(result, pd.DataFrame) else 'N/A'}")
                 return result
         return None
 
@@ -381,14 +372,11 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         filepath = dir_input / 'Misc-spds.pkl'
         data = _load_pickle_safe(filepath)
         if data is None:
-            print(f"[DEBUG] {filepath} returned None")
             return None
-        print(f"[DEBUG] Misc-spds.pkl keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
         if isinstance(data, dict) and 'PCASpread' in data:
             nested = data['PCASpread']
             if isinstance(nested, dict) and 'Spread' in nested:
                 result = nested['Spread']
-                print(f"[DEBUG] data['PCASpread']['Spread'] type: {type(result)}, shape: {result.shape if isinstance(result, pd.DataFrame) else 'N/A'}")
                 return result
         return None
 
@@ -396,7 +384,6 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         filepath = dir_input / 'IRS-pxspds.pkl'
         data = _load_pickle_safe(filepath)
         if data is None:
-            print(f"[DEBUG] {filepath} returned None")
             return None
         if isinstance(data, dict) and 'Spread' in data:
             df_spread = data.get('Spread')
@@ -404,11 +391,9 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                 cols = pd.Index(df_spread.columns.astype(str))
                 df_spread = df_spread.loc[:, ~cols.str.endswith('.IR')].copy()
                 df_spread = df_spread.loc[:, _exclude_swapspread_butterflies(pd.Index(df_spread.columns))].copy()
-                print(f"[DEBUG] Loaded SwapSpread from IRS-pxspds.pkl Spread, shape={df_spread.shape}")
                 return df_spread
         return None
 
-    print(f"[DEBUG] Unsupported spread_type: {spread_type}")
     return None
 
 

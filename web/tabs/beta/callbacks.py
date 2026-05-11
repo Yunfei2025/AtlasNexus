@@ -1564,10 +1564,8 @@ def register_multiasset_callbacks(app):
 
         try:
             # Parse dates
-            print(f"\n[DEBUG] Received dates: start_date={start_date}, end_date={end_date}")
             start_date = pd.to_datetime(start_date) if start_date else None
             end_date = pd.to_datetime(end_date) if end_date else None
-            print(f"[DEBUG] Parsed dates: start_date={start_date}, end_date={end_date}")
             top_pairs = int(top_pairs) if top_pairs else 10
             
             # Load risk factor data
@@ -1656,10 +1654,6 @@ def register_multiasset_callbacks(app):
             # Calculate earliest valid rebalance date based on selected factor data
             earliest_valid_date = factor_data_start + corr_lookback_delta
             
-            print(f"[DEBUG] factor_data_start={factor_data_start.date()}, lookback={corr_lookback}")
-            print(f"[DEBUG] earliest_valid_date={earliest_valid_date.date()}")
-            print(f"[DEBUG] User start_date={start_date.date()}, end_date={end_date.date()}")
-            
             # Check if user's selected start date is before minimum supported date
             if start_date < earliest_valid_date:
                 limiting_factor_info = f" (limited by {limiting_factors[0][0]})" if limiting_factors else ""
@@ -1683,8 +1677,6 @@ def register_multiasset_callbacks(app):
             while current_date <= end_date:
                 rebalance_dates.append(current_date)
                 current_date += relativedelta(months=1)
-            
-            print(f"[DEBUG] Rebalance dates: {len(rebalance_dates)} from {rebalance_dates[0].date()} to {rebalance_dates[-1].date()}")
             
             if not rebalance_dates:
                 err_fig = go.Figure().update_layout(title="Not enough historical data for the selected period", template=THEME['chart_template'])

@@ -431,7 +431,6 @@ class BondOption(BaseOption):
                 mod_dur = metrics['modified_duration']
                 price_vol = mod_dur * yield_vol  # relative price vol
                 abs_price_vol = metrics['clean'] * mod_dur * yield_vol  # absolute price vol
-                print(f"[DEBUG] Yield vol: {yield_vol:.6f} ({yield_vol*10000:.2f} bps), ModDur: {mod_dur:.4f}, Rel price vol: {price_vol:.6f}, Abs price vol: {abs_price_vol:.4f}")
                 volatility = abs_price_vol
             else:
                 # Price strike: use price volatility

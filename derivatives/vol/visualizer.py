@@ -648,9 +648,7 @@ class VolatilityVisualizer:
         }}
         
         function runAnalysis() {{
-            console.log('[DEBUG] runAnalysis function called!');
             const ticker = document.getElementById('ticker-select').value;
-            console.log('[DEBUG] ticker:', ticker);
             const loader = document.getElementById('loader');
             const status = document.getElementById('status');
             const startedAt = new Date();

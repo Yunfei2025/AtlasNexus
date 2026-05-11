@@ -196,9 +196,9 @@ def updateInstrumentDef():
             else:
                 from curves.utils.generator_utils import get_mtime_date
                 def_file = DIR_INPUT / (btype + "-InstrumentInfo.pkl")
-                interval = dp.date() - get_mtime_date(def_file)
+                interval = get_mtime_date(def_file) - dp.date()
 
-                if interval.days == 5: # update the pool every 5 days
+                if interval.days == 10: # update the pool every 5 days
                     pool = updateInstrumentPool(btype, dps)
                     bonds = pool.index
                 else:

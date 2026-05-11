@@ -344,9 +344,7 @@ def run_risk_parity_allocation(total_capital: float = 10_000_000_000,
                  factor exposures DataFrame, factor risk contributions DataFrame,
                  Portfolio object)
     """
-    print(f"[DEBUG] Starting run_risk_parity_allocation with {len(selected_assets) if selected_assets else 0} assets")
     if selected_assets and len(selected_assets) > 0:
-        print(f"[DEBUG] Creating custom portfolio for: {selected_assets}")
         portfolio = create_custom_portfolio(
             selected_assets,
             use_cache=use_cache,
@@ -354,20 +352,15 @@ def run_risk_parity_allocation(total_capital: float = 10_000_000_000,
             hedge_asset_names=hedge_asset_names,
         )
     else:
-        print("[DEBUG] Creating default portfolio")
         portfolio = create_default_portfolio(use_cache=use_cache, use_deterministic=use_deterministic)
 
-    print(f"[DEBUG] Portfolio created with {len(portfolio.assets)} assets")
-    print("[DEBUG] Creating optimizer...")
     optimizer = FactorRiskParityOptimizer(portfolio=portfolio, input_dir=str(DIR_INPUT))
 
-    print("[DEBUG] Running optimization...")
     summary, asset_returns, volatilities, factor_exposures, factor_risk_contributions = optimizer.optimize(
         total_capital, use_cache=use_cache, risk_budgets=risk_budgets,
         hedge_asset_names=hedge_asset_names,
     )
 
-    print("[DEBUG] Optimization complete")
     optimizer.print_summary(summary, total_capital, factor_exposures, factor_risk_contributions)
 
     return summary, asset_returns, volatilities, factor_exposures, factor_risk_contributions, portfolio
