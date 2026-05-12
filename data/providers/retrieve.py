@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+
 """
 Created on Mon Sep 18 22:47:31 2023
 
@@ -8,6 +10,7 @@ import pandas as pd
 import pickle
 import threading
 import datetime as dt
+import logging
 import numpy as np
 from typing import Optional
 from settings.general import DateConfig, TradingHoursConfig
@@ -17,6 +20,7 @@ from factors.config import config_manager
 # Localized new-config convenience variables
 _dates = DateConfig.get_date_mappings()
 _date_strs = DateConfig.get_date_strings()
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Wind connectivity — single startup probe with timeout
@@ -92,14 +96,15 @@ def _wsq_single_call(codes, fields) -> pd.DataFrame:
     t.join(timeout=WSQ_CALL_TIMEOUT)
 
     if t.is_alive():
-        print(
-            f"[Wind] wsq timeout after {WSQ_CALL_TIMEOUT:.0f}s "
-            f"for {len(template.index)} codes; returning NaN frame."
+        logger.warning(
+            "[Wind] wsq timeout after %ss for %d codes; returning NaN frame.",
+            f"{WSQ_CALL_TIMEOUT:.0f}",
+            len(template.index),
         )
         return template
 
     if exc_holder[0] is not None:
-        print('Wind wsq error:', exc_holder[0])
+        logger.warning("Wind wsq error: %s", exc_holder[0])
         return template
 
     result = result_holder[0]
@@ -126,7 +131,7 @@ def _ensure_wind() -> bool:
         return True
     except Exception as e:
         _WIND_AVAILABLE = False
-        print(f"[Wind] Failed to start: {e} — running in offline mode.")
+        logger.warning("[Wind] Failed to start: %s — running in offline mode.", e)
         return False
 
 
@@ -142,7 +147,7 @@ def reset_wind_connection():
         _WIND_AVAILABLE = True
     except Exception as e:
         _WIND_AVAILABLE = False
-        print(f"[Wind] Failed to restart: {e}")
+        logger.warning("[Wind] Failed to restart: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +162,7 @@ def _wind_call(func_name: str, *args) -> pd.DataFrame:
         result = getattr(w, func_name)(*args, usedf=True)[1]
         return _normalize_wind_frame(result)
     except Exception as ex:
-        print(f'Wind {func_name} error:', ex)
+        logger.warning("Wind %s error: %s", func_name, ex)
         return pd.DataFrame()
 
 
@@ -192,7 +197,7 @@ def _wsq(codes, fields):
     chunks = [code_list[i:i + WSQ_CHUNK_SIZE] for i in range(0, len(code_list), WSQ_CHUNK_SIZE)]
     frames = []
     for i, chunk in enumerate(chunks, 1):
-        print(f"[Wind] wsq chunk {i}/{len(chunks)}: {len(chunk)} codes")
+        logger.debug("[Wind] wsq chunk %d/%d: %d codes", i, len(chunks), len(chunk))
         frames.append(_wsq_single_call(chunk, fields))
     return pd.concat(frames, axis=0) if frames else _empty_wsq_frame(code_list, fields)
 
@@ -240,7 +245,7 @@ def fetch_wind_data_day(symbol):
     pd.DataFrame: OHLCV data with datetime index
     """
     if config_manager is None:
-        print('Wind day data fetch skipped: config_manager not available')
+        logger.debug('Wind day data fetch skipped: config_manager not available')
         return pd.DataFrame()
     data = _wsd(
         symbol,
@@ -269,7 +274,7 @@ def fetch_wind_data_bar(symbol):
     pd.DataFrame: OHLCV data with datetime index
     """
     if config_manager is None:
-        print('Wind bar data fetch skipped: config_manager not available')
+        logger.debug('Wind bar data fetch skipped: config_manager not available')
         return pd.DataFrame()
     data = _wsi(
         symbol,
@@ -299,7 +304,7 @@ def fetch_interest_rate(symbol):
     """
 
     if config_manager is None:
-        print('Interest rate fetch skipped: config_manager not available')
+        logger.debug('Interest rate fetch skipped: config_manager not available')
         return pd.DataFrame()
     data = _wsi(
         config_manager.date_config.interest_rate_symbols,

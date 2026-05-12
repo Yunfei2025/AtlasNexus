@@ -57,22 +57,34 @@ def updatePKL(dictn, file_path, rewrite=False):
             def _update_dataframe(target_df, new_df):
                 if target_df is None or not isinstance(target_df, pd.DataFrame):
                     target_df = pd.DataFrame()
-                # Ensure both index and columns cover the union before assignment
-                union_idx = target_df.index.union(new_df.index)
-                union_cols = target_df.columns.union(new_df.columns)
-                target_df = target_df.reindex(index=union_idx, columns=union_cols)
-                target_df.loc[new_df.index, new_df.columns] = new_df
-                target_df = target_df.sort_index().ffill().dropna(axis=0, how="all")
-                return target_df
+                target_df = target_df.copy()
+                new_df = new_df.copy()
+
+                if not target_df.index.is_unique:
+                    target_df = target_df[~target_df.index.duplicated(keep='last')]
+                if not target_df.columns.is_unique:
+                    target_df = target_df.loc[:, ~target_df.columns.duplicated(keep='last')]
+                if not new_df.index.is_unique:
+                    new_df = new_df[~new_df.index.duplicated(keep='last')]
+                if not new_df.columns.is_unique:
+                    new_df = new_df.loc[:, ~new_df.columns.duplicated(keep='last')]
+
+                combined = new_df.combine_first(target_df)
+                combined = combined.sort_index().ffill().dropna(axis=0, how="all")
+                return combined
 
             def _update_series(target_ser, new_ser):
                 if target_ser is None or not isinstance(target_ser, pd.Series):
                     target_ser = pd.Series(dtype=float)
-                union_idx = target_ser.index.union(new_ser.index)
-                target_ser = target_ser.reindex(union_idx)
-                target_ser.loc[new_ser.index] = new_ser
-                target_ser = target_ser.sort_index().dropna(axis=0, how="all")
-                return target_ser
+                target_ser = target_ser.copy()
+                new_ser = new_ser.copy()
+                if not target_ser.index.is_unique:
+                    target_ser = target_ser[~target_ser.index.duplicated(keep='last')]
+                if not new_ser.index.is_unique:
+                    new_ser = new_ser[~new_ser.index.duplicated(keep='last')]
+                combined = new_ser.combine_first(target_ser)
+                combined = combined.sort_index().dropna(axis=0, how="all")
+                return combined
 
             def _update_value(target_val, new_val):
                 # For strings or scalars, prefer new value

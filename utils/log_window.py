@@ -197,7 +197,24 @@ _gui_window = None
 _creator_pid = None  # PID of the process that created the GUI
 
 
-def setup_logging(show_window: bool = True, level: int = logging.INFO):
+def _coerce_log_level(value, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return default
+        if text.isdigit():
+            return int(text)
+        resolved = getattr(logging, text.upper(), None)
+        if isinstance(resolved, int):
+            return resolved
+    return default
+
+
+def setup_logging(show_window: bool = True, level: Optional[int] = None):
     """
     Configure root logging with console + GUI, and redirect print to logger.
     Uses singleton pattern to ensure only one log window is created.
@@ -207,6 +224,9 @@ def setup_logging(show_window: bool = True, level: int = logging.INFO):
     global _logging_initialized, _gui_window, _creator_pid
     
     logger = logging.getLogger()
+    resolved_level = _coerce_log_level(level, _coerce_log_level(os.environ.get("FI_LOG_LEVEL"), logging.WARNING))
+    stdout_level = _coerce_log_level(os.environ.get("FI_STDOUT_LOG_LEVEL"), logging.DEBUG)
+    stderr_level = _coerce_log_level(os.environ.get("FI_STDERR_LOG_LEVEL"), logging.ERROR)
     
     # If already initialized, just return the existing setup
     if _logging_initialized:
@@ -219,7 +239,7 @@ def setup_logging(show_window: bool = True, level: int = logging.INFO):
                 pass
         return logger, _gui_window
     
-    logger.setLevel(level)
+    logger.setLevel(resolved_level)
 
     # Clear any existing handlers to prevent conflicts
     for handler in logger.handlers[:]:
@@ -227,7 +247,7 @@ def setup_logging(show_window: bool = True, level: int = logging.INFO):
 
     # Add console handler with immediate flushing
     console = logging.StreamHandler()
-    console.setLevel(level)
+    console.setLevel(resolved_level)
     console.flush_on_emit = True  # Flush after each log message
     formatter = logging.Formatter("%(levelname)s: %(message)s")
     console.setFormatter(formatter)
@@ -270,21 +290,21 @@ def setup_logging(show_window: bool = True, level: int = logging.INFO):
                 os.makedirs(logs_dir, exist_ok=True)
                 log_file = os.path.join(logs_dir, 'app.log')
                 file_handler = logging.FileHandler(log_file, encoding='utf-8')
-                file_handler.setLevel(level)
+                file_handler.setLevel(resolved_level)
                 file_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
                 logger.addHandler(file_handler)
-                logger.info(f"Log file: {log_file}")
+                logger.debug("Log file: %s", log_file)
             except Exception as e:
                 logger.warning(f"Could not set up file logging: {e}")
 
             # Redirect stdout/stderr on macOS too so print() is captured
             import sys as _sys
-            _sys.stdout = _BufferedRedirect(logger, logging.INFO)  # type: ignore
-            _sys.stderr = _BufferedRedirect(logger, logging.ERROR)  # type: ignore
+            _sys.stdout = _BufferedRedirect(logger, stdout_level)  # type: ignore
+            _sys.stderr = _BufferedRedirect(logger, stderr_level)  # type: ignore
         else:
             log_q: queue.Queue[str] = queue.Queue(maxsize=10000)
             gui_handler = QueueHandler(log_q)
-            gui_handler.setLevel(level)
+            gui_handler.setLevel(resolved_level)
             gui_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
             logger.addHandler(gui_handler)
 
@@ -294,11 +314,11 @@ def setup_logging(show_window: bool = True, level: int = logging.INFO):
 
             # Redirect stdout/stderr so print() also goes through logger
             import sys as _sys
-            _sys.stdout = _BufferedRedirect(logger, logging.INFO)  # type: ignore
-            _sys.stderr = _BufferedRedirect(logger, logging.ERROR)  # type: ignore
+            _sys.stdout = _BufferedRedirect(logger, stdout_level)  # type: ignore
+            _sys.stderr = _BufferedRedirect(logger, stderr_level)  # type: ignore
 
             # Small banner so the window isn't empty
-            logger.info("Log window started at %s", time.strftime('%H:%M:%S'))
+            logger.debug("Log window started at %s", time.strftime('%H:%M:%S'))
     else:
         # If Tk isn't available, or not main process, still ensure console logging works
         if tk is None:

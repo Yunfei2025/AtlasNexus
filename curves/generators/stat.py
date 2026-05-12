@@ -185,7 +185,7 @@ class StatGenerator:
             if df_.shape[0] > 0:
                 anchor[k] = df_.index[0]
 
-        bond_ts = self.df_act_tbond.loc[self.start:]
+        bond_ts = self.df_act_tbond.loc[self.start:].apply(pd.to_numeric, errors='coerce')
         spreads_bi: dict[str, pd.DataFrame] = {}
         # Term spreads (10Y-5Y, 30Y-10Y)
         term_cols = list(anchor.values())
@@ -195,7 +195,8 @@ class StatGenerator:
         # Bucketed spreads vs anchor
         for k in self.bond_groups.keys():
             t = k[-2:] if '5' in k else k[-3:]
-            spreads_bi[k] = self.bond_groups[k].sub(bond_ts[anchor[t]], axis=0)
+            group_df = self.bond_groups[k].apply(pd.to_numeric, errors='coerce')
+            spreads_bi[k] = group_df.sub(bond_ts[anchor[t]], axis=0)
 
         spreads_b = pd.concat(spreads_bi, axis=1).droplevel(0, axis=1).sort_index()
         spreads_b.drop(columns=list(anchor.values()), inplace=True, errors='ignore')
@@ -320,9 +321,9 @@ class StatGenerator:
         self.compute_bond_and_swap_spreads()
         self.compute_irs_spreads()
         self.compute_other_bond_spreads()
-        # self.compute_spread_regression()
+        self.compute_spread_regression()
         self.compute_pca_spreads()
-        self.compute_futures_stats()
+        # self.compute_futures_stats()
         print('\nFinish initialising statistics at：', datetime.datetime.now().strftime('%H:%M:%S'))
 
     @classmethod

@@ -234,7 +234,6 @@ class IRSRefresher:
 			self.today_date, self.quote_rate, self.forward_data_adjusted, GeneralConfig.PSHIFT)
 		# Extract adjusted fix rates
 		self.cv_irs_adjusted = self.contracts_adjusted['value'].loc[IRSConfig.IRS_LIST, 'FixRate'].to_frame().T
-		# import pdb; pdb.set_trace()
 		# Calculate spreads for adjusted curves
 		self.cv_spreads_adjusted = irs.irsSpreads(self.cv_irs_adjusted)
 		logger.info("Completed pricing with shift adjustments")

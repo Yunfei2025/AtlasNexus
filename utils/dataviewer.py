@@ -20,6 +20,25 @@ sys.path.insert(0, str(project_root))
 
 from settings.paths import DIR_DATA, DIR_INPUT
 
+
+def preview_object(obj, *, max_rows: int = 20, max_cols: int = 12) -> str:
+  if isinstance(obj, pd.DataFrame):
+    with pd.option_context(
+      'display.max_rows', max_rows,
+      'display.max_columns', max_cols,
+      'display.width', 200,
+    ):
+      return obj.to_string()
+  if isinstance(obj, pd.Series):
+    with pd.option_context('display.max_rows', max_rows, 'display.width', 200):
+      return obj.to_string()
+  if isinstance(obj, dict):
+    keys = list(obj.keys())
+    preview_keys = keys[:max_rows]
+    suffix = '' if len(keys) <= max_rows else f" ... (+{len(keys) - max_rows} more)"
+    return f"dict[{len(keys)}]: {preview_keys}{suffix}"
+  return repr(obj)
+
 #%%
 if __name__ == "__main__":
     # Example usage when run directly
@@ -67,3 +86,5 @@ if __name__ == "__main__":
     bond = '092302002.IB'
     data = pd.read_pickle(file_path)
     bond_data = data.loc[bond].dropna()
+
+    print(preview_object(bond_data))
