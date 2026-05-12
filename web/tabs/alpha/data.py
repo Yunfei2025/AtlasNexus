@@ -313,6 +313,7 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
             spd = data.get('BondCurve', {}).get('Spread')
             if isinstance(spd, pd.DataFrame) and not spd.empty:
                 return spd.apply(pd.to_numeric, errors='coerce') * 100.0
+
         return None
 
     if spread_type == 'SwapSpread':
@@ -320,7 +321,7 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         if isinstance(data, dict):
             cr = data.get('CarryRoll3m')
             if isinstance(cr, pd.DataFrame) and not cr.empty:
-                return cr.apply(pd.to_numeric, errors='coerce')
+                return cr.apply(pd.to_numeric, errors='coerce') * 100.0
         return None
 
     return None

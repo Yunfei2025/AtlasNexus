@@ -594,7 +594,13 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     _raw_score = results.get('norm_mom_ts') if is_trend else (_composite if _composite is not None else results.get('zscore_ts'))
     if _raw_score is not None and len(_raw_score.dropna()) > 0:
         score_ts_display = _raw_score.dropna()
-        score_label = 'Norm Momentum (σ)' if is_trend else ('Carry-Adj Z (120d)' if _composite is not None else 'Z-Score (120d)')
+        if is_trend:
+            score_label = 'Norm Momentum (σ)'
+        else:
+            if _composite is not None:
+                score_label = 'Composite Signal (Z - Carry) (120d)'
+            else:
+                score_label = 'Z-Score (120d)'
 
         signal_fig = go.Figure()
 
@@ -645,13 +651,14 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             if len(loss_x) > 0:
                 signal_fig.add_trace(go.Scatter(x=loss_x['exit_date'], y=_score_at(loss_x, 'exit_date'), mode='markers', marker=dict(symbol='x', size=8, color=THEME['danger'], opacity=0.8), showlegend=False))
 
+        yaxis_label = 'Norm Mom (σ)' if is_trend else ('Composite Signal' if _composite is not None else 'Z-Score')
         signal_fig.update_layout(
             title=f'Score History ({score_label})', height=230,
             margin=dict(l=50, r=20, t=40, b=40),
             plot_bgcolor=THEME['bg_main'], paper_bgcolor=THEME['bg_main'],
             font=dict(color=THEME['text_main']),
             xaxis=dict(gridcolor=THEME['bg_card'], tickformat='%b\n%Y', hoverformat='%Y-%m-%d', **_xaxis_range),
-            yaxis=dict(title='Norm Mom (σ)' if is_trend else 'Z-Score', gridcolor=THEME['bg_card']),
+            yaxis=dict(title=yaxis_label, gridcolor=THEME['bg_card']),
             showlegend=False,
         )
         score_div = html.Div([dcc.Graph(figure=signal_fig, style={'height': '230px'})], style={'marginBottom': '15px'})
