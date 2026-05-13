@@ -299,6 +299,137 @@ def _load_windrt_cache(btype: str):
         return None
 
 
+def _normalize_bondrt_frame(env, bond_rt, btype: str) -> pd.DataFrame:
+    """Return a bond RT frame with stable bid/offer yield columns.
+
+    Wind/cache payloads can arrive with older English column names, a single-sided
+    quote, or no RT columns at all. Downstream refreshers expect both `买价收益率`
+    and `卖价收益率`, so synthesize them here using aliases and CNBD fallback.
+    """
+    fallback = env['Def']['估价收益率:%(中债)']
+
+    if not isinstance(bond_rt, pd.DataFrame):
+        bond_rt = pd.DataFrame(index=fallback.index)
+    else:
+        bond_rt = bond_rt.copy()
+
+    if bond_rt.index.name != fallback.index.name:
+        bond_rt.index.name = fallback.index.name
+
+    aliases = {
+        '买价收益率': ['买价收益率', 'Bid', 'RT_BID1', 'RT_BID_PRICE1YTM'],
+        '卖价收益率': ['卖价收益率', 'Ofr', 'RT_ASK1', 'RT_ASK_PRICE1YTM'],
+        '成交收益率': ['成交收益率', 'RT_LAST_YTM'],
+    }
+
+    normalized = pd.DataFrame(index=fallback.index)
+    for target, candidates in aliases.items():
+        series = None
+        for candidate in candidates:
+            if candidate in bond_rt.columns:
+                extracted = bond_rt[candidate]
+                if isinstance(extracted, pd.DataFrame):
+                    extracted = extracted.iloc[:, 0]
+                series = pd.to_numeric(extracted, errors='coerce').reindex(fallback.index)
+                break
+        if series is not None:
+            normalized[target] = series
+
+    if '买价收益率' not in normalized.columns and '卖价收益率' in normalized.columns:
+        normalized['买价收益率'] = normalized['卖价收益率']
+    if '卖价收益率' not in normalized.columns and '买价收益率' in normalized.columns:
+        normalized['卖价收益率'] = normalized['买价收益率']
+
+    for col in ['买价收益率', '卖价收益率']:
+        if col not in normalized.columns:
+            normalized[col] = fallback
+        else:
+            normalized[col] = normalized[col].fillna(fallback)
+
+    if '成交收益率' not in normalized.columns:
+        normalized['成交收益率'] = (normalized['买价收益率'] + normalized['卖价收益率']) / 2
+    else:
+        normalized['成交收益率'] = normalized['成交收益率'].fillna(
+            (normalized['买价收益率'] + normalized['卖价收益率']) / 2
+        )
+
+    logger.info(
+        "BondRT normalized for %s with columns: %s",
+        btype,
+        ', '.join(normalized.columns.astype(str))
+    )
+    return normalized
+
+
+def _rename_rt_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Rename Wind RT columns to stable internal names.
+
+    Wind live calls and offline placeholder frames can differ only by case
+    (`RT_BID_PRICE1YTM` vs `rt_bid_price1ytm`). Support both so callers never
+    crash on a simple field-name mismatch.
+    """
+    col_map = BondConfig.get_column_mapping()
+    rename_map = {}
+    for column in frame.columns:
+        mapped = col_map.get(column)
+        if mapped is None and isinstance(column, str):
+            mapped = col_map.get(column.upper())
+        rename_map[column] = mapped or column
+    return frame.rename(columns=rename_map)
+
+
+def _normalize_swaprt_frame(swap_rt) -> pd.DataFrame:
+    """Return a swap RT frame with stable bid/offer/trade yield columns."""
+    expected_index = pd.Index(list(dict.fromkeys(IRSConfig.FIXING_LIST + IRSConfig.IRS_LIST)), dtype=object)
+
+    if not isinstance(swap_rt, pd.DataFrame):
+        swap_rt = pd.DataFrame(index=expected_index)
+    else:
+        swap_rt = swap_rt.copy()
+
+    swap_rt = _rename_rt_columns(swap_rt)
+    swap_rt = swap_rt.reindex(expected_index)
+
+    aliases = {
+        '买价收益率': ['买价收益率', 'Bid'],
+        '卖价收益率': ['卖价收益率', 'Ofr'],
+        '成交收益率': ['成交收益率'],
+    }
+
+    normalized = pd.DataFrame(index=expected_index)
+    for target, candidates in aliases.items():
+        for candidate in candidates:
+            if candidate in swap_rt.columns:
+                normalized[target] = pd.to_numeric(swap_rt[candidate], errors='coerce').reindex(expected_index)
+                break
+
+    if '成交收益率' not in normalized.columns:
+        normalized['成交收益率'] = np.nan
+    if '买价收益率' not in normalized.columns and '成交收益率' in normalized.columns:
+        normalized['买价收益率'] = normalized['成交收益率']
+    if '卖价收益率' not in normalized.columns and '成交收益率' in normalized.columns:
+        normalized['卖价收益率'] = normalized['成交收益率']
+
+    if '买价收益率' not in normalized.columns:
+        normalized['买价收益率'] = np.nan
+    if '卖价收益率' not in normalized.columns:
+        normalized['卖价收益率'] = np.nan
+
+    normalized['买价收益率'] = normalized['买价收益率'].fillna(normalized['卖价收益率'])
+    normalized['卖价收益率'] = normalized['卖价收益率'].fillna(normalized['买价收益率'])
+
+    mid = (normalized['买价收益率'] + normalized['卖价收益率']) / 2
+    normalized['成交收益率'] = normalized['成交收益率'].fillna(mid)
+    normalized['买价收益率'] = normalized['买价收益率'].fillna(normalized['成交收益率'])
+    normalized['卖价收益率'] = normalized['卖价收益率'].fillna(normalized['成交收益率'])
+
+    logger.info(
+        "SwapRT normalized with columns: %s",
+        ', '.join(normalized.columns.astype(str))
+    )
+    return normalized
+
+
 def retrieveWindRT(btype):
     logger.info("Fetching Wind real-time data for %s...", btype)
     with open(os.path.join(DIR_INPUT,btype+'-InstrumentInfo.pkl'), 'rb') as file:
@@ -320,8 +451,7 @@ def retrieveWindRT(btype):
 
     if btype != 'futures':
         assert isinstance(bond_rt, pd.DataFrame)
-        col_map_rt = BondConfig.get_column_mapping()
-        bond_rt.columns = [ col_map_rt[c] for c in bond_rt.columns]
+        bond_rt = _rename_rt_columns(bond_rt)
         bond_rt = bond_rt.replace(0,np.nan)
     _save_windrt_cache(btype, bond_rt)
     n = len(bond_rt) if isinstance(bond_rt, pd.DataFrame) else sum(len(v) for v in bond_rt.values())
@@ -341,28 +471,36 @@ def retrieveEnvRT(env,btype):
         if online:
             bond_rt = retrieveWindRT(btype)
             if bond_rt is not None and not bond_rt.empty:
-                env['BondRT'] = bond_rt
+                env['BondRT'] = _normalize_bondrt_frame(env, bond_rt, btype)
                 logger.info("BondRT source: Wind live data (%d bonds)", len(bond_rt))
             else:
                 logger.warning("Wind returned empty data for %s — falling back to cache.", btype)
                 cached = _load_windrt_cache(btype)
                 if cached is not None:
-                    env['BondRT'] = cached
+                    env['BondRT'] = _normalize_bondrt_frame(env, cached, btype)
                     logger.info("BondRT source: cache (windrt.pkl) for %s", btype)
                 else:
                     cnbd = env['Def']['估价收益率:%(中债)']
                     logger.warning("No cache for %s — using CNBD yields as fallback.", btype)
-                    env['BondRT'] = pd.DataFrame({'买价收益率': cnbd, '卖价收益率': cnbd})
+                    env['BondRT'] = _normalize_bondrt_frame(
+                        env,
+                        pd.DataFrame({'买价收益率': cnbd, '卖价收益率': cnbd}),
+                        btype,
+                    )
         else:
             logger.info("Outside trading hours — loading windrt.pkl for %s.", btype)
             cached = _load_windrt_cache(btype)
             if cached is not None:
-                env['BondRT'] = cached
+                env['BondRT'] = _normalize_bondrt_frame(env, cached, btype)
                 logger.info("BondRT source: cache (windrt.pkl) for %s", btype)
             else:
                 cnbd = env['Def']['估价收益率:%(中债)']
                 logger.warning("No cache for %s — using CNBD yields as fallback.", btype)
-                env['BondRT'] = pd.DataFrame({'买价收益率': cnbd, '卖价收益率': cnbd})
+                env['BondRT'] = _normalize_bondrt_frame(
+                    env,
+                    pd.DataFrame({'买价收益率': cnbd, '卖价收益率': cnbd}),
+                    btype,
+                )
 
         # Use CNBD price as fallback for NaN values or values very close to 0
         fallback_count = 0
@@ -378,20 +516,22 @@ def retrieveEnvRT(env,btype):
             logger.info("CNBD fallback applied to %d price entries for %s.", fallback_count, btype)
 
         if online:
-            env['SwapRT'] = retrieveWindRT('IRS')
+            env['SwapRT'] = _normalize_swaprt_frame(retrieveWindRT('IRS'))
             if btype in ['TBond','CBond']:
                 fixings = ['FR001.IR','FR007.IR','SHIBOR3M.IR']
-                for c in ['买价收益率','卖价收益率']:
-                    fs = env['SwapRT'].loc[fixings,'成交收益率']
-                    env['SwapRT'].loc[fixings,c]=fs.values
+                available_fixings = [ticker for ticker in fixings if ticker in env['SwapRT'].index]
+                if available_fixings and '成交收益率' in env['SwapRT'].columns:
+                    fs = env['SwapRT'].loc[available_fixings, '成交收益率']
+                    for c in ['买价收益率', '卖价收益率']:
+                        env['SwapRT'].loc[available_fixings, c] = fs.values
         else:
             cached_irs = _load_windrt_cache('IRS')
             if cached_irs is not None:
-                env['SwapRT'] = cached_irs
+                env['SwapRT'] = _normalize_swaprt_frame(cached_irs)
                 logger.info("SwapRT source: cache (windrt.pkl)")
             else:
                 logger.warning("No IRS cache found — SwapRT will be empty.")
-                env['SwapRT'] = pd.DataFrame()
+                env['SwapRT'] = _normalize_swaprt_frame(pd.DataFrame())
     return env
 
 

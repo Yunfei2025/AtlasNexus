@@ -118,14 +118,14 @@ class Backtestor:
         print(f"Initializing curves for {self.btype}...")
         
         if self.btype in ['TBond', 'CBond', 'IRS']:
-            # Use parallel implementation for curve initialization
-            print(f"Using parallel curve initialization for {self.btype}")
             manager = CurveManager(self.btype)
             
             # Add parallel processing to curve initialization
             if not self.serial and self.processes > 1 and len(prange) > 10:
+                print(f"Using parallel curve initialization for {self.btype}")
                 dict_curve = self._parallel_initialize_curves(manager, env, prange)
             else:
+                print(f"Using serial curve initialization for {self.btype}")
                 dict_curve = manager.initialize_curves(env, prange)
                 
             if self.btype != 'IRS':

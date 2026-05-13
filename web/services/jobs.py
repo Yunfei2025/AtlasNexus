@@ -271,10 +271,14 @@ def start_engine_job(*, argv: list[str]) -> JobInfo:
 
     # Start subprocess, redirect stdout/stderr to log file.
     log_f = log_path.open("w", encoding="utf-8")
+    child_env = os.environ.copy()
+    child_env.setdefault("FI_SHOW_LOG_WINDOW", "0")
+    child_env.setdefault("PYTHONUNBUFFERED", "1")
     try:
         p = subprocess.Popen(
             cmd,
             cwd=str(root),
+            env=child_env,
             stdout=log_f,
             stderr=subprocess.STDOUT,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform.startswith("win") else 0,

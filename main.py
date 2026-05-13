@@ -4,16 +4,40 @@
 Main entry point for FIEngine - Financial Engineering Platform
 """
 
+import os
 import sys
 import logging
 import argparse
 import socket
+import multiprocessing as mp
 from datetime import datetime
 from pathlib import Path
 
-# Make stdout/stderr unbuffered for immediate log output on all platforms
-sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf8', buffering=1)
-sys.stderr = open(sys.stderr.fileno(), mode='w', encoding='utf8', buffering=1)
+def _configure_stdio() -> None:
+    """Best-effort unbuffered text stdio for immediate log output."""
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        try:
+            fileno = stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            continue
+        try:
+            setattr(sys, name, open(fileno, mode='w', encoding='utf8', buffering=1, closefd=False))
+        except OSError:
+            continue
+
+
+def _should_show_log_window(argv: list[str]) -> bool:
+    """Return whether the Tk log window should be shown for this process."""
+    env_override = os.environ.get("FI_SHOW_LOG_WINDOW")
+    if env_override is not None:
+        return env_override.strip().lower() in {"1", "true", "yes", "on"}
+
+    cmd = argv[0] if argv else None
+    return cmd in {None, "daily-web", "intraday-web"}
+
+
+_configure_stdio()
 
 # Add project root to Python path
 project_root = Path(__file__).parent
@@ -228,13 +252,23 @@ def main():
 
     if args.cmd == "curve-backtest":
         from curves.backtest.backtestor import Backtestor
+        windows_parallel_disabled = (
+            sys.platform.startswith("win")
+            and args.processes > 1
+            and os.environ.get("FI_ENABLE_WINDOWS_CURVE_MP", "0") != "1"
+        )
+        if windows_parallel_disabled:
+            logger.warning(
+                "Curve backtest multiprocessing is disabled on Windows for stability; "
+                "falling back to serial execution. Set FI_ENABLE_WINDOWS_CURVE_MP=1 to override."
+            )
         bt = Backtestor(
             btype=args.btype,
             start=args.start,
             end=args.end,
             update_list=args.update_list or ["pool"],
             processes=args.processes,
-            serial=False,
+            serial=windows_parallel_disabled,
         )
         bt.run()
         return
@@ -246,8 +280,9 @@ if __name__ == "__main__":
     # Configure logging and show live log window only in the main process
     try:
         from utils.log_window import setup_logging, get_logger
+        mp.freeze_support()
         # Ensure only the main process creates the GUI log window
-        setup_logging(show_window=True)
+        setup_logging(show_window=_should_show_log_window(sys.argv[1:]))
         logger = get_logger(__name__)
     except Exception:
         # Fallback: continue without GUI logging
