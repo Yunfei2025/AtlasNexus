@@ -115,6 +115,24 @@ def _exclude_swapspread_butterflies(labels: pd.Index | pd.Series):
     return ~text.str.match(_SWAP_SPREAD_BUTTERFLY_PATTERN)
 
 
+def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
+    """Build tenor spread time series from CNBD key-rate history."""
+    if not isinstance(cnbd_data, dict) or 'CGB' not in cnbd_data or 'CDB' not in cnbd_data:
+        return {}
+    try:
+        return {
+            'CGB-5s10s': cnbd_data['CGB']['中债国债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
+            'CGB-10s30s': cnbd_data['CGB']['中债国债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
+            'CDB-5s10s': cnbd_data['CDB']['中债国开债到期收益率:10年'] - cnbd_data['CDB']['中债国开债到期收益率:5年'],
+            'CDB-10s30s': cnbd_data['CDB']['中债国开债到期收益率:30年'] - cnbd_data['CDB']['中债国开债到期收益率:10年'],
+            'CDBCGB-5y': cnbd_data['CDB']['中债国开债到期收益率:5年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
+            'CDBCGB-10y': cnbd_data['CDB']['中债国开债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
+            'CDBCGB-30y': cnbd_data['CDB']['中债国开债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:30年'],
+        }
+    except Exception:
+        return {}
+
+
 # ---------------------------------------------------------------------------
 # Data Loading Utilities
 # ---------------------------------------------------------------------------
@@ -182,6 +200,22 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
             df = df[~df.index.astype(str).str.endswith('.IR')].copy()
             df = df[_exclude_swapspread_butterflies(df.index)].copy()
             return df
+        return None
+
+    elif spread_type == 'TenorSpread':
+        try:
+            from curves.utils.loader import loadCNBDTS
+            tenor_ts = _build_tenor_spread_timeseries(loadCNBDTS())
+            if tenor_ts:
+                df = pd.DataFrame({
+                    'spread': {name: pd.to_numeric(series, errors='coerce').dropna().iloc[-1]
+                               for name, series in tenor_ts.items()
+                               if isinstance(series, pd.Series) and not pd.to_numeric(series, errors='coerce').dropna().empty}
+                })
+                if not df.empty:
+                    return df
+        except Exception:
+            pass
         return None
 
     elif spread_type == 'NetBasis':
@@ -393,6 +427,28 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                 df_spread = df_spread.loc[:, ~cols.str.endswith('.IR')].copy()
                 df_spread = df_spread.loc[:, _exclude_swapspread_butterflies(pd.Index(df_spread.columns))].copy()
                 return df_spread
+        return None
+
+    elif spread_type == 'TenorSpread':
+        # Try lightweight loader first (may omit CDB); if incomplete, read database-px.pkl directly
+        try:
+            from curves.utils.loader import loadCNBDTS
+            env = loadCNBDTS()
+            tenor_ts = _build_tenor_spread_timeseries(env)
+            if tenor_ts:
+                return pd.DataFrame(tenor_ts)
+        except Exception:
+            pass
+
+        try:
+            db_path = dir_input / 'database-px.pkl'
+            if db_path.exists():
+                db = pd.read_pickle(db_path)
+                tenor_ts = _build_tenor_spread_timeseries(db)
+                if tenor_ts:
+                    return pd.DataFrame(tenor_ts)
+        except Exception:
+            pass
         return None
 
     return None

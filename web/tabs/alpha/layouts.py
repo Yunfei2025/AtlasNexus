@@ -10,6 +10,19 @@ from dash import dcc, html, dash_table
 from .data import THEME, SPREAD_CATEGORIES
 
 
+_BACKTEST_SPREAD_TYPE_OPTIONS = [
+    {'label': 'Bond-Curve (Treasury)', 'value': 'TBondCurve'},
+    {'label': 'Bond-Curve (Policybank)', 'value': 'CBondCurve'},
+    {'label': 'Bond-Swap (Treasury)', 'value': 'TBondSwap'},
+    {'label': 'Bond-Swap (Policybank)', 'value': 'CBondSwap'},
+    {'label': 'Swap Spread', 'value': 'SwapSpread'},
+    {'label': 'Tenor Spreads', 'value': 'TenorSpread'},
+    {'label': 'Net Basis (Futures)', 'value': 'NetBasis'},
+    {'label': 'Term Basis (Futures)', 'value': 'TermBasis'},
+    {'label': 'PCA Spread', 'value': 'PCASpread'},
+]
+
+
 def build_diversified_trades_display(trades: List[Dict]) -> html.Div:
     """Build display for diversification suggestions."""
     if not trades or len(trades) == 0:
@@ -387,16 +400,7 @@ def build_individual_backtest_panel() -> html.Div:
                     html.Label("Spread Type:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginBottom': '5px', 'display': 'block'}),
                     dcc.Dropdown(
                         id='bt-spread-type',
-                        options=[
-                            {'label': 'Bond-Curve (Treasury)', 'value': 'TBondCurve'},
-                            {'label': 'Bond-Curve (Policybank)', 'value': 'CBondCurve'},
-                            {'label': 'Bond-Swap (Treasury)', 'value': 'TBondSwap'},
-                            {'label': 'Bond-Swap (Policybank)', 'value': 'CBondSwap'},
-                            {'label': 'Swap Spread', 'value': 'SwapSpread'},
-                            {'label': 'Net Basis (Futures)', 'value': 'NetBasis'},
-                            {'label': 'Term Basis (Futures)', 'value': 'TermBasis'},
-                            {'label': 'PCA Spread', 'value': 'PCASpread'},
-                        ],
+                        options=_BACKTEST_SPREAD_TYPE_OPTIONS,
                         value='TBondCurve', clearable=False,
                         style={'width': '250px'},
                     ),
