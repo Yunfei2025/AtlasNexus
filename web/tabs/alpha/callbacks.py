@@ -1304,6 +1304,7 @@ def register_alpha_callbacks(app) -> None:
                     borrow_cost_short_bp=bc_short,
                     spread_type=spread_type,
                     tenor_ratio=0.5 if spread_type == 'TenorSpread' else 1.0,
+                    carry_roll_sell_ts=_cr_sell_for_chart,
                 )
             else:
                 results = run_spread_backtest(
@@ -1320,6 +1321,7 @@ def register_alpha_callbacks(app) -> None:
                     borrow_cost_short_bp=bc_short,
                     spread_type=spread_type,
                     tenor_ratio=0.5 if spread_type == 'TenorSpread' else 1.0,
+                    carry_roll_sell_ts=_cr_sell_for_chart,
                 )
         except Exception as exc:
             import traceback

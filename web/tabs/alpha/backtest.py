@@ -24,21 +24,24 @@ def _carry_accrual(
     borrow_cost_short_bp: float = 0.0,
     spread_type: Optional[str] = None,
     tenor_ratio: float = 1.0,
+    carry_roll_sell_ts: Optional[pd.Series] = None,
 ) -> float:
     """Compute carry accrual for a trade including direction-dependent borrow cost.
 
-    Sums daily carry rates from timeseries (in %) and converts to bp.
-    The carry_roll_ts for TenorSpread is pre-adjusted in the callback to include:
-        - Base spread carry: -ratio*spread (for BUY), +ratio*spread (for SELL)
-        - Financing adjustment: +(1-ratio)*(ytm_long - financing_rate) with position sign
-        - Borrow cost deduction: -ratio*BC_long (for BUY), -BC_short (for SELL)
-
-    This function simply sums the pre-adjusted daily values.
+    For TenorSpread: carry_roll_ts = cr_buy (BUY borrow cost embedded),
+    carry_roll_sell_ts = cr_sell (SELL borrow cost embedded).
+    SELL trades use carry_roll_sell_ts when provided.
+    For other spread types, carry_roll_ts is used for both directions.
     """
+    # Select the correct timeseries based on position
+    ts_to_use = carry_roll_ts
+    if position == -1 and carry_roll_sell_ts is not None:
+        ts_to_use = carry_roll_sell_ts
+
     carry_income = 0.0
-    if carry_roll_ts is not None and len(carry_roll_ts) > 0:
+    if ts_to_use is not None and len(ts_to_use) > 0:
         try:
-            ts = carry_roll_ts
+            ts = ts_to_use
             if not isinstance(ts.index, pd.DatetimeIndex):
                 ts = ts.copy()
                 ts.index = pd.to_datetime(ts.index)
@@ -86,6 +89,7 @@ def run_spread_backtest(
     borrow_cost_short_bp: float = 0.0,
     spread_type: Optional[str] = None,
     tenor_ratio: float = 1.0,
+    carry_roll_sell_ts: Optional[pd.Series] = None,
 ) -> Dict[str, Any]:
     """Run backtest on a single spread time series."""
     if spread_ts is None or len(spread_ts) < 130:
@@ -171,6 +175,7 @@ def run_spread_backtest(
                     carry_roll_ts, carry_roll_bp,
                     borrow_cost_long_bp, borrow_cost_short_bp,
                     spread_type, tenor_ratio,
+                    carry_roll_sell_ts,
                 )
                 pnl = price_pnl + carry_income
                 realized_pnl += pnl
@@ -225,6 +230,7 @@ def run_spread_backtest(
                 carry_roll_ts, carry_roll_bp,
                 borrow_cost_long_bp, borrow_cost_short_bp,
                 spread_type, tenor_ratio,
+                carry_roll_sell_ts,
             )
             mtm = realized_pnl + (price - entry_price) * position * duration_mult + daily_carry
         else:
@@ -357,6 +363,7 @@ def run_trend_backtest_dc(
     borrow_cost_short_bp: float = 0.0,
     spread_type: Optional[str] = None,
     tenor_ratio: float = 1.0,
+    carry_roll_sell_ts: Optional[pd.Series] = None,
 ) -> Dict[str, Any]:
     """Trend/carry backtest using directional-change trend confirmation."""
     if spread_ts is None or len(spread_ts) < 60:
@@ -423,6 +430,7 @@ def run_trend_backtest_dc(
                     carry_roll_ts, carry_roll_bp,
                     borrow_cost_long_bp, borrow_cost_short_bp,
                     spread_type, tenor_ratio,
+                    carry_roll_sell_ts,
                 )
                 pnl = price_pnl + carry_income
                 realized_pnl += pnl
