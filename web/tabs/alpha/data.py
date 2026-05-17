@@ -305,7 +305,25 @@ def _get_duration_mult(instrument: str, spread_type: str) -> float:
             pass
         return 1.0
 
-    if spread_type in ('SwapSpread', 'TenorSpread'):
+    if spread_type == 'TenorSpread':
+        # TenorSpread: PnL ≈ duration_first_leg × Δspread (DV01-hedged position)
+        # e.g. CGB-10s30s → first leg = 10y → use duration of shorter tenor
+        # The 's' suffix is used for years in tenor spread IDs (e.g. 10s = 10 years)
+        dash_pos = instrument.find('-')
+        tenor_part = instrument[dash_pos + 1:] if dash_pos != -1 else instrument
+        # Match m/M/y/Y suffixes (SwapSpread style) or s/S suffix (TenorSpread style = years)
+        tenors_my = re.findall(r'\d+(?:\.\d+)?[mMyY]', tenor_part)
+        if tenors_my:
+            return _tenor_to_duration(tenors_my[0].lower())
+        # Fall back to 's' suffix: treat Ns as Ny (N years)
+        tenors_s = re.findall(r'(\d+(?:\.\d+)?)s', tenor_part, re.IGNORECASE)
+        if tenors_s:
+            return _tenor_to_duration(tenors_s[0] + 'y')
+        return 1.0
+
+    if spread_type == 'SwapSpread':
+        # SwapSpread: PnL ≈ duration_second_leg × Δspread (longer/paying leg drives DV01)
+        # e.g. Repo-1y3y → second leg = 3y; Basis-1y → single tenor = 1y
         dash_pos = instrument.find('-')
         if dash_pos == -1:
             m = re.search(r'(\d+[MY])', instrument, re.IGNORECASE)
@@ -320,9 +338,9 @@ def _get_duration_mult(instrument: str, spread_type: str) -> float:
         elif len(tenors) == 1:
             return _tenor_to_duration(tenors[0].lower())
         elif len(tenors) == 2:
-            return _tenor_to_duration(tenors[1].lower())
+            return _tenor_to_duration(tenors[1].lower())  # second (longer) leg
         else:
-            return _tenor_to_duration(tenors[1].lower())
+            return _tenor_to_duration(tenors[1].lower())  # middle for flies
 
     return 1.0
 
