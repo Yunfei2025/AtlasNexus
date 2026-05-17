@@ -1238,6 +1238,7 @@ def register_alpha_callbacks(app) -> None:
             bc_long, bc_short = _get_borrow_cost_annual_bp(spread_type, instrument)
 
             # For TenorSpread, adjust carry_roll_ts to include financing and borrow costs
+            _cr_sell_for_chart = None  # default; only set for TenorSpread
             if spread_type == 'TenorSpread' and carry_roll_ts_instrument is not None:
                 try:
                     from .data import _get_tenor_yields_for_spread, _get_current_fr007_bp
@@ -1264,26 +1265,24 @@ def register_alpha_callbacks(app) -> None:
                         bc_short_3m_pct = (bc_short) * (90.0 / 360.0) / 100.0
 
                         # Create direction-specific carry_roll
-                        # BUY: base_cr + fin_adj - bc_long
-                        # SELL: base_cr + fin_adj - bc_short (but negated for position -1)
+                        # BUY: base_cr + fin_adj - bc_long (long the shorter, short the longer)
+                        # SELL: base_cr + fin_adj - bc_short
                         cr_buy = carry_roll_ts_instrument + fin_adj_3m_pct - bc_long_3m_pct
                         cr_sell = carry_roll_ts_instrument + fin_adj_3m_pct - bc_short_3m_pct
+                        _cr_sell_for_chart = cr_sell  # kept for chart display below
 
                         # For backtest, use BUY version (will be multiplied by position sign)
                         carry_roll_ts_instrument = cr_buy
                 except Exception:
-                    pass  # Use original carry_roll_ts if adjustment fails
+                    pass  # _cr_sell_for_chart stays None
 
             # For BondCurve and BondSwap, adjust carry_roll_ts to include direction-dependent borrow costs
-            elif spread_type in ['TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'] and carry_roll_ts_instrument is not None:
+            if spread_type in ['TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'] and carry_roll_ts_instrument is not None:
                 try:
                     # Convert borrow costs from annual bp to 3m % form
                     bc_long_3m_pct = (bc_long) * (90.0 / 360.0) / 100.0
-                    bc_short_3m_pct = (bc_short) * (90.0 / 360.0) / 100.0
 
-                    # Adjust carry_roll_ts with borrow cost deductions
-                    # For BUY positions: deduct BC_long (cost of shorting the bond)
-                    # For SELL positions: deduct BC_short (cost of shorting the short-term bond)
+                    # Deduct borrow cost (same for BUY and SELL since bc_long == bc_short for these types)
                     carry_roll_ts_instrument = carry_roll_ts_instrument - bc_long_3m_pct
                 except Exception:
                     pass  # Use original carry_roll_ts if adjustment fails
@@ -1325,6 +1324,10 @@ def register_alpha_callbacks(app) -> None:
         except Exception as exc:
             import traceback
             return html.Div(f"Backtest engine error: {exc}\n{traceback.format_exc(limit=8)}", style={'color': THEME['warning'], 'whiteSpace': 'pre-wrap', 'fontSize': '11px', 'padding': '10px'}), f"Error at {datetime.now().strftime('%H:%M:%S')}"
+
+        # Inject SELL carry+roll timeseries for TenorSpread chart display
+        if isinstance(results, dict) and _cr_sell_for_chart is not None:
+            results['carry_roll_sell_ts'] = _cr_sell_for_chart
 
         status = f"Backtest completed at {datetime.now().strftime('%H:%M:%S')}"
         try:

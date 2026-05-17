@@ -54,11 +54,10 @@ def _carry_accrual(
             window = ts.loc[t0:t1].dropna()
             if len(window) > 0:
                 # window contains daily carry rates in % (3m convention from load_carry_roll_timeseries).
-                # Each value represents a 3-month carry rate, so convert:
-                # Sum daily values → multiply by 100 (% to bp) → divide by 90 (scale 3m rate to actual holding period)
-                # This gives: sum(daily_rates%) × 100 / 90 = CR_ACC in bp
-                # Apply position sign for direction effect.
-                carry_income = position * float(window.sum()) * 100.0 / 90.0
+                # Return in % (same unit as spread_ts) so it can be combined with price_pnl.
+                # Divide by 90 to scale 3m rate to actual holding period fraction.
+                # Caller (trade record) multiplies by 100 to convert to bp for display.
+                carry_income = position * float(window.sum()) / 90.0
         except Exception:
             pass
 
@@ -67,7 +66,8 @@ def _carry_accrual(
     if days_held > 0 and spread_type not in ['TenorSpread', 'BondCurve', 'BondSwap', 'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap']:
         borrow_cost = borrow_cost_long_bp if position == 1 else borrow_cost_short_bp
         if borrow_cost != 0.0:
-            carry_income -= abs(borrow_cost) * days_held / 365.0
+            # borrow_cost is in bp; divide by 100 to convert to % (same unit as carry_income)
+            carry_income -= abs(borrow_cost) / 100.0 * days_held / 365.0
 
     return carry_income
 
@@ -601,17 +601,18 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         profit_exits = trades_df[_exit_reason_inst.isin(['target', 'reversal'])]
         loss_exits = trades_df[_exit_reason_inst.isin(['stop_loss', 'max_hold', 'trailing', 'carry', 'flip'])]
         if len(long_entries) > 0:
-            instrument_fig.add_trace(go.Scatter(x=long_entries['entry_date'], y=long_entries['entry_price'], mode='markers', name='Long Entry', marker=dict(symbol='triangle-up', size=10, color=THEME['success'], line=dict(width=1, color='white')), showlegend=True))
+            instrument_fig.add_trace(go.Scatter(x=long_entries['entry_date'], y=long_entries['entry_price'] * 100.0, mode='markers', name='Long Entry', marker=dict(symbol='triangle-up', size=10, color=THEME['success'], line=dict(width=1, color='white')), showlegend=True))
         if len(short_entries) > 0:
-            instrument_fig.add_trace(go.Scatter(x=short_entries['entry_date'], y=short_entries['entry_price'], mode='markers', name='Short Entry', marker=dict(symbol='triangle-down', size=10, color=THEME['danger'], line=dict(width=1, color='white')), showlegend=True))
+            instrument_fig.add_trace(go.Scatter(x=short_entries['entry_date'], y=short_entries['entry_price'] * 100.0, mode='markers', name='Short Entry', marker=dict(symbol='triangle-down', size=10, color=THEME['danger'], line=dict(width=1, color='white')), showlegend=True))
         if len(profit_exits) > 0:
-            instrument_fig.add_trace(go.Scatter(x=profit_exits['exit_date'], y=profit_exits['exit_price'], mode='markers', name='Exit (profit)', marker=dict(symbol='circle', size=7, color=THEME['success'], opacity=0.85), showlegend=True))
+            instrument_fig.add_trace(go.Scatter(x=profit_exits['exit_date'], y=profit_exits['exit_price'] * 100.0, mode='markers', name='Exit (profit)', marker=dict(symbol='circle', size=7, color=THEME['success'], opacity=0.85), showlegend=True))
         if len(loss_exits) > 0:
-            instrument_fig.add_trace(go.Scatter(x=loss_exits['exit_date'], y=loss_exits['exit_price'], mode='markers', name='Exit (stop/loss)', marker=dict(symbol='x', size=9, color=THEME['danger'], opacity=0.85), showlegend=True))
+            instrument_fig.add_trace(go.Scatter(x=loss_exits['exit_date'], y=loss_exits['exit_price'] * 100.0, mode='markers', name='Exit (stop/loss)', marker=dict(symbol='x', size=9, color=THEME['danger'], opacity=0.85), showlegend=True))
 
-    _cr_ts = results.get('carry_roll_ts')
-    if _cr_ts is not None and len(_cr_ts) > 0:
-        cr_plot = _cr_ts.copy()
+    def _add_cr_trace(fig, cr_ts, label, color, dash='dot'):
+        if cr_ts is None or len(cr_ts) == 0:
+            return
+        cr_plot = cr_ts.copy()
         if not isinstance(cr_plot.index, pd.DatetimeIndex):
             cr_plot.index = pd.to_datetime(cr_plot.index)
         elif hasattr(cr_plot.index, 'tz') and cr_plot.index.tz is not None:
@@ -619,14 +620,22 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         if x_start is not None:
             cr_plot = cr_plot.loc[cr_plot.index >= x_start]
         if len(cr_plot) > 0:
-            # Convert carry+roll from % to bp for display
             cr_plot_bp = cr_plot * 100.0
-            instrument_fig.add_trace(go.Scatter(
+            fig.add_trace(go.Scatter(
                 x=cr_plot_bp.index, y=cr_plot_bp.values,
-                mode='lines', name='Carry+Roll (3m, bp)',
-                line=dict(color='rgba(243,156,18,0.75)', width=1, dash='dot'),
+                mode='lines', name=label,
+                line=dict(color=color, width=1, dash=dash),
                 yaxis='y2', showlegend=True,
             ))
+
+    _cr_ts = results.get('carry_roll_ts')
+    _cr_sell_ts = results.get('carry_roll_sell_ts')
+    if _cr_sell_ts is not None:
+        # TenorSpread: show BUY and SELL versions separately
+        _add_cr_trace(instrument_fig, _cr_ts, 'CR+Roll BUY (3m,bp)', 'rgba(0,204,150,0.75)')
+        _add_cr_trace(instrument_fig, _cr_sell_ts, 'CR+Roll SELL (3m,bp)', 'rgba(239,85,59,0.75)')
+    else:
+        _add_cr_trace(instrument_fig, _cr_ts, 'Carry+Roll (3m, bp)', 'rgba(243,156,18,0.75)')
 
     instrument_fig.update_layout(
         title='Instrument History', height=300,
