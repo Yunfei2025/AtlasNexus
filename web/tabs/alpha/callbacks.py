@@ -1238,7 +1238,8 @@ def register_alpha_callbacks(app) -> None:
             bc_long, bc_short = _get_borrow_cost_annual_bp(spread_type, instrument)
 
             # For TenorSpread, adjust carry_roll_ts to include financing and borrow costs
-            _cr_sell_for_chart = None  # default; only set for TenorSpread
+            _cr_sell_for_chart = None    # negated carry_roll for SELL chart display
+            _cr_sell_for_backtest = None  # unnegated carry_roll for SELL _carry_accrual
             if spread_type == 'TenorSpread' and carry_roll_ts_instrument is not None:
                 try:
                     from .data import _get_tenor_yields_for_spread, _get_current_fr007_bp
@@ -1265,11 +1266,15 @@ def register_alpha_callbacks(app) -> None:
                         bc_short_3m_pct = (bc_short) * (90.0 / 360.0) / 100.0
 
                         # Create direction-specific carry_roll
-                        # BUY: base_cr + fin_adj - bc_long (long the shorter, short the longer)
-                        # SELL: base_cr + fin_adj - bc_short
+                        # BUY (position=+1): cr_buy passed directly to _carry_accrual → carry = sum(cr_buy)/90
+                        # SELL (position=-1): carry = (-1)*sum(cr_sell)/90
+                        #   → +bc_short here so that (-1)*(+bc_short) = -bc_short (cost, not income)
                         cr_buy = carry_roll_ts_instrument + fin_adj_3m_pct - bc_long_3m_pct
-                        cr_sell = carry_roll_ts_instrument + fin_adj_3m_pct - bc_short_3m_pct
-                        _cr_sell_for_chart = cr_sell  # kept for chart display below
+                        cr_sell = carry_roll_ts_instrument + fin_adj_3m_pct + bc_short_3m_pct
+                        # Chart shows what SELL trade earns: negate so negative = cost on chart
+                        _cr_sell_for_chart = -cr_sell
+                        # Backtest _carry_accrual multiplies by position=-1, so pass unnegated
+                        _cr_sell_for_backtest = cr_sell
 
                         # For backtest, use BUY version (will be multiplied by position sign)
                         carry_roll_ts_instrument = cr_buy
@@ -1304,7 +1309,7 @@ def register_alpha_callbacks(app) -> None:
                     borrow_cost_short_bp=bc_short,
                     spread_type=spread_type,
                     tenor_ratio=0.5 if spread_type == 'TenorSpread' else 1.0,
-                    carry_roll_sell_ts=_cr_sell_for_chart,
+                    carry_roll_sell_ts=_cr_sell_for_backtest,
                 )
             else:
                 results = run_spread_backtest(
@@ -1321,7 +1326,7 @@ def register_alpha_callbacks(app) -> None:
                     borrow_cost_short_bp=bc_short,
                     spread_type=spread_type,
                     tenor_ratio=0.5 if spread_type == 'TenorSpread' else 1.0,
-                    carry_roll_sell_ts=_cr_sell_for_chart,
+                    carry_roll_sell_ts=_cr_sell_for_backtest,
                 )
         except Exception as exc:
             import traceback

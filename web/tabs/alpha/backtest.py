@@ -122,14 +122,39 @@ def run_spread_backtest(
     except Exception:
         composite_signal = zscore.copy()
 
+    # Pre-align carry series to spread index once — avoids O(n²) re-slicing in the loop.
+    _cr_fallback_val = (carry_roll_bp or 0.0) / 100.0  # convert bp scalar to %
+    def _align_cr(ts):
+        if ts is None:
+            return None
+        t = ts.copy()
+        if hasattr(t.index, 'tz') and t.index.tz is not None:
+            t.index = t.index.tz_localize(None)
+        return t.reindex(spread_ts.index, method='ffill')
+
+    _cr_long_aligned = _align_cr(carry_roll_ts)
+    _cr_sell_aligned = _align_cr(carry_roll_sell_ts)
+
+    def _cr_val_at(i: int, pos: int) -> float:
+        ts = _cr_sell_aligned if (pos == -1 and _cr_sell_aligned is not None) else _cr_long_aligned
+        if ts is None:
+            return _cr_fallback_val
+        v = ts.iloc[i]
+        return float(v) if np.isfinite(v) else 0.0
+
     trades = []
     position = 0
     entry_date = None
     entry_price = None
     entry_zscore = None
     realized_pnl = 0.0
+    realized_capital = 0.0   # bp: closed-trade capital component
+    realized_carry = 0.0     # bp: closed-trade carry component
+    open_cr_sum = 0.0        # running sum of daily cr values for the open trade (in %)
     equity_dates: List[pd.Timestamp] = []
     equity_values: List[float] = []
+    capital_values: List[float] = []
+    carry_values: List[float] = []
 
     for i in range(lookback, len(spread_ts)):
         date = spread_ts.index[i]
@@ -179,6 +204,9 @@ def run_spread_backtest(
                 )
                 pnl = price_pnl + carry_income
                 realized_pnl += pnl
+                realized_capital += price_pnl * 100.0
+                realized_carry += carry_income * 100.0
+                open_cr_sum = 0.0
                 trades.append({
                     'entry_date': entry_date,
                     'exit_date': date,
@@ -187,7 +215,6 @@ def run_spread_backtest(
                     'exit_price': price,
                     'entry_z': entry_zscore,
                     'exit_z': z,
-                    # spd_chg: raw spread change in bp (no duration), cr_acc: carry accrual in bp
                     'spd_chg': (price - entry_price) * position * 100.0,
                     'cr_acc': carry_income * 100.0,
                     'duration': duration_mult,
@@ -223,20 +250,27 @@ def run_spread_backtest(
                     entry_price = price
                     entry_zscore = cs
 
+        # Incremental daily MTM — O(n) total, no per-day _carry_accrual call.
         if position != 0 and entry_price is not None:
-            days_open = (date - entry_date).days if entry_date else 0
-            daily_carry = _carry_accrual(
-                position, entry_date, date, days_open,
-                carry_roll_ts, carry_roll_bp,
-                borrow_cost_long_bp, borrow_cost_short_bp,
-                spread_type, tenor_ratio,
-                carry_roll_sell_ts,
-            )
-            mtm = realized_pnl + (price - entry_price) * position * duration_mult + daily_carry
+            open_cr_sum += _cr_val_at(i, position)
+            open_carry_pct = position * open_cr_sum / 90.0
+            # Borrow cost for types where it is not already embedded in the ts
+            if spread_type not in ('TenorSpread', 'BondCurve', 'BondSwap', 'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'):
+                bc = borrow_cost_long_bp if position == 1 else borrow_cost_short_bp
+                days_open = (date - entry_date).days if entry_date else 0
+                open_carry_pct -= abs(bc) / 100.0 * days_open / 365.0
+            open_cap_pct = (price - entry_price) * position * duration_mult
+            mtm = realized_pnl + open_cap_pct + open_carry_pct
+            cap_daily = realized_capital + open_cap_pct * 100.0
+            cr_daily = realized_carry + open_carry_pct * 100.0
         else:
             mtm = realized_pnl
+            cap_daily = realized_capital
+            cr_daily = realized_carry
         equity_dates.append(pd.Timestamp(date))
         equity_values.append(float(mtm))
+        capital_values.append(float(cap_daily))
+        carry_values.append(float(cr_daily))
 
     equity_ts = pd.Series(equity_values, index=pd.DatetimeIndex(equity_dates), name='equity_bp')
 
@@ -284,16 +318,19 @@ def run_spread_backtest(
         sharpe = 0
 
     cum_pnl = np.cumsum(pnls)
-    running_max = np.maximum.accumulate(cum_pnl)
-    drawdowns = running_max - cum_pnl
-    max_drawdown = drawdowns.max() if len(drawdowns) > 0 else 0
-
     trades_out = trades_df.to_dict('records') if not trades_df.empty else []
 
-    try:
-        equity_ts = equity_ts * 100.0
-    except Exception:
-        pass
+    equity_ts = equity_ts * 100.0
+    capital_ts = pd.Series(capital_values, index=pd.DatetimeIndex(equity_dates), name='capital_bp')
+    carry_ts   = pd.Series(carry_values,   index=pd.DatetimeIndex(equity_dates), name='carry_bp')
+
+    # Max drawdown from daily equity curve (captures intra-trade peaks/troughs)
+    eq_vals = equity_ts.dropna().values
+    if len(eq_vals) > 0:
+        running_max = np.maximum.accumulate(eq_vals)
+        max_drawdown = float((running_max - eq_vals).max())
+    else:
+        max_drawdown = 0.0
 
     return {
         'trades': trades_out,
@@ -310,6 +347,8 @@ def run_spread_backtest(
         'composite_signal_ts': composite_signal,
         'cum_pnl': cum_pnl,
         'equity_ts': equity_ts,
+        'capital_ts': capital_ts,
+        'carry_ts': carry_ts,
         'carry_roll_ts': carry_roll_ts,
         'entry_z': entry_z,
         'exit_z': exit_z,
@@ -380,14 +419,38 @@ def run_trend_backtest_dc(
     sigma = s.diff().rolling(vol_window).std()
     norm_mom = mom / sigma.replace(0, np.nan)
 
+    # Pre-align carry series to spread index once — avoids O(n²) re-slicing in the loop.
+    def _align_cr_trend(ts):
+        if ts is None:
+            return None
+        t = ts.copy()
+        if hasattr(t.index, 'tz') and t.index.tz is not None:
+            t.index = t.index.tz_localize(None)
+        return t.reindex(s.index, method='ffill')
+
+    _cr_long_al = _align_cr_trend(carry_roll_ts)
+    _cr_sell_al = _align_cr_trend(carry_roll_sell_ts)
+
+    def _cr_val_trend(i: int, pos: int) -> float:
+        ts = _cr_sell_al if (pos == -1 and _cr_sell_al is not None) else _cr_long_al
+        if ts is None:
+            return 0.0
+        v = ts.iloc[i]
+        return float(v) if np.isfinite(v) else 0.0
+
     trades: List[Dict[str, Any]] = []
     position = 0
     entry_date = None
     entry_price = None
     best_fav = None
     realized_pnl = 0.0
+    realized_capital = 0.0
+    realized_carry = 0.0
+    open_cr_sum = 0.0
     equity_dates: List[pd.Timestamp] = []
     equity_values: List[float] = []
+    capital_values: List[float] = []
+    carry_values: List[float] = []
 
     start_i = max(vol_window, mom_window) + 1
     for i in range(start_i, len(s)):
@@ -434,13 +497,15 @@ def run_trend_backtest_dc(
                 )
                 pnl = price_pnl + carry_income
                 realized_pnl += pnl
+                realized_capital += price_pnl * 100.0
+                realized_carry += carry_income * 100.0
+                open_cr_sum = 0.0
                 trades.append({
                     'entry_date': entry_date,
                     'exit_date': date,
                     'direction': 'LONG' if position == 1 else 'SHORT',
                     'entry_price': entry_price,
                     'exit_price': px,
-                    # spd_chg: raw spread change in bp (no duration), cr_acc: carry accrual in bp
                     'spd_chg': (px - entry_price) * position * 100.0,
                     'cr_acc': carry_income * 100.0,
                     'duration': duration_mult,
@@ -466,11 +531,24 @@ def run_trend_backtest_dc(
                 best_fav = px
 
         if position != 0 and entry_price is not None:
-            mtm = realized_pnl + (px - entry_price) * position * duration_mult
+            open_cr_sum += _cr_val_trend(i, position)
+            open_carry_pct = position * open_cr_sum / 90.0
+            if spread_type not in ('TenorSpread', 'BondCurve', 'BondSwap', 'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'):
+                bc = borrow_cost_long_bp if position == 1 else borrow_cost_short_bp
+                days_open = (date - entry_date).days if entry_date else 0
+                open_carry_pct -= abs(bc) / 100.0 * days_open / 365.0
+            open_cap_pct = (px - entry_price) * position * duration_mult
+            mtm = realized_pnl + open_cap_pct + open_carry_pct
+            cap_daily = realized_capital + open_cap_pct * 100.0
+            cr_daily = realized_carry + open_carry_pct * 100.0
         else:
             mtm = realized_pnl
+            cap_daily = realized_capital
+            cr_daily = realized_carry
         equity_dates.append(pd.Timestamp(date))
         equity_values.append(float(mtm))
+        capital_values.append(float(cap_daily))
+        carry_values.append(float(cr_daily))
 
     equity_ts = pd.Series(equity_values, index=pd.DatetimeIndex(equity_dates), name='equity_bp')
 
@@ -512,15 +590,19 @@ def run_trend_backtest_dc(
     sharpe = float((np.nanmean(pnls) / np.nanstd(pnls)) * np.sqrt(min(n_trades, 20))) if (pnls.size > 0 and np.nanstd(pnls) > 0) else 0.0
 
     cum_pnl = np.nancumsum(pnls) if pnls.size > 0 else np.array([])
-    running_max = np.maximum.accumulate(cum_pnl) if cum_pnl.size > 0 else np.array([])
-    drawdowns = running_max - cum_pnl if cum_pnl.size > 0 else np.array([])
-    max_drawdown = float(drawdowns.max()) if len(drawdowns) > 0 else 0.0
-
     trades_out = trades_df.to_dict('records') if not trades_df.empty else []
-    try:
-        equity_ts = equity_ts * 100.0
-    except Exception:
-        pass
+
+    equity_ts = equity_ts * 100.0
+    capital_ts = pd.Series(capital_values, index=pd.DatetimeIndex(equity_dates), name='capital_bp')
+    carry_ts   = pd.Series(carry_values,   index=pd.DatetimeIndex(equity_dates), name='carry_bp')
+
+    # Max drawdown from daily equity curve (captures intra-trade peaks/troughs)
+    eq_vals = equity_ts.dropna().values
+    if len(eq_vals) > 0:
+        running_max = np.maximum.accumulate(eq_vals)
+        max_drawdown = float((running_max - eq_vals).max())
+    else:
+        max_drawdown = 0.0
 
     return {
         'trades': trades_out,
@@ -537,6 +619,8 @@ def run_trend_backtest_dc(
         'norm_mom_ts': norm_mom,
         'cum_pnl': cum_pnl,
         'equity_ts': equity_ts,
+        'capital_ts': capital_ts,
+        'carry_ts': carry_ts,
         'carry_roll_ts': carry_roll_ts,
     }
 
@@ -544,6 +628,7 @@ def run_trend_backtest_dc(
 def build_backtest_results_display(results: Dict[str, Any], title: str = "Backtest Results") -> html.Div:
     """Build the display for backtest results."""
     import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
 
     if 'error' in results:
         return html.Div(f"Error: {results['error']}", style={'color': THEME['warning'], 'padding': '20px'})
@@ -587,37 +672,57 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
 
     _xaxis_range = dict(range=[x_start, x_end]) if x_start is not None else {}
 
-    instrument_fig = go.Figure()
+    _cr_ts = results.get('carry_roll_ts')
+    _cr_sell_ts = results.get('carry_roll_sell_ts')
+    _has_cr = _cr_ts is not None or _cr_sell_ts is not None
+
+    # Use 2-row subplot when carry+roll data exists so the CR panel has its own
+    # independent y-axis and doesn't visually overlap the spread line.
+    if _has_cr:
+        instrument_fig = make_subplots(
+            rows=2, cols=1, shared_xaxes=True,
+            row_heights=[0.68, 0.32], vertical_spacing=0.06,
+        )
+    else:
+        instrument_fig = go.Figure()
+
+    def _add_to_fig(trace, row=None):
+        if _has_cr:
+            instrument_fig.add_trace(trace, row=row, col=1)
+        else:
+            instrument_fig.add_trace(trace)
+
     if 'spread_ts' in results and results['spread_ts'] is not None:
         spread_ts = results['spread_ts'].dropna()
         if x_start is not None:
             spread_ts = spread_ts.loc[spread_ts.index >= x_start]
         if len(spread_ts) > 0:
-            # Convert spread from % to bp (multiply by 100) for display
             spread_ts_bp = spread_ts * 100.0
-            instrument_fig.add_trace(go.Scatter(
+            _add_to_fig(go.Scatter(
                 x=spread_ts_bp.index, y=spread_ts_bp.values,
                 mode='lines', name='Spread (bp)',
                 line=dict(color=THEME['accent'], width=1.5),
                 showlegend=False,
-            ))
+            ), row=1)
 
     if trades_df is not None and len(trades_df) > 0:
         long_entries = trades_df[trades_df['direction'] == 'LONG']
         short_entries = trades_df[trades_df['direction'] == 'SHORT']
-        _exit_reason_inst = trades_df.get('exit_reason', pd.Series([''] * len(trades_df), index=trades_df.index))
-        profit_exits = trades_df[_exit_reason_inst.isin(['target', 'reversal'])]
-        loss_exits = trades_df[_exit_reason_inst.isin(['stop_loss', 'max_hold', 'trailing', 'carry', 'flip'])]
+        # Color exits by actual P&L sign so trend exits (flip/max_hold/trailing)
+        # are not all shown as losses when they may be profitable.
+        _pnl_col = trades_df.get('pnl_trade', pd.Series(0.0, index=trades_df.index))
+        profit_exits = trades_df[_pnl_col > 0]
+        loss_exits = trades_df[_pnl_col <= 0]
         if len(long_entries) > 0:
-            instrument_fig.add_trace(go.Scatter(x=long_entries['entry_date'], y=long_entries['entry_price'] * 100.0, mode='markers', name='Long Entry', marker=dict(symbol='triangle-up', size=10, color=THEME['success'], line=dict(width=1, color='white')), showlegend=True))
+            _add_to_fig(go.Scatter(x=long_entries['entry_date'], y=long_entries['entry_price'] * 100.0, mode='markers', name='Long Entry', marker=dict(symbol='triangle-up', size=10, color=THEME['success'], line=dict(width=1, color='white')), showlegend=True), row=1)
         if len(short_entries) > 0:
-            instrument_fig.add_trace(go.Scatter(x=short_entries['entry_date'], y=short_entries['entry_price'] * 100.0, mode='markers', name='Short Entry', marker=dict(symbol='triangle-down', size=10, color=THEME['danger'], line=dict(width=1, color='white')), showlegend=True))
+            _add_to_fig(go.Scatter(x=short_entries['entry_date'], y=short_entries['entry_price'] * 100.0, mode='markers', name='Short Entry', marker=dict(symbol='triangle-down', size=10, color=THEME['danger'], line=dict(width=1, color='white')), showlegend=True), row=1)
         if len(profit_exits) > 0:
-            instrument_fig.add_trace(go.Scatter(x=profit_exits['exit_date'], y=profit_exits['exit_price'] * 100.0, mode='markers', name='Exit (profit)', marker=dict(symbol='circle', size=7, color=THEME['success'], opacity=0.85), showlegend=True))
+            _add_to_fig(go.Scatter(x=profit_exits['exit_date'], y=profit_exits['exit_price'] * 100.0, mode='markers', name='Exit (profit)', marker=dict(symbol='circle', size=7, color=THEME['success'], opacity=0.85), showlegend=True), row=1)
         if len(loss_exits) > 0:
-            instrument_fig.add_trace(go.Scatter(x=loss_exits['exit_date'], y=loss_exits['exit_price'] * 100.0, mode='markers', name='Exit (stop/loss)', marker=dict(symbol='x', size=9, color=THEME['danger'], opacity=0.85), showlegend=True))
+            _add_to_fig(go.Scatter(x=loss_exits['exit_date'], y=loss_exits['exit_price'] * 100.0, mode='markers', name='Exit (loss)', marker=dict(symbol='x', size=9, color=THEME['danger'], opacity=0.85), showlegend=True), row=1)
 
-    def _add_cr_trace(fig, cr_ts, label, color, dash='dot'):
+    def _add_cr_trace(cr_ts, label, color, dash='dot'):
         if cr_ts is None or len(cr_ts) == 0:
             return
         cr_plot = cr_ts.copy()
@@ -629,33 +734,51 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             cr_plot = cr_plot.loc[cr_plot.index >= x_start]
         if len(cr_plot) > 0:
             cr_plot_bp = cr_plot * 100.0
-            fig.add_trace(go.Scatter(
+            _add_to_fig(go.Scatter(
                 x=cr_plot_bp.index, y=cr_plot_bp.values,
                 mode='lines', name=label,
                 line=dict(color=color, width=1, dash=dash),
-                yaxis='y2', showlegend=True,
-            ))
+                showlegend=True,
+            ), row=2)
 
-    _cr_ts = results.get('carry_roll_ts')
-    _cr_sell_ts = results.get('carry_roll_sell_ts')
     if _cr_sell_ts is not None:
-        # TenorSpread: show BUY and SELL versions separately
-        _add_cr_trace(instrument_fig, _cr_ts, 'CR+Roll BUY (3m,bp)', 'rgba(0,204,150,0.75)')
-        _add_cr_trace(instrument_fig, _cr_sell_ts, 'CR+Roll SELL (3m,bp)', 'rgba(239,85,59,0.75)')
-    else:
-        _add_cr_trace(instrument_fig, _cr_ts, 'Carry+Roll (3m, bp)', 'rgba(243,156,18,0.75)')
+        _add_cr_trace(_cr_ts, 'CR+Roll BUY (3m,bp)', 'rgba(0,204,150,0.85)')
+        _add_cr_trace(_cr_sell_ts, 'CR+Roll SELL (3m,bp)', 'rgba(239,85,59,0.85)')
+    elif _cr_ts is not None:
+        _add_cr_trace(_cr_ts, 'Carry+Roll (3m, bp)', 'rgba(243,156,18,0.85)')
 
-    instrument_fig.update_layout(
-        title='Instrument History', height=300,
+    # Zero reference line in the CR panel
+    if _has_cr and x_start is not None and x_end is not None:
+        instrument_fig.add_trace(go.Scatter(
+            x=[x_start, x_end], y=[0, 0],
+            mode='lines', name='Zero',
+            line=dict(color='rgba(180,180,180,0.4)', width=1, dash='dot'),
+            showlegend=False,
+        ), row=2, col=1)
+
+    _chart_height = 420 if _has_cr else 300
+    _common_layout = dict(
+        title='Instrument History', height=_chart_height,
         margin=dict(l=50, r=20, t=40, b=40),
         plot_bgcolor=THEME['bg_main'], paper_bgcolor=THEME['bg_main'],
         font=dict(color=THEME['text_main']),
-        xaxis=dict(gridcolor=THEME['bg_card'], tickformat='%b\n%Y', hoverformat='%Y-%m-%d', **_xaxis_range),
-        yaxis=dict(title='Spread', gridcolor=THEME['bg_card']),
-        yaxis2=dict(title=dict(text='Carry+Roll (3m)', font=dict(color='rgba(243,156,18,0.85)')), overlaying='y', side='right', showgrid=False, tickfont=dict(color='rgba(243,156,18,0.85)')),
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1, font=dict(size=10), bgcolor='rgba(0,0,0,0)'),
     )
-    instrument_div = html.Div([dcc.Graph(figure=instrument_fig, style={'height': '300px'})], style={'marginBottom': '15px'})
+    if _has_cr:
+        instrument_fig.update_layout(
+            **_common_layout,
+            xaxis=dict(gridcolor=THEME['bg_card'], showticklabels=False, **_xaxis_range),
+            xaxis2=dict(gridcolor=THEME['bg_card'], tickformat='%b\n%Y', hoverformat='%Y-%m-%d', **_xaxis_range),
+            yaxis=dict(title='Spread (bp)', gridcolor=THEME['bg_card']),
+            yaxis2=dict(title='CR+Roll 3m (bp)', gridcolor=THEME['bg_card']),
+        )
+    else:
+        instrument_fig.update_layout(
+            **_common_layout,
+            xaxis=dict(gridcolor=THEME['bg_card'], tickformat='%b\n%Y', hoverformat='%Y-%m-%d', **_xaxis_range),
+            yaxis=dict(title='Spread (bp)', gridcolor=THEME['bg_card']),
+        )
+    instrument_div = html.Div([dcc.Graph(figure=instrument_fig, style={'height': f'{_chart_height}px'})], style={'marginBottom': '15px'})
 
     score_div = html.Div()
     _composite = results.get('composite_signal_ts')
@@ -706,9 +829,9 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
 
             long_e  = trades_df[trades_df['direction'] == 'LONG']
             short_e = trades_df[trades_df['direction'] == 'SHORT']
-            _exit_reason = trades_df.get('exit_reason', pd.Series([''] * len(trades_df), index=trades_df.index))
-            prof_x = trades_df[_exit_reason.isin(['target', 'reversal'])]
-            loss_x = trades_df[_exit_reason.isin(['stop_loss', 'max_hold', 'trailing', 'carry', 'flip'])]
+            _pnl_score = trades_df.get('pnl_trade', pd.Series(0.0, index=trades_df.index))
+            prof_x = trades_df[_pnl_score > 0]
+            loss_x = trades_df[_pnl_score <= 0]
 
             if len(long_e) > 0:
                 signal_fig.add_trace(go.Scatter(x=long_e['entry_date'], y=_score_at(long_e, 'entry_date'), mode='markers', marker=dict(symbol='triangle-up', size=9, color=THEME['success'], line=dict(width=1, color='white')), showlegend=False))
@@ -732,62 +855,49 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         score_div = html.Div([dcc.Graph(figure=signal_fig, style={'height': '230px'})], style={'marginBottom': '15px'})
 
     equity_fig = go.Figure()
-    equity_ts = results.get('equity_ts')
+    equity_ts  = results.get('equity_ts')
+    capital_ts = results.get('capital_ts')
+    carry_ts   = results.get('carry_ts')
 
-    # Try to build per-trade cumulative breakdown (capital + carry) from trades_df
-    _drawn_breakdown = False
-    if trades_df is not None and len(trades_df) > 0 and 'spd_chg' in trades_df.columns and 'cr_acc' in trades_df.columns:
-        _tdf = trades_df.copy()
-        _tdf['exit_date'] = pd.to_datetime(_tdf['exit_date'])
-        _tdf['entry_date'] = pd.to_datetime(_tdf['entry_date'])
-        _tdf = _tdf.sort_values('exit_date')
-
-        # per-trade values in bp; capital = duration * spd_chg
-        _dur = pd.to_numeric(_tdf['duration'], errors='coerce').fillna(1.0).values
-        _capital = _dur * pd.to_numeric(_tdf['spd_chg'], errors='coerce').fillna(0.0).values
-        _carry = pd.to_numeric(_tdf['cr_acc'], errors='coerce').fillna(0.0).values
-        _pnl = _capital + _carry
-
-        _dates = [_tdf['entry_date'].iloc[0]] + _tdf['exit_date'].tolist()
-        _cum_cap   = [0.0] + list(np.cumsum(_capital))
-        _cum_total = [0.0] + list(np.cumsum(_pnl))
-        # carry line = total - capital = cumulative carry at each exit
-        _cum_carry_only = [t - c for t, c in zip(_cum_total, _cum_cap)]
-
+    def _trim(ts):
+        if not isinstance(ts, pd.Series) or len(ts.dropna()) == 0:
+            return None
         if x_start is not None:
-            _mask = [d >= x_start for d in _dates]
-            _dates        = [d for d, m in zip(_dates, _mask) if m]
-            _cum_cap      = [v for v, m in zip(_cum_cap, _mask) if m]
-            _cum_carry_only = [v for v, m in zip(_cum_carry_only, _mask) if m]
-            _cum_total    = [v for v, m in zip(_cum_total, _mask) if m]
+            ts = ts[ts.index >= x_start]
+        return ts if len(ts) > 0 else None
 
-        if len(_dates) > 1:
+    _eq  = _trim(equity_ts)
+    _cap = _trim(capital_ts)
+    _cr  = _trim(carry_ts)
+
+    if _cap is not None and _cr is not None:
+        # Daily breakdown: capital and carry as continuous daily series
+        equity_fig.add_trace(go.Scatter(
+            x=_cap.index, y=_cap.values,
+            mode='lines', name='Capital G/L (Daily MtM)',
+            line=dict(color=THEME['accent'], width=1.5, dash='dash'),
+        ))
+        equity_fig.add_trace(go.Scatter(
+            x=_cr.index, y=_cr.values,
+            mode='lines', name='Carry (Daily Accrual)',
+            line=dict(color='rgba(243,156,18,0.85)', width=1.5, dash='dot'),
+        ))
+        if _eq is not None:
             equity_fig.add_trace(go.Scatter(
-                x=_dates, y=_cum_cap,
-                mode='lines', name='Cumulative Capital G/L',
-                line=dict(color=THEME['accent'], width=1.5, dash='dash'),
-            ))
-            equity_fig.add_trace(go.Scatter(
-                x=_dates, y=_cum_carry_only,
-                mode='lines', name='Cumulative Carry (incl. cost)',
-                line=dict(color='rgba(243,156,18,0.85)', width=1.5, dash='dot'),
-            ))
-            equity_fig.add_trace(go.Scatter(
-                x=_dates, y=_cum_total,
+                x=_eq.index, y=_eq.values,
                 mode='lines', name='Total PnL',
                 line=dict(color=THEME['success'], width=2),
                 fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.06)',
             ))
-            equity_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
-            _drawn_breakdown = True
-
-    if not _drawn_breakdown:
-        # Fallback: daily MtM equity curve without breakdown
-        if isinstance(equity_ts, pd.Series) and len(equity_ts.dropna()) > 0:
-            if x_start is not None:
-                equity_ts = equity_ts[equity_ts.index >= x_start]
-            equity_fig.add_trace(go.Scatter(x=equity_ts.index, y=equity_ts.values, mode='lines', name='Cumulative PnL (Daily MtM)', line=dict(color=THEME['success'], width=2), fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.08)'))
-            equity_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
+        equity_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
+    elif _eq is not None:
+        equity_fig.add_trace(go.Scatter(
+            x=_eq.index, y=_eq.values,
+            mode='lines', name='Cumulative PnL (Daily MtM)',
+            line=dict(color=THEME['success'], width=2),
+            fill='tozeroy', fillcolor='rgba(0, 204, 150, 0.08)',
+        ))
+        equity_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
 
     equity_fig.update_layout(
         title='Cumulative PnL Breakdown (bp)', height=250,

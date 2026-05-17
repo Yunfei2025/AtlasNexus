@@ -1130,3 +1130,11 @@ WARNING: Using empty forward shifts as fallback
 WARNING: Could not write to Dashboard.xlsm (skipping): Local application 'Microsoft Excel.app' not found.
 WARNING: Using empty forward shifts as fallback
 WARNING: Could not write to Dashboard.xlsm (skipping): Local application 'Microsoft Excel.app' not found.
+ERROR: Address already in use
+ERROR: Port 8080 is in use by another program. Either identify and stop that program, or start the server with a different port.
+WARNING: Using empty forward shifts as fallback
+WARNING: Could not write to Dashboard.xlsm (skipping): Local application 'Microsoft Excel.app' not found.
+WARNING: Using empty forward shifts as fallback
+WARNING: Could not write to Dashboard.xlsm (skipping): Local application 'Microsoft Excel.app' not found.
+WARNING: Using empty forward shifts as fallback
+WARNING: Could not write to Dashboard.xlsm (skipping): Local application 'Microsoft Excel.app' not found.
