@@ -41,7 +41,16 @@ def _is_trading_hours(now: Optional[dt.datetime] = None) -> bool:
     return dt.time(TradingHoursConfig.START_HOUR, 0) <= current_time <= dt.time(TradingHoursConfig.END_HOUR, 0)
 
 
-_WIND_AVAILABLE: Optional[bool] = None if _is_trading_hours() else False
+# When True, allow Wind retrieval even outside normal trading hours.
+# Intended for manual/backtest retrieval where users explicitly request
+# historical data on weekends. It does NOT enable scheduled/automatic
+# processes to bypass trading-hour checks unless they also set this flag.
+ALLOW_NONTRADING_RETRIEVAL: bool = False
+
+
+# Initial Wind availability: only True if within trading hours (or if the
+# override flag is enabled at import time).
+_WIND_AVAILABLE: Optional[bool] = None if (_is_trading_hours() or ALLOW_NONTRADING_RETRIEVAL) else False
 
 
 def _normalize_codes(codes) -> list[str]:
@@ -121,7 +130,9 @@ def _ensure_wind() -> bool:
     success, False on failure. Intentionally does not use timeouts or caching.
     """
     global _WIND_AVAILABLE
-    if not _is_trading_hours():
+    # Respect normal trading-hour gating unless explicitly allowed for a
+    # manual/backtest retrieval run.
+    if not _is_trading_hours() and not ALLOW_NONTRADING_RETRIEVAL:
         _WIND_AVAILABLE = False
         return False
     try:
@@ -138,7 +149,7 @@ def _ensure_wind() -> bool:
 def reset_wind_connection():
     """Force a fresh Wind session restart."""
     global _WIND_AVAILABLE
-    if not _is_trading_hours():
+    if not _is_trading_hours() and not ALLOW_NONTRADING_RETRIEVAL:
         _WIND_AVAILABLE = False
         return
     try:
@@ -148,6 +159,18 @@ def reset_wind_connection():
     except Exception as e:
         _WIND_AVAILABLE = False
         logger.warning("[Wind] Failed to restart: %s", e)
+
+
+def set_allow_nontrading_retrieval(flag: bool):
+    """Enable or disable non-trading-hour retrieval.
+
+    When enabled, Wind connection attempts will be allowed outside trading
+    hours. This is intended for explicit/manual backtest retrieval only and
+    should not be enabled by scheduled/automatic processes.
+    """
+    global ALLOW_NONTRADING_RETRIEVAL
+    ALLOW_NONTRADING_RETRIEVAL = bool(flag)
+    return ALLOW_NONTRADING_RETRIEVAL
 
 
 # ---------------------------------------------------------------------------

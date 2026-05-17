@@ -9,7 +9,7 @@ from dateutil.relativedelta import relativedelta
 
 
 class BondConfig:
-    TBOND_POOL_START = 7
+    TBOND_POOL_START = 5
     OBOND_POOL_START = 3
     SECTOR_MAP = {
         "TBond": "a101010101000000",
@@ -90,7 +90,9 @@ class BondConfig:
         3: [2.0, 3.0], 5: [4.0, 5.0], 10: [8.0, 10.0]
     }
     PX = ['Bid', 'Ofr']
-
+    BORROW_COST = {
+        5: 10, 10: 40, 20: 100, 30: 120, 
+    } # annual cost in bp
     @classmethod
     def get_column_mapping(cls) -> Dict[str, str]:
         return dict(zip(cls.COLUMNS_EN, cls.COLUMNS_CN))

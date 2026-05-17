@@ -327,6 +327,182 @@ def _get_duration_mult(instrument: str, spread_type: str) -> float:
     return 1.0
 
 
+def _get_borrow_cost_annual_bp(spread_type: str, instrument: str) -> tuple[float, float]:
+    """Return (long_borrow_bp, short_borrow_bp) annual repo/borrow cost in bp.
+
+    TenorSpread (e.g. CGB-10s30s, CDB-5s10s):
+        LONG  the spread = short the LONGER-tenor bond  → long_borrow_bp  = BORROW_COST[longer]
+        SHORT the spread = short the SHORTER-tenor bond → short_borrow_bp = BORROW_COST[shorter]
+    BondCurve / BondSwap:
+        Symmetric — same cost for both directions based on the bond's ttm bucket.
+    Others:
+        (0.0, 0.0)
+    """
+    try:
+        from settings.fixed_income import BondConfig
+        bc = BondConfig.BORROW_COST  # {5: 10, 10: 40, 20: 100, 30: 120}
+    except Exception:
+        return 0.0, 0.0
+
+    def _bucket(years: float) -> float:
+        if years <= 5:
+            return float(bc.get(5, 10))
+        elif years <= 10:
+            return float(bc.get(10, 40))
+        elif years <= 20:
+            return float(bc.get(20, 100))
+        else:
+            return float(bc.get(30, 120))
+
+    if spread_type == 'TenorSpread':
+        # 'CGB-10s30s' → shorter=10, longer=30
+        m = re.search(r'(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
+        if m:
+            shorter = float(m.group(1))
+            longer  = float(m.group(2))
+            return _bucket(longer), _bucket(shorter)
+        # 'CDBCGB-30y' → single tenor, symmetric
+        m2 = re.search(r'-(\d+)y$', instrument, re.IGNORECASE)
+        if m2:
+            cost = _bucket(float(m2.group(1)))
+            return cost, cost
+        return 0.0, 0.0
+
+    if spread_type in ('TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'):
+        try:
+            snap = load_spread_data(spread_type)
+            if isinstance(snap, pd.DataFrame) and instrument in snap.index and 'ttm' in snap.columns:
+                ttm = float(snap.loc[instrument, 'ttm'])
+                if ttm > 0:
+                    cost = _bucket(ttm)
+                    return cost, cost
+        except Exception:
+            pass
+        return 0.0, 0.0
+
+    return 0.0, 0.0
+
+
+def _get_tenor_yields_for_spread(instrument: str) -> tuple[Optional[float], Optional[float]]:
+    """Extract short-tenor and long-tenor yields (in %) for a TenorSpread instrument.
+
+    Returns: (short_tenor_yield, long_tenor_yield) or (None, None) if not available.
+    Example: CGB-10s30s → (y_10y, y_30y)
+    """
+    try:
+        from curves.utils.loader import loadCNBDTS
+        env = loadCNBDTS()
+
+        # Parse tenor spread ID like "CGB-10s30s", "CDB-5s10s", "CDBCGB-10y"
+        if 'CGB-' in instrument or 'CDB-' in instrument:
+            bond_type = 'CGB' if 'CGB-' in instrument else 'CDB'
+            tenor_data = env.get(bond_type, {})
+
+            # Extract tenor values
+            m = re.search(r'(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
+            if m:
+                short_tenor = f"中债{'国债' if bond_type == 'CGB' else '国开'}到期收益率:{m.group(1)}年"
+                long_tenor = f"中债{'国债' if bond_type == 'CGB' else '国开'}到期收益率:{m.group(2)}年"
+            else:
+                m2 = re.search(r'-(\d+)y$', instrument, re.IGNORECASE)
+                if m2:  # CDBCGB-10y (symmetric)
+                    tenor_str = m2.group(1)
+                    short_tenor = f"中债国债到期收益率:{tenor_str}年"
+                    long_tenor = f"中债国开债到期收益率:{tenor_str}年"
+                else:
+                    return None, None
+
+            # Get the latest values
+            short_val = tenor_data.get(short_tenor)
+            long_val = tenor_data.get(long_tenor)
+            if short_val is not None and long_val is not None:
+                # Convert to latest value if Series
+                if isinstance(short_val, pd.Series):
+                    short_val = float(short_val.iloc[-1])
+                if isinstance(long_val, pd.Series):
+                    long_val = float(long_val.iloc[-1])
+                return float(short_val), float(long_val)
+    except Exception:
+        pass
+
+    return None, None
+
+
+def _get_current_fr007_bp() -> Optional[float]:
+    """Get current FR007 rate in basis points from market data.
+
+    Loads the latest FR007.IR value from database-px.pkl['IRS'] and converts
+    from percentage to basis points. Returns None if not available.
+    """
+    try:
+        dir_input = _get_input_dir()
+        db_path = dir_input / 'database-px.pkl'
+        if not db_path.exists():
+            return None
+        data = _load_pickle_safe(db_path)
+        if isinstance(data, dict) and 'IRS' in data:
+            irs_df = data['IRS']
+            if isinstance(irs_df, pd.DataFrame) and 'FR007.IR' in irs_df.columns:
+                val = irs_df['FR007.IR'].dropna().iloc[-1] if not irs_df['FR007.IR'].dropna().empty else None
+                if val is not None and pd.notna(val):
+                    return float(val) * 100.0  # Convert % to bp
+    except Exception:
+        pass
+    return None
+
+
+def _get_ttm_display(spread_type: str, instrument: str) -> Optional[float]:
+    """Return TTM (years) for the Candidates table TTM column.
+
+    BondCurve / BondSwap : bond TTM from snapshot.
+    TenorSpread           : first-leg tenor (e.g. 10 for CGB-10s30s, 10 for CDBCGB-10y).
+    SwapSpread            : second-leg tenor for pairs and flies (e.g. 2 for Repo-1y2y,
+                            2 for Repo-1y2y5y, 0.75 for Shi3M-6m9m).
+    All other types       : None.
+    """
+    def _tenor_to_yr(t: str) -> Optional[float]:
+        t = t.strip().lower()
+        m = re.match(r'^(\d+(?:\.\d+)?)(m|y)$', t)
+        if not m:
+            return None
+        val, unit = float(m.group(1)), m.group(2)
+        return round(val / 12.0 if unit == 'm' else val, 2)
+
+    if spread_type in ('TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'):
+        try:
+            snap = load_spread_data(spread_type)
+            if isinstance(snap, pd.DataFrame) and instrument in snap.index and 'ttm' in snap.columns:
+                ttm = float(snap.loc[instrument, 'ttm'])
+                if ttm > 0:
+                    return round(ttm, 1)
+        except Exception:
+            pass
+        return None
+
+    if spread_type == 'TenorSpread':
+        # CGB-10s30s → first leg = 10
+        m = re.search(r'(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
+        if m:
+            return float(m.group(1))
+        # CDBCGB-10y → 10
+        m2 = re.search(r'-(\d+)y$', instrument, re.IGNORECASE)
+        if m2:
+            return float(m2.group(1))
+        return None
+
+    if spread_type == 'SwapSpread':
+        dash = instrument.find('-')
+        if dash == -1:
+            return None
+        tenors = re.findall(r'\d+(?:\.\d+)?[mMyY]', instrument[dash + 1:])
+        if len(tenors) >= 1:
+            # Single tenor (Basis-1y): use it; pairs/flies (Basis-1y2y, Repo-1y2y5y): use second leg
+            return _tenor_to_yr(tenors[1] if len(tenors) >= 2 else tenors[0])
+        return None
+
+    return None
+
+
 def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
     """Load daily 3m carry+roll time series for each instrument (in bp)."""
     dir_input = _get_input_dir()
@@ -337,7 +513,12 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         if isinstance(data, dict):
             carry = data.get('BondSwap', {}).get('BondCarry')
             if isinstance(carry, pd.DataFrame) and not carry.empty:
-                return carry.apply(pd.to_numeric, errors='coerce')
+                # BondCarry = (bond_yield - FR007S3M) * 100 = annual spread in bp.
+                # Convert to 3m carry in % to match spread_ts units (also in %):
+                #   bp → % : / 100
+                #   annual → 3m : * (90/360)
+                #   combined: / 400
+                return carry.apply(pd.to_numeric, errors='coerce') / 400.0
         return None
 
     if spread_type in ('TBondCurve', 'CBondCurve'):
@@ -346,8 +527,10 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         if isinstance(data, dict):
             spd = data.get('BondCurve', {}).get('Spread')
             if isinstance(spd, pd.DataFrame) and not spd.empty:
-                return spd.apply(pd.to_numeric, errors='coerce') * 100.0
-
+                # Spread is annual yield difference in % (e.g. 0.01 = 1bp).
+                # Convert to 3m carry in % to match price_pnl units:
+                #   annual % → 3m % : * (90/360)
+                return spd.apply(pd.to_numeric, errors='coerce') * (90.0 / 360.0)
         return None
 
     if spread_type == 'SwapSpread':
@@ -355,7 +538,35 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         if isinstance(data, dict):
             cr = data.get('CarryRoll3m')
             if isinstance(cr, pd.DataFrame) and not cr.empty:
-                return cr.apply(pd.to_numeric, errors='coerce') * 100.0
+                # CarryRoll3m is already stored as 3m carry in % (carry3m + roll3m
+                # from generators/irs.py are in % after / 100 conversion).
+                # No further scaling needed.
+                return cr.apply(pd.to_numeric, errors='coerce')
+        return None
+
+    if spread_type == 'TenorSpread':
+        # Carry component in 3m %, to match spread_ts units (raw CNBD yield diff in %).
+        # Convention for _carry_accrual: ts[t] = 3m carry in %, so that
+        #   carry_income = position * sum(ts[t0:t1]) / 90  is in %
+        # and the final *100 in run_spread_backtest converts to bp.
+        #
+        # Annual carry for each structure:
+        #   XsYs (CGB-10s30s etc.)  BUY=steepener: carry = Y_short - Y_long = -spread_%
+        #   CDBCGB cross-sector      BUY=long CDB : carry = Y_CDB - Y_CGB   = +spread_%
+        # Convert annual % → 3m %: multiply by 90/360.
+        # Negate XsYs (\d+s\d+) columns; CDBCGB stays positive.
+        try:
+            db = _load_pickle_safe(dir_input / 'database-px.pkl')
+            if isinstance(db, dict) and 'CGB' in db and 'CDB' in db:
+                tenor_ts = _build_tenor_spread_timeseries(db)
+                if tenor_ts:
+                    df = pd.DataFrame(tenor_ts).apply(pd.to_numeric, errors='coerce') * (90.0 / 360.0)
+                    for col in df.columns:
+                        if re.search(r'\d+s\d+', col, re.IGNORECASE):
+                            df[col] = -df[col]
+                    return df
+        except Exception:
+            pass
         return None
 
     return None

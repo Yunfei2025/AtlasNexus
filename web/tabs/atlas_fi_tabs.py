@@ -57,8 +57,6 @@ def build_spreads_layout():
     # Dropdown options for spread type with disabled group headers
     _spread_options = [
         {"label": "— Sectors —",           "value": "__sectors__",  "disabled": True},
-        {"label": "Institutional Behaviour","value": "InsPos"},
-        {"label": "Assets PCA",             "value": "AssetPCASpread"},
         {"label": "Sector PCA",             "value": "SectorPCASpread"},
         {"label": "Spread Regression",      "value": "BinarySpread"},
         {"label": "— Bonds —",             "value": "__bonds__",    "disabled": True},
@@ -113,18 +111,10 @@ def build_spreads_layout():
                                 "marginBottom": "2px",
                             },
                         ),
-                        _field_label("Institution Type"),
-                        dcc.Dropdown(
-                            options=InstitutionConfig.INSTITUTION_TYPES,
-                            value=InstitutionConfig.INSTITUTION_TYPES[0],
-                            id="select-inst",
-                            clearable=False,
-                            style=_DD_STYLE,
-                        ),
                         _field_label("Spread Type"),
                         dcc.Dropdown(
                             options=_spread_options,
-                            value="AssetPCASpread",
+                            value="SectorPCASpread",
                             id="spread-type",
                             clearable=False,
                             style=_DD_STYLE,
@@ -636,10 +626,9 @@ def register_callbacks(app) -> None:
         Input("data-refresh", "n_intervals"),
         Input("realtime-data", "data"),
         Input("spread-type", "value"),
-        Input("select-inst", "value"),
         Input("select-season", "value"),
     )
-    def _update_spread_bar(interval, data_rt_js, stype, inst, season):
+    def _update_spread_bar(interval, data_rt_js, stype, season):
         """Update the spread bar chart."""
         if not PLOTTING_AVAILABLE or go is None:
             # Return a simple dict-based figure if plotly isn't available
@@ -657,22 +646,42 @@ def register_callbacks(app) -> None:
             if data_rt_js:
                 data_rt = json.loads(data_rt_js)
                 # Handle special cases consistent with web.core.graphs.statistics
-                if stype == 'InsPos':
-                    if 'InsPos' not in data_rt:
-                        raise KeyError(f"Data not available for {stype}")
-                elif stype == 'NetBasis':
+                if stype == 'NetBasis':
                     if 'NetBasis' not in data_rt:
                         raise KeyError(f"Data not available for {stype}")
-                elif stype not in data_rt:
-                    # Return a friendly empty chart instead of crashing
-                    return go.Figure(data=[], layout=dict(
-                        plot_bgcolor=app_color["graph_bg"],
-                        paper_bgcolor=app_color["graph_bg"],
-                        title=f"Waiting for data: {stype}..."
-                    ))
+                elif stype not in data_rt or data_rt.get(stype) is None:
+                    _misc_spd_key = {'BinarySpread': 'BinarySpread', 'SectorPCASpread': 'PCASpread'}.get(stype)
+                    if _misc_spd_key:
+                        try:
+                            import pandas as pd
+                            import re as _re
+                            _misc_static = Utils.load_pickle_cached(os.path.join(DIR_INPUT, "Misc-spds.pkl"))
+                            if isinstance(_misc_static, Mapping):
+                                _bucket = _misc_static.get(_misc_spd_key, {})
+                                if isinstance(_bucket, dict):
+                                    _spread = _bucket.get('Spread')
+                                    _stat = _bucket.get('StatInfo')
+                                    if isinstance(_spread, pd.DataFrame) and isinstance(_stat, pd.DataFrame) and not _spread.empty:
+                                        _current = _spread.iloc[-1].rename('spread').to_frame()
+                                        _current = _current.join(_stat[['mean', 'vol']], how='inner')
+                                        _current['Zscore'] = (_current['spread'] - _current['mean']) / _current['vol']
+                                        _current['color'] = 'grey'
+                                        if stype == 'SectorPCASpread':
+                                            _current.index = [_re.sub(r'(-\d+)\.0(Y)$', r'\1\2', idx) for idx in _current.index]
+                                        data_rt[stype] = _current.to_dict()
+                                        data_rt_js = json.dumps(data_rt)
+                        except Exception:
+                            pass
+                    if stype not in data_rt or data_rt.get(stype) is None:
+                        # Return a friendly empty chart instead of crashing
+                        return go.Figure(data=[], layout=dict(
+                            plot_bgcolor=app_color["graph_bg"],
+                            paper_bgcolor=app_color["graph_bg"],
+                            title=f"Waiting for data: {stype}..."
+                        ))
 
             # Forward real data to original implementation
-            return orig_statistics(interval, data_rt_js, stype, inst, season)
+            return orig_statistics(interval, data_rt_js, stype, season)
         except Exception as e:
             print(f"Error in _update_spread_bar: {e}")
             import traceback
@@ -699,11 +708,10 @@ def register_callbacks(app) -> None:
     @app.callback(
         Output("graph-spread", "figure"),
         Input("spread-type", "value"),
-        Input("select-inst", "value"),
         Input("select-season", "value"),
         Input("ticker", "children"),
     )
-    def _update_spread_ts(stype, inst, season, ticker):
+    def _update_spread_ts(stype, season, ticker):
         """Update the spread time series chart."""
         if not PLOTTING_AVAILABLE or go is None:
             return {"data": [], "layout": {"title": "Plotting not available"}}
@@ -723,7 +731,7 @@ def register_callbacks(app) -> None:
                     paper_bgcolor=app_color["graph_bg"],
                     title="Please select a ticker from the bar chart above"
                 ))
-            return orig_spreadts(stype, inst, season, ticker)
+            return orig_spreadts(stype, season, ticker)
         except Exception as e:
             print(f"Error in _update_spread_ts: {e}")
             import traceback

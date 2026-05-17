@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -302,6 +303,15 @@ def start_engine_job(*, argv: list[str]) -> JobInfo:
         status["pid_started_at"] = proc_started_at.isoformat()
     status_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
 
+    # Daemon thread watches the subprocess and writes FINISHED immediately on exit,
+    # avoiding the zombie-PID false-positive that previously caused >10min delays.
+    threading.Thread(
+        target=_status_watcher,
+        args=(p, status_path),
+        daemon=True,
+        name=f"job-watcher-{job_id}",
+    ).start()
+
     return JobInfo(
         job_id=job_id,
         created_at=status["created_at"],
@@ -310,6 +320,29 @@ def start_engine_job(*, argv: list[str]) -> JobInfo:
         status_path=status_path,
         log_path=log_path,
     )
+
+
+def _status_watcher(proc: subprocess.Popen, status_path: Path) -> None:
+    """Block until *proc* exits, then immediately write FINISHED/FAILED to status.json.
+
+    Runs in a daemon thread so the Dash process doesn't have to wait.
+    This eliminates the >10-minute delay that occurred because zombie processes
+    still pass the os.kill(pid, 0) check in finalize_job_if_done.
+    """
+    proc.wait()
+    rc = proc.returncode
+    try:
+        raw = status_path.read_text(encoding="utf-8")
+        st = json.loads(raw)
+        if st.get("state") == "RUNNING":
+            st["state"] = "FINISHED" if rc == 0 else "FAILED"
+            st["ended_at"] = now_iso()
+            st["returncode"] = rc
+            if rc != 0:
+                st["error"] = st.get("error") or f"Process exited with returncode {rc}"
+            status_path.write_text(json.dumps(st, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def refresh_job_state(job_id: str) -> dict[str, Any] | None:

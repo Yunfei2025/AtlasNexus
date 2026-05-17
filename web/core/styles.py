@@ -96,10 +96,7 @@ def getInfo(b: str, df: Union[pd.Series, pd.DataFrame], dfts: Mapping[str, Any],
         std = df_stat.loc[b,'vol']*100
         vmax = df_stat.loc[b,'max']*100
         vmin = df_stat.loc[b,'min']*100
-        if stype in ['TBondCurve','CBondCurve']:
-            mean = 0
-        else:
-            mean = df_stat.loc[b,'mean']*100
+        mean = df_stat.loc[b,'mean']*100
         stationary = df_stat.loc[b, 'stationary']
         ttm = extractTTM(b, stype, df_stat)
 

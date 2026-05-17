@@ -19,12 +19,17 @@ from utils.log_window import get_logger
 logger = get_logger(__name__)
 
 # Instrument type: 'TBond', 'CBond', or 'IRS'
-btype = "CBond"
+btype = "TBond"
 # Update flags: list of strings from ['pool', 'bonds', 'cbts']
-update_list = ['pool', 'bonds']
+update_list = ['pool']
 
-start = '2026-04-01'  # Backtest start date
-end = '2026-05-12'    # Backtest end date
+# Default date window: most recent 3 months ending on previous CN workday
+from settings.general import DateConfig
+from dateutil.relativedelta import relativedelta
+end_dt = DateConfig.get_date_mappings()['dp'].date()
+start_dt = end_dt - relativedelta(months=3)
+start = '2026-04-01'#start_dt.strftime('%Y-%m-%d')
+end = '2026-05-15'#end_dt.strftime('%Y-%m-%d')
 
 # Performance settings
 processes = 4   # Number of parallel workers

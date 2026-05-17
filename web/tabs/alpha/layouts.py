@@ -418,7 +418,6 @@ def build_individual_backtest_panel() -> html.Div:
                     id='bt-trade-style',
                     options=[
                         {'label': ' Mean-Reversion', 'value': 'mr'},
-                        {'label': ' Carry', 'value': 'carry'},
                         {'label': ' Trend (Directional-Change)', 'value': 'trend'},
                     ],
                     value='mr', inline=True,

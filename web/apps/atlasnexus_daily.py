@@ -189,6 +189,18 @@ def build_tabs_panel():
         'letterSpacing': '0.08em', 'marginBottom': '10px',
     }
 
+    # Default start/end for Run Center: end = previous CN workday, start = end - 3 months
+    try:
+        from settings.general import DateConfig
+        from dateutil.relativedelta import relativedelta
+        dp = DateConfig.get_date_mappings()['dp'].date()
+        end_default = dp.strftime('%Y-%m-%d')
+        start_default = (dp - relativedelta(months=3)).strftime('%Y-%m-%d')
+    except Exception:
+        # Fallback to a sensible static default if date utilities are unavailable
+        end_default = '2026-05-15'
+        start_default = '2026-02-15'
+
     run_center_content = html.Div(
         [
             # ── Daily Pipeline card ──────────────────────────────────────────
@@ -242,7 +254,7 @@ def build_tabs_panel():
                         dcc.Input(
                             id="an-bt-start",
                             type="text",
-                            value="2026-01-01",
+                            value=start_default,
                             placeholder="YYYY-MM-DD",
                             debounce=True,
                             style=_input_style,
@@ -254,7 +266,7 @@ def build_tabs_panel():
                         dcc.Input(
                             id="an-bt-end",
                             type="text",
-                            value="2026-03-01",
+                            value=end_default,
                             placeholder="YYYY-MM-DD",
                             debounce=True,
                             style=_input_style,

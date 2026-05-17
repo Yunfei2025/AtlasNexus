@@ -51,9 +51,33 @@ def loadIRSPKL():
     return cvdata
 
 
-def loadDB(btype,prange,update):
+def loadDB(btype, prange, update):
     if update['pool']:
-        retrieveWindBacktestPool(btype, prange)
+        dps = prange[0].strftime("%Y%m%d")
+        ds  = prange[-1].strftime("%Y%m%d")
+        cache_path = os.path.join(DIR_DATA, f'{btype}-bondpool_{dps}-{ds}.pkl')
+        canonical_path = os.path.join(DIR_DATA, btype + '-bondpool.pkl')
+
+        if os.path.exists(cache_path):
+            print(f"Bondpool cache hit — loading {os.path.basename(cache_path)}, skipping WindPy.")
+            try:
+                bond_info = pd.read_pickle(cache_path)
+            except Exception:
+                with open(cache_path, 'rb') as f:
+                    bond_info = pickle.load(f)
+            with open(canonical_path, 'wb') as f:
+                pickle.dump(bond_info, f, protocol=pickle.HIGHEST_PROTOCOL)
+        else:
+            retrieveWindBacktestPool(btype, prange)
+            # Cache the result so subsequent runs skip WindPy
+            try:
+                bond_info = pd.read_pickle(canonical_path)
+                with open(cache_path, 'wb') as f:
+                    pickle.dump(bond_info, f, protocol=pickle.HIGHEST_PROTOCOL)
+                print(f"Bondpool cached to {os.path.basename(cache_path)} for future runs.")
+            except Exception as e:
+                print(f"Warning: could not write bondpool cache: {e}")
+
     database = loadBondDataPKL(btype, prange, update['bonds'])
     database.update(loadCNBDCurvePKL(update['cbts']))
     database.update(loadIRSPKL())

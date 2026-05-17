@@ -172,6 +172,7 @@ class StatRefresher:
             pxrt = pd.read_pickle(os.path.join(DIR_INPUT, f'{btype}-rtquo.pkl'))
             #
             ytm_quote = pxrt['Quote'][['ID', 'Bid', 'Ofr']].dropna().set_index('ID')
+            ytm_quote_cv = pxrt['Quote'][['ID', 'CvBid', 'CvOfr']].dropna().set_index('ID')
             self.spot_ref[btype] = pxrt['Curve']['SpotRate'][self.tenor]
             self.spot_ref[btype].index = [f'{btype}-{i}Y' for i in self.spot_ref[btype].index]
 
@@ -199,13 +200,17 @@ class StatRefresher:
 
             self.px_bond_rt[btype] = (env['BondRT']['买价收益率'] + env['BondRT']['卖价收益率']) / 2
             spreads['BondCurve']['CloseYield'] = self.px_bond_rt[btype]
-            spreads['BondCurve']['CurveYield'] = cvpx
+            # Use affine model mid (CvBid/CvOfr) not market mid (Bid/Ofr) as CurveYield
+            spreads['BondCurve']['CurveYield'] = (ytm_quote_cv['CvBid'] + ytm_quote_cv['CvOfr']) / 2
             spreads['BondCurve']['spread'] = spreads['BondCurve']['CloseYield'] - spreads['BondCurve']['CurveYield']
             spreads['BondSwap']['spread'] = self.px_bond_rt[btype] - px_bs_rt
 
-            for k in spreads.keys():
-                mean_ = spreads[k]['mean'] if 'mean' in spreads[k].columns else 0
-                spreads[k]['Zscore'] = (spreads[k]['spread'] - mean_) / spreads[k]['vol']
+            for k, df_k in spreads.items():
+                # Use (spread - mean) / vol for all BondCurve types.
+                # For TBond, OU mean ≈ 0 so this is nearly identical to spread/vol;
+                # for CBond (policy bank), mean can be structurally non-zero.
+                mean_ = df_k['mean'] if 'mean' in df_k.columns else 0
+                df_k['Zscore'] = (df_k['spread'] - mean_) / df_k['vol']
 
             write_to_sheet[btype] = stat_his['BondCurve']
             write_to_sheet[btype + 'Swap'] = stat_his['BondSwap']
@@ -238,7 +243,8 @@ class StatRefresher:
             cvpx = (ytm_quote['Bid'] + ytm_quote['Ofr']) / 2
             spreads_all[obtype + 'Spread']['spread'] = self.px_bond_rt[obtype] - cvpx
             for t in spreads_all.keys():
-                spreads_all[t]['Zscore'] = (spreads_all[t]['spread']) / spreads_all[t]['vol']
+                mean_ = spreads_all[t]['mean'] if 'mean' in spreads_all[t].columns else 0
+                spreads_all[t]['Zscore'] = (spreads_all[t]['spread'] - mean_) / spreads_all[t]['vol']
             spreads_all[obtype + 'Spread']['bondtype'] = obtype
             self._write_pickle(spreads_all[obtype + 'Spread'], f'{obtype}-spdsrt.pkl')
 
@@ -256,7 +262,10 @@ class StatRefresher:
         spreads['BinarySpread'] = stat['BinarySpread']
         for b in spreads['BinarySpread'].index:
             label = spreads['BinarySpread'].loc[b, 'label']
-            if isinstance(label, str):
+            # Compound tickers (e.g. '260005.IB-250014.IB') must be handled as
+            # pair spreads regardless of any label inherited from updatePKL merges.
+            is_compound = isinstance(b, str) and '.IB-' in b
+            if isinstance(label, str) and not is_compound:
                 bt, yt = label[:5], label[5:]
                 anchor = stat['BinaryAnchor'][yt]
                 if b in self.px_bond_rt[bt].index:
@@ -285,6 +294,13 @@ class StatRefresher:
             spreads[t]['Zscore'] = (spreads[t]['spread'] - spreads[t]['mean']) / spreads[t]['vol']
             if t != 'PCASpread':
                 spreads[t].sort_index(inplace=True)
+
+        # Rename decimal tenors: TBond-1.0Y -> TBond-1Y, CBond-2.0Y -> CBond-2Y
+        import re as _re_stat
+        spreads['PCASpread'].index = [
+            _re_stat.sub(r'(-\d+)\.0(Y)$', r'\1\2', idx)
+            for idx in spreads['PCASpread'].index
+        ]
 
         self._write_pickle(spreads, 'Misc-spdsrt.pkl')
 

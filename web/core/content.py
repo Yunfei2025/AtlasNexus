@@ -60,16 +60,7 @@ def build_spread_tab():
                 html.Div([
                     html.H6("Spread Type"),
                     html.Div([
-                        html.H6('Select Institution Type: ', style={"padding-left": "2px"}),
-                        dcc.Dropdown(
-                            options=InstitutionConfig.INSTITUTION_TYPES,
-                            value=InstitutionConfig.INSTITUTION_TYPES[0],
-                            id="select-inst",
-                        ),
-                        html.H6('Sectors', style={"padding-left": "2px", "padding-top": "20px"}),
                         dcc.RadioItems([
-                            {'label': ['Institutional Behaviour'], 'value': 'InsPos'},
-                            {'label': 'Assets PCA', 'value': 'AssetPCASpread'},
                             {'label': 'Sector PCA', 'value': 'SectorPCASpread'},
                             {'label': ['Spread Regression', html.H6('Bonds', style={"padding-top": "20px"})], 'value': 'BinarySpread'},
                             {'label': 'Treasury Bond', 'value': 'TBondCurve'},
@@ -83,7 +74,7 @@ def build_spread_tab():
                             {'label': ['Policybank BondSwap', html.H6('Futures', style={"padding-top": "20px"})], 'value': 'CBondSwap'},
                             {'label': 'Futures Term Basis', 'value': 'TermBasis'},
                             {'label': ['Futures Net Basis'], 'value': 'NetBasis'},
-                        ], id="spread-type", value='AssetPCASpread'),
+                        ], id="spread-type", value='SectorPCASpread'),
                         dcc.Dropdown(
                             options=list(FuturesConfig.SEASONS.keys()),
                             value=list(FuturesConfig.SEASONS.keys())[0],

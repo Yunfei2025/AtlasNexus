@@ -363,6 +363,55 @@ def refresh(interval):
     if isinstance(miscspds, Mapping):
         data_rt['SectorPCASpread'] = miscspds.get('PCASpread', None)
         data_rt['BinarySpread'] = miscspds.get('BinarySpread', None)
+    # Fallback: if runtime pkl is unavailable, synthesize current rows from the
+    # static snapshot so the bar charts still show live-looking data.
+    _misc_static_loaded = False
+    _misc_static = None
+
+    def _load_misc_static():
+        nonlocal _misc_static_loaded, _misc_static
+        if not _misc_static_loaded:
+            _misc_static = Utils.load_pickle_cached(os.path.join(DIR_INPUT, "Misc-spds.pkl"))
+            _misc_static_loaded = True
+        return _misc_static
+
+    if data_rt.get('BinarySpread') is None:
+        try:
+            import pandas as pd
+            ms = _load_misc_static()
+            if isinstance(ms, Mapping):
+                _bs = ms.get('BinarySpread', {})
+                if isinstance(_bs, dict):
+                    _spread = _bs.get('Spread')
+                    _stat = _bs.get('StatInfo')
+                    if isinstance(_spread, pd.DataFrame) and isinstance(_stat, pd.DataFrame) and not _spread.empty:
+                        _current = _spread.iloc[-1].rename('spread').to_frame()
+                        _current = _current.join(_stat[['mean', 'vol']], how='inner')
+                        _current['Zscore'] = (_current['spread'] - _current['mean']) / _current['vol']
+                        _current['color'] = 'grey'
+                        data_rt['BinarySpread'] = _current
+        except Exception:
+            pass
+
+    if data_rt.get('SectorPCASpread') is None:
+        try:
+            import re as _re
+            ms = _load_misc_static()
+            if isinstance(ms, Mapping):
+                _pca = ms.get('PCASpread', {})
+                if isinstance(_pca, dict):
+                    _spread = _pca.get('Spread')
+                    _stat = _pca.get('StatInfo')
+                    if isinstance(_spread, pd.DataFrame) and isinstance(_stat, pd.DataFrame) and not _spread.empty:
+                        _current = _spread.iloc[-1].rename('spread').to_frame()
+                        _current = _current.join(_stat[['mean', 'vol']], how='inner')
+                        _current['Zscore'] = (_current['spread'] - _current['mean']) / _current['vol']
+                        _current['color'] = 'grey'
+                        # Rename '1.0Y'-style tenors to '1Y' to match RT format
+                        _current.index = [_re.sub(r'(-\d+)\.0(Y)$', r'\1\2', idx) for idx in _current.index]
+                        data_rt['SectorPCASpread'] = _current
+        except Exception:
+            pass
 
     futspds = Utils.load_pickle_cached(os.path.join(DIR_INPUT,"futures-spdsrt.pkl"))
     if isinstance(futspds, Mapping):

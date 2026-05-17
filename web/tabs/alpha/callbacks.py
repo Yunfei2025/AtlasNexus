@@ -21,7 +21,8 @@ from .data import (
     THEME, SPREAD_CATEGORIES, ZSCORE_ENTRY_THRESHOLD, MACRO_PREFIX,
     _get_input_dir, _load_pickle_safe,
     load_spread_data, load_spread_timeseries, load_carry_roll_timeseries,
-    load_macro_series, _get_duration_mult,
+    load_macro_series, _get_duration_mult, _get_borrow_cost_annual_bp,
+    _get_ttm_display, _get_current_fr007_bp,
 )
 
 _SUMMARY_ALPHA_PARQUET = str(_DIR_INPUT / 'summary_alpha_portfolio.parquet')
@@ -130,6 +131,87 @@ def register_alpha_callbacks(app) -> None:
                     df_all.loc[_pct_mask, _col] = (
                         pd.to_numeric(df_all.loc[_pct_mask, _col], errors='coerce') * 100.0
                     )
+        # ── TenorSpread Carry Calculation ──────────────────────────────────────
+        # Assume 2:1 DV01-hedged ratio (long 2 of short-tenor, short 1 of long-tenor).
+        #
+        # Carry formula (annual, per 100M notional on long leg):
+        #   Carry = spread - (1 - 1/ratio)×(Y_long_tenor - RF) - (1/ratio)×BC_long_tenor
+        #   For 2:1: = spread + 0.5×(RF - Y_long) - 0.5×BC_long (bp)
+        #
+        # Financing Adjustment: accounts for the cost/benefit of financing at RF vs Y_long
+        # Borrow Cost: directional - pay BC_long when BUY (short long-tenor bond),
+        #             pay BC_short when SELL (short short-tenor bond)
+        #
+        # >>> Adjust these parameters to match your financing conditions:
+        _TENOR_RATIO = 2.0  # DV01 hedge ratio (notional_long / notional_short)
+        _FINANCING_RATE_BP = _get_current_fr007_bp() or 137.0  # Current FR007 from market data, fallback to 137bp
+
+        if 'carry_roll' in df_all.columns and 'spread_type' in df_all.columns and 'ID' in df_all.columns:
+            _ts_mask = df_all['spread_type'].eq('TenorSpread')
+            if _ts_mask.any():
+                from .data import _get_tenor_yields_for_spread
+                _cr_ts_annual = pd.to_numeric(df_all.loc[_ts_mask, 'carry_roll'], errors='coerce')
+                _dir_ts = df_all.loc[_ts_mask].get('direction', pd.Series('', index=df_all.index[_ts_mask])).astype(str).str.strip().str.upper()
+                _fin_adj = pd.Series(0.0, index=df_all.index[_ts_mask], dtype=float)
+                _bc_adj = pd.Series(0.0, index=df_all.index[_ts_mask], dtype=float)
+
+                for _bidx in df_all.index[_ts_mask]:
+                    inst_id = str(df_all.at[_bidx, 'ID'])
+                    # Get long-tenor yield for financing adjustment
+                    try:
+                        y_short, y_long = _get_tenor_yields_for_spread(inst_id)
+                        if y_long is not None:
+                            y_long_bp = y_long * 100.0  # Convert % to bp
+                            # For BUY: financing advantage = 0.5 × (RF - Y_long)
+                            # For SELL: financing advantage = 0.5 × (RF - Y_short) where Y_short = Y_10
+                            # Simplify: always use 0.5 × (RF - Y_long) for "long tenor" benefit/cost
+                            _fin_adj.at[_bidx] = 0.5 * (_FINANCING_RATE_BP - y_long_bp)
+                    except Exception:
+                        _fin_adj.at[_bidx] = 0.0
+
+                    # Get borrow cost for borrowed leg
+                    _bc_l, _bc_s = _get_borrow_cost_annual_bp('TenorSpread', inst_id)
+                    # BUY borrows long-tenor (30Y): pay BC_long. SELL borrows short-tenor (10Y): pay BC_short
+                    if _dir_ts.at[_bidx] == 'BUY':
+                        _bc_annual = _bc_l * 0.5  # 0.5 = notional_short / notional_long for 2:1
+                    else:
+                        _bc_annual = _bc_s * 0.5  # For SELL, both legs borrow 10Y, use same 0.5 factor
+                    _bc_adj.at[_bidx] = _bc_annual / 4.0  # Convert to 3-month
+
+                # Annual carry (before scaling to 3-month):
+                # Carry = -spread + 0.5×(Y_long - RF) - 0.5×BC_long (for 2:1 ratio)
+                # Because: interest income is Y_10 (not spread), which equals Y_30 - spread
+                _cr_annual_adjusted = -_cr_ts_annual + _fin_adj - _bc_adj * 4.0
+                # Scale to 3-month
+                _cr_3m = _cr_annual_adjusted * (90.0 / 360.0)
+                df_all.loc[_ts_mask, 'carry_roll'] = _cr_3m.round(4)
+
+        # Compute TTM (years) for display and breakeven calculation
+        _snap_ttm_cache: dict = {}
+        def _ttm_cached(stype: str, inst: str):
+            if stype in ('TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'):
+                if stype not in _snap_ttm_cache:
+                    _snap_ttm_cache[stype] = load_spread_data(stype)
+                snap = _snap_ttm_cache[stype]
+                if isinstance(snap, pd.DataFrame) and inst in snap.index and 'ttm' in snap.columns:
+                    v = float(snap.loc[inst, 'ttm'])
+                    return round(v, 1) if v > 0 else None
+                return None
+            return _get_ttm_display(stype, inst)
+
+        if 'spread_type' in df_all.columns and 'ID' in df_all.columns:
+            df_all['ttm_display'] = [
+                _ttm_cached(str(r.get('spread_type', '')), str(r.get('ID', '')))
+                for _, r in df_all.iterrows()
+            ]
+            if 'carry_roll' in df_all.columns:
+                _cr_be = pd.to_numeric(df_all['carry_roll'], errors='coerce')
+                _ttm_be = pd.to_numeric(df_all['ttm_display'], errors='coerce').replace(0, np.nan)
+                # Breakeven (3m, bp): how much spread must move against you to wipe out 3m carry
+                # Only meaningful when carry is negative; positive carry needs no breakeven
+                _be_raw = (-_cr_be / _ttm_be).where(_cr_be.lt(0) & _ttm_be.notna())
+                df_all['breakeven_3m'] = _be_raw.round(4)
+
         _spread_v = pd.to_numeric(df_all.get('spread', pd.Series(dtype=float)), errors='coerce')
         _mean_v   = pd.to_numeric(df_all.get('mean',   pd.Series(dtype=float)), errors='coerce')
         _risk_vol = (
@@ -152,8 +234,22 @@ def register_alpha_callbacks(app) -> None:
         df_all['stop_loss'] = np.where(_is_mr_v, (_dist_v + 1.5 * _vol_v).round(4), (2.0 * _vol_v).round(4))
         df_all['profit_target'] = np.where(_is_mr_v, _dist_v.round(4), _trend_target_bp.round(4))
 
-        _mr_display_cols = ['ID', 'spread_type', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'halflife', 'carry_roll', 'score', 'stop_loss', 'profit_target']
-        _trend_display_cols = ['ID', 'spread_type', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'score', 'trend_state', 'stop_loss', 'profit_target']
+        # Filter: if breakeven_3m > vol, the carry cannot cover typical spread moves → exclude
+        if 'breakeven_3m' in df_all.columns and 'vol' in df_all.columns:
+            _be_f  = pd.to_numeric(df_all['breakeven_3m'], errors='coerce')
+            _vol_f = pd.to_numeric(df_all['vol'], errors='coerce').abs()
+            _ttm_f = pd.to_numeric(df_all.get('ttm_display', pd.Series(dtype=float)), errors='coerce')
+            _reject = _be_f.gt(_vol_f) & _be_f.notna() & _vol_f.gt(0) & _ttm_f.notna()
+            if _reject.any():
+                df_all = df_all[~_reject].copy()
+                if df_all.empty:
+                    return (
+                        html.Div("All candidates filtered out by breakeven > vol constraint.", style={'color': THEME['warning']}),
+                        f"Filtered at {scanned_time}", [], {},
+                    )
+
+        _mr_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'halflife', 'carry_roll', 'breakeven_3m', 'score', 'stop_loss', 'profit_target']
+        _trend_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'breakeven_3m', 'score', 'trend_state', 'stop_loss', 'profit_target']
 
         _all_display_cols = list(dict.fromkeys(_mr_display_cols + _trend_display_cols + ['style']))
         df_display = df_all.copy()
@@ -162,9 +258,9 @@ def register_alpha_callbacks(app) -> None:
         available_all = [c for c in _all_display_cols if c in df_display.columns]
         df_display = df_display[available_all].copy()
 
-        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score', 'stop_loss', 'profit_target', 'trend_state', 'regime_confidence', 'efficiency_ratio', 'hurst']:
+        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score', 'stop_loss', 'profit_target', 'trend_state', 'regime_confidence', 'efficiency_ratio', 'hurst', 'ttm_display', 'breakeven_3m']:
             if col in df_display.columns:
-                df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(4)
+                df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(1)
 
         df_mr = pd.DataFrame()
         df_trend = pd.DataFrame()
@@ -209,7 +305,8 @@ def register_alpha_callbacks(app) -> None:
             {'if': {'filter_query': '{regime} = "uncertain"',      'column_id': 'regime'}, 'color': '#9E9E9E'},
         ]
         _col_labels = {
-            'spread_type': 'type', 'carry_roll': 'carry+roll(3m,bp)',
+            'spread_type': 'type', 'ttm_display': 'ttm',
+            'carry_roll': 'carry+roll(3m,bp)', 'breakeven_3m': 'breakeven(3m,bp)',
             'stop_loss': 'stop(bp)', 'profit_target': 'target(bp)',
             'spread': 'spread(bp)', 'mean': 'mean(bp)', 'vol': 'vol(bp)',
             'regime': 'regime', 'trend_state': 'trend', 'regime_confidence': 'reg.conf',
@@ -909,12 +1006,10 @@ def register_alpha_callbacks(app) -> None:
     # -------------------------------------------------------------------------
     _BT_BASE_OPTIONS = [
         {'label': ' Mean-Reversion', 'value': 'mr'},
-        {'label': ' Carry', 'value': 'carry'},
         {'label': ' Trend (Directional-Change)', 'value': 'trend'},
     ]
     _BT_DISABLED_OPTIONS = [
         {'label': ' Mean-Reversion', 'value': 'mr', 'disabled': True},
-        {'label': ' Carry', 'value': 'carry', 'disabled': True},
         {'label': ' Trend (Directional-Change)', 'value': 'trend', 'disabled': True},
     ]
     _BT_STYLE_DIV_HIDDEN  = {'marginBottom': '5px', 'display': 'none'}
@@ -1140,6 +1235,58 @@ def register_alpha_callbacks(app) -> None:
         style = style or 'mr'
         try:
             duration_mult = _get_duration_mult(instrument, spread_type)
+            bc_long, bc_short = _get_borrow_cost_annual_bp(spread_type, instrument)
+
+            # For TenorSpread, adjust carry_roll_ts to include financing and borrow costs
+            if spread_type == 'TenorSpread' and carry_roll_ts_instrument is not None:
+                try:
+                    from .data import _get_tenor_yields_for_spread, _get_current_fr007_bp
+                    y_short, y_long = _get_tenor_yields_for_spread(instrument)
+                    fr007_bp = _get_current_fr007_bp() or 137.0
+                    tenor_ratio = 0.5  # 2:1 DV01-hedged ratio
+
+                    if y_short is not None and y_long is not None:
+                        y_short_pct = y_short
+                        y_long_pct = y_long
+                        fr007_pct = fr007_bp / 100.0
+
+                        # Adjust carry_roll_ts for both BUY and SELL directions
+                        # BUY: CR_annual = -ratio*spread + (1-ratio)*(y_long - FR007) - ratio*BC_long
+                        # SELL: CR_annual = ratio*spread - (1-ratio)*(y_long - FR007) - BC_short
+                        # Convert annual % to daily %, then multiply by position sign in backtest
+
+                        # Convert annual % to 3m % (same convention as carry_roll_ts)
+                        fin_adj_annual_pct = (1.0 - tenor_ratio) * (y_long_pct - fr007_pct)
+                        fin_adj_3m_pct = fin_adj_annual_pct * (90.0 / 360.0)
+
+                        # Borrow costs in 3m % form
+                        bc_long_3m_pct = (bc_long * tenor_ratio) * (90.0 / 360.0) / 100.0
+                        bc_short_3m_pct = (bc_short) * (90.0 / 360.0) / 100.0
+
+                        # Create direction-specific carry_roll
+                        # BUY: base_cr + fin_adj - bc_long
+                        # SELL: base_cr + fin_adj - bc_short (but negated for position -1)
+                        cr_buy = carry_roll_ts_instrument + fin_adj_3m_pct - bc_long_3m_pct
+                        cr_sell = carry_roll_ts_instrument + fin_adj_3m_pct - bc_short_3m_pct
+
+                        # For backtest, use BUY version (will be multiplied by position sign)
+                        carry_roll_ts_instrument = cr_buy
+                except Exception:
+                    pass  # Use original carry_roll_ts if adjustment fails
+
+            # For BondCurve and BondSwap, adjust carry_roll_ts to include direction-dependent borrow costs
+            elif spread_type in ['TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'] and carry_roll_ts_instrument is not None:
+                try:
+                    # Convert borrow costs from annual bp to 3m % form
+                    bc_long_3m_pct = (bc_long) * (90.0 / 360.0) / 100.0
+                    bc_short_3m_pct = (bc_short) * (90.0 / 360.0) / 100.0
+
+                    # Adjust carry_roll_ts with borrow cost deductions
+                    # For BUY positions: deduct BC_long (cost of shorting the bond)
+                    # For SELL positions: deduct BC_short (cost of shorting the short-term bond)
+                    carry_roll_ts_instrument = carry_roll_ts_instrument - bc_long_3m_pct
+                except Exception:
+                    pass  # Use original carry_roll_ts if adjustment fails
 
             if style == 'trend':
                 results = run_trend_backtest_dc(
@@ -1154,6 +1301,10 @@ def register_alpha_callbacks(app) -> None:
                     carry_roll_ts=carry_roll_ts_instrument,
                     carry_roll_bp=carry_roll_bp,
                     duration_mult=duration_mult,
+                    borrow_cost_long_bp=bc_long,
+                    borrow_cost_short_bp=bc_short,
+                    spread_type=spread_type,
+                    tenor_ratio=0.5 if spread_type == 'TenorSpread' else 1.0,
                 )
             else:
                 results = run_spread_backtest(
@@ -1166,6 +1317,10 @@ def register_alpha_callbacks(app) -> None:
                     carry_roll_ts=carry_roll_ts_instrument,
                     carry_roll_bp=carry_roll_bp,
                     duration_mult=duration_mult,
+                    borrow_cost_long_bp=bc_long,
+                    borrow_cost_short_bp=bc_short,
+                    spread_type=spread_type,
+                    tenor_ratio=0.5 if spread_type == 'TenorSpread' else 1.0,
                 )
         except Exception as exc:
             import traceback
@@ -1330,6 +1485,7 @@ def register_alpha_callbacks(app) -> None:
                     pass
 
                 dur = _get_duration_mult(asset, spread_type)
+                _bc_long, _bc_short = _get_borrow_cost_annual_bp(spread_type, asset)
 
                 try:
                     if run_trend:
@@ -1341,6 +1497,8 @@ def register_alpha_callbacks(app) -> None:
                         res = run_spread_backtest(
                             spread_ts=ts, carry_roll_ts=_cr_ts,
                             carry_roll_bp=_cr_bp, duration_mult=dur,
+                            borrow_cost_long_bp=_bc_long,
+                            borrow_cost_short_bp=_bc_short,
                         )
                 except Exception:
                     continue

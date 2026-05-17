@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import os
+import re as _re
 import json
 import pickle
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -33,9 +34,40 @@ from web.core.load import spread_ts, fixing_ts, DATA_PATH
 yunits = BondConfig.get_spread_units()
 ospread = SpreadConfig.build_ospreado()
 
+
+def _suppress_curve_yield_jumps(
+    curve_yield: pd.Series,
+    close_yield: pd.Series,
+    jump_threshold: float = 0.08,
+    ratio_threshold: float = 5.0,
+) -> pd.Series:
+    """No-op: reference bond selection is considered clean enough.
+    Returns curve_yield unchanged."""
+    return curve_yield
+
+
+def _sector_pca_sort_key(ticker: str) -> tuple:
+    """Return (group, tenor_months) sort key for SectorPCASpread tickers."""
+    def _tenor_months(t: str) -> int:
+        m = _re.match(r'^(\d+)(Y|M)$', t, _re.IGNORECASE)
+        if not m:
+            return 9999
+        n, unit = int(m.group(1)), m.group(2).upper()
+        return n * 12 if unit == 'Y' else n
+    if ticker.startswith('TBond-'):
+        return (0, _tenor_months(ticker.split('-', 1)[1]))
+    if ticker.startswith('CBond-'):
+        return (1, _tenor_months(ticker.split('-', 1)[1]))
+    if ticker.startswith('FR007S'):
+        return (2, _tenor_months(ticker.replace('FR007S', '').replace('.IR', '')))
+    if ticker.startswith('SHI3MS'):
+        return (3, _tenor_months(ticker.replace('SHI3MS', '').replace('.IR', '')))
+    return (4, ticker)
+
+
 # Thresholds and type groupings
 ZSCORE_ALERT_THRESHOLD: float = 2.0
-TYPES_SIMPLE_ONLY: set[str] = {"AssetPCASpread"}
+TYPES_SIMPLE_ONLY: set[str] = set()
 TYPES_WITH_FS: set[str] = {"SectorPCASpread"}
 TYPES_BINARY: set[str] = {"BinarySpread"}
 
@@ -73,7 +105,7 @@ def _build_fixing_trace(fixing_series: pd.Series) -> List[go.Scatter]:
 
 
 def _compute_x_range(spread_type: str, series: pd.Series) -> Dict[str, Any]:
-    if spread_type in ["InsPos", "AssetPCASpread", "SectorPCASpread", "BinarySpread"]:
+    if spread_type in ["SectorPCASpread", "BinarySpread"]:
         return dict(start=min(series.index), end=max(series.index))
     dates = DateConfig.get_date_mappings()
     return dict(start=dates["d1y"], end=dates["d"])
@@ -106,54 +138,42 @@ def _select_layout(
 ) -> Dict[str, Any]:
     if spread_type == "InsPos":
         return layout_ts_line(title, y_unit, x_range, y_range)
-    if spread_type in ("AssetPCASpread", "SectorPCASpread"):
+    if spread_type == "SectorPCASpread":
         return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, shape=True)
     if spread_type == "BinarySpread":
         return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, xmulti=True)
     return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, ymulti=True, shape=True)
 
 
-def build_spread_series(b: str, inst: str, season: int, stype: str) -> Dict[str, Any]:
+def build_spread_series(b: str, season: int, stype: str) -> Dict[str, Any]:
     """Assemble primary and auxiliary time series required for a spread chart."""
 
     def _resolve_datasets(spread_type: str):
-        if spread_type == "InsPos":
-            d = spread_ts[spread_type][inst]
-            tenors = list(d.columns)
-        else:
-            d = (
-                spread_ts[spread_type][FuturesConfig.SEASONS[season]]
-                if spread_type == "NetBasis"
-                else spread_ts[spread_type]
-            )
-            tenors = list(d["StatInfo"].index)
+        d = (
+            spread_ts[spread_type][FuturesConfig.SEASONS[season]]
+            if spread_type == "NetBasis"
+            else spread_ts[spread_type]
+        )
+        tenors = list(d["StatInfo"].index)
         return d, tenors
 
     def _ensure_tenor(selected: str, tenors: List[str]) -> str:
         return selected if selected in tenors else tenors[0]
 
     def _primary_series(spread_type: str, d, tenor: str) -> Union[pd.Series, pd.DataFrame]:
-        if spread_type == "InsPos":
-            s = d[tenor].dropna()
-            s.name = "Volume"
-            df_local = s.to_frame()
-            buy_idx = df_local[df_local["Volume"] > 0].index
-            sell_idx = df_local[df_local["Volume"] < 0].index
-            df_local.loc[buy_idx, "color"] = "green"
-            df_local.loc[sell_idx, "color"] = "red"
-            df_local["color"].fillna("grey", inplace=True)
-            return df_local
-
-        s = 100 * d["Spread"][tenor].dropna()
-        if spread_type in ["TBondCurve", "CBondCurve"]:
-            s = s - d["StatInfo"].loc[tenor, "mean"] * 100
+        if spread_type in ["TBondCurve", "CBondCurve"] + ospread:
+            cl = d["CloseYield"][tenor]
+            cy_clean = _suppress_curve_yield_jumps(d["CurveYield"][tenor], cl)
+            s = 100 * (cl - cy_clean).dropna()
+        else:
+            s = 100 * d["Spread"][tenor].dropna()
         return s
 
     dfts, tenor_options = _resolve_datasets(stype)
     b = _ensure_tenor(b, tenor_options)
     primary_series = _primary_series(stype, dfts, b)
 
-    figinfo = getInfo(b, primary_series, dfts, inst, stype)
+    figinfo = getInfo(b, primary_series, dfts, "", stype)
     ftype = getFixingType(b)
 
     def _build_additional_series(spread_type: str, d, tenor: str, season_idx: int) -> Dict[Union[int, str], Any]:
@@ -168,8 +188,9 @@ def build_spread_series(b: str, inst: str, season: int, stype: str) -> Dict[str,
             extra[1] = f"y={slope:.2f}x+{incpt:.2f}, R2: {r2:.2f}"
             return extra
         if spread_type in ["TBondCurve", "CBondCurve"] + ospread:
-            extra[0] = spread_ts[spread_type]["CloseYield"][tenor]
-            extra[1] = spread_ts[spread_type]["CurveYield"][tenor]
+            cl = spread_ts[spread_type]["CloseYield"][tenor]
+            extra[0] = cl
+            extra[1] = _suppress_curve_yield_jumps(spread_ts[spread_type]["CurveYield"][tenor], cl)
             return extra
         if spread_type in ["TBondSwap", "CBondSwap"]:
             extra[0] = spread_ts[spread_type]["BondCarry"][tenor]
@@ -276,36 +297,35 @@ def display_click_data(clickData):
               Input("data-refresh", "n_intervals"),
               Input("realtime-data", "data"),
               Input("spread-type", "value"),
-              Input("select-inst", "value"),
               Input("select-season", "value"),
               )
-def statistics(interval, data_rt_js, stype, inst, season):
+def statistics(interval, data_rt_js, stype, season):
     thd = ZSCORE_ALERT_THRESHOLD
     if not data_rt_js:
         empty_layout = layout_stat(yunits.get(stype, "Z-score"))
         return go.Figure(data=[], layout=empty_layout)
     data_rt = json.loads(data_rt_js)
 
-    if stype == 'InsPos':
-        yunit = yunits[stype]
-        df_ins = pd.DataFrame(data_rt[stype][inst])
-        spread = df_ins[0].rename('Volume').replace(0, np.nan).dropna()
+    if stype == 'NetBasis':
+        df_raw = data_rt.get(stype, {}).get(FuturesConfig.SEASONS[season])
     else:
-        if stype == 'NetBasis':
-            df_raw = data_rt[stype][FuturesConfig.SEASONS[season]]
-        else:
-            df_raw = data_rt[stype]
-        df_ = pd.DataFrame(df_raw)
-        yunit = "Z-score"
-        spread = df_[['spread', 'Zscore']].dropna()
-        buy = spread[spread["Zscore"] >= thd].index
-        sell = spread[spread["Zscore"] <= -thd].index
-        spread.loc[buy, 'color'] = 'green'
-        spread.loc[sell, 'color'] = 'red'
-        spread['color'].fillna('grey', inplace=True)
+        df_raw = data_rt.get(stype)
+    if df_raw is None:
+        raise PreventUpdate
+    df_ = pd.DataFrame(df_raw)
+    yunit = "Z-score"
+    spread = df_[['spread', 'Zscore']].dropna()
+    buy = spread[spread["Zscore"] >= thd].index
+    sell = spread[spread["Zscore"] <= -thd].index
+    spread.loc[buy, 'color'] = 'green'
+    spread.loc[sell, 'color'] = 'red'
+    spread['color'].fillna('grey', inplace=True)
 
     # Sort by index (ticker code) for better readability
-    spread = spread.sort_index()
+    if stype == 'SectorPCASpread':
+        spread = spread.loc[sorted(spread.index, key=_sector_pca_sort_key)]
+    else:
+        spread = spread.sort_index()
     
     trace = getTraceStat(spread,stype)
     layout = layout_stat(yunit)
@@ -316,12 +336,11 @@ def statistics(interval, data_rt_js, stype, inst, season):
 
 @app.callback(Output("graph-spread", "figure"),
               Input("spread-type", "value"),
-              Input("select-inst", "value"),
               Input("select-season", "value"),
               Input("ticker", "children"),
               )
-def spreadts(stype, inst, season, b):
-    dfc = build_spread_series(b, inst, season, stype)
+def spreadts(stype, season, b):
+    dfc = build_spread_series(b, season, stype)
     df = dfc["df"]
     df1 = dfc["df1"]
     fs = dfc["fs"]

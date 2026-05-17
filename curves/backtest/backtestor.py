@@ -108,8 +108,23 @@ class Backtestor:
         
         # Caching removed: always load fresh data
         from dateutil.relativedelta import relativedelta
+        # Allow backtest to explicitly retrieve data outside trading hours
+        # (e.g., weekends) while keeping normal auto-retrieval gated.
+        try:
+            from data.providers import retrieve as dp_retrieve
+            dp_retrieve.set_allow_nontrading_retrieval(True)
+        except Exception:
+            dp_retrieve = None
+
         window_range = [prange[0], prange[-1]]
-        database = db.loadDB(self.btype, window_range, self.update_flags)
+        try:
+            database = db.loadDB(self.btype, window_range, self.update_flags)
+        finally:
+            if 'dp_retrieve' in locals() and dp_retrieve is not None:
+                try:
+                    dp_retrieve.set_allow_nontrading_retrieval(False)
+                except Exception:
+                    pass
         env = loadBacktestingInputs(self.btype, window_range, database)
         prange = [ d for d in prange if d in env['Close'].index ] 
         return env, prange

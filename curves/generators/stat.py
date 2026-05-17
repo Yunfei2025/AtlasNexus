@@ -21,8 +21,41 @@ from settings.fixed_income import BondConfig, IRSConfig
 from settings.general import GeneralConfig, DateConfig 
 from settings.futures import FuturesConfig
 
+def _suppress_model_jumps(
+    df_quo: pd.DataFrame,
+    df_act: pd.DataFrame,
+    jump_threshold: float = 0.08,
+    ratio_threshold: float = 5.0,
+) -> pd.DataFrame:
+    """Suppress affine model calibration artifacts (discontinuous factor shifts) in ytm_quo.
+
+    A calibration jump is flagged when ytm_quo changes by more than `jump_threshold` (in %)
+    while ytm_act barely moves (ratio of changes exceeds `ratio_threshold`).
+    Flagged entries are replaced with NaN then linearly interpolated.
+    """
+    df_quo_diff = df_quo.diff().abs()
+    act_aligned = df_act.reindex(index=df_quo.index, columns=df_quo.columns)
+    df_act_diff = act_aligned.diff().abs()
+    very_small_act = df_act_diff.fillna(0) < 1e-6
+    ratio_exceeded = (df_act_diff > 0) & (df_quo_diff > ratio_threshold * df_act_diff)
+    outlier = (df_quo_diff > jump_threshold) & (very_small_act | ratio_exceeded)
+    if not outlier.any().any():
+        return df_quo
+    # Use .where() to avoid index/column misalignment issues on boolean-mask assignment
+    df_clean = df_quo.where(~outlier.reindex_like(df_quo).fillna(False))
+    # Cast to float64 before interpolating. The row index here is an Index of
+    # python date objects, so interpolate(method='index') fails on pandas 3.13+.
+    # Interpolate on a temporary DatetimeIndex instead, then restore the index.
+    df_clean = df_clean.astype(float)
+    original_index = df_clean.index
+    df_clean.index = pd.to_datetime(df_clean.index)
+    df_clean = df_clean.interpolate(method='time', axis=0, limit_area='inside')
+    df_clean.index = original_index
+    return df_clean
+
+
 class StatGenerator:
-    
+
     """Generate daily statistics with OOP structure and performance improvements."""
 
     def __init__(self) -> None:
@@ -62,11 +95,13 @@ class StatGenerator:
             # Clean data to handle byte strings and invalid values before statistical analysis
             df_act = df_act.apply(pd.to_numeric, errors='coerce')
             df_quo = df_quo.apply(pd.to_numeric, errors='coerce')
-            
+
+            # Remove affine model calibration jumps caused by reference bond rollovers
+            df_quo = _suppress_model_jumps(df_quo, df_act)
+
             irs_key_ts = self.env_ts['SwapTS'].loc[df_act.index[0]:df_act.index[-1]]
 
             # Compute and persist spread stats
-
             stat_bc = st.statAnalysis_BC(env, df_act, df_quo)
             # if btype == 'TBond':
             #     import pdb; pdb.set_trace()
@@ -145,7 +180,10 @@ class StatGenerator:
             # Clean data to handle byte strings and invalid values
             df_act_obond = df_act_obond.apply(pd.to_numeric, errors='coerce')
             df_quo_obond = df_quo_obond.apply(pd.to_numeric, errors='coerce')
-            
+
+            # Remove affine model calibration jumps caused by reference bond rollovers
+            df_quo_obond = _suppress_model_jumps(df_quo_obond, df_act_obond)
+
             ob_spread = {obtype + 'Spread': st.statAnalysis_BC(env_obond, df_act_obond, df_quo_obond)}
             updatePKL(ob_spread, os.path.join(DIR_INPUT, f'{obtype}-spds.pkl'))
 
@@ -226,7 +264,12 @@ class StatGenerator:
         resi = pd.DataFrame(resi_cols)
         stat1 = st.OU_calibrate(resi)
         stat_ = pd.concat([stat0, stat1], axis=1)
-        stat_['mean'] = stat_['level']
+        # Use raw historical spread mean and std for Z-score (not linear trend extrapolation).
+        # This keeps Z-scores stable regardless of when the generator was last run.
+        raw_mean = spreads_b.mean()
+        raw_std  = spreads_b.std()
+        stat_['mean'] = raw_mean.reindex(stat_.index)
+        stat_['vol']  = raw_std.reindex(stat_.index)
         stat_.drop('level', axis=1, inplace=True)
 
         # Save to Excel

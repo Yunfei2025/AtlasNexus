@@ -29,6 +29,7 @@ import pathlib
 import pandas as pd
 import numpy as np
 import datetime
+import time
 import logging
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
@@ -322,11 +323,19 @@ class BondCurveGenerator:
             self.save_curve_objects(curve_objs, dp, curve0)
 
             # parallel pricing
+            self.logger.info("starting parallel_pricing()")
+            t0 = time.perf_counter()
             quote0, sen0 = self.parallel_pricing(curve0, env, bonds_quo)
+            t1 = time.perf_counter()
+            self.logger.info(f"parallel_pricing() finished (elapsed {t1-t0:.2f}s)")
 
             # save pricing results
             # update bond prices
+            self.logger.info("starting update_bond_prices()")
+            t0 = time.perf_counter()
             self.update_bond_prices(quote0, sen0, env, dp)
+            t1 = time.perf_counter()
+            self.logger.info(f"update_bond_prices() finished (elapsed {t1-t0:.2f}s)")
             
             # build final curve — reuse the 1-month S2 already calibrated in curve0
             # (curve0 uses start0 = dp - months(sigma_window_months); do NOT
@@ -336,7 +345,11 @@ class BondCurveGenerator:
             curve.extractFactors(df_ref, bond_ref)
             
             # save final result
+            self.logger.info("starting save_final_curve()")
+            t0 = time.perf_counter()
             self.save_final_curve(curve, ref, botr, spot, term)
+            t1 = time.perf_counter()
+            self.logger.info(f"save_final_curve() finished (elapsed {t1-t0:.2f}s)")
             
             self.logger.info(f"{self.config.bond_type} curve generation completed, time: {datetime.datetime.now().strftime('%H:%M:%S')}")
             
