@@ -116,8 +116,6 @@ def _compute_y_range(
     series: pd.Series,
     x_range: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    if spread_type == "InsPos":
-        return dict(low=min(series["Volume"]), up=max(series["Volume"]))
     if x_range is not None:
         try:
             filtered = series.loc[x_range["start"]:x_range["end"]].dropna()
@@ -136,8 +134,6 @@ def _select_layout(
     y_range: Dict[str, Any],
     lineinfo: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    if spread_type == "InsPos":
-        return layout_ts_line(title, y_unit, x_range, y_range)
     if spread_type == "SectorPCASpread":
         return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, shape=True)
     if spread_type == "BinarySpread":

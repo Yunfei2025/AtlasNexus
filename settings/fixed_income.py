@@ -67,8 +67,7 @@ class BondConfig:
         'SectorPCASpread': 'Sector PCA',
         'NetBasis': 'Net Basis of Futures Contract and Deliverable Bond',
         'TermBasis': 'Term Basis between Futures Contracts',
-        'BinarySpread': 'Spread Regression',
-        'InsPos': 'Institution'
+        'BinarySpread': 'Spread Regression'
     }
     COLUMNS_EN = [
         'NAME', 'FULLNAME', 'SEC_TYPE', 'OUTSTANDINGBALANCE', 'CARRYDATE','MATURITYDATE',
@@ -101,9 +100,7 @@ class BondConfig:
     def get_spread_units(cls) -> Dict[str, str]:
         units = {}
         for k in cls.SPREAD_MAP.keys():
-            if k == 'InsPos':
-                units[k] = "Volume, 1e8"
-            elif k in ['NetBasis', 'TermBasis']:
+            if k in ['NetBasis', 'TermBasis']:
                 units[k] = "Basis, cent"
             else:
                 units[k] = "Spread, bp"

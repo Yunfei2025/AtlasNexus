@@ -260,3 +260,90 @@ input[type="button"] {
 .DateInput_input::placeholder {
     color: #aab0c0;
 }
+
+/* DatePicker popup dark theme (react-dates) */
+.SingleDatePicker_picker,
+.SingleDatePicker_picker_1,
+.SingleDatePicker_picker__directionLeft,
+.SingleDatePicker_picker__directionLeft_2,
+.DateRangePicker_picker,
+.DateRangePicker_picker_1 {
+    background: #0c2b64 !important;
+    border: 1px solid #1a3a6e !important;
+}
+
+.DayPicker,
+.DayPicker__withBorder,
+.DayPicker__withBorder_2,
+.DayPicker_weekHeader,
+.DayPicker_weekHeader_ul {
+    background: #0c2b64 !important;
+}
+
+.CalendarMonth,
+.CalendarMonthGrid,
+.CalendarMonth_caption,
+.CalendarMonth_caption_1,
+.DayPickerNavigation,
+.DayPickerNavigation_button,
+.DayPickerNavigation_button_1,
+.DayPickerNavigation_button__default,
+.DayPickerNavigation_button__default_2 {
+    background: #0c2b64 !important;
+    color: #ffffff !important;
+    border-color: #1a3a6e !important;
+}
+
+.CalendarMonth_caption,
+.CalendarMonth_caption_1,
+.DayPicker_weekHeader_li {
+    color: #ffffff !important;
+}
+
+.CalendarDay__default,
+.CalendarDay__default_2 {
+    background: #112e66 !important;
+    border: 1px solid #1a3a6e !important;
+    color: #ffffff !important;
+}
+
+.CalendarDay__default:hover,
+.CalendarDay__default_2:hover,
+.CalendarDay__hovered_span,
+.CalendarDay__hovered_span_2 {
+    background: #1a3a6e !important;
+    border: 1px solid #2e86c1 !important;
+    color: #ffffff !important;
+}
+
+.CalendarDay__selected,
+.CalendarDay__selected_2,
+.CalendarDay__selected_span,
+.CalendarDay__selected_span_2,
+.CalendarDay__selected_start,
+.CalendarDay__selected_start_2,
+.CalendarDay__selected_end,
+.CalendarDay__selected_end_2 {
+    background: #2e86c1 !important;
+    border: 1px solid #2e86c1 !important;
+    color: #ffffff !important;
+}
+
+.CalendarDay__blocked_out_of_range,
+.CalendarDay__blocked_out_of_range_2 {
+    background: #0f2552 !important;
+    border: 1px solid #163263 !important;
+    color: #7a8499 !important;
+}
+
+.CalendarDay__today,
+.CalendarDay__today_2 {
+    border: 1px solid #f39c12 !important;
+    color: #ffffff !important;
+}
+
+.DayPickerKeyboardShortcuts_buttonReset,
+.DayPickerKeyboardShortcuts_buttonReset_1 {
+    background: #0c2b64 !important;
+    color: #ffffff !important;
+}

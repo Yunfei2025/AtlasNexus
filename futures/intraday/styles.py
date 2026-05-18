@@ -84,100 +84,71 @@ def getFixingType(b: Union[str, Any]) -> str:
 
 def getInfo(b: str, df: Union[pd.Series, pd.DataFrame], dfts: Mapping[str, Any], inst: str, stype: str) -> Dict[str, Any]:
     """Build figure title and reference line info for the given spread."""
-    if stype == 'InsPos':
-        bond = b.split(':')[0]
-        term = b.split(':')[1]
-        title = "<b> %s: %s </b>,  Bond Type: %s,  Term: %s <br>" % (BondConfig.SPREAD_MAP[stype], inst, bond, term)
-        lineinfo = ''
+    df_stat = dfts['StatInfo']
+    start = df.index[-1] - relativedelta(months=GeneralConfig.STAT_WINDOW)
+    end = df.index[-1]
+    std = df_stat.loc[b,'vol']*100
+    vmax = df_stat.loc[b,'max']*100
+    vmin = df_stat.loc[b,'min']*100
+    if stype in ['TBondCurve','CBondCurve']:
+        mean = 0
     else:
-        df_stat = dfts['StatInfo']
-        start = df.index[-1] - relativedelta(months=GeneralConfig.STAT_WINDOW)
-        end = df.index[-1]
-        std = df_stat.loc[b,'vol']*100
-        vmax = df_stat.loc[b,'max']*100
-        vmin = df_stat.loc[b,'min']*100
-        if stype in ['TBondCurve','CBondCurve']:
-            mean = 0
-        else:
-            mean = df_stat.loc[b,'mean']*100
-        stationary = df_stat.loc[b, 'stationary']
-        ttm = extractTTM(b, stype, df_stat)
+        mean = df_stat.loc[b,'mean']*100
+    stationary = df_stat.loc[b, 'stationary']
+    ttm = extractTTM(b, stype, df_stat)
 
-        # halflife
-        if (df_stat.loc[b,'halflife']=='')|(df_stat.loc[b,'stationary']=='NO'):
-            halflife = 'NA'
-        else:
-            halflife = '%.1f days'%df_stat.loc[b,'halflife']
+    # halflife
+    if (df_stat.loc[b,'halflife']=='')|(df_stat.loc[b,'stationary']=='NO'):
+        halflife = 'NA'
+    else:
+        halflife = '%.1f days'%df_stat.loc[b,'halflife']
 
-        # title
-        if stype == 'BinarySpread':
-            term = df_stat.loc[b, 'label']
-            if pd.isna(term):
-                ticker = b
-            else:
-                yt = term[5:]
-                anchor = dfts['Anchor'][yt]
-                ticker = b+'-'+anchor
-        elif stype == 'NetBasis':
-            ticker = b + '-' + df_stat.loc[b, 'futures']
-        else:
+    # title
+    if stype == 'BinarySpread':
+        term = df_stat.loc[b, 'label']
+        if pd.isna(term):
             ticker = b
-        title = "<b>%s Ticker: %s </b><br> \
-            Term to Maturity: %s,    Stationary: %s,    Halflife: %s <br> \
-            Mean: %.1fbp, Vol: %.1fbp \
-            Max:  %.1fbp, Min: %.1fbp "%(BondConfig.SPREAD_MAP[stype],ticker,ttm,\
-                stationary,halflife,mean,std,vmax,vmin)
-        lineinfo = dict(mean=mean, std=std, start=start,end=end)
+        else:
+            yt = term[5:]
+            anchor = dfts['Anchor'][yt]
+            ticker = b+'-'+anchor
+    elif stype == 'NetBasis':
+        ticker = b + '-' + df_stat.loc[b, 'futures']
+    else:
+        ticker = b
+    title = "<b>%s Ticker: %s </b><br> \
+        Term to Maturity: %s,    Stationary: %s,    Halflife: %s <br> \
+        Mean: %.1fbp, Vol: %.1fbp \
+        Max:  %.1fbp, Min: %.1fbp "%(BondConfig.SPREAD_MAP[stype],ticker,ttm,\
+            stationary,halflife,mean,std,vmax,vmin)
+    lineinfo = dict(mean=mean, std=std, start=start,end=end)
     return dict(title = title,line=lineinfo)
 
 def getTrace(df: Union[pd.Series, pd.DataFrame], stype: str) -> List[Any]:
     """Create main time-series trace for the spread panel."""
-    if stype == 'InsPos':
-        trace1 = [go.Bar(
-            name="Volume",
-            x=df.index,
-            y=df["Volume"],
-            yaxis='y',
-            marker=dict(
-                color=df.get("color", 'grey'),
-            ),
-            hovertext="",
-        )]
-    else:
-        trace1 = [go.Scatter(
-            name='Spread',
-            x=df.index,
-            y=df.values,
-            yaxis='y',
-            line={
-                "width": 3,
-                "color": "#2a6fd3"
-            }
-        )]
+    trace1 = [go.Scatter(
+        name='Spread',
+        x=df.index,
+        y=df.values,
+        yaxis='y',
+        line={
+            "width": 3,
+            "color": "#2a6fd3"
+        }
+    )]
     return trace1
 
 def getTraceStat(df: Union[pd.Series, pd.DataFrame], stype: str) -> go.Bar:
     """Create bar trace for statistical overview chart."""
-    if stype == 'InsPos':
-        trace = go.Bar(
-            x=df.index,
-            y=df.values,
-            marker = dict(
-                color='grey',
-                ),        
-            hovertext="",
-            name=df.name,
-        )
-    else:
-        trace = go.Bar(
-            x=df.index,
-            y=df["Zscore"],
-            marker = dict(
-                color=df["color"],
-                ),        
-            hovertext="",
-            name="Zscore"
-        )
+    trace = go.Bar(
+        x=df.index,
+        y=df["Zscore"],
+        marker = dict(
+            color=df["color"],
+            ),        
+        hovertext="",
+        name="Zscore"
+    )
     return trace
 
 def getTraceAdd(df1: Mapping[int, pd.Series], stype: str) -> List[Any]:
@@ -431,7 +402,7 @@ def extractTTM(b: str, stype: str, df_stat: pd.DataFrame) -> str:
             ttm = b.split('.')[0][-2:]
     elif stype == 'BinarySpread':
         ttm = df_stat.loc[b, 'label']
-    elif stype in ['InsPos','TermBasis']:
+    elif stype == 'TermBasis':
         ttm = ''
     else:
         ttm = '%.2fY' % df_stat.loc[b, 'ttm']

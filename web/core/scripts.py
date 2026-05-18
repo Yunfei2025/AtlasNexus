@@ -418,13 +418,9 @@ def refresh(interval):
         data_rt['NetBasis'] = futspds.get('NetBasis', None)
         data_rt['TermBasis'] = futspds.get('TermBasis', None)
 
-    positions = Utils.load_pickle_cached(os.path.join(DIR_INPUT,"positions.pkl"))
-    if isinstance(positions, Mapping):
-        positions_last = {k: v.iloc[-1] for k, v in positions.items()}
-        data_rt['InsPos'] = pd.concat(positions_last, axis=1)
-
     out_dict = {}
     for key, value in data_rt.items():
+        import pandas as pd
         if isinstance(value, pd.DataFrame):
             out_dict[key] = value.to_dict()
         elif isinstance(value, dict):

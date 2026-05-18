@@ -27,6 +27,99 @@ from ._common import (
 )
 
 
+def _coerce_float(value) -> float | None:
+    if value in (None, "", "N/A"):
+        return None
+    try:
+        return float(str(value).replace(",", "").replace("%", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _compute_alpha_carry_mtm(
+    spread_type: str,
+    instrument_id: str,
+    open_date_str: str,
+    volume_mm: float | None,
+) -> float | None:
+    if _load_cr_ts is None or not open_date_str or not volume_mm:
+        return None
+    try:
+        cr_ts = _load_cr_ts(spread_type)
+        if cr_ts is None or instrument_id not in cr_ts.columns:
+            return None
+        series = cr_ts[instrument_id].dropna()
+        open_dt = pd.to_datetime(open_date_str)
+        today = pd.Timestamp.today().normalize()
+        mask = (series.index >= open_dt) & (series.index <= today)
+        carry_cum_pct = float(series[mask].sum()) / 90.0
+        return round(volume_mm * carry_cum_pct / 100.0, 4)
+    except Exception:
+        return None
+
+
+def _refresh_alpha_display_row(row: dict) -> dict:
+    updated = dict(row)
+    open_price_bp = _coerce_float(updated.get('Open price (bp)'))
+    volume_mm = _coerce_float(updated.get('Volume (mm)'))
+    duration = _coerce_float(updated.get('Duration'))
+    close_price_bp = _coerce_float(updated.get('Close Price (bp)'))
+
+    mtm_price_mm = None
+    if None not in (open_price_bp, volume_mm, duration, close_price_bp):
+        mtm_price_mm = round(
+            volume_mm * duration * (close_price_bp - open_price_bp) / 10000.0,
+            4,
+        )
+
+    mtm_carry_mm = _compute_alpha_carry_mtm(
+        str(updated.get('Spread Type', '')),
+        str(updated.get('ID', '')),
+        str(updated.get('Open date', '')),
+        volume_mm,
+    )
+
+    mtm_total_mm = None
+    if mtm_price_mm is not None or mtm_carry_mm is not None:
+        mtm_total_mm = round((mtm_price_mm or 0.0) + (mtm_carry_mm or 0.0), 4)
+
+    updated['MTM spd (bp)'] = f"{open_price_bp:,.4f}" if open_price_bp is not None else ''
+    updated['MtM Carry (MM CNY)'] = f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else ''
+    updated['MtM Value (MM CNY)'] = f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else ''
+    return updated
+
+
+def _persist_alpha_summary_rows(rows: list[dict]) -> None:
+    records = [{
+        'spread_type': str(r.get('Spread Type', '')),
+        'ID': str(r.get('ID', '')),
+        'open_price_bp': r.get('Open price (bp)', ''),
+        'volume_mm': r.get('Volume (mm)', ''),
+        'open_date': str(r.get('Open date', '')),
+    } for r in rows]
+    pd.DataFrame(records).to_parquet(_ALPHA_POSITIONS_PARQUET, index=False)
+
+    if not os.path.exists(_SUMMARY_ALPHA_PARQUET):
+        return
+
+    snapshot = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
+    if snapshot.empty or 'ID' not in snapshot.columns:
+        snapshot.to_parquet(_SUMMARY_ALPHA_PARQUET, index=False)
+        return
+
+    current_keys = {
+        (str(r.get('Spread Type', '')), str(r.get('ID', '')))
+        for r in rows
+        if str(r.get('ID', '')) not in ('', 'TOTAL')
+    }
+
+    spread_type_series = snapshot['spread_type'].fillna('').astype(str) if 'spread_type' in snapshot.columns else pd.Series('', index=snapshot.index)
+    id_series = snapshot['ID'].fillna('').astype(str)
+    row_keys = pd.Series(list(zip(spread_type_series, id_series)), index=snapshot.index)
+    keep_mask = id_series.isin(['', 'TOTAL']) | row_keys.isin(current_keys)
+    snapshot.loc[keep_mask].to_parquet(_SUMMARY_ALPHA_PARQUET, index=False)
+
+
 def register_risk_callbacks(app):
     """Register Risk / Summary tab callbacks."""
 
@@ -246,11 +339,13 @@ def register_risk_callbacks(app):
 
                     # MTM calculation when user has filled in open_price and volume
                     mtm_price_mm = None
+                    mtm_spd_bp = None
                     mtm_carry_mm = None
                     mtm_total_mm = None
                     try:
                         open_price_bp = float(open_price_str) if open_price_str else None
                         volume_mm     = float(volume_str)     if volume_str     else None
+                        mtm_spd_bp    = open_price_bp
 
                         if open_price_bp is not None and volume_mm is not None and cp_bp is not None:
                             # Price P&L: Volume × Duration × ΔSpread / 10000  (MM CNY)
@@ -281,7 +376,7 @@ def register_risk_callbacks(app):
                         'Close Price (bp)':       f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
                         'Suggested size (MM CNY)':f"{notional:,.1f}",
                         'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",
-                        'MtM Price (MM CNY)':     f"{mtm_price_mm:,.4f}" if mtm_price_mm is not None else '',
+                        'MTM spd (bp)':           f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else '',
                         'MtM Carry (MM CNY)':     f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
                         'MtM Value (MM CNY)':     f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
                         'Weight (%)':             f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
@@ -292,7 +387,12 @@ def register_risk_callbacks(app):
 
                 _editable_cols = {'Open price (bp)', 'Volume (mm)', 'Open date'}
                 columns = [
-                    {'name': c, 'id': c, 'editable': c in _editable_cols}
+                    {
+                        'name': c,
+                        'id': c,
+                        'editable': c in _editable_cols,
+                        **({'type': 'datetime'} if c == 'Open date' else {}),
+                    }
                     for c in display_rows[0].keys()
                 ]
 
@@ -339,18 +439,51 @@ def register_risk_callbacks(app):
                         'Open price (bp)':   'User-editable: entry spread in bp',
                         'Volume (mm)':       'User-editable: position size in MM CNY',
                         'Open date':         'User-editable: trade open date (YYYY-MM-DD)',
-                        'MtM Price (MM CNY)':'Volume × Duration × (Close − Open) / 10000',
+                        'MTM spd (bp)':      'User-entered open spread shown in bp',
                         'MtM Carry (MM CNY)':'Volume × cumulative carry+roll since open date',
                         'MtM Value (MM CNY)':'MtM Price + MtM Carry',
                     },
                     tooltip_delay=0,
                     tooltip_duration=None,
                 )
+                content = html.Div([
+                    html.Div([
+                        html.Span(
+                            'Open date calendar:',
+                            style={'color': THEME['text_sub'], 'fontSize': '11px'}
+                        ),
+                        dcc.DatePickerSingle(
+                            id='summary-alpha-open-date-picker',
+                            date=None,
+                            display_format='YYYY-MM-DD',
+                            clearable=True,
+                            disabled=True,
+                            placeholder='Select an Open date cell',
+                            style={'backgroundColor': THEME['bg_input']},
+                        ),
+                        html.Span(
+                            id='summary-alpha-open-date-target',
+                            children='Click an Open date cell to edit with the calendar.',
+                            style={
+                                'color': THEME['text_sub'],
+                                'fontSize': '11px',
+                                'fontStyle': 'italic',
+                            },
+                        ),
+                    ], style={
+                        'display': 'flex',
+                        'alignItems': 'center',
+                        'gap': '10px',
+                        'marginBottom': '10px',
+                        'flexWrap': 'wrap',
+                    }),
+                    table,
+                ])
                 status = (
                     f"Alpha snapshot from {ts[:19]}"
                     + (" — saved" if is_refresh else "")
                 )
-                return table, status
+                return content, status
 
             except Exception as exc:
                 return _no_data(f"Error loading Alpha snapshot: {exc}")
@@ -367,18 +500,63 @@ def register_risk_callbacks(app):
         prevent_initial_call=True,
     )
     def _autosave_alpha_table(_ts, rows):
-        if not rows:
+        if rows is None:
             raise dash.exceptions.PreventUpdate
         try:
-            records = [{
-                'spread_type':   str(r.get('Spread Type', '')),
-                'ID':            str(r.get('ID', '')),
-                'open_price_bp': r.get('Open price (bp)', ''),
-                'volume_mm':     r.get('Volume (mm)', ''),
-                'open_date':     str(r.get('Open date', '')),
-            } for r in rows]
-            pd.DataFrame(records).to_parquet(_ALPHA_POSITIONS_PARQUET, index=False)
+            _persist_alpha_summary_rows(rows)
             return f"Edits saved at {datetime.now().strftime('%H:%M:%S')}"
         except Exception as exc:
             return f"Save failed: {exc}"
+
+    @app.callback(
+        [
+            Output('summary-alpha-open-date-picker', 'date'),
+            Output('summary-alpha-open-date-picker', 'disabled'),
+            Output('summary-alpha-open-date-target', 'children'),
+        ],
+        Input('summary-alpha-table', 'active_cell'),
+        State('summary-alpha-table', 'data'),
+        prevent_initial_call=False,
+    )
+    def _sync_alpha_open_date_picker(active_cell, rows):
+        if not rows or not active_cell or active_cell.get('column_id') != 'Open date':
+            return None, True, 'Click an Open date cell to edit with the calendar.'
+
+        row_index = active_cell.get('row')
+        if row_index is None or row_index >= len(rows):
+            return None, True, 'Click an Open date cell to edit with the calendar.'
+
+        current_value = rows[row_index].get('Open date', '')
+        parsed = pd.to_datetime(current_value, errors='coerce')
+        label = f"Editing {rows[row_index].get('ID', '')}"
+        return (
+            parsed.date().isoformat() if pd.notna(parsed) else None,
+            False,
+            label,
+        )
+
+    @app.callback(
+        [
+            Output('summary-alpha-table', 'data', allow_duplicate=True),
+            Output('summary-refresh-status', 'children', allow_duplicate=True),
+        ],
+        Input('summary-alpha-open-date-picker', 'date'),
+        State('summary-alpha-table', 'active_cell'),
+        State('summary-alpha-table', 'data'),
+        prevent_initial_call=True,
+    )
+    def _apply_alpha_open_date(date_value, active_cell, rows):
+        if not rows or not active_cell or active_cell.get('column_id') != 'Open date':
+            raise dash.exceptions.PreventUpdate
+
+        row_index = active_cell.get('row')
+        if row_index is None or row_index >= len(rows):
+            raise dash.exceptions.PreventUpdate
+
+        updated_rows = [dict(row) for row in rows]
+        updated_rows[row_index]['Open date'] = date_value or ''
+        updated_rows[row_index] = _refresh_alpha_display_row(updated_rows[row_index])
+
+        _persist_alpha_summary_rows(updated_rows)
+        return updated_rows, f"Open date saved at {datetime.now().strftime('%H:%M:%S')}"
 

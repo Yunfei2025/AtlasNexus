@@ -98,9 +98,6 @@ def _build_spread_ts() -> dict:
     out["BinarySpread"] = miscspds["BinarySpread"]
     out["AssetPCASpread"] = portspds
 
-    positions = _load_pickle(os.path.join(DIR_INPUT,"positions.pkl"))
-    out["InsPos"] = positions
-
     # futures
     futspds = _load_pickle(os.path.join(DIR_INPUT,"futures-spds.pkl"))
     out["NetBasis"] = futspds["NetBasis"]

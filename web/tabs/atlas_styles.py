@@ -20,6 +20,16 @@ tabs_styles: Dict[str, Any] = {
     "border-radius": "4px",
 }
 
+summary_subtabs_style: Dict[str, Any] = {
+    "marginBottom": "16px",
+}
+
+summary_subtabs_colors: Dict[str, Any] = {
+    "border": "#061E44",
+    "primary": "#3498db",
+    "background": "#112e66",
+}
+
 tab_selected_style: Dict[str, Any] = {
     "background": "#082255",
     "color": "white",
@@ -45,6 +55,25 @@ tab_style: Dict[str, Any] = {
     "border-style": "solid",
     "border-color": "#061E44",
 }
+
+summary_subtab_style: Dict[str, Any] = {
+    "backgroundColor": "#112e66",
+    "color": "#aab0c0",
+    "fontSize": "12px",
+    "padding": "6px 20px",
+    "border": "none",
+}
+
+
+def summary_subtab_selected_style(color: str = "#3498db") -> Dict[str, Any]:
+    return {
+        "backgroundColor": "#0c2b64",
+        "color": color,
+        "fontSize": "12px",
+        "padding": "6px 20px",
+        "borderTop": f"2px solid {color}",
+        "borderBottom": "none",
+    }
 
 # ---------------------------------------------------------------------------
 # Plotly figure layout defaults

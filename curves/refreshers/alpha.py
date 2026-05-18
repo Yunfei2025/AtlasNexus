@@ -763,14 +763,16 @@ def _add_unified_score_preview(
 
 	# ── Z-score: regression-based (spread − reg_mean) / reg_vol_resid ──────────
 	# Positive z → spread above trendline.
-	# Falls back to snapshot z when regression data are unavailable.
+	# Keep the original snapshot z-score for UI display and candidate filters,
+	# and store the regression residual z-score separately for diagnostics.
 	z_snap = pd.to_numeric(
 		out["Zscore"] if "Zscore" in out.columns else pd.Series(np.nan, index=out.index),
 		errors="coerce",
 	)
 	reg_z = (spread - reg_mean_col) / reg_vol_resid.replace(0, np.nan)
-	z = reg_z.where(reg_z.notna(), z_snap)
-	out["Zscore"] = z
+	out["snapshot_zscore"] = z_snap
+	out["reg_zscore"] = reg_z
+	out["Zscore"] = z_snap.where(z_snap.notna(), reg_z)
 
 	# ── Unified expected spread change E[Δs_H] ─────────────────────────────────
 	# E[Δs_H] = slope × H + (reg_mean − spread)
@@ -1166,6 +1168,8 @@ def build_alpha_candidates(
 	# ── BondSwap direction override + score recomputation ────────────────────────
 	# Convention: spread = bond yield − swap rate.
 	# z > 0 (spread above mean, bond cheap vs swap) → BUY; z < 0 → SELL.
+	# Use the displayed snapshot z-score here so direction stays aligned with the
+	# visible spread/mean columns in the Candidates table.
 	# The stored carry (BondCarry) is the BUY-side carry (buy bond, sell swap).
 	# Pin direction to z-score sign, then recompute score with carry correctly
 	# attributed: +carry for BUY, −carry for SELL.
