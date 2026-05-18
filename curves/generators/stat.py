@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import datetime
 import pathlib
@@ -101,11 +102,25 @@ class StatGenerator:
 
             irs_key_ts = self.env_ts['SwapTS'].loc[df_act.index[0]:df_act.index[-1]]
 
+            # Build bond par-yield key-rate DataFrame for roll computation.
+            # Columns = tenor in years (float); values = par yield in % at that tenor.
+            # TBond uses CGB key rates; CBond uses CDB key rates.
+            _cnbd_bond_ts = self.env_ts.get('CGB' if btype == 'TBond' else 'CDB')
+            _col_prefix = '中债国债到期收益率:' if btype == 'TBond' else '中债国开债到期收益率:'
+            _tenor_years = [1, 2, 3, 4, 5, 7, 10, 20, 30]
+            bond_key_ts_df = None
+            if isinstance(_cnbd_bond_ts, pd.DataFrame):
+                _avail = {
+                    t: _cnbd_bond_ts[f'{_col_prefix}{t}年']
+                    for t in _tenor_years
+                    if f'{_col_prefix}{t}年' in _cnbd_bond_ts.columns
+                }
+                if _avail:
+                    bond_key_ts_df = pd.DataFrame(_avail).loc[df_act.index[0]:df_act.index[-1]]
+
             # Compute and persist spread stats
             stat_bc = st.statAnalysis_BC(env, df_act, df_quo)
-            # if btype == 'TBond':
-            #     import pdb; pdb.set_trace()
-            stat_bs = st.statAnalysis_BS(env, df_act, irs_key_ts)
+            stat_bs = st.statAnalysis_BS(env, df_act, irs_key_ts, bond_key_ts=bond_key_ts_df)
             bond_spd = {'BondCurve': stat_bc, 'BondSwap': stat_bs}
             
             updatePKL(bond_spd, os.path.join(DIR_INPUT, f'{btype}-spds.pkl'))
@@ -359,6 +374,91 @@ class StatGenerator:
 
         updatePKL(spreads, os.path.join(DIR_INPUT, f'{btype}-spds.pkl'), rewrite=True)
 
+    # ---------------------- Tenor spreads ----------------------
+    def compute_tenor_spreads(self) -> None:
+        """Build tenor-spread (CGB/CDB slope + CDBCGB cross-sector) time series,
+        compute carry+roll (3m, %) for each instrument, run OU statistics, and
+        persist to ``Tenor-spds.pkl``.
+
+        File structure::
+
+            Tenor-spds.pkl  →  dict
+              'TenorSpread'
+                'Spread'       : pd.DataFrame  — annual yield diff in %  (index=date, cols=instruments)
+                'CarryRoll3m'  : pd.DataFrame  — 3m carry in % for a BUY trade
+                                               (XsYs: negated; CDBCGB: positive)
+                'StatInfo'     : pd.DataFrame  — OU statistics per instrument
+        """
+        env_ts = self.env_ts
+        if not isinstance(env_ts, dict) or 'CGB' not in env_ts or 'CDB' not in env_ts:
+            print('Warning: CGB/CDB key-rate data not available — skipping tenor spreads.')
+            return
+
+        cgb = env_ts['CGB']
+        cdb = env_ts['CDB']
+
+        # Column name helpers — allow the function to work even if a key is missing.
+        def _series(src: dict, key: str):
+            """Return src[key] as a float Series, or None if missing."""
+            v = src.get(key)
+            if v is None:
+                return None
+            return pd.to_numeric(v, errors='coerce')
+
+        cgb5  = _series(cgb, '中债国债到期收益率:5年')
+        cgb10 = _series(cgb, '中债国债到期收益率:10年')
+        cgb20 = _series(cgb, '中债国债到期收益率:20年')
+        cgb30 = _series(cgb, '中债国债到期收益率:30年')
+        cdb5  = _series(cdb, '中债国开债到期收益率:5年')
+        cdb10 = _series(cdb, '中债国开债到期收益率:10年')
+        cdb30 = _series(cdb, '中债国开债到期收益率:30年')
+
+        instruments = {}
+        if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10  - cgb5
+        if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30  - cgb10
+        if cgb10 is not None and cgb20 is not None: instruments['CGB-10s20s'] = cgb20  - cgb10
+        if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10  - cdb5
+        if cdb10 is not None and cdb30 is not None: instruments['CDB-10s30s'] = cdb30  - cdb10
+        if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5   - cgb5
+        if cdb10 is not None and cgb10 is not None: instruments['CDBCGB-10y'] = cdb10  - cgb10
+        if cdb30 is not None and cgb30 is not None: instruments['CDBCGB-30y'] = cdb30  - cgb30
+
+        if not instruments:
+            print('Warning: Could not build any tenor-spread series.')
+            return
+
+        # Spread DataFrame: annual yield diff in % (e.g. 0.30 for 30bp)
+        df_spread = pd.DataFrame(instruments).apply(pd.to_numeric, errors='coerce')
+        df_spread = df_spread.loc[self.start:].sort_index()
+
+        # Carry+Roll (3m) in %:
+        #   XsYs (CGB-10s30s etc.)  BUY = long short-tenor, short long-tenor
+        #     → carry = Y_short − Y_long = −spread  → CR3m = −spread × 0.25
+        #   CDBCGB cross-sector     BUY = long CDB, short CGB
+        #     → carry = Y_CDB − Y_CGB = +spread     → CR3m = +spread × 0.25
+        df_cr3m = df_spread.copy() * (90.0 / 360.0)
+        for col in df_cr3m.columns:
+            if re.search(r'\d+s\d+', col, re.IGNORECASE):
+                df_cr3m[col] = -df_cr3m[col]
+
+        # OU statistics on spread levels
+        try:
+            stat_info = st.OU_calibrate(df_spread.dropna(how='all'))
+        except Exception as exc:
+            print(f'Warning: OU calibration for tenor spreads failed: {exc}')
+            stat_info = pd.DataFrame(index=df_spread.columns)
+
+        tenor_spds = {
+            'TenorSpread': {
+                'Spread':      df_spread,
+                'CarryRoll3m': df_cr3m,
+                'StatInfo':    stat_info,
+            }
+        }
+        out_path = os.path.join(DIR_INPUT, 'Tenor-spds.pkl')
+        updatePKL(tenor_spds, out_path, rewrite=True)
+        print(f'  Tenor-spds.pkl written: {list(instruments.keys())}')
+
     # ---------------------- Orchestration ----------------------
     def run_all(self) -> None:
         self.compute_bond_and_swap_spreads()
@@ -366,6 +466,7 @@ class StatGenerator:
         self.compute_other_bond_spreads()
         self.compute_spread_regression()
         self.compute_pca_spreads()
+        self.compute_tenor_spreads()
         # self.compute_futures_stats()
         print('\nFinish initialising statistics at：', datetime.datetime.now().strftime('%H:%M:%S'))
 

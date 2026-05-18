@@ -141,32 +141,86 @@ def statAnalysis_BC(env,df1,df2):
                 CloseYield=df1,
                 CurveYield=df2)#+stat_info['mean'].T
 
-def statAnalysis_BS(env,df_act,irsKeyTS):
-    # Ornstein–Uhlenbeck Process calibration, or normal statistics
-    # formula reference: https://www.zhihu.com/question/268075949/answer/1531412127
-    # spreadvalues between quoted ytm and actual swap rate
+def statAnalysis_BS(env, df_act, irsKeyTS, bond_key_ts=None):
+    """Compute bond-swap spread statistics and BUY-side carry+roll time series.
+
+    BondCarry stores the BUY-side (long bond, pay fixed IRS) annual carry+roll in bp:
+        carry    = ytm_bond - fixrate_swap  (the bond-swap spread, annual %)
+        roll_bond = (y_bond(TTM) - y_bond(TTM-3m)) * 4  (annualised 3m bond roll, %)
+        roll_swap = (y_IRS(TTM)  - y_IRS(TTM-3m))  * 4  (annualised 3m IRS  roll, %)
+        BondCarry = (carry + roll_bond + roll_swap) * 100  (annual bp)
+
+    For SELL (short bond, receive fixed IRS), _carry_accrual multiplies by position=-1
+    to negate: SELL carry+roll = -(carry + roll_bond + roll_swap).
+
+    bond_key_ts : pd.DataFrame with float-year columns (1,2,3,4,5,7,10,...) and
+                  DatetimeIndex containing the par yield (in %) of the bond curve at
+                  each tenor.  If None, roll_bond defaults to 0.
+    """
+    ROLL_HORIZON = 0.25   # 3-month roll period in years
+    ROLL_ANNUALIZE = 4.0  # convert 3m roll → annualised per-year figure
+
     bonds = df_act.columns.intersection(env['Def'].index)
-    irs = pd.DataFrame(index=df_act.index,columns=bonds)
-    for d in irsKeyTS.index:  
-        irsKeyRates = irsKeyTS.loc[d,ANCHORS]
+    irs      = pd.DataFrame(index=df_act.index, columns=bonds)
+    irs_roll = pd.DataFrame(0.0, index=df_act.index, columns=bonds)
+    bond_roll = pd.DataFrame(0.0, index=df_act.index, columns=bonds)
+
+    for d in irsKeyTS.index:
+        irsKeyRates = irsKeyTS.loc[d, ANCHORS]
         irsKeyRates.index = TERMS
         irsKeyRates = irsKeyRates.dropna()
-        if irsKeyRates.shape[0] >= 2:
-            f = interpolate.interp1d(irsKeyRates.index,irsKeyRates.values,kind='linear')
-            for b in bonds:  
-                dtm = env['Def'].loc[b,'到期日期']
-                ttm = (dtm - d).days/365              
-                try:        
-                    if ttm <= 5:
-                        irs.loc[d,b] = f(ttm)
-                    else:
-                        irs.loc[d,b] = irsKeyRates.loc[5.0]
-                except Exception as ex:
-                    pass
-            
+        if irsKeyRates.shape[0] < 2:
+            continue
+        f_irs = interpolate.interp1d(
+            irsKeyRates.index, irsKeyRates.values, kind='linear',
+            fill_value=(float(irsKeyRates.iloc[0]), float(irsKeyRates.iloc[-1])),
+            bounds_error=False,
+        )
+
+        # Bond key-rate interpolator for this date (used for roll_bond)
+        f_bond = None
+        if bond_key_ts is not None:
+            try:
+                bkt_row = bond_key_ts.loc[d].dropna() if d in bond_key_ts.index else pd.Series(dtype=float)
+                if len(bkt_row) >= 2:
+                    xb = bkt_row.index.astype(float).to_numpy()
+                    yb = bkt_row.values.astype(float)
+                    f_bond = interpolate.interp1d(
+                        xb, yb, kind='linear',
+                        fill_value=(float(yb[0]), float(yb[-1])), bounds_error=False,
+                    )
+            except Exception:
+                f_bond = None
+
+        for b in bonds:
+            dtm = env['Def'].loc[b, '到期日期']
+            ttm = (dtm - d).days / 365
+            ttm_roll = max(0.01, ttm - ROLL_HORIZON)
+            try:
+                # IRS rate at TTM (capped at 5y, matching original behaviour)
+                if ttm <= TERMS[-1]:
+                    y_irs = float(f_irs(ttm))
+                else:
+                    y_irs = float(irsKeyRates.iloc[-1])
+                irs.loc[d, b] = y_irs
+
+                # IRS roll: annualised yield change from rolling 3m down the IRS curve
+                y_irs_roll_pt = float(f_irs(min(ttm_roll, TERMS[-1])))
+                irs_roll.loc[d, b] = (y_irs - y_irs_roll_pt) * ROLL_ANNUALIZE
+
+                # Bond roll: annualised yield change from rolling 3m down the par bond curve
+                if f_bond is not None:
+                    y_bond_at_ttm  = float(f_bond(ttm))
+                    y_bond_at_roll = float(f_bond(ttm_roll))
+                    bond_roll.loc[d, b] = (y_bond_at_ttm - y_bond_at_roll) * ROLL_ANNUALIZE
+            except Exception:
+                pass
 
     irs = irs.astype(float)
-    vol_ratio = df_act.std()/irs.std()
+    irs_roll = irs_roll.astype(float)
+    bond_roll = bond_roll.astype(float)
+
+    vol_ratio = df_act.std() / irs.std()
     spreadvalue = pd.DataFrame(columns=bonds)
     fr001 = irsKeyTS['FR001.IR']
     fr007 = irsKeyTS['FR007.IR']
@@ -175,10 +229,17 @@ def statAnalysis_BS(env,df_act,irsKeyTS):
     spread = df_act - irs
     spread = spread[bonds]
     stat_info = OU_calibrate(spread)
-    for b in bonds:     
-        stat_info.loc[b,'ttm'] = env['Def'].loc[b,'剩余期限']
-        spreadvalue[b] =  (df_act[b] - r7d3m)*100 #spread[b] - fr001 + fr007
-        stat_info.loc[b,'vol_ratio'] = vol_ratio.loc[b]
+    for b in bonds:
+        stat_info.loc[b, 'ttm'] = env['Def'].loc[b, '剩余期限']
+        # BUY-side annual carry+roll in bp:
+        #   carry     = ytm_bond − fixrate_swap  (annual %, stored in spread[b])
+        #   roll_bond = bond curve roll over 3m, annualised (annual %)
+        #   roll_swap = IRS  curve roll over 3m, annualised (annual %)
+        #   BondCarry = (carry + roll_bond + roll_swap) × 100  (annual bp)
+        rb = bond_roll[b].reindex(spread.index).fillna(0.0)
+        rs = irs_roll[b].reindex(spread.index).fillna(0.0)
+        spreadvalue[b] = (spread[b] + rb + rs) * 100.0
+        stat_info.loc[b, 'vol_ratio'] = vol_ratio.loc[b]
     spreadvalue = spreadvalue[bonds]
     return dict(StatInfo=stat_info.dropna(subset=['stationary']),
                 Spread=spread,

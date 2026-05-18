@@ -314,66 +314,54 @@ def build_tabs_panel():
     
     beta_content = html.Div(
         [
-            html.Div(
-                [
-                    dcc.Tabs(
-                        id="an-beta-subtabs",
-                        value="factor",
-                        vertical=True,
-                        children=[
-                            dcc.Tab(label="Factor",    value="factor",            style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Portfolio", value="portfolio",         style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Rebalance", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Bond",      value="bond",              style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Backtest",  value="factor-model-bt",   style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Futures",   value="backtest-factor",   style=tab_style, selected_style=tab_selected_style),
-                        ],
-                        style={"minHeight": "520px"},
-                    ),
-                    html.Div([
-                            html.Div(id="beta-factor-div",            children=build_multiasset_factor_layout(),     style={"display": "block", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-portfolio-div",         children=build_multiasset_portfolio_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-bond-div",              children=build_multiasset_bond_layout(),       style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-factor-model-bt-div",   children=build_risk_factor_backtest_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-backtest-factor-div",   children=build_factor_backtest_layout(),       style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                        ], style={"position": "relative", "flex": "1", "minWidth": "0"}),
+            dcc.Tabs(
+                id="an-beta-subtabs",
+                value="factor",
+                children=[
+                    dcc.Tab(label="Factor",    value="factor",            style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Portfolio", value="portfolio",         style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Rebalance", value="backtest-portfolio", style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Bond",      value="bond",              style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Backtest",  value="factor-model-bt",   style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Futures",   value="backtest-factor",   style=tab_style, selected_style=tab_selected_style),
                 ],
-                style={"display": "flex", "flexDirection": "row", "gap": "12px"},
+                style=tabs_styles,
             ),
+            html.Div([
+                html.Div(id="beta-factor-div",             children=build_multiasset_factor_layout(),     style={"display": "block"}),
+                html.Div(id="beta-portfolio-div",          children=build_multiasset_portfolio_layout(),  style={"display": "none"}),
+                html.Div(id="beta-bond-div",               children=build_multiasset_bond_layout(),       style={"display": "none"}),
+                html.Div(id="beta-factor-model-bt-div",    children=build_risk_factor_backtest_layout(),  style={"display": "none"}),
+                html.Div(id="beta-backtest-factor-div",    children=build_factor_backtest_layout(),       style={"display": "none"}),
+                html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(),   style={"display": "none"}),
+            ], style={"position": "relative"}),
         ]
     )
     
     alpha_content = html.Div(
         [
-            html.Div(
-                [
-                    dcc.Tabs(
-                        id="an-alpha-subtabs",
-                        value="candidates",
-                        vertical=True,
-                        children=[
-                            dcc.Tab(label="Candidates", value="candidates", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Portfolio",  value="portfolio",  style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Backtest",   value="backtest",   style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Spread",     value="spreads",    style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Pairs",      value="pairs",      style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Volatility", value="volatility", style=tab_style, selected_style=tab_selected_style),
-                        ],
-                        style={"minHeight": "520px"},
-                    ),
-                    html.Div([
-                            html.Div(id="alpha-candidates-div", children=build_candidates_layout(), style={"display": "block", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-portfolio-div",  children=build_portfolio_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-backtest-div",   children=build_backtest_layout(),   style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-spreads-div",    children=build_spreads_layout(),    style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-pairs-div",      children=build_pairs_layout(),      style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="alpha-volatility-div", children=build_volatility_layout(), style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                        # alpha-basket-div intentionally removed
-                        ], style={"position": "relative", "flex": "1", "minWidth": "0"}),
+            dcc.Tabs(
+                id="an-alpha-subtabs",
+                value="candidates",
+                children=[
+                    dcc.Tab(label="Candidates", value="candidates", style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Portfolio",  value="portfolio",  style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Backtest",   value="backtest",   style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Spread",     value="spreads",    style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Pairs",      value="pairs",      style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Volatility", value="volatility", style=tab_style, selected_style=tab_selected_style),
                 ],
-                style={"display": "flex", "flexDirection": "row", "gap": "12px"},
+                style=tabs_styles,
             ),
+            html.Div([
+                html.Div(id="alpha-candidates-div", children=build_candidates_layout(), style={"display": "block"}),
+                html.Div(id="alpha-portfolio-div",  children=build_portfolio_layout(),  style={"display": "none"}),
+                html.Div(id="alpha-backtest-div",   children=build_backtest_layout(),   style={"display": "none"}),
+                html.Div(id="alpha-spreads-div",    children=build_spreads_layout(),    style={"display": "none"}),
+                html.Div(id="alpha-pairs-div",      children=build_pairs_layout(),      style={"display": "none"}),
+                html.Div(id="alpha-volatility-div", children=build_volatility_layout(), style={"display": "none"}),
+                # alpha-basket-div intentionally removed
+            ], style={"position": "relative"}),
         ]
     )
     
@@ -386,31 +374,25 @@ def build_tabs_panel():
 
     market_content = html.Div(
         [
-            html.Div(
-                [
-                    dcc.Tabs(
-                        id="an-market-subtabs",
-                        value="data",
-                        vertical=True,
-                        children=[
-                            dcc.Tab(label="Data",    value="data",    style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Trend",   value="trend",   style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Pricer",  value="pricer",  style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Surface", value="surface", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Curves",  value="curves",  style=tab_style, selected_style=tab_selected_style),
-                        ],
-                        style={"minHeight": "520px"},
-                    ),
-                    html.Div([
-                            html.Div(id="market-data-div",    children=build_market_data_layout(), style={"display": "block", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-trend-div",   children=build_trend_layout(),   style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-pricer-div",  children=build_pricer_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-surface-div", children=build_surface_layout(), style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                            html.Div(id="market-curves-div",  children=build_curves_layout(),  style={"display": "none", "paddingLeft": "16px", "boxSizing": "border-box"}),
-                        ], style={"position": "relative", "flex": "1", "minWidth": "0"}),
+            dcc.Tabs(
+                id="an-market-subtabs",
+                value="data",
+                children=[
+                    dcc.Tab(label="Data",    value="data",    style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Trend",   value="trend",   style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Pricer",  value="pricer",  style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Surface", value="surface", style=tab_style, selected_style=tab_selected_style),
+                    dcc.Tab(label="Curves",  value="curves",  style=tab_style, selected_style=tab_selected_style),
                 ],
-                style={"display": "flex", "flexDirection": "row", "gap": "12px"},
+                style=tabs_styles,
             ),
+            html.Div([
+                html.Div(id="market-data-div",    children=build_market_data_layout(), style={"display": "block"}),
+                html.Div(id="market-trend-div",   children=build_trend_layout(),       style={"display": "none"}),
+                html.Div(id="market-pricer-div",  children=build_pricer_layout(),      style={"display": "none"}),
+                html.Div(id="market-surface-div", children=build_surface_layout(),     style={"display": "none"}),
+                html.Div(id="market-curves-div",  children=build_curves_layout(),      style={"display": "none"}),
+            ], style={"position": "relative"}),
         ]
     )
 

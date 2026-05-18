@@ -563,6 +563,14 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         return None
 
     if spread_type == 'TenorSpread':
+        # Primary: read from pre-computed Tenor-spds.pkl written by StatGenerator.
+        tenor_spds = _load_pickle_safe(dir_input / 'Tenor-spds.pkl')
+        if isinstance(tenor_spds, dict):
+            cr = tenor_spds.get('TenorSpread', {}).get('CarryRoll3m')
+            if isinstance(cr, pd.DataFrame) and not cr.empty:
+                return cr.apply(pd.to_numeric, errors='coerce')
+
+        # Fallback: compute on-the-fly from database-px.pkl.
         # Carry component in 3m %, to match spread_ts units (raw CNBD yield diff in %).
         # Convention for _carry_accrual: ts[t] = 3m carry in %, so that
         #   carry_income = position * sum(ts[t0:t1]) / 90  is in %
@@ -659,7 +667,14 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         return None
 
     elif spread_type == 'TenorSpread':
-        # Try lightweight loader first (may omit CDB); if incomplete, read database-px.pkl directly
+        # Primary: read from pre-computed Tenor-spds.pkl written by StatGenerator.
+        tenor_spds = _load_pickle_safe(dir_input / 'Tenor-spds.pkl')
+        if isinstance(tenor_spds, dict):
+            spd = tenor_spds.get('TenorSpread', {}).get('Spread')
+            if isinstance(spd, pd.DataFrame) and not spd.empty:
+                return spd.apply(pd.to_numeric, errors='coerce')
+
+        # Fallback: compute on-the-fly (lightweight loader first, then database-px.pkl).
         try:
             from curves.utils.loader import loadCNBDTS
             env = loadCNBDTS()
