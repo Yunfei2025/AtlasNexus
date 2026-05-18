@@ -25,6 +25,7 @@ from curves.utils.loader import loadInstrumentDefinition, loadStatData, loadRefD
 from curves.utils.retrieve import retrieveEnvRT
 from settings.paths import DIR_INPUT
 from settings.general import GeneralConfig, DateConfig
+from settings.fixed_income import BondConfig
 from curves.calibration.stat import statAdjust
 from curves.utils.plot import plotCurve
 from curves.calibration.selector import compute_spot_term_panels
@@ -53,7 +54,7 @@ def _price_bucket(bucket):
 class BondCurveRefresher:
     """Refresh curve prices in an object-oriented, performant way."""
 
-    def __init__(self, bond_type: str, max_workers: Optional[int] = None, min_maturity: float = GeneralConfig.MIN_MATURITY, max_maturity: float = GeneralConfig.MAX_MATURITY):
+    def __init__(self, bond_type: str, max_workers: Optional[int] = None, min_maturity: float = BondConfig.PRICING_MIN_TTM, max_maturity: float = BondConfig.PRICING_MAX_TTM):
         self.bond_type = bond_type
         self.max_workers = max_workers if max_workers is not None else GeneralConfig.N_CORE
         self.min_maturity = min_maturity
@@ -134,6 +135,12 @@ class BondCurveRefresher:
             raise ValueError("Pricing inputs are not initialized")
 
         ref_series = self.bond_ref_df[price_type].dropna()
+        # Mirror the generator: keep only reference points within the pricing TTM band
+        # so the 3-factor affine fit is not pulled by noisy short-end / very-long bonds.
+        _ttm_idx = pd.to_numeric(pd.Series(ref_series.index), errors='coerce').values
+        _fit_mask = (_ttm_idx >= BondConfig.PRICING_MIN_TTM) & (_ttm_idx <= BondConfig.PRICING_MAX_TTM)
+        if _fit_mask.sum() >= 3:
+            ref_series = ref_series.iloc[_fit_mask]
         self.curve.extractFactors(ref_series, self.curve.reference)
         
         # build buckets

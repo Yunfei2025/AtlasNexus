@@ -56,14 +56,14 @@ if __name__ == "__main__":
 
 
     # CBond reference demo
-    file_path = os.path.join(DIR_INPUT, 'TBond-cvref.pkl')
-    data = pd.read_pickle(file_path)
+    file_path = os.path.join(DIR_INPUT, 'CBond-cvpx.pkl')
+    data0 = pd.read_pickle(file_path)
     key = 'BondCurve'
     bond_data = data[key]
 
 
     # TBond cvpx demo
-    file_path = os.path.join(DIR_DATA, 'CBond-px.pkl')
+    file_path = os.path.join(DIR_DATA, 'TBond-px.pkl')
     key = 'Volume'
     date_str = '2025-08-01'
     bond = ['180206.IB','2202002.IB']

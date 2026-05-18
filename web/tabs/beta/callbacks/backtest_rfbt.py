@@ -5,24 +5,14 @@ and run the factor-model backtest."""
 from __future__ import annotations
 
 import dash
-from dash import dcc, html, dash_table
+from dash import html, dash_table
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import pandas as pd
-import numpy as np
-import os
-import traceback
-import pathlib
-from datetime import datetime
 
-from multiasset.risk_loader import RiskFactorLoader
-from multiasset.factor_optimizer import FactorRiskParityOptimizer
-from multiasset.factor_backtest import compute_ewma_factor_vols
-from multiasset.config import RiskModelConfig
-from settings.paths import DIR_INPUT, DIR_MODELS, DIR_OUTPUT
+from settings.paths import DIR_INPUT
 
-from ..data import THEME, SELECTED_FACTOR_POOL
+from ..data import THEME
 
 
 def register_backtest_rfbt_callbacks(app):

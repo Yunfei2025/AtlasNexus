@@ -69,6 +69,7 @@ from curves.utils.file import updatePKL
 from curves.affine.curve import Curve
 from settings.paths import DIR_INPUT
 from settings.general import GeneralConfig, DateConfig
+from settings.fixed_income import BondConfig
 
 @dataclass
 class CurveConfig:
@@ -77,8 +78,9 @@ class CurveConfig:
     calculation_date: datetime.date
     start_date: datetime.date
     sigma_window_months: int = GeneralConfig.SIGMA_WINDOW_MONTHS
-    min_maturity: float = GeneralConfig.MIN_MATURITY
-    max_maturity: float = GeneralConfig.MAX_MATURITY
+    # TTM band for ytm_quo pricing — sourced from settings.fixed_income.BondConfig.
+    min_maturity: float = BondConfig.PRICING_MIN_TTM
+    max_maturity: float = BondConfig.PRICING_MAX_TTM
     tenor_points: int = 10
 
 
@@ -312,8 +314,24 @@ class BondCurveGenerator:
             df_ref = pd.Series(spot.iloc[-1].values, index=term.iloc[-1].values)
             df_ref.name = 'Ref Spot'
             bond_ref = botr.iloc[-1]
-            
-            curve0.extractFactors(df_ref, bond_ref)
+
+            # Restrict the 3-factor affine fit to reference points within the
+            # PRICING TTM window. Reference points outside this band carry
+            # extra noise (e.g. near-maturity rolldown for <1.5y bonds) and
+            # otherwise pull factors away from the long end we actually trade.
+            _ttm_min = BondConfig.PRICING_MIN_TTM
+            _ttm_max = BondConfig.PRICING_MAX_TTM
+            _ttm_idx = pd.to_numeric(pd.Series(df_ref.index), errors='coerce').values
+            _fit_mask = (_ttm_idx >= _ttm_min) & (_ttm_idx <= _ttm_max)
+            df_ref_fit = df_ref.iloc[_fit_mask] if _fit_mask.any() else df_ref
+            if _fit_mask.sum() < 3:
+                self.logger.warning(
+                    f"Only {int(_fit_mask.sum())} reference points in TTM band "
+                    f"[{_ttm_min},{_ttm_max}] — falling back to all reference points."
+                )
+                df_ref_fit = df_ref
+
+            curve0.extractFactors(df_ref_fit, bond_ref)
             
             # update curve parameters
             self.update_curve_parameters(curve0, ref, dp, bond_ref)
@@ -342,7 +360,7 @@ class BondCurveGenerator:
             #  re-calibrate from self.config.start_date which is only 7 days)
             curve = Curve(self.config.calculation_date, self.config.bond_type)
             curve.S2 = curve0.S2
-            curve.extractFactors(df_ref, bond_ref)
+            curve.extractFactors(df_ref_fit, bond_ref)
             
             # save final result
             self.logger.info("starting save_final_curve()")

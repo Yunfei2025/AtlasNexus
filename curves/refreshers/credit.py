@@ -91,7 +91,7 @@ class CreditSpreadRefresher:
         if '剩余期限' not in df_def.columns and '到期日期' in df_def.columns:
             mat = df_def['到期日期'] - pd.to_datetime(calc_date)
             df_def['剩余期限'] = mat.dt.days / 365
-        mask = (df_def['剩余期限'] > GeneralConfig.MIN_MATURITY) & (df_def['剩余期限'] < GeneralConfig.MAX_MATURITY)
+        mask = (df_def['剩余期限'] > BondConfig.PRICING_MIN_TTM) & (df_def['剩余期限'] < BondConfig.PRICING_MAX_TTM)
         self.obonds_quo = df_def[mask].index
 
     # ------------- Pricing -------------

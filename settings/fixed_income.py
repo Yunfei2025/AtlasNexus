@@ -90,8 +90,17 @@ class BondConfig:
     }
     PX = ['Bid', 'Ofr']
     BORROW_COST = {
-        5: 10, 10: 40, 20: 100, 30: 120, 
+        5: 10, 10: 40, 20: 100, 30: 120,
     } # annual cost in bp
+    # Curve pricing filter (years). Bonds outside this TTM band are excluded
+    # from `ytm_quo` (curve-implied YTM):
+    #   - Short bonds (<1.5y) have huge fit residuals under the 3-factor affine
+    #     model — 1 cent of price ≈ 13bp of YTM near maturity, so a tiny
+    #     fit residual produces a large YTM spike.
+    #   - Long bonds (>10y) are outside the calibration pool.
+    # We rarely do RV trading on <1.5y bonds anyway, so they are skipped.
+    PRICING_MIN_TTM = 1.5
+    PRICING_MAX_TTM = 10.0
     @classmethod
     def get_column_mapping(cls) -> Dict[str, str]:
         return dict(zip(cls.COLUMNS_EN, cls.COLUMNS_CN))
