@@ -101,6 +101,30 @@ class BondConfig:
     # We rarely do RV trading on <1.5y bonds anyway, so they are skipped.
     PRICING_MIN_TTM = 1.5
     PRICING_MAX_TTM = 10.0
+    # Calibration fit window (years) — decoupled from the pricing window.
+    # Reference points in [FIT_MIN_TTM, FIT_MAX_TTM] are used to extract the
+    # 3-factor affine factors. Including <1.5y points stabilizes the short end
+    # (important for bootstrapping); FIT_MIN_TTM=0.25 still skips the last few
+    # weeks before maturity where YTM is most price-sensitive.
+    FIT_MIN_TTM = 0.25
+    FIT_MAX_TTM = 10.0
+    # Reference-point staleness filter (applied in the realtime refresher
+    # before fitting). A bond is treated as stale and dropped if:
+    #   - It is missing from BondRT, OR
+    #   - Its live BID/OFR YTM equals the CNBD valuation (= fallback fired),
+    #     i.e. no real quote on that side, OR
+    #   - The bid-offer YTM spread exceeds REF_BID_OFR_MAX_BP.
+    REF_BID_OFR_MAX_BP = 15.0
+    # Short-end overlay: PCHIP-interpolate observed reference points below
+    # SHORT_ANCHOR_TTM, anchored on the right to the affine spot at the anchor
+    # tenor for continuity. The 3-factor affine model has too few DoFs to bend
+    # short and long ends simultaneously; the overlay lets the displayed curve
+    # pass through observed short bills while affine pricing of tradable
+    # bonds (≥PRICING_MIN_TTM) stays untouched.
+    SHORT_ANCHOR_TTM = 1.0
+    # Safety: if any short-end reference point's first-pass residual exceeds
+    # this, skip the overlay (data too noisy → fall back to affine fit).
+    SHORT_OVERLAY_MAX_DEV_BP = 50.0
     @classmethod
     def get_column_mapping(cls) -> Dict[str, str]:
         return dict(zip(cls.COLUMNS_EN, cls.COLUMNS_CN))

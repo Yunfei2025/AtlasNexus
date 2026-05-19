@@ -126,6 +126,87 @@ class BondCurveRefresher:
         buckets = [index_like[m * i:m * (i + 1)] for i in range(worker_count)]
         return [b for b in buckets if len(b) > 0]
 
+    # ---- Reference-point staleness filter ----
+    def _stale_reference_info(self, side: str, max_spread_bp: float) -> Dict[Any, Tuple[float, str]]:
+        """Identify reference bonds whose live quote on `side` is stale.
+
+        A bond is flagged stale when:
+          - It is missing from BondRT, OR
+          - Its `side` YTM equals the CNBD valuation (fallback fired in
+            curves/utils/retrieve._normalize_bondrt_frame), OR
+          - Both bid and ofr are present and their spread > max_spread_bp.
+
+        Returns {bond_id: (ttm, reason)}.
+        """
+        info: Dict[Any, Tuple[float, str]] = {}
+        if self.env is None or self.ref is None or self.curve is None:
+            return info
+        bond_rt = self.env.get('BondRT')
+        if bond_rt is None:
+            return info
+        if 'RefBond' not in self.ref or len(self.ref['RefBond']) == 0:
+            return info
+        df_def = self.env.get('Def', pd.DataFrame())
+        if '剩余期限' not in df_def.columns or '估价收益率:%(中债)' not in df_def.columns:
+            return info
+
+        bond_ref_today = self.ref['RefBond'].iloc[-1]
+        bid_col, ofr_col = '买价收益率', '卖价收益率'
+        eps = 1e-6  # YTM equality tolerance (in %)
+
+        for bond_id in bond_ref_today.values:
+            if pd.isna(bond_id) or bond_id not in df_def.index:
+                continue
+            ttm = float(df_def.loc[bond_id, '剩余期限'])
+            cnbd = pd.to_numeric(df_def.loc[bond_id, '估价收益率:%(中债)'], errors='coerce')
+
+            reason: Optional[str] = None
+            if bond_id not in bond_rt.index:
+                reason = "absent from BondRT"
+            else:
+                row = bond_rt.loc[bond_id]
+                bid_ytm = pd.to_numeric(row.get(bid_col), errors='coerce')
+                ofr_ytm = pd.to_numeric(row.get(ofr_col), errors='coerce')
+                side_ytm = bid_ytm if side == 'Bid' else ofr_ytm
+
+                if pd.isna(side_ytm):
+                    reason = f"no live {side}"
+                elif pd.notna(cnbd) and abs(float(side_ytm) - float(cnbd)) < eps:
+                    reason = f"{side}=CNBD (stale)"
+                elif pd.notna(bid_ytm) and pd.notna(ofr_ytm):
+                    spread_bp = abs(float(ofr_ytm) - float(bid_ytm)) * 100.0
+                    if spread_bp > max_spread_bp:
+                        reason = f"wide spread {spread_bp:.1f}bp"
+
+            if reason is not None:
+                info[bond_id] = (ttm, reason)
+        return info
+
+    def _drop_stale_refs(self, ref_series: pd.Series, side: str) -> pd.Series:
+        """Drop stale reference points from `ref_series` (indexed by TTM)."""
+        info = self._stale_reference_info(side, BondConfig.REF_BID_OFR_MAX_BP)
+        if not info:
+            return ref_series
+        stale_ttms = np.array([t for (t, _) in info.values()], dtype=float)
+        ref_ttms = ref_series.index.values.astype(float)
+        # match each ref-point TTM to a stale-bond TTM within ~2 days
+        tol = 2.0 / 365.0
+        keep = np.array([not np.any(np.abs(stale_ttms - t) < tol) for t in ref_ttms])
+        n_dropped = int((~keep).sum())
+        if n_dropped == 0:
+            return ref_series
+        if (keep.sum()) < 4:
+            logger.warning(
+                f"{side} stale filter would leave <4 points "
+                f"({int(keep.sum())} kept of {len(ref_ttms)}); skipping filter."
+            )
+            return ref_series
+        logger.info(
+            f"{side} dropped {n_dropped} stale ref point(s): "
+            + "; ".join(f"τ={t:.2f}y {b} ({r})" for b, (t, r) in info.items())
+        )
+        return ref_series[keep]
+
     # ---- Pricing ----
     def _price_one_side(self, price_type: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         logger.info(f"Processing {price_type} curve...")
@@ -135,13 +216,17 @@ class BondCurveRefresher:
             raise ValueError("Pricing inputs are not initialized")
 
         ref_series = self.bond_ref_df[price_type].dropna()
-        # Mirror the generator: keep only reference points within the pricing TTM band
-        # so the 3-factor affine fit is not pulled by noisy short-end / very-long bonds.
+        # Mirror the generator: keep reference points within the FIT TTM band
+        # (decoupled from PRICING window — includes <1.5y points for short-end stability,
+        # skips only the last few weeks before maturity where price→YTM noise blows up).
         _ttm_idx = pd.to_numeric(pd.Series(ref_series.index), errors='coerce').values
-        _fit_mask = (_ttm_idx >= BondConfig.PRICING_MIN_TTM) & (_ttm_idx <= BondConfig.PRICING_MAX_TTM)
+        _fit_mask = (_ttm_idx >= BondConfig.FIT_MIN_TTM) & (_ttm_idx <= BondConfig.FIT_MAX_TTM)
         if _fit_mask.sum() >= 3:
             ref_series = ref_series.iloc[_fit_mask]
-        self.curve.extractFactors(ref_series, self.curve.reference)
+        # Drop reference points whose live quote is stale (no live data, side fell
+        # back to CNBD valuation, or bid-ofr spread > REF_BID_OFR_MAX_BP).
+        ref_series = self._drop_stale_refs(ref_series, price_type)
+        self.curve.extractFactorsRobust(ref_series, self.curve.reference, k_mad=2.0, min_points=4)
         
         # build buckets
         total = len(self.env_quo)

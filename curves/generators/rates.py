@@ -173,8 +173,8 @@ class BondCurveGenerator:
             ref['Factors'].loc[dp, 'slope'] = float(curve.factors[1])
             ref['Factors'].loc[dp, 'curvature'] = float(curve.factors[2])
             
-            # update spot curve
-            tenor = list(np.linspace(1, 10, self.config.tenor_points))
+            # update spot curve — store short-end (PCHIP overlay) and long-end (affine).
+            tenor = [0.25, 0.5, 0.75] + list(np.linspace(1, 10, self.config.tenor_points))
             tenor_label = [f"{self.config.bond_type}-{t}Y" for t in tenor]
             spot_di = curve.fitting()['SpotRate'].loc[tenor]
             spot_di.index = [f"{self.config.bond_type}-{t}Y" for t in spot_di.index]
@@ -316,11 +316,12 @@ class BondCurveGenerator:
             bond_ref = botr.iloc[-1]
 
             # Restrict the 3-factor affine fit to reference points within the
-            # PRICING TTM window. Reference points outside this band carry
-            # extra noise (e.g. near-maturity rolldown for <1.5y bonds) and
-            # otherwise pull factors away from the long end we actually trade.
-            _ttm_min = BondConfig.PRICING_MIN_TTM
-            _ttm_max = BondConfig.PRICING_MAX_TTM
+            # FIT TTM window (decoupled from PRICING). Including <1.5y points
+            # stabilizes the short end for bootstrapping; FIT_MIN_TTM=0.25
+            # still skips the last few weeks before maturity where tiny price
+            # residuals blow up into large YTM errors.
+            _ttm_min = BondConfig.FIT_MIN_TTM
+            _ttm_max = BondConfig.FIT_MAX_TTM
             _ttm_idx = pd.to_numeric(pd.Series(df_ref.index), errors='coerce').values
             _fit_mask = (_ttm_idx >= _ttm_min) & (_ttm_idx <= _ttm_max)
             df_ref_fit = df_ref.iloc[_fit_mask] if _fit_mask.any() else df_ref
@@ -331,8 +332,8 @@ class BondCurveGenerator:
                 )
                 df_ref_fit = df_ref
 
-            curve0.extractFactors(df_ref_fit, bond_ref)
-            
+            curve0.extractFactorsRobust(df_ref_fit, bond_ref, k_mad=2.0, min_points=4)
+
             # update curve parameters
             self.update_curve_parameters(curve0, ref, dp, bond_ref)
             
@@ -360,7 +361,7 @@ class BondCurveGenerator:
             #  re-calibrate from self.config.start_date which is only 7 days)
             curve = Curve(self.config.calculation_date, self.config.bond_type)
             curve.S2 = curve0.S2
-            curve.extractFactors(df_ref_fit, bond_ref)
+            curve.extractFactorsRobust(df_ref_fit, bond_ref, k_mad=2.0, min_points=4)
             
             # save final result
             self.logger.info("starting save_final_curve()")

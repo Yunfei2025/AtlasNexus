@@ -339,7 +339,7 @@ def build_tabs_panel():
                 html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(),   style={"display": "none"}),
             ], style={"position": "relative"}),
         ],
-        style={"padding": "10px", "boxSizing": "border-box"},
+        style={"padding": "20px", "margin": "10px", "boxSizing": "border-box"},
     )
     
     alpha_content = html.Div(
@@ -368,7 +368,7 @@ def build_tabs_panel():
                 # alpha-basket-div intentionally removed
             ], style={"position": "relative"}),
         ],
-        style={"padding": "10px", "boxSizing": "border-box"},
+        style={"padding": "20px", "margin": "10px", "boxSizing": "border-box"},
     )
 
     risk_content = dcc.Loading(
@@ -401,7 +401,7 @@ def build_tabs_panel():
                 html.Div(id="market-curves-div",  children=build_curves_layout(),      style={"display": "none"}),
             ], style={"position": "relative"}),
         ],
-        style={"padding": "10px", "boxSizing": "border-box"},
+        style={"padding": "20px", "margin": "10px", "boxSizing": "border-box"},
     )
 
     return html.Div(

@@ -79,6 +79,57 @@ class Curve:
         self.factors = af.getAffineFactors(df_bs,self.S2,self.gamma,self.mtype,self.caltype)
         self.reference = bond_ref
         return self
+
+    def extractFactorsRobust(self, df_bs, bond_ref, k_mad=2.0, min_points=4):
+        """3-factor extraction with MAD-based outlier screening.
+
+        First-pass OLS, then drop reference points whose residual exceeds
+        k_mad × scaled-MAD; re-fit on the survivors. Falls back to the
+        first-pass fit if fewer than `min_points` survive.
+
+        Diagnostics: self._fit_residuals, self._fit_kept, self._fit_dropped.
+        """
+        # First-pass fit
+        self.factors = af.getAffineFactors(df_bs, self.S2, self.gamma, self.mtype, self.caltype)
+        self.reference = bond_ref
+
+        taus = df_bs.index.values.astype(float)
+        obs = df_bs.values.astype(float)
+        S2_flat = tuple(float(self.S2[i, j]) for i in range(3) for j in range(3))
+        gamma_f = float(self.gamma)
+        if isinstance(self.factors, sp.MatrixBase):
+            x_arr = np.array([float(self.factors[i]) for i in range(3)])
+        else:
+            x_arr = np.asarray(self.factors, dtype=float).ravel()
+        model = np.empty_like(obs)
+        for i, t in enumerate(taus):
+            a, B = af.calAB_np(gamma_f, float(t), S2_flat, self.mtype)
+            model[i] = a + B @ x_arr
+        residuals = obs - model
+
+        med = float(np.median(residuals))
+        mad = float(np.median(np.abs(residuals - med)))
+        scaled_mad = 1.4826 * mad
+        if scaled_mad > 0:
+            keep = np.abs(residuals - med) <= k_mad * scaled_mad
+        else:
+            keep = np.ones_like(residuals, dtype=bool)
+
+        self._fit_residuals = pd.Series(residuals, index=df_bs.index, name='residual')
+        # Full pre-MAD input (already screened by staleness + TTM band upstream).
+        # The short-end overlay uses this set so points the affine model treats
+        # as outliers — because the model is structurally too smooth at the
+        # short end — are still visible in the displayed curve.
+        self._fit_ref_input = df_bs
+        if keep.sum() >= min_points and keep.sum() < len(residuals):
+            df_kept = df_bs.iloc[keep]
+            self.factors = af.getAffineFactors(df_kept, self.S2, self.gamma, self.mtype, self.caltype)
+            self._fit_kept = keep
+            self._fit_dropped = self._fit_residuals[~keep]
+        else:
+            self._fit_kept = np.ones_like(residuals, dtype=bool)
+            self._fit_dropped = pd.Series(dtype=float, name='residual')
+        return self
         
     def affinePricing(self,bonds,bonds_quo):
         quote = pd.DataFrame(index=bonds.index,columns=['全价','净价','收益率'])
@@ -216,10 +267,9 @@ class Curve:
         return quote.astype(float)
     
     def fitting(self):
-        # curve
-        delt = 0.1
-        taus = np.arange(0.1, 10.1, delt)
-        # Vectorized: compute all taus at once via numpy path
+        # 0.05y grid so that exact 0.25/0.5/0.75 tenor lookups land on the grid.
+        delt = 0.05
+        taus = np.round(np.arange(0.05, 10.05, delt), 2)
         S2_flat = tuple(float(self.S2[i,j]) for i in range(3) for j in range(3))
         gamma_f = float(self.gamma)
         if isinstance(self.factors, sp.MatrixBase):
@@ -230,10 +280,9 @@ class Curve:
         for idx, tau in enumerate(taus):
             a, B = af.calAB_np(gamma_f, float(tau), S2_flat, self.mtype)
             spot_curve[idx] = a + B @ x_arr
-        df_curve = pd.Series(spot_curve)
-        df_curve.index = taus.round(2)
-        df_curve.name = 'SpotRate'
-        discount_curve = np.exp(-np.array(df_curve.values) * np.array(df_curve.index.values) / 100)
+        df_curve = pd.Series(spot_curve, index=taus, name='SpotRate')
+
+        discount_curve = np.exp(-df_curve.values * df_curve.index.values.astype(float) / 100)
         df_forward = _instantaneous_forward_from_discount(discount_curve, df_curve.index.values)
         df_curves = pd.concat([df_curve, df_forward], axis=1)
         return df_curves
