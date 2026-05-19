@@ -327,7 +327,7 @@ def build_tabs_panel():
                     dcc.Tab(label="Backtest",  value="factor-model-bt",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
                     dcc.Tab(label="Futures",   value="backtest-factor",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
                 ],
-                style=summary_subtabs_style,
+                style={**summary_subtabs_style, "marginTop": "8px"},
                 colors=summary_subtabs_colors,
             ),
             html.Div([
@@ -355,7 +355,7 @@ def build_tabs_panel():
                     dcc.Tab(label="Pairs",      value="pairs",      style=summary_subtab_style, selected_style=summary_subtab_selected_style("#ef553b")),
                     dcc.Tab(label="Volatility", value="volatility", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#ef553b")),
                 ],
-                style=summary_subtabs_style,
+                style={**summary_subtabs_style, "marginTop": "8px"},
                 colors={**summary_subtabs_colors, "primary": "#ef553b"},
             ),
             html.Div([
@@ -390,7 +390,7 @@ def build_tabs_panel():
                     dcc.Tab(label="Surface", value="surface", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
                     dcc.Tab(label="Curves",  value="curves",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
                 ],
-                style=summary_subtabs_style,
+                style={**summary_subtabs_style, "marginTop": "8px"},
                 colors=summary_subtabs_colors,
             ),
             html.Div([

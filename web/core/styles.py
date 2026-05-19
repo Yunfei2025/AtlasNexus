@@ -144,15 +144,7 @@ def getTraceStat(df: Union[pd.Series, pd.DataFrame], stype: str) -> go.Bar:
     trace = go.Bar(
         x=df.index,
         y=df['Zscore'],
-        marker = dict(
-            color=df['color'],
-            colorscale='Viridis',
-            cmin=-3,
-            cmax=3,
-            colorbar=dict(
-                title='Z-score',
-            )
-            ),        
+        marker=dict(color=df['color']),
         hovertext=hovertext,
         name='Zscore',
     )

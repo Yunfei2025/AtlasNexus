@@ -13,6 +13,20 @@ from dash import dcc, html, dash_table
 from ..data import THEME
 
 
+def _coerce_datetime_series(series: pd.Series | None) -> pd.Series | None:
+    """Return a copy with a timezone-naive DatetimeIndex when possible."""
+    if not isinstance(series, pd.Series):
+        return None
+    coerced = series.copy()
+    try:
+        coerced.index = pd.to_datetime(coerced.index)
+        if getattr(coerced.index, 'tz', None) is not None:
+            coerced.index = coerced.index.tz_localize(None)
+    except Exception:
+        return coerced
+    return coerced
+
+
 def build_backtest_results_display(results: Dict[str, Any], title: str = "Backtest Results") -> html.Div:
     """Build the display for backtest results."""
     import plotly.graph_objects as go
@@ -40,8 +54,8 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     is_trend = 'trend_state_ts' in results
     trades_df = results.get('trades_df')
 
-    _score_raw = results.get('norm_mom_ts') if is_trend else results.get('zscore_ts')
-    _equity_raw = results.get('equity_ts')
+    _score_raw = _coerce_datetime_series(results.get('norm_mom_ts') if is_trend else results.get('zscore_ts'))
+    _equity_raw = _coerce_datetime_series(results.get('equity_ts'))
     x_start = None
     if _score_raw is not None and len(_score_raw.dropna()) > 0:
         x_start = _score_raw.dropna().index[0]
@@ -81,7 +95,10 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             instrument_fig.add_trace(trace)
 
     if 'spread_ts' in results and results['spread_ts'] is not None:
-        spread_ts = results['spread_ts'].dropna()
+        spread_ts = _coerce_datetime_series(results['spread_ts'])
+        if spread_ts is None:
+            spread_ts = results['spread_ts']
+        spread_ts = spread_ts.dropna()
         if x_start is not None:
             spread_ts = spread_ts.loc[spread_ts.index >= x_start]
         if len(spread_ts) > 0:
@@ -113,11 +130,9 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     def _add_cr_trace(cr_ts, label, color, dash='dot'):
         if cr_ts is None or len(cr_ts) == 0:
             return
-        cr_plot = cr_ts.copy()
-        if not isinstance(cr_plot.index, pd.DatetimeIndex):
-            cr_plot.index = pd.to_datetime(cr_plot.index)
-        elif hasattr(cr_plot.index, 'tz') and cr_plot.index.tz is not None:
-            cr_plot.index = cr_plot.index.tz_localize(None)
+        cr_plot = _coerce_datetime_series(cr_ts)
+        if cr_plot is None:
+            return
         if x_start is not None:
             cr_plot = cr_plot.loc[cr_plot.index >= x_start]
         if len(cr_plot) > 0:
@@ -172,7 +187,10 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     _composite = results.get('composite_signal_ts')
     _raw_score = results.get('norm_mom_ts') if is_trend else (_composite if _composite is not None else results.get('zscore_ts'))
     if _raw_score is not None and len(_raw_score.dropna()) > 0:
-        score_ts_display = _raw_score.dropna()
+        score_ts_display = _coerce_datetime_series(_raw_score)
+        if score_ts_display is None:
+            score_ts_display = _raw_score
+        score_ts_display = score_ts_display.dropna()
         if is_trend:
             score_label = 'Norm Momentum (σ)'
         else:
@@ -248,6 +266,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     carry_ts   = results.get('carry_ts')
 
     def _trim(ts):
+        ts = _coerce_datetime_series(ts)
         if not isinstance(ts, pd.Series) or len(ts.dropna()) == 0:
             return None
         if x_start is not None:
