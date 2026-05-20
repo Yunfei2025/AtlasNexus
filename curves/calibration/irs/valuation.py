@@ -54,7 +54,7 @@ def evalueContract(di, quote_rt, fwddata, pshift):
         irs_val.loc[instrument, 'Convexity'] = contract.cov
         irs_val.loc[instrument, 'Carry(3m,bp)'] = cashflow['CashFlow(NetPay)'].iloc[0]
         irs_val.loc[instrument, 'Carry(6m,bp)'] = cashflow['CashFlow(NetPay)'].iloc[:2].sum()
-        irs_val.loc[instrument, 'Carry(1y,bp)'] = cashflow['CashFlow(NetPay)'].iloc[:3].sum()
+        irs_val.loc[instrument, 'Carry(1y,bp)'] = cashflow['CashFlow(NetPay)'].iloc[:4].sum()
         _calculate_roll_returns(irs_val, instrument, term, interpolators[curve_type], term_map)
     for period in ['3m', '6m', '1y']:
         irs_val[f'CarryRoll({period},bp)'] = irs_val[f'Carry({period},bp)'] + irs_val[f'Roll({period},bp)']

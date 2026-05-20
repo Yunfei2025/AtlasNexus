@@ -468,31 +468,25 @@ def build_market_data_layout() -> html.Div:
                        "marginBottom": "16px"},
             ),
 
-            # Row 1: Money Market + Bond Futures
+            # Left column (Money Market / Reference Bonds / Bond Futures) + Right column (IRS Forward Rates)
             html.Div(
                 [
+                    # ── Left column: three stacked cards ──────────────────
                     html.Div(
-                        _card("MONEY MARKET RATES",
-                              html.Div(id="mkt-data-rates-table")),
-                        style={"flex": "1", "minWidth": "0"},
+                        [
+                            _card("MONEY MARKET RATES",
+                                  html.Div(id="mkt-data-rates-table")),
+                            html.Div(style={"height": "14px"}),
+                            _card("REFERENCE BONDS",
+                                  html.Div(id="mkt-data-refbond-table")),
+                            html.Div(style={"height": "14px"}),
+                            _card("BOND FUTURES & CTD",
+                                  html.Div(id="mkt-data-futures-table")),
+                        ],
+                        style={"flex": "1 1 auto", "minWidth": "420px",
+                               "display": "flex", "flexDirection": "column"},
                     ),
-                    html.Div(
-                        _card("BOND FUTURES & CTD",
-                              html.Div(id="mkt-data-futures-table")),
-                        style={"flex": "1", "minWidth": "0"},
-                    ),
-                ],
-                style={"display": "flex", "gap": "14px", "marginBottom": "14px"},
-            ),
-
-            # Row 2: Reference Bonds + IRS Forward Rates
-            html.Div(
-                [
-                    html.Div(
-                        _card("REFERENCE BONDS",
-                              html.Div(id="mkt-data-refbond-table")),
-                        style={"flex": "1 1 auto", "minWidth": "450px"},
-                    ),
+                    # ── Right column: IRS Forward Rates ───────────────────
                     html.Div(
                         _card(
                             "IRS FORWARD RATES",
@@ -551,7 +545,7 @@ def build_market_data_layout() -> html.Div:
                         style={"flex": "1.2 1 auto", "minWidth": "0"},
                     ),
                 ],
-                style={"display": "flex", "gap": "14px"},
+                style={"display": "flex", "gap": "14px", "alignItems": "flex-start"},
             ),
         ],
         style={"padding": "16px", "backgroundColor": THEME["bg_main"]},

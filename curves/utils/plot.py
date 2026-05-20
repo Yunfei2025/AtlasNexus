@@ -712,7 +712,7 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
                 carry = (s0 - fund_rate) * 100 * period_term
                 T_roll = T - period_term
                 sr = float(np.interp(max(T_roll, spot_tenor[0]), spot_tenor, spot_vals))
-                roll = (s0 - sr) * T * 100 if T_roll > 0.01 else 0.0
+                roll = (s0 - sr) * T_roll * 100 if T_roll > 0.01 else 0.0
                 cr_list.append(carry + roll)
             cr_vals[f'CarryRoll({period},bp)'] = cr_list
         bond_carry_roll[btype] = cr_vals
