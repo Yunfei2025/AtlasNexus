@@ -50,6 +50,7 @@ _OPTIONS = [
     {"label": "5Y − 1Y FR007",                    "value": "FR007:5Y-1Y"},
     {"label": "── Bond-Swap Spreads ────────",   "value": "__bsw__",  "disabled": True},
     {"label": "TBond − FR007  1Y",                "value": "TBond-FR007:1Y"},
+    {"label": "TBond − FR007  2Y",                "value": "TBond-FR007:2Y"},
     {"label": "TBond − FR007  5Y",                "value": "TBond-FR007:5Y"},
 ]
 
@@ -76,6 +77,7 @@ _QUICK = [
     ("FR007:5Y-2Y",  "IRS 5s2s"),
     ("FR007:5Y-1Y",  "IRS 5s1s"),
     ("TBond-FR007:1Y", "BdSwap 1Y"),
+    ("TBond-FR007:2Y", "BdSwap 2Y"),
     ("TBond-FR007:5Y", "BdSwap 5Y"),
 ]
 

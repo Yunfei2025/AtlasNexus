@@ -559,6 +559,21 @@ def plotIRSSpotCurve(fixings, curve_dict):
                  showlegend=False)
                  for (i, c) in enumerate(tenor.keys())]
 
+    # Add TBond/CBond fit curves on the spot chart when the refresher has populated them.
+    for btype, color in [('TBond', '#FF8C00'), ('CBond', '#FFFF33')]:
+        spot_col = f'{btype}SpotRate'
+        if spot_col not in curve_dict['instfit']['r7d'].columns:
+            continue
+        trace1.append(go.Scatter(
+            name=btype + 'FitCurve',
+            x=curve_dict['instfit']['r7d'].index,
+            y=curve_dict['instfit']['r7d'][spot_col],
+            line={
+                "width": 3,
+                "color": color,
+            },
+        ))
+
     # plot reference markers
     colormap = {'s3m':'blue','r7d':'red'}
     trace2 = [go.Scatter(
@@ -664,13 +679,50 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
 
     tenor = {'r7d': 7 / GeneralConfig.YN, 's3m': 90 / GeneralConfig.YN}
     label = {'r7d': 'FR007', 's3m': 'Shibor3M', 'basis': 'S.R.'}
-    tenorlist = np.array([1 / 2, 3 / 4, 1, 2, 3, 4, 5]).round(2)
-    r7dlist = ['FR007S6M.IR', 'FR007S9M.IR','FR007S1Y.IR', 'FR007S2Y.IR', 'FR007S3Y.IR', 'FR007S4Y.IR', 'FR007S5Y.IR']
-    s3mlist = ['SHI3MS6M.IR', 'SHI3MS9M.IR','SHI3MS1Y.IR','SHI3MS2Y.IR','SHI3MS3Y.IR', 'SHI3MS4Y.IR', 'SHI3MS5Y.IR']
+    tenorlist = np.array([1 / 2, 3 / 4, 1, 2, 3, 4, 5, 7, 10]).round(2)
+    r7dlist = ['FR007S6M.IR', 'FR007S9M.IR','FR007S1Y.IR', 'FR007S2Y.IR', 'FR007S3Y.IR', 'FR007S4Y.IR', 'FR007S5Y.IR', 'FR007S7Y.IR', 'FR007S10Y.IR']
+    s3mlist = ['SHI3MS6M.IR', 'SHI3MS9M.IR','SHI3MS1Y.IR','SHI3MS2Y.IR','SHI3MS3Y.IR', 'SHI3MS4Y.IR', 'SHI3MS5Y.IR', 'SHI3MS7Y.IR', 'SHI3MS10Y.IR']
     datalist = ['CarryRoll(1y,bp)', 'CarryRoll(6m,bp)', 'CarryRoll(3m,bp)', ]
     #datalist = 'Carry(3m,bp)'
+
+    # Compute TBond/CBond carry/roll if spot rates have been populated by the refresher.
+    # Carry  = (bond_spot - FR007_period_rate) × period_term × 100  [positive = bond yields > funding]
+    # Roll   = (bond_spot(T) - bond_spot(T-period)) × T × 100       [positive on upward-sloping curve]
+    # Both formulas use the same scaling as IRS cashflow/roll calculations.
+    bond_tenorlist = np.array([1, 2, 3, 4, 5, 7, 10])
+    bond_carry_roll = {}
+    for btype in ['TBond', 'CBond']:
+        spot_col = f'{btype}SpotRate'
+        if spot_col not in curve_dict['instfit']['r7d'].columns:
+            continue
+        spot_vals = curve_dict['instfit']['r7d'][spot_col].values.astype(float)
+        spot_tenor = curve_dict['instfit']['r7d'].index.values.astype(float)
+        try:
+            fr007_3m = float(irs_val.loc['FR007S3M.IR', 'Quote'])
+            fr007_6m = float(irs_val.loc['FR007S6M.IR', 'Quote'])
+            fr007_1y = float(irs_val.loc['FR007S1Y.IR', 'Quote'])
+        except (KeyError, TypeError):
+            continue
+        funding = {'3m': (fr007_3m, 0.25), '6m': (fr007_6m, 0.5), '1y': (fr007_1y, 1.0)}
+        cr_vals = {}
+        for period, (fund_rate, period_term) in funding.items():
+            cr_list = []
+            for T in bond_tenorlist:
+                s0 = float(np.interp(T, spot_tenor, spot_vals))
+                carry = (s0 - fund_rate) * 100 * period_term
+                T_roll = T - period_term
+                sr = float(np.interp(max(T_roll, spot_tenor[0]), spot_tenor, spot_vals))
+                roll = (s0 - sr) * T * 100 if T_roll > 0.01 else 0.0
+                cr_list.append(carry + roll)
+            cr_vals[f'CarryRoll({period},bp)'] = cr_list
+        bond_carry_roll[btype] = cr_vals
+
     rmax = abs(irs_val[datalist]).max(axis=1).max() + 10
     #rmax = abs(irs_val[datalist]).max() + 10
+    if bond_carry_roll:
+        for _bvals in bond_carry_roll.values():
+            for _cvals in _bvals.values():
+                rmax = max(rmax, float(np.abs(np.array(_cvals, dtype=float)).max()) + 10)
     
     mymap = {'3m': 1 / 4, '6m': 1 / 2, '1y': 1}
     import pandas as pd
@@ -750,10 +802,12 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
                  for (i, c) in enumerate(tenor.keys())]
     i = 4
     for btype in ['TBond','CBond']:
+        fit_curve = curve_dict['instfit']['r7d']
+        fit_curve = fit_curve.loc[fit_curve.index.astype(float) > 1.0]
         trace1.append(go.Scatter(
                      name=btype+' FitCurve',
-                     x=curve_dict['instfit']['r7d'].index,
-                     y=curve_dict['instfit']['r7d'][btype+'ForwardRate'],
+                     x=fit_curve.index,
+                     y=fit_curve[btype+'ForwardRate'],
                      line={
                          "width": 3,
                          "color": _palette_color(px.colors.qualitative.Set1, i)
@@ -774,33 +828,56 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
             showlegend=False)
             for (i, c) in enumerate(tenor.keys())])
 
-    # plot carry bar charts 
-    trace2 = [dict(
-        type="bar",
-        name=c,
-        x=tenorlist - 0.05,
-        y=irs_val.loc[r7dlist, c],
-        width=0.1,
-        marker={"color": px.colors.diverging.balance[i]},
-        showlegend=True,
-        yaxis='y2',
-        text=r7dlist,
-        hoverinfo='text+y',
+    # plot carry bar charts.
+    # Layout (width=0.08, spacing 0.02): TBond at T-0.24, CBond at T-0.14,
+    # FR007 at T-0.04, Shibor at T+0.06.  Bond bars only exist for tenors 1–10Y.
+    _bond_colors = {
+        'TBond': ['#FF8C00', '#FFA500', '#FFD700'],   # orange shades
+        'CBond': ['#3CB371', '#2E8B57', '#90EE90'],   # green shades
+    }
+    _bond_offsets = {'TBond': -0.24, 'CBond': -0.14}
+    trace2 = (
+        [dict(
+            type="bar",
+            name=f'{btype} CR({c[10:-4]})',
+            x=bond_tenorlist + _bond_offsets[btype],
+            y=bond_carry_roll[btype][c],
+            width=0.08,
+            marker={"color": _bond_colors[btype][j]},
+            showlegend=True,
+            yaxis='y2',
+            text=[f'{btype}-{int(t)}Y' for t in bond_tenorlist],
+            hoverinfo='text+y',
+        )
+        for btype in ['TBond', 'CBond'] if btype in bond_carry_roll
+        for j, c in enumerate(datalist)]
+        + [dict(
+            type="bar",
+            name=c,
+            x=tenorlist - 0.04,
+            y=irs_val.loc[r7dlist, c],
+            width=0.08,
+            marker={"color": px.colors.diverging.balance[i]},
+            showlegend=True,
+            yaxis='y2',
+            text=r7dlist,
+            hoverinfo='text+y',
+        )
+        for (i, c) in enumerate(datalist)]
+        + [dict(
+            type="bar",
+            name=c,
+            x=tenorlist + 0.06,
+            y=irs_val.loc[s3mlist, c],
+            width=0.08,
+            marker={"color": px.colors.diverging.balance[i]},
+            showlegend=False,
+            yaxis='y2',
+            text=s3mlist,
+            hoverinfo='text+y',
+        )
+        for (i, c) in enumerate(datalist)]
     )
-                 for (i, c) in enumerate(datalist)] + \
-             [dict(
-                 type="bar",
-                 name=c,
-                 x=tenorlist + 0.05,
-                 y=irs_val.loc[s3mlist, c],
-                 width=0.1,
-                 marker={"color": px.colors.diverging.balance[i]},
-                 showlegend=False,
-                 yaxis='y2',
-                 text=s3mlist,
-                 hoverinfo='text+y',
-             )
-                 for (i, c) in enumerate(datalist)]
 
     data = trace2 + trace0 + trace1
 
@@ -853,8 +930,17 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
         height=700,
         title={'text': '<br> Realtime IRS Forward Curves: ' + d.strftime("%Y-%m-%d %H:%M:%S"), \
                'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
-        legend=dict(x=0.01, y=1.0,
-                    traceorder="normal"),
+        legend=dict(
+            x=1.0,
+            y=0.0,
+            xanchor='right',
+            yanchor='bottom',
+            traceorder="normal",
+            orientation='h',
+            entrywidth=120,
+            entrywidthmode='pixels',
+            font=dict(size=10),
+        ),
         plot_bgcolor=app_color["graph_bg"],
         paper_bgcolor=app_color["graph_bg"],
         font={"color": "#fff"},

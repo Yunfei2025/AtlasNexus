@@ -30,16 +30,18 @@ class TrendGenerator:
     # Trend figures
     # -------------
     def _build_series(self):
-        desired_columns = ['中债国债到期收益率:1年', '中债国债到期收益率:5年', '中债国债到期收益率:10年',
+        desired_columns = ['中债国债到期收益率:1年', '中债国债到期收益率:2年', '中债国债到期收益率:5年', '中债国债到期收益率:10年',
                            '中债国债到期收益率:30年']
-        vT = self.env['CGB'].loc[self.start_date:self.as_of_date,desired_columns]
-        dvT = vT.diff(axis=1).dropna(axis=1)
+        vT = self.env['CGB'].loc[self.start_date:self.as_of_date, desired_columns]
+        dvT = vT[['中债国债到期收益率:1年', '中债国债到期收益率:5年',
+                   '中债国债到期收益率:10年', '中债国债到期收益率:30年']].diff(axis=1).dropna(axis=1)
         dvT.columns = ['中债国债到期收益率:5年-1年', '中债国债到期收益率:10年-5年', '中债国债到期收益率:30年-10年']
         vI = self.env['SwapTS'].loc[self.start_date:self.as_of_date, ['FR007S1Y.IR', 'FR007S2Y.IR', 'FR007S5Y.IR']]
         dvI = vI.diff(axis=1).dropna(axis=1)
         dvI.columns = ['FR007:2Y-1Y', 'FR007:5Y-2Y']
         dvI['FR007:5Y-1Y'] = vI['FR007S5Y.IR'] - vI['FR007S1Y.IR']
         dvI['TBond-FR007:1Y'] = vT['中债国债到期收益率:1年'] - vI['FR007S1Y.IR']
+        dvI['TBond-FR007:2Y'] = vT['中债国债到期收益率:2年'] - vI['FR007S2Y.IR']
         dvI['TBond-FR007:5Y'] = vT['中债国债到期收益率:5年'] - vI['FR007S5Y.IR']
 
         vFixing = self.env['SwapTS'].loc[self.start_date:self.as_of_date, ['FR001.IR', 'FR007.IR', 'SHIBOR3M.IR']]

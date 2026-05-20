@@ -268,6 +268,13 @@ class IRSRefresher:
 
 		interpolated_values = np.interp(target_index, x_src, y_src)
 		self.curve_dictionary['instfit']['r7d'][f"{bond_type}ForwardRate"] = interpolated_values
+		# Also store SpotRate (data[0]) for carry/roll computation in the forward-curve plot
+		x_spot = np.asarray(figure['data'][0].x, dtype=float)
+		y_spot = np.asarray(figure['data'][0].y, dtype=float)
+		sort_spot = np.argsort(x_spot)
+		self.curve_dictionary['instfit']['r7d'][f"{bond_type}SpotRate"] = np.interp(
+			target_index, x_spot[sort_spot], y_spot[sort_spot]
+		)
 
 	def plot_curves(self):
 		logger.info("Generating curve plots...")

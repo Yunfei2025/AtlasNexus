@@ -97,10 +97,9 @@ def OU_calibrate(ts):
                 if np.isfinite(A) and (1 - A) != 0 and A > 0:
                     theta = B / (1 - A)
                     kappa = -np.log(A)
-                    sigma = C * np.sqrt(max(1e-12, 2 * kappa / (1 - A ** 2)))
                     stat_info.loc[b, 'halflife'] = np.log(2) / max(1e-12, kappa)
                     stat_info.loc[b, 'mean'] = theta
-                    stat_info.loc[b, 'vol'] = sigma
+                    stat_info.loc[b, 'vol'] = sp.std()
                 else:
                     stat_info.loc[b, 'halflife'] = np.nan
                     stat_info.loc[b, 'mean'] = sp.mean()
