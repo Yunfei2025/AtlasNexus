@@ -34,6 +34,8 @@ def _should_show_log_window(argv: list[str]) -> bool:
         return env_override.strip().lower() in {"1", "true", "yes", "on"}
 
     cmd = argv[0] if argv else None
+    if sys.platform.startswith("win") and cmd in {None, "daily-web", "intraday-web"}:
+        return False
     return cmd in {None, "daily-web", "intraday-web"}
 
 
@@ -252,15 +254,15 @@ def main():
 
     if args.cmd == "curve-backtest":
         from curves.backtest.backtestor import Backtestor
-        windows_parallel_disabled = (
+        force_serial = (
             sys.platform.startswith("win")
             and args.processes > 1
-            and os.environ.get("FI_ENABLE_WINDOWS_CURVE_MP", "0") != "1"
+            and os.environ.get("FI_DISABLE_WINDOWS_CURVE_MP", "0") == "1"
         )
-        if windows_parallel_disabled:
+        if force_serial:
             logger.warning(
-                "Curve backtest multiprocessing is disabled on Windows for stability; "
-                "falling back to serial execution. Set FI_ENABLE_WINDOWS_CURVE_MP=1 to override."
+                "Curve backtest multiprocessing was disabled explicitly on Windows; "
+                "falling back to serial execution because FI_DISABLE_WINDOWS_CURVE_MP=1."
             )
         bt = Backtestor(
             btype=args.btype,
@@ -268,7 +270,7 @@ def main():
             end=args.end,
             update_list=args.update_list or ["pool"],
             processes=args.processes,
-            serial=windows_parallel_disabled,
+            serial=force_serial,
         )
         bt.run()
         return

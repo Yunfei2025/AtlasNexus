@@ -409,7 +409,7 @@ class BondCurveGenerator:
         return True
 
 
-def main(bond_type = 'TBond'):
+def main(bond_type = 'CBond'):
     print(f"🚀 Starting {bond_type} curve generation.")
     try:
         success = BondCurveGenerator.main(bond_type=bond_type)

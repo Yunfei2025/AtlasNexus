@@ -35,7 +35,19 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     if 'error' in results:
         return html.Div(f"Error: {results['error']}", style={'color': THEME['warning'], 'padding': '20px'})
 
-    if results['n_trades'] == 0:
+    open_trade = results.get('open_trade') if isinstance(results.get('open_trade'), dict) else None
+    open_trade_text = None
+    if open_trade:
+        try:
+            open_trade_text = (
+                f"{open_trade['direction']} from "
+                f"{pd.Timestamp(open_trade['entry_date']).strftime('%Y-%m-%d')} "
+                f"({open_trade['days_held']}d, MTM {open_trade['pnl_open']:.1f} bp)"
+            )
+        except Exception:
+            open_trade = None
+
+    if results['n_trades'] == 0 and not open_trade:
         return html.Div("No trades generated with current parameters.", style={'color': THEME['warning'], 'padding': '20px'})
 
     metrics_div = html.Div([
@@ -49,6 +61,16 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             html.Div([html.Strong("Sharpe: ", style={'color': THEME['text_sub']}), html.Span(f"{results['sharpe']:.2f}", style={'color': THEME['success'] if results['sharpe'] > 1 else THEME['text_main']})], style={'marginRight': '25px'}),
             html.Div([html.Strong("Max DD: ", style={'color': THEME['text_sub']}), html.Span(f"{results['max_drawdown']:.1f} bp", style={'color': THEME['danger']})]),
         ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '20px'}),
+        html.Div(
+            [
+                html.Strong("Open Position: ", style={'color': THEME['text_sub']}),
+                html.Span(
+                    open_trade_text,
+                    style={'color': THEME['warning'] if open_trade else THEME['text_sub']}
+                )
+            ],
+            style={'display': 'block' if open_trade else 'none', 'marginBottom': '4px'}
+        ),
     ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'})
 
     is_trend = 'trend_state_ts' in results
@@ -110,18 +132,33 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
                 showlegend=False,
             ), row=1)
 
-    if trades_df is not None and len(trades_df) > 0:
-        long_entries = trades_df[trades_df['direction'] == 'LONG']
-        short_entries = trades_df[trades_df['direction'] == 'SHORT']
+    if (trades_df is not None and len(trades_df) > 0) or open_trade:
+        long_entries = trades_df[trades_df['direction'] == 'LONG'].copy() if trades_df is not None and len(trades_df) > 0 else pd.DataFrame(columns=['entry_date', 'entry_price'])
+        short_entries = trades_df[trades_df['direction'] == 'SHORT'].copy() if trades_df is not None and len(trades_df) > 0 else pd.DataFrame(columns=['entry_date', 'entry_price'])
+        open_long_entries = pd.DataFrame(columns=['entry_date', 'entry_price'])
+        open_short_entries = pd.DataFrame(columns=['entry_date', 'entry_price'])
         # Color exits by actual P&L sign so trend exits (flip/max_hold/trailing)
         # are not all shown as losses when they may be profitable.
-        _pnl_col = trades_df.get('pnl_trade', pd.Series(0.0, index=trades_df.index))
-        profit_exits = trades_df[_pnl_col > 0]
-        loss_exits = trades_df[_pnl_col <= 0]
+        if open_trade:
+            open_entry_df = pd.DataFrame([{
+                'entry_date': open_trade['entry_date'],
+                'entry_price': open_trade['entry_price'],
+            }])
+            if open_trade.get('direction') == 'LONG':
+                open_long_entries = open_entry_df
+            elif open_trade.get('direction') == 'SHORT':
+                open_short_entries = open_entry_df
+        _pnl_col = trades_df.get('pnl_trade', pd.Series(0.0, index=trades_df.index)) if trades_df is not None and len(trades_df) > 0 else pd.Series(dtype=float)
+        profit_exits = trades_df[_pnl_col > 0] if trades_df is not None and len(trades_df) > 0 else pd.DataFrame()
+        loss_exits = trades_df[_pnl_col <= 0] if trades_df is not None and len(trades_df) > 0 else pd.DataFrame()
         if len(long_entries) > 0:
             _add_to_fig(go.Scatter(x=long_entries['entry_date'], y=long_entries['entry_price'] * 100.0, mode='markers', name='Long Entry', marker=dict(symbol='triangle-up', size=10, color=THEME['success'], line=dict(width=1, color='white')), showlegend=True), row=1)
         if len(short_entries) > 0:
             _add_to_fig(go.Scatter(x=short_entries['entry_date'], y=short_entries['entry_price'] * 100.0, mode='markers', name='Short Entry', marker=dict(symbol='triangle-down', size=10, color=THEME['danger'], line=dict(width=1, color='white')), showlegend=True), row=1)
+        if len(open_long_entries) > 0:
+            _add_to_fig(go.Scatter(x=open_long_entries['entry_date'], y=open_long_entries['entry_price'] * 100.0, mode='markers', name='Open Long', marker=dict(symbol='diamond-open', size=12, color=THEME['success'], line=dict(width=2, color='white')), showlegend=True), row=1)
+        if len(open_short_entries) > 0:
+            _add_to_fig(go.Scatter(x=open_short_entries['entry_date'], y=open_short_entries['entry_price'] * 100.0, mode='markers', name='Open Short', marker=dict(symbol='diamond-open', size=12, color=THEME['danger'], line=dict(width=2, color='white')), showlegend=True), row=1)
         if len(profit_exits) > 0:
             _add_to_fig(go.Scatter(x=profit_exits['exit_date'], y=profit_exits['exit_price'] * 100.0, mode='markers', name='Exit (profit)', marker=dict(symbol='circle', size=7, color=THEME['success'], opacity=0.85), showlegend=True), row=1)
         if len(loss_exits) > 0:
@@ -228,21 +265,33 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             signal_fig.add_hline(y=_xz,  line_dash='dot',  line_color='rgba(0,204,150,0.4)',        annotation_text=f'+{_xz}σ exit')
             signal_fig.add_hline(y=-_xz, line_dash='dot',  line_color='rgba(0,204,150,0.4)',        annotation_text=f'-{_xz}σ exit')
 
-        if trades_df is not None and len(trades_df) > 0:
+        if (trades_df is not None and len(trades_df) > 0) or open_trade:
             def _score_at(df, date_col):
                 dates = pd.DatetimeIndex(pd.to_datetime(df[date_col]))
                 return score_ts_display.clip(-4, 4).reindex(dates, method='nearest').values
 
-            long_e  = trades_df[trades_df['direction'] == 'LONG']
-            short_e = trades_df[trades_df['direction'] == 'SHORT']
-            _pnl_score = trades_df.get('pnl_trade', pd.Series(0.0, index=trades_df.index))
-            prof_x = trades_df[_pnl_score > 0]
-            loss_x = trades_df[_pnl_score <= 0]
+            long_e  = trades_df[trades_df['direction'] == 'LONG'].copy() if trades_df is not None and len(trades_df) > 0 else pd.DataFrame(columns=['entry_date'])
+            short_e = trades_df[trades_df['direction'] == 'SHORT'].copy() if trades_df is not None and len(trades_df) > 0 else pd.DataFrame(columns=['entry_date'])
+            open_long_e = pd.DataFrame(columns=['entry_date'])
+            open_short_e = pd.DataFrame(columns=['entry_date'])
+            if open_trade:
+                open_score_df = pd.DataFrame([{'entry_date': open_trade['entry_date']}])
+                if open_trade.get('direction') == 'LONG':
+                    open_long_e = open_score_df
+                elif open_trade.get('direction') == 'SHORT':
+                    open_short_e = open_score_df
+            _pnl_score = trades_df.get('pnl_trade', pd.Series(0.0, index=trades_df.index)) if trades_df is not None and len(trades_df) > 0 else pd.Series(dtype=float)
+            prof_x = trades_df[_pnl_score > 0] if trades_df is not None and len(trades_df) > 0 else pd.DataFrame()
+            loss_x = trades_df[_pnl_score <= 0] if trades_df is not None and len(trades_df) > 0 else pd.DataFrame()
 
             if len(long_e) > 0:
                 signal_fig.add_trace(go.Scatter(x=long_e['entry_date'], y=_score_at(long_e, 'entry_date'), mode='markers', marker=dict(symbol='triangle-up', size=9, color=THEME['success'], line=dict(width=1, color='white')), showlegend=False))
             if len(short_e) > 0:
                 signal_fig.add_trace(go.Scatter(x=short_e['entry_date'], y=_score_at(short_e, 'entry_date'), mode='markers', marker=dict(symbol='triangle-down', size=9, color=THEME['danger'], line=dict(width=1, color='white')), showlegend=False))
+            if len(open_long_e) > 0:
+                signal_fig.add_trace(go.Scatter(x=open_long_e['entry_date'], y=_score_at(open_long_e, 'entry_date'), mode='markers', marker=dict(symbol='diamond-open', size=11, color=THEME['success'], line=dict(width=2, color='white')), showlegend=False))
+            if len(open_short_e) > 0:
+                signal_fig.add_trace(go.Scatter(x=open_short_e['entry_date'], y=_score_at(open_short_e, 'entry_date'), mode='markers', marker=dict(symbol='diamond-open', size=11, color=THEME['danger'], line=dict(width=2, color='white')), showlegend=False))
             if len(prof_x) > 0:
                 signal_fig.add_trace(go.Scatter(x=prof_x['exit_date'], y=_score_at(prof_x, 'exit_date'), mode='markers', marker=dict(symbol='circle', size=7, color=THEME['success'], opacity=0.8), showlegend=False))
             if len(loss_x) > 0:
@@ -318,14 +367,36 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     equity_div = html.Div([dcc.Graph(figure=equity_fig, style={'height': '250px'})], style={'marginBottom': '15px'})
 
     trades_table = html.Div()
-    if 'trades_df' in results and results['trades_df'] is not None and len(results['trades_df']) > 0:
-        df = results['trades_df'].copy()
-        df['entry_date'] = pd.to_datetime(df['entry_date']).dt.strftime('%Y-%m-%d')
-        df['exit_date'] = pd.to_datetime(df['exit_date']).dt.strftime('%Y-%m-%d')
+    if ('trades_df' in results and results['trades_df'] is not None and len(results['trades_df']) > 0) or open_trade:
+        df = results['trades_df'].copy() if 'trades_df' in results and results['trades_df'] is not None else pd.DataFrame()
+        if open_trade:
+            open_row = {
+                'entry_date': pd.Timestamp(open_trade['entry_date']).strftime('%Y-%m-%d'),
+                'exit_date': 'OPEN',
+                'direction': open_trade['direction'],
+                'entry_price': pd.to_numeric(open_trade.get('entry_price'), errors='coerce'),
+                'exit_price': pd.to_numeric(open_trade.get('current_price'), errors='coerce'),
+                'spd_chg': pd.to_numeric(open_trade.get('capital_open'), errors='coerce'),
+                'cr_acc': pd.to_numeric(open_trade.get('carry_open'), errors='coerce'),
+                'pnl_trade': pd.to_numeric(open_trade.get('pnl_open'), errors='coerce'),
+                'duration': np.nan,
+                'days_held': open_trade.get('days_held'),
+                'exit_reason': 'OPEN',
+            }
+            if 'entry_z' in open_trade:
+                open_row['entry_z'] = pd.to_numeric(open_trade.get('entry_z'), errors='coerce')
+            df = pd.concat([df, pd.DataFrame([open_row])], ignore_index=True)
+        if 'entry_date' in df.columns:
+            df['entry_date'] = pd.to_datetime(df['entry_date']).dt.strftime('%Y-%m-%d')
+        if 'exit_date' in df.columns:
+            _exit_dt = pd.to_datetime(df['exit_date'], errors='coerce')
+            df['exit_date'] = np.where(_exit_dt.notna(), _exit_dt.dt.strftime('%Y-%m-%d'), df['exit_date'])
         # entry_price / exit_price: convert % → bp
         for col in ['entry_price', 'exit_price']:
             if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce') * 100.0
+                numeric_col = pd.to_numeric(df[col], errors='coerce')
+                needs_scale = numeric_col.abs().max(skipna=True) < 20 if len(numeric_col.dropna()) > 0 else False
+                df[col] = numeric_col * 100.0 if needs_scale else numeric_col
         # Round all numeric columns to 2 dp
         for col in ['entry_price', 'exit_price', 'spd_chg', 'cr_acc', 'pnl_trade', 'capital_cum', 'carry_cum', 'pnl_cum', 'entry_z', 'exit_z', 'duration']:
             if col in df.columns:
@@ -350,6 +421,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
                 style_data_conditional=[
                     {'if': {'filter_query': '{pnl_trade} > 0'}, 'backgroundColor': 'rgba(0, 204, 150, 0.1)'},
                     {'if': {'filter_query': '{pnl_trade} < 0'}, 'backgroundColor': 'rgba(239, 85, 59, 0.1)'},
+                    {'if': {'filter_query': '{exit_reason} = "OPEN"'}, 'backgroundColor': 'rgba(243, 156, 18, 0.12)'},
                 ],
                 page_size=10,
                 sort_action='native',

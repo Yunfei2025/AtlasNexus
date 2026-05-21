@@ -270,22 +270,10 @@ def load_pairs_content(_, n_clicks):
         trigger_id = callback_context.triggered[0]['prop_id']
         if 'pairs-refresh-btn' in trigger_id and n_clicks and n_clicks > 0:
             try:
-                # Import and call the main function directly from pairs.main
-                # Try to find Dashboard.xlsm for configuration
-                dashboard_path = project_root.parent / "Dashboard.xlsm"
-                
-                if dashboard_path.exists():
-                    # Call with Excel path for configuration loading, but in non-interactive mode
-                    pairs_main(excel_mode=False, excel_path=str(dashboard_path))
-                else:
-                    # Try alternate location
-                    alt_dashboard = project_root / "Dashboard.xlsm"
-                    if alt_dashboard.exists():
-                        pairs_main(excel_mode=False, excel_path=str(alt_dashboard))
-                    else:
-                        # Fall back to standalone mode without Excel
-                        print("⚠ Dashboard.xlsm not found, running in standalone mode")
-                        pairs_main(excel_mode=False, excel_path=None)
+                # Import and call the main function directly from pairs.main.
+                # Pair analysis now supports standalone configuration and no
+                # longer relies on Dashboard.xlsm for web refreshes.
+                pairs_main(excel_mode=False, excel_path=None)
                 
                 last_updated = f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             except ImportError as e:

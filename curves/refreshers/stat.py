@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import xlwings as xw
 
-# local libraries
+# local libraries000
 PATH = pathlib.Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PATH))
 
@@ -25,10 +25,12 @@ from settings.general import DateConfig, GeneralConfig
 from settings.fixed_income import IRSConfig, BondConfig
 from curves.calibration import irscurves as irs
 from curves.calibration import hedge as h
+import curves.calibration.stat as st
+from curves.generators.stat import _suppress_model_jumps
 
 class StatRefresher:
     """Refresh bond and swap statistics with OOP structure and performance improvements."""
-    def __init__(self, skip_excel_update: bool = False) -> None:
+    def __init__(self, skip_excel_update: bool = True) -> None:
         self.now = DateConfig.get_date_mappings()['d']
         self.d = self.now.date()
         self.dp = DateConfig.get_date_mappings()['dp'].date()
@@ -51,9 +53,12 @@ class StatRefresher:
 
     @staticmethod
     def _np_interp(x_new: pd.Series, x: np.ndarray, y: np.ndarray) -> pd.Series:
-        order = np.argsort(x)
-        x_sorted, y_sorted = np.asarray(x)[order], np.asarray(y)[order]
-        y_new = np.interp(x_new.values.astype(float), x_sorted, y_sorted)
+        x_arr = np.asarray(x, dtype=float)
+        y_arr = np.asarray(y, dtype=float)
+        x_new_arr = np.asarray(x_new, dtype=float)
+        order = np.argsort(x_arr)
+        x_sorted, y_sorted = x_arr[order], y_arr[order]
+        y_new = np.interp(x_new_arr, x_sorted, y_sorted)
         return pd.Series(y_new, index=x_new.index)
 
     @staticmethod
@@ -170,6 +175,7 @@ class StatRefresher:
             with open(os.path.join(DIR_INPUT, f'{btype}-cvrt.obj'), 'rb') as f:
                 curve = pickle.load(f)
             pxrt = pd.read_pickle(os.path.join(DIR_INPUT, f'{btype}-rtquo.pkl'))
+            bond_px = pd.read_pickle(os.path.join(DIR_INPUT, f'{btype}-cvpx.pkl'))
             #
             ytm_quote = pxrt['Quote'][['ID', 'Bid', 'Ofr']].dropna().set_index('ID')
             ytm_quote_cv = pxrt['Quote'][['ID', 'CvBid', 'CvOfr']].dropna().set_index('ID')
@@ -178,6 +184,17 @@ class StatRefresher:
 
             env = rd.retrieveEnvRT(ld.loadInstrumentDefinition(btype), btype)
             stat_his = ld.loadStatData(btype)
+
+            try:
+                bonds_hist = bond_px['ytm_quo'].columns.intersection(env['Def'].index)
+                df_act_hist = bond_px['ytm_act'].loc[:, bonds_hist].apply(pd.to_numeric, errors='coerce')
+                df_quo_hist = bond_px['ytm_quo'].loc[:, bonds_hist].apply(pd.to_numeric, errors='coerce')
+                df_quo_hist = _suppress_model_jumps(df_quo_hist, df_act_hist)
+                fresh_bc = st.statAnalysis_BC(env, df_act_hist, df_quo_hist).get('StatInfo', pd.DataFrame())
+                if isinstance(fresh_bc, pd.DataFrame) and not fresh_bc.empty:
+                    stat_his['BondCurve'] = fresh_bc
+            except Exception as exc:
+                print(f"WARN: Could not refresh {btype} BondCurve stats from historical cvpx: {exc}")
 
             stat_his = h.BondHedge(stat_his, env, ytm_quote, curve, pxrt['Sen'], btype)
             stat_his = h.SwapHedge(stat_his, env, ytm_quote)
@@ -191,12 +208,12 @@ class StatRefresher:
             self.px_irs_rt = px_irs_rt
             _dates = DateConfig.get_date_mappings()
             _irs_terms = IRSConfig.get_irs_terms()
-            terms = np.array([(_dates['d'] + _irs_terms[i] - _dates['d']).days / GeneralConfig.YN for i in px_irs_rt.index])
+            terms = np.asarray([(_dates['d'] + _irs_terms[i] - _dates['d']).days / GeneralConfig.YN for i in px_irs_rt.index], dtype=float)
 
             # Filter and clip bond terms, then interpolate using numpy
             env['Def'] = env['Def'][env['Def']['剩余期限'] > 3 / 12]
-            bond_term = env['Def']['剩余期限'].clip(upper=5.0)
-            px_bs_rt = self._np_interp(bond_term, terms, px_irs_rt.values)
+            bond_term = pd.to_numeric(env['Def']['剩余期限'].clip(upper=5.0), errors='coerce')
+            px_bs_rt = self._np_interp(bond_term, terms, np.asarray(px_irs_rt.values, dtype=float))
 
             self.px_bond_rt[btype] = (env['BondRT']['买价收益率'] + env['BondRT']['卖价收益率']) / 2
             spreads['BondCurve']['CloseYield'] = self.px_bond_rt[btype]
@@ -209,8 +226,14 @@ class StatRefresher:
                 # Use (spread - mean) / vol for all BondCurve types.
                 # For TBond, OU mean ≈ 0 so this is nearly identical to spread/vol;
                 # for CBond (policy bank), mean can be structurally non-zero.
-                mean_ = df_k['mean'] if 'mean' in df_k.columns else 0
-                df_k['Zscore'] = (df_k['spread'] - mean_) / df_k['vol']
+                mean_ = pd.to_numeric(df_k['mean'], errors='coerce') if 'mean' in df_k.columns else pd.Series(0.0, index=df_k.index)
+                vol_ = pd.to_numeric(df_k['vol'], errors='coerce') if 'vol' in df_k.columns else pd.Series(np.nan, index=df_k.index)
+                if not isinstance(mean_, pd.Series):
+                    mean_ = pd.Series(mean_, index=df_k.index)
+                if not isinstance(vol_, pd.Series):
+                    vol_ = pd.Series(vol_, index=df_k.index)
+                vol_ = vol_.where(vol_.abs() > 1e-6)
+                df_k['Zscore'] = (df_k['spread'] - mean_) / vol_
 
             write_to_sheet[btype] = stat_his['BondCurve']
             write_to_sheet[btype + 'Swap'] = stat_his['BondSwap']
@@ -322,7 +345,7 @@ class StatRefresher:
         print('\nFinish refreshing statistics at：', datetime.now().strftime('%H:%M:%S'))
 
     @classmethod
-    def main(cls, skip_excel_update=False):
+    def main(cls, skip_excel_update=True):
         """Main entry point for the StatRefresher"""
         instance = cls(skip_excel_update=skip_excel_update)
         instance.run_all()
@@ -334,6 +357,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Refresh bond and swap statistics')
     parser.add_argument('--skip-excel', action='store_true', 
                        help='Skip Excel dashboard updates')
+    parser.add_argument('--write-excel', action='store_true',
+                       help='Opt in to legacy Dashboard.xlsm updates')
     parser.add_argument('--diagnose', action='store_true',
                        help='Run Excel diagnostics before processing')
     
@@ -348,4 +373,4 @@ if __name__ == '__main__':
             print("Excel diagnostics not available")
     
     # Run the refresher
-    StatRefresher.main(skip_excel_update=args.skip_excel)
+    StatRefresher.main(skip_excel_update=(not args.write_excel) or args.skip_excel)

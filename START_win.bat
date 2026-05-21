@@ -35,6 +35,9 @@ if errorlevel 1 (
 echo [2/3] Environment activated successfully
 echo.
 
+REM Keep logging in this console only; avoid spawning a second Tk log window.
+set FI_SHOW_LOG_WINDOW=0
+
 REM Change to correct directory
 cd /d "%~dp0"
 

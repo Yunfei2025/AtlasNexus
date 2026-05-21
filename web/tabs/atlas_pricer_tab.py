@@ -303,8 +303,20 @@ def _compute_pricer_styles(rows: list[dict], include_zscore: bool = True) -> lis
     # Z-Score: center-anchored green/red bar
     if include_zscore and "Z-Score" in df.columns:
         z_vals = pd.to_numeric(df["Z-Score"], errors="coerce").dropna()
-        max_abs = max(abs(z_vals).max(), 0.1) if len(z_vals) else 3.0
+        max_abs = min(max(abs(z_vals).max(), 0.1), 3.5) if len(z_vals) else 3.0
         styles += _bar_styles_zscore(df, "Z-Score", max_abs)
+        if _ROW_KEY_COL in df.columns:
+            z_full = pd.to_numeric(df["Z-Score"], errors="coerce")
+            for row_key, z_val in zip(df[_ROW_KEY_COL], z_full):
+                if pd.isna(z_val) or abs(float(z_val)) < 3.5:
+                    continue
+                styles.append({
+                    **_style_row_filter(row_key, "Z-Score"),
+                    "fontWeight": "bold",
+                    "color": "#ffffff",
+                    "border": "2px solid rgba(243,156,18,0.95)",
+                    "boxShadow": "inset 0 0 0 1px rgba(255,255,255,0.25)",
+                })
 
     # dYld (bp): center-anchored green/red bar
     if "dYld (bp)" in df.columns:

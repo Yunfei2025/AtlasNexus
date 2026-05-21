@@ -33,9 +33,10 @@ from curves.utils.plot import plotIRSSpotCurve, plotIRSForwardCurve
 from curves.calibration import irscurves as irs
 
 class IRSRefresher:
-	def __init__(self):
+	def __init__(self, skip_excel_update: bool = True):
 		self.today_date = DateConfig.get_date_mappings()['d'].date()
 		self.previous_bday = (self.today_date - pd.tseries.offsets.BDay(1)).date()
+		self.skip_excel_update = skip_excel_update
 		self.environment = None
 		self.environment_time_series = None
 		self.fixings = None
@@ -510,7 +511,10 @@ class IRSRefresher:
 			self.price_contracts_with_shift()
 			self.plot_curves()
 			spreads, time_based_df = self.compute_stats()
-			self.save_to_dashboard(spreads, time_based_df)
+			if self.skip_excel_update:
+				logger.info("Skipping legacy Dashboard.xlsm writeback")
+			else:
+				self.save_to_dashboard(spreads, time_based_df)
 			self.save_rt_pickle(spreads)
 			# Build normalized alpha snapshot for Atlas UI candidate scanning.
 			# Keep this non-fatal to avoid breaking the refresh pipeline.
@@ -530,11 +534,11 @@ class IRSRefresher:
 			raise
 
 	@classmethod
-	def main(cls):
+	def main(cls, skip_excel_update: bool = True):
 		"""Main entry point for the IRSRefresher"""
 		logger.info("Initializing IRSRefresher...")
 		try:
-			instance = cls()
+			instance = cls(skip_excel_update=skip_excel_update)
 			instance.run()
 			logger.info("IRSRefresher completed successfully")
 		except Exception as e:
@@ -544,4 +548,11 @@ class IRSRefresher:
 
 #%
 if __name__== '__main__':
-	IRSRefresher.main()
+	import argparse
+
+	parser = argparse.ArgumentParser(description='Refresh IRS curves and statistics')
+	parser.add_argument('--write-excel', action='store_true',
+		help='Opt in to legacy Dashboard.xlsm updates')
+	args = parser.parse_args()
+
+	IRSRefresher.main(skip_excel_update=not args.write_excel)

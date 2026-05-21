@@ -199,7 +199,7 @@ def main() -> str:
         pairs_generated = False
         if success_count == len(generators):
             from curves.generators.pairs import main
-            main(min_cr=30.0, lookback_days=60, write_to_excel=True)
+            main(min_cr=30.0, lookback_days=60, write_to_excel=False)
             pairs_generated = True
             print("INFO: Top CR pairs generated.")
 

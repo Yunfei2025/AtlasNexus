@@ -209,7 +209,28 @@ def run_spread_backtest(
 
     equity_ts = pd.Series(equity_values, index=pd.DatetimeIndex(equity_dates), name='equity_bp')
 
-    if not trades:
+    open_trade = None
+    if position != 0 and entry_price is not None and equity_dates:
+        last_date = equity_dates[-1]
+        last_price = float(spread_ts.loc[last_date])
+        days_open = (last_date - entry_date).days if entry_date else 0
+        open_cap_bp = (last_price - entry_price) * position * duration_mult * 100.0
+        open_carry_bp = open_cr_sum * position / 90.0 * 100.0
+        open_trade = {
+            'entry_date': entry_date,
+            'direction': 'LONG' if position == 1 else 'SHORT',
+            'entry_price': entry_price,
+            'entry_z': entry_zscore,
+            'current_date': last_date,
+            'current_price': last_price,
+            'days_held': days_open,
+            'capital_open': open_cap_bp,
+            'carry_open': open_carry_bp,
+            'pnl_open': open_cap_bp + open_carry_bp,
+            'status': 'OPEN',
+        }
+
+    if not trades and open_trade is None:
         return {
             'trades': [],
             'n_trades': 0,
@@ -227,6 +248,7 @@ def run_spread_backtest(
             'entry_z': entry_z,
             'exit_z': exit_z,
             'stop_z': stop_z,
+            'open_trade': None,
         }
 
     trades_df = pd.DataFrame(trades)
@@ -288,4 +310,5 @@ def run_spread_backtest(
         'entry_z': entry_z,
         'exit_z': exit_z,
         'stop_z': stop_z,
+        'open_trade': open_trade,
     }

@@ -315,7 +315,7 @@ class PairsGenerator:
         return cr_df
 
 
-def main(min_cr: float = 30.0, lookback_days: int = 60, write_to_excel: bool = True) -> pd.DataFrame:
+def main(min_cr: float = 30.0, lookback_days: int = 60, write_to_excel: bool = False) -> pd.DataFrame:
     """Main entry point for generating carry-roll pairs with regression stats.
 
     Parameters
@@ -350,6 +350,5 @@ def main(min_cr: float = 30.0, lookback_days: int = 60, write_to_excel: bool = T
 if __name__ != '__main__':
     main(write_to_excel=False)
 else:
-    # When run as script, generate and write to Excel
-    main(write_to_excel=True)
+    main(write_to_excel=False)
     
