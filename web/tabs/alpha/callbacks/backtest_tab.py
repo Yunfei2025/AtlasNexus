@@ -427,6 +427,8 @@ def register_backtest_callbacks(app) -> None:
         # Inject SELL carry+roll timeseries for chart display
         if isinstance(results, dict) and _cr_sell_for_chart is not None:
             results['carry_roll_sell_ts'] = _cr_sell_for_chart
+        if isinstance(results, dict):
+            results['spread_type'] = spread_type
 
         status = f"Backtest completed at {datetime.now().strftime('%H:%M:%S')}"
         try:

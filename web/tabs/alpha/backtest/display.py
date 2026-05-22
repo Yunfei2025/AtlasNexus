@@ -74,6 +74,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'})
 
     is_trend = 'trend_state_ts' in results
+    is_bondswap = results.get('spread_type') in ('TBondSwap', 'CBondSwap', 'BondSwap')
     trades_df = results.get('trades_df')
 
     _score_raw = _coerce_datetime_series(results.get('norm_mom_ts') if is_trend else results.get('zscore_ts'))
@@ -258,8 +259,12 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             _ez = float(results.get('entry_z', 2.0))
             _sz = float(results.get('stop_z', 4.0))
             _xz = float(results.get('exit_z', 0.5))
-            signal_fig.add_hline(y=_ez,  line_dash='dash', line_color=THEME['danger'],              annotation_text=f'+{_ez}σ entry')
-            signal_fig.add_hline(y=-_ez, line_dash='dash', line_color=THEME['success'],             annotation_text=f'-{_ez}σ entry')
+            if is_bondswap:
+                signal_fig.add_hline(y=_ez,  line_dash='dash', line_color=THEME['success'],        annotation_text=f'+{_ez}σ long entry')
+                signal_fig.add_hline(y=-_ez, line_dash='dash', line_color=THEME['danger'],         annotation_text=f'-{_ez}σ short entry')
+            else:
+                signal_fig.add_hline(y=_ez,  line_dash='dash', line_color=THEME['danger'],         annotation_text=f'+{_ez}σ short entry')
+                signal_fig.add_hline(y=-_ez, line_dash='dash', line_color=THEME['success'],        annotation_text=f'-{_ez}σ long entry')
             signal_fig.add_hline(y=_sz,  line_dash='dot',  line_color='rgba(239,85,59,0.5)',        annotation_text=f'+{_sz}σ stop')
             signal_fig.add_hline(y=-_sz, line_dash='dot',  line_color='rgba(239,85,59,0.5)',        annotation_text=f'-{_sz}σ stop')
             signal_fig.add_hline(y=_xz,  line_dash='dot',  line_color='rgba(0,204,150,0.4)',        annotation_text=f'+{_xz}σ exit')
