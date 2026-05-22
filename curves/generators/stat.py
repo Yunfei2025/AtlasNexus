@@ -288,8 +288,8 @@ class StatGenerator:
         stat_.drop('level', axis=1, inplace=True)
 
         # Save to Excel
-        with pd.ExcelWriter(os.path.join(DIR_OUTPUT, 'PairSpreads.xlsx')) as writer:
-            stat_.to_excel(writer)
+        # with pd.ExcelWriter(os.path.join(DIR_OUTPUT, 'PairSpreads.xlsx')) as writer:
+        #     stat_.to_excel(writer)
 
         # Persist in spreads dict for downstream use
         self.spreads['BinarySpread'] = {

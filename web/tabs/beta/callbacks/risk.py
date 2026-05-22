@@ -323,8 +323,8 @@ def register_risk_callbacks(app):
                     open_date_str  = str(saved.get('open_date', ''))
 
                     spread_val = row.get('spread', None)
-                    # spread is in annual % (e.g. 0.01 = 1bp) → convert to bp for display
-                    cp_bp      = round(float(spread_val) * 100, 4) if pd.notna(spread_val) else None
+                    # spread is already stored in bp in the Alpha portfolio snapshot
+                    cp_bp      = round(float(spread_val), 4) if pd.notna(spread_val) else None
                     notional   = float(row.get('notional_mm', 0) or 0)
                     dv01_k     = float(row.get('DV01_k', 0) or 0)
                     # Use saved _duration if available, else reconstruct from DV01_k and notional

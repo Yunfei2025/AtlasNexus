@@ -38,7 +38,7 @@ class BondConfig:
     EXCLUDE_KEYWORDS = [
         '抗疫', '战疫', '柜台', '置换', '美元','定向','清发',
         '土地储备', '棚户区改造', '二级资本', '债券通', '注资','上海清算所',
-        '绿债', '增发', '增', '续', '新疆', '西藏', '甘肃', '青海',
+        '绿债', '绿色', '增发', '增', '续', '新疆', '西藏', '甘肃', '青海',
         '专项', '再融资', 'CD'
     ]
     INCLUDE_FILTERS = {
@@ -99,7 +99,7 @@ class BondConfig:
     #     fit residual produces a large YTM spike.
     #   - Long bonds (>10y) are outside the calibration pool.
     # We rarely do RV trading on <1.5y bonds anyway, so they are skipped.
-    PRICING_MIN_TTM = 1.5
+    PRICING_MIN_TTM = 1.0
     PRICING_MAX_TTM = 10.0
     # Calibration fit window (years) — decoupled from the pricing window.
     # Reference points in [FIT_MIN_TTM, FIT_MAX_TTM] are used to extract the

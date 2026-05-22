@@ -252,7 +252,7 @@ class RefBondSelector:
             df_volume = env['Def']['成交量:万元'].loc[bonds]
             
             # Filter valid bonds
-            valid_mask = (df_balance != 0) & (df_balance.notna()) & (df_volume.notna())
+            valid_mask = (df_balance != 0) & (df_balance.notna())
             bonds = bonds[valid_mask]
             df_balance = df_balance[valid_mask]
             df_volume = df_volume[valid_mask]
@@ -336,17 +336,17 @@ class RefBondSelector:
             if len(previous_dates) > 0:
                 prev_date = previous_dates[-1]
                 prev_bond = existing_results.loc[prev_date, bucket_name]
-                if prev_bond in bonds['start_date'].index:
-                    prev_bond_issue = bonds['start_date'].loc[prev_bond]
-                    try:
-                        selected_bond_issue = bonds['start_date'].loc[selected_bond]
-                    except KeyError:
-                        warnings.warn(f'Bond {selected_bond} not found in start_date index, skipping stability check')
-                        day_results[bucket_name] = selected_bond
-                        continue
-                    daydiff = (selected_bond_issue - prev_bond_issue).days
-                    if daydiff <= 0 and (prev_bond in bucket_bonds) :
+                if prev_bond in bonds['start_date'].index and prev_bond in bucket_bonds:
+                    if pd.isna(selected_bond):
                         selected_bond = prev_bond
+                    elif selected_bond not in bonds['start_date'].index:
+                        selected_bond = prev_bond
+                    else:
+                        prev_bond_issue = bonds['start_date'].loc[prev_bond]
+                        selected_bond_issue = bonds['start_date'].loc[selected_bond]
+                        daydiff = (selected_bond_issue - prev_bond_issue).days
+                        if daydiff <= 0:
+                            selected_bond = prev_bond
             day_results[bucket_name] = selected_bond
             # if bucket_term == 5 and date_str == '2025-06-11':
             #     import pdb; pdb.set_trace()

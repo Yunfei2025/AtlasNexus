@@ -14,7 +14,7 @@ import pandas as pd
 from typing import Dict, Optional, Tuple
 
 
-DEFAULT_REGIME_WINDOW = 120
+DEFAULT_REGIME_WINDOW = 60
 
 # Reuse helper functions from the futures regime module
 from futures.backtest.regime import (

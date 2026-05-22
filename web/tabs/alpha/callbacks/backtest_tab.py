@@ -354,9 +354,11 @@ def register_backtest_callbacks(app) -> None:
                 except Exception:
                     pass
 
+            is_bondswap = spread_type in ('TBondSwap', 'CBondSwap')
+
             if style == 'trend':
                 results = run_trend_backtest_dc(
-                    spread_ts=-ts if spread_type in ('TBondSwap', 'CBondSwap') else ts,
+                    spread_ts=-ts if is_bondswap else ts,
                     theta=float(theta) if theta is not None else 0.02,
                     mom_window=int(mom_window) if mom_window is not None else 20,
                     vol_window=int(vol_window) if vol_window is not None else 60,
@@ -375,7 +377,7 @@ def register_backtest_callbacks(app) -> None:
                 )
             else:
                 results = run_spread_backtest(
-                    spread_ts=-ts if spread_type in ('TBondSwap', 'CBondSwap') else ts,
+                    spread_ts=-ts if is_bondswap else ts,
                     entry_z=entry_z or 2.0,
                     exit_z=exit_z or 0.5,
                     stop_z=stop_z or 4.0,
@@ -391,18 +393,33 @@ def register_backtest_callbacks(app) -> None:
                     carry_roll_sell_ts=_cr_sell_for_backtest,
                 )
 
-            # For BondSwap: restore original (positive) spread and prices for display
-            if spread_type in ('TBondSwap', 'CBondSwap') and isinstance(results, dict):
+            # For BondSwap: restore original display signs after internal inversion.
+            if is_bondswap and isinstance(results, dict):
                 results['spread_ts'] = ts
+                for key in ('zscore_ts', 'composite_signal_ts', 'norm_mom_ts', 'trend_state_ts'):
+                    series = results.get(key)
+                    if isinstance(series, pd.Series):
+                        results[key] = -series
                 for trade in results.get('trades', []):
-                    for k in ('entry_price', 'exit_price'):
+                    for k in ('entry_price', 'exit_price', 'entry_z', 'exit_z'):
                         if k in trade:
                             trade[k] = -trade[k]
+                    if style == 'trend' and 'direction' in trade:
+                        trade['direction'] = 'LONG' if trade['direction'] == 'SHORT' else ('SHORT' if trade['direction'] == 'LONG' else trade['direction'])
+                open_trade = results.get('open_trade')
+                if isinstance(open_trade, dict):
+                    for k in ('entry_price', 'current_price', 'entry_z'):
+                        if k in open_trade and open_trade[k] is not None:
+                            open_trade[k] = -open_trade[k]
+                    if style == 'trend' and 'direction' in open_trade:
+                        open_trade['direction'] = 'LONG' if open_trade['direction'] == 'SHORT' else ('SHORT' if open_trade['direction'] == 'LONG' else open_trade['direction'])
                 _tdf = results.get('trades_df')
                 if isinstance(_tdf, pd.DataFrame) and not _tdf.empty:
-                    for k in ('entry_price', 'exit_price'):
+                    for k in ('entry_price', 'exit_price', 'entry_z', 'exit_z'):
                         if k in _tdf.columns:
                             results['trades_df'][k] = -_tdf[k]
+                    if style == 'trend' and 'direction' in _tdf.columns:
+                        results['trades_df']['direction'] = _tdf['direction'].replace({'LONG': 'SHORT', 'SHORT': 'LONG'})
         except Exception as exc:
             import traceback
             return html.Div(f"Backtest engine error: {exc}\n{traceback.format_exc(limit=8)}", style={'color': THEME['warning'], 'whiteSpace': 'pre-wrap', 'fontSize': '11px', 'padding': '10px'}), f"Error at {datetime.now().strftime('%H:%M:%S')}"
@@ -551,6 +568,8 @@ def register_backtest_callbacks(app) -> None:
                 run_trend = 'trend' in str(_item.get('style', '')).lower()
 
                 ts = df_prices[asset]
+                is_bondswap = spread_type in ('TBondSwap', 'CBondSwap')
+                ts_bt = -ts if is_bondswap else ts
 
                 _cr_ts, _cr_bp = None, 0.0
                 try:
@@ -575,15 +594,17 @@ def register_backtest_callbacks(app) -> None:
                 try:
                     if run_trend:
                         res = run_trend_backtest_dc(
-                            spread_ts=ts, carry_roll_ts=_cr_ts,
+                            spread_ts=ts_bt, carry_roll_ts=_cr_ts,
                             carry_roll_bp=_cr_bp, duration_mult=dur,
+                            allow_short=True,
                         )
                     else:
                         res = run_spread_backtest(
-                            spread_ts=ts, carry_roll_ts=_cr_ts,
+                            spread_ts=ts_bt, carry_roll_ts=_cr_ts,
                             carry_roll_bp=_cr_bp, duration_mult=dur,
                             borrow_cost_long_bp=_bc_long,
                             borrow_cost_short_bp=_bc_short,
+                            spread_type=spread_type,
                         )
                 except Exception:
                     continue
