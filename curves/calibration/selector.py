@@ -68,6 +68,26 @@ def get_most_liquid_bond(turnover: pd.Series) -> str:
     return turnover.idxmax() if len(turnover) > 1 else turnover.index[0]
 
 
+def get_offtherun_bond(turnover: pd.Series, n_exclude: int = 1) -> str:
+    """Select first-off-the-run bond by excluding the top n_exclude most liquid.
+
+    For RV trading the on-the-run benchmark must NOT define the calibration
+    curve — otherwise the curve chases the benchmark and the on/off spread
+    collapses to zero. We exclude the most liquid bond(s) so the affine curve
+    represents fair value for generic off-the-run bonds, and `ytm_act - ytm_quo`
+    for the on-the-run bond becomes a clean on/off-the-run premium.
+
+    Fallback: if the bucket has <= n_exclude bonds, return the most liquid
+    one (avoids returning NaN for sparse tenor buckets such as 20Y/30Y).
+    """
+    if len(turnover) == 0:
+        return np.nan
+    if len(turnover) <= n_exclude:
+        return turnover.idxmax()
+    ranked = turnover.sort_values(ascending=False)
+    return ranked.index[n_exclude]
+
+
 def extract_yield(env: dict, bond_id: str, date: datetime, price_type: str) -> float:
     """Extract yield to maturity based on price type."""
     if price_type == 'hist':
@@ -163,6 +183,13 @@ class RefBondSelector:
         if 'RefBond' in existing_data:
             result_df = existing_data['RefBond'].sort_index()
             result_df = result_df.loc[~result_df.index.duplicated(keep='first')]
+            # Back-compat: add columns for any new buckets not present in the stored file,
+            # then reorder to match the current TERM_BUCKETS definition.
+            expected_columns = [f'Term near {t}Y' for t in term_buckets.keys()]
+            for col in expected_columns:
+                if col not in result_df.columns:
+                    result_df[col] = np.nan
+            result_df = result_df[expected_columns]
         else:
             column_names = [f'Term near {t}Y' for t in term_buckets.keys()]
             result_df = pd.DataFrame(columns=column_names, dtype=object)
@@ -239,6 +266,10 @@ class RefBondSelector:
             # Calculate turnover time series
             df_turnover = env['Volume'][bonds].div(df_balance.values, axis=1) / 1e8
             df_turnover = df_turnover.replace([np.inf, -np.inf], 0).dropna(axis=0, how='all')
+            # 20-day rolling mean smooths zero-volume days and gives stable
+            # on/off-the-run ranking. min_periods=5 avoids penalising bonds
+            # that just started trading (auction week).
+            df_turnover = df_turnover.rolling(window=20, min_periods=5).mean()
         else:
             # Single date case
             required_cols = ['债券余额:亿', '成交量:万元', '到期日期', '起息日期', '证券全称']
@@ -319,7 +350,9 @@ class RefBondSelector:
                 zero_coupon_mask = (freq_data == 1) & freq_data.notna()
                 candidate_bonds = candidate_bonds[zero_coupon_mask]
 
-            # Select most liquid bond
+            # Rank by 20-day rolling turnover; pick first off-the-run
+            # (rank-2 by liquidity). When the bucket has only one bond,
+            # get_offtherun_bond falls back to the most liquid one.
             available_turnover = date_turnover.loc[candidate_bonds].dropna()
             # avoid duplication with previous bucket
             term_idx = list(existing_results.columns).index(bucket_name)
@@ -329,27 +362,24 @@ class RefBondSelector:
                 if prev_tenor_bond in available_turnover.index:
                     available_turnover = available_turnover.drop(index=prev_tenor_bond)
 
-            selected_bond = get_most_liquid_bond(available_turnover)
-            # Use previous selection for stability if appropriate
-            previous_dates = existing_results.index[existing_results.index < current_date]
+            selected_bond = get_offtherun_bond(available_turnover, n_exclude=1)
 
+            # Sticky off-the-run: prefer the previous selection as long as
+            # it is still in this bucket. This prevents day-to-day turnover
+            # noise from flipping the reference between adjacent off-the-run
+            # bonds, and lets new on-the-run issuance roll smoothly into the
+            # calibration (old on-the-run becomes the new first off-the-run
+            # only when the previous reference ages out of the bucket).
+            previous_dates = existing_results.index[existing_results.index < current_date]
             if len(previous_dates) > 0:
                 prev_date = previous_dates[-1]
                 prev_bond = existing_results.loc[prev_date, bucket_name]
-                if prev_bond in bonds['start_date'].index and prev_bond in bucket_bonds:
-                    if pd.isna(selected_bond):
-                        selected_bond = prev_bond
-                    elif selected_bond not in bonds['start_date'].index:
-                        selected_bond = prev_bond
-                    else:
-                        prev_bond_issue = bonds['start_date'].loc[prev_bond]
-                        selected_bond_issue = bonds['start_date'].loc[selected_bond]
-                        daydiff = (selected_bond_issue - prev_bond_issue).days
-                        if daydiff <= 0:
-                            selected_bond = prev_bond
+                if (prev_bond in bonds['start_date'].index
+                        and prev_bond in bucket_bonds):
+                    selected_bond = prev_bond
+                elif pd.isna(selected_bond) and prev_bond in bonds['start_date'].index:
+                    selected_bond = prev_bond
             day_results[bucket_name] = selected_bond
-            # if bucket_term == 5 and date_str == '2025-06-11':
-            #     import pdb; pdb.set_trace()
         return day_results
 
 

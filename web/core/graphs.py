@@ -187,15 +187,36 @@ def build_spread_series(b: str, season: int, stype: str) -> Dict[str, Any]:
             cl = spread_ts[spread_type]["CloseYield"][tenor]
             extra[0] = cl
             extra[1] = _suppress_curve_yield_jumps(spread_ts[spread_type]["CurveYield"][tenor], cl)
+            # CR(3m,bp) for BondCurve types: Spread series (annual %, 0.01=1bp) on y4
+            if spread_type in ["TBondCurve", "CBondCurve"]:
+                try:
+                    spd_cr = spread_ts[spread_type].get("Spread")
+                    if isinstance(spd_cr, pd.DataFrame) and tenor in spd_cr.columns:
+                        extra['cr_buy'] = spd_cr[tenor]
+                except Exception:
+                    pass
             return extra
         if spread_type in ["TBondSwap", "CBondSwap"]:
-            extra[0] = spread_ts[spread_type]["BondCarry"][tenor]
+            bc = spread_ts[spread_type]["BondCarry"][tenor]
+            extra[0] = bc  # backward compat
+            extra['cr_buy'] = bc    # annual bp → divide by 4 for 3m bp in trace
+            extra['cr_sell'] = -bc
             return extra
         if spread_type == "SwapSpread":
             extra[0] = spread_ts[spread_type]["CarryRoll3m"][tenor]
             return extra
         if spread_type == "NetBasis":
             extra[0] = spread_ts["NetIRR"][FuturesConfig.SEASONS[season_idx]][tenor]
+            return extra
+        if spread_type == "TenorSpread":
+            try:
+                cr3m = spread_ts["TenorSpread"].get("CarryRoll3m")
+                if isinstance(cr3m, pd.DataFrame) and tenor in cr3m.columns:
+                    extra['cr_buy'] = cr3m[tenor]   # 3m % BUY carry (×100 for bp in trace)
+                    extra['cr_sell'] = -cr3m[tenor]
+            except Exception:
+                pass
+            extra[0] = pd.Series(dtype=float)
             return extra
         extra[0] = pd.Series(dtype=float)
         return extra
@@ -361,14 +382,14 @@ def spreadts(stype, season, b):
     yrg = _compute_y_range(stype, df, x_range=xrg)
     layout = _select_layout(stype, title, yunits[stype], xrg, yrg, lineinfo)
 
-    # Explicitly scope yaxis2 (fixing overlay) and yaxis3 (CR 3m) ranges to the
-    # visible x-window so both right axes scale to 1Y data, not full history.
-    _axis_sources = [("yaxis2", trace_fs), ("yaxis3", trace_add)]
+    # Explicitly scope yaxis2 (fixing overlay), yaxis3 and yaxis4 (CR 3m) ranges
+    # to the visible x-window so right axes scale to 1Y data, not full history.
+    _axis_sources = [("yaxis2", trace_fs), ("yaxis3", trace_add), ("yaxis4", trace_add)]
     for axis_key, traces in _axis_sources:
         if axis_key not in layout:
             continue
         _vals: List[float] = []
-        _tag = "y2" if axis_key == "yaxis2" else "y3"
+        _tag = axis_key.replace("yaxis", "y")  # "yaxis2" → "y2", "yaxis3" → "y3", etc.
         for t in traces:
             if getattr(t, "yaxis", None) == _tag and t.x is not None and t.y is not None:
                 try:

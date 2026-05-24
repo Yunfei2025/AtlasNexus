@@ -1117,14 +1117,15 @@ def build_alpha_candidates(
 	# Style mapping: explicit carry categories stay Carry; mixed categories are ADF-driven.
 	cat_to_style = {
 		"Bond-Curve": "MeanReversion",
-		#"Swap-Spread": "MeanReversion", # HANDLED DYNAMICALLY BELOW
-		"Bond-Swap": "Carry",
+		# "Bond-Swap" handled dynamically below (MR when stationary, Carry otherwise)
 	}
 	if "style" not in df_all.columns:
 		df_all["style"] = df_all["category"].map(cat_to_style)
-		
-		# Dynamic style for mixed categories: MR if stationary, else Carry.
-		for dynamic_category in ["Swap-Spread", "Tenor-Spread"]:
+
+		# Dynamic style: MR if the ADF stationarity test passes, else Carry.
+		# Bond-Swap is included here because bond yield − swap rate is cointegrated
+		# over the medium term; treat it as MR when the series confirms stationarity.
+		for dynamic_category in ["Bond-Swap", "Swap-Spread", "Tenor-Spread"]:
 			mask_dynamic = df_all["category"] == dynamic_category
 			if mask_dynamic.any():
 				df_all.loc[mask_dynamic, "style"] = "Carry"
@@ -1227,11 +1228,11 @@ def build_alpha_candidates(
 				trend.loc[bs_idx, "score"] = (exp_ret / risk_bs).fillna(0.0)
 
 	# ── Execution-feasibility filters ──────────────────────────────────────────
-	# Bond-Swap (TBondSwap / CBondSwap): borrowing the bond to short is not
-	# feasible in practice, so only BUY-side candidates are kept.
-	# Bond-Curve (TBondCurve / CBondCurve): shorting off-the-run bonds is
-	# similarly not feasible, so only BUY-side candidates are kept.
-	_SELL_RESTRICTED_CATEGORIES = {"Bond-Swap", "Bond-Curve"}
+	# Bond-Curve (TBondCurve / CBondCurve): shorting off-the-run bonds requires
+	# repo/borrow that is not reliably available, so only BUY-side is kept.
+	# Bond-Swap SELL direction is permitted: it is expressed as receive-fixed on
+	# an IRS (no physical bond short needed), which is fully executable.
+	_SELL_RESTRICTED_CATEGORIES = {"Bond-Curve"}
 	if "category" in mr.columns and "direction" in mr.columns:
 		sell_restricted = mr["category"].isin(_SELL_RESTRICTED_CATEGORIES)
 		mr = mr[~(sell_restricted & mr["direction"].eq("SELL"))].copy()

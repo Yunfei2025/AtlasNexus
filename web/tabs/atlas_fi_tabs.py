@@ -59,6 +59,7 @@ def build_spreads_layout():
         {"label": "— Sectors —",           "value": "__sectors__",  "disabled": True},
         {"label": "Sector PCA",             "value": "SectorPCASpread"},
         {"label": "Spread Regression",      "value": "BinarySpread"},
+        {"label": "Tenor Spreads",          "value": "TenorSpread"},
         {"label": "— Bonds —",             "value": "__bonds__",    "disabled": True},
         {"label": "Treasury Bond",          "value": "TBondCurve"},
         {"label": "Policybank Bond",        "value": "CBondCurve"},

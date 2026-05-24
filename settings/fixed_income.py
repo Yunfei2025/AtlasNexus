@@ -67,7 +67,8 @@ class BondConfig:
         'SectorPCASpread': 'Sector PCA',
         'NetBasis': 'Net Basis of Futures Contract and Deliverable Bond',
         'TermBasis': 'Term Basis between Futures Contracts',
-        'BinarySpread': 'Spread Regression'
+        'BinarySpread': 'Spread Regression',
+        'TenorSpread': 'Tenor Spreads',
     }
     COLUMNS_EN = [
         'NAME', 'FULLNAME', 'SEC_TYPE', 'OUTSTANDINGBALANCE', 'CARRYDATE','MATURITYDATE',
@@ -85,8 +86,9 @@ class BondConfig:
     ]
     TERM_BUCKETS = {
         0.3: [0.1, 0.4], 0.5: [0.4, 0.6], 0.7: [0.6, 0.9],
-        1: [0.9, 1.2], 1.5: [1.2, 1.6], 2: [1.6, 2.0],
-        3: [2.0, 3.0], 5: [4.0, 5.0], 10: [8.0, 10.0]
+        1: [0.9, 1.2], 1.5: [1.2, 1.6], 2: [1.6, 2.5],
+        3: [2.5, 3.5], 5: [4.0, 6.0], 7: [6.0, 8.5],
+        10: [8.5, 12.0], 20: [17.0, 22.0], 30: [27.0, 32.0],
     }
     PX = ['Bid', 'Ofr']
     BORROW_COST = {
@@ -94,20 +96,19 @@ class BondConfig:
     } # annual cost in bp
     # Curve pricing filter (years). Bonds outside this TTM band are excluded
     # from `ytm_quo` (curve-implied YTM):
-    #   - Short bonds (<1.5y) have huge fit residuals under the 3-factor affine
+    #   - Short bonds (<1.0y) have huge fit residuals under the 3-factor affine
     #     model — 1 cent of price ≈ 13bp of YTM near maturity, so a tiny
     #     fit residual produces a large YTM spike.
-    #   - Long bonds (>10y) are outside the calibration pool.
-    # We rarely do RV trading on <1.5y bonds anyway, so they are skipped.
+    # We rarely do RV trading on <1.0y bonds anyway, so they are skipped.
     PRICING_MIN_TTM = 1.0
-    PRICING_MAX_TTM = 10.0
+    PRICING_MAX_TTM = 32.0
     # Calibration fit window (years) — decoupled from the pricing window.
     # Reference points in [FIT_MIN_TTM, FIT_MAX_TTM] are used to extract the
     # 3-factor affine factors. Including <1.5y points stabilizes the short end
     # (important for bootstrapping); FIT_MIN_TTM=0.25 still skips the last few
     # weeks before maturity where YTM is most price-sensitive.
     FIT_MIN_TTM = 0.25
-    FIT_MAX_TTM = 10.0
+    FIT_MAX_TTM = 32.0
     # Reference-point staleness filter (applied in the realtime refresher
     # before fitting). A bond is treated as stale and dropped if:
     #   - It is missing from BondRT, OR

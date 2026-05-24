@@ -113,20 +113,20 @@ def OU_calibrate(ts):
     stat_info[statvs] = stat_info[statvs].astype(float)
     return stat_info
 
-def statAnalysis_BC(env,df1,df2):
+def statAnalysis_BC(env, df1, df2, zscore_lookback: int = 252):
     # Ornstein–Uhlenbeck Process calibration, or normal statistics
     # formula reference: https://www.zhihu.com/question/268075949/answer/1531412127
     # spreadvalues between quoted ytm and actual ytm
 
     vol_ratio = df1.std()/df2.std()
-    # spreadvalue = pd.DataFrame(columns=spread.columns)
-    # irsKeyRates = env['irs_ts'].loc[df1.index[0]:df1.index[-1]]
-    # fr001 = irsKeyRates['FR001.IR']
-    # fr007 = irsKeyRates['FR007.IR']
     bonds = df1.columns.intersection(env['Def'].index)
     spread = df1 - df2
     spread = spread[bonds]
-    stat_info = OU_calibrate(spread)
+    # Use a 1-year rolling window for mean/vol/stationarity so old regimes
+    # don't dilute the normalisation. Full spread history is kept in the
+    # returned dict for downstream charting.
+    spread_stat = spread.iloc[-zscore_lookback:] if len(spread) > zscore_lookback else spread
+    stat_info = OU_calibrate(spread_stat)
     for b in bonds:
         stat_info.loc[b,'ttm'] = env['Def'].loc[b,'剩余期限']
         # spreadvalue[b] = spread[b] - fr001 + fr007

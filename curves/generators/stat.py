@@ -25,7 +25,7 @@ from settings.futures import FuturesConfig
 def _suppress_model_jumps(
     df_quo: pd.DataFrame,
     df_act: pd.DataFrame,
-    jump_threshold: float = 0.08,
+    jump_threshold: float = 0.03,
     ratio_threshold: float = 5.0,
 ) -> pd.DataFrame:
     """Suppress affine model calibration artifacts (discontinuous factor shifts) in ytm_quo.
@@ -33,6 +33,7 @@ def _suppress_model_jumps(
     A calibration jump is flagged when ytm_quo changes by more than `jump_threshold` (in %)
     while ytm_act barely moves (ratio of changes exceeds `ratio_threshold`).
     Flagged entries are replaced with NaN then linearly interpolated.
+    Threshold lowered from 0.08 to 0.03 to catch 3-6bp coupon-date factor recalibration artifacts.
     """
     df_quo_diff = df_quo.diff().abs()
     act_aligned = df_act.reindex(index=df_quo.index, columns=df_quo.columns)

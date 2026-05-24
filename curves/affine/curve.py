@@ -269,7 +269,7 @@ class Curve:
     def fitting(self):
         # 0.05y grid so that exact 0.25/0.5/0.75 tenor lookups land on the grid.
         delt = 0.05
-        taus = np.round(np.arange(0.05, 10.05, delt), 2)
+        taus = np.round(np.arange(0.05, 32.05, delt), 2)
         S2_flat = tuple(float(self.S2[i,j]) for i in range(3) for j in range(3))
         gamma_f = float(self.gamma)
         if isinstance(self.factors, sp.MatrixBase):

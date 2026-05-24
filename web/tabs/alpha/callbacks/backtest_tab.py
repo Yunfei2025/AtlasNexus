@@ -173,13 +173,46 @@ def register_backtest_callbacks(app) -> None:
                 style_key = 'trend'
                 auto_options = _BT_DISABLED_OPTIONS
             else:
+                # Uncertain regime: use carry_roll sign as tiebreaker.
+                # Positive carry rewards waiting for reversion → MR.
+                # Negative/zero carry means holding costs money → follow Trend.
                 auto_options = _BT_BASE_OPTIONS
+                carry_roll_val = np.nan
+                try:
+                    snap_df = load_spread_data(spread_type)
+                    if isinstance(snap_df, pd.DataFrame) and not snap_df.empty:
+                        _row = None
+                        if instrument in snap_df.index:
+                            _row = snap_df.loc[instrument]
+                        elif 'ID' in snap_df.columns:
+                            _m = snap_df[snap_df['ID'].astype(str) == str(instrument)]
+                            if not _m.empty:
+                                _row = _m.iloc[0]
+                        if _row is not None:
+                            for _c in ['carry_roll', 'carry_3m_bp', 'Carry(3m,bp)', 'carry']:
+                                _v = _row.get(_c, np.nan)
+                                if _v is not None and np.isfinite(float(_v)):
+                                    carry_roll_val = float(_v)
+                                    break
+                except Exception:
+                    pass
+                if not np.isnan(carry_roll_val):
+                    style_key = 'mr' if carry_roll_val > 0 else 'trend'
+                    carry_hint = f"carry={carry_roll_val:+.1f}bp → {'MR' if carry_roll_val > 0 else 'Trend'} suggested"
+                else:
+                    style_key = 'mr'
+                    carry_hint = "carry unavailable → MR suggested"
 
-            badge_extra = (
-                html.Span("  — please select trade style manually", style={'color': THEME['warning'], 'fontSize': '11px'})
-                if regime == 'uncertain' else
-                html.Span(f"  (score: {score:+.2f}, source: {regime_source})", style={'color': THEME['text_sub'], 'fontSize': '11px'})
-            )
+            if regime == 'uncertain':
+                badge_extra = html.Span(
+                    f"  (score: {score:+.2f})  {carry_hint}",
+                    style={'color': THEME['warning'], 'fontSize': '11px'},
+                )
+            else:
+                badge_extra = html.Span(
+                    f"  (score: {score:+.2f}, source: {regime_source})",
+                    style={'color': THEME['text_sub'], 'fontSize': '11px'},
+                )
             badge = html.Div([
                 html.Span("Auto-detected regime: ", style={'color': THEME['text_sub'], 'fontSize': '12px'}),
                 html.Span(regime.upper().replace('_', '-'), style={'color': regime_color, 'fontWeight': 'bold', 'fontSize': '13px'}),

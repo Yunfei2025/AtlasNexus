@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 import pathlib
 import pickle
+import re
 import sys
 from pathlib import Path
+import numpy as np
 import pandas as pd
 import time
 import logging
@@ -75,6 +77,68 @@ LOAD_TICKS = os.environ.get("LOAD_TICKS", "1") == "1"
 # defers data loading until callbacks request it.
 WEB_PRELOAD = os.environ.get("WEB_PRELOAD", "1") == "1"
 
+def _build_tenor_spread_fallback() -> dict:
+    """Build minimal TenorSpread structure from database-px.pkl when Tenor-spds.pkl is absent."""
+    try:
+        db = _load_pickle(os.path.join(DIR_INPUT, 'database-px.pkl'))
+        if not isinstance(db, dict):
+            return {}
+        cgb = db.get('CGB', {})
+        cdb = db.get('CDB', {})
+        if not cgb or not cdb:
+            return {}
+
+        def _s(src, k):
+            v = src.get(k)
+            return pd.to_numeric(v, errors='coerce') if v is not None else None
+
+        cgb5  = _s(cgb, '中债国债到期收益率:5年')
+        cgb10 = _s(cgb, '中债国债到期收益率:10年')
+        cgb20 = _s(cgb, '中债国债到期收益率:20年')
+        cgb30 = _s(cgb, '中债国债到期收益率:30年')
+        cdb5  = _s(cdb, '中债国开债到期收益率:5年')
+        cdb10 = _s(cdb, '中债国开债到期收益率:10年')
+        cdb30 = _s(cdb, '中债国开债到期收益率:30年')
+
+        instruments = {}
+        if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10 - cgb5
+        if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30 - cgb10
+        if cgb10 is not None and cgb20 is not None: instruments['CGB-10s20s'] = cgb20 - cgb10
+        if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10 - cdb5
+        if cdb10 is not None and cdb30 is not None: instruments['CDB-10s30s'] = cdb30 - cdb10
+        if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5  - cgb5
+        if cdb10 is not None and cgb10 is not None: instruments['CDBCGB-10y'] = cdb10 - cgb10
+        if cdb30 is not None and cgb30 is not None: instruments['CDBCGB-30y'] = cdb30 - cgb30
+
+        if not instruments:
+            return {}
+
+        df_spread = pd.DataFrame(instruments).apply(pd.to_numeric, errors='coerce')
+        df_cr3m = df_spread.copy() * (90.0 / 360.0)
+        for col in df_cr3m.columns:
+            if re.search(r'\d+s\d+', col, re.IGNORECASE):
+                df_cr3m[col] = -df_cr3m[col]
+
+        stat_cols = ['stationary', 'halflife', 'mean', 'vol', 'max', 'min']
+        stat_info = pd.DataFrame(index=df_spread.columns, columns=stat_cols)
+        stat_info.index.name = 'ID'
+        for col in df_spread.columns:
+            sp = df_spread[col].dropna()
+            if len(sp) > 10:
+                stat_info.loc[col, 'mean'] = float(sp.mean())
+                stat_info.loc[col, 'vol']  = float(sp.std())
+                stat_info.loc[col, 'max']  = float(sp.max())
+                stat_info.loc[col, 'min']  = float(sp.min())
+                stat_info.loc[col, 'halflife'] = np.nan
+                stat_info.loc[col, 'stationary'] = 'NO'
+        for c in ['halflife', 'mean', 'vol', 'max', 'min']:
+            stat_info[c] = pd.to_numeric(stat_info[c], errors='coerce')
+
+        return {'Spread': df_spread, 'CarryRoll3m': df_cr3m, 'StatInfo': stat_info}
+    except Exception:
+        return {}
+
+
 def _build_spread_ts() -> dict:
     out = {}
     # bond types
@@ -97,6 +161,15 @@ def _build_spread_ts() -> dict:
     out["SectorPCASpread"] = miscspds["PCASpread"]
     out["BinarySpread"] = miscspds["BinarySpread"]
     out["AssetPCASpread"] = portspds
+
+    # Tenor spreads (CGB/CDB slope + CDBCGB cross-sector)
+    try:
+        tenor_spds = _load_pickle(os.path.join(DIR_INPUT, 'Tenor-spds.pkl'))
+        out["TenorSpread"] = tenor_spds["TenorSpread"]
+    except Exception:
+        fb = _build_tenor_spread_fallback()
+        if fb:
+            out["TenorSpread"] = fb
 
     # futures
     futspds = _load_pickle(os.path.join(DIR_INPUT,"futures-spds.pkl"))

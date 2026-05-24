@@ -24,7 +24,7 @@ class GeneralConfig:
     N_CORE = 6
     DSHIFT = 1
     PSHIFT = 1
-    STAT_WINDOW = 3
+    STAT_WINDOW = 12
     SIGMA_WINDOW_MONTHS = 3
     # MIN_MATURITY / MAX_MATURITY moved to settings.fixed_income.BondConfig
     # (PRICING_MIN_TTM / PRICING_MAX_TTM) — they are bond-curve specific.

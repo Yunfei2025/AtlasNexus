@@ -57,10 +57,11 @@ _L1_OPTIONS = [
 ]
 
 _BOND_TERM_OPTIONS = [
-    {"label": "1 – 3 Y",  "value": "1-3Y"},
-    {"label": "3 – 5 Y",  "value": "3-5Y"},
-    {"label": "5 – 7 Y",  "value": "5-7Y"},
-    {"label": "7 – 10 Y", "value": "7-10Y"},
+    {"label": "1 – 3 Y",   "value": "1-3Y"},
+    {"label": "3 – 5 Y",   "value": "3-5Y"},
+    {"label": "5 – 7 Y",   "value": "5-7Y"},
+    {"label": "7 – 10 Y",  "value": "7-10Y"},
+    {"label": "10 – 30 Y", "value": "10-30Y"},
 ]
 
 _SWAP_TERM_OPTIONS = [
@@ -74,10 +75,11 @@ _SWAP_TERM_OPTIONS = [
 
 # Term range → (lo_exclusive, hi_inclusive) in years
 _TERM_RANGE: dict[str, tuple[float, float]] = {
-    "1-3Y":  (1.0,  3.0),
-    "3-5Y":  (3.0,  5.0),
-    "5-7Y":  (5.0,  7.0),
-    "7-10Y": (7.0, 10.0),
+    "1-3Y":   (1.0,  3.0),
+    "3-5Y":   (3.0,  5.0),
+    "5-7Y":   (5.0,  7.0),
+    "7-10Y":  (7.0, 10.0),
+    "10-30Y": (10.0, 32.0),
 }
 
 # ── Instrument name patterns for swap sub-categories ─────────────────────────

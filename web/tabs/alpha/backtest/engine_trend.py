@@ -179,7 +179,7 @@ def run_trend_backtest_dc(
                 entry_date = date
                 entry_price = px
                 best_fav = px
-            elif allow_short and st < 0 and mom_ok and px <= -carry_buffer:
+            elif allow_short and st < 0 and mom_ok:
                 position = -1
                 entry_date = date
                 entry_price = px

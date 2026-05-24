@@ -164,10 +164,14 @@ class Backtestor:
         # Pre-compute reference data once (this is already optimized in CurveManager)
         if self.btype != 'IRS':
             manager._precompute_reference(env, prange)
-        # Use ProcessPoolExecutor with initializer to share heavy context once per worker
+        # Use ProcessPoolExecutor with initializer to share heavy context once per worker.
+        # Force 'fork' start method: macOS/Linux default is 'spawn' in Python 3.8+,
+        # which re-imports all modules in each worker and hangs on heavy module-level init.
+        import multiprocessing as _mp
         from curves.backtest.workers import _init_worker_curves, _init_curves_chunk_worker
         with ProcessPoolExecutor(
             max_workers=self.processes,
+            mp_context=_mp.get_context('fork'),
             initializer=_init_worker_curves,
             initargs=(manager.bond_type, manager._cache, env, prange),
         ) as executor:
@@ -206,9 +210,11 @@ class Backtestor:
             # Note: periods is a list of date chunks [[date1, date2, ...], [date3, date4, ...], ...]
             # Each chunk will be converted to [start, end] format inside the worker
             # Use ProcessPoolExecutor with initializer to share dict_curve/env once per worker
+            import multiprocessing as _mp
             from curves.backtest.workers import _init_worker_pricing, _price_chunk_worker
             with ProcessPoolExecutor(
                 max_workers=self.processes,
+                mp_context=_mp.get_context('fork'),
                 initializer=_init_worker_pricing,
                 initargs=(self.btype, dict_curve, env),
             ) as executor:

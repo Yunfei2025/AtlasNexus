@@ -180,21 +180,64 @@ def getTraceAdd(df1: Mapping[int, pd.Series], stype: str) -> List[Any]:
             line={
                 "width": width[i],
                 "color": color[i],
-                #"dash" :'dash',
                 }
         ) for i in [0,1]]
+        # CR(3m,bp) for BondCurve: Spread (annual %, 0.01=1bp) × 25 → 3m bp; on y4 to avoid
+        # scale conflict with CloseYield/CurveYield on y3.
+        cr_s = df1.get('cr_buy')
+        if cr_s is not None and hasattr(cr_s, 'dropna') and not cr_s.dropna().empty:
+            trace2.append(go.Scatter(
+                name='CR(3m,bp)',
+                x=cr_s.index,
+                y=25 * cr_s,
+                yaxis='y4',
+                line={"width": 1, "color": px.colors.diverging.balance[3], "dash": "dash"},
+            ))
     elif stype in ['TBondSwap','CBondSwap']:
-        trace2 = [go.Scatter(
-            name = 'Bond Carry (3m)',
-            x=df1[0].index,
-            y=df1[0],
-            yaxis='y3',
-            line={
-                "width": 1,
-                "color": ACCENT,
-                "dash" :'dash',
-                }
-        )]
+        if 'cr_buy' in df1 and df1['cr_buy'] is not None:
+            trace2 = [
+                go.Scatter(
+                    name='CR BUY (3m,bp)',
+                    x=df1['cr_buy'].index,
+                    y=df1['cr_buy'] / 4,  # annual bp → 3m bp
+                    yaxis='y3',
+                    line={"width": 1, "color": "rgba(0,204,150,0.85)", "dash": "dash"},
+                ),
+                go.Scatter(
+                    name='CR SELL (3m,bp)',
+                    x=df1['cr_sell'].index,
+                    y=df1['cr_sell'] / 4,
+                    yaxis='y3',
+                    line={"width": 1, "color": "rgba(239,85,59,0.85)", "dash": "dash"},
+                ),
+            ]
+        else:
+            trace2 = [go.Scatter(
+                name='Bond Carry (3m)',
+                x=df1[0].index,
+                y=df1[0],
+                yaxis='y3',
+                line={"width": 1, "color": ACCENT, "dash": "dash"},
+            )]
+    elif stype == 'TenorSpread':
+        trace2 = []
+        if 'cr_buy' in df1 and df1['cr_buy'] is not None:
+            trace2 = [
+                go.Scatter(
+                    name='CR BUY (3m,bp)',
+                    x=df1['cr_buy'].index,
+                    y=100 * df1['cr_buy'],  # 3m % → 3m bp
+                    yaxis='y3',
+                    line={"width": 1, "color": "rgba(0,204,150,0.85)", "dash": "dash"},
+                ),
+                go.Scatter(
+                    name='CR SELL (3m,bp)',
+                    x=df1['cr_sell'].index,
+                    y=100 * df1['cr_sell'],
+                    yaxis='y3',
+                    line={"width": 1, "color": "rgba(239,85,59,0.85)", "dash": "dash"},
+                ),
+            ]
     elif stype == 'SwapSpread':
         trace2 = [go.Scatter(
             name = 'CR(3m,bp)',
@@ -359,13 +402,12 @@ def layout_ts_line(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[
                 }
         layout["yaxis4"]={
                 "showgrid": False,
-                "showline": True,
+                "showline": False,
                 "anchor":'x',
                 "overlaying":'y',
                 "side":'right',
-                "zeroline": True,
-                "zerolinecolor": WHITE,
-                "zerolinewidth": 1,
+                "zeroline": False,
+                "tickvals": [],
                 },
     if shape:
         layout["shapes"] = _make_stat_shapes(lineinfo)
@@ -398,12 +440,17 @@ def extractTTM(b: str, stype: str, df_stat: pd.DataFrame) -> str:
             ttm = '%.2fY' % ttm
         else:
             ttm = b.split('.')[0][-2:]
+    elif stype == 'TenorSpread':
+        ttm = b  # instrument name (e.g. CGB-5s10s) encodes the tenor range
     elif stype == 'BinarySpread':
         ttm = df_stat.loc[b, 'label']
     elif stype == 'TermBasis':
         ttm = ''
     else:
-        ttm = '%.2fY' % df_stat.loc[b, 'ttm']
+        try:
+            ttm = '%.2fY' % df_stat.loc[b, 'ttm']
+        except (KeyError, TypeError, ValueError):
+            ttm = ''
     return ttm
 
 __all__ = [

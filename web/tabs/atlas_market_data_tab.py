@@ -355,7 +355,7 @@ def _load_bond_futures() -> pd.DataFrame:
 
 def _load_reference_bonds() -> pd.DataFrame:
     """On-the-run CGB/CDB reference bonds with CR(3m,bp) from spdsrt pickles."""
-    tenors = ["0.3Y", "0.5Y", "0.7Y", "1Y", "1.5Y", "2Y", "3Y", "5Y", "10Y"]
+    tenors = ["0.3Y", "0.5Y", "0.7Y", "1Y", "1.5Y", "2Y", "3Y", "5Y", "10Y", "20Y", "30Y"]
     tenor_cols = [f"Term near {t}" for t in tenors]
 
     rows = []
