@@ -20,7 +20,7 @@ _PRICE_BOND_TYPE = None
 _PRICE_DICT_CURVE = None
 _PRICE_ENV = None
 
-def _init_worker_curves(bond_type, cache, env, prange):
+def _init_worker_curves(bond_type, cache, env=None, prange=None):
     """Initializer for worker processes to set shared, picklable context."""
     global _WORKER_BOND_TYPE, _WORKER_CACHE, _WORKER_ENV, _WORKER_PRANGE
     _WORKER_BOND_TYPE = bond_type

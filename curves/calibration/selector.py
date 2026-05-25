@@ -504,12 +504,16 @@ def compute_spot_term_panels(
         d = botr.index[-1]
         bond_ref = botr.loc[d]
         plist = ['Bid', 'Ofr']
-        ref_df = pd.DataFrame(index=columns, columns=plist, dtype=float)
+        ref_series = {}
         for p in plist:
             builder = YieldCurveBuilder()
             dfp = builder.build_curve(bond_ref, env, p, d)
-            ref_df.index = dfp['ttm'].values
-            ref_df[p] = dfp['spot'].values
+            series = pd.Series(dfp['spot'].values, index=dfp['ttm'].values, dtype=float)
+            series.index = pd.to_numeric(series.index, errors='coerce')
+            series = series[~pd.isna(series.index)]
+            series = series[~series.index.duplicated(keep='last')].sort_index()
+            ref_series[p] = series
+        ref_df = pd.concat(ref_series, axis=1).sort_index()
         return ref_df
 
 def update_price(df_price, quote0, sen0, bonds, d0):

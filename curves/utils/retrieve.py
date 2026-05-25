@@ -65,8 +65,9 @@ def filterInstrument(bond_info,btype,hist=False):
     bond_info['CARRYDATE'] = [d.date() for d in bond_info['CARRYDATE']]
     bond_info['MATURITYDATE'] = [d.date() for d in bond_info['MATURITYDATE']]
     if not hist:
-        bond_info = bond_info[(bond_info['PTMYEAR']<=10)|
-                              ((bond_info['PTMYEAR']>=25.0)&(bond_info['PTMYEAR']<=30.0))]
+        # bond_info = bond_info[(bond_info['PTMYEAR']<=10)|
+                             # ((bond_info['PTMYEAR']>=25.0)&(bond_info['PTMYEAR']<=30.0))]
+        bond_info = bond_info[bond_info['PTMYEAR']<=30]
         if btype not in ['CBond','TBond']:
             if btype in ['CP','SCP']:
                 bond_info = bond_info[bond_info['PTMYEAR'] >= 1/4]

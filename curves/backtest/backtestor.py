@@ -11,6 +11,7 @@ import pathlib
 import logging
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor
+import multiprocessing as _mp
 
 # Local libraries
 PATH = pathlib.Path(__file__).parent.parent.parent
@@ -164,16 +165,18 @@ class Backtestor:
         # Pre-compute reference data once (this is already optimized in CurveManager)
         if self.btype != 'IRS':
             manager._precompute_reference(env, prange)
+            manager._seed_factor_history(prange)
         # Use ProcessPoolExecutor with initializer to share heavy context once per worker.
-        # Force 'fork' start method: macOS/Linux default is 'spawn' in Python 3.8+,
-        # which re-imports all modules in each worker and hangs on heavy module-level init.
-        import multiprocessing as _mp
+        # Prefer 'fork' when available, but fall back to the platform default on Windows.
         from curves.backtest.workers import _init_worker_curves, _init_curves_chunk_worker
+        initargs = (manager.bond_type, manager._cache)
+        if self.btype == 'IRS':
+            initargs = (*initargs, env, prange)
         with ProcessPoolExecutor(
             max_workers=self.processes,
-            mp_context=_mp.get_context('fork'),
+            mp_context=self._get_process_context(),
             initializer=_init_worker_curves,
-            initargs=(manager.bond_type, manager._cache, env, prange),
+            initargs=initargs,
         ) as executor:
             futures = [executor.submit(_init_curves_chunk_worker, chunk) for chunk in chunks]
             results = [future.result() for future in futures]
@@ -199,6 +202,13 @@ class Backtestor:
                 chunks.append(chunk)
         return chunks
 
+    @staticmethod
+    def _get_process_context():
+        """Return the safest multiprocessing context for the current platform."""
+        if 'fork' in _mp.get_all_start_methods():
+            return _mp.get_context('fork')
+        return _mp.get_context()
+
     def _run_pricing(self, dict_curve, env, test_period, periods):
         engine = PricingEngine(self.btype)
         
@@ -210,11 +220,10 @@ class Backtestor:
             # Note: periods is a list of date chunks [[date1, date2, ...], [date3, date4, ...], ...]
             # Each chunk will be converted to [start, end] format inside the worker
             # Use ProcessPoolExecutor with initializer to share dict_curve/env once per worker
-            import multiprocessing as _mp
             from curves.backtest.workers import _init_worker_pricing, _price_chunk_worker
             with ProcessPoolExecutor(
                 max_workers=self.processes,
-                mp_context=_mp.get_context('fork'),
+                mp_context=self._get_process_context(),
                 initializer=_init_worker_pricing,
                 initargs=(self.btype, dict_curve, env),
             ) as executor:

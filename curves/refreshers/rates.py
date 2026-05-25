@@ -28,7 +28,7 @@ from settings.general import GeneralConfig, DateConfig
 from settings.fixed_income import BondConfig
 from curves.calibration.stat import statAdjust
 from curves.utils.plot import plotCurve
-from curves.calibration.selector import compute_spot_term_panels
+from curves.calibration.selector import RefBondSelector, compute_spot_term_panels
 
 # logging using centralized setup
 from utils.log_window import get_logger
@@ -91,6 +91,7 @@ class BondCurveRefresher:
             env = cast(Dict[str, Any], retrieveEnvRT(self.env, self.bond_type))
             stat = cast(Dict[str, Any], loadStatData(self.bond_type))
             ref = cast(Dict[str, Any], loadRefData(self.bond_type))
+            ref = self._refresh_missing_reference_bonds(env, ref, calc_date)
             # Use compute_spot_term_panels for single date computation
             price_range = [calc_date, calc_date]
             self.bond_ref_df = cast(
@@ -102,6 +103,38 @@ class BondCurveRefresher:
         except Exception as e:
             logger.error(f"Error refreshing market data: {e}")
             raise
+
+    def _refresh_missing_reference_bonds(self, env: Dict[str, Any], ref: Dict[str, Any], calc_date: date) -> Dict[str, Any]:
+        """Refresh today's `RefBond` row if it points to bonds absent from the live universe."""
+        ref_bond = ref.get('RefBond')
+        if not isinstance(ref_bond, pd.DataFrame) or ref_bond.empty:
+            selector = RefBondSelector()
+            updated_ref_bond = selector.select_reference_bonds(
+                env, [calc_date, calc_date], self.bond_type, daily=True, update=True
+            )
+            ref['RefBond'] = updated_ref_bond
+            return ref
+
+        if calc_date in ref_bond.index:
+            ref_today = ref_bond.loc[calc_date]
+        else:
+            ref_today = ref_bond.iloc[-1]
+
+        ref_ids = [bond_id for bond_id in ref_today.values if pd.notna(bond_id)]
+        missing_ids = [bond_id for bond_id in ref_ids if bond_id not in env['Def'].index]
+        if not missing_ids:
+            return ref
+
+        logger.warning(
+            "Refreshing today's RefBond selection because these saved reference bonds are absent from live Def: %s",
+            ", ".join(map(str, missing_ids)),
+        )
+        selector = RefBondSelector()
+        updated_ref_bond = selector.select_reference_bonds(
+            env, [calc_date, calc_date], self.bond_type, daily=True, update=True
+        )
+        ref['RefBond'] = updated_ref_bond
+        return ref
 
     def compute_quoted_bonds(self) -> pd.Index:
         if self.env is None or self.curve is None:
@@ -219,10 +252,10 @@ class BondCurveRefresher:
         # Mirror the generator: keep reference points within the FIT TTM band
         # (decoupled from PRICING window — includes <1.5y points for short-end stability,
         # skips only the last few weeks before maturity where price→YTM noise blows up).
-        _ttm_idx = pd.to_numeric(pd.Series(ref_series.index), errors='coerce').values
+        _ttm_idx = pd.to_numeric(pd.Series(ref_series.index), errors='coerce')
         _fit_mask = (_ttm_idx >= BondConfig.FIT_MIN_TTM) & (_ttm_idx <= BondConfig.FIT_MAX_TTM)
-        if _fit_mask.sum() >= 3:
-            ref_series = ref_series.iloc[_fit_mask]
+        if int(_fit_mask.sum()) >= 3:
+            ref_series = ref_series.loc[_fit_mask.to_numpy(dtype=bool)]
         # Drop reference points whose live quote is stale (no live data, side fell
         # back to CNBD valuation, or bid-ofr spread > REF_BID_OFR_MAX_BP).
         ref_series = self._drop_stale_refs(ref_series, price_type)
@@ -290,7 +323,7 @@ class BondCurveRefresher:
             raise ValueError("Bond reference data is not initialized")
 
         sen = (sendict.get('Bid', pd.DataFrame()) + sendict.get('Ofr', pd.DataFrame())) / 2
-        refspot_avg = ((self.bond_ref_df['Bid'] + self.bond_ref_df['Ofr']) / 2).to_frame()
+        refspot_avg = self.bond_ref_df[['Bid', 'Ofr']].mean(axis=1, skipna=True).to_frame()
         pxrt = {
             'Curve': (curvedict['Bid'] + curvedict['Ofr']) / 2,
             'RefSpot': refspot_avg,
@@ -328,7 +361,7 @@ class BondCurveRefresher:
             logger.error(f"Error saving results: {e}")
             raise
 
-def main(bond_type='CBond', max_workers: Optional[int] = None):
+def main(bond_type='TBond', max_workers: Optional[int] = None):
     try:
         BondCurveRefresher.main(bond_type=bond_type, max_workers=max_workers)
     except Exception as e:

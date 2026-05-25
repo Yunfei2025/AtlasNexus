@@ -13,7 +13,7 @@ from scipy import interpolate
 import curves.affine.affine as af
 import curves.affine.pricingYield as yd
 from settings.general import GeneralConfig
-from settings.fixed_income import IRSConfig
+from settings.fixed_income import IRSConfig, BondConfig
 from curves.utils.calendar import getScheduleDays
 
 
@@ -267,22 +267,74 @@ class Curve:
         return quote.astype(float)
     
     def fitting(self):
-        # 0.05y grid so that exact 0.25/0.5/0.75 tenor lookups land on the grid.
+        # 0.05y grid so that exact tenor lookups land on the grid.
         delt = 0.05
-        taus = np.round(np.arange(0.05, 32.05, delt), 2)
-        S2_flat = tuple(float(self.S2[i,j]) for i in range(3) for j in range(3))
+        max_display_tenor = 30.0
+        taus = np.round(np.arange(0.05, max_display_tenor + delt / 2, delt), 2)
         gamma_f = float(self.gamma)
+
+        ref_input = getattr(self, '_fit_ref_input', None)
+        if isinstance(ref_input, pd.Series):
+            ref_input = ref_input.dropna().sort_index()
+            ref_input.index = pd.to_numeric(pd.Index(ref_input.index), errors='coerce')
+            ref_input = ref_input[~pd.isna(ref_input.index)]
+            ref_input = ref_input[ref_input.index <= max_display_tenor]
+            ref_input = ref_input[~ref_input.index.duplicated(keep='last')].sort_index()
+        else:
+            ref_input = None
+
+        S2_eff = np.asarray(self.S2, dtype=float)
+        if not np.isfinite(S2_eff).all():
+            S2_eff = np.eye(3) * 1e-4
+        else:
+            S2_eff = np.asarray(af._project_to_psd(S2_eff), dtype=float)
+
         if isinstance(self.factors, sp.MatrixBase):
             x_arr = np.array([float(self.factors[i]) for i in range(3)])
         else:
             x_arr = np.asarray(self.factors, dtype=float).ravel()
-        spot_curve = np.empty(len(taus))
-        for idx, tau in enumerate(taus):
-            a, B = af.calAB_np(gamma_f, float(tau), S2_flat, self.mtype)
-            spot_curve[idx] = a + B @ x_arr
-        df_curve = pd.Series(spot_curve, index=taus, name='SpotRate')
 
-        discount_curve = np.exp(-df_curve.values * df_curve.index.values.astype(float) / 100)
+        def _evaluate_curve(S2_matrix, factors):
+            S2_flat_local = tuple(float(v) for v in np.asarray(S2_matrix, dtype=float).ravel())
+            out = np.empty(len(taus))
+            for idx, tau in enumerate(taus):
+                a_val, b_val = af.calAB_np(gamma_f, float(tau), S2_flat_local, self.mtype)
+                out[idx] = a_val + b_val @ factors
+            return pd.Series(out, index=taus, name='SpotRate')
+
+        df_curve = _evaluate_curve(S2_eff, x_arr)
+
+        if ref_input is not None and len(ref_input) >= 3:
+            S2_flat_eff = tuple(float(v) for v in S2_eff.ravel())
+            base_at_anchor = np.empty(len(ref_input))
+            for idx, tau in enumerate(ref_input.index.to_numpy(dtype=float)):
+                a_val, b_val = af.calAB_np(gamma_f, float(tau), S2_flat_eff, self.mtype)
+                base_at_anchor[idx] = a_val + b_val @ x_arr
+
+            anchor_fit_error = float(np.nanmax(np.abs(base_at_anchor - ref_input.to_numpy(dtype=float))))
+            affine_unstable = (
+                (not np.isfinite(base_at_anchor).all())
+                or (not np.isfinite(df_curve.values).all())
+                or np.linalg.norm(x_arr) > 1e3
+                or np.nanmax(np.abs(df_curve.values)) > 100.0
+                or anchor_fit_error > 5.0
+            )
+
+            if affine_unstable:
+                diag_cap = 1e-4
+                max_diag = float(np.max(np.diag(S2_eff))) if S2_eff.size else 0.0
+                if max_diag <= 0:
+                    S2_display = np.eye(3) * diag_cap
+                else:
+                    shrink = min(1.0, diag_cap / max_diag)
+                    S2_display = S2_eff * shrink
+                x_display = af.getAffineFactors(ref_input, sp.Matrix(S2_display.tolist()), self.gamma, self.mtype, self.caltype)
+                x_display = np.asarray(x_display, dtype=float).ravel()
+                df_curve = _evaluate_curve(S2_display, x_display)
+
+        exponent = -df_curve.values * df_curve.index.values.astype(float) / 100
+        exponent = np.clip(exponent, -700, 700)
+        discount_curve = np.exp(exponent)
         df_forward = _instantaneous_forward_from_discount(discount_curve, df_curve.index.values)
         df_curves = pd.concat([df_curve, df_forward], axis=1)
         return df_curves
