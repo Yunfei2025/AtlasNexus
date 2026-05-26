@@ -147,7 +147,7 @@ class Curve:
             mate = row['到期日期']
             freq = row['每年付息次数']
             if '国债' in name:
-                tax = 0# 0.25
+                tax = 0.25  # CGB coupon income is exempt from 25% corporate tax
             else:
                 tax = 0.
             if freq == 0.:

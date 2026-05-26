@@ -230,6 +230,8 @@ def pricingAffine(day, coup, tax, schedule, freq, factors, S2, gamma, mtype, cal
     # Vectorized: compute a and B for all cashflow dates
     p = 0.0
     s = np.zeros(3)
+    coupon_pv_sum = 0.0   # sum of all coupon present values (for tax adjustment)
+    s_coupon = np.zeros(3)  # factor sensitivity of coupon_pv_sum
     for t in range(n_flows):
         tau_d = taus_days[t]
         tau_y = tau_d / 365.0
@@ -240,7 +242,10 @@ def pricingAffine(day, coup, tax, schedule, freq, factors, S2, gamma, mtype, cal
         
         coupon_pv = coup / freq * discount_factor
         p += coupon_pv
-        s -= B * tau_y * coupon_pv
+        contrib = B * tau_y * coupon_pv
+        s -= contrib
+        coupon_pv_sum += coupon_pv
+        s_coupon -= contrib
     
     # Principal payment (reuse last computed values)
     final_tau_d = taus_days[-1]
@@ -254,9 +259,12 @@ def pricingAffine(day, coup, tax, schedule, freq, factors, S2, gamma, mtype, cal
     p += p0
     s -= B * final_tau_y * p0
     
-    # Tax adjustment
+    # Tax adjustment: CGB coupon income is exempt from 25% corporate tax.
+    # Banks value each coupon at full face value (no tax haircut), so the
+    # additional price premium equals:  tax_rate * PV(all coupons)
     if tax > 0:
-        p += tax * max(0, coup - y) * principal_discount
+        p += tax * coupon_pv_sum
+        s += tax * s_coupon
     
     # Accrued interest
     accrued = coup / freq * (1.0 - dres / TS)
