@@ -69,6 +69,24 @@ def _load_pickle(path: pathlib.Path):
             logger.info('Loaded %s in %.3fs', path, elapsed)
 
 
+def _load_pickle_optional(path: pathlib.Path):
+    """Load a pickle without emitting warnings when the file is missing or stale.
+
+    This is used for cache-style artifacts that already have a fallback builder,
+    so an absent or incompatible file should be treated as a cache miss.
+    """
+    if not path.exists():
+        return None
+    try:
+        return pd.read_pickle(path)
+    except Exception:
+        try:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            return None
+
+
 # Toggle heavy tick loading via env (default on for backward compatibility)
 LOAD_TICKS = os.environ.get("LOAD_TICKS", "1") == "1"
 
@@ -164,8 +182,12 @@ def _build_spread_ts() -> dict:
 
     # Tenor spreads (CGB/CDB slope + CDBCGB cross-sector)
     try:
-        tenor_spds = _load_pickle(os.path.join(DIR_INPUT, 'Tenor-spds.pkl'))
-        out["TenorSpread"] = tenor_spds["TenorSpread"]
+        tenor_path = pathlib.Path(DIR_INPUT) / 'Tenor-spds.pkl'
+        tenor_spds = _load_pickle_optional(tenor_path)
+        if isinstance(tenor_spds, dict) and "TenorSpread" in tenor_spds:
+            out["TenorSpread"] = tenor_spds["TenorSpread"]
+        else:
+            raise FileNotFoundError(str(tenor_path))
     except Exception:
         fb = _build_tenor_spread_fallback()
         if fb:

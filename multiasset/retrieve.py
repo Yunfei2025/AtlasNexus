@@ -49,4 +49,6 @@ def retrieveFXIRCurves():
             curves_ts[country] = df
             curves_ts[country].columns = [ country+t for t in tenorlist ]
         for file_path in file_paths:
-            updatePKL(curves_ts, file_path)
+            # These artifacts are regenerated as a full snapshot, so overwrite them
+            # directly instead of merging into any legacy pickle layout.
+            updatePKL(curves_ts, file_path, rewrite=True)

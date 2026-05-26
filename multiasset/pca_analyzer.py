@@ -3,6 +3,7 @@
 PCA-based risk factor analyzer for yield curves.
 """
 import os
+import pickle
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Union
@@ -19,7 +20,13 @@ def _load_fx_curve_artifact(input_dir: str) -> dict:
             try:
                 return pd.read_pickle(file_path)
             except Exception as exc:
-                print(f"Warning: could not load curve artifact {file_path}: {exc}")
+                try:
+                    with open(file_path, 'rb') as file:
+                        return pickle.load(file)
+                except Exception:
+                    # Quietly treat legacy artifacts as cache misses; callers can
+                    # regenerate the file from upstream market data.
+                    pass
     raise FileNotFoundError("Neither fxcurve_ts.pkl nor curve_ts.pkl exists in the input directory")
 
 

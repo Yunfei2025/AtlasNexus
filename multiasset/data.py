@@ -7,6 +7,7 @@ Functions for loading and processing market data.
 import pandas as pd
 import numpy as np
 import os
+import pickle
 from settings.paths import DIR_INPUT
 
 
@@ -17,7 +18,13 @@ def _load_fx_curve_artifact():
             try:
                 return pd.read_pickle(file_path)
             except Exception as exc:
-                print(f"Warning: could not load curve artifact {file_path}: {exc}")
+                try:
+                    with open(file_path, 'rb') as file:
+                        return pickle.load(file)
+                except Exception:
+                    # Keep startup quiet for legacy artifacts; the caller can
+                    # still regenerate from upstream data if needed.
+                    pass
     raise FileNotFoundError("Neither fxcurve_ts.pkl nor curve_ts.pkl exists in DIR_INPUT")
 
 

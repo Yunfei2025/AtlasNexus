@@ -88,8 +88,26 @@ def get_offtherun_bond(turnover: pd.Series, n_exclude: int = 1) -> str:
     return ranked.index[n_exclude]
 
 
+def _as_scalar_bond_id(bond_id):
+    """Normalize a bond identifier to a scalar hashable value.
+
+    Some upstream pandas selections can return a one-element Series/Index/ndarray
+    instead of a plain scalar. Downstream membership checks and DataFrame lookups
+    require a hashable bond code.
+    """
+    if isinstance(bond_id, pd.Series):
+        non_na = bond_id.dropna()
+        return _as_scalar_bond_id(non_na.iloc[0]) if not non_na.empty else np.nan
+    if isinstance(bond_id, (pd.Index, list, tuple, np.ndarray)):
+        if len(bond_id) == 0:
+            return np.nan
+        return _as_scalar_bond_id(bond_id[0])
+    return bond_id
+
+
 def extract_yield(env: dict, bond_id: str, date: datetime, price_type: str) -> float:
     """Extract yield to maturity based on price type."""
+    bond_id = _as_scalar_bond_id(bond_id)
     if price_type == 'hist':
         hist_data = env.get('Close')
         if hist_data is not None and date in hist_data.index and bond_id in hist_data.columns:
@@ -183,6 +201,7 @@ class RefBondSelector:
         if 'RefBond' in existing_data:
             result_df = existing_data['RefBond'].sort_index()
             result_df = result_df.loc[~result_df.index.duplicated(keep='first')]
+            result_df = result_df.astype(object)
             # Back-compat: add columns for any new buckets not present in the stored file,
             # then reorder to match the current TERM_BUCKETS definition.
             expected_columns = [f'Term near {t}Y' for t in term_buckets.keys()]
@@ -231,6 +250,8 @@ class RefBondSelector:
             new_rows[current_date] = day_results
             # Keep result_df up-to-date so stability logic can see the row
             for bucket_name, selected_bond in day_results.items():
+                if bucket_name in result_df.columns:
+                    result_df[bucket_name] = result_df[bucket_name].astype(object)
                 result_df.loc[current_date, bucket_name] = selected_bond
 
         # Merge new rows (if any) and persist
@@ -362,7 +383,7 @@ class RefBondSelector:
                 if prev_tenor_bond in available_turnover.index:
                     available_turnover = available_turnover.drop(index=prev_tenor_bond)
 
-            selected_bond = get_offtherun_bond(available_turnover, n_exclude=1)
+            selected_bond = _as_scalar_bond_id(get_offtherun_bond(available_turnover, n_exclude=1))
 
             # Sticky off-the-run: prefer the previous selection as long as
             # it is still in this bucket. This prevents day-to-day turnover
@@ -373,13 +394,13 @@ class RefBondSelector:
             previous_dates = existing_results.index[existing_results.index < current_date]
             if len(previous_dates) > 0:
                 prev_date = previous_dates[-1]
-                prev_bond = existing_results.loc[prev_date, bucket_name]
+                prev_bond = _as_scalar_bond_id(existing_results.loc[prev_date, bucket_name])
                 if (prev_bond in bonds['start_date'].index
                         and prev_bond in bucket_bonds):
                     selected_bond = prev_bond
                 elif pd.isna(selected_bond) and prev_bond in bonds['start_date'].index:
                     selected_bond = prev_bond
-            day_results[bucket_name] = selected_bond
+            day_results[bucket_name] = _as_scalar_bond_id(selected_bond)
         return day_results
 
 
@@ -392,9 +413,10 @@ class YieldCurveBuilder:
     def build_curve(self, bond_ref: pd.Series, env: dict, price_type: str, date: datetime) -> pd.DataFrame:
         """Build yield curve from reference bonds."""
         yield_curve = bs.BootstrapYieldCurve()
-        results = pd.DataFrame(index=bond_ref.values, columns=['ttm', 'spot'])
+        results = pd.DataFrame(index=bond_ref.index, columns=['bond_id', 'ttm', 'spot'], dtype=object)
         
-        for bond_id in bond_ref:
+        for bucket_name, bond_id in bond_ref.items():
+            bond_id = _as_scalar_bond_id(bond_id)
             if pd.isna(bond_id):
                 continue
 
@@ -428,7 +450,8 @@ class YieldCurveBuilder:
             ttm = (date_1 - date_2).days / 365
             
             # Add to yield curve
-            results.loc[bond_id, 'ttm'] = ttm
+            results.loc[bucket_name, 'bond_id'] = bond_id
+            results.loc[bucket_name, 'ttm'] = ttm
             yield_curve.add_instrument(100, ttm, coupon, dirty, frequency)
         
         # Extract yield curve
@@ -437,11 +460,13 @@ class YieldCurveBuilder:
         rate_map = dict(zip(maturities, zero_rates))
         
         # Map spot rates
-        for bond_id in bond_ref:
-            ttm = results.loc[bond_id, 'ttm']
-            results.loc[bond_id, 'spot'] = rate_map.get(ttm, np.nan)
-        
-        return results.astype(float)
+        for bucket_name in results.index:
+            ttm = pd.to_numeric(results.loc[bucket_name, 'ttm'], errors='coerce')
+            results.loc[bucket_name, 'spot'] = rate_map.get(float(ttm), np.nan) if pd.notna(ttm) else np.nan
+
+        results['ttm'] = pd.to_numeric(results['ttm'], errors='coerce')
+        results['spot'] = pd.to_numeric(results['spot'], errors='coerce')
+        return results
 
 def compute_spot_term_panels(
     env: dict,
@@ -489,9 +514,11 @@ def compute_spot_term_panels(
                 spot_series = pd.Series(index=columns, dtype=float)
 
                 for bucket, bond_id in bond_ref.items():
-                    if pd.notna(bond_id) and bond_id in dfp.index:
-                        ttm_series.loc[bucket] = float(dfp.loc[bond_id, 'ttm'])
-                        spot_series.loc[bucket] = float(dfp.loc[bond_id, 'spot'])
+                    if bucket in dfp.index:
+                        ttm_value = pd.to_numeric(dfp.loc[bucket, 'ttm'], errors='coerce')
+                        spot_value = pd.to_numeric(dfp.loc[bucket, 'spot'], errors='coerce')
+                        ttm_series.loc[bucket] = float(ttm_value) if pd.notna(ttm_value) else np.nan
+                        spot_series.loc[bucket] = float(spot_value) if pd.notna(spot_value) else np.nan
 
                 new_term.loc[d] = ttm_series
                 new_spot.loc[d] = spot_series

@@ -28,7 +28,7 @@ from settings.general import GeneralConfig, DateConfig
 from settings.fixed_income import BondConfig
 from curves.calibration.stat import statAdjust
 from curves.utils.plot import plotCurve
-from curves.calibration.selector import RefBondSelector, compute_spot_term_panels
+from curves.calibration.selector import RefBondSelector, compute_spot_term_panels, _as_scalar_bond_id
 
 # logging using centralized setup
 from utils.log_window import get_logger
@@ -120,7 +120,8 @@ class BondCurveRefresher:
         else:
             ref_today = ref_bond.iloc[-1]
 
-        ref_ids = [bond_id for bond_id in ref_today.values if pd.notna(bond_id)]
+        # Normalize potential one-element Series/Index entries to scalars
+        ref_ids = [_as_scalar_bond_id(bond_id) for bond_id in ref_today.values if pd.notna(bond_id)]
         missing_ids = [bond_id for bond_id in ref_ids if bond_id not in env['Def'].index]
         if not missing_ids:
             return ref
@@ -148,6 +149,17 @@ class BondCurveRefresher:
                 self.env['Def']['剩余期限'] = [ d.days / 365 for d in mat ]
         filt = (self.env['Def']['剩余期限'] > self.min_maturity) & (self.env['Def']['剩余期限'] < self.max_maturity)
         bonds = self.env['Def'][filt].index
+
+        reference_bonds = pd.Index([], dtype=object)
+        if hasattr(self.curve, 'reference') and isinstance(self.curve.reference, pd.Series):
+            normalized_refs = [
+                _as_scalar_bond_id(bond_id)
+                for bond_id in self.curve.reference.dropna().tolist()
+            ]
+            normalized_refs = [bond_id for bond_id in normalized_refs if pd.notna(bond_id)]
+            reference_bonds = pd.Index(normalized_refs, dtype=object).intersection(self.env['Def'].index)
+
+        bonds = bonds.union(reference_bonds)
         self.env_quo = bonds
         return bonds
 
@@ -158,6 +170,60 @@ class BondCurveRefresher:
         m = int(np.ceil(len(index_like) / worker_count))
         buckets = [index_like[m * i:m * (i + 1)] for i in range(worker_count)]
         return [b for b in buckets if len(b) > 0]
+
+    def _ensure_reference_sensitivities(self, sen: pd.DataFrame) -> pd.DataFrame:
+        """Backfill missing curve-reference sensitivities via TTM interpolation."""
+        if self.env is None or self.curve is None or sen.empty:
+            return sen
+        if not hasattr(self.curve, 'reference') or not isinstance(self.curve.reference, pd.Series):
+            return sen
+
+        df_def = self.env.get('Def', pd.DataFrame())
+        if '剩余期限' not in df_def.columns:
+            return sen
+
+        reference_bonds = [
+            _as_scalar_bond_id(bond_id)
+            for bond_id in self.curve.reference.dropna().tolist()
+        ]
+        reference_bonds = [bond_id for bond_id in reference_bonds if pd.notna(bond_id) and bond_id in df_def.index]
+        missing_refs = [bond_id for bond_id in reference_bonds if bond_id not in sen.index]
+        if not missing_refs:
+            return sen
+
+        source_terms = pd.to_numeric(df_def.reindex(sen.index)['剩余期限'], errors='coerce')
+        valid_term_mask = source_terms.notna()
+        source_terms = source_terms.loc[valid_term_mask]
+        source_sen = sen.loc[source_terms.index].apply(pd.to_numeric, errors='coerce')
+        valid_row_mask = source_sen.notna().all(axis=1)
+        source_terms = source_terms.loc[valid_row_mask]
+        source_sen = source_sen.loc[valid_row_mask]
+        if source_sen.empty:
+            return sen
+
+        source_df = source_sen.copy()
+        source_df['剩余期限'] = source_terms.astype(float)
+        source_df = source_df.sort_values('剩余期限').drop_duplicates(subset='剩余期限', keep='last')
+        if len(source_df) < 2:
+            return sen
+
+        x = source_df['剩余期限'].to_numpy(dtype=float)
+        filled = sen.copy()
+        filled_count = 0
+        for bond_id in missing_refs:
+            target_term = pd.to_numeric(pd.Series([df_def.loc[bond_id, '剩余期限']]), errors='coerce').iloc[0]
+            if pd.isna(target_term):
+                continue
+            interpolated = {
+                greek: float(np.interp(float(target_term), x, source_df[greek].to_numpy(dtype=float)))
+                for greek in ['Greek1', 'Greek2', 'Greek3']
+            }
+            filled.loc[bond_id, ['Greek1', 'Greek2', 'Greek3']] = pd.Series(interpolated)
+            filled_count += 1
+
+        if filled_count:
+            logger.info("Backfilled %d missing reference sensitivities for %s.", filled_count, self.bond_type)
+        return filled.apply(pd.to_numeric, errors='coerce').dropna(how='all')
 
     # ---- Reference-point staleness filter ----
     def _stale_reference_info(self, side: str, max_spread_bp: float) -> Dict[Any, Tuple[float, str]]:
@@ -188,6 +254,7 @@ class BondCurveRefresher:
         eps = 1e-6  # YTM equality tolerance (in %)
 
         for bond_id in bond_ref_today.values:
+            bond_id = _as_scalar_bond_id(bond_id)
             if pd.isna(bond_id) or bond_id not in df_def.index:
                 continue
             ttm = float(df_def.loc[bond_id, '剩余期限'])
@@ -323,6 +390,7 @@ class BondCurveRefresher:
             raise ValueError("Bond reference data is not initialized")
 
         sen = (sendict.get('Bid', pd.DataFrame()) + sendict.get('Ofr', pd.DataFrame())) / 2
+        sen = self._ensure_reference_sensitivities(sen)
         refspot_avg = self.bond_ref_df[['Bid', 'Ofr']].mean(axis=1, skipna=True).to_frame()
         pxrt = {
             'Curve': (curvedict['Bid'] + curvedict['Ofr']) / 2,
@@ -339,7 +407,7 @@ class BondCurveRefresher:
         return pxrt
 
     @classmethod
-    def main(cls, bond_type='CBond', max_workers: Optional[int] = None):
+    def main(cls, bond_type='TBond', max_workers: Optional[int] = None):
         """Main entry point for the BondCurveRefresher"""
         try:
             instance = cls(bond_type=bond_type, max_workers=max_workers)

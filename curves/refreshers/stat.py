@@ -166,6 +166,52 @@ class StatRefresher:
         path = os.path.join(DIR_INPUT, filename)
         save_frame(obj, path)
 
+    @staticmethod
+    def _repair_reference_sensitivities(curve, env: dict, sen: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+        """Backfill missing curve-reference sensitivities via TTM interpolation."""
+        if sen is None or not isinstance(sen, pd.DataFrame) or sen.empty:
+            return sen, 0
+        if not hasattr(curve, 'reference') or not isinstance(curve.reference, pd.Series):
+            return sen, 0
+
+        df_def = env.get('Def', pd.DataFrame()) if isinstance(env, dict) else pd.DataFrame()
+        if '剩余期限' not in df_def.columns:
+            return sen, 0
+
+        ref_ids = [bond_id for bond_id in curve.reference.dropna().tolist() if bond_id in df_def.index]
+        missing_refs = [bond_id for bond_id in ref_ids if bond_id not in sen.index]
+        if not missing_refs:
+            return sen, 0
+
+        source_terms = pd.to_numeric(df_def.reindex(sen.index)['剩余期限'], errors='coerce')
+        source_sen = sen.apply(pd.to_numeric, errors='coerce')
+        valid_rows = source_terms.notna() & source_sen.notna().all(axis=1)
+        source_terms = source_terms.loc[valid_rows]
+        source_sen = source_sen.loc[valid_rows]
+        if len(source_sen) < 2:
+            return sen, 0
+
+        source_df = source_sen.copy()
+        source_df['剩余期限'] = source_terms.astype(float)
+        source_df = source_df.sort_values('剩余期限').drop_duplicates(subset='剩余期限', keep='last')
+        if len(source_df) < 2:
+            return sen, 0
+
+        x = source_df['剩余期限'].to_numpy(dtype=float)
+        repaired = sen.copy()
+        filled_count = 0
+        for bond_id in missing_refs:
+            target_term = pd.to_numeric(pd.Series([df_def.loc[bond_id, '剩余期限']]), errors='coerce').iloc[0]
+            if pd.isna(target_term):
+                continue
+            repaired.loc[bond_id, ['Greek1', 'Greek2', 'Greek3']] = [
+                float(np.interp(float(target_term), x, source_df[greek].to_numpy(dtype=float)))
+                for greek in ['Greek1', 'Greek2', 'Greek3']
+            ]
+            filled_count += 1
+
+        return repaired.apply(pd.to_numeric, errors='coerce').dropna(how='all'), filled_count
+
     def refresh_bonds_and_swaps(self) -> None:
         print('\nRefresh spreads at：', self.now.strftime('%H:%M:%S'))
 
@@ -184,6 +230,13 @@ class StatRefresher:
 
             env = rd.retrieveEnvRT(ld.loadInstrumentDefinition(btype), btype)
             stat_his = ld.loadStatData(btype)
+
+            repaired_sen, repaired_count = self._repair_reference_sensitivities(curve, env, pxrt.get('Sen'))
+            if repaired_count:
+                pxrt['Sen'] = repaired_sen
+                with open(os.path.join(DIR_INPUT, f'{btype}-rtquo.pkl'), 'wb') as f:
+                    pickle.dump(pxrt, f)
+                print(f"INFO: Backfilled {repaired_count} missing hedge sensitivities for {btype}.")
 
             try:
                 bonds_hist = bond_px['ytm_quo'].columns.intersection(env['Def'].index)
@@ -250,6 +303,8 @@ class StatRefresher:
         # Use TBond curve as reference
         with open(os.path.join(DIR_INPUT, 'TBond-cvrt.obj'), 'rb') as f:
             curve = pickle.load(f)
+        tbond_pxrt = pd.read_pickle(os.path.join(DIR_INPUT, 'TBond-rtquo.pkl'))
+        tbond_hedge_sen = tbond_pxrt.get('Sen', pd.DataFrame())
 
         spreads_all = {}
         for obtype in BondConfig.INCLUDE_FILTERS.keys():
@@ -258,7 +313,11 @@ class StatRefresher:
             
             oenv = rd.retrieveEnvRT(ld.loadInstrumentDefinition(obtype), obtype)
             stat_his = ld.loadStatData(obtype)
-            stat_his = h.BondHedge(stat_his, oenv, ytm_quote, curve, opxrt['Sen'], obtype)
+            combined_sen = opxrt['Sen']
+            if isinstance(tbond_hedge_sen, pd.DataFrame) and not tbond_hedge_sen.empty:
+                combined_sen = pd.concat([combined_sen, tbond_hedge_sen], axis=0)
+                combined_sen = combined_sen.loc[~combined_sen.index.duplicated(keep='first')]
+            stat_his = h.BondHedge(stat_his, oenv, ytm_quote, curve, combined_sen, obtype)
             self.px_bond_rt[obtype] = (oenv['BondRT']['买价收益率'] + oenv['BondRT']['卖价收益率']) / 2
             px_cnbd = oenv['Def']['估价收益率:%(中债)']
             self.px_bond_rt[obtype] = self.px_bond_rt[obtype].fillna(px_cnbd)

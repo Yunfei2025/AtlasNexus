@@ -9,6 +9,9 @@ import numpy as np
 from scipy import interpolate
 from curves.calibration.irscurves import irsSpreads
 
+
+MAX_BOND_CURVE_ADJUSTMENT = 10.0  # percent; prevents corrupt historical stats from exploding CvBid/CvOfr
+
 # Constants reused across functions
 ANCHORS = ['FR007.IR','FR007S3M.IR','FR007S6M.IR','FR007S9M.IR','FR007S1Y.IR','FR007S2Y.IR','FR007S5Y.IR']
 TERMS = [0, 1/4, 1/2, 3/4, 1, 2, 5]
@@ -63,8 +66,11 @@ def adftest(df):
 
 def statAdjust(quote,env,stat): 
     quote_adj = pd.DataFrame()
+    mean_adj = pd.to_numeric(stat['mean'], errors='coerce')
+    mean_adj = mean_adj.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    mean_adj = mean_adj.clip(lower=-MAX_BOND_CURVE_ADJUSTMENT, upper=MAX_BOND_CURVE_ADJUSTMENT)
     for k in quote.keys():
-        quote_adj[k] = quote[k]['收益率']+stat['mean']
+        quote_adj[k] = (pd.to_numeric(quote[k]['收益率'], errors='coerce') + mean_adj).clip(lower=0.0, upper=20.0)
     rt_bid = env['BondRT']['买价收益率']
     rt_ofr = env['BondRT']['卖价收益率']
     quote_mid = (rt_ofr + rt_bid) / 2

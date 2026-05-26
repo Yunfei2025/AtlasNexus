@@ -67,7 +67,7 @@ class StatGenerator:
         self.dp: datetime.date = dates['dp'].date()
         self.start: datetime.date = (self.d - relativedelta(months=GeneralConfig.STAT_WINDOW))
         self.start1y: datetime.date = (self.d - relativedelta(years=1))
-        self.da: datetime.datetime = self.d - timedelta(hours=1)
+        self.da: datetime.date = self.d - timedelta(hours=1)
 
         # Global env time series
         self.env_ts: dict = loadCNBDTS()
@@ -80,6 +80,50 @@ class StatGenerator:
         # Cache TBond env/series explicitly to avoid implicit variable leakage
         self.env_tbond: Optional[dict] = None
         self.df_act_tbond: Optional[pd.DataFrame] = None
+
+    @staticmethod
+    def _resolve_curve_column_map(curve_df: pd.DataFrame, tenors: list[int]) -> dict[int, str]:
+        """Map tenor years to actual column names present in a CNBD curve frame.
+
+        Supports either 国债 / 国开债 prefixes by detecting whichever set exists
+        in the provided DataFrame.
+        """
+        if not isinstance(curve_df, pd.DataFrame):
+            return {}
+
+        candidates = [
+            '中债国债到期收益率:',
+            '中债国开债到期收益率:',
+        ]
+
+        column_map: dict[int, str] = {}
+        for tenor in tenors:
+            for prefix in candidates:
+                col = f'{prefix}{tenor}年'
+                if col in curve_df.columns:
+                    column_map[tenor] = col
+                    break
+        return column_map
+
+    def _ensure_cgb_cdb_timeseries(self) -> dict:
+        """Ensure CGB/CDB key-rate time series are available for spread generation."""
+        env_ts = self.env_ts if isinstance(self.env_ts, dict) else {}
+        if 'CGB' in env_ts and 'CDB' in env_ts:
+            return env_ts
+
+        try:
+            db = pd.read_pickle(os.path.join(DIR_INPUT, 'database-px.pkl'))
+            if isinstance(db, dict):
+                if 'CGB' in db and 'CGB' not in env_ts:
+                    env_ts['CGB'] = db['CGB']
+                if 'CDB' in db and 'CDB' not in env_ts:
+                    env_ts['CDB'] = db['CDB']
+                if 'IRS' in db and 'SwapTS' not in env_ts:
+                    env_ts['SwapTS'] = db['IRS']
+                self.env_ts = env_ts
+        except Exception:
+            pass
+        return env_ts
 
     # ---------------------- Bonds (TBond/CBond) ----------------------
     def compute_bond_and_swap_spreads(self) -> None:
@@ -107,15 +151,11 @@ class StatGenerator:
             # Columns = tenor in years (float); values = par yield in % at that tenor.
             # TBond uses CGB key rates; CBond uses CDB key rates.
             _cnbd_bond_ts = self.env_ts.get('CGB' if btype == 'TBond' else 'CDB')
-            _col_prefix = '中债国债到期收益率:' if btype == 'TBond' else '中债国开债到期收益率:'
             _tenor_years = [1, 2, 3, 4, 5, 7, 10, 20, 30]
             bond_key_ts_df = None
             if isinstance(_cnbd_bond_ts, pd.DataFrame):
-                _avail = {
-                    t: _cnbd_bond_ts[f'{_col_prefix}{t}年']
-                    for t in _tenor_years
-                    if f'{_col_prefix}{t}年' in _cnbd_bond_ts.columns
-                }
+                _curve_cols = self._resolve_curve_column_map(_cnbd_bond_ts, _tenor_years)
+                _avail = {t: _cnbd_bond_ts[col] for t, col in _curve_cols.items()}
                 if _avail:
                     bond_key_ts_df = pd.DataFrame(_avail).loc[df_act.index[0]:df_act.index[-1]]
 
@@ -390,7 +430,7 @@ class StatGenerator:
                                                (XsYs: negated; CDBCGB: positive)
                 'StatInfo'     : pd.DataFrame  — OU statistics per instrument
         """
-        env_ts = self.env_ts
+        env_ts = self._ensure_cgb_cdb_timeseries()
         if not isinstance(env_ts, dict) or 'CGB' not in env_ts or 'CDB' not in env_ts:
             print('Warning: CGB/CDB key-rate data not available — skipping tenor spreads.')
             return
@@ -399,20 +439,23 @@ class StatGenerator:
         cdb = env_ts['CDB']
 
         # Column name helpers — allow the function to work even if a key is missing.
-        def _series(src: dict, key: str):
+        def _series(src: dict, key: Optional[str]):
             """Return src[key] as a float Series, or None if missing."""
             v = src.get(key)
             if v is None:
                 return None
             return pd.to_numeric(v, errors='coerce')
 
-        cgb5  = _series(cgb, '中债国债到期收益率:5年')
-        cgb10 = _series(cgb, '中债国债到期收益率:10年')
-        cgb20 = _series(cgb, '中债国债到期收益率:20年')
-        cgb30 = _series(cgb, '中债国债到期收益率:30年')
-        cdb5  = _series(cdb, '中债国开债到期收益率:5年')
-        cdb10 = _series(cdb, '中债国开债到期收益率:10年')
-        cdb30 = _series(cdb, '中债国开债到期收益率:30年')
+        cgb_cols = self._resolve_curve_column_map(cgb, [5, 10, 20, 30])
+        cdb_cols = self._resolve_curve_column_map(cdb, [5, 10, 30])
+
+        cgb5  = _series(cgb, cgb_cols.get(5))
+        cgb10 = _series(cgb, cgb_cols.get(10))
+        cgb20 = _series(cgb, cgb_cols.get(20))
+        cgb30 = _series(cgb, cgb_cols.get(30))
+        cdb5  = _series(cdb, cdb_cols.get(5))
+        cdb10 = _series(cdb, cdb_cols.get(10))
+        cdb30 = _series(cdb, cdb_cols.get(30))
 
         instruments = {}
         if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10  - cgb5
@@ -458,8 +501,7 @@ class StatGenerator:
         }
         out_path = os.path.join(DIR_INPUT, 'Tenor-spds.pkl')
         updatePKL(tenor_spds, out_path, rewrite=True)
-        print(f'  Tenor-spds.pkl written: {list(instruments.keys())}')
-
+        
     # ---------------------- Orchestration ----------------------
     def run_all(self) -> None:
         self.compute_bond_and_swap_spreads()

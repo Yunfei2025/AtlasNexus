@@ -408,7 +408,7 @@ def layout_ts_line(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[
                 "side":'right',
                 "zeroline": False,
                 "tickvals": [],
-                },
+            }
     if shape:
         layout["shapes"] = _make_stat_shapes(lineinfo)
     return layout

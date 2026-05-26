@@ -58,6 +58,7 @@ def loadCNBDTS():
     env = {}
     env['SwapTS'] = ts['IRS']
     env['CGB'] = ts['CGB']
+    env['CDB'] = ts['CDB']
     env['SOFR'] = ts['sofr']
     env['FX'] = ts['fx']
     env['FXSwap'] = ts['fxswap']

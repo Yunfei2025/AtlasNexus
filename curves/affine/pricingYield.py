@@ -96,15 +96,54 @@ def pricingYield(day, coup, schedule, f, p0):
     if len(flow_dates) == 0:
         return np.nan
     
+    def _is_reasonable(yield_value: float) -> bool:
+        return np.isfinite(yield_value) and abs(float(yield_value)) <= 50.0
+
     try:
-        return optimize.newton(
-            _pricing_objective, 
-            2.5, 
-            args=(day, coup, schedule, f, p0), 
-            maxiter=500
+        root = optimize.newton(
+            _pricing_objective,
+            2.5,
+            args=(day, coup, schedule, f, p0),
+            maxiter=500,
         )
-    except (RuntimeError, ValueError):
-        return np.nan
+        if _is_reasonable(root):
+            return float(root)
+    except (RuntimeError, ValueError, OverflowError):
+        pass
+
+    # Fallback: bracket the economically plausible region and use a robust
+    # bracketing solver. This avoids returning absurd yields when Newton lands
+    # on a spurious root for long-dated/low-coupon bonds.
+    bracket_points = [-5.0, -1.0, 0.0, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 50.0]
+    values = []
+    for y in bracket_points:
+        try:
+            values.append(_pricing_objective(y, day, coup, schedule, f, p0))
+        except Exception:
+            values.append(np.nan)
+
+    for left, right, f_left, f_right in zip(bracket_points[:-1], bracket_points[1:], values[:-1], values[1:]):
+        if not (np.isfinite(f_left) and np.isfinite(f_right)):
+            continue
+        if f_left == 0:
+            return float(left)
+        if f_right == 0:
+            return float(right)
+        if f_left * f_right < 0:
+            try:
+                root = optimize.brentq(
+                    _pricing_objective,
+                    left,
+                    right,
+                    args=(day, coup, schedule, f, p0),
+                    maxiter=500,
+                )
+                if _is_reasonable(root):
+                    return float(root)
+            except Exception:
+                continue
+
+    return np.nan
         
 def pricing(day, coup, schedule, freq, ytm):
     """

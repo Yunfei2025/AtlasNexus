@@ -152,11 +152,17 @@ class HedgeCalculator:
 
             bond_obj = env['Def'].loc[bond]
             ttm = stat_his[k].loc[bond, 'ttm']
+            bond_greek1 = np.nan
+            if isinstance(sen, pd.DataFrame) and bond in sen.index and 'Greek1' in sen.columns:
+                bond_greek1 = pd.to_numeric(pd.Series([sen.loc[bond, 'Greek1']]), errors='coerce').iloc[0]
             
             # Calculate Roll
             if ttm > QUARTER_YEAR:
                 s1, s2 = f1(ttm), f1(ttm - QUARTER_YEAR)
-                roll_value = -BASIS_POINTS * (s1 - s2) * sen.loc[bond, 'Greek1']
+                if pd.notna(bond_greek1):
+                    roll_value = -BASIS_POINTS * (s1 - s2) * bond_greek1
+                else:
+                    roll_value = np.nan
             else:
                 roll_value = -BASIS_POINTS * f1(ttm) * ttm
             

@@ -60,6 +60,13 @@ def updatePKL(dictn, file_path, rewrite=False):
                 target_df = target_df.copy()
                 new_df = new_df.copy()
 
+                # If the incoming frame contains object/string data for a column,
+                # preserve that column as object so bond codes and other labels
+                # are not coerced into float64 during assignment.
+                for col in new_df.columns.intersection(target_df.columns):
+                    if new_df[col].dtype == object or target_df[col].dtype == object:
+                        target_df[col] = target_df[col].astype(object)
+
                 if not target_df.index.is_unique:
                     target_df = target_df[~target_df.index.duplicated(keep='last')]
                 if not target_df.columns.is_unique:
@@ -68,6 +75,10 @@ def updatePKL(dictn, file_path, rewrite=False):
                     new_df = new_df[~new_df.index.duplicated(keep='last')]
                 if not new_df.columns.is_unique:
                     new_df = new_df.loc[:, ~new_df.columns.duplicated(keep='last')]
+
+                for col in new_df.columns:
+                    if col not in target_df.columns or new_df[col].dtype == object:
+                        target_df[col] = target_df.get(col, pd.Series(index=target_df.index, dtype=object)).astype(object)
 
                 combined = new_df.combine_first(target_df)
                 combined = combined.sort_index().ffill().dropna(axis=0, how="all")
