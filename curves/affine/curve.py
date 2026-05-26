@@ -269,7 +269,7 @@ class Curve:
     def fitting(self):
         # 0.05y grid so that exact tenor lookups land on the grid.
         delt = 0.05
-        max_display_tenor = 30.0
+        max_display_tenor = 10.0
         taus = np.round(np.arange(0.05, max_display_tenor + delt / 2, delt), 2)
         gamma_f = float(self.gamma)
 

@@ -5,6 +5,7 @@ Created on Wed Sep 24 21:52:07 2025
 @author: CMBC
 """
 
+import pandas as pd
 import plotly.graph_objs as go
 import plotly.io as pio
 import plotly.express as px
@@ -57,6 +58,7 @@ def plotCurve(btype, dict_plot):
     dfl = dict_plot['Curve']
     dfm = dict_plot['Quote']
     dfr = dict_plot['RefSpot']
+    dfr = dfr[pd.to_numeric(dfr.index, errors='coerce') <= 10.0]
 
     # plot curves
     trace1 = [go.Scatter(
