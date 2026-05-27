@@ -32,7 +32,6 @@ import numpy as np
 import datetime
 import time
 import logging
-import sympy as sp
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 from dateutil.relativedelta import relativedelta
@@ -67,7 +66,7 @@ sys.path.insert(0, str(PATH))
 
 from curves.calibration.selector import RefBondSelector, compute_spot_term_panels, update_price
 from curves.utils.loader import loadCurvePxTS, loadInstrumentDefinition
-from curves.utils.file import updatePKL, loadPKL
+from curves.utils.file import updatePKL
 from curves.affine.curve import Curve
 from settings.paths import DIR_INPUT
 from settings.general import GeneralConfig, DateConfig
@@ -161,44 +160,6 @@ class BondCurveGenerator:
         return get_logger(f"CurveGenerator_{self.config.bond_type}")
 
     @staticmethod
-    def _ensure_date_index(df: pd.DataFrame) -> pd.DataFrame:
-        """Normalize index values to date objects for reliable slicing."""
-        normalized = df.copy()
-        normalized.index = [idx.date() if hasattr(idx, 'date') else idx for idx in normalized.index]
-        return normalized
-
-    @staticmethod
-    def _project_covariance(matrix: np.ndarray, min_eigenvalue: float = 1e-10) -> np.ndarray:
-        """Project a covariance estimate onto the PSD cone."""
-        matrix = np.asarray(matrix, dtype=float)
-        matrix = 0.5 * (matrix + matrix.T)
-        eigenvalues, eigenvectors = np.linalg.eigh(matrix)
-        eigenvalues = np.clip(eigenvalues, min_eigenvalue, None)
-        projected = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
-        return 0.5 * (projected + projected.T)
-
-    def _extract_factor_history(self, curve_history: Dict, start_date: datetime.date, end_date: datetime.date) -> pd.DataFrame:
-        """Build a rolling factor history from previously saved curve objects."""
-        rows = {}
-        for dt_key, curve in curve_history.items():
-            dt_norm = dt_key.date() if hasattr(dt_key, 'date') else dt_key
-            if dt_norm < start_date or dt_norm > end_date or not hasattr(curve, 'factors'):
-                continue
-            try:
-                rows[dt_norm] = self._factor_values(curve)
-            except Exception:
-                continue
-
-        if not rows:
-            return pd.DataFrame(columns=['level', 'slope', 'curvature'], dtype=float)
-
-        return pd.DataFrame.from_dict(
-            rows,
-            orient='index',
-            columns=['level', 'slope', 'curvature'],
-        ).sort_index()
-
-    @staticmethod
     def _factor_values(curve: Curve) -> List[float]:
         """Convert stored curve factors into plain floats."""
         values = np.asarray(curve.factors, dtype=float).reshape(-1)
@@ -209,18 +170,6 @@ class BondCurveGenerator:
         """Return diagonal S2 entries as plain floats."""
         matrix = np.asarray(curve.S2, dtype=float)
         return [float(matrix[i, i]) for i in range(3)]
-
-    @staticmethod
-    def _sanitize_factor_history(factor_history: pd.DataFrame, max_abs_factor: float = 1e4) -> pd.DataFrame:
-        """Drop non-finite or obviously corrupted factor rows."""
-        if factor_history.empty:
-            return factor_history
-        factor_history = factor_history.apply(pd.to_numeric, errors='coerce').dropna(how='any')
-        finite_mask = np.isfinite(factor_history.to_numpy(dtype=float)).all(axis=1)
-        finite_positions = np.flatnonzero(finite_mask)
-        factor_history = factor_history.iloc[finite_positions]
-        factor_history = factor_history[(factor_history.abs() <= max_abs_factor).all(axis=1)]
-        return factor_history.sort_index()
 
     def _fit_today_factors(self, curve: Curve, ref: pd.Series, bond_ref: pd.Series) -> None:
         """Extract today's affine factors from current reference points."""
@@ -237,56 +186,6 @@ class BondCurveGenerator:
             df_ref_fit = ref
 
         curve.extractFactorsRobust(df_ref_fit, bond_ref, k_mad=2.0, min_points=4)
-
-    def _full_calibrate_curve(self, curve: Curve, term: pd.DataFrame, spot: pd.DataFrame, dp: datetime.date) -> None:
-        """Fallback full-window affine calibration from reference spot/term panels."""
-        start0 = dp - relativedelta(months=self.config.sigma_window_months)
-        term_slice = self._ensure_date_index(term).loc[start0:dp]
-        spot_slice = self._ensure_date_index(spot).loc[start0:dp]
-        t0 = time.perf_counter()
-        curve.calibrate(term_slice, spot_slice)
-        t1 = time.perf_counter()
-        self.logger.info(f"curve0.calibrate() finished (elapsed {t1-t0:.2f}s)")
-
-    def _incremental_calibrate_curve(self, curve: Curve, ref: Dict, dp: datetime.date, df_ref: pd.Series, bond_ref: pd.Series) -> bool:
-        """Incrementally update S2 from the rolling 3-month factor covariance."""
-        curve_file = os.path.join(DIR_INPUT, f"{self.config.bond_type}-cvobj.pkl")
-        curve_history = loadPKL(curve_file)
-        if not isinstance(curve_history, dict) or len(curve_history) == 0:
-            self.logger.info("No prior curve history found; using full affine calibration.")
-            return False
-
-        start0 = dp - relativedelta(months=self.config.sigma_window_months)
-        factor_history = self._extract_factor_history(curve_history, start0, dp)
-        factor_history = factor_history[~factor_history.index.duplicated(keep='last')]
-        factor_history = self._sanitize_factor_history(factor_history)
-        factor_history = factor_history[factor_history.index < dp]
-
-        if factor_history.shape[0] < 4:
-            self.logger.info("Too little factor history for incremental calibration; using full affine calibration.")
-            return False
-
-        covariance = np.cov(factor_history.to_numpy(dtype=float), rowvar=False)
-        if not np.isfinite(covariance).all():
-            self.logger.info("Incremental covariance is non-finite; using full affine calibration.")
-            return False
-
-        curve.S2 = sp.Matrix(self._project_covariance(covariance).tolist())
-        self._fit_today_factors(curve, df_ref, bond_ref)
-
-        factor_history.loc[dp] = self._factor_values(curve)
-        factor_history = self._sanitize_factor_history(factor_history)
-        covariance = np.cov(factor_history.to_numpy(dtype=float), rowvar=False)
-        if not np.isfinite(covariance).all():
-            self.logger.info("Incremental covariance with today's factor is non-finite; using single-pass history covariance.")
-            return True
-
-        curve.S2 = sp.Matrix(self._project_covariance(covariance).tolist())
-        self._fit_today_factors(curve, df_ref, bond_ref)
-        self.logger.info(
-            f"incremental affine calibration used {factor_history.shape[0]} factor observations ending {dp}."
-        )
-        return True
     
     def load_data(self) -> Dict:
         """load data and reference data"""
@@ -312,8 +211,6 @@ class BondCurveGenerator:
             t1 = time.perf_counter()
             self.logger.info(f"select_reference_bonds() finished (elapsed {t1-t0:.2f}s)")
             # botr = select_reference_bonds(env, window_range, self.config.bond_type, daily=True, update=False)
-            # Reuse existing daily close panels when available instead of recomputing
-            # the same spot/term bootstrap on every rerun.
             t0 = time.perf_counter()
             ref = compute_spot_term_panels(
                 env,
@@ -321,7 +218,6 @@ class BondCurveGenerator:
                 botr,
                 self.config.bond_type,
                 price_type='close',
-                update=False,
             )
             if not isinstance(ref, dict):
                 raise TypeError("compute_spot_term_panels() must return a dict for price_type='close'.")
@@ -478,20 +374,31 @@ class BondCurveGenerator:
             
             # update yesterday curve
             dp = self.config.calculation_date
+            start0 = dp - relativedelta(months=self.config.sigma_window_months)
             curve0 = Curve(dp, self.config.bond_type)
+
+            def safe_slice(df, start_date, end_date):
+                """Safely slice DataFrame with date range, handling mixed date types."""
+                try:
+                    return df.loc[start_date:end_date]
+                except (TypeError, KeyError):
+                    df_copy = df.copy()
+                    df_copy.index = [idx.date() if hasattr(idx, 'date') else idx for idx in df_copy.index]
+                    return df_copy.loc[start_date:end_date]
+
+            term_slice = safe_slice(term, start0, dp)
+            spot_slice = safe_slice(spot, start0, dp)
+            t0 = time.perf_counter()
+            curve0.calibrate(term_slice, spot_slice)
+            t1 = time.perf_counter()
+            self.logger.info(f"curve0.calibrate() finished (elapsed {t1-t0:.2f}s)")
 
             # get reference spot curve
             df_ref = pd.Series(spot.iloc[-1].values, index=term.iloc[-1].values)
             df_ref.name = 'Ref Spot'
             bond_ref = botr.iloc[-1]
 
-            t0 = time.perf_counter()
-            incremental_ok = self._incremental_calibrate_curve(curve0, ref, dp, df_ref, bond_ref)
-            if not incremental_ok:
-                self._full_calibrate_curve(curve0, term, spot, dp)
-                self._fit_today_factors(curve0, df_ref, bond_ref)
-            t1 = time.perf_counter()
-            self.logger.info(f"affine calibration pipeline finished (elapsed {t1-t0:.2f}s)")
+            self._fit_today_factors(curve0, df_ref, bond_ref)
 
             # update curve parameters
             self.update_curve_parameters(curve0, ref, dp, bond_ref)

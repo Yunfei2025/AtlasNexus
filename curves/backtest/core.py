@@ -19,7 +19,6 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import numpy as np
-import sympy as sp
 from dateutil.relativedelta import relativedelta
 
 # Local libraries
@@ -28,7 +27,7 @@ sys.path.insert(0, str(PATH))
 
 import curves.affine.curve as c
 from settings.paths import DIR_INPUT
-from settings.fixed_income import IRSConfig
+from settings.fixed_income import BondConfig, IRSConfig
 from settings.general import GeneralConfig
 
 # Import with fallbacks
@@ -115,100 +114,9 @@ class CurveManager:
             'botr': None,   # Reference bonds history
             'spot': None,   # Spot curve panel
             'term': None,   # Term structure panel
-            'factor_history': None,
             # 'window_start': None,
             # 'window_end': None
         }
-
-    @staticmethod
-    def _factor_values(curve: c.Curve) -> list:
-        values = np.asarray(curve.factors, dtype=float).reshape(-1)
-        return [float(values[i]) for i in range(3)]
-
-    @staticmethod
-    def _project_covariance(matrix: np.ndarray, min_eigenvalue: float = 1e-10) -> np.ndarray:
-        matrix = np.asarray(matrix, dtype=float)
-        matrix = 0.5 * (matrix + matrix.T)
-        eigenvalues, eigenvectors = np.linalg.eigh(matrix)
-        eigenvalues = np.clip(eigenvalues, min_eigenvalue, None)
-        projected = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
-        return 0.5 * (projected + projected.T)
-
-    @staticmethod
-    def _sanitize_factor_history(factor_history: pd.DataFrame, max_abs_factor: float = 1e4) -> pd.DataFrame:
-        if factor_history is None or factor_history.empty:
-            return pd.DataFrame(columns=['level', 'slope', 'curvature'], dtype=float)
-        factor_history = factor_history.apply(pd.to_numeric, errors='coerce').dropna(how='any')
-        finite_mask = np.isfinite(factor_history.to_numpy(dtype=float)).all(axis=1)
-        factor_history = factor_history.iloc[np.flatnonzero(finite_mask)]
-        factor_history = factor_history[(factor_history.abs() <= max_abs_factor).all(axis=1)]
-        factor_history = factor_history[~factor_history.index.duplicated(keep='last')]
-        return factor_history.sort_index()
-
-    def _extract_factor_history(self, curve_history: Dict, start_date, end_date) -> pd.DataFrame:
-        rows = {}
-        for dt_key, curve in curve_history.items():
-            dt_norm = dt_key.date() if hasattr(dt_key, 'date') else dt_key
-            if dt_norm < start_date or dt_norm > end_date or not hasattr(curve, 'factors'):
-                continue
-            try:
-                rows[dt_norm] = self._factor_values(curve)
-            except Exception:
-                continue
-
-        if not rows:
-            return pd.DataFrame(columns=['level', 'slope', 'curvature'], dtype=float)
-
-        factor_history = pd.DataFrame.from_dict(
-            rows,
-            orient='index',
-            columns=['level', 'slope', 'curvature'],
-        )
-        return self._sanitize_factor_history(factor_history)
-
-    def _seed_factor_history(self, price_range: List, curve_history: Dict = None):
-        start_date = (pd.Timestamp(min(price_range)) - relativedelta(months=self.lookback)).date()
-        end_date = max(price_range)
-        if curve_history is None:
-            curve_obj_file = os.path.join(DIR_INPUT, f'{self.bond_type}-cvobj.pkl')
-            curve_history = loadPKL(curve_obj_file)
-        if not isinstance(curve_history, dict):
-            curve_history = {}
-        self._cache['factor_history'] = self._extract_factor_history(curve_history, start_date, end_date)
-
-    def _fit_today_factors(self, curve: c.Curve, df_ref: pd.Series, bond_ref: pd.Series):
-        curve.extractFactors(df_ref, bond_ref)
-
-    def _incremental_calibrate_curve(self, curve: c.Curve, date, df_ref: pd.Series, bond_ref: pd.Series) -> bool:
-        factor_history = self._cache.get('factor_history')
-        factor_history = self._sanitize_factor_history(factor_history)
-        start_date = (pd.Timestamp(date) - relativedelta(months=self.lookback)).date()
-        factor_history = factor_history[(factor_history.index >= start_date) & (factor_history.index < date)]
-
-        if factor_history.shape[0] < 4:
-            return False
-
-        covariance = np.cov(factor_history.to_numpy(dtype=float), rowvar=False)
-        if not np.isfinite(covariance).all():
-            return False
-
-        curve.S2 = sp.Matrix(self._project_covariance(covariance).tolist())
-        self._fit_today_factors(curve, df_ref, bond_ref)
-
-        today_values = self._factor_values(curve)
-        factor_history.loc[date] = today_values
-        factor_history = self._sanitize_factor_history(factor_history)
-        covariance = np.cov(factor_history.to_numpy(dtype=float), rowvar=False)
-        if np.isfinite(covariance).all():
-            curve.S2 = sp.Matrix(self._project_covariance(covariance).tolist())
-            self._fit_today_factors(curve, df_ref, bond_ref)
-
-        self._cache['factor_history'] = pd.concat([
-            self._sanitize_factor_history(self._cache.get('factor_history')),
-            pd.DataFrame([self._factor_values(curve)], index=[date], columns=['level', 'slope', 'curvature'])
-        ])
-        self._cache['factor_history'] = self._sanitize_factor_history(self._cache['factor_history'])
-        return True
     
     def initialize_curves(self, env: Dict, price_range: List) -> Dict:
         """
@@ -237,7 +145,6 @@ class CurveManager:
         # Pre-compute reference bond set & spot/term matrices ONCE instead of per date
         if self.bond_type != 'IRS':
             self._precompute_reference(env, price_range)
-            self._seed_factor_history(price_range, dict_curve)
         
         for date in price_range:
             try:
@@ -352,16 +259,20 @@ class CurveManager:
         # Build per-date inputs
         spot_slice = spot_full.loc[start_date:date]
         term_slice = term_full.loc[start_date:date]
-        df_ref = pd.Series(spot_full.loc[date].values, index=term_full.loc[date].values)
+        term_today = pd.to_numeric(term_full.loc[date], errors='coerce')
+        calibration_cols = term_today[(term_today >= BondConfig.FIT_MIN_TTM) & (term_today <= BondConfig.FIT_MAX_TTM)].index.tolist()
+        if len(calibration_cols) < 4:
+            calibration_cols = term_today[term_today <= BondConfig.FIT_MAX_TTM].index.tolist()
+        if len(calibration_cols) < 4:
+            calibration_cols = list(term_slice.columns)
+
+        spot_slice = spot_slice.loc[:, calibration_cols]
+        term_slice = term_slice.loc[:, calibration_cols]
+        df_ref = pd.Series(spot_full.loc[date, calibration_cols].values, index=term_full.loc[date, calibration_cols].values)
         bond_ref = botr_full.loc[date]
         curve = c.Curve(date, self.bond_type)
-        incremental_ok = self._incremental_calibrate_curve(curve, date, df_ref, bond_ref)
-        if not incremental_ok:
-            curve.calibrate(term_slice, spot_slice)
-            self._fit_today_factors(curve, df_ref, bond_ref)
-            factor_history = self._sanitize_factor_history(self._cache.get('factor_history'))
-            factor_history.loc[date] = self._factor_values(curve)
-            self._cache['factor_history'] = self._sanitize_factor_history(factor_history)
+        curve.calibrate(term_slice, spot_slice)
+        curve.extractFactors(df_ref, bond_ref)
         return curve
 
 class CurveParameterExtractor:

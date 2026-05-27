@@ -165,7 +165,6 @@ class Backtestor:
         # Pre-compute reference data once (this is already optimized in CurveManager)
         if self.btype != 'IRS':
             manager._precompute_reference(env, prange)
-            manager._seed_factor_history(prange)
         # Use ProcessPoolExecutor with initializer to share heavy context once per worker.
         # Prefer 'fork' when available, but fall back to the platform default on Windows.
         from curves.backtest.workers import _init_worker_curves, _init_curves_chunk_worker

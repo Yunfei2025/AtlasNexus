@@ -78,8 +78,8 @@ def calAffineCov(term, spot, gamma, mtype, caltype):
     """Iterative fixed-point calibration of the 3x3 factor covariance matrix S2.
 
     Key optimisation: B (factor loadings) and I (drift integrals) depend only on
-    (gamma, tau), NOT on S2.  We therefore pre-compute them once before the
-    convergence loop and cache them via _compute_IB_cached.  Each iteration is
+    (gamma, tau), NOT on S2. We therefore pre-compute them once before the
+    convergence loop and cache them via _compute_IB_cached. Each iteration is
     then a pure NumPy einsum + batched pseudo-inverse multiply — no Python loops.
     """
     gamma_f = float(gamma)
@@ -113,77 +113,17 @@ def calAffineCov(term, spot, gamma, mtype, caltype):
             I_mat_all[d, i] = np.array(I_flat).reshape(3, 3)
             B_mat_all[d, i] = np.array(B_vec)
 
+    # Pre-compute batched pseudo-inverse of B — shape (n_dates, 3, k), also ONCE.
+    B_pinv_all = np.linalg.pinv(B_mat_all)
+
     S2_np = np.eye(3)
     nstep = 20
-    damping = 0.5
     for ns in range(1, nstep + 1):
-        # a_vec: contract S2 with pre-computed I matrices — no Python loop
         a_vec_all = np.einsum('ij,dkij->dk', S2_np, I_mat_all)  # (n_dates, k)
-
         rhs_all = y_all - a_vec_all  # (n_dates, k)
-
-        # Regularized per-date solve. This is slightly slower than a batched
-        # pseudo-inverse but much more stable on near-singular loading matrices.
-        x_arr = _solve_regularized_factors(B_mat_all, rhs_all)
-
-        if not np.isfinite(x_arr).all():
-            print(f'\rIteration: {ns}, non-finite factor estimates encountered; reusing last stable covariance.', end='')
-            break
-
-        # Robust covariance computation to avoid overflow when x_arr contains
-        # extremely large values. We standardize per-column (demean and divide
-        # by std, with a safe lower bound) compute the small covariance there,
-        # and then rescale back. This avoids squaring huge numbers and creating
-        # inf entries that then propagate into S2.
-        def _robust_cov(arr):
-            arr = np.asarray(arr, dtype=np.float64)
-            if arr.size == 0:
-                return np.zeros((3, 3), dtype=float)
-            mu = np.mean(arr, axis=0)
-            sd = np.std(arr, axis=0, ddof=1)
-            sd_safe = np.where(sd < 1e-8, 1.0, sd)
-            z = (arr - mu) / sd_safe
-            # compute covariance in standardized space
-            cov_z = (z.T @ z) / max(1, arr.shape[0] - 1)
-            # rescale back
-            cov = cov_z * np.outer(sd_safe, sd_safe)
-            return cov
-
-        S2_candidate = _robust_cov(x_arr)
-        if not np.isfinite(S2_candidate).all():
-            print(f'\rIteration: {ns}, non-finite covariance encountered; reusing last stable covariance.', end='')
-            try:
-                # Diagnostics to help identify the root cause: shapes and basic stats
-                print('\ncalAffineCov DIAG:')
-                print(f'  n_dates={n_dates}, k={k}, S2_np_norm={np.linalg.norm(S2_np):.3g}')
-                print(f'  x_arr.shape={getattr(x_arr, "shape", None)}')
-                finite_x = np.isfinite(x_arr)
-                print(f'  x_arr finite: {finite_x.all()}, nan_count={np.isnan(x_arr).sum()}, inf_count={(~finite_x & ~np.isnan(x_arr)).sum()}')
-                if np.isfinite(x_arr).any():
-                    xa = x_arr[np.isfinite(x_arr)]
-                    print(f'  x_arr stats: min={xa.min():.6g}, max={xa.max():.6g}, mean={xa.mean():.6g}, std={xa.std():.6g}')
-                try:
-                    print(f'  B_mat_all.shape={getattr(B_mat_all, "shape", None)}')
-                    b_finite = np.isfinite(B_mat_all).all()
-                    print(f'  B_mat_all all-finite: {b_finite}')
-                except Exception:
-                    pass
-            except Exception as _diag_e:
-                print(f'  calAffineCov diagnostic failed: {_diag_e}')
-            break
-
-        S2_candidate = _project_to_psd(S2_candidate)
-        S2_new = damping * S2_candidate + (1 - damping) * S2_np
-        if not np.isfinite(S2_new).all():
-            print(f'\rIteration: {ns}, S2_new became non-finite after damping; reusing last stable covariance.', end='')
-            try:
-                print('\ncalAffineCov DIAG (S2_new non-finite):')
-                print(f'  S2_candidate finite: {np.isfinite(S2_candidate).all()}')
-                print(f'  S2_candidate stats: min={np.nanmin(S2_candidate):.6g}, max={np.nanmax(S2_candidate):.6g}')
-            except Exception:
-                pass
-            break
-        S_err = np.linalg.norm(S2_new - S2_np, ord='fro') / max(1.0, np.linalg.norm(S2_np, ord='fro'))
+        x_arr = (B_pinv_all @ rhs_all[:, :, None]).squeeze(-1)  # (n_dates, 3)
+        S2_new = np.cov(x_arr, rowvar=False)  # (3, 3)
+        S_err = abs(np.linalg.det(S2_np) - np.linalg.det(S2_new))
         print(f'\rIteration: {ns}, Residual of Covariance Matrix {S_err:.4f}', end='')
 
         if S_err < 0.001:
@@ -207,13 +147,7 @@ def getAffineFactors(dfi,S2,gamma,mtype,caltype):
         a_vec[i], B_mat[i] = calAB_np(gamma_f, float(taus0[i]), S2_flat, mtype)
 
     rhs = y0 - a_vec
-    x = _solve_regularized_system(
-        B_mat,
-        rhs,
-        ridge_scale=1e-6,
-        rcond=1e-6,
-        max_abs_factor=1e4,
-    )
+    x, _, _, _ = np.linalg.lstsq(B_mat, rhs, rcond=None)
     return sp.Matrix(x.tolist())  # keep return type compatible
 
 def Affine(tau,x,S2,gamma,mtype,caltype):
