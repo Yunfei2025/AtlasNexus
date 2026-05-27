@@ -161,24 +161,19 @@ class Curve:
                 if b not in schedule:
                     schedule[b] = yd.scheduleDate(mats, mate, name, freq)
                 price, clean, sen0 = yd.pricingAffine(self.day,coup,tax,schedule[b],freq,self.factors,self.S2,self.gamma,self.mtype,self.caltype)
-                fallback_ytm = pd.to_numeric(row.get('估价收益率:%(中债)'), errors='coerce')
                 price_is_implausible = (not np.isfinite(price)) or (not np.isfinite(clean)) or price <= 1.0 or price > 200.0
-                if price_is_implausible and pd.notna(fallback_ytm):
-                    try:
-                        price, clean, _, _ = yd.pricing(self.day, coup, schedule[b], freq, float(fallback_ytm))
-                    except Exception:
-                        pass
                 quote.loc[b,'全价'] = price
                 quote.loc[b,'净价'] = clean
-                try:
-                    if price_is_implausible and pd.notna(fallback_ytm):
-                        quote.loc[b,'收益率'] = float(fallback_ytm)
-                    else:
+                if price_is_implausible:
+                    print(f'Implausible price for {b} on {self.day}: price={price:.4f}')
+                    quote.loc[b,'收益率'] = np.nan
+                else:
+                    try:
                         quote.loc[b,'收益率'] = yd.pricingYield(self.day,coup,schedule[b],freq,float(price))
-                    quote.loc[b,'剩余期限'] = (mate-self.day).days/365
-                except:
-                    quote.loc[b,'收益率'] = float(fallback_ytm) if pd.notna(fallback_ytm) else np.nan
-                    print('Pricing ',b, ' failed, on ',self.day.strftime("%Y-%m-%d"))
+                        quote.loc[b,'剩余期限'] = (mate-self.day).days/365
+                    except Exception as _e:
+                        quote.loc[b,'收益率'] = np.nan
+                        print(f'Pricing {b} failed on {self.day}: {_e}')
                 sen.loc[b,:] = [sen0[0,s] for s in range(sen0.shape[1])]     
             else:
                 quote.loc[b,'收益率'] = np.nan

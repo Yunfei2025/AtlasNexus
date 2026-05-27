@@ -64,9 +64,9 @@ if __name__ == "__main__":
 
     # TBond cvpx demo
     file_path = os.path.join(DIR_DATA, 'TBond-px.pkl')
-    key = 'Volume'
-    date_str = '2025-08-01'
-    bond = ['180206.IB','2202002.IB']
+    key = 'Close'
+    date_str = '2025-09-25'
+    bond = ['240019.IB','240011.IB']
     data = pd.read_pickle(file_path)
     d = pd.to_datetime(date_str).date()
     bond_data = data[key]

@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 # Instrument type: 'TBond', 'CBond', or 'IRS'
 btype = "TBond"
 # Update flags: list of strings from ['pool', 'bonds', 'cbts']
-update_list = ['pool','bonds', 'cbts']
+update_list = ['pool', ]
 
 # Default date window: most recent 3 months ending on previous CN workday
 from settings.general import DateConfig
@@ -29,7 +29,7 @@ from dateutil.relativedelta import relativedelta
 end_dt = DateConfig.get_date_mappings()['dp'].date()
 start_dt = end_dt - relativedelta(months=3)
 start = '2026-03-31'#start_dt.strftime('%Y-%m-%d')
-end = '2026-05-22'#end_dt.strftime('%Y-%m-%d')
+end = '2026-05-27'#end_dt.strftime('%Y-%m-%d')
 
 # Performance settings
 processes = 4   # Number of parallel workers

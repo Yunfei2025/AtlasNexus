@@ -194,7 +194,7 @@ def calAffineCov(term, spot, gamma, mtype, caltype):
     # Return as sympy matrix for full backward compatibility
     return sp.Matrix(S2_np.tolist())
         
-def getAffineFactors(dfi,S2,gamma,mtype,caltype): 
+def getAffineFactors(dfi,S2,gamma,mtype,caltype):
     k = dfi.shape[0]
     y0 = dfi.values.astype(float)          # (k,)
     taus0 = dfi.index

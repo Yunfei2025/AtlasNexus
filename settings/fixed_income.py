@@ -87,7 +87,7 @@ class BondConfig:
     TERM_BUCKETS = {
         0.3: [0.1, 0.4], 0.5: [0.4, 0.6], 0.7: [0.6, 0.9],
         1: [0.9, 1.2], 1.5: [1.2, 1.6], 2: [1.6, 2.5],
-        3: [2.5, 3.5], 5: [4.0, 6.0], 7: [6.0, 8.5],
+        3: [2.5, 3.5], 5: [4.0, 6.0], 
         10: [8.5, 10.0],
     }
     PX = ['Bid', 'Ofr']
@@ -95,12 +95,6 @@ class BondConfig:
         5: 10, 10: 40,
     } # annual cost in bp
     # Curve pricing filter (years). Bonds outside this TTM band are excluded
-    # from `ytm_quo` (curve-implied YTM):
-    #   - Short bonds (<1.0y) have huge fit residuals under the 3-factor affine
-    #     model — 1 cent of price ≈ 13bp of YTM near maturity, so a tiny
-    #     fit residual produces a large YTM spike.
-    #   - Long bonds (>10y) are outside the calibration pool.
-    # We rarely do RV trading on <1.0y bonds anyway, so they are skipped.
     PRICING_MIN_TTM = 1.0
     PRICING_MAX_TTM = 10.0
     # Calibration fit window (years) — decoupled from the pricing window.
@@ -117,16 +111,7 @@ class BondConfig:
     #     i.e. no real quote on that side, OR
     #   - The bid-offer YTM spread exceeds REF_BID_OFR_MAX_BP.
     REF_BID_OFR_MAX_BP = 15.0
-    # Short-end overlay: PCHIP-interpolate observed reference points below
-    # SHORT_ANCHOR_TTM, anchored on the right to the affine spot at the anchor
-    # tenor for continuity. The 3-factor affine model has too few DoFs to bend
-    # short and long ends simultaneously; the overlay lets the displayed curve
-    # pass through observed short bills while affine pricing of tradable
-    # bonds (≥PRICING_MIN_TTM) stays untouched.
-    SHORT_ANCHOR_TTM = 1.0
-    # Safety: if any short-end reference point's first-pass residual exceeds
-    # this, skip the overlay (data too noisy → fall back to affine fit).
-    SHORT_OVERLAY_MAX_DEV_BP = 50.0
+    
     @classmethod
     def get_column_mapping(cls) -> Dict[str, str]:
         return dict(zip(cls.COLUMNS_EN, cls.COLUMNS_CN))

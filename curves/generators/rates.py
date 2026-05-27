@@ -73,6 +73,35 @@ from settings.paths import DIR_INPUT
 from settings.general import GeneralConfig, DateConfig
 from settings.fixed_income import BondConfig
 
+
+def _parse_pricing_date(date_value: Optional[str]) -> datetime.date:
+    """Parse an optional YYYYMMDD pricing date, defaulting to today."""
+    if date_value is None:
+        return datetime.datetime.today().date()
+    if isinstance(date_value, datetime.date) and not isinstance(date_value, datetime.datetime):
+        return date_value
+    if isinstance(date_value, datetime.datetime):
+        return date_value.date()
+    return datetime.datetime.strptime(str(date_value), "%Y%m%d").date()
+
+
+def _pricing_date_mappings(date_value: Optional[str] = None) -> Dict[str, datetime.datetime]:
+    """Build date mappings for a requested pricing date."""
+    pricing_date = _parse_pricing_date(date_value)
+    pricing_dt = datetime.datetime.combine(pricing_date, datetime.time.min)
+    prev_workday = DateConfig.prev_cn_workday(pricing_date - datetime.timedelta(days=1))
+    return {
+        'd': pricing_dt,
+        'dp': datetime.datetime.combine(prev_workday, datetime.time.min),
+        'd2d': pricing_dt - relativedelta(days=2),
+        'd7d': pricing_dt - relativedelta(days=7),
+        'd1m': pricing_dt - relativedelta(months=1),
+        'd3m': pricing_dt - relativedelta(months=3),
+        'd6m': pricing_dt - relativedelta(months=6),
+        'd1y': pricing_dt - relativedelta(years=1),
+        'd10y': pricing_dt - relativedelta(years=10),
+    }
+
 @dataclass
 class CurveConfig:
     """曲线配置类"""
@@ -274,7 +303,7 @@ class BondCurveGenerator:
     def get_reference_bonds(self, env: Dict) -> Tuple[pd.DataFrame, dict]:
         """Get reference bonds and compute spot/term panels using shared selector utilities."""
         try:
-            dp = DateConfig.get_date_mappings()['dp'].date()
+            dp = self.config.calculation_date
             window_range = [self.config.start_date, dp]
             # Select reference bonds (skip updating existing selections)
             selector = RefBondSelector()
@@ -448,7 +477,7 @@ class BondCurveGenerator:
                                   (env['Def']['剩余期限'] < self.config.max_maturity)].index
             
             # update yesterday curve
-            dp = DateConfig.get_date_mappings()['dp'].date()
+            dp = self.config.calculation_date
             curve0 = Curve(dp, self.config.bond_type)
 
             # get reference spot curve
@@ -507,7 +536,7 @@ class BondCurveGenerator:
             raise
 
     @classmethod
-    def main(cls, bond_type, log_level='INFO'):
+    def main(cls, bond_type, date=None, log_level='INFO'):
         """Main entry point for the BondCurveGenerator"""
         # Use centralized logging setup instead of basicConfig
         from utils.log_window import get_logger
@@ -515,7 +544,8 @@ class BondCurveGenerator:
         
         try:
             # create configuration
-            d = DateConfig.get_date_mappings()['d']
+            date_mappings = _pricing_date_mappings(date)
+            d = date_mappings['d']
             start = d.date() - relativedelta(days=7)
             
             config = CurveConfig(
@@ -539,10 +569,10 @@ class BondCurveGenerator:
         return True
 
 
-def main(bond_type = 'TBond'):
+def main(bond_type = 'TBond', date=None):#'20251230'):#
     print(f"🚀 Starting {bond_type} curve generation.")
     try:
-        success = BondCurveGenerator.main(bond_type=bond_type)
+        success = BondCurveGenerator.main(bond_type=bond_type, date=date)
         if success:
             print("✅ Curve generation completed successfully!")
         else:
