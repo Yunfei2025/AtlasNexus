@@ -146,16 +146,10 @@ class Curve:
             mats = row['起息日期']
             mate = row['到期日期']
             freq = row['每年付息次数']
-            # The TBond affine model is calibrated to TAX-FREE equivalent spot
-            # rates (market dirty price minus 0.25 × PV_coupons).  Applying
-            # tax=0.25 here therefore correctly adds each bond's coupon-specific
-            # tax premium — a 3% coupon bond gets a larger premium than a 2.5%
-            # coupon bond, so ytm_quo correctly reflects the lower market yield.
-            # CDB bonds are calibrated to raw market rates; no tax premium.
-            if '国债' in name:
-                tax = 0.25
-            else:
-                tax = 0.
+            # Use a single no-tax convention for both calibration and pricing.
+            # TBond and CDB quotes are both generated directly from the affine
+            # curve without adding a coupon-specific tax premium.
+            tax = 0.
             if freq == 0.:
                 coup = 0.
                 freq = round((365/(mate-mats).days),0)
@@ -175,10 +169,8 @@ class Curve:
                     quote.loc[b,'收益率'] = np.nan
                 else:
                     try:
-                        # Invert from the TAX-INCLUSIVE model price: the model now
-                        # adds the coupon-specific tax premium on top of a tax-free
-                        # calibrated curve, so `price` is the fair market dirty price
-                        # and the resulting ytm_quo is directly comparable to ytm_act.
+                        # Invert directly from the model dirty price under the
+                        # shared no-tax convention used for calibration.
                         quote.loc[b,'收益率'] = yd.pricingYield(self.day,coup,schedule[b],freq,float(price))
                         quote.loc[b,'剩余期限'] = (mate-self.day).days/365
                     except Exception as _e:

@@ -414,12 +414,10 @@ class YieldCurveBuilder:
         """Build yield curve from reference bonds.
 
         Args:
-            tax: If > 0, strip ``tax * PV(coupons)`` from each bond's dirty price
-                 before bootstrapping.  Use tax=0.25 for TBond so the resulting
-                 spot curve represents the tax-free equivalent rate (CGB market
-                 prices already embed the 25% income-tax advantage; removing the
-                 premium yields the underlying risk-free curve that the affine
-                 model should be calibrated to).
+            tax: Optional coupon-premium adjustment applied before bootstrapping.
+                 The current bond-curve workflow uses ``tax=0`` for both TBond
+                 and CBond so spot calibration and downstream pricing share the
+                 same no-tax convention.
         """
         yield_curve = bs.BootstrapYieldCurve()
         results = pd.DataFrame(index=bond_ref.index, columns=['bond_id', 'ttm', 'spot'], dtype=object)
@@ -458,9 +456,8 @@ class YieldCurveBuilder:
             date_2 = pd.Timestamp(date).date()
             ttm = (date_1 - date_2).days / 365
             
-            # Strip the coupon income-tax premium so the bootstrapped spot
-            # curve represents tax-free equivalent rates.  For tax=0 (CBond /
-            # IRS) the dirty price is used as-is.
+            # Under the current no-tax convention the dirty price is used
+            # as-is. The branch is kept for optional future adjustments.
             if tax > 0.0 and np.isfinite(dirty):
                 cpv = yd.coupon_pv_sum(date, coupon, schedule, frequency, ytm)
                 dirty_for_bootstrap = dirty - tax * cpv
@@ -523,7 +520,7 @@ def compute_spot_term_panels(
             new_spot = pd.DataFrame(index=missing_dates, columns=columns, dtype=float)
             new_term = pd.DataFrame(index=missing_dates, columns=columns, dtype=float)
 
-            _tax = 0.25 if bond_type == 'TBond' else 0.0
+            _tax = 0.0
             for d in missing_dates:
                 bond_ref = botr.loc[d]
                 builder = YieldCurveBuilder()
@@ -551,7 +548,7 @@ def compute_spot_term_panels(
         bond_ref = botr.loc[d]
         plist = ['Bid', 'Ofr']
         ref_series = {}
-        _tax = 0.25 if bond_type == 'TBond' else 0.0
+        _tax = 0.0
         for p in plist:
             builder = YieldCurveBuilder()
             dfp = builder.build_curve(bond_ref, env, p, d, tax=_tax)

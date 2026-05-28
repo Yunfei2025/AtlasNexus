@@ -220,9 +220,9 @@ def pricing(day, coup, schedule, freq, ytm):
 def coupon_pv_sum(day, coup, schedule, freq, ytm):
     """Compute the present value of all future coupon payments at a flat yield.
 
-    Mirrors the discounting convention used in :func:`pricing` so that subtracting
-    ``tax * coupon_pv_sum(...)`` from a market dirty price yields the tax-free
-    equivalent dirty price suitable for bootstrapping a tax-free spot curve.
+    Mirrors the discounting convention used in :func:`pricing`. This helper is
+    retained for optional coupon-premium adjustments, although the current bond
+    curve workflow prices and calibrates under a shared no-tax convention.
 
     Args:
         day:      Pricing date
@@ -338,9 +338,8 @@ def pricingAffine(day, coup, tax, schedule, freq, factors, S2, gamma, mtype, cal
     accrued  = coup / freq * (1.0 - dres / TS)
     clean_pretax = p_pretax - accrued
 
-    # Tax adjustment: CGB coupon income is exempt from 25% corporate tax.
-    # Banks value each coupon at full face value (no tax haircut), so the
-    # additional price premium equals:  tax_rate * PV(all coupons)
+    # Optional coupon-premium adjustment. The current bond workflow uses
+    # tax=0, so this branch is inactive unless an explicit premium is passed.
     if tax > 0:
         p += tax * coupon_pv_sum
         s += tax * s_coupon
@@ -349,7 +348,7 @@ def pricingAffine(day, coup, tax, schedule, freq, factors, S2, gamma, mtype, cal
     clean_price = p - accrued
 
     # Return sensitivity as sympy Matrix(1,3) for backward compatibility.
-    # p_pretax / clean_pretax are the pre-tax (market-convention) prices;
-    # pass them to pricingYield so the inverted yield matches ytm_act.
+    # p_pretax / clean_pretax expose the base curve price before any optional
+    # coupon-premium adjustment.
     s_sp = sp.Matrix([s.tolist()])
     return p, clean_price, s_sp / 1e2, p_pretax, clean_pretax
