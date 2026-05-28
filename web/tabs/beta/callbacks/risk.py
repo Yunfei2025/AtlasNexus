@@ -364,23 +364,38 @@ def register_risk_callbacks(app):
                         pass
 
                     display_rows.append({
-                        'ID':                     trade_id,
-                        'Spread Type':            spread_type,
-                        'Style':                  row.get('style', ''),
-                        'Direction':              row.get('direction', ''),
-                        'Duration':               f"{duration:.2f}" if duration else 'N/A',
-                        'Open price (bp)':        open_price_str,
-                        'Volume (mm)':            volume_str,
-                        'Open date':              open_date_str,
-                        'Z-Score':                f"{float(row.get('Zscore', 0) or 0):.2f}",
-                        'Close Price (bp)':       f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
-                        'Suggested size (MM CNY)':f"{notional:,.1f}",
-                        'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",
-                        'MTM spd (bp)':           f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else '',
-                        'MtM Carry (MM CNY)':     f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
-                        'MtM Value (MM CNY)':     f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
-                        'Weight (%)':             f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
+                        'ID':                       trade_id,
+                        'Spread Type':              spread_type,
+                        'Style':                    row.get('style', ''),
+                        'Direction':                row.get('direction', ''),
+                        'Duration':                 f"{duration:.2f}" if duration else 'N/A',
+                        'Open price (bp)':          open_price_str,
+                        'Volume (mm)':              volume_str,
+                        'Open date':                open_date_str,
+                        'Z-Score':                  f"{float(row.get('Zscore', 0) or 0):.2f}",
+                        'Close Price (bp)':         f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
+                        'Target Volume (MM CNY)':   f"{notional:,.1f}",
+                        'DV01 (k CNY/bp)':          f"{dv01_k:.1f}",
+                        'MTM spd (bp)':             f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else '',
+                        'MtM Carry (MM CNY)':       f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
+                        'MtM Value (MM CNY)':       f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
+                        'Target Weight (%)':        f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
+                        'Weight (%)':               '',  # filled below after summing volumes
                     })
+
+                # Compute actual Weight (%) = Volume (mm) / sum(Volume (mm))
+                total_vol = 0.0
+                for r in display_rows:
+                    try:
+                        total_vol += float(r['Volume (mm)']) if r['Volume (mm)'] else 0.0
+                    except (ValueError, TypeError):
+                        pass
+                for r in display_rows:
+                    try:
+                        v = float(r['Volume (mm)']) if r['Volume (mm)'] else None
+                        r['Weight (%)'] = f"{v / total_vol * 100:.2f}%" if (v is not None and total_vol > 0) else ''
+                    except (ValueError, TypeError):
+                        r['Weight (%)'] = ''
 
                 if not display_rows:
                     return _no_data("Alpha snapshot is empty.")

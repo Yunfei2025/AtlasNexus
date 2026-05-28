@@ -1183,3 +1183,5 @@ ERROR:     )
 ERROR: ValueError: cannot set a frame with no defined index and a scalar
 ERROR: Address already in use
 ERROR: Port 8080 is in use by another program. Either identify and stop that program, or start the server with a different port.
+ERROR: Address already in use
+ERROR: Port 8080 is in use by another program. Either identify and stop that program, or start the server with a different port.

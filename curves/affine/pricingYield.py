@@ -217,6 +217,45 @@ def pricing(day, coup, schedule, freq, ytm):
     
     return p, clean_price, d, v
 
+def coupon_pv_sum(day, coup, schedule, freq, ytm):
+    """Compute the present value of all future coupon payments at a flat yield.
+
+    Mirrors the discounting convention used in :func:`pricing` so that subtracting
+    ``tax * coupon_pv_sum(...)`` from a market dirty price yields the tax-free
+    equivalent dirty price suitable for bootstrapping a tax-free spot curve.
+
+    Args:
+        day:      Pricing date
+        coup:     Coupon rate (%)
+        schedule: pd.Series of payment dates
+        freq:     Payment frequency (payments per year)
+        ytm:      Flat yield to maturity (%) used for discounting
+
+    Returns:
+        float: PV of all coupon cashflows
+    """
+    flow_dates = schedule[schedule > day]
+    if len(flow_dates) == 0 or coup == 0:
+        return 0.0
+    schedule_idx = pd.Index(schedule)
+    idx = schedule_idx.get_indexer([day], method='ffill')[0]
+    if len(schedule) >= 2:
+        TS = (schedule_idx[idx + 1] - schedule_idx[idx]).days
+        dres = (schedule_idx[idx + 1] - day).days
+    else:
+        TS = 365
+        dres = (flow_dates.iloc[0] - day).days
+    n_flows = len(flow_dates)
+    discount_rate = ytm / freq / 100.0
+    if n_flows == 1:
+        nt = dres / TS if TS > 0 else dres / 365.0
+        return float(coup / freq / (1.0 + discount_rate * nt))
+    else:
+        base_discount = 1.0 / (1.0 + discount_rate)
+        time_factors = np.arange(n_flows) + dres / TS
+        return float(np.sum(coup / freq * base_discount ** time_factors))
+
+
 def pricingAffine(day, coup, tax, schedule, freq, factors, S2, gamma, mtype, caltype):
     """
     Calculate bond price using affine term structure model.
@@ -294,17 +333,23 @@ def pricingAffine(day, coup, tax, schedule, freq, factors, S2, gamma, mtype, cal
     p += p0
     s -= B * final_tau_y * p0
     
+    # Pre-tax price (market convention — used for yield inversion via pricingYield)
+    p_pretax = p
+    accrued  = coup / freq * (1.0 - dres / TS)
+    clean_pretax = p_pretax - accrued
+
     # Tax adjustment: CGB coupon income is exempt from 25% corporate tax.
     # Banks value each coupon at full face value (no tax haircut), so the
     # additional price premium equals:  tax_rate * PV(all coupons)
     if tax > 0:
         p += tax * coupon_pv_sum
         s += tax * s_coupon
-    
-    # Accrued interest
-    accrued = coup / freq * (1.0 - dres / TS)
+
+    # Accrued interest (same for both — accrued is pre-tax coupon fraction)
     clean_price = p - accrued
-    
-    # Return sensitivity as sympy Matrix(1,3) for backward compatibility
+
+    # Return sensitivity as sympy Matrix(1,3) for backward compatibility.
+    # p_pretax / clean_pretax are the pre-tax (market-convention) prices;
+    # pass them to pricingYield so the inverted yield matches ytm_act.
     s_sp = sp.Matrix([s.tolist()])
-    return p, clean_price, s_sp / 1e2
+    return p, clean_price, s_sp / 1e2, p_pretax, clean_pretax

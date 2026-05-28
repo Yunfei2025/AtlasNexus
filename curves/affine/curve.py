@@ -146,8 +146,14 @@ class Curve:
             mats = row['起息日期']
             mate = row['到期日期']
             freq = row['每年付息次数']
+            # The TBond affine model is calibrated to TAX-FREE equivalent spot
+            # rates (market dirty price minus 0.25 × PV_coupons).  Applying
+            # tax=0.25 here therefore correctly adds each bond's coupon-specific
+            # tax premium — a 3% coupon bond gets a larger premium than a 2.5%
+            # coupon bond, so ytm_quo correctly reflects the lower market yield.
+            # CDB bonds are calibrated to raw market rates; no tax premium.
             if '国债' in name:
-                tax = 0.25  # CGB coupon income is exempt from 25% corporate tax
+                tax = 0.25
             else:
                 tax = 0.
             if freq == 0.:
@@ -160,15 +166,19 @@ class Curve:
             if mats < self.day:
                 if b not in schedule:
                     schedule[b] = yd.scheduleDate(mats, mate, name, freq)
-                price, clean, sen0 = yd.pricingAffine(self.day,coup,tax,schedule[b],freq,self.factors,self.S2,self.gamma,self.mtype,self.caltype)
+                price, clean, sen0, price_pretax, clean_pretax = yd.pricingAffine(self.day,coup,tax,schedule[b],freq,self.factors,self.S2,self.gamma,self.mtype,self.caltype)
                 price_is_implausible = (not np.isfinite(price)) or (not np.isfinite(clean)) or price <= 1.0 or price > 200.0
                 quote.loc[b,'全价'] = price
                 quote.loc[b,'净价'] = clean
                 if price_is_implausible:
-                    print(f'Implausible price for {b} on {self.day}: price={price:.4f}')
+                    print(f'Implausible price for {b} on {self.day}: price=nan')
                     quote.loc[b,'收益率'] = np.nan
                 else:
                     try:
+                        # Invert from the TAX-INCLUSIVE model price: the model now
+                        # adds the coupon-specific tax premium on top of a tax-free
+                        # calibrated curve, so `price` is the fair market dirty price
+                        # and the resulting ytm_quo is directly comparable to ytm_act.
                         quote.loc[b,'收益率'] = yd.pricingYield(self.day,coup,schedule[b],freq,float(price))
                         quote.loc[b,'剩余期限'] = (mate-self.day).days/365
                     except Exception as _e:
@@ -447,7 +457,7 @@ class IRSCurve:
     def affinePricing(self,irs):
         sen = pd.DataFrame(index=irs.keys(),columns=['Greek1','Greek2','Greek3'])
         for i in irs.keys():
-            price, clean, sen0 = yd.pricingAffine(self.day,irs.fixrate,0,irs.schedule,irs.freq,self.factors,self.S2,self.gamma,self.mtype,self.caltype)
+            price, clean, sen0, *_ = yd.pricingAffine(self.day,irs.fixrate,0,irs.schedule,irs.freq,self.factors,self.S2,self.gamma,self.mtype,self.caltype)
             sen.loc[i,:] = [sen0[0,s] for s in range(sen0.shape[1])]     
         return sen.astype(float).dropna()
     

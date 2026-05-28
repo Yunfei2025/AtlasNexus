@@ -410,8 +410,17 @@ class YieldCurveBuilder:
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
     
-    def build_curve(self, bond_ref: pd.Series, env: dict, price_type: str, date: datetime) -> pd.DataFrame:
-        """Build yield curve from reference bonds."""
+    def build_curve(self, bond_ref: pd.Series, env: dict, price_type: str, date: datetime, tax: float = 0.0) -> pd.DataFrame:
+        """Build yield curve from reference bonds.
+
+        Args:
+            tax: If > 0, strip ``tax * PV(coupons)`` from each bond's dirty price
+                 before bootstrapping.  Use tax=0.25 for TBond so the resulting
+                 spot curve represents the tax-free equivalent rate (CGB market
+                 prices already embed the 25% income-tax advantage; removing the
+                 premium yields the underlying risk-free curve that the affine
+                 model should be calibrated to).
+        """
         yield_curve = bs.BootstrapYieldCurve()
         results = pd.DataFrame(index=bond_ref.index, columns=['bond_id', 'ttm', 'spot'], dtype=object)
         
@@ -449,10 +458,19 @@ class YieldCurveBuilder:
             date_2 = pd.Timestamp(date).date()
             ttm = (date_1 - date_2).days / 365
             
+            # Strip the coupon income-tax premium so the bootstrapped spot
+            # curve represents tax-free equivalent rates.  For tax=0 (CBond /
+            # IRS) the dirty price is used as-is.
+            if tax > 0.0 and np.isfinite(dirty):
+                cpv = yd.coupon_pv_sum(date, coupon, schedule, frequency, ytm)
+                dirty_for_bootstrap = dirty - tax * cpv
+            else:
+                dirty_for_bootstrap = dirty
+
             # Add to yield curve
             results.loc[bucket_name, 'bond_id'] = bond_id
             results.loc[bucket_name, 'ttm'] = ttm
-            yield_curve.add_instrument(100, ttm, coupon, dirty, frequency)
+            yield_curve.add_instrument(100, ttm, coupon, dirty_for_bootstrap, frequency)
         
         # Extract yield curve
         maturities = yield_curve.get_maturities()
@@ -505,10 +523,11 @@ def compute_spot_term_panels(
             new_spot = pd.DataFrame(index=missing_dates, columns=columns, dtype=float)
             new_term = pd.DataFrame(index=missing_dates, columns=columns, dtype=float)
 
+            _tax = 0.25 if bond_type == 'TBond' else 0.0
             for d in missing_dates:
                 bond_ref = botr.loc[d]
                 builder = YieldCurveBuilder()
-                dfp = builder.build_curve(bond_ref, env, price_type, d)
+                dfp = builder.build_curve(bond_ref, env, price_type, d, tax=_tax)
 
                 ttm_series = pd.Series(index=columns, dtype=float)
                 spot_series = pd.Series(index=columns, dtype=float)
@@ -532,9 +551,10 @@ def compute_spot_term_panels(
         bond_ref = botr.loc[d]
         plist = ['Bid', 'Ofr']
         ref_series = {}
+        _tax = 0.25 if bond_type == 'TBond' else 0.0
         for p in plist:
             builder = YieldCurveBuilder()
-            dfp = builder.build_curve(bond_ref, env, p, d)
+            dfp = builder.build_curve(bond_ref, env, p, d, tax=_tax)
             series = pd.Series(dfp['spot'].values, index=dfp['ttm'].values, dtype=float)
             series.index = pd.to_numeric(series.index, errors='coerce')
             series = series[~pd.isna(series.index)]

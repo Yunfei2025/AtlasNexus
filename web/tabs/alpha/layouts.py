@@ -295,6 +295,13 @@ def build_portfolio_layout() -> html.Div:
                 ),
                 html.Span("Billion CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
 
+                html.Label("Total Single Side DV01:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
+                dcc.Input(
+                    id='alpha-dv01-budget', type='number', value=5, min=0,
+                    style={'width': '80px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #4a6f9f', 'backgroundColor': '#2a3f5f', 'color': '#fff'}
+                ),
+                html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
+
                 html.Label("Method:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
                 html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '14px', 'fontWeight': 'bold'}),
             ], style={'display': 'flex', 'alignItems': 'center'}),

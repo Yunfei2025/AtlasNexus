@@ -116,10 +116,11 @@ def register_portfolio_callbacks(app) -> None:
          State('alpha-total-capital', 'value'),
          State('alpha-alloc-method', 'value'),
          State('alpha-enforce-corr', 'value'),
-         State('alpha-curated-instruments-store', 'data')],
+         State('alpha-curated-instruments-store', 'data'),
+         State('alpha-dv01-budget', 'value')],
         prevent_initial_call=True
     )
-    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, alloc_method, enforce_corr, curated_instruments):
+    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, alloc_method, enforce_corr, curated_instruments, total_dv01_budget):
         if not n_clicks:
             return html.Div(), html.Div(), html.Div(), []
 
@@ -132,6 +133,7 @@ def register_portfolio_callbacks(app) -> None:
         try:
             total_capital = float(total_capital) if total_capital is not None else 10.0
             total_capital_mm = total_capital * 1000
+            total_dv01_budget = float(total_dv01_budget) if total_dv01_budget is not None else 5.0
 
             df = pd.DataFrame(candidates)
 
@@ -213,12 +215,49 @@ def register_portfolio_callbacks(app) -> None:
             if weight_sum > 0 and abs(weight_sum - 1.0) > 1e-9:
                 df_scored['weight'] = df_scored['weight'] / weight_sum
 
-            df_scored['notional_mm'] = (np.floor(df_scored['weight'] * total_capital_mm / 10) * 10)
+            # Direction sign: +1 for BUY, -1 for SELL
+            _direction_sign = (
+                df_scored['direction'].apply(lambda d: -1.0 if str(d).strip().upper() == 'SELL' else 1.0)
+                if 'direction' in df_scored.columns
+                else pd.Series(1.0, index=df_scored.index)
+            )
+
+            # Step A: initial unsigned notional from weights
+            df_scored['notional_mm'] = np.floor(df_scored['weight'] * total_capital_mm / 10) * 10
+
+            # Step B: capital constraint for bond/swap/tenor spreads
+            _CAPITAL_TYPES = {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap', 'TenorSpread', 'BondCurve', 'BondSwap'}
+            _is_bond = (
+                df_scored['spread_type'].isin(_CAPITAL_TYPES)
+                if 'spread_type' in df_scored.columns
+                else pd.Series(False, index=df_scored.index)
+            )
+            if _is_bond.any():
+                _raw_signed = (df_scored.loc[_is_bond, 'notional_mm'] * _direction_sign[_is_bond]).sum()
+                if abs(_raw_signed) > 1e-6:
+                    _cap_scale = total_capital_mm / _raw_signed
+                    df_scored.loc[_is_bond, 'notional_mm'] = (
+                        np.floor(df_scored.loc[_is_bond, 'notional_mm'] * _cap_scale / 10) * 10
+                    )
+
+            # Step C: apply direction sign to all notionals
+            df_scored['notional_mm'] = df_scored['notional_mm'] * _direction_sign
+
+            # Step D: duration and DV01
             df_scored['_duration'] = df_scored.apply(
                 lambda r: _get_duration_mult(str(r.get('ID', '')), str(r.get('spread_type', ''))),
                 axis=1,
             )
-            df_scored['DV01_k'] = (df_scored['notional_mm'] * df_scored['_duration'] / 10_000 * 1_000).round(1)
+            df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)
+
+            # Step E: DV01 constraint — single-side (BUY) DV01 = total_dv01_budget * 1000 k CNY/bp
+            _dv01_budget_k = total_dv01_budget * 1000
+            _buy_mask = _direction_sign > 0
+            _single_side_dv01 = df_scored.loc[_buy_mask, 'DV01_k'].sum() if _buy_mask.any() else df_scored['DV01_k'].sum()
+            if _single_side_dv01 > 1e-6 and _dv01_budget_k > 0:
+                _dv01_scale = _dv01_budget_k / _single_side_dv01
+                df_scored['notional_mm'] = np.floor(df_scored['notional_mm'] * _dv01_scale / 10) * 10
+                df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)
 
             df_nonzero = df_scored[df_scored['weight'] > 0.0001].copy()
             optimized_results = df_nonzero.to_dict('records')
@@ -278,6 +317,7 @@ def register_portfolio_callbacks(app) -> None:
                 html.Div([
                     html.Div([html.Strong("Total Trades: ", style={'color': THEME['text_sub']}), html.Span(f"{len(df_scored)}", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("Capital Allocated: ", style={'color': THEME['text_sub']}), html.Span(f"{total_capital:.1f} B CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
+                    html.Div([html.Strong("DV01 Budget: ", style={'color': THEME['text_sub']}), html.Span(f"{total_dv01_budget:.1f} MM CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("Avg Score: ", style={'color': THEME['text_sub']}), html.Span(f"{df_scored['score'].mean():.3f}", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("Risk Parity: ", style={'color': THEME['text_sub']}), html.Span(f"σ(RC)={df_scored['risk_contribution'].std():.3f}" if 'risk_contribution' in df_scored.columns else "N/A", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("BUY/SELL: ", style={'color': THEME['text_sub']}), html.Span(f"{(df_scored['direction'] == 'BUY').sum()} / {(df_scored['direction'] == 'SELL').sum()}" if 'direction' in df_scored.columns else "N/A", style={'color': THEME['text_main']})]),
