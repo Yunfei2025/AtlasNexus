@@ -1185,3 +1185,20 @@ ERROR: Address already in use
 ERROR: Port 8080 is in use by another program. Either identify and stop that program, or start the server with a different port.
 ERROR: Address already in use
 ERROR: Port 8080 is in use by another program. Either identify and stop that program, or start the server with a different port.
+ERROR: Traceback (most recent call last):
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/atlas_fi_tabs.py", line 685, in _update_spread_bar
+ERROR:     return orig_statistics(interval, data_rt_js, stype, season)
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/graphs.py", line 337, in statistics
+ERROR:     spread.loc[buy, 'color'] = 'green'
+ERROR:     ~~~~~~~~~~^^^^^^^^^^^^^^
+ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexing.py", line 938, in __setitem__
+ERROR:     iloc._setitem_with_indexer(indexer, value, self.name)
+ERROR:     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexing.py", line 1915, in _setitem_with_indexer
+ERROR:     self._setitem_new_column(indexer, key, value, name=name)
+ERROR:     ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexing.py", line 1849, in _setitem_new_column
+ERROR:     raise ValueError(
+ERROR:         "cannot set a frame with no defined index and a scalar"
+ERROR:     )
+ERROR: ValueError: cannot set a frame with no defined index and a scalar

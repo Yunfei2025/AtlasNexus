@@ -386,8 +386,27 @@ class BondCurveGenerator:
                     df_copy.index = [idx.date() if hasattr(idx, 'date') else idx for idx in df_copy.index]
                     return df_copy.loc[start_date:end_date]
 
-            term_slice = safe_slice(term, start0, dp)
-            spot_slice = safe_slice(spot, start0, dp)
+            # Drop reference-bucket columns whose latest TTM is outside
+            # [FIT_MIN_TTM, FIT_MAX_TTM].  Near-maturity bonds (< FIT_MIN_TTM)
+            # produce bootstrap anomalies (wildly high short-end rates) that
+            # corrupt the S2 covariance matrix and produce NaN factors/prices.
+            # Very long-end buckets (> FIT_MAX_TTM) are outside the affine
+            # model's tenor range.  Apply the same band used for factor extraction.
+            _fit_min = BondConfig.FIT_MIN_TTM
+            _fit_max = BondConfig.FIT_MAX_TTM
+            latest_ttm = term.iloc[-1].dropna()
+            _calib_cols = latest_ttm[
+                (_fit_min <= latest_ttm) & (latest_ttm <= _fit_max)
+            ].index
+            if len(_calib_cols) < 3:
+                self.logger.warning(
+                    f"Only {len(_calib_cols)} reference columns within TTM "
+                    f"[{_fit_min}, {_fit_max}] — using all columns for calibration."
+                )
+                _calib_cols = term.columns
+
+            term_slice = safe_slice(term[_calib_cols], start0, dp)
+            spot_slice = safe_slice(spot[_calib_cols], start0, dp)
             t0 = time.perf_counter()
             curve0.calibrate(term_slice, spot_slice)
             t1 = time.perf_counter()
@@ -476,7 +495,7 @@ class BondCurveGenerator:
         return True
 
 
-def main(bond_type = 'TBond', date=None):#'20251230'):#
+def main(bond_type = 'CBond', date=None):#'20251230'):#
     print(f"🚀 Starting {bond_type} curve generation.")
     try:
         success = BondCurveGenerator.main(bond_type=bond_type, date=date)

@@ -371,9 +371,11 @@ class RefBondSelector:
                 zero_coupon_mask = (freq_data == 1) & freq_data.notna()
                 candidate_bonds = candidate_bonds[zero_coupon_mask]
 
-            # Rank by 20-day rolling turnover; pick first off-the-run
-            # (rank-2 by liquidity). When the bucket has only one bond,
-            # get_offtherun_bond falls back to the most liquid one.
+            # For short-end buckets (<1.5Y) use the most liquid bond: near-maturity
+            # off-the-run bonds often have stale CNBD yields that equal their coupon
+            # rate (2-5%) rather than the current market rate, which inflates the
+            # bootstrap spot. For longer buckets use first off-the-run to avoid
+            # the calibration curve chasing on-the-run richness.
             available_turnover = date_turnover.loc[candidate_bonds].dropna()
             # avoid duplication with previous bucket
             term_idx = list(existing_results.columns).index(bucket_name)
@@ -383,7 +385,10 @@ class RefBondSelector:
                 if prev_tenor_bond in available_turnover.index:
                     available_turnover = available_turnover.drop(index=prev_tenor_bond)
 
-            selected_bond = _as_scalar_bond_id(get_offtherun_bond(available_turnover, n_exclude=1))
+            if bucket_term < 1.5:
+                selected_bond = _as_scalar_bond_id(get_most_liquid_bond(available_turnover))
+            else:
+                selected_bond = _as_scalar_bond_id(get_offtherun_bond(available_turnover, n_exclude=1))
 
             # Sticky off-the-run: prefer the previous selection as long as
             # it is still in this bucket. This prevents day-to-day turnover

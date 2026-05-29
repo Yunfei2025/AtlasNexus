@@ -352,10 +352,9 @@ def _get_anchor_swap_rates(env: Dict, col_map: Dict) -> np.ndarray:
     return get_swap_mid_quotes(env['SwapRT'], ANCHOR_SWAPS).values
 
 
-def _create_jacobian_matrix(irs_anchor: np.ndarray) -> sp.Matrix:
+def _create_jacobian_matrix(irs_anchor: np.ndarray) -> np.ndarray:
     """Create Jacobian matrix for swap calculations."""
-    jac_matrix = sp.Matrix([[1, 1, 1], [1, 2, 5]])
-    return jac_matrix.row_insert(0, sp.Matrix(irs_anchor).T)
+    return np.array([irs_anchor, [1.0, 1.0, 1.0], [1.0, 2.0, 5.0]], dtype=float)
 
 
 def _calculate_swap_rates(env: Dict, col_map: Dict, ttm: float) -> Tuple[float, float, float]:
@@ -389,12 +388,20 @@ def _calculate_swap_rates(env: Dict, col_map: Dict, ttm: float) -> Tuple[float, 
     return bid_val, ofr_val, mid_val
 
 
-def _calculate_hedge_ratios(stat_his: Dict, bond: str, ttm: float, 
-                          irs_mid: float, jac_matrix: sp.Matrix) -> None:
-    """Calculate hedge ratios for medium-term bonds."""
-    b_r = sp.Matrix([irs_mid, 1, ttm])
-    n_r = jac_matrix.inv() * b_r
-    
+def _calculate_hedge_ratios(stat_his: Dict, bond: str, ttm: float,
+                          irs_mid: float, jac_matrix: np.ndarray) -> None:
+    """Calculate hedge ratios for medium-term bonds.
+
+    Uses numpy for numerical stability.  When the swap curve is flat the
+    Jacobian determinant (3·r1 − 4·r2 + r5) is exactly zero; lstsq gives the
+    minimum-norm solution in that degenerate case.
+    """
+    b_r = np.array([irs_mid, 1.0, ttm], dtype=float)
+    try:
+        n_r = np.linalg.solve(jac_matrix, b_r)
+    except np.linalg.LinAlgError:
+        n_r, _, _, _ = np.linalg.lstsq(jac_matrix, b_r, rcond=None)
+
     stat_his['BondSwap'].loc[bond, 'FR007S1Y.IR'] = float(n_r[0])
     stat_his['BondSwap'].loc[bond, 'FR007S2Y.IR'] = float(n_r[1])
     stat_his['BondSwap'].loc[bond, 'FR007S5Y.IR'] = float(n_r[2])

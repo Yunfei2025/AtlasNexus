@@ -180,9 +180,13 @@ def pricing(day, coup, schedule, freq, ytm):
     discount_rate = ytm / freq / 100
     
     if n_flows == 1:  # Single payment
-        nt = dres / TS if TS > 0 else dres / YN
-        discount = 1 / (1 + discount_rate * nt)
-            
+        if dres <= YN:
+            nt = dres / YN
+            discount = 1 / (1 + discount_rate * nt)
+        else:
+            nt = dres / TS + math.floor(dres / TS)
+            discount = (1 / (1 + discount_rate)) ** nt
+
         p = (100 + coup / freq) * discount
         d = nt / (1 + ytm / 100 / freq) # nt / freq / 100 * discount
         v = d * 2 * nt / freq / 100 * discount
