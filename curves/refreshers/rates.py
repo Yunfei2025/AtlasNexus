@@ -429,7 +429,7 @@ class BondCurveRefresher:
             logger.error(f"Error saving results: {e}")
             raise
 
-def main(bond_type='CBond', max_workers: Optional[int] = None):
+def main(bond_type='TBond', max_workers: Optional[int] = None):
     try:
         BondCurveRefresher.main(bond_type=bond_type, max_workers=max_workers)
     except Exception as e:

@@ -38,12 +38,28 @@ ospread = SpreadConfig.build_ospreado()
 def _suppress_curve_yield_jumps(
     curve_yield: pd.Series,
     close_yield: pd.Series,
-    jump_threshold: float = 0.08,
-    ratio_threshold: float = 5.0,
+    abs_limit: float = 20.0,
+    diff_limit: float = 5.0,
 ) -> pd.Series:
-    """No-op: reference bond selection is considered clean enough.
-    Returns curve_yield unchanged."""
-    return curve_yield
+    """Suppress impossible curve-yield spikes using the close-yield series as anchor."""
+    curve = pd.to_numeric(curve_yield, errors='coerce').replace([np.inf, -np.inf], np.nan).astype(float).copy()
+    if curve.empty:
+        return curve
+
+    close = pd.to_numeric(close_yield, errors='coerce').reindex(curve.index).astype(float)
+    outlier = curve.abs().gt(abs_limit)
+    if close.notna().any():
+        outlier = outlier | (close.notna() & (curve - close).abs().gt(diff_limit))
+
+    if not outlier.any():
+        return curve
+
+    curve = curve.mask(outlier)
+    original_index = curve.index
+    curve.index = pd.to_datetime(curve.index)
+    curve = curve.interpolate(method='time', limit_area='inside').ffill().bfill()
+    curve.index = original_index
+    return curve
 
 
 def _sector_pca_sort_key(ticker: str) -> tuple:

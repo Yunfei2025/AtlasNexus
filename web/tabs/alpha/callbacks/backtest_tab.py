@@ -242,6 +242,28 @@ def register_backtest_callbacks(app) -> None:
         return base_mr, base_trend
 
     # -------------------------------------------------------------------------
+    # BACKTEST: Spread-type parameter presets
+    # -------------------------------------------------------------------------
+    @app.callback(
+        [Output('bt-entry-z', 'value'),
+         Output('bt-exit-z', 'value'),
+         Output('bt-stop-z', 'value'),
+         Output('bt-theta', 'value'),
+         Output('bt-mom-window', 'value'),
+         Output('bt-vol-window', 'value'),
+         Output('bt-trailing-mult', 'value')],
+        Input('bt-spread-type', 'value'),
+    )
+    def preset_backtest_params(spread_type):
+        if spread_type == 'TenorSpread':
+            # Longer-hold preset for curve steepeners / butterflies:
+            # fewer marginal entries, slower exits, and less stop-out noise.
+            return 2.5, 0.25, 5.0, 0.03, 30, 90, 2.0
+
+        # Default presets for other spread families.
+        return 2.0, 0.5, 4.0, 0.02, 20, 60, 1.5
+
+    # -------------------------------------------------------------------------
     # BACKTEST: Run Individual Backtest
     # -------------------------------------------------------------------------
     @app.callback(

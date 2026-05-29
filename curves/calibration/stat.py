@@ -12,6 +12,33 @@ from curves.calibration.irscurves import irsSpreads
 
 MAX_BOND_CURVE_ADJUSTMENT = 10.0  # percent; prevents corrupt historical stats from exploding CvBid/CvOfr
 
+
+def _suppress_curve_yield_outliers(
+    curve_yield: pd.Series,
+    close_yield: pd.Series,
+    abs_limit: float = 20.0,
+    diff_limit: float = 5.0,
+) -> pd.Series:
+    """Suppress impossible curve-yield spikes using the close-yield series as anchor."""
+    curve = pd.to_numeric(curve_yield, errors='coerce').replace([np.inf, -np.inf], np.nan).astype(float).copy()
+    if curve.empty:
+        return curve
+
+    close = pd.to_numeric(close_yield, errors='coerce').reindex(curve.index).astype(float)
+    outlier = curve.abs().gt(abs_limit)
+    if close.notna().any():
+        outlier = outlier | (close.notna() & (curve - close).abs().gt(diff_limit))
+
+    if not outlier.any():
+        return curve
+
+    curve = curve.mask(outlier)
+    original_index = curve.index
+    curve.index = pd.to_datetime(curve.index)
+    curve = curve.interpolate(method='time', limit_area='inside').ffill().bfill()
+    curve.index = original_index
+    return curve
+
 # Constants reused across functions
 ANCHORS = ['FR007.IR','FR007S3M.IR','FR007S6M.IR','FR007S9M.IR','FR007S1Y.IR','FR007S2Y.IR','FR007S5Y.IR']
 TERMS = [0, 1/4, 1/2, 3/4, 1, 2, 5]
@@ -124,8 +151,15 @@ def statAnalysis_BC(env, df1, df2, zscore_lookback: int = 252):
     # formula reference: https://www.zhihu.com/question/268075949/answer/1531412127
     # spreadvalues between quoted ytm and actual ytm
 
-    vol_ratio = df1.std()/df2.std()
     bonds = df1.columns.intersection(env['Def'].index)
+    df1 = pd.DataFrame(df1).apply(pd.to_numeric, errors='coerce')
+    df2 = pd.DataFrame(df2).apply(pd.to_numeric, errors='coerce')
+    df1 = df1.loc[:, bonds]
+    df2 = df2.reindex(index=df1.index, columns=bonds)
+    for b in bonds:
+        df2[b] = _suppress_curve_yield_outliers(df2[b], df1[b])
+
+    vol_ratio = df1.std() / df2.std().replace(0, np.nan)
     spread = df1 - df2
     spread = spread[bonds]
     # Use a 1-year rolling window for mean/vol/stationarity so old regimes
@@ -144,7 +178,7 @@ def statAnalysis_BC(env, df1, df2, zscore_lookback: int = 252):
     return dict(StatInfo=stat_info.dropna(subset=['stationary']),
                 Spread=spread,
                 CloseYield=df1,
-                CurveYield=df2)#+stat_info['mean'].T
+                CurveYield=df2)
 
 def statAnalysis_BS(env, df_act, irsKeyTS, bond_key_ts=None):
     """Compute bond-swap spread statistics and BUY-side carry+roll time series.
