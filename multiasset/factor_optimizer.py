@@ -272,18 +272,25 @@ class FactorRiskParityOptimizer:
                 return float(np.sum((RC - target) ** 2))
 
         # ── Per-asset bounds ─────────────────────────────────────────────────
-        # Hedge instruments are allowed to take short positions so that the
-        # optimizer can offset large factor concentrations.  Regular (long-only)
-        # assets stay in [0, 1].  Maximum absolute hedge weight = 30% per
-        # instrument, mirroring the half-total-DV01 cap used in portfolio/.
+        # Hedge instruments are allowed to take short positions.  Regular assets
+        # stay long-only.  A small minimum weight floor prevents the optimizer
+        # from zeroing out assets when the B matrix is rank-deficient (e.g. 6
+        # CN bonds all sharing the same 3 factors → degenerate ERC landscape).
         _MAX_HEDGE_WT = 0.30
         _hedge_set = set(hedge_asset_names) if hedge_asset_names else set()
+        # Minimum weight: each selected asset gets at least 10 % of equal share.
+        # E.g. 6 assets → floor = 1/(6×10) ≈ 1.7 %; 20 assets → 0.5 %.
+        _min_wt = 1.0 / (n_assets * 10)
         bounds = [
-            (-_MAX_HEDGE_WT, _MAX_HEDGE_WT) if name in _hedge_set else (0.0, 1.0)
+            (-_MAX_HEDGE_WT, _MAX_HEDGE_WT) if name in _hedge_set else (_min_wt, 1.0)
             for name in asset_names
         ]
 
-        w0 = np.ones(n_assets) / n_assets
+        # Start from the minimum-weight floor so the initial guess is feasible.
+        w0 = np.full(n_assets, _min_wt)
+        remaining = 1.0 - n_assets * _min_wt
+        if remaining > 0:
+            w0 += remaining / n_assets
 
         result = minimize(
             objective, w0,
@@ -296,7 +303,7 @@ class FactorRiskParityOptimizer:
         # ── If the primary solve did not converge, retry without hedge shorts ─
         # This mirrors portfolio/portfolio.py's two-stage fallback logic.
         if not result.success and _hedge_set:
-            fallback_bounds = [(0.0, 1.0)] * n_assets
+            fallback_bounds = [(_min_wt, 1.0)] * n_assets
             result_fb = minimize(
                 objective, w0,
                 method='SLSQP',

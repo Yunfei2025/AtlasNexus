@@ -225,6 +225,14 @@ class StatRefresher:
             #
             ytm_quote = pxrt['Quote'][['ID', 'Bid', 'Ofr']].dropna().set_index('ID')
             ytm_quote_cv = pxrt['Quote'][['ID', 'CvBid', 'CvOfr']].dropna().set_index('ID')
+            # Exclude bonds where the affine model produced no valid quote (CvBid=CvOfr=0);
+            # these would otherwise give CurveYield=0 and a huge spurious spread/z-score.
+            ytm_quote_cv = ytm_quote_cv[(ytm_quote_cv['CvBid'] > 0) & (ytm_quote_cv['CvOfr'] > 0)]
+            # Exclude bonds where the model yield is implausibly far from the market yield
+            # (|CvMid - MktMid| > 50bp indicates a calibration artifact, e.g. factor overflow).
+            _cv_mid = (ytm_quote_cv['CvBid'] + ytm_quote_cv['CvOfr']) / 2
+            _mkt_mid = ((ytm_quote['Bid'] + ytm_quote['Ofr']) / 2).reindex(ytm_quote_cv.index)
+            ytm_quote_cv = ytm_quote_cv[(_cv_mid - _mkt_mid).abs() <= 0.5]
             self.spot_ref[btype] = pxrt['Curve']['SpotRate'][self.tenor]
             self.spot_ref[btype].index = [f'{btype}-{i}Y' for i in self.spot_ref[btype].index]
 
@@ -276,17 +284,21 @@ class StatRefresher:
             spreads['BondSwap']['spread'] = self.px_bond_rt[btype] - px_bs_rt
 
             for k, df_k in spreads.items():
-                # Use (spread - mean) / vol for all BondCurve types.
-                # For TBond, OU mean ≈ 0 so this is nearly identical to spread/vol;
-                # for CBond (policy bank), mean can be structurally non-zero.
-                mean_ = pd.to_numeric(df_k['mean'], errors='coerce') if 'mean' in df_k.columns else pd.Series(0.0, index=df_k.index)
                 vol_ = pd.to_numeric(df_k['vol'], errors='coerce') if 'vol' in df_k.columns else pd.Series(np.nan, index=df_k.index)
-                if not isinstance(mean_, pd.Series):
-                    mean_ = pd.Series(mean_, index=df_k.index)
                 if not isinstance(vol_, pd.Series):
                     vol_ = pd.Series(vol_, index=df_k.index)
                 vol_ = vol_.where(vol_.abs() > 1e-6)
-                df_k['Zscore'] = (df_k['spread'] - mean_) / vol_
+                if k == 'BondCurve':
+                    # CurveYield already incorporates the historical mean adjustment
+                    # (affine model output), so normalise the raw spread directly.
+                    df_k['Zscore'] = df_k['spread'] / vol_
+                else:
+                    # BondSwap: the IRS rate is market-observed without mean adjustment,
+                    # so subtract the OU mean before normalising.
+                    mean_ = pd.to_numeric(df_k['mean'], errors='coerce') if 'mean' in df_k.columns else pd.Series(0.0, index=df_k.index)
+                    if not isinstance(mean_, pd.Series):
+                        mean_ = pd.Series(mean_, index=df_k.index)
+                    df_k['Zscore'] = (df_k['spread'] - mean_) / vol_
 
             write_to_sheet[btype] = stat_his['BondCurve']
             write_to_sheet[btype + 'Swap'] = stat_his['BondSwap']

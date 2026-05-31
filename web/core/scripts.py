@@ -418,6 +418,27 @@ def refresh(interval):
         data_rt['NetBasis'] = futspds.get('NetBasis', None)
         data_rt['TermBasis'] = futspds.get('TermBasis', None)
 
+    # TenorSpread has no live RT feed; synthesize bar-chart rows from the latest
+    # daily-batch Tenor-spds.pkl so the bar chart doesn't show "Waiting for data".
+    try:
+        tenor_static = Utils.load_pickle_cached(os.path.join(DIR_INPUT, 'Tenor-spds.pkl'))
+        if isinstance(tenor_static, Mapping) and 'TenorSpread' in tenor_static:
+            _ts = tenor_static['TenorSpread']
+            if isinstance(_ts, dict):
+                _spread = _ts.get('Spread')
+                _stat   = _ts.get('StatInfo')
+                if (isinstance(_spread, pd.DataFrame) and not _spread.empty
+                        and isinstance(_stat, pd.DataFrame) and not _stat.empty):
+                    _current = _spread.iloc[-1].rename('spread').to_frame()
+                    _current = _current.join(_stat[['mean', 'vol']], how='inner')
+                    _vol = pd.to_numeric(_current['vol'], errors='coerce').replace(0, float('nan'))
+                    _mean = pd.to_numeric(_current['mean'], errors='coerce')
+                    _current['Zscore'] = (pd.to_numeric(_current['spread'], errors='coerce') - _mean) / _vol
+                    _current['color'] = 'grey'
+                    data_rt['TenorSpread'] = _current
+    except Exception:
+        pass
+
     out_dict = {}
     for key, value in data_rt.items():
         import pandas as pd

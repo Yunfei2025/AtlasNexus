@@ -36,7 +36,7 @@ def _calculate_fly_spreads(repos, shibors):
     for i in range(len(repos.columns) - 2):
         for j in range(i + 1, len(repos.columns) - 1):
             for k in range(j + 1, len(repos.columns)):
-                spreads[f'Repo-{rmap[i]}{rmap[j]}{rmap[k]}'] = 2 * repos.iloc[:, j] - (repos.iloc[:, i] + repos.iloc[:, k])
+                spreads[f'Repo7d-{rmap[i]}{rmap[j]}{rmap[k]}'] = 2 * repos.iloc[:, j] - (repos.iloc[:, i] + repos.iloc[:, k])
     for i in range(len(shibors.columns) - 2):
         for j in range(i + 1, len(shibors.columns) - 1):
             for k in range(j + 1, len(shibors.columns)):
@@ -65,8 +65,8 @@ def _irs_quote_spread_weights(sp):
     stype, note = sp.split('-')
     tenors = [token.upper() for token in re.findall(r'\d+[my]', note.lower())]
 
-    if stype in ['Repo', 'Shi3M']:
-        prefix = f if stype == 'Repo' else s
+    if stype in ['Repo7d', 'Shi3M']:
+        prefix = f if stype == 'Repo7d' else s
         if len(tenors) == 2:
             return {
                 prefix + tenors[1] + t: 1.0,
@@ -123,8 +123,8 @@ def irsSpreadComposite(spread_list, cost):
                 spread_cost[sp] = cost[s + note + t] - irs_ratio[sp] * cost[f + note + t]
             else:
                 spread_cost[sp] = spread_cost[f'{stype}-{note[2:].lower()}'] - spread_cost[f'{stype}-{note[:2].lower()}']
-        elif stype in ['Repo', 'Shi3M']:
-            prefix = f if stype == 'Repo' else s
+        elif stype in ['Repo7d', 'Shi3M']:
+            prefix = f if stype == 'Repo7d' else s
             if len(note) == 4:
                 spread_cost[sp] = cost[prefix + note[2:] + t] - irs_ratio[sp] * cost[prefix + note[:2] + t]
             else:

@@ -374,7 +374,7 @@ def build_backtest_layout() -> html.Div:
         html.H6("Alpha Backtest", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
         html.P(
             "Backtest individual spread trades or the full portfolio using historical data. "
-            "Evaluate strategy performance with z-score (MR/Carry) or directional-change trend rules.",
+            "Evaluate strategy performance with z-score (mean-reversion or momentum) or directional-change trend rules.",
             style={'color': THEME['text_sub'], 'fontSize': '13px', 'marginBottom': '20px'}
         ),
 
@@ -457,7 +457,7 @@ def build_individual_backtest_panel() -> html.Div:
                 html.Div([html.Label("Mom window:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
                 html.Div([html.Label("Vol window:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
                 html.Div([html.Label("Trail mult:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-trailing-mult', type='number', value=1.5, min=0.5, max=5.0, step=0.1, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Carry buffer:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-carry-buffer', type='number', value=0.0, step=0.0001, style={'width': '90px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
+                html.Div([html.Label("Momentum buffer:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-carry-buffer', type='number', value=0.0, step=0.0001, style={'width': '90px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px'}),
 
             html.Div([

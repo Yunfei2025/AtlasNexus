@@ -291,21 +291,52 @@ def build_multiasset_risk_layout():
         # ── Risk subtab ──────────────────────────────────────────────────────
         html.Div(id='summary-tab-risk', children=[
 
-        # Risk Exposure Analysis
-        html.H4("Risk Exposure Analysis", style={'color': THEME['text_main'], 'marginBottom': '15px', 'borderBottom': f'2px solid {THEME["warning"]}', 'paddingBottom': '5px'}),
+        # Header row
         html.Div([
-            # Heatmap
+            html.H4("Combined Book Risk", style={
+                'color': THEME['text_main'], 'margin': '0',
+                'borderBottom': f'2px solid {THEME["warning"]}', 'paddingBottom': '5px', 'flex': '1',
+            }),
             html.Div([
-                html.H6("Asset Sensitivity (Beta to Factors)", style={'textAlign': 'center', 'color': THEME['text_main']}),
-                html.Div(
-                    id='risk-heatmap-container',
-                    children=[
-                        dcc.Graph(id='sensitivity-heatmap', figure=heatmap_fig, style={'height': '400px'}) if heatmap_fig and heatmap_fig.data else html.Div("Run Optimization First", style={'padding': '40px', 'textAlign': 'center', 'color': THEME['text_sub']})
-                    ]
-                )
-            ], style={'flex': '3', 'minWidth': '300px', 'backgroundColor': THEME['bg_card'], 'padding': '10px', 'borderRadius': '5px', 'marginRight': '10px'}),
+                html.Button("Refresh", id='risk-refresh-btn', n_clicks=0, style={
+                    'fontSize': '11px', 'padding': '3px 10px',
+                    'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
+                    'border': f'1px solid {THEME["warning"]}', 'borderRadius': '4px', 'cursor': 'pointer',
+                }),
+                html.Span(id='risk-refresh-status', style={
+                    'fontSize': '11px', 'color': THEME['text_sub'], 'fontStyle': 'italic',
+                }),
+            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+        ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center',
+                  'marginBottom': '16px'}),
 
-        ], style={'display': 'flex', 'flexWrap': 'wrap', 'marginBottom': '20px'}),
+        dcc.Loading(type='default', children=[
+            # ── Inventory table ───────────────────────────────────────────────
+            html.Div([
+                html.H6("Position Inventory  (Beta + Alpha)", style={
+                    'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '13px',
+                }),
+                html.Div(id='risk-inventory-container',
+                         children=[html.Div("Click Refresh to load positions.",
+                                            style={'color': THEME['text_sub'], 'fontStyle': 'italic',
+                                                   'padding': '20px', 'textAlign': 'center'})]),
+            ], style={'backgroundColor': THEME['bg_card'], 'padding': '14px 16px',
+                      'borderRadius': '5px', 'marginBottom': '16px',
+                      'border': f'1px solid {THEME["table_header"]}'}),
+
+            # ── Risk exposure table ───────────────────────────────────────────
+            html.Div([
+                html.H6("Factor Risk Exposure  (Beta + Alpha combined)", style={
+                    'color': THEME['warning'], 'marginBottom': '8px', 'fontSize': '13px',
+                }),
+                html.Div(id='risk-exposure-container',
+                         children=[html.Div("Click Refresh to load exposures.",
+                                            style={'color': THEME['text_sub'], 'fontStyle': 'italic',
+                                                   'padding': '20px', 'textAlign': 'center'})]),
+            ], style={'backgroundColor': THEME['bg_card'], 'padding': '14px 16px',
+                      'borderRadius': '5px',
+                      'border': f'1px solid {THEME["table_header"]}'}),
+        ]),
 
         ], style={'display': 'none'}),
 

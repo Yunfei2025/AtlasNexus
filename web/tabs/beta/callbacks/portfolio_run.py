@@ -47,12 +47,16 @@ from ..data import (
     get_assets_from_factors,
 )
 from ._common import _SUMMARY_BETA_PARQUET, _upsert_snapshot
+from ._common import _BETA_BOOK_POSITIONS_PARQUET
 
 
 def register_portfolio_run_callbacks(app):
     """Register Run Analysis & IRDL Hedge callbacks for the Portfolio tab."""
 
     # 3.6 Risk Factor Budget Input Generator
+    # NOTE: vol-adj-store is State (not Input) to avoid circular dependency in Dash 4.x:
+    #   vol-adj-store → update_risk_budget_inputs → renders vol-adj-input components
+    #   → save_vol_adj → vol-adj-store
     @app.callback(
         Output('risk-budget-container', 'children'),
         [Input('asset-pool-store', 'data'),
@@ -60,9 +64,10 @@ def register_portfolio_run_callbacks(app):
          Input('factor-signals-snapshot-store', 'data'),
          Input('allocation-mode', 'value')],
         [State('capital-input', 'value'),
-         State('capital-unit', 'value')],
+         State('capital-unit', 'value'),
+         State('vol-adj-store', 'data')],
     )
-    def update_risk_budget_inputs(asset_pool, rp_budgets, snapshot_data, allocation_mode, capital, capital_unit):
+    def update_risk_budget_inputs(asset_pool, rp_budgets, snapshot_data, allocation_mode, capital, capital_unit, vol_adj_store):
         if not asset_pool:
              return [html.Div("Add assets to see risk factors", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px', 'textAlign': 'center'})]
 
@@ -143,12 +148,17 @@ def register_portfolio_run_callbacks(app):
         # ── Factor vol lookup (live 1Y EWMA) ─────────────────────────────────
         _vol_map = compute_factor_vol_map(sorted_factors)
 
+        # ── Per-factor vol multiplier (adj) — user can inflate IRCV/low-vol factor vols
+        #    to prevent over-allocation under pure risk parity.
+        _vol_adj = vol_adj_store or {}
+
         # ── Inverse-vol proportional RP Max (stable base for risk_parity / factor_scaling) ─
         _inv_vols = {}
         for _f in sorted_factors:
             _v = _vol_map.get(_f)
+            _a = float(_vol_adj.get(_f, 1.0) or 1.0)
             if _v is not None and pd.notna(_v) and _v > 0:
-                _inv_vols[_f] = 1.0 / _v
+                _inv_vols[_f] = 1.0 / (_v * _a)
         _total_inv_vol = sum(_inv_vols.values())
         if _total_inv_vol > 0:
             _inv_vol_budgets = {
@@ -177,6 +187,9 @@ def register_portfolio_run_callbacks(app):
 
             vol_val = _vol_map.get(factor)
             vol_str = f"{vol_val:.2f}%" if vol_val is not None and pd.notna(vol_val) else "–"
+            adj_val = float(_vol_adj.get(factor, 1.0) or 1.0)
+            # Highlight the adj input when it deviates from 1.0 (user override active)
+            _adj_border = f'1px solid {THEME["accent"]}' if adj_val != 1.0 else f'1px solid {THEME["table_header"]}'
 
             rows.append(
                 html.Div([
@@ -189,6 +202,20 @@ def register_portfolio_run_callbacks(app):
                         'width': '62px', 'textAlign': 'right', 'flexShrink': '0',
                         'fontFamily': 'monospace',
                     }),
+                    dcc.Input(
+                        id={'type': 'vol-adj-input', 'index': factor},
+                        type='number',
+                        value=adj_val,
+                        min=0.1, max=10.0, step=0.1,
+                        title='Vol adj multiplier: effective vol = measured vol × adj. '
+                              'Set >1 to discount allocation (e.g. IRCV over-allocation).',
+                        style={
+                            'width': '48px', 'fontSize': '12px', 'padding': '2px 4px',
+                            'backgroundColor': '#fff', 'color': '#000',
+                            'border': _adj_border,
+                            'borderRadius': '2px', 'textAlign': 'right',
+                        }
+                    ),
                     html.Span(f"{rp_max:.1f}M", style={
                         'color': THEME['text_sub'], 'fontSize': '12px',
                         'width': '54px', 'textAlign': 'right', 'flexShrink': '0',
@@ -218,168 +245,23 @@ def register_portfolio_run_callbacks(app):
                     html.Span("M", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '2px'}),
                 ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px', 'gap': '4px'})
             )
-        
+
         return rows
 
-    # ── 3.7  Factor Model Signals – refresh & render ──────────────────
+    # ── 3.7b  Vol-adj store: persist user edits to per-factor vol multipliers ──
     @app.callback(
-        [Output('factor-signals-table-container', 'children'),
-         Output('factor-signals-status', 'children'),
-         Output('factor-signals-snapshot-store', 'data')],
-        [Input('refresh-factor-signals-btn', 'n_clicks')],
+        Output('vol-adj-store', 'data'),
+        Input({'type': 'vol-adj-input', 'index': ALL}, 'value'),
+        State({'type': 'vol-adj-input', 'index': ALL}, 'id'),
         prevent_initial_call=True,
     )
-    def refresh_factor_signals(n_clicks):
-        """Compute signal snapshot from the factor prediction engine and
-        render as a colour-coded table in the Factor tab.
-
-        Signal sources (merged, risk-factor models take priority):
-        1. Contract-level ``trained_model_*.joblib`` from ``factors/``
-           → decomposed to risk factors via exposure profiles.
-        2. Risk-factor-level ``factor_model_*.joblib`` from ``input/models/``
-           → direct risk-factor predictions (override contract-based).
-        """
-        try:
-            from factors.processing.exposure_mapper import (
-                BucketConfig, compute_signal_snapshot,
-            )
-            from factors.processing.risk_factor_mapper import (
-                CONTRACT_RISK_PROFILES, decompose_signal_series,
-            )
-            import joblib, os, glob
-            from settings.paths import PATH
-
-            rf_signals: dict = {}  # risk_factor → signal Series
-            source_info: list = []  # human-readable summary
-
-            # --- Source 1: contract-level models (factors/) --------------------
-            model_dir = os.path.join(str(PATH), 'factors')
-            model_files = glob.glob(os.path.join(model_dir, 'trained_model_*.joblib'))
-
-            if model_files:
-                from factors.processing.loader import getDailyTS, ensure_returns_column
-                from factors.generator.factory import FactorCalculatorFactory
-                from factors.engine.predictor import predict_returns
-
-                n_contracts = 0
-                for mf in model_files:
-                    basename = os.path.basename(mf)
-                    parts = basename.replace('trained_model_', '').replace('.joblib', '').split('_')
-                    contract = parts[0] if parts else None
-                    if contract not in CONTRACT_RISK_PROFILES:
-                        continue
-                    artifact = joblib.load(mf)
-                    trained_model  = artifact.get('trained_model', {})
-                    selected_factors = artifact.get('selected_factors', [])
-                    ticker = artifact.get('config', {}).get('ticker', contract)
-                    if not trained_model or not selected_factors:
-                        continue
-                    try:
-                        raw_data = getDailyTS(ticker)
-                        raw_data = ensure_returns_column(raw_data)
-                        factory  = FactorCalculatorFactory(raw_data)
-                        all_factors = factory.generate_factors()
-                        predictions = predict_returns(all_factors, trained_model, selected_factors)
-                        predictions = predictions.dropna()
-                        predictions = predictions[predictions != 0]
-                    except Exception:
-                        continue
-                    if predictions is None or (hasattr(predictions, 'empty') and predictions.empty):
-                        continue
-                    decomposed = decompose_signal_series(predictions, contract)
-                    for col in decomposed.columns:
-                        if col in rf_signals:
-                            rf_signals[col] = rf_signals[col].add(decomposed[col], fill_value=0)
-                        else:
-                            rf_signals[col] = decomposed[col].copy()
-                    n_contracts += 1
-
-                if n_contracts:
-                    source_info.append(f"{n_contracts} contracts")
-
-            # --- Source 2: risk-factor-level models (input/models/) -----------
-            try:
-                from multiasset.factor_model import predict_factor_signals
-                rf_model_signals = predict_factor_signals(DIR_INPUT, DIR_MODELS)
-                if rf_model_signals:
-                    for rf, series in rf_model_signals.items():
-                        rf_signals[rf] = series  # override contract-derived
-                    source_info.append(f"{len(rf_model_signals)} risk-factor models")
-            except Exception as e:
-                print(f"Warning: risk-factor model signals unavailable: {e}")
-
-            if not rf_signals:
-                return (
-                    html.Div("No signal series could be computed from trained models.",
-                             style={'color': THEME['text_sub']}),
-                    "No signals",
-                    {},
-                )
-
-            # --- bucket mapping ------------------------------------------------
-            cfg = BucketConfig()
-            snapshot = compute_signal_snapshot(rf_signals, cfg)
-
-            if snapshot.empty:
-                return (
-                    html.Div("Signal snapshot is empty.", style={'color': THEME['text_sub']}),
-                    "Empty",
-                    {},
-                )
-
-            # --- render table --------------------------------------------------
-            def _bucket_color(label):
-                label_lower = str(label).lower()
-                if 'strong long' in label_lower: return THEME['success']
-                if 'long' in label_lower: return '#27ae60'
-                if 'strong short' in label_lower: return THEME['danger']
-                if 'short' in label_lower: return '#c0392b'
-                return THEME['text_sub']
-
-            rows = [
-                html.Tr([
-                    html.Td(r['risk_factor'], style={'fontWeight': 'bold'}),
-                    html.Td(f"{r['signal']:.4f}"),
-                    html.Td(r['bucket_label'],
-                             style={'color': _bucket_color(r['bucket_label']),
-                                    'fontWeight': 'bold'}),
-                    html.Td(f"{r['scalar']:+.1f}×"),
-                    html.Td(f"{r['risk_budget']:+.2f} M"),
-                    html.Td(f"{r['confidence']:.0%}"),
-                ], style={'fontSize': '12px'})
-                for r in snapshot.to_dict('records')
-            ]
-
-            table = html.Table(
-                [html.Thead(html.Tr([
-                    html.Th(c, style={'padding': '4px 8px', 'color': THEME['text_sub'],
-                                      'borderBottom': f'1px solid {THEME["table_header"]}'})
-                    for c in ['Risk Factor', 'Signal', 'Bucket', 'Scalar',
-                              'Risk Budget', 'Confidence']
-                ]))] + [html.Tbody(rows)],
-                style={'width': '100%', 'color': THEME['text_main'],
-                       'fontSize': '12px', 'borderCollapse': 'collapse'},
-            )
-
-            # Store snapshot as serialisable dict for Portfolio tab
-            snapshot_data = snapshot.to_dict(orient='records')
-
-            source_str = ' + '.join(source_info) if source_info else 'unknown'
-
-            return (
-                table,
-                f"Updated ({len(snapshot)} factors · {source_str})",
-                snapshot_data,
-            )
-
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return (
-                html.Div(f"Error: {e}", style={'color': THEME['danger']}),
-                "Error",
-                {},
-            )
+    def save_vol_adj(values, ids):
+        if not ids:
+            raise dash.exceptions.PreventUpdate
+        return {
+            id_dict['index']: float(v) if (v is not None and v > 0) else 1.0
+            for v, id_dict in zip(values, ids)
+        }
 
     # ── 3.8  Mode status hint ─────────────────────────────────────────
     @app.callback(
@@ -396,8 +278,24 @@ def register_portfolio_run_callbacks(app):
             return "Edit Exposure inputs directly · re-runs preserve your values"
         # factor_scaling
         if not snapshot_data:
-            return "⚠ No signal snapshot — click 'Refresh Signals' in the Factor tab first."
-        return f"✓ {len(snapshot_data)} factor signals scale RP Max at run time."
+            return "⚠ No signal snapshot — click 'Predict' in the Candidates tab first."
+        return f"✓ {len(snapshot_data)} factor signals loaded from Candidates tab."
+
+    # ── 3.9  Max DV01 display hint ────────────────────────────────────────────
+    @app.callback(
+        Output('max-dv01-display', 'children'),
+        [Input('max-duration-input', 'value'),
+         Input('capital-input', 'value'),
+         Input('capital-unit', 'value')],
+    )
+    def update_max_dv01_display(max_dur, capital, unit):
+        try:
+            mult = 1e9 if unit == 'billion' else 1e6
+            cap = float(capital or 10) * mult
+            limit = cap * float(max_dur or 5) / 1e10
+            return f"→ max DV01 {limit:.1f} MM"
+        except Exception:
+            return ""
 
     # 4. Run Analysis (Portfolio Tab -> Results)
     @app.callback(
@@ -413,10 +311,13 @@ def register_portfolio_run_callbacks(app):
          State({'type': 'risk-budget-input', 'index': ALL}, 'value'),
          State({'type': 'risk-budget-input', 'index': ALL}, 'id'),
          State('allocation-mode', 'value'),
-         State('factor-signals-snapshot-store', 'data')]
+         State('factor-signals-snapshot-store', 'data'),
+         State('vol-adj-store', 'data'),
+         State('max-duration-input', 'value')]
     )
     def run_analysis(n_clicks, total_capital, capital_unit, asset_pool,
-                     budget_values, budget_ids, allocation_mode, signal_snapshot):
+                     budget_values, budget_ids, allocation_mode, signal_snapshot,
+                     vol_adj_store, max_duration):
         if n_clicks == 0:
             return (html.Div("No data available. Click 'Run Analysis' to start.", style={'color': THEME['text_sub']}),
                     "", "", {}, {})
@@ -448,9 +349,10 @@ def register_portfolio_run_callbacks(app):
                 risk_budgets = None
 
             elif allocation_mode == 'factor_scaling':
-                # Factor Model Scaling: inverse-vol base budgets, scaled by signal scalar.
+                # Factor Model Scaling: inverse-vol base budgets (with vol-adj), scaled by signal scalar.
                 _vm = compute_factor_vol_map(factor_names_in_pool) if factor_names_in_pool else {}
-                _iv = {f: 1.0 / _vm[f] for f in factor_names_in_pool
+                _va = vol_adj_store or {}
+                _iv = {f: 1.0 / (_vm[f] * float(_va.get(f, 1.0) or 1.0)) for f in factor_names_in_pool
                        if _vm.get(f) and pd.notna(_vm[f]) and _vm[f] > 0}
                 _tot = sum(_iv.values())
                 n_pool = len(factor_names_in_pool) or 1
@@ -511,7 +413,11 @@ def register_portfolio_run_callbacks(app):
             portfolio_df = prepare_portfolio_table(summary, factor_exp, portfolio)
             portfolio_enhanced = []
             total_rounded_capital = 0.0
-            
+            dv01_cap_msg = ""
+            total_dv01 = 0.0           # safe default — overwritten below when table is non-empty
+            _durations = np.array([])  # safe default
+            _rounded   = np.array([])
+
             if not portfolio_df.empty:
                 _units = np.where(
                     portfolio_df['Asset Type'].isin(('Rates', 'Spread')),
@@ -519,33 +425,70 @@ def register_portfolio_run_callbacks(app):
                     1_000_000.0,
                 )
                 _rounded = np.floor(portfolio_df['Capital (CNY)'].values / _units) * _units
+
+                # ── DV01 cap: scale down if portfolio DV01 exceeds max_duration limit ──
+                _durations = portfolio_df['Duration'].values
+                _raw_dv01_mm = float(sum(v * d / 1e10 for v, d in zip(_rounded, _durations)))
+                _max_dur = float(max_duration or 5)
+                _max_dv01_mm = total_capital_cny * _max_dur / 1e10
+                if _raw_dv01_mm > _max_dv01_mm and _raw_dv01_mm > 0:
+                    _scale = _max_dv01_mm / _raw_dv01_mm
+                    _rounded = np.floor(_rounded * _scale / _units) * _units
+                    dv01_cap_msg = (f"  ·  DV01 capped: {_raw_dv01_mm:.2f}→{_max_dv01_mm:.2f} MM "
+                                    f"(scale {_scale:.2%})")
+
                 total_rounded_capital = float(_rounded.sum())
                 _display_df = portfolio_df.copy()
                 _display_df['Capital (CNY)'] = [f"{v / 1_000_000:,.2f}" for v in _rounded]
                 _display_df['Weight (%)'] = portfolio_df['Weight (%)'].map(lambda v: f"{v:.2f}%")
+                # Recompute DV01 on (possibly capped) rounded capital
+                _display_df['DV01 (MM CNY)'] = [
+                    round(v * d / 1e10, 4)
+                    for v, d in zip(_rounded, _durations)
+                ]
                 portfolio_enhanced = _display_df.to_dict('records')
-            
+
             portfolio_table_df = pd.DataFrame(portfolio_enhanced)
-            
+
             # Add totals row
             if not portfolio_table_df.empty:
+                total_dv01 = round(
+                    sum(v * d / 1e10 for v, d in zip(_rounded, _durations)), 4
+                )
                 totals = {
                     'Asset Type': 'TOTAL', 'Universe': '', 'Sector': '', 'Asset Name': '',
+                    'Instrument': '', 'Duration': None,   # None → NaN, avoids mixed-type parquet issue
                     'Capital (CNY)': f"{total_rounded_capital / 1_000_000:,.2f}",
+                    'DV01 (MM CNY)': total_dv01,
                     'Weight (%)': f"{summary['Weight (%)'].sum():.2f}%"
                 }
                 portfolio_table_df = pd.concat([portfolio_table_df, pd.DataFrame([totals])], ignore_index=True)
+
+            # Save positions parquet (coerce object columns so pyarrow doesn't choke)
+            try:
+                _save_df = portfolio_table_df.copy()
+                for _c in _save_df.columns:
+                    if _save_df[_c].dtype == object:
+                        _save_df[_c] = _save_df[_c].fillna('').astype(str)
+                pathlib.Path(_BETA_BOOK_POSITIONS_PARQUET).parent.mkdir(parents=True, exist_ok=True)
+                _save_df.to_parquet(_BETA_BOOK_POSITIONS_PARQUET, index=False)
+                print(f"✓ beta_book_positions.parquet saved ({len(_save_df)} rows) → {_BETA_BOOK_POSITIONS_PARQUET}")
+            except Exception as _se:
+                print(f"Warning: Could not save Beta book positions: {_se}")
             
             # Create table
             portfolio_table = dash_table.DataTable(
                 data=portfolio_table_df.to_dict('records'),
                 columns=[
-                    {'name': 'Asset Type', 'id': 'Asset Type'},
-                    {'name': 'Universe', 'id': 'Universe'},
-                    {'name': 'Sector', 'id': 'Sector'},
-                    {'name': 'Asset Name', 'id': 'Asset Name'},
+                    {'name': 'Asset Type',           'id': 'Asset Type'},
+                    {'name': 'Universe',              'id': 'Universe'},
+                    {'name': 'Sector',                'id': 'Sector'},
+                    {'name': 'Asset Name',            'id': 'Asset Name'},
+                    {'name': 'Instrument',            'id': 'Instrument'},
+                    {'name': 'Duration',              'id': 'Duration'},
                     {'name': 'Capital (Million CNY)', 'id': 'Capital (CNY)'},
-                    {'name': 'Weight', 'id': 'Weight (%)'},
+                    {'name': 'DV01 (MM CNY)',         'id': 'DV01 (MM CNY)'},
+                    {'name': 'Weight',                'id': 'Weight (%)'},
                 ],
                 style_cell={
                     'textAlign': 'center', 
@@ -569,7 +512,8 @@ def register_portfolio_run_callbacks(app):
                 style_table={'overflowX': 'auto'}
             )
             
-            status_msg = html.Span("✓ Analysis completed successfully!", style={'color': THEME['success'], 'fontWeight': 'bold'})
+            _dv01_info = f"  ·  DV01 {total_dv01:.2f} MM / max {total_capital_cny * float(max_duration or 5) / 1e10:.2f} MM{dv01_cap_msg}"
+            status_msg = html.Span(f"✓ Analysis completed!{_dv01_info}", style={'color': THEME['success'], 'fontWeight': 'bold'})
             timestamp_msg = f"Last updated: {ALLOCATION_RESULTS['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"
 
             # For Pure Risk Parity: derive RP Max from actual factor risk contributions

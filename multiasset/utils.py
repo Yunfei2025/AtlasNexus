@@ -15,13 +15,17 @@ wdstring = "G0000886,G0000887,G0000889,G0000891,G0000893,\
 G1235655,G1235656,G1235659,G1235664,G1235668,\
 V8579294,K3585162,A6910824,A5540027,A1410477,\
 G1306752,G4161196,G0006352,G0006353,G1306755"
-wdlist = wdstring.split(",")          
+wdlist = wdstring.split(",")
 
-ticker_dict = {}
+# Per-country tenors — CN additionally carries a 20Y point
+per_country_tenors: dict[str, list[str]] = {c: tenorlist for c in countrylist}
+per_country_tenors["CN"] = ["1Y", "2M", "5Y", "10Y", "20Y", "30Y"]
+
+ticker_dict: dict[str, list[str]] = {}
 i = 0
 for c in countrylist:
     ticker_dict[c] = []
-    for t in tenorlist:
+    for t in per_country_tenors[c]:
         ticker_dict[c].append(wdlist[i])
         i += 1
 
@@ -62,6 +66,7 @@ def get_default_sensitivities(tenor: str) -> dict:
         '2Y':  {'IRDL': 1.90,  'IRSL':  0.30, 'IRCV': -0.50, 'FXDL': 1.0},
         '5Y':  {'IRDL': 4.50,  'IRSL':  0.0,  'IRCV':  1.0,  'FXDL': 1.0},
         '10Y': {'IRDL': 8.50,  'IRSL': -0.50, 'IRCV': -0.50, 'FXDL': 1.0},
+        '20Y': {'IRDL': 13.0,  'IRSL': -0.75, 'IRCV':  0.0,  'FXDL': 1.0},
         '30Y': {'IRDL': 17.0,  'IRSL': -1.00, 'IRCV':  0.0,  'FXDL': 1.0},
     }
 

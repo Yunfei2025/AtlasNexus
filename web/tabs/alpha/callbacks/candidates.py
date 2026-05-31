@@ -177,8 +177,13 @@ def register_candidate_callbacks(app) -> None:
             ]
             if 'carry_roll' in df_all.columns:
                 _cr_be = pd.to_numeric(df_all['carry_roll'], errors='coerce')
+                _dir_be = df_all.get('direction', pd.Series('', index=df_all.index)).astype(str).str.strip().str.upper()
+                _dir_sign_be = pd.Series(1.0, index=df_all.index, dtype=float)
+                _dir_sign_be[_dir_be.eq('SELL')] = -1.0
+                # Breakeven only applies when the direction-adjusted carry is negative.
+                _cr_disp_be = _cr_be * _dir_sign_be
                 _ttm_be = pd.to_numeric(df_all['ttm_display'], errors='coerce').replace(0, np.nan)
-                _be_raw = (-_cr_be / _ttm_be).where(_cr_be.lt(0) & _ttm_be.notna())
+                _be_raw = (-_cr_disp_be / _ttm_be).where(_cr_disp_be.lt(0) & _ttm_be.notna())
                 df_all['breakeven_3m'] = _be_raw.round(4)
 
         _spread_v = pd.to_numeric(df_all.get('spread', pd.Series(dtype=float)), errors='coerce')
@@ -225,6 +230,24 @@ def register_candidate_callbacks(app) -> None:
             df_display = df_display.reset_index()
         available_all = [c for c in _all_display_cols if c in df_display.columns]
         df_display = df_display[available_all].copy()
+
+        if 'style' in df_display.columns:
+            def _style_to_regime_label(value):
+                style_value = str(value).strip().lower()
+                if style_value in {'meanreversion', 'mean_reverting'}:
+                    return 'mean-reverting'
+                if style_value in {'trend', 'trendfollowing', 'carry', 'mixed'}:
+                    return 'momentum'
+                return value
+
+            df_display['style'] = df_display['style'].map(_style_to_regime_label)
+
+        # carry_roll is stored as the BUY-side value; flip sign for SELL direction.
+        if 'carry_roll' in df_display.columns and 'direction' in df_display.columns:
+            _sell_mask = df_display['direction'].astype(str).str.strip().str.upper().eq('SELL')
+            df_display.loc[_sell_mask, 'carry_roll'] = (
+                pd.to_numeric(df_display.loc[_sell_mask, 'carry_roll'], errors='coerce').multiply(-1)
+            )
 
         for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score', 'stop_loss', 'profit_target', 'trend_state', 'regime_confidence', 'efficiency_ratio', 'hurst', 'ttm_display', 'breakeven_3m']:
             if col in df_display.columns:
@@ -297,7 +320,7 @@ def register_candidate_callbacks(app) -> None:
 
         table_mr = html.Div([html.H6(f"Mean-Reversion Candidates (max 20) - {len(df_mr)} found", style={'color': THEME['text_main'], 'marginBottom': '8px'}), style_summary_div, mr_body], style={'marginBottom': '20px'})
 
-        trend_body = html.Div("No carry & momentum candidates under current filters.", style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '8px'})
+        trend_body = html.Div("No momentum candidates under current filters.", style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '8px'})
         if not df_trend.empty:
             trend_body = dash_table.DataTable(
                 id='alpha-candidates-table-trend',
@@ -309,7 +332,7 @@ def register_candidate_callbacks(app) -> None:
                 page_size=20, sort_action='native',
             )
 
-        table_trend = html.Div([html.H6(f"Carry & Momentum Candidates (max 20) - {len(df_trend)} found", style={'color': THEME['text_main'], 'marginBottom': '8px'}), style_summary_div, trend_body], style={'marginBottom': '20px'})
+        table_trend = html.Div([html.H6(f"Momentum Candidates (max 20) - {len(df_trend)} found", style={'color': THEME['text_main'], 'marginBottom': '8px'}), style_summary_div, trend_body], style={'marginBottom': '20px'})
 
         table_out = html.Div([table_mr, table_trend])
         status = f"Found {len(df_all)} candidates at {scanned_time}"
@@ -461,7 +484,14 @@ def register_candidate_callbacks(app) -> None:
                 inst = pair_row[col]
                 if inst not in seen_insts and inst in corr_matrix.columns:
                     seen_insts.add(inst)
-                    curated_instruments.append({'spread_type': id_to_type.get(inst, 'Unknown'), 'instrument': inst})
+                    row_meta = {'spread_type': id_to_type.get(inst, 'Unknown'), 'instrument': inst, 'manual': False}
+                    if all_candidates:
+                        for c in all_candidates:
+                            if c.get('ID') == inst and c.get('spread_type') == row_meta['spread_type']:
+                                row_meta['regime'] = c.get('regime', 'uncertain')
+                                row_meta['direction'] = c.get('direction', '')
+                                break
+                    curated_instruments.append(row_meta)
                     if len(curated_instruments) >= 10:
                         break
             if len(curated_instruments) >= 10:
@@ -527,7 +557,26 @@ def register_candidate_callbacks(app) -> None:
                 raise PreventUpdate
             if any(e['instrument'] == instrument for e in current):
                 raise PreventUpdate
-            return current + [{'spread_type': spread_type, 'instrument': instrument}]
+            # Auto-populate regime and direction from snapshot
+            _regime = 'uncertain'
+            _direction = ''
+            try:
+                snap = load_spread_data(spread_type)
+                if snap is not None and instrument in snap.index:
+                    snap_row = snap.loc[instrument]
+                    raw_style = str(snap_row.get('style', '') or '').strip().lower()
+                    if raw_style in {'meanreversion', 'mean_reverting', 'mean-reverting'}:
+                        _regime = 'mean-reverting'
+                    elif raw_style in {'trend', 'trendfollowing', 'carry', 'mixed', 'momentum'}:
+                        _regime = 'momentum'
+                    raw_dir = str(snap_row.get('direction', '') or '').strip().upper()
+                    if raw_dir in {'BUY', 'SELL'}:
+                        _direction = raw_dir
+            except Exception:
+                pass
+            return current + [{'spread_type': spread_type, 'instrument': instrument,
+                               'regime': _regime, 'direction': _direction,
+                               'manual': True}]
 
         if trig_dict and trig_dict.get('type') == 'curated-del':
             if not any(nc for nc in del_clicks if nc):
@@ -536,6 +585,43 @@ def register_candidate_callbacks(app) -> None:
             return [e for i, e in enumerate(current) if i != idx]
 
         raise PreventUpdate
+
+    # -------------------------------------------------------------------------
+    # CANDIDATES: Update regime / direction from curated-table dropdowns
+    # -------------------------------------------------------------------------
+    @app.callback(
+        Output('alpha-curated-instruments-store', 'data', allow_duplicate=True),
+        [Input({'type': 'curated-regime',    'index': ALL}, 'value'),
+         Input({'type': 'curated-direction', 'index': ALL}, 'value')],
+        State('alpha-curated-instruments-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def update_curated_meta(regimes, directions, current):
+        ctx = callback_context
+        if not ctx.triggered or not current:
+            raise PreventUpdate
+
+        raw_prop = ctx.triggered[0]['prop_id']
+        raw_id   = raw_prop.rsplit('.', 1)[0]
+        try:
+            trig_dict = _json.loads(raw_id)
+        except (ValueError, TypeError):
+            raise PreventUpdate
+
+        trig_type = trig_dict.get('type', '')
+        trig_idx  = trig_dict.get('index', None)
+        if trig_idx is None or trig_idx >= len(current):
+            raise PreventUpdate
+
+        updated = [dict(e) for e in current]
+        new_val = ctx.triggered[0]['value']
+        if trig_type == 'curated-regime':
+            updated[trig_idx]['regime'] = new_val or 'uncertain'
+        elif trig_type == 'curated-direction':
+            updated[trig_idx]['direction'] = new_val or ''
+        else:
+            raise PreventUpdate
+        return updated
 
     # -------------------------------------------------------------------------
     # CANDIDATES: Render curated instrument table + curated correlation view
@@ -561,22 +647,71 @@ def register_candidate_callbacks(app) -> None:
         _cell = {'padding': '6px 10px', 'fontSize': '12px', 'color': THEME['text_main']}
         _hdr  = {**_cell, 'color': THEME['text_sub'], 'fontWeight': '600', 'fontSize': '11px', 'borderBottom': f"1px solid {THEME['table_header']}"}
 
+        _REGIME_OPTIONS = [
+            {'label': 'mean-reverting', 'value': 'mean-reverting'},
+            {'label': 'momentum',       'value': 'momentum'},
+        ]
+        _DIR_OPTIONS = [
+            {'label': 'BUY',  'value': 'BUY'},
+            {'label': 'SELL', 'value': 'SELL'},
+        ]
+        _dd_style = {'fontSize': '12px', 'minWidth': '130px'}
+        _dd_warn  = {'fontSize': '12px', 'minWidth': '130px', 'border': f"1px solid {THEME['warning']}",
+                     'borderRadius': '4px'}
+
         header_row = html.Tr([
             html.Th("Spread Type", style=_hdr),
             html.Th("Instrument",  style=_hdr),
+            html.Th("Regime",      style=_hdr),
+            html.Th("Direction",   style=_hdr),
             html.Th("In Matrix",   style={**_hdr, 'textAlign': 'center'}),
             html.Th("",            style=_hdr),
         ])
 
         body_rows = []
         for i, entry in enumerate(instruments):
-            stype = entry.get('spread_type', '')
-            inst  = entry.get('instrument', '')
-            in_m  = inst in matrix_cols
+            stype     = entry.get('spread_type', '')
+            inst      = entry.get('instrument', '')
+            regime    = entry.get('regime', 'uncertain') or 'uncertain'
+            direction = entry.get('direction', '') or ''
+            manual    = bool(entry.get('manual', False))
+            in_m      = inst in matrix_cols
             indicator = (html.Span("✓", style={'color': THEME['success']}) if in_m else html.Span("—", style={'color': THEME['text_sub']}))
+
+            regime_known = regime in {'mean-reverting', 'momentum'}
+            dir_known    = direction in {'BUY', 'SELL'}
+            regime_editable = manual or not regime_known
+            direction_editable = manual or not dir_known
+
+            if regime_editable:
+                regime_cell = dcc.Dropdown(
+                    id={'type': 'curated-regime', 'index': i},
+                    options=_REGIME_OPTIONS,
+                    value=regime if regime_known else None,
+                    placeholder='Assign regime…',
+                    clearable=False,
+                    style=_dd_style if regime_known else _dd_warn,
+                )
+            else:
+                regime_cell = html.Div(regime, style={'padding': '6px 2px', 'fontSize': '12px', 'color': THEME['text_main']})
+
+            if direction_editable:
+                dir_cell = dcc.Dropdown(
+                    id={'type': 'curated-direction', 'index': i},
+                    options=_DIR_OPTIONS,
+                    value=direction if dir_known else None,
+                    placeholder='Assign…',
+                    clearable=False,
+                    style=_dd_style if dir_known else _dd_warn,
+                )
+            else:
+                dir_cell = html.Div(direction, style={'padding': '6px 2px', 'fontSize': '12px', 'color': THEME['text_main']})
+
             body_rows.append(html.Tr([
                 html.Td(stype, style=_cell),
                 html.Td(inst,  style={**_cell, 'fontWeight': '500'}),
+                html.Td(regime_cell,  style={**_cell, 'padding': '2px 6px'}),
+                html.Td(dir_cell,     style={**_cell, 'padding': '2px 6px'}),
                 html.Td(indicator, style={**_cell, 'textAlign': 'center'}),
                 html.Td(
                     html.Button("×", id={'type': 'curated-del', 'index': i}, n_clicks=0,

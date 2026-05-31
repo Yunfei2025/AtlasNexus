@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Market Data tab — daily snapshot of money-market rates, bond futures,
-reference bonds and IRS forward rates for the MARKET > DATA subtab.
+reference bonds, on-the-run bonds and IRS forward rates for the MARKET > DATA subtab.
 
 Data sources
 ------------
@@ -9,6 +9,8 @@ Data sources
 * Bond futures & CTD             : futures-InstrumentInfo.pkl (key Def)
 * Bond futures Zscore            : TBond-spdsrt.pkl (key BondCurve, col Zscore)
 * Reference bonds     (F33:H42)  : TBond-cvref.pkl + CBond-cvref.pkl
+* On-the-run bonds   (1Y/2Y/5Y/10Y/20Y/30Y)
+                                 : latest bondpool + bond px turnover ratio
 * IRS forward rates              : IRS-forward.pkl  (Term/Date/R7D_Forward/S3M_Forward)
                                    written by curves/refreshers/irs.py compute_stats()
 """
@@ -22,7 +24,7 @@ import pandas as pd
 from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output
 
-from settings.paths import DIR_INPUT
+from settings.paths import DIR_INPUT, DIR_DATA
 
 # ── Theme ────────────────────────────────────────────────────────────────────
 THEME = {
@@ -355,7 +357,128 @@ def _load_bond_futures() -> pd.DataFrame:
 
 def _load_reference_bonds() -> pd.DataFrame:
     """On-the-run CGB/CDB reference bonds with CR(3m,bp) from spdsrt pickles."""
-    tenors = ["0.3Y", "0.5Y", "0.7Y", "1Y", "1.5Y", "2Y", "3Y", "5Y", "10Y", "20Y", "30Y"]
+    return _load_bond_table(["0.3Y", "0.5Y", "0.7Y", "1Y", "1.5Y", "2Y", "3Y", "5Y", "10Y", "20Y", "30Y"])
+
+
+def _load_on_the_run_bonds() -> pd.DataFrame:
+    """Highest-turnover on-the-run bonds for the requested tenor subset."""
+    tenors = ["1Y", "2Y", "5Y", "10Y", "20Y", "30Y"]
+    cgb_ids = _select_on_the_run_bonds("TBond", tenors)
+    cdb_ids = _select_on_the_run_bonds("CBond", tenors)
+
+    try:
+        cgb_bc = pd.read_pickle(str(DIR_INPUT / "TBond-spdsrt.pkl")).get("BondCurve", pd.DataFrame())
+    except Exception:
+        cgb_bc = pd.DataFrame()
+
+    try:
+        cdb_bc = pd.read_pickle(str(DIR_INPUT / "CBond-spdsrt.pkl")).get("BondCurve", pd.DataFrame())
+    except Exception:
+        cdb_bc = pd.DataFrame()
+
+    rows = []
+    for tenor in tenors:
+        cgb_id = cgb_ids.get(tenor, "—")
+        cdb_id = cdb_ids.get(tenor, "—")
+        rows.append({
+            "Tenor": tenor,
+            "CGB": cgb_id,
+            "CGB_CR": _cr_from_curve(cgb_bc, cgb_id),
+            "CDB": cdb_id,
+            "CDB_CR": _cr_from_curve(cdb_bc, cdb_id),
+        })
+    return pd.DataFrame(rows)
+
+
+_ON_THE_RUN_TENOR_BANDS: dict[str, tuple[float, float]] = {
+    "1Y": (0.9, 1.2),
+    "2Y": (1.6, 2.5),
+    "5Y": (4.0, 6.0),
+    "10Y": (8.5, 10.0),
+    "20Y": (15.0, 25.0),
+    "30Y": (25.0, 30.0),
+}
+
+
+def _select_on_the_run_bonds(btype: str, tenors: list[str]) -> dict[str, Any]:
+    """Pick the highest-turnover bond inside each tenor band for the latest date."""
+    try:
+        bond_info = pd.read_pickle(str(DIR_DATA / f"{btype}-bondpool.pkl"))
+    except Exception:
+        return {}
+
+    try:
+        bond_px = pd.read_pickle(str(DIR_DATA / f"{btype}-px.pkl"))
+    except Exception:
+        return {}
+
+    if isinstance(bond_px, dict):
+        volume_df = bond_px.get("Volume", pd.DataFrame())
+    elif isinstance(bond_px, pd.DataFrame):
+        volume_df = bond_px.get("Volume", pd.DataFrame()) if "Volume" in bond_px.columns else bond_px
+    else:
+        volume_df = pd.DataFrame()
+
+    if not isinstance(bond_info, pd.DataFrame) or bond_info.empty or not isinstance(volume_df, pd.DataFrame) or volume_df.empty:
+        return {}
+
+    bond_info = bond_info.copy()
+    if "债券余额:亿" not in bond_info.columns or "到期日期" not in bond_info.columns or "起息日期" not in bond_info.columns:
+        return {}
+
+    latest_date = volume_df.index[-1]
+    latest_volume = pd.to_numeric(volume_df.loc[latest_date], errors="coerce")
+    latest_volume = latest_volume.replace([pd.NA, pd.NaT], pd.NA).dropna()
+
+    balance = pd.to_numeric(bond_info["债券余额:亿"], errors="coerce")
+    if btype == "TBond":
+        name_mask = bond_info["证券全称"].astype(str).str.contains("国债", na=False)
+    else:
+        name_mask = bond_info["证券全称"].astype(str).str.contains("国家开发银行", na=False)
+
+    valid_bonds = bond_info.index[name_mask & balance.notna() & (balance != 0)]
+    if len(valid_bonds) == 0:
+        return {}
+
+    maturity = pd.to_datetime(bond_info.loc[valid_bonds, "到期日期"], errors="coerce")
+    start_date = pd.to_datetime(bond_info.loc[valid_bonds, "起息日期"], errors="coerce")
+    terms = (maturity - pd.Timestamp(latest_date)).dt.days / 365.0
+    turnover = latest_volume.reindex(valid_bonds).div(balance.reindex(valid_bonds)).div(1e4)
+
+    selected: dict[str, Any] = {}
+    for tenor in tenors:
+        lo, hi = _ON_THE_RUN_TENOR_BANDS[tenor]
+        bucket_mask = (
+            terms.notna()
+            & start_date.notna()
+            & (start_date < pd.Timestamp(latest_date))
+            & (maturity > pd.Timestamp(latest_date))
+            & (terms > lo)
+            & (terms <= hi)
+        )
+        bucket_turnover = turnover[bucket_mask].dropna()
+        if bucket_turnover.empty:
+            selected[tenor] = "—"
+            continue
+        selected[tenor] = bucket_turnover.idxmax()
+
+    return selected
+
+
+def _cr_from_curve(bc: pd.DataFrame, bond_id: Any) -> Any:
+    """Return Carry(3m,bp) + Roll(3m,bp) for bond_id in BondCurve, else '—'."""
+    if not isinstance(bond_id, str) or bc.empty or bond_id not in bc.index:
+        return "—"
+    row = bc.loc[bond_id]
+    carry = row.get("Carry(3m,bp)")
+    roll = row.get("Roll(3m,bp)")
+    if pd.notna(carry) and pd.notna(roll):
+        return round(float(carry) + float(roll), 2)
+    return "—"
+
+
+def _load_bond_table(tenors: list[str]) -> pd.DataFrame:
+    """Build a latest-row bond table from the cvref pickles for the requested tenors."""
     tenor_cols = [f"Term near {t}" for t in tenors]
 
     rows = []
@@ -381,28 +504,35 @@ def _load_reference_bonds() -> pd.DataFrame:
     except Exception:
         cdb_bc = pd.DataFrame()
 
-    def _cr(bc: pd.DataFrame, bond_id: Any) -> Any:
-        """Return Carry(3m,bp) + Roll(3m,bp) for bond_id in BondCurve, else '—'."""
-        if not isinstance(bond_id, str) or bc.empty or bond_id not in bc.index:
-            return "—"
-        row = bc.loc[bond_id]
-        carry = row.get("Carry(3m,bp)")
-        roll  = row.get("Roll(3m,bp)")
-        if pd.notna(carry) and pd.notna(roll):
-            return round(float(carry) + float(roll), 2)
-        return "—"
-
     for tenor, col in zip(tenors, tenor_cols):
         cgb_id = cgb_last.get(col, "—")
         cdb_id = cdb_last.get(col, "—")
         rows.append({
             "Tenor":   tenor,
             "CGB":     cgb_id,
-            "CGB_CR":  _cr(cgb_bc, cgb_id),
+            "CGB_CR":  _cr_from_curve(cgb_bc, cgb_id),
             "CDB":     cdb_id,
-            "CDB_CR":  _cr(cdb_bc, cdb_id),
+            "CDB_CR":  _cr_from_curve(cdb_bc, cdb_id),
         })
     return pd.DataFrame(rows)
+
+
+def _render_bond_table(df: pd.DataFrame, table_id: str) -> Any:
+    """Render a reference-style bond table with shared column labels and CR bars."""
+    if df.empty:
+        return html.Span("Data unavailable", style={"color": THEME["text_sub"], "fontSize": "12px"})
+
+    _ref_labels = {"Tenor": "Tenor", "CGB": "CGB", "CGB_CR": "CR,3m",
+                   "CDB": "CDB", "CDB_CR": "CR,3m"}
+    cols_ref = [{"name": _ref_labels.get(c, c), "id": c} for c in df.columns]
+    ref_styles: list[dict] = []
+    for cr_col in ["CGB_CR", "CDB_CR"]:
+        if cr_col in df.columns:
+            cr_vals = pd.to_numeric(df[cr_col], errors="coerce").dropna()
+            if len(cr_vals):
+                max_abs = max(abs(cr_vals).max(), 0.1)
+                ref_styles += _bar_styles_zscore(df, cr_col, max_abs=max_abs)
+    return _dt_style(table_id, cols_ref, df.to_dict("records"), extra_styles=ref_styles)
 
 
 def _load_irs_forward() -> pd.DataFrame:
@@ -468,7 +598,7 @@ def build_market_data_layout() -> html.Div:
                        "marginBottom": "16px"},
             ),
 
-            # Left column (Money Market / Reference Bonds / Bond Futures) + Right column (IRS Forward Rates)
+            # Left column (Money Market / Reference Bonds / Bond Futures) + Right column (On-the-run / IRS)
             html.Div(
                 [
                     # ── Left column: three stacked cards ──────────────────
@@ -486,63 +616,68 @@ def build_market_data_layout() -> html.Div:
                         style={"flex": "1 1 auto", "minWidth": "420px",
                                "display": "flex", "flexDirection": "column"},
                     ),
-                    # ── Right column: IRS Forward Rates ───────────────────
+                    # ── Right column: On-the-run bonds + IRS Forward Rates ──
                     html.Div(
-                        _card(
-                            "IRS FORWARD RATES",
-                            html.Div([
-                                # ── Shift controls ────────────────────────
-                                html.Div(
-                                    [
-                                        html.Span(
-                                            "R7D shift (bp):",
-                                            style={"color": THEME["text_sub"], "fontSize": "11px",
-                                                   "marginRight": "6px", "whiteSpace": "nowrap"},
-                                        ),
-                                        dcc.Input(
-                                            id="irs-fwd-r7d-shift",
-                                            type="number",
-                                            value=0,
-                                            step=0.25,
-                                            debounce=True,
-                                            style={
-                                                "width": "70px", "fontSize": "12px",
-                                                "backgroundColor": THEME["bg_input"],
-                                                "color": THEME["text_main"],
-                                                "border": f'1px solid {THEME["accent"]}',
-                                                "borderRadius": "3px", "padding": "2px 6px",
-                                                "textAlign": "right",
-                                            },
-                                        ),
-                                        html.Span(
-                                            "S3M shift (bp):",
-                                            style={"color": THEME["text_sub"], "fontSize": "11px",
-                                                   "marginLeft": "16px", "marginRight": "6px",
-                                                   "whiteSpace": "nowrap"},
-                                        ),
-                                        dcc.Input(
-                                            id="irs-fwd-s3m-shift",
-                                            type="number",
-                                            value=0,
-                                            step=0.25,
-                                            debounce=True,
-                                            style={
-                                                "width": "70px", "fontSize": "12px",
-                                                "backgroundColor": THEME["bg_input"],
-                                                "color": THEME["text_main"],
-                                                "border": f'1px solid {THEME["accent"]}',
-                                                "borderRadius": "3px", "padding": "2px 6px",
-                                                "textAlign": "right",
-                                            },
-                                        ),
-                                    ],
-                                    style={"display": "flex", "alignItems": "center",
-                                           "marginBottom": "10px"},
-                                ),
-                                html.Div(id="mkt-data-irs-table"),
-                            ]),
-                        ),
-                        style={"flex": "1.2 1 auto", "minWidth": "0"},
+                        [
+                            _card("ON-THE-RUN BONDS",
+                                  html.Div(id="mkt-data-otr-table")),
+                            html.Div(style={"height": "14px"}),
+                            _card(
+                                "IRS FORWARD RATES",
+                                html.Div([
+                                    # ── Shift controls ────────────────────────
+                                    html.Div(
+                                        [
+                                            html.Span(
+                                                "R7D shift (bp):",
+                                                style={"color": THEME["text_sub"], "fontSize": "11px",
+                                                       "marginRight": "6px", "whiteSpace": "nowrap"},
+                                            ),
+                                            dcc.Input(
+                                                id="irs-fwd-r7d-shift",
+                                                type="number",
+                                                value=0,
+                                                step=0.25,
+                                                debounce=True,
+                                                style={
+                                                    "width": "70px", "fontSize": "12px",
+                                                    "backgroundColor": THEME["bg_input"],
+                                                    "color": THEME["text_main"],
+                                                    "border": f'1px solid {THEME["accent"]}',
+                                                    "borderRadius": "3px", "padding": "2px 6px",
+                                                    "textAlign": "right",
+                                                },
+                                            ),
+                                            html.Span(
+                                                "S3M shift (bp):",
+                                                style={"color": THEME["text_sub"], "fontSize": "11px",
+                                                       "marginLeft": "16px", "marginRight": "6px",
+                                                       "whiteSpace": "nowrap"},
+                                            ),
+                                            dcc.Input(
+                                                id="irs-fwd-s3m-shift",
+                                                type="number",
+                                                value=0,
+                                                step=0.25,
+                                                debounce=True,
+                                                style={
+                                                    "width": "70px", "fontSize": "12px",
+                                                    "backgroundColor": THEME["bg_input"],
+                                                    "color": THEME["text_main"],
+                                                    "border": f'1px solid {THEME["accent"]}',
+                                                    "borderRadius": "3px", "padding": "2px 6px",
+                                                    "textAlign": "right",
+                                                },
+                                            ),
+                                        ],
+                                        style={"display": "flex", "alignItems": "center",
+                                               "marginBottom": "10px"},
+                                    ),
+                                    html.Div(id="mkt-data-irs-table"),
+                                ]),
+                            ),
+                        ],
+                        style={"flex": "1.2 1 auto", "minWidth": "0", "display": "flex", "flexDirection": "column"},
                     ),
                 ],
                 style={"display": "flex", "gap": "14px", "alignItems": "flex-start"},
@@ -561,6 +696,7 @@ def register_market_data_callbacks(app) -> None:
             Output("mkt-data-rates-table",   "children"),
             Output("mkt-data-futures-table", "children"),
             Output("mkt-data-refbond-table", "children"),
+            Output("mkt-data-otr-table",     "children"),
             Output("mkt-data-irs-table",     "children"),
             Output("market-data-timestamp",  "children"),
         ],
@@ -607,21 +743,11 @@ def register_market_data_callbacks(app) -> None:
 
         # ── Reference Bonds ───────────────────────────────────────────────
         df_ref = _load_reference_bonds()
-        if df_ref.empty:
-            tbl_ref = html.Span("Data unavailable", style={"color": THEME["text_sub"], "fontSize": "12px"})
-        else:
-            _ref_labels = {"Tenor": "Tenor", "CGB": "CGB", "CGB_CR": "CR,3m",
-                           "CDB": "CDB", "CDB_CR": "CR,3m"}
-            cols_ref = [{"name": _ref_labels.get(c, c), "id": c} for c in df_ref.columns]
-            ref_styles: list[dict] = []
-            for cr_col in ["CGB_CR", "CDB_CR"]:
-                if cr_col in df_ref.columns:
-                    cr_vals = pd.to_numeric(df_ref[cr_col], errors="coerce").dropna()
-                    if len(cr_vals):
-                        max_abs = max(abs(cr_vals).max(), 0.1)
-                        ref_styles += _bar_styles_zscore(df_ref, cr_col, max_abs=max_abs)
-            tbl_ref = _dt_style("mkt-dt-refbond", cols_ref, df_ref.to_dict("records"),
-                                extra_styles=ref_styles)
+        tbl_ref = _render_bond_table(df_ref, "mkt-dt-refbond")
+
+        # ── On-the-run Bonds ──────────────────────────────────────────────
+        df_otr = _load_on_the_run_bonds()
+        tbl_otr = _render_bond_table(df_otr, "mkt-dt-otr")
 
         # ── IRS Forward Rates ─────────────────────────────────────────────
         df_irs = _load_irs_forward()
@@ -673,4 +799,4 @@ def register_market_data_callbacks(app) -> None:
             tbl_irs = _dt_style("mkt-dt-irs", cols_irs, df_irs.to_dict("records"),
                                 extra_styles=irs_styles)
 
-        return tbl_mm, tbl_fut, tbl_ref, tbl_irs, ts
+        return tbl_mm, tbl_fut, tbl_ref, tbl_otr, tbl_irs, ts

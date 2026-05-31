@@ -495,7 +495,7 @@ class BondCurveGenerator:
         return True
 
 
-def main(bond_type = 'CBond', date=None):#'20251230'):#
+def main(bond_type = 'TBond', date=None):#'20260528'):#
     print(f"🚀 Starting {bond_type} curve generation.")
     try:
         success = BondCurveGenerator.main(bond_type=bond_type, date=date)

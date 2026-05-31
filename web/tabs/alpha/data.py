@@ -100,7 +100,7 @@ MAX_CORRELATION_THRESHOLD = 0.6
 
 # Instrument selector prefix for non-spread (macro) series
 MACRO_PREFIX = "MACRO|"
-_SWAP_SPREAD_BUTTERFLY_PATTERN = re.compile(r"^(?:Repo|Shi3M)-(?:\d+[my]){3,}$", re.IGNORECASE)
+_SWAP_SPREAD_BUTTERFLY_PATTERN = re.compile(r"^(?:Repo7d|Shi3M)-(?:\d+[my]){3,}$", re.IGNORECASE)
 
 # Global state for diversified trade recommendations
 DIVERSIFIED_TRADE_RECOMMENDATIONS = {
@@ -110,7 +110,7 @@ DIVERSIFIED_TRADE_RECOMMENDATIONS = {
 
 
 def _exclude_swapspread_butterflies(labels: pd.Index | pd.Series):
-    """Return mask that excludes IRS butterfly IDs such as Repo-1y2y5y or Shi3M-3m6m9m."""
+    """Return mask that excludes IRS butterfly IDs such as Repo7d-1y2y5y or Shi3M-3m6m9m."""
     text = labels.astype(str)
     return ~text.str.match(_SWAP_SPREAD_BUTTERFLY_PATTERN)
 
@@ -284,7 +284,7 @@ def _tenor_to_duration(tenor: str) -> float:
 def _get_duration_mult(instrument: str, spread_type: str) -> float:
     """Return the duration multiplier for a spread instrument.
 
-    SwapSpread (Repo-*, Shi3M-*, Basis-*, FR007S*.IR, etc.)
+    SwapSpread (Repo7d-*, Shi3M-*, Basis-*, FR007S*.IR, etc.)
         Single leg (1 tenor): duration of that tenor.
         Pair       (2 tenors): duration of the last (longer) tenor.
         Fly        (3 tenors): duration of the middle tenor.
@@ -323,7 +323,7 @@ def _get_duration_mult(instrument: str, spread_type: str) -> float:
 
     if spread_type == 'SwapSpread':
         # SwapSpread: PnL ≈ duration_second_leg × Δspread (longer/paying leg drives DV01)
-        # e.g. Repo-1y3y → second leg = 3y; Basis-1y → single tenor = 1y
+        # e.g. Repo7d-1y3y → second leg = 3y; Basis-1y → single tenor = 1y
         dash_pos = instrument.find('-')
         if dash_pos == -1:
             m = re.search(r'(\d+[MY])', instrument, re.IGNORECASE)
@@ -474,8 +474,8 @@ def _get_ttm_display(spread_type: str, instrument: str) -> Optional[float]:
 
     BondCurve / BondSwap : bond TTM from snapshot.
     TenorSpread           : first-leg tenor (e.g. 10 for CGB-10s30s, 10 for CDBCGB-10y).
-    SwapSpread            : second-leg tenor for pairs and flies (e.g. 2 for Repo-1y2y,
-                            2 for Repo-1y2y5y, 0.75 for Shi3M-6m9m).
+    SwapSpread            : second-leg tenor for pairs and flies (e.g. 2 for Repo7d-1y2y,
+                            2 for Repo7d-1y2y, 0.75 for Shi3M-6m9m).
     All other types       : None.
     """
     def _tenor_to_yr(t: str) -> Optional[float]:
@@ -514,7 +514,7 @@ def _get_ttm_display(spread_type: str, instrument: str) -> Optional[float]:
             return None
         tenors = re.findall(r'\d+(?:\.\d+)?[mMyY]', instrument[dash + 1:])
         if len(tenors) >= 1:
-            # Single tenor (Basis-1y): use it; pairs/flies (Basis-1y2y, Repo-1y2y5y): use second leg
+            # Single tenor (Basis-1y): use it; pairs/flies (Basis-1y2y, Repo7d-1y2y5y): use second leg
             return _tenor_to_yr(tenors[1] if len(tenors) >= 2 else tenors[0])
         return None
 

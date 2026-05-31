@@ -16,5 +16,7 @@ from web.tabs.beta.layouts import (  # noqa: F401
     build_multiasset_backtest_layout,
     build_risk_factor_backtest_layout,
     build_factor_backtest_layout,
+    build_beta_backtest_combined_layout,
+    build_factor_history_layout,
 )
 from web.tabs.beta.callbacks import register_multiasset_callbacks  # noqa: F401

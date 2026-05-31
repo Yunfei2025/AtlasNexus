@@ -116,10 +116,10 @@ DIVERSIFICATION_RECOMMENDATIONS = {
 
 # Global state for selected factor pool (shared between Factor tab and Backtest tab)
 SELECTED_FACTOR_POOL = {
-    'ir_factors': ['IRDL.CN', 'IRDL.US', 'IRSL.CN', 'IRSL.US'],  # Default selection
-    'sp_factors': ['SPDL.IRS', 'SPDL.CDB'],
+    'ir_factors': ['IRDL.CN', 'IRSL.CN', 'IRCV.CN'],  # Default: CN Level/Slope/Curvature
+    'sp_factors': [],
     'fx_factors': ['FXDL.USDCNY'],
-    'cmd_factors': ['CMDL.AU', 'CMDL.CU'],
+    'cmd_factors': ['CMDL.AU', 'CMDL.AL'],  # Gold + Aluminium
     'timestamp': None
 }
 
@@ -179,16 +179,19 @@ FACTOR_TO_ASSET_MAP = {
         {'name': 'CN2Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '2Y'},
         {'name': 'CN5Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '5Y'},
         {'name': 'CN10Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '10Y'},
+        {'name': 'CN20Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '20Y'},
         {'name': 'CN30Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '30Y'},
     ],
     'IRSL.CN': [
         {'name': 'CN2Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '2Y'},
         {'name': 'CN10Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '10Y'},
+        {'name': 'CN20Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '20Y'},
     ],
     'IRCV.CN': [
         {'name': 'CN2Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '2Y'},
         {'name': 'CN5Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '5Y'},
         {'name': 'CN10Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '10Y'},
+        {'name': 'CN20Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '20Y'},
     ],
 
     # US Government Bonds (Treasury)

@@ -3,7 +3,7 @@
 
 Shows bid/offer price tables for:
   - Bonds: TBond, CBond, LBond, GBond  (filtered by term range)
-  - Swaps: FR007 IRS, Repo Pairs, Shi3M Pairs, Box, Repo Butterflies, Shi3M Butterflies
+  - Swaps: FR007 IRS, Repo7d Pairs, Shi3M Pairs, Box, Repo7d Butterflies, Shi3M Butterflies
 
 Data sources
 ------------
@@ -65,12 +65,12 @@ _BOND_TERM_OPTIONS = [
 ]
 
 _SWAP_TERM_OPTIONS = [
-    {"label": "Swaps",             "value": "Swaps"},
-    {"label": "Repo Pairs",        "value": "RepoPairs"},
-    {"label": "Shi3M Pairs",       "value": "Shi3MPairs"},
-    {"label": "Box",               "value": "Box"},
-    {"label": "Repo Butterflies",  "value": "RepoButterflies"},
-    {"label": "Shi3M Butterflies", "value": "Shi3MButterflies"},
+    {"label": "Swaps",               "value": "Swaps"},
+    {"label": "Repo7d Pairs",        "value": "RepoPairs"},
+    {"label": "Shi3M Pairs",         "value": "Shi3MPairs"},
+    {"label": "Box",                 "value": "Box"},
+    {"label": "Repo7d Butterflies",  "value": "RepoButterflies"},
+    {"label": "Shi3M Butterflies",   "value": "Shi3MButterflies"},
 ]
 
 # Term range → (lo_exclusive, hi_inclusive) in years
@@ -83,10 +83,10 @@ _TERM_RANGE: dict[str, tuple[float, float]] = {
 }
 
 # ── Instrument name patterns for swap sub-categories ─────────────────────────
-_BUTTERFLY_RE   = re.compile(r"^(?:Repo|Shi3M)-(?:\d+[my]){3,}$", re.IGNORECASE)
-_PAIR_REPO_RE   = re.compile(r"^Repo-(?:\d+[my]){2}$", re.IGNORECASE)
+_BUTTERFLY_RE   = re.compile(r"^(?:Repo7d|Shi3M)-(?:\d+[my]){3,}$", re.IGNORECASE)
+_PAIR_REPO_RE   = re.compile(r"^Repo7d-(?:\d+[my]){2}$", re.IGNORECASE)
 _PAIR_SHI3M_RE  = re.compile(r"^Shi3M-(?:\d+[my]){2}$", re.IGNORECASE)
-_BOX_RE         = re.compile(r"^(?:Repo|Shi3M)-(?:\d+[my]){4,}$|^Box-", re.IGNORECASE)
+_BOX_RE         = re.compile(r"^(?:Repo7d|Shi3M)-(?:\d+[my]){4,}$|^Box-", re.IGNORECASE)
 _IRS_ORDER      = {ticker: rank for rank, ticker in enumerate(IRSConfig.IRS_LIST)}
 _ROW_KEY_COL    = "__row_key"
 
@@ -583,6 +583,12 @@ def _build_swap_rows(subtype: str) -> list[dict]:
     if not isinstance(df, pd.DataFrame) or df.empty:
         return []
 
+    # Normalise legacy pickle data: rename Repo-* → Repo7d-* in the index
+    if df.index.dtype == object:
+        df.index = df.index.map(
+            lambda x: re.sub(r'^Repo-', 'Repo7d-', str(x))
+        )
+
     # Filter by category (works for both "Swaps" and all spread subtypes)
     mask = [_swap_category(str(idx)) == subtype for idx in df.index]
     df = df[mask]
@@ -605,7 +611,7 @@ def _build_swap_rows(subtype: str) -> list[dict]:
 
         # Use historical close from IRS-cvpx when available.
         # For spread subtypes this is derived from close outright legs
-        # (e.g. Repo-1y2y = FR007S2Y.IR - FR007S1Y.IR).
+        # (e.g. Repo7d-1y2y = FR007S2Y.IR - FR007S1Y.IR).
         if subtype == "Swaps":
             close_val = outright_close.get(ticker)
             close = _safe_round(close_val, 4) if close_val is not None and pd.notna(close_val) else _v("CvPx", 4)

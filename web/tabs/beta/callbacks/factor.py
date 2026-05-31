@@ -5,7 +5,7 @@ factor history chart, and correlation ranking."""
 from __future__ import annotations
 
 import dash
-from dash import dcc, html, dash_table
+from dash import dcc, html, dash_table, Patch
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 import pandas as pd
@@ -257,29 +257,32 @@ def register_factor_callbacks(app):
     @app.callback(
         [Output('factor-pool-count', 'children'),
          Output('factor-selection-store', 'data')],
-        [Input('factor-selection-ir', 'value'),
-         Input('factor-selection-sp', 'value'),
+        [Input('factor-selection-ir-cn', 'value'),
+         Input('factor-selection-ir-us', 'value'),
+         Input('factor-selection-ir-eu', 'value'),
+         Input('factor-selection-ir-jp', 'value'),
+         Input('factor-selection-ir-uk', 'value'),
          Input('factor-selection-fx', 'value'),
          Input('factor-selection-cmd', 'value')],
         prevent_initial_call=True
     )
-    def update_factor_pool_count(ir_factors, sp_factors, fx_factors, cmd_factors):
+    def update_factor_pool_count(ir_cn, ir_us, ir_eu, ir_jp, ir_uk, fx_factors, cmd_factors):
+        # Merge all domicile IR selections into one list
+        ir_factors = (ir_cn or []) + (ir_us or []) + (ir_eu or []) + (ir_jp or []) + (ir_uk or [])
         # Store selected factors in global state for cross-tab access
-        SELECTED_FACTOR_POOL['ir_factors'] = ir_factors or []
-        SELECTED_FACTOR_POOL['sp_factors'] = sp_factors or []
+        SELECTED_FACTOR_POOL['ir_factors'] = ir_factors
         SELECTED_FACTOR_POOL['fx_factors'] = fx_factors or []
         SELECTED_FACTOR_POOL['cmd_factors'] = cmd_factors or []
         SELECTED_FACTOR_POOL['timestamp'] = datetime.now()
         
         # Prepare data for store
         store_data = {
-            'ir': ir_factors or [],
-            'sp': sp_factors or [],
+            'ir': ir_factors,
             'fx': fx_factors or [],
             'cmd': cmd_factors or []
         }
         
-        total = len(ir_factors or []) + len(sp_factors or []) + len(fx_factors or []) + len(cmd_factors or [])
+        total = len(ir_factors) + len(fx_factors or []) + len(cmd_factors or [])
         if total == 0:
             message = "⚠️ No factors selected. Please select at least 2 factors for correlation analysis."
         elif total == 1:
@@ -296,22 +299,26 @@ def register_factor_callbacks(app):
         Input('rank-correlations-btn', 'n_clicks'),
         [State('correlation-period-selector', 'value'),
          State('correlation-top-pairs-selector', 'value'),
-         State('factor-selection-ir', 'value'),
-         State('factor-selection-sp', 'value'),
+         State('factor-selection-ir-cn', 'value'),
+         State('factor-selection-ir-us', 'value'),
+         State('factor-selection-ir-eu', 'value'),
+         State('factor-selection-ir-jp', 'value'),
+         State('factor-selection-ir-uk', 'value'),
          State('factor-selection-fx', 'value'),
          State('factor-selection-cmd', 'value')],
         prevent_initial_call=True
     )
-    def update_correlation_ranks(n_clicks, period, top_pairs, ir_factors, sp_factors, fx_factors, cmd_factors):
+    def update_correlation_ranks(n_clicks, period, top_pairs,
+                                 ir_cn, ir_us, ir_eu, ir_jp, ir_uk,
+                                 fx_factors, cmd_factors):
         if not n_clicks:
             return html.Div(), []
         
-        # Combine all selected factors
+        # Merge domicile IR selections and combine with FX/CMD
+        ir_factors = (ir_cn or []) + (ir_us or []) + (ir_eu or []) + (ir_jp or []) + (ir_uk or [])
         selected_factors = []
         if ir_factors:
             selected_factors.extend(ir_factors)
-        if sp_factors:
-            selected_factors.extend(sp_factors)
         if fx_factors:
             selected_factors.extend(fx_factors)
         if cmd_factors:
@@ -352,11 +359,6 @@ def register_factor_callbacks(app):
             df_subset = factor_levels.loc[start_date:end_date]
             if df_subset.empty:
                  return html.Div(f"No data for period {period}", style={'color': THEME['warning']}), []
-            
-            # Exclude IRCV (Curvature) factors from correlation analysis
-            # Curvature factors are less meaningful for diversification and can add noise
-            ircv_cols = [col for col in df_subset.columns if col.startswith('IRCV')]
-            df_subset = df_subset.drop(columns=ircv_cols, errors='ignore')
             
             # Calculate returns for correlation (levels might be non-stationary, but request asked for factors correlation. 
             # Usually we corr changes, but let's stick to simple Correlation of the daily prices/levels if that's what "Factors" implies, 

@@ -10,6 +10,48 @@ import pandas as pd
 from multiasset.storage import load_last_asset_pool
 from multiasset.data import get_asset_type, get_universe, get_sector
 
+_CGB_TENOR_BANDS: dict = {
+    "1Y": (0.9, 1.2), "2Y": (1.6, 2.5), "5Y": (4.0, 6.0),
+    "10Y": (8.5, 10.0), "20Y": (15.0, 25.0), "30Y": (25.0, 30.0),
+}
+
+
+def get_cgb_otr_map() -> dict[str, str]:
+    """Return {tenor: on-the-run bond ID} for CGB (TBond) using highest TOR per bucket."""
+    try:
+        from settings.paths import DIR_DATA
+        from pathlib import Path
+        bond_info = pd.read_pickle(str(Path(DIR_DATA) / "TBond-bondpool.pkl"))
+        bond_px   = pd.read_pickle(str(Path(DIR_DATA) / "TBond-px.pkl"))
+        volume_df = bond_px.get("Volume", pd.DataFrame()) if isinstance(bond_px, dict) else bond_px
+        if bond_info.empty or volume_df.empty:
+            return {}
+
+        latest_date = volume_df.index[-1]
+        latest_vol  = pd.to_numeric(volume_df.loc[latest_date], errors="coerce").dropna()
+        balance     = pd.to_numeric(bond_info["债券余额:亿"], errors="coerce")
+        name_mask   = bond_info["证券全称"].astype(str).str.contains("国债", na=False)
+        valid       = bond_info.index[name_mask & balance.notna() & (balance != 0)]
+        maturity    = pd.to_datetime(bond_info.loc[valid, "到期日期"], errors="coerce")
+        start       = pd.to_datetime(bond_info.loc[valid, "起息日期"], errors="coerce")
+        terms       = (maturity - pd.Timestamp(latest_date)).dt.days / 365.0
+        tor         = latest_vol.reindex(valid).div(balance.reindex(valid)).div(1e4)
+
+        result: dict[str, str] = {}
+        for tenor, (lo, hi) in _CGB_TENOR_BANDS.items():
+            mask = (
+                terms.notna() & start.notna()
+                & (start < pd.Timestamp(latest_date))
+                & (maturity > pd.Timestamp(latest_date))
+                & (terms > lo) & (terms <= hi)
+            )
+            bucket = tor[mask].dropna()
+            if not bucket.empty:
+                result[tenor] = bucket.idxmax()
+        return result
+    except Exception:
+        return {}
+
 
 def prepare_portfolio_table(summary_df, factor_exposures_df, portfolio=None):
     """
@@ -38,15 +80,36 @@ def prepare_portfolio_table(summary_df, factor_exposures_df, portfolio=None):
 
     # Build classification columns (vectorized via .map)
     asset_col = filtered['Asset']
+    otr_map = get_cgb_otr_map()
     filtered = filtered.assign(
         **{
             'Asset Type': asset_col.map(get_asset_type),
             'Universe':   asset_col.map(get_universe),
             'Sector':     asset_col.map(get_sector),
             'Asset Name': asset_col,
+            'Instrument': [
+                (otr_map.get(sector, f"CGB-{sector}")
+                 if universe == 'China Gov Bond' and asset_type == 'Rates'
+                 else asset)
+                for asset, asset_type, universe, sector in zip(
+                    asset_col,
+                    asset_col.map(get_asset_type),
+                    asset_col.map(get_universe),
+                    asset_col.map(get_sector),
+                )
+            ],
             'Capital (CNY)': filtered['Allocation (CNY)'],
         }
     )
+
+    # Duration: IRDL value from get_default_sensitivities (modified duration proxy)
+    from multiasset.utils import get_default_sensitivities
+    filtered['Duration'] = filtered['Sector'].map(
+        lambda s: get_default_sensitivities(s).get('IRDL', 0.0) if isinstance(s, str) else 0.0
+    )
+
+    # DV01 (MM CNY) = capital (CNY) * duration / 1e10  ≡  capital_mm * duration / 1e4
+    filtered['DV01 (MM CNY)'] = (filtered['Capital (CNY)'] * filtered['Duration'] / 1e10).round(4)
 
     # Build sensitivity matrix from portfolio object
     if portfolio:
@@ -61,8 +124,8 @@ def prepare_portfolio_table(summary_df, factor_exposures_df, portfolio=None):
         for factor in risk_factors:
             filtered[factor] = 0.0
 
-    cols = ['Asset Type', 'Universe', 'Sector', 'Asset Name',
-            'Capital (CNY)', 'Weight (%)'] + risk_factors
+    cols = ['Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument',
+            'Duration', 'Capital (CNY)', 'DV01 (MM CNY)', 'Weight (%)'] + risk_factors
     portfolio_df = filtered[cols].sort_values(['Asset Type', 'Universe', 'Sector'])
     portfolio_df = portfolio_df.reset_index(drop=True)
 
@@ -104,6 +167,7 @@ def create_portfolio_table_with_sensitivities(portfolio_df, portfolio_obj):
         'Universe': '',
         'Sector': '',
         'Asset Name': '',
+        'Instrument': '',
         'Capital (CNY)': portfolio_df['Capital (CNY)'].sum(),
         'Weight (%)': portfolio_df['Weight (%)'].sum(),
     }

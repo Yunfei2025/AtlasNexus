@@ -170,6 +170,19 @@ def register_portfolio_callbacks(app) -> None:
                         extra_rows.append(inst_row)
                 if extra_rows:
                     df_curated = pd.concat([df_curated, pd.DataFrame(extra_rows)], ignore_index=True)
+
+                # Apply user-assigned regime and direction overrides from curated store
+                _entry_map = {e['instrument']: e for e in curated_instruments}
+                for inst, entry in _entry_map.items():
+                    stored_dir    = str(entry.get('direction', '') or '').strip().upper()
+                    stored_regime = str(entry.get('regime',    '') or '').strip().lower()
+                    mask = df_curated['ID'] == inst
+                    if mask.any():
+                        if stored_dir in {'BUY', 'SELL'}:
+                            df_curated.loc[mask, 'direction'] = stored_dir
+                        if stored_regime in {'mean-reverting', 'momentum'}:
+                            df_curated.loc[mask, 'style'] = stored_regime
+
                 df = df_curated
 
             if 'score' not in df.columns:
@@ -250,10 +263,14 @@ def register_portfolio_callbacks(app) -> None:
             )
             df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)
 
-            # Step E: DV01 constraint — single-side (BUY) DV01 = total_dv01_budget * 1000 k CNY/bp
+            # Step E: DV01 constraint — each side ≤ total_dv01_budget MM CNY/bp
             _dv01_budget_k = total_dv01_budget * 1000
-            _buy_mask = _direction_sign > 0
-            _single_side_dv01 = df_scored.loc[_buy_mask, 'DV01_k'].sum() if _buy_mask.any() else df_scored['DV01_k'].sum()
+            _buy_mask  = _direction_sign > 0
+            _sell_mask = _direction_sign < 0
+            _buy_dv01  = df_scored.loc[_buy_mask,  'DV01_k'].sum() if _buy_mask.any()  else 0.0
+            _sell_dv01 = df_scored.loc[_sell_mask, 'DV01_k'].sum() if _sell_mask.any() else 0.0
+            # use the larger of the two sides so both sides stay within budget after scaling
+            _single_side_dv01 = max(_buy_dv01, _sell_dv01) if (_buy_dv01 > 0 and _sell_dv01 > 0) else (_buy_dv01 + _sell_dv01)
             if _single_side_dv01 > 1e-6 and _dv01_budget_k > 0:
                 _dv01_scale = _dv01_budget_k / _single_side_dv01
                 df_scored['notional_mm'] = np.floor(df_scored['notional_mm'] * _dv01_scale / 10) * 10
@@ -271,6 +288,17 @@ def register_portfolio_callbacks(app) -> None:
             available_cols = [c for c in display_cols if c in df_scored.columns]
             df_display = df_scored[available_cols].copy()
 
+            if 'style' in df_display.columns:
+                def _style_to_regime_label(value):
+                    style_value = str(value).strip().lower()
+                    if style_value in {'meanreversion', 'mean_reverting'}:
+                        return 'mean-reverting'
+                    if style_value in {'trend', 'trendfollowing', 'carry', 'mixed'}:
+                        return 'momentum'
+                    return value
+
+                df_display['style'] = df_display['style'].map(_style_to_regime_label)
+
             for col in df_display.columns:
                 if col == 'risk_contribution':
                     df_display[col] = df_display[col].round(2)
@@ -286,10 +314,16 @@ def register_portfolio_callbacks(app) -> None:
 
             summary_row: dict = {c: "" for c in df_display.columns}
             summary_row['ID'] = 'TOTAL'
-            for col, decimals in [('weight', 4), ('risk_contribution', 2), ('notional_mm', 0), ('DV01_k', 1)]:
+            for col, decimals in [('weight', 4), ('risk_contribution', 2), ('notional_mm', 0)]:
                 if col in df_display.columns:
                     total = df_display[col].sum()
                     summary_row[col] = round(total, decimals)
+            # DV01_k TOTAL: single-side (larger of BUY / SELL) to match budget constraint
+            if 'DV01_k' in df_display.columns:
+                _dir_s = df_display['direction'].astype(str).str.strip().str.upper() if 'direction' in df_display.columns else pd.Series('BUY', index=df_display.index)
+                _ss_buy  = pd.to_numeric(df_display.loc[_dir_s.eq('BUY'),  'DV01_k'], errors='coerce').sum()
+                _ss_sell = pd.to_numeric(df_display.loc[_dir_s.eq('SELL'), 'DV01_k'], errors='coerce').sum()
+                summary_row['DV01_k'] = round(max(_ss_buy, _ss_sell), 1)
             df_display = pd.concat([df_display, pd.DataFrame([summary_row])], ignore_index=True)
 
             conditional_style = []
@@ -323,8 +357,12 @@ def register_portfolio_callbacks(app) -> None:
                     html.Div([html.Strong("BUY/SELL: ", style={'color': THEME['text_sub']}), html.Span(f"{(df_scored['direction'] == 'BUY').sum()} / {(df_scored['direction'] == 'SELL').sum()}" if 'direction' in df_scored.columns else "N/A", style={'color': THEME['text_main']})]),
                 ], style={'display': 'flex', 'flexWrap': 'wrap', 'marginBottom': '15px'}),
                 html.Div([
-                    html.Strong("By Style: ", style={'color': THEME['text_sub']}),
-                    html.Span(" | ".join([f"{style}: {count}" for style, count in df_scored.groupby('style').size().items()]), style={'color': THEME['text_main'], 'fontSize': '12px'}) if 'style' in df_scored.columns else "",
+                    html.Strong("By Regime: ", style={'color': THEME['text_sub']}),
+                    html.Span(
+                        " | ".join([f"{style}: {count}" for style, count in df_display['style'].value_counts(dropna=False).items()])
+                        if 'style' in df_display.columns else "",
+                        style={'color': THEME['text_main'], 'fontSize': '12px'},
+                    ),
                 ]),
             ])
 

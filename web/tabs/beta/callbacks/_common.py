@@ -11,6 +11,8 @@ from settings.paths import DIR_INPUT
 
 _SUMMARY_BETA_PARQUET    = str(DIR_INPUT / 'summary_beta_portfolio.parquet')
 _SUMMARY_ALPHA_PARQUET   = str(DIR_INPUT / 'summary_alpha_portfolio.parquet')
+_BETA_BOOK_POSITIONS_PARQUET = str(DIR_INPUT / 'beta_book_positions.parquet')
+_BETA_BOOK_USER_PARQUET  = str(DIR_INPUT / 'beta_book_user.parquet')
 _ALPHA_POSITIONS_PARQUET = str(DIR_INPUT / 'alpha_book_positions.parquet')
 
 # Optional: carry+roll timeseries loader (from alpha data module)

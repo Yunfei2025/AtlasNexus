@@ -14,7 +14,7 @@ Output files (in DIR_INPUT):
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -37,6 +37,35 @@ def get_factor_duration(factor_code: str) -> float:
     Price-based factors (FX, commodities) do not use duration conversion.
     """
     return 1.0 if _is_yield_factor(factor_code) else 0.0
+
+
+# Approximate modified durations (years) for par government bonds at standard tenors.
+# Used to compute the tenor-weighted duration of IRDL/IRSL/IRCV factor portfolios.
+_TENOR_YEARS = [1, 2, 5, 10, 30]
+_TENOR_MOD_DUR = {1: 0.95, 2: 1.90, 5: 4.60, 10: 8.80, 30: 20.0}
+
+# Deterministic factor weights (from multiasset/pca_analyzer.py)
+# IRDL: equal-weight level  |  IRSL: antisymmetric slope  |  IRCV: butterfly curvature
+_IR_WEIGHTS = {
+    'IRDL': [0.20,  0.20,  0.20,  0.20,  0.20],   # equal weight, sum=1 → long-only
+    'IRSL': [-0.40, -0.20,  0.00,  0.20,  0.40],   # steepener, sum=0
+    'IRCV': [0.25, -0.25,  0.00, -0.25,  0.25],    # butterfly, sum=0
+}
+
+
+def get_factor_weighted_duration(factor_code: str) -> float:
+    """Tenor-weighted modified duration of an IR factor portfolio.
+
+    Computed as ``Σ w_i × D_i`` where ``w_i`` are the deterministic factor
+    weights and ``D_i`` are approximate modified durations for each tenor.
+
+    Returns ``None`` for non-IR factors (FX, commodity, spread).
+    """
+    prefix = factor_code.split('.')[0]
+    weights = _IR_WEIGHTS.get(prefix)
+    if weights is None:
+        return None
+    return sum(w * _TENOR_MOD_DUR[t] for w, t in zip(weights, _TENOR_YEARS))
 
 
 def _is_yield_factor(factor_code: str) -> bool:
@@ -397,8 +426,9 @@ def run_factor_backtest(
     end_date: Optional[str] = None,
     input_dir: Union[str, Path] = DIR_INPUT,
     save: bool = True,
+    save_latest_only: bool = False,
     **strategy_kwargs,
-) -> Dict[str, pd.DataFrame]:
+) -> Tuple[Dict[str, pd.DataFrame], Optional[Dict]]:
     """Run a single strategy across multiple factors and save results.
 
     Parameters
@@ -413,12 +443,17 @@ def run_factor_backtest(
         Data directory containing ``factor-rates.pkl``.
     save : bool
         Whether to persist results to ``factor-backtest.pkl``.
+    save_latest_only : bool
+        When True (Factor-tab daily-train mode) only the most-recent monthly
+        model artifact is written to disk instead of all walk-forward snapshots.
     **strategy_kwargs
         Override default strategy parameters.
 
     Returns
     -------
-    dict  {factor_code: DataFrame}
+    (results, latest_artifact)
+        results         : {factor_code: DataFrame}
+        latest_artifact : artifact dict for the latest month, or None.
     """
     factor_levels = load_factor_rates(input_dir)
 
@@ -435,15 +470,16 @@ def run_factor_backtest(
         for k, v in strategy_kwargs.items():
             if hasattr(fm_cfg, k):
                 setattr(fm_cfg, k, type(getattr(fm_cfg, k))(v))
-        results = run_factor_model_batch(
+        results, latest_artifact = run_factor_model_batch(
             factors=factors,
             start_date=start_date,
             end_date=end_date,
             input_dir=input_dir,
             config=fm_cfg,
             save=save,
+            save_latest_only=save_latest_only,
         )
-        return results
+        return results, latest_artifact
 
     # ── Technical indicator strategies ──────────────────────────────────
     if start_date:
@@ -499,7 +535,8 @@ def run_factor_backtest(
         print(f"Saved factor-backtest.pkl  (strategy={strategy}, "
               f"{len(results)} factors)")
 
-    return results
+    # Non-FactorModel strategies have no model artifact
+    return results, None
 
 
 def load_factor_backtest(

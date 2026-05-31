@@ -82,6 +82,37 @@ class FactorModelConfig:
     signal_smooth_days: int = 5              # smooth predicted returns before sign()
     # Target horizon
     target_horizon: int = 1                  # predict N-day forward return
+    # ── Position sizing (doc §3.1) ──────────────────────────────────────────
+    sizing_mode: str = 'continuous'          # 'binary' (legacy) | 'continuous'
+    target_vol: float = 0.10                 # annualised vol target for vol-scaling
+    vol_scale_window: int = 60               # realised-vol lookback (days)
+    icir_window: int = 60                    # rolling OOS-IC window for ICIR weight
+    icir_saturation: float = 0.25            # tanh saturation constant (doc §3.1)
+    max_leverage: float = 2.0                # cap |position|
+    # ── Turnover & costs (doc §3.3 / §5.1) ──────────────────────────────────
+    turnover_threshold: float = 0.10         # min |Δposition| to trade
+    # tx cost is read from settings.fixed_income.FACTOR_TX_COST_BP (flat notional bp)
+    # ── Walk-forward purge / embargo (doc §4.2) ─────────────────────────────
+    purge_days: int = 5                      # purge around train/test boundary
+    embargo_days: int = 10                   # embargo at start of test set
+    # ── Fix 1: Multi-horizon ensemble ───────────────────────────────────────
+    # Train separate models for each prediction horizon and blend by IC weight.
+    # H=20 strongly upweights momentum features, capturing sustained trends.
+    target_horizons: List[int] = field(default_factory=lambda: [1, 5, 20])
+    # ── Fix 2: Trend-regime veto on mean-reversion features ─────────────────
+    # During a confirmed directional trend, zero out z-score / value features
+    # so they cannot force the model to fade a running bull/bear market.
+    trend_veto_zscore: bool = True
+    trend_veto_ema_windows: tuple = (10, 30, 60)  # fast / mid / slow EMA spans
+    trend_veto_mom_sigma: float = 0.5             # threshold: |mom| > σ × this
+    # ── Fix 3: EWMA observation weighting in IC calculation ─────────────────
+    # Recent months dominate IC estimates; half-life ≈ 3 months (63 trading days).
+    # Set to 0 to disable (uniform weighting).
+    ewma_obs_halflife: int = 63
+    # ── Fix 4: Longer momentum features + long-only position floor ──────────
+    # Mom120 / Mom252 added in _momentum_features; floor enforced here.
+    long_floor: float = 0.30                      # min position during confirmed trend
+    long_floor_confirm_window: int = 120          # medium-term momentum window (days)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -104,14 +135,23 @@ def _rolling_percentile(s: pd.Series, window: int) -> pd.Series:
 
 # ── Momentum features ───────────────────────────────────────────────────
 def _momentum_features(level: pd.Series, name: str) -> Dict[str, pd.Series]:
-    """Rate-of-change at multiple horizons + trend strength."""
+    """Rate-of-change at multiple horizons + trend strength.
+
+    Fix 4: adds Mom120 (6M) and Mom252 (12M) which carry much higher IC vs
+    20-day forward returns during sustained trends, plus a long-horizon EMA
+    crossover that flags multi-month directional regimes.
+    """
     feats: Dict[str, pd.Series] = {}
-    for w in [5, 10, 20, 60]:
+    for w in [5, 10, 20, 60, 120, 252]:
         feats[f'{name}_Mom{w}'] = level.diff(w)
-    # EMA crossover
+    # Short EMA crossover (10d vs 30d) — captures intra-month momentum
     ema_fast = level.ewm(span=10, adjust=False).mean()
     ema_slow = level.ewm(span=30, adjust=False).mean()
     feats[f'{name}_EMACross'] = ema_fast - ema_slow
+    # Long EMA crossover (60d vs 200d) — captures multi-month trend regime
+    ema_mid  = level.ewm(span=60,  adjust=False).mean()
+    ema_vlong = level.ewm(span=200, adjust=False).mean()
+    feats[f'{name}_EMACrossLong'] = ema_mid - ema_vlong
     return feats
 
 
@@ -330,29 +370,123 @@ def build_features(
 #  3. Self-contained IC model (avoids shift issues in shared functions)
 # ═══════════════════════════════════════════════════════════════════════════
 
+# ── Fix 3 helper: weighted Spearman IC ──────────────────────────────────
+def _weighted_spearman_ic(
+    x: pd.Series,
+    y: pd.Series,
+    weights: pd.Series,
+) -> float:
+    """Weighted Spearman rank correlation.
+
+    Implements fractional weighted ranks so that observations with higher
+    weight contribute more to the IC estimate.  Used when ``ewma_obs_halflife``
+    is set so that recent training data is emphasised over older data.
+    """
+    idx = x.notna() & y.notna() & weights.notna() & (weights > 0)
+    xv = x[idx].values.astype(float)
+    yv = y[idx].values.astype(float)
+    wv = weights[idx].values.astype(float)
+    if len(xv) < 10:
+        return float('nan')
+    wv = wv / wv.sum()
+
+    def _wrank(v: np.ndarray, wt: np.ndarray) -> np.ndarray:
+        order = np.argsort(v)
+        rv = np.empty(len(v))
+        cw = 0.0
+        for k in order:
+            rv[k] = cw + wt[k] / 2.0
+            cw += float(wt[k])
+        return rv
+
+    rx = _wrank(xv, wv)
+    ry = _wrank(yv, wv)
+    mx = float((rx * wv).sum())
+    my = float((ry * wv).sum())
+    num  = float(((rx - mx) * (ry - my) * wv).sum())
+    var_x = float(((rx - mx) ** 2 * wv).sum())
+    var_y = float(((ry - my) ** 2 * wv).sum())
+    denom = np.sqrt(var_x * var_y)
+    return float(num / denom) if denom > 1e-12 else 0.0
+
+
+# ── Fix 2 helper: trend-regime flag ─────────────────────────────────────
+def _trend_regime_flag(
+    level: pd.Series,
+    ema_windows: tuple = (10, 30, 60),
+    mom_sigma_mult: float = 0.5,
+) -> pd.Series:
+    """Boolean Series: True where a sustained directional trend is confirmed.
+
+    Confirmation requires both:
+    * EMA alignment — the three EMAs cascade in one direction
+      (EMA_fast < EMA_mid < EMA_slow for a downtrend; reverse for uptrend)
+    * Strong momentum — |mom_slow_window| > ``mom_sigma_mult × rolling σ``
+
+    For yield factors (IRDL) a *downtrend* in the yield level equals a bond
+    bull market.  The flag catches both downtrends and uptrends so it works
+    for all factor types.
+    """
+    e1 = level.ewm(span=ema_windows[0], adjust=False).mean()
+    e2 = level.ewm(span=ema_windows[1], adjust=False).mean()
+    e3 = level.ewm(span=ema_windows[2], adjust=False).mean()
+    mom = level.diff(ema_windows[2])
+    mom_std = mom.rolling(252, min_periods=60).std()
+    ema_downtrend = (e1 < e2) & (e2 < e3)
+    ema_uptrend   = (e1 > e2) & (e2 > e3)
+    strong_mom = mom.abs() > mom_sigma_mult * mom_std.replace(0, np.nan)
+    return ((ema_downtrend | ema_uptrend) & strong_mom.fillna(False))
+
+
 def _compute_ic_metrics(
     features: pd.DataFrame,
     forward_returns: pd.Series,
     min_obs: int = 60,
+    ewma_halflife: int = 0,
 ) -> pd.DataFrame:
     """Compute Spearman IC of each feature vs already-aligned forward returns.
 
     Unlike ``factors.analysis.metrics.calculate_metrics`` this does **not**
     shift returns internally — caller must supply properly aligned fwd returns.
+
+    Fix 3: when ``ewma_halflife > 0`` the IC is computed as a weighted
+    Spearman correlation where each observation is weighted by
+    ``exp(-log(2)/halflife × (T-t))`` so that recent training data dominates.
+    The regular (unweighted) ``spearmanr`` p-value is still used as a
+    conservative significance gate.
     """
     common = features.index.intersection(forward_returns.dropna().index)
     if len(common) < min_obs:
         return pd.DataFrame()
 
     feat = features.loc[common]
-    ret = forward_returns.loc[common]
+    ret  = forward_returns.loc[common]
+
+    # EWMA sample weights (Fix 3) — computed once for all features
+    n = len(common)
+    if ewma_halflife > 0 and n > ewma_halflife:
+        decay = np.exp(-np.log(2) / ewma_halflife * np.arange(n - 1, -1, -1))
+        sample_weights = pd.Series(decay / decay.sum(), index=common)
+    else:
+        sample_weights = None
 
     rows = []
     for col in feat.columns:
-        valid = feat[col].notna()
+        valid = feat[col].notna() & ret.notna()
         if valid.sum() < min_obs:
             continue
-        ic, p = spearmanr(feat[col].loc[valid], ret.loc[valid])
+        x_col = feat[col].loc[valid]
+        y_col = ret.loc[valid]
+
+        if sample_weights is not None:
+            w_col = sample_weights.reindex(x_col.index).fillna(0)
+            w_col = w_col / w_col.sum() if w_col.sum() > 1e-12 else w_col
+            ic = _weighted_spearman_ic(x_col, y_col, w_col)
+            # conservative p-value: use unweighted Spearman
+            _, p = spearmanr(x_col, y_col)
+        else:
+            ic, p = spearmanr(x_col, y_col)
+
         if np.isnan(ic):
             continue
         rows.append({
@@ -429,6 +563,114 @@ def _predict_ic_model(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  3b. Position sizing  (shared by backtest + live-predict paths)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def rolling_icir(
+    predicted_return: pd.Series,
+    daily_returns: pd.Series,
+    window: int = 60,
+) -> pd.Series:
+    """Rolling information-coefficient information-ratio.
+
+    IC_t   = window-corr(predicted_return, next-day actual return)
+    ICIR_t = rolling mean(IC) / rolling std(IC)   over the same window.
+
+    The series is **not** shifted here — callers that use it for sizing must
+    ``.shift(1)`` so that only past information drives today's position.
+    Mirrors the dashboard IC block (backtest_rfbt.py) so both paths agree.
+    """
+    actual_fwd = daily_returns.shift(-1).reindex(predicted_return.index)
+    ic = predicted_return.rolling(window).corr(actual_fwd)
+    ic_mean = ic.rolling(window, min_periods=max(window // 2, 10)).mean()
+    ic_std = ic.rolling(window, min_periods=max(window // 2, 10)).std()
+    return (ic_mean / ic_std.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+
+
+def factor_tx_cost_per_unit(factor_code: str, cfg: FactorModelConfig) -> float:
+    """Transaction cost per unit of position turnover, in **return space**.
+
+    Uses a flat notional-based cost (``FACTOR_TX_COST_BP`` from
+    ``settings.fixed_income``) applied uniformly across all factor types.
+    0.3 bp notional = 3e-5 per unit of position.
+    """
+    from settings.fixed_income import FACTOR_TX_COST_BP
+    return FACTOR_TX_COST_BP / 1e4
+
+
+def build_position_series(
+    predicted_return: pd.Series,
+    daily_returns: pd.Series,
+    cfg: FactorModelConfig,
+    long_only: bool = False,
+) -> pd.DataFrame:
+    """Convert predicted returns into a tradable position series.
+
+    Returns a DataFrame with columns ``signal`` (-1/0/+1), ``position``
+    (continuous target, leverage-capped) and ``turnover`` (|Δposition|).
+
+    ``sizing_mode='binary'`` reproduces the legacy ``sign(smoothed pred)``
+    behaviour exactly (turnover = |Δsign|).  ``'continuous'`` applies the
+    doc §3.1 recipe: ``z(pred) × tanh(ICIR/κ) × vol_scale``, turnover-filtered
+    and leverage-capped.  All inputs are causal (shifted) to avoid look-ahead.
+
+    ``long_only=True`` clips the final position to ``[0, max_leverage]`` so
+    the factor can never go short — appropriate for IRDL (duration level)
+    which represents the core long-only bond exposure.
+    """
+    pred = predicted_return.astype(float)
+
+    # Smoothed prediction (shared by both modes)
+    if cfg.signal_smooth_days > 1:
+        smoothed = pred.rolling(cfg.signal_smooth_days, min_periods=1).mean()
+    else:
+        smoothed = pred
+
+    if cfg.sizing_mode == 'binary':
+        raw_sig = np.sign(smoothed).fillna(0).astype(float)
+        if long_only:
+            raw_sig = raw_sig.clip(lower=0)   # 0 or +1 only
+        signal = raw_sig.astype(int)
+        out = pd.DataFrame({'signal': signal, 'position': raw_sig})
+        out['turnover'] = out['position'].diff().abs().fillna(out['position'].abs())
+        return out
+
+    # ── Continuous sizing (doc §3.1) ─────────────────────────────────────
+    # 1. Standardise the predicted return so size is regime-relative.
+    pred_z = _rolling_zscore(smoothed, cfg.icir_window).fillna(0.0)
+
+    # 2. ICIR weight — smooth saturating confidence gate (past info only).
+    icir = rolling_icir(pred, daily_returns, cfg.icir_window).shift(1)
+    icir_weight = np.tanh(icir / cfg.icir_saturation).fillna(0.0)
+
+    # 3. Risk-parity vol scale — target_vol / realised annualised vol (lagged).
+    realised_vol = (
+        daily_returns.rolling(cfg.vol_scale_window).std().shift(1) * np.sqrt(252)
+    )
+    realised_vol = realised_vol.reindex(pred.index)
+    vol_scale = (cfg.target_vol / realised_vol.replace(0, np.nan)).clip(upper=cfg.max_leverage)
+    vol_scale = vol_scale.fillna(0.0)
+
+    lo, hi = (0.0, cfg.max_leverage) if long_only else (-cfg.max_leverage, cfg.max_leverage)
+    raw_position = (pred_z * icir_weight * vol_scale).clip(lo, hi).fillna(0.0)
+
+    # 4. Turnover filter — only move when the change clears the threshold.
+    held = 0.0
+    positions = []
+    thr = cfg.turnover_threshold
+    for val in raw_position.values:
+        if abs(val - held) > thr:
+            held = float(val)
+        positions.append(held)
+
+    position = pd.Series(positions, index=raw_position.index)
+    out = pd.DataFrame({'position': position})
+    out['signal'] = np.sign(position).fillna(0).astype(int)
+    out['turnover'] = position.diff().abs().fillna(position.abs())
+    return out[['signal', 'position', 'turnover']]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  4. Walk-forward factor model engine
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -494,20 +736,26 @@ def run_factor_model_backtest(
     else:
         te = factor_levels.index.max()
 
-    # Build features once (full history)
-    print(f"  [{factor_code}] Building features (horizon={cfg.target_horizon}d) ...")
+    # ── Build features once (full history) ─────────────────────────────────
+    # Fix 1: use a list of horizons; ensemble predictions across H=1, 5, 20.
+    horizons = list(cfg.target_horizons) if cfg.target_horizons else [max(cfg.target_horizon, 1)]
+    print(f"  [{factor_code}] Building features (horizons={horizons}d) ...")
     all_features = build_features(factor_code, factor_levels, input_dir)
 
-    # Daily returns and N-day forward returns
+    # Daily returns; forward returns are computed PER horizon inside the loop.
     daily_returns = _compute_target_returns(factor_code, factor_levels)
-    # forward_ret[t] = sum of daily_returns[t+1 … t+H]  (return from day t to t+H)
-    H = max(cfg.target_horizon, 1)
-    forward_returns = daily_returns.rolling(H).sum().shift(-H)
-
-    # Align features and forward returns
-    common = all_features.index.intersection(forward_returns.dropna().index)
-    all_features = all_features.loc[common]
-    forward_returns = forward_returns.loc[common]
+    all_fwd_by_H: Dict[int, pd.Series] = {
+        H: daily_returns.rolling(H).sum().shift(-H)
+        for H in horizons
+    }
+    # Trim features to where the shortest-horizon forward return is defined
+    # (guarantees we have at least some training data for all horizons).
+    H_min = min(horizons)
+    all_features = all_features.loc[
+        all_features.index.intersection(all_fwd_by_H[H_min].dropna().index)
+    ]
+    # Raw level series — used for trend veto (Fix 2) and position floor (Fix 4)
+    level = factor_levels[factor_code].dropna()
 
     # Walk-forward periods
     from dateutil.relativedelta import relativedelta
@@ -516,13 +764,16 @@ def run_factor_model_backtest(
     train_months = cfg.train_months
     test_months = cfg.test_months
 
-    # Generate test windows
+    # Generate test windows.  Purge the last (H + purge_days) calendar days
+    # before each test set so the forward-return window of the final training
+    # sample cannot overlap the test period (doc §4.2 — Lopéz de Prado purging).
+    purge_gap = pd.Timedelta(days=1 + cfg.purge_days + H_min)
     periods = []
     cursor = ts
     while cursor <= te:
         period_end = min(cursor + relativedelta(months=test_months) - pd.Timedelta(days=1), te)
         train_start = cursor - relativedelta(months=train_months)
-        train_end = cursor - pd.Timedelta(days=1)
+        train_end = cursor - purge_gap
         periods.append((train_start, train_end, cursor, period_end))
         cursor = period_end + pd.Timedelta(days=1)
 
@@ -535,62 +786,124 @@ def run_factor_model_backtest(
     selector = FactorSelector(cfg)
 
     for train_start, train_end, test_start, test_end in periods:
-        # Slice train / test
+        # ── Slice train / test ──────────────────────────────────────────────
         train_mask = (all_features.index >= train_start) & (all_features.index <= train_end)
-        test_mask = (all_features.index >= test_start) & (all_features.index <= test_end)
+        test_mask  = (all_features.index >= test_start)  & (all_features.index <= test_end)
 
         train_feat = all_features.loc[train_mask].copy()
-        test_feat = all_features.loc[test_mask].copy()
-        train_fwd = forward_returns.loc[train_mask].copy()
+        test_feat  = all_features.loc[test_mask].copy()
+
+        # Embargo: drop the first ``embargo_days`` rows of the test set so that
+        # samples immediately after the train boundary do not bleed train info
+        # through the forward-return window (doc §4.2).
+        if cfg.embargo_days > 0 and len(test_feat) > cfg.embargo_days:
+            test_feat = test_feat.iloc[cfg.embargo_days:]
 
         if len(train_feat) < cfg.min_observations or len(test_feat) == 0:
             continue
 
         # Forward-fill then zero-fill NaN in features
         train_feat = train_feat.ffill().fillna(0)
-        test_feat = test_feat.ffill().fillna(0)
+        test_feat  = test_feat.ffill().fillna(0)
 
-        # Step 1: Compute IC metrics (no internal shift; fwd returns already aligned)
-        metrics = _compute_ic_metrics(train_feat, train_fwd, cfg.min_observations)
-        if metrics.empty:
-            continue
+        # ── Fix 2: Trend-regime flag at the end of the training window ──────
+        # We check whether the factor was in a confirmed directional trend at
+        # train_end. If so, mean-reversion features (z-scores, value) are vetoed
+        # so they cannot force the model to fade a running bull/bear market.
+        trend_confirmed = False
+        if cfg.trend_veto_zscore:
+            lvl_train = level.reindex(train_feat.index)
+            if len(lvl_train.dropna()) > cfg.trend_veto_ema_windows[2]:
+                tf = _trend_regime_flag(
+                    lvl_train,
+                    ema_windows=cfg.trend_veto_ema_windows,
+                    mom_sigma_mult=cfg.trend_veto_mom_sigma,
+                )
+                trend_confirmed = bool(tf.iloc[-1]) if len(tf) > 0 else False
 
-        # Step 2: Select features via FactorSelector (IC + VIF + diversification)
-        selected = selector.select_factors(metrics, train_feat)
-        if not selected:
-            if not metrics.empty:
-                selected = metrics.nlargest(min(3, len(metrics)), 'IC_abs').index.tolist()
-            if not selected:
+        # ── Fix 1: Multi-horizon ensemble ────────────────────────────────────
+        # Train one IC-weighted model per horizon; blend predictions by mean
+        # |IC| of the selected features — longer horizons win during trends.
+        preds_list:    List[pd.Series] = []
+        weights_list:  List[float]     = []
+        best_selected: List[str]       = []
+
+        for H in horizons:
+            # Align training forward returns to the training feature window
+            train_fwd_H = all_fwd_by_H[H].reindex(train_feat.index)
+            common_H    = train_fwd_H.dropna().index
+            if len(common_H) < cfg.min_observations:
                 continue
 
-        # Step 3: Train IC-weighted model on aligned fwd returns
-        trained = _train_ic_model(train_feat, train_fwd, selected)
-        if 'error' in trained:
+            tf_H = train_feat.loc[common_H]
+            fr_H = train_fwd_H.loc[common_H]
+
+            # Fix 3: IC metrics with EWMA weighting
+            metrics_H = _compute_ic_metrics(
+                tf_H, fr_H, cfg.min_observations,
+                ewma_halflife=cfg.ewma_obs_halflife,
+            )
+            if metrics_H.empty:
+                continue
+
+            # Fix 2: Zero out mean-reversion features when trend confirmed
+            if trend_confirmed:
+                veto = [f for f in metrics_H.index
+                        if any(k in f for k in ('_ZScore', '_PctRank', '_ValueMom'))]
+                if veto:
+                    metrics_H.loc[veto, 'IC']             = 0.0
+                    metrics_H.loc[veto, 'IC_abs']         = 0.0
+                    metrics_H.loc[veto, 'is_significant'] = False
+
+            # Feature selection
+            selected_H = selector.select_factors(metrics_H, tf_H)
+            if not selected_H:
+                selected_H = metrics_H.nlargest(min(3, len(metrics_H)), 'IC_abs').index.tolist()
+            if not selected_H:
+                continue
+
+            # Train model for this horizon
+            trained_H = _train_ic_model(tf_H, fr_H, selected_H)
+            if 'error' in trained_H:
+                continue
+
+            # Persist artifact keyed to the first (shortest) horizon
+            if H == horizons[0] and models_by_month is not None:
+                month_key = train_end.strftime('%Y%m%d')
+                if month_key not in models_by_month:
+                    models_by_month[month_key] = {}
+                models_by_month[month_key][factor_code] = {
+                    'trained_model': {
+                        'coefficients': trained_H['coefficients'],
+                        'scaling_factor': trained_H['scaling_factor'],
+                        'scaler': trained_H['scaler'],
+                        'feature_names': trained_H['feature_names'],
+                    },
+                    'selected_factors': selected_H,
+                }
+
+            preds_H = _predict_ic_model(test_feat, trained_H)
+            if preds_H.empty:
+                continue
+
+            mean_ic_H = float(
+                metrics_H.loc[[f for f in selected_H if f in metrics_H.index], 'IC_abs'].mean()
+            ) if selected_H else 0.01
+            preds_list.append(preds_H)
+            weights_list.append(max(mean_ic_H if not np.isnan(mean_ic_H) else 0.0, 0.01))
+            if len(selected_H) > len(best_selected):
+                best_selected = selected_H
+
+        if not preds_list:
             continue
 
-        # Collect model artifact keyed by train_end month for .joblib persistence
-        if models_by_month is not None:
-            month_key = train_end.strftime('%Y%m%d')
-            if month_key not in models_by_month:
-                models_by_month[month_key] = {}
-            models_by_month[month_key][factor_code] = {
-                'trained_model': {
-                    'coefficients': trained['coefficients'],
-                    'scaling_factor': trained['scaling_factor'],
-                    'scaler': trained['scaler'],
-                    'feature_names': trained['feature_names'],
-                },
-                'selected_factors': selected,
-            }
-
-        # Step 4: Predict out-of-sample
-        preds = _predict_ic_model(test_feat, trained)
-        if preds.empty:
-            continue
+        # IC-weighted blend of horizon predictions
+        total_w = sum(weights_list)
+        preds   = sum(p * (w / total_w) for p, w in zip(preds_list, weights_list))
 
         pred_df = pd.DataFrame({
             'predicted_return': preds,
-            'n_features': len(selected),
+            'n_features':       len(best_selected),
         })
         all_predictions.append(pred_df)
 
@@ -614,19 +927,40 @@ def run_factor_model_backtest(
     result['predicted_return'] = pred_full['predicted_return']
     result['n_features'] = pred_full['n_features']
 
-    # Signal: sign of (smoothed) predicted return
-    if cfg.signal_smooth_days > 1:
-        smoothed = result['predicted_return'].rolling(
-            cfg.signal_smooth_days, min_periods=1
-        ).mean()
-    else:
-        smoothed = result['predicted_return']
-    result['signal'] = np.sign(smoothed).fillna(0).astype(int)
-
     # Actual daily returns (for PnL, always use 1-day returns)
     result['returns'] = daily_returns.reindex(result.index)
 
-    result['strategy_returns'] = result['signal'].shift(1) * result['returns']
+    # IRDL (rate level) factors represent core long-only duration exposure.
+    _long_only = factor_code.split('.')[0] == 'IRDL'
+    pos = build_position_series(result['predicted_return'], result['returns'], cfg,
+                                long_only=_long_only)
+
+    # Fix 4: Position floor during confirmed bond-bull trend (IRDL only).
+    # When both short-term (60d) and medium-term (cfg.long_floor_confirm_window)
+    # yield momentum are negative — i.e. yields are falling on both horizons —
+    # the model must hold at least cfg.long_floor units of duration exposure.
+    # This prevents a full exit during a running bull market caused by noisy
+    # daily predictions or residual mean-reversion signal.
+    if _long_only and cfg.long_floor > 0:
+        lvl_chg_short  = factor_levels[factor_code].diff(60).reindex(result.index)
+        lvl_chg_medium = factor_levels[factor_code].diff(
+            cfg.long_floor_confirm_window
+        ).reindex(result.index)
+        # For yield factors: falling level = bond rally → enforce the floor
+        floor_mask = (lvl_chg_short < 0) & (lvl_chg_medium < 0)
+        pos.loc[floor_mask, 'position'] = (
+            pos.loc[floor_mask, 'position'].clip(lower=cfg.long_floor)
+        )
+
+    result['signal'] = pos['signal']
+    result['position'] = pos['position']
+    result['turnover'] = pos['turnover']
+
+    # Gross PnL, then net of transaction costs (doc §5.1, DV01-aware)
+    result['strategy_returns_gross'] = result['position'].shift(1) * result['returns']
+    cost_per_unit = factor_tx_cost_per_unit(factor_code, cfg)
+    tx_cost = result['turnover'].abs() * cost_per_unit
+    result['strategy_returns'] = result['strategy_returns_gross'] - tx_cost
     result['cumulative_returns'] = (1 + result['strategy_returns'].fillna(0)).cumprod()
 
     return result
@@ -643,14 +977,20 @@ def run_factor_model_batch(
     input_dir: Union[str, Path] = DIR_INPUT,
     config: Optional[FactorModelConfig] = None,
     save: bool = True,
-) -> Dict[str, pd.DataFrame]:
+    save_latest_only: bool = False,
+) -> Tuple[Dict[str, pd.DataFrame], Optional[Dict]]:
     """Run factor-model backtest across multiple risk factors.
 
     Saves results to ``factor-backtest.pkl`` under the key ``'FactorModel'``.
+    When ``save_latest_only=True`` only the most-recent monthly model is
+    persisted (useful for the Factor-tab daily train action).
 
     Returns
     -------
-    dict  {factor_code: DataFrame}
+    (results, latest_artifact)
+        results         : {factor_code: DataFrame}
+        latest_artifact : the artifact dict saved/updated for the latest month,
+                          or None when save=False or nothing was produced.
     """
     factor_levels = load_factor_rates(input_dir)
     if not isinstance(factor_levels.index, pd.DatetimeIndex):
@@ -720,20 +1060,36 @@ def run_factor_model_batch(
         cfg = config or FactorModelConfig()
         models_dir = os.path.join(str(input_dir), 'models')
         os.makedirs(models_dir, exist_ok=True)
+
+        # When save_latest_only=True we only persist the most-recent month,
+        # keeping the models/ folder lean for daily-signal use.
+        if save_latest_only and models_by_month:
+            latest_key = max(models_by_month)
+            months_to_save = {latest_key: models_by_month[latest_key]}
+        else:
+            months_to_save = models_by_month
+
         n_saved = 0
-        for month_key, factor_models in models_by_month.items():
+        last_saved_artifact: Optional[Dict] = None
+        for month_key, factor_models in months_to_save.items():
             joblib_path = os.path.join(
                 models_dir, f'factor_model_{month_key}.joblib'
             )
-            # Load existing file to merge new factors into it
+            # Incremental merge: load existing file, overlay new factors only.
+            # Factors not in this run are preserved unchanged.
             existing_artifact: Dict = {}
+            n_retained = 0
             if os.path.exists(joblib_path):
                 try:
                     existing_artifact = joblib.load(joblib_path)
+                    n_retained = len([k for k in existing_artifact
+                                      if k != 'metadata' and k not in factor_models])
                 except Exception:
                     existing_artifact = {}
-            # Merge factor models (new factors override existing for same key)
-            existing_artifact.update(factor_models)
+            existing_artifact.update(factor_models)  # new factors override by key
+            print(f"  joblib merge: {len(factor_models)} updated, "
+                  f"{n_retained} retained from previous → "
+                  f"{len([k for k in existing_artifact if k != 'metadata'])} total")
             existing_artifact['metadata'] = {
                 'train_end_date': month_key,
                 'created_date': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -742,18 +1098,23 @@ def run_factor_model_batch(
                     'ic_threshold': cfg.ic_threshold,
                     'top_n': cfg.top_n,
                     'target_horizon': cfg.target_horizon,
+                    'signal_smooth_days': cfg.signal_smooth_days,
                     'weighting_method': cfg.weighting_method,
                 },
                 'factors': [k for k in existing_artifact if k != 'metadata'],
             }
             joblib.dump(existing_artifact, joblib_path)
+            last_saved_artifact = existing_artifact
             n_saved += 1
 
-        print(f"Saved {n_saved} monthly factor_model_*.joblib files "
-              f"({len(models_by_month)} months, factors per latest: "
-              f"{len(models_by_month.get(max(models_by_month) if models_by_month else '', {}))}")
+        label = 'latest-only' if save_latest_only else 'all'
+        print(f"Saved {n_saved} monthly factor_model_*.joblib files ({label}) "
+              f"({len(months_to_save)} months, factors per latest: "
+              f"{len(months_to_save.get(max(months_to_save) if months_to_save else '', {}))}")
 
-    return results
+        return results, last_saved_artifact
+
+    return results, None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

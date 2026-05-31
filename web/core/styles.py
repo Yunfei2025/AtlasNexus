@@ -139,7 +139,7 @@ def getTraceStat(df: Union[pd.Series, pd.DataFrame], stype: str) -> go.Bar:
     """Create bar trace for statistical overview chart."""
     hovertext = None
     if isinstance(df, pd.DataFrame) and 'spread' in df.columns:
-        hovertext = [f"Spread: {value:.2f}bp" for value in df['spread']]
+        hovertext = [f"Spread: {value :.2f}bp" for value in df['spread']]
 
     trace = go.Bar(
         x=df.index,

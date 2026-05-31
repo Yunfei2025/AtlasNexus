@@ -8,6 +8,15 @@ from typing import Dict, List
 from dateutil.relativedelta import relativedelta
 
 
+# ── Factor model transaction cost ─────────────────────────────────────────────
+# Flat notional-based bid-ask cost applied to every factor uniformly.
+# Units: basis points of notional per side (0.3 bp = 0.00003).
+# Rationale: Chinese treasury futures (T/TF/TS) spread ≈ 0.2–0.4 bp; cash bonds
+# slightly wider.  Using a single notional-based cost avoids duration-scaling
+# complexity while being conservative enough for a 10B CNY beta book.
+FACTOR_TX_COST_BP: float = 0.3
+
+
 class BondConfig:
     TBOND_POOL_START = 5
     OBOND_POOL_START = 3
@@ -193,10 +202,10 @@ class IRSConfig:
         7/365: "7d", 1/4: "1s", 1/2: "2s", 3/4: "3s",
         1: "4s", 2: "8s", 3: "12s", 4: "16s", 5: "20s", 7: "28s", 10: "40s"
     }
-    PAIRS = ['Repo-3m6m', 'Repo-6m9m', 'Repo-9m1y', 'Repo-1y2y', 'Repo-2y3y', 'Repo-3y4y', 'Repo-4y5y',
-             'Repo-3m9m', 'Repo-6m1y', 'Repo-9m2y', 'Repo-1y3y', 'Repo-2y4y', 'Repo-3y5y',
-             'Repo-3m1y', 'Repo-6m2y', 'Repo-9m3y', 'Repo-1y4y', 'Repo-2y5y',
-             'Repo-3m2y', 'Repo-6m3y', 'Repo-9m4y', 'Repo-1y5y',
+    PAIRS = ['Repo7d-3m6m', 'Repo7d-6m9m', 'Repo7d-9m1y', 'Repo7d-1y2y', 'Repo7d-2y3y', 'Repo7d-3y4y', 'Repo7d-4y5y',
+             'Repo7d-3m9m', 'Repo7d-6m1y', 'Repo7d-9m2y', 'Repo7d-1y3y', 'Repo7d-2y4y', 'Repo7d-3y5y',
+             'Repo7d-3m1y', 'Repo7d-6m2y', 'Repo7d-9m3y', 'Repo7d-1y4y', 'Repo7d-2y5y',
+             'Repo7d-3m2y', 'Repo7d-6m3y', 'Repo7d-9m4y', 'Repo7d-1y5y',
              'Shi3M-6m9m', 'Shi3M-9m1y', 'Shi3M-1y2y', 'Shi3M-2y3y', 'Shi3M-3y4y', 'Shi3M-4y5y',
              'Shi3M-6m1y', 'Shi3M-9m2y', 'Shi3M-1y3y', 'Shi3M-2y4y', 'Shi3M-3y5y',
              'Shi3M-6m2y', 'Shi3M-9m3y', 'Shi3M-1y4y', 'Shi3M-2y5y',

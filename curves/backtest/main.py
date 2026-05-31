@@ -19,7 +19,7 @@ from utils.log_window import get_logger
 logger = get_logger(__name__)
 
 # Instrument type: 'TBond', 'CBond', or 'IRS'
-btype = "CBond"
+btype = "TBond"
 # Update flags: list of strings from ['pool', 'bonds', 'cbts']
 update_list = ['pool', ]
 

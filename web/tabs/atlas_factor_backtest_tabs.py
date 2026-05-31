@@ -245,42 +245,296 @@ def _build_period_table(results: Any) -> html.Div:
     )
 
 
+def _build_top_alpha_features(results: Any) -> html.Div | None:
+    """Build a 'Top Driving Signals' panel from feature frequency across walk-forward periods."""
+    from collections import Counter
+    counter: Counter = Counter()
+    for period in getattr(results, "period_results", []):
+        for feat in (getattr(period, "selected_factors", None) or []):
+            counter[feat] += 1
+    if not counter:
+        return None
+
+    top = counter.most_common(8)
+    n_periods = sum(1 for p in getattr(results, "period_results", [])
+                    if getattr(p, "status", "") == "success")
+    n_periods = max(n_periods, 1)
+
+    _td = {"padding": "6px 12px", "fontSize": "12px", "color": THEME["text"]}
+    _th = {**_td, "color": THEME["muted"], "fontWeight": "600",
+           "borderBottom": f"1px solid {THEME['border']}"}
+
+    rows = []
+    for rank, (feat, cnt) in enumerate(top, 1):
+        pct = cnt / n_periods
+        bar_w = f"{max(4, int(pct * 100))}%"
+        rows.append(html.Tr([
+            html.Td(str(rank), style={**_td, "color": THEME["muted"]}),
+            html.Td(feat, style={**_td, "fontFamily": "monospace", "color": THEME["accent"]}),
+            html.Td(str(cnt), style=_td),
+            html.Td(
+                html.Div(
+                    html.Div(style={"height": "8px", "width": bar_w,
+                                    "backgroundColor": THEME["accent"],
+                                    "borderRadius": "3px"}),
+                    style={"width": "120px"}
+                ),
+                style=_td,
+            ),
+            html.Td(f"{pct:.0%}", style=_td),
+        ]))
+
+    return html.Div([
+        html.H5("Top Driving Signals",
+                style={"color": THEME["accent"], "marginBottom": "6px", "fontSize": "14px"}),
+        html.P(
+            "Indicators most frequently selected by the walk-forward model to predict returns "
+            "(selection frequency across successful periods ≈ indicator consistency).",
+            style={"color": THEME["muted"], "fontSize": "11px", "marginBottom": "10px",
+                   "fontStyle": "italic"},
+        ),
+        html.Table([
+            html.Thead(html.Tr([
+                html.Th("#",           style=_th),
+                html.Th("Indicator",   style=_th),
+                html.Th("Count",       style=_th),
+                html.Th("Consistency", style=_th),
+                html.Th("%",           style=_th),
+            ])),
+            html.Tbody(rows),
+        ], style={"width": "100%", "borderCollapse": "collapse"}),
+    ], style={
+        "backgroundColor": THEME["panel"],
+        "border": f"1px solid {THEME['border']}",
+        "borderRadius": "10px",
+        "padding": "14px 16px",
+        "marginBottom": "16px",
+    })
+
+
 def _build_results_layout(results: Any, ticker: str, start_date: str, end_date: str) -> html.Div:
-    metrics = getattr(results, "backtest_metrics", None)
-    backtest_data = getattr(results, "backtest_data", None)
+    metrics       = getattr(results, "backtest_metrics", None)
+    backtest_data = getattr(results, "backtest_data",   None)
+
+    cumulative_returns = _to_series(getattr(backtest_data, "cumulative_returns", None))
+    strategy_returns   = _to_series(getattr(backtest_data, "strategy_returns",   None))
+    predictions        = _to_series(getattr(backtest_data, "predictions",        None))
+    positions          = _to_series(getattr(backtest_data, "positions",          None))
+
+    # ── Compute IC statistics & current signal state ─────────────────────────
+    mean_ic = ic_std = icir = ic_hit = ic_tstat = 0.0
+    z_score = scalar = 0.0
+    last_signal = 0
+    ic_rolling = pd.Series(dtype=float)
+
+    if not predictions.empty and not strategy_returns.empty:
+        # IC = rolling 60-day corr(prediction_t, actual_return_{t+1})
+        # 60-day (≈3 months) is the practitioner-standard window: reduces noise
+        # without sacrificing signal timeliness.
+        actual_fwd = strategy_returns.shift(-1).reindex(predictions.index)
+        ic_rolling = predictions.rolling(60).corr(actual_fwd).dropna()
+        if len(ic_rolling) > 0:
+            mean_ic  = float(ic_rolling.mean())
+            ic_std   = float(ic_rolling.std()) if len(ic_rolling) > 1 else 1.0
+            icir     = mean_ic / (ic_std + 1e-8)
+            ic_hit   = float((ic_rolling > 0).mean())
+            n_ic     = len(ic_rolling)
+            ic_tstat = mean_ic / (ic_std / (n_ic ** 0.5) + 1e-8) if n_ic > 1 else 0.0
+
+        last_pred_val = float(predictions.iloc[-1])
+        pred_hist     = predictions.tail(252)
+        z_score = ((last_pred_val - pred_hist.mean()) / (pred_hist.std() + 1e-8)
+                   if len(pred_hist) > 5 else 0.0)
+        scalar = max(0.5, min(2.0, abs(z_score)))
+
+    if not positions.empty:
+        last_signal = int(round(float(positions.iloc[-1])))
+
+    if   last_signal ==  1: dir_label, dir_color = "⬆ LONG",    THEME["success"]
+    elif last_signal == -1: dir_label, dir_color = "⬇ SHORT",   THEME["danger"]
+    else:                   dir_label, dir_color = "⏸ NEUTRAL", THEME["muted"]
+
+    if   abs(icir) >= 0.50: conf, conf_color = "HIGH",   THEME["success"]
+    elif abs(icir) >= 0.25: conf, conf_color = "MEDIUM", THEME["warning"]
+    else:                   conf, conf_color = "LOW",     THEME["danger"]
+
+    # ── Section 1: Summary cards + Current Signal State ──────────────────────
+    signal_card = html.Div([
+        html.Div("Current Signal",
+                 style={"fontSize": "11px", "color": THEME["muted"], "marginBottom": "6px",
+                        "textTransform": "uppercase", "letterSpacing": "0.5px"}),
+        html.Div(dir_label,
+                 style={"fontSize": "20px", "fontWeight": "800", "color": dir_color,
+                        "marginBottom": "8px"}),
+        html.Div([
+            html.Span("Z  ",     style={"color": THEME["muted"], "fontSize": "11px"}),
+            html.Span(f"{z_score:+.2f}",
+                      style={"color": THEME["text"], "fontSize": "12px", "fontWeight": "600"}),
+        ], style={"marginBottom": "3px"}),
+        html.Div([
+            html.Span("Scale  ", style={"color": THEME["muted"], "fontSize": "11px"}),
+            html.Span(f"{scalar:.1f}×",
+                      style={"color": THEME["accent"], "fontSize": "12px", "fontWeight": "600"}),
+        ], style={"marginBottom": "3px"}),
+        html.Div([
+            html.Span("ICIR  ",  style={"color": THEME["muted"], "fontSize": "11px"}),
+            html.Span(f"{icir:.2f}",
+                      style={"color": conf_color, "fontSize": "12px", "fontWeight": "600"}),
+        ], style={"marginBottom": "3px"}),
+        html.Div(f"Conf: {conf}",
+                 style={"fontSize": "11px", "color": conf_color, "fontWeight": "700",
+                        "marginTop": "4px"}),
+    ], style={
+        "backgroundColor": THEME["panel"],
+        "border":          f"2px solid {dir_color}",
+        "borderRadius":    "10px",
+        "padding":         "14px 16px",
+        "minWidth":        "160px",
+        "flex":            "1",
+    })
 
     metric_cards = html.Div(
         [
-            _metric_card("Ticker", ticker),
-            _metric_card("Period", f"{start_date} → {end_date}"),
+            _metric_card("Ticker",       ticker),
+            _metric_card("Period",       f"{start_date} → {end_date}"),
             _metric_card("Total Return", _format_pct(getattr(metrics, "total_return", None))),
-            _metric_card("Sharpe", _format_num(getattr(metrics, "sharpe_ratio", None))),
-            _metric_card("Volatility", _format_pct(getattr(metrics, "volatility", None))),
+            _metric_card("Sharpe",       _format_num(getattr(metrics, "sharpe_ratio", None))),
+            _metric_card("Volatility",   _format_pct(getattr(metrics, "volatility",   None))),
             _metric_card("Max Drawdown", _format_pct(getattr(metrics, "max_drawdown", None))),
+            signal_card,
         ],
         style={"display": "flex", "gap": "12px", "flexWrap": "wrap", "marginBottom": "18px"},
     )
 
-    cumulative_returns = _to_series(getattr(backtest_data, "cumulative_returns", None))
-    strategy_returns = _to_series(getattr(backtest_data, "strategy_returns", None))
-    predictions = _to_series(getattr(backtest_data, "predictions", None))
-    positions = _to_series(getattr(backtest_data, "positions", None))
+    # ── Section 2: IC & Signal Statistics table ───────────────────────────────
+    _td = {"padding": "7px 14px", "textAlign": "center", "fontSize": "12px",
+           "color": THEME["text"]}
+    _th = {**_td, "color": THEME["muted"], "fontWeight": "600",
+           "borderBottom": f"1px solid {THEME['border']}"}
 
-    figures = html.Div(
-        [
-            html.Div(dcc.Graph(figure=_make_line_figure(cumulative_returns, "Cumulative Returns", THEME["accent"]))),
-            html.Div(dcc.Graph(figure=_make_line_figure(strategy_returns, "Strategy Returns", THEME["success"]))),
-            html.Div(dcc.Graph(figure=_make_line_figure(predictions, "Predictions", THEME["warning"]))),
-            html.Div(dcc.Graph(figure=_make_line_figure(positions, "Positions", THEME["danger"]))),
-        ],
-        style={
-            "display": "grid",
-            "gridTemplateColumns": "repeat(auto-fit, minmax(380px, 1fr))",
-            "gap": "16px",
-        },
+    ic_table_div = html.Div([
+        html.H5("IC & Signal Statistics",
+                style={"color": THEME["accent"], "marginBottom": "10px", "fontSize": "14px"}),
+        html.Table([
+            html.Thead(html.Tr([
+                html.Th("Mean IC",   style=_th),
+                html.Th("IC Std",    style=_th),
+                html.Th("ICIR",      style=_th),
+                html.Th("IC t-stat", style=_th),
+                html.Th("IC Hit%",   style=_th),
+                html.Th("Win Rate",  style=_th),
+            ])),
+            html.Tbody(html.Tr([
+                html.Td(f"{mean_ic:.4f}",  style=_td),
+                html.Td(f"{ic_std:.4f}",   style=_td),
+                html.Td(f"{icir:.2f}",
+                        style={**_td, "color": conf_color, "fontWeight": "700"}),
+                html.Td(f"{ic_tstat:.2f}", style=_td),
+                html.Td(f"{ic_hit:.1%}",   style=_td),
+                html.Td(_format_pct(getattr(metrics, "win_rate", None)), style=_td),
+            ])),
+        ], style={"width": "100%", "borderCollapse": "collapse"}),
+    ], style={
+        "backgroundColor": THEME["panel"],
+        "border":          f"1px solid {THEME['border']}",
+        "borderRadius":    "10px",
+        "padding":         "14px 16px",
+        "marginBottom":    "16px",
+    })
+
+    # ── Section 3: Cumulative PnL + Rolling IC (side by side) ────────────────
+    _common = dict(
+        paper_bgcolor=THEME["panel"], plot_bgcolor=THEME["panel"],
+        font={"color": THEME["text"]}, hovermode="x unified",
+        margin={"l": 44, "r": 20, "t": 45, "b": 40},
+        xaxis=dict(gridcolor=THEME["border"]),
+        yaxis=dict(gridcolor=THEME["border"]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                    xanchor="right", x=1, font={"color": THEME["text"]}),
     )
 
-    return html.Div([metric_cards, figures, _build_period_table(results)])
+    pnl_fig = go.Figure()
+    if not cumulative_returns.empty:
+        pnl_fig.add_trace(go.Scatter(
+            x=cumulative_returns.index, y=cumulative_returns.values,
+            mode="lines", line={"color": THEME["accent"], "width": 2},
+            name="Cumulative PnL",
+        ))
+    pnl_fig.update_layout(title="Cumulative PnL", height=310, **_common)
+
+    ic_fig = go.Figure()
+    if not ic_rolling.empty:
+        ic_fig.add_trace(go.Scatter(
+            x=ic_rolling.index, y=ic_rolling.values,
+            mode="lines", line={"color": THEME["warning"], "width": 1, "dash": "dot"},
+            name="Rolling 60d IC", opacity=0.55,
+        ))
+        # EWMA(20) of the rolling IC — smoothes out high-frequency flips
+        ic_ewma = ic_rolling.ewm(span=20, min_periods=10).mean()
+        ic_fig.add_trace(go.Scatter(
+            x=ic_ewma.index, y=ic_ewma.values,
+            mode="lines", line={"color": THEME["warning"], "width": 2},
+            name="IC EWMA(20)",
+        ))
+        ic_fig.add_trace(go.Scatter(
+            x=[ic_rolling.index.min(), ic_rolling.index.max()], y=[0.0, 0.0],
+            mode="lines", line={"color": "gray", "dash": "dash", "width": 1},
+            showlegend=False,
+        ))
+    ic_fig.update_layout(title="Rolling 60-day IC  (dotted = raw, solid = EWMA-20)", height=310, **_common)
+
+    charts_row = html.Div([
+        html.Div(dcc.Graph(figure=pnl_fig), style={"flex": "1", "minWidth": "0"}),
+        html.Div(dcc.Graph(figure=ic_fig),  style={"flex": "1", "minWidth": "0"}),
+    ], style={"display": "flex", "gap": "12px", "marginBottom": "16px"})
+
+    # ── Section 4: Signal History bar chart (colour-coded) ────────────────────
+    _sig_c = {1: THEME["success"], -1: THEME["danger"], 0: THEME["muted"]}
+    bar_colors = [_sig_c.get(int(round(float(v))), THEME["muted"])
+                  for v in positions.values] if not positions.empty else []
+
+    sig_fig = go.Figure()
+    if not positions.empty:
+        sig_fig.add_trace(go.Bar(
+            x=positions.index, y=positions.values,
+            marker_color=bar_colors,
+            name="Signal",
+        ))
+    sig_fig.update_layout(
+        title="Signal History  (+1 Long / −1 Short / 0 Neutral)",
+        height=200, bargap=0, showlegend=False,
+        **_common,
+    )
+
+    # ── Q3 footnote: signal convention for bond futures ────────────────────────
+    ir_note = html.Div(
+        "ℹ  Signal direction is in futures PRICE space.  "
+        "Macro features (IRDL/IRSL/IRCV) are stored as yield levels — the model "
+        "is trained on price returns (−D·Δy), so ⬆ LONG already means long bond/futures "
+        "(rate expected to fall).  No manual sign flip is required.",
+        style={"color": THEME["muted"], "fontSize": "11px", "fontStyle": "italic",
+               "padding": "8px 12px", "backgroundColor": THEME["panel_alt"],
+               "borderRadius": "6px", "marginBottom": "14px",
+               "borderLeft": f"3px solid {THEME['accent']}"},
+    )
+
+    # ── Top Driving Signals panel ─────────────────────────────────────────────────
+    top_alpha_div = _build_top_alpha_features(results)
+
+    children = [
+        ir_note,
+        metric_cards,
+        ic_table_div,
+        charts_row,
+        html.H5("Signal History",
+                style={"color": THEME["accent"], "marginBottom": "8px", "fontSize": "14px"}),
+        dcc.Graph(figure=sig_fig),
+    ]
+    if top_alpha_div is not None:
+        children.append(top_alpha_div)
+    children.append(_build_period_table(results))
+
+    return html.Div(children)
 
 
 def _status_block(job: dict[str, Any] | None) -> html.Div:
@@ -332,12 +586,15 @@ def build_factor_model_backtest_layout() -> html.Div:
             dcc.Interval(id="factor-job-poll", interval=1500, n_intervals=0, disabled=True),
 
             html.H4(
-                "Factor Model Backtest",
-                style={"color": THEME["text"], "marginBottom": "8px"},
+                "Alpha Factor Backtest",
+                style={"color": THEME["text"], "marginBottom": "4px"},
             ),
             html.P(
-                "Set the backtest period and instrument, then run the factor model backtest.",
-                style={"color": THEME["muted"], "marginBottom": "20px", "fontSize": "13px"},
+                "Walk-forward ML model trained on alpha signals (momentum, carry, vol, macro) "
+                "to predict bond futures price returns.  "
+                "Risk factors (IRDL/IRSL/FX/CMD) enter as predictive features, not as the traded asset.",
+                style={"color": THEME["muted"], "marginBottom": "20px", "fontSize": "12px",
+                       "fontStyle": "italic"},
             ),
 
             # ── Controls row ────────────────────────────────────────────

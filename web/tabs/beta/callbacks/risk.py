@@ -21,6 +21,8 @@ from ..data import THEME, ALLOCATION_RESULTS
 from ._common import (
     _SUMMARY_BETA_PARQUET,
     _SUMMARY_ALPHA_PARQUET,
+    _BETA_BOOK_POSITIONS_PARQUET,
+    _BETA_BOOK_USER_PARQUET,
     _ALPHA_POSITIONS_PARQUET,
     _get_beta_close_prices,
     _load_cr_ts,
@@ -90,13 +92,14 @@ def _refresh_alpha_display_row(row: dict) -> dict:
 
 
 def _persist_alpha_summary_rows(rows: list[dict]) -> None:
+    # Skip the synthetic TOTAL row — it is not a real position.
     records = [{
         'spread_type': str(r.get('Spread Type', '')),
         'ID': str(r.get('ID', '')),
         'open_price_bp': r.get('Open price (bp)', ''),
         'volume_mm': r.get('Volume (mm)', ''),
         'open_date': str(r.get('Open date', '')),
-    } for r in rows]
+    } for r in rows if str(r.get('ID', '')) != 'TOTAL']
     pd.DataFrame(records).to_parquet(_ALPHA_POSITIONS_PARQUET, index=False)
 
     if not os.path.exists(_SUMMARY_ALPHA_PARQUET):
@@ -224,54 +227,152 @@ def register_risk_callbacks(app):
 
         # ── Beta tab ──────────────────────────────────────────────────────────
         if tab_value == 'beta':
-            if not _os.path.exists(_SUMMARY_BETA_PARQUET):
+            if not _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET) and not _os.path.exists(_SUMMARY_BETA_PARQUET):
                 return _no_data(
                     "No Beta snapshot found. Click RUN ANALYSIS in the Beta Book → Portfolio tab first."
                 )
             try:
-                df = pd.read_parquet(_SUMMARY_BETA_PARQUET)
-                ts = df['_timestamp'].iloc[0] if '_timestamp' in df.columns else "unknown"
+                if _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
+                    df = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
+                else:
+                    df = pd.read_parquet(_SUMMARY_BETA_PARQUET)
 
-                # Close Price: look up last factor level for each asset's primary factor
-                close_prices = _get_beta_close_prices()
+                if df.empty:
+                    return _no_data("Beta snapshot is empty.")
 
-                def _close_price_for(asset_name: str) -> float | None:
-                    """Match asset name prefix to a factor-level proxy."""
-                    for prefix, price in close_prices.items():
-                        if asset_name.upper().startswith(prefix.upper()):
-                            return price
-                    return None
+                ts = "unknown"
+                if _os.path.exists(_SUMMARY_BETA_PARQUET):
+                    try:
+                        snap = pd.read_parquet(_SUMMARY_BETA_PARQUET)
+                        ts = snap['_timestamp'].iloc[0] if '_timestamp' in snap.columns else "unknown"
+                    except Exception:
+                        ts = "unknown"
 
-                capital_col = '_capital_cny' if '_capital_cny' in df.columns else 'Capital (CNY)'
+                # Load user-editable fields (open_yld, open_date, volume) keyed by asset_name+instrument
+                user_data: dict = {}
+                if _os.path.exists(_BETA_BOOK_USER_PARQUET):
+                    try:
+                        udf = pd.read_parquet(_BETA_BOOK_USER_PARQUET)
+                        for _, r in udf.iterrows():
+                            key = (str(r.get('asset_name', '')), str(r.get('instrument', '')))
+                            user_data[key] = {
+                                'open_yld':  str(r.get('open_yld', '')),
+                                'open_date': str(r.get('open_date', '')),
+                                'volume':    str(r.get('volume', '')),
+                            }
+                    except Exception:
+                        pass
+
+                # Get latest close yields from factor levels
+                close_prices = _get_beta_close_prices()  # {prefix: yield_pct}
+
                 display_rows = []
                 for _, row in df.iterrows():
-                    asset = str(row.get('Asset Name', ''))
-                    if asset == 'TOTAL':
+                    asset_type = str(row.get('Asset Type', ''))
+                    if asset_type == 'TOTAL':
                         continue
-                    cap_cny = float(row.get(capital_col, 0) or 0)
-                    cap_mm  = round(cap_cny / 1e6, 2)
-                    wt      = round(float(row.get('Weight (%)', 0) or 0), 2)
-                    cp      = _close_price_for(asset)
-                    mv_mm   = cap_mm   # bonds at ~par → market value ≈ notional
+                    asset_name = str(row.get('Asset Name', ''))
+                    instrument = str(row.get('Instrument', ''))
+                    key = (asset_name, instrument)
+                    saved = user_data.get(key, {})
+
+                    open_yld_str  = str(saved.get('open_yld', ''))
+                    open_date_str = str(saved.get('open_date', ''))
+                    volume_str    = str(saved.get('volume', ''))
+
+                    # Close yield: look up by asset-name prefix (e.g. 'CN' → IRDL.CN)
+                    prefix = asset_name[:2]
+                    close_yld = close_prices.get(prefix)
+                    close_yld_str = f"{close_yld:.4f}%" if close_yld is not None else ''
+
+                    # MtM price P&L: Volume × Duration × (Close - Open) / 10000  (MM CNY)
+                    mtm_str = ''
+                    try:
+                        _dur_raw = row.get('Duration', None)
+                        _dur = float(str(_dur_raw).replace(',', '')) if _dur_raw not in (None, '', 'N/A') else None
+                        _vol = float(volume_str) if volume_str else None
+                        _open_y = float(open_yld_str) if open_yld_str else None
+                        if _dur and _vol and _open_y and close_yld is not None:
+                            mtm = round(_vol * _dur * (close_yld - _open_y) / 10000.0, 4)
+                            mtm_str = f"{mtm:+.4f}"
+                    except (ValueError, TypeError):
+                        pass
 
                     display_rows.append({
-                        'Asset Type':        row.get('Asset Type', ''),
-                        'Universe':          row.get('Universe', ''),
-                        'Asset Name':        asset,
-                        'Close Price (%)':   f"{cp:.4f}" if cp is not None else 'N/A',
-                        'Capital (MM CNY)':  f"{cap_mm:,.2f}",
-                        'Market Value (MM)': f"{mv_mm:,.2f}",
-                        'Weight (%)':        f"{wt:.2f}%",
+                        'Asset Type':       asset_type,
+                        'Universe':         str(row.get('Universe', '')),
+                        'Sector':           str(row.get('Sector', '')),
+                        'Asset Name':       asset_name,
+                        'Instrument':       instrument,
+                        'Duration':         str(row.get('Duration', '')),
+                        'Capital (MM CNY)': str(row.get('Capital (CNY)', '')),
+                        'Weight (%)':       str(row.get('Weight (%)', '')),
+                        'Open Yld (%)':     open_yld_str,
+                        'Open Date':        open_date_str,
+                        'Volume (MM)':      volume_str,
+                        'Close Yld (%)':    close_yld_str,
+                        'MtM (MM CNY)':     mtm_str,
                     })
 
                 if not display_rows:
                     return _no_data("Beta snapshot is empty.")
 
+                # TOTAL row
+                def _sum_num(col):
+                    t, any_ = 0.0, False
+                    for r in display_rows:
+                        v = str(r.get(col, '')).replace(',', '').replace('+', '').strip()
+                        if v:
+                            try:
+                                t += float(v); any_ = True
+                            except (ValueError, TypeError):
+                                pass
+                    return t if any_ else None
+
+                total_row = {c: '' for c in display_rows[0].keys()}
+                total_row['Asset Type'] = 'TOTAL'
+                _s_cap = _sum_num('Capital (MM CNY)')
+                _s_vol = _sum_num('Volume (MM)')
+                _s_mtm = _sum_num('MtM (MM CNY)')
+                if _s_cap is not None:
+                    total_row['Capital (MM CNY)'] = f"{_s_cap:,.2f}"
+                if _s_vol is not None:
+                    total_row['Volume (MM)'] = f"{_s_vol:,.1f}"
+                if _s_mtm is not None:
+                    total_row['MtM (MM CNY)'] = f"{_s_mtm:+.4f}"
+                display_rows.append(total_row)
+
+                _editable_cols = {'Open Yld (%)', 'Open Date', 'Volume (MM)'}
+                columns = [
+                    {
+                        'name': c,
+                        'id': c,
+                        'editable': c in _editable_cols,
+                        **({'type': 'datetime'} if c == 'Open Date' else {}),
+                    }
+                    for c in display_rows[0].keys()
+                ]
+
+                _editable_style = [
+                    {'if': {'column_id': c},
+                     'border': f'1px solid {THEME["accent"]}',
+                     'backgroundColor': 'rgba(99,179,237,0.08)'}
+                    for c in _editable_cols
+                ]
+                _mtm_styles = [
+                    {'if': {'filter_query': '{MtM (MM CNY)} contains "+"', 'column_id': 'MtM (MM CNY)'},
+                     'color': THEME.get('success', '#27ae60')},
+                    {'if': {'filter_query': '{MtM (MM CNY)} contains "-"', 'column_id': 'MtM (MM CNY)'},
+                     'color': THEME.get('danger', '#e74c3c')},
+                ]
+
                 table = dash_table.DataTable(
+                    id='summary-beta-table',
                     data=display_rows,
-                    columns=[{'name': c, 'id': c} for c in display_rows[0].keys()],
+                    columns=columns,
+                    editable=True,
                     style_cell={
-                        'textAlign': 'center', 'padding': '8px',
+                        'textAlign': 'center', 'padding': '6px 8px',
                         'backgroundColor': THEME['table_row_odd'],
                         'color': THEME['text_main'], 'border': 'none',
                         'fontSize': '12px',
@@ -280,16 +381,57 @@ def register_risk_callbacks(app):
                         'backgroundColor': THEME['table_header'],
                         'color': THEME['text_main'],
                         'fontWeight': 'bold', 'border': 'none',
+                        'whiteSpace': 'normal', 'height': 'auto',
                     },
                     style_data_conditional=[
                         {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                        {'if': {'filter_query': '{Asset Type} = "TOTAL"'},
+                         'backgroundColor': THEME['table_header'], 'fontWeight': 'bold',
+                         'borderTop': f"1px solid {THEME['accent']}"},
+                        *_editable_style,
+                        *_mtm_styles,
                     ],
                     style_table={'overflowX': 'auto'},
                     sort_action='native',
-                    page_size=20,
+                    page_size=30,
+                    tooltip_header={
+                        'Open Yld (%)':   'User-editable: yield at which position was opened (%)',
+                        'Open Date':      'User-editable: trade open date (YYYY-MM-DD)',
+                        'Volume (MM)':    'User-editable: position size in MM CNY',
+                        'Close Yld (%)':  'Latest yield from factor levels',
+                        'MtM (MM CNY)':   'Volume × Duration × (Close Yld − Open Yld) / 10000',
+                    },
+                    tooltip_delay=0,
+                    tooltip_duration=None,
                 )
+
+                content = html.Div([
+                    html.Div([
+                        html.Span(
+                            'Open Date calendar:',
+                            style={'color': THEME['text_sub'], 'fontSize': '11px'},
+                        ),
+                        dcc.DatePickerSingle(
+                            id='summary-beta-open-date-picker',
+                            date=None,
+                            display_format='YYYY-MM-DD',
+                            clearable=True,
+                            disabled=True,
+                            placeholder='Select an Open Date cell',
+                            style={'backgroundColor': THEME['bg_input']},
+                        ),
+                        html.Span(
+                            id='summary-beta-open-date-target',
+                            children='Click an Open Date cell to edit with the calendar.',
+                            style={'color': THEME['text_sub'], 'fontSize': '11px',
+                                   'fontStyle': 'italic'},
+                        ),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
+                              'marginBottom': '10px', 'flexWrap': 'wrap'}),
+                    table,
+                ])
                 status = f"Beta snapshot from {ts[:19]}"
-                return table, status
+                return content, status
 
             except Exception as exc:
                 return _no_data(f"Error loading Beta snapshot: {exc}")
@@ -400,6 +542,46 @@ def register_risk_callbacks(app):
                 if not display_rows:
                     return _no_data("Alpha snapshot is empty.")
 
+                # ── TOTAL row ────────────────────────────────────────────────
+                # Volume and Target Volume only sum for outright bond types
+                # (BondCurve / BondSwap); spread trades are DV01-neutral.
+                _BOND_OUTRIGHT_TYPES = {
+                    'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap',
+                }
+
+                def _sum_col(col, filter_types=None):
+                    """Return numeric sum of col, or None if no non-empty values."""
+                    total, has_any = 0.0, False
+                    for r in display_rows:
+                        if filter_types and r.get('Spread Type', '') not in filter_types:
+                            continue
+                        v = str(r.get(col, '')).replace(',', '').replace('%', '').strip()
+                        if v:
+                            try:
+                                total += float(v)
+                                has_any = True
+                            except (ValueError, TypeError):
+                                pass
+                    return total if has_any else None
+
+                _s_vol     = _sum_col('Volume (mm)',            _BOND_OUTRIGHT_TYPES)
+                _s_tvol    = _sum_col('Target Volume (MM CNY)', _BOND_OUTRIGHT_TYPES)
+                _s_carry   = _sum_col('MtM Carry (MM CNY)')
+                _s_mtm     = _sum_col('MtM Value (MM CNY)')
+                _s_tgt_wt  = _sum_col('Target Weight (%)')
+                _s_wt      = _sum_col('Weight (%)')
+
+                total_row = {c: '' for c in display_rows[0].keys()}
+                total_row['ID']                     = 'TOTAL'
+                total_row['Volume (mm)']            = f"{_s_vol:,.1f}"    if _s_vol    is not None else ''
+                total_row['Target Volume (MM CNY)'] = f"{_s_tvol:,.1f}"   if _s_tvol   is not None else ''
+                total_row['MtM Carry (MM CNY)']     = f"{_s_carry:,.4f}"  if _s_carry  is not None else ''
+                total_row['MtM Value (MM CNY)']     = f"{_s_mtm:,.4f}"    if _s_mtm    is not None else ''
+                total_row['Target Weight (%)']      = f"{_s_tgt_wt:.2f}%" if _s_tgt_wt is not None else ''
+                total_row['Weight (%)']             = f"{_s_wt:.2f}%"     if _s_wt     is not None else ''
+                display_rows.append(total_row)
+                # ── end TOTAL row ─────────────────────────────────────────────
+
                 _editable_cols = {'Open price (bp)', 'Volume (mm)', 'Open date'}
                 columns = [
                     {
@@ -416,6 +598,10 @@ def register_risk_callbacks(app):
                      'backgroundColor': 'rgba(0, 204, 150, 0.12)'},
                     {'if': {'filter_query': '{Direction} = "SELL"'},
                      'backgroundColor': 'rgba(239, 85, 59, 0.12)'},
+                    {'if': {'filter_query': '{ID} = "TOTAL"'},
+                     'backgroundColor': THEME['table_header'],
+                     'fontWeight': 'bold',
+                     'borderTop': f"1px solid {THEME['accent']}"},
                 ]
                 editable_style = [
                     {'if': {'column_id': c},
@@ -574,4 +760,419 @@ def register_risk_callbacks(app):
 
         _persist_alpha_summary_rows(updated_rows)
         return updated_rows, f"Open date saved at {datetime.now().strftime('%H:%M:%S')}"
+
+    # ── Auto-save edits on the Beta positions table ───────────────────────────
+    def _persist_beta_user_rows(rows: list[dict]) -> None:
+        """Persist user-editable fields (open_yld, open_date, volume) to parquet."""
+        records = [
+            {
+                'asset_name':  str(r.get('Asset Name', '')),
+                'instrument':  str(r.get('Instrument', '')),
+                'open_yld':    str(r.get('Open Yld (%)', '')),
+                'open_date':   str(r.get('Open Date', '')),
+                'volume':      str(r.get('Volume (MM)', '')),
+            }
+            for r in rows
+            if str(r.get('Asset Type', '')) not in ('', 'TOTAL')
+        ]
+        try:
+            import pathlib as _pl
+            _pl.Path(_BETA_BOOK_USER_PARQUET).parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(records).to_parquet(_BETA_BOOK_USER_PARQUET, index=False)
+        except Exception:
+            pass
+
+    @app.callback(
+        Output('summary-refresh-status', 'children', allow_duplicate=True),
+        Input('summary-beta-table', 'data_timestamp'),
+        State('summary-beta-table', 'data'),
+        prevent_initial_call=True,
+    )
+    def _autosave_beta_table(_ts, rows):
+        if rows is None:
+            raise dash.exceptions.PreventUpdate
+        try:
+            _persist_beta_user_rows(rows)
+            return f"Beta edits saved at {datetime.now().strftime('%H:%M:%S')}"
+        except Exception as exc:
+            return f"Save failed: {exc}"
+
+    @app.callback(
+        [
+            Output('summary-beta-open-date-picker', 'date'),
+            Output('summary-beta-open-date-picker', 'disabled'),
+            Output('summary-beta-open-date-target', 'children'),
+        ],
+        Input('summary-beta-table', 'active_cell'),
+        State('summary-beta-table', 'data'),
+        prevent_initial_call=False,
+    )
+    def _sync_beta_open_date_picker(active_cell, rows):
+        if not rows or not active_cell or active_cell.get('column_id') != 'Open Date':
+            return None, True, 'Click an Open Date cell to edit with the calendar.'
+        row_index = active_cell.get('row')
+        if row_index is None or row_index >= len(rows):
+            return None, True, 'Click an Open Date cell to edit with the calendar.'
+        current_value = rows[row_index].get('Open Date', '')
+        parsed = pd.to_datetime(current_value, errors='coerce')
+        label = f"Editing {rows[row_index].get('Asset Name', '')}"
+        return (
+            parsed.date().isoformat() if pd.notna(parsed) else None,
+            False,
+            label,
+        )
+
+    @app.callback(
+        [
+            Output('summary-beta-table', 'data', allow_duplicate=True),
+            Output('summary-refresh-status', 'children', allow_duplicate=True),
+        ],
+        Input('summary-beta-open-date-picker', 'date'),
+        State('summary-beta-table', 'active_cell'),
+        State('summary-beta-table', 'data'),
+        prevent_initial_call=True,
+    )
+    def _apply_beta_open_date(date_value, active_cell, rows):
+        if not rows or not active_cell or active_cell.get('column_id') != 'Open Date':
+            raise dash.exceptions.PreventUpdate
+        row_index = active_cell.get('row')
+        if row_index is None or row_index >= len(rows):
+            raise dash.exceptions.PreventUpdate
+        updated_rows = [dict(row) for row in rows]
+        updated_rows[row_index]['Open Date'] = date_value or ''
+        _persist_beta_user_rows(updated_rows)
+        return updated_rows, f"Open date saved at {datetime.now().strftime('%H:%M:%S')}"
+
+    # ── Helper: duration → tenor mapping ────────────────────────────────────────
+    def _dur_to_tenor_label(dur: float) -> str:
+        """Map duration (years) to nearest tenor label."""
+        _TENOR_BOUNDS = [(0.0, 1.5, '1Y'), (1.5, 3.5, '2Y'), (3.5, 7.0, '5Y'),
+                         (7.0, 12.0, '10Y'), (12.0, 17.0, '20Y'), (17.0, 9999.0, '30Y')]
+        for lo, hi, label in _TENOR_BOUNDS:
+            if lo <= dur < hi:
+                return label
+        return '30Y'
+
+    def _parse_repo_spread_legs(spread_id: str) -> tuple[str, str]:
+        """Parse 'Repo7d-6m1y' → ('FR007S6M.IR', 'FR007S1Y.IR')."""
+        import re
+        _TENOR_MAP = {'3m': '3M', '6m': '6M', '9m': '9M', '1y': '1Y',
+                      '2y': '2Y', '3y': '3Y', '5y': '5Y', '10y': '10Y'}
+        m = re.match(r'repo7d-(.+)', spread_id.lower())
+        if not m:
+            return ('', '')
+        remainder = m.group(1)
+        pairs = re.findall(r'(\d+[a-z])', remainder)
+        if len(pairs) < 2:
+            return ('', '')
+        t1 = _TENOR_MAP.get(pairs[0], pairs[0].upper())
+        t2 = _TENOR_MAP.get(pairs[1], pairs[1].upper())
+        return (f'FR007S{t1}.IR', f'FR007S{t2}.IR')
+
+    def _find_reference_bond(bond_isin: str, instrument_info_df: pd.DataFrame,
+                            target_tenor: str) -> str:
+        """Find a reference bond with target tenor from instrument info.
+
+        For now, returns the bond code (ISIN) as the leg name.
+        In practice, would filter by tenor and return the first match.
+        """
+        return bond_isin  # Placeholder: just use the original ISIN
+
+    # ── Risk subtab: inventory + factor exposure + key-term DV01 ladder ─────────
+    @app.callback(
+        [Output('risk-inventory-container', 'children'),
+         Output('risk-exposure-container', 'children'),
+         Output('risk-refresh-status', 'children')],
+        [Input('summary-main-tabs', 'value'),
+         Input('risk-refresh-btn', 'n_clicks')],
+        prevent_initial_call=False,
+    )
+    def update_risk_tables(tab_value, _n_clicks):
+        import os as _os
+        import re
+
+        if tab_value != 'risk':
+            raise dash.exceptions.PreventUpdate
+
+        def _no_data_div(msg):
+            return html.Div(msg, style={'color': THEME['text_sub'], 'fontStyle': 'italic',
+                                        'padding': '20px', 'textAlign': 'center', 'fontSize': '13px'})
+
+        # ── Tenor bucket helper ───────────────────────────────────────────────
+        _TENOR_ORDER = ['1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
+        _TENOR_BOUNDS = [(0.0, 1.5), (1.5, 3.5), (3.5, 7.0),
+                         (7.0, 12.0), (12.0, 17.0), (17.0, 9999.0)]
+
+        def _dur_to_tenor(dur: float) -> str:
+            for label, (lo, hi) in zip(_TENOR_ORDER, _TENOR_BOUNDS):
+                if lo <= dur < hi:
+                    return label
+            return '30Y'
+
+        _SECTOR_TO_TENOR = {'1Y': '1Y', '2Y': '2Y', '5Y': '5Y',
+                            '10Y': '10Y', '20Y': '20Y', '30Y': '30Y'}
+
+        # ── Alpha spread-type → Key Term column ──────────────────────────────
+        _ALPHA_COL = {
+            'TBondCurve': 'CGB',   'TBondSwap':  'CGB',
+            'CBondCurve': 'PBB',   'CBondSwap':  'PBB',
+            'IRS':        'Repo7d',
+            'CDB':        'PBB',
+            'ICP':        'Shi3M',
+        }
+        _KT_COLS = ['CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M']
+
+        # ── Load Beta positions ───────────────────────────────────────────────
+        beta_rows, kt_grid = [], {t: {c: 0.0 for c in _KT_COLS} for t in _TENOR_ORDER}
+        if _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
+            try:
+                bdf = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
+                for _, r in bdf.iterrows():
+                    atype = str(r.get('Asset Type', ''))
+                    if atype == 'TOTAL':
+                        continue
+                    name     = str(r.get('Asset Name', ''))
+                    sector   = str(r.get('Sector', ''))
+                    cap_str  = str(r.get('Capital (CNY)', ''))
+                    dv01_val = r.get('DV01 (MM CNY)', 0)
+                    try:
+                        dv01_mm = float(str(dv01_val).replace(',', '')) if dv01_val else 0.0
+                    except (ValueError, TypeError):
+                        dv01_mm = 0.0
+
+                    beta_rows.append({
+                        'Book': 'Beta', 'Name': name,
+                        'Instrument': str(r.get('Instrument', '')),
+                        'Leg1': '', 'Leg2': '',  # Beta positions don't have legs
+                        'Sector': sector,
+                        'Capital (MM)': cap_str, 'DV01 (MM/bp)': f"{dv01_mm:.4f}",
+                        'Direction': 'LONG',
+                    })
+
+                    # Key Term: CN bonds → CGB; others → Others
+                    tenor = _SECTOR_TO_TENOR.get(sector)
+                    if tenor and dv01_mm != 0.0:
+                        col = 'CGB' if name.startswith('CN') else 'Others'
+                        kt_grid[tenor][col] = round(kt_grid[tenor][col] + dv01_mm, 4)
+            except Exception:
+                pass
+
+        # ── Load Alpha positions ──────────────────────────────────────────────
+        alpha_rows = []
+        if _os.path.exists(_SUMMARY_ALPHA_PARQUET):
+            try:
+                adf = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
+                for _, r in adf.iterrows():
+                    tid = str(r.get('ID', ''))
+                    if tid in ('', 'TOTAL'):
+                        continue
+                    notional  = float(r.get('notional_mm', 0) or 0)
+                    dv01_k    = float(r.get('DV01_k', 0) or 0)
+                    dv01_mm   = dv01_k / 1000.0          # k CNY → MM CNY
+                    dur_raw   = r.get('_duration', None)
+                    if dur_raw is not None and pd.notna(dur_raw):
+                        duration = float(dur_raw)
+                    elif notional > 0:
+                        duration = dv01_k * 10.0 / notional
+                    else:
+                        duration = 0.0
+                    direction = str(r.get('direction', 'BUY'))
+                    stype     = str(r.get('spread_type', ''))
+                    dir_sign  = -1.0 if direction in ('SELL', 'SHORT') else 1.0
+
+                    # Determine leg1, leg2 based on spread type and ID
+                    leg1, leg2 = '', ''
+                    if stype == 'SwapSpread':
+                        # SwapSpread: parse "Repo7d-6m1y" style
+                        leg1, leg2 = _parse_repo_spread_legs(tid)
+                    elif stype == 'TBondCurve':
+                        # TBondCurve: leg1=bond code, leg2=tenor reference (placeholder for now)
+                        leg1 = tid
+                        target_tenor = _dur_to_tenor_label(duration)
+                        leg2 = f"CGB-{target_tenor}"  # Simplified: actual lookup would be from reference data
+                    # Add more spread types as needed
+
+                    alpha_rows.append({
+                        'Book': 'Alpha', 'Name': tid, 'Instrument': tid,
+                        'Leg1': leg1, 'Leg2': leg2,
+                        'Sector': stype,
+                        'Capital (MM)': f"{notional:.1f}",
+                        'DV01 (MM/bp)': f"{dv01_mm * dir_sign:.4f}",
+                        'Direction': direction,
+                    })
+
+                    # Key Term ladder
+                    tenor = _dur_to_tenor(duration)
+                    col   = _ALPHA_COL.get(stype, 'Others')
+                    if dv01_mm != 0.0:
+                        kt_grid[tenor][col] = round(
+                            kt_grid[tenor][col] + dv01_mm * dir_sign, 4)
+            except Exception:
+                pass
+
+        if not beta_rows and not alpha_rows:
+            return (
+                _no_data_div("No positions found — run analysis (Beta) or optimization (Alpha) first."),
+                _no_data_div("No data."),
+                "",
+            )
+
+        # ── Inventory table ───────────────────────────────────────────────────
+        all_rows = beta_rows + alpha_rows
+        _dir_style = [
+            {'if': {'filter_query': '{Direction} = "LONG" or {Direction} = "BUY"'},
+             'backgroundColor': 'rgba(0,204,150,0.08)'},
+            {'if': {'filter_query': '{Direction} = "SHORT" or {Direction} = "SELL"'},
+             'backgroundColor': 'rgba(239,85,59,0.08)'},
+            {'if': {'filter_query': '{Book} = "Beta"', 'column_id': 'Book'},
+             'color': THEME['accent'], 'fontWeight': 'bold'},
+            {'if': {'filter_query': '{Book} = "Alpha"', 'column_id': 'Book'},
+             'color': THEME['danger'], 'fontWeight': 'bold'},
+        ]
+        inventory_table = dash_table.DataTable(
+            data=all_rows,
+            columns=[{'name': c, 'id': c} for c in
+                     ['Book', 'Name', 'Instrument', 'Leg1', 'Leg2', 'Sector',
+                      'Capital (MM)', 'DV01 (MM/bp)', 'Direction']],
+            style_cell={'textAlign': 'center', 'padding': '5px 8px', 'fontSize': '12px',
+                        'backgroundColor': THEME['table_row_odd'],
+                        'color': THEME['text_main'], 'border': 'none'},
+            style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'],
+                          'fontWeight': 'bold', 'border': 'none'},
+            style_data_conditional=[
+                {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                *_dir_style,
+            ],
+            style_table={'overflowX': 'auto'},
+            sort_action='native', page_size=40,
+        )
+
+        # ── Factor Risk Exposure (Beta only, no SPDL/SPSL, non-zero only) ────
+        factor_risk_df = ALLOCATION_RESULTS.get('factor_risk')
+        _SKIP_PREFIXES = ('SPDL', 'SPSL')
+        if (factor_risk_df is not None and not factor_risk_df.empty
+                and 'Risk Factor' in factor_risk_df.columns
+                and 'Net Exposure' in factor_risk_df.columns):
+            fr_rows = []
+            for _, fr in factor_risk_df.iterrows():
+                rf  = str(fr['Risk Factor'])
+                if any(rf.startswith(p) for p in _SKIP_PREFIXES):
+                    continue
+                exp = float(fr.get('Net Exposure', 0) or 0)
+                rc  = float(fr.get('Risk Contribution (%)', 0) or 0)
+                vol = float(fr.get('Volatility (% ann.)', 0) or 0)
+                if abs(exp) < 1e-8:          # skip truly-zero exposures
+                    continue
+                fr_rows.append({
+                    'Risk Factor':  rf,
+                    'Exposure':     f"{exp:+.4f}",
+                    'Vol (% ann.)': f"{vol:.2f}%",
+                    'RC (%)':       f"{rc:.1f}%",
+                })
+            if fr_rows:
+                _exp_styles = [
+                    {'if': {'filter_query': '{Exposure} contains "+"', 'column_id': 'Exposure'},
+                     'color': THEME['success']},
+                    {'if': {'filter_query': '{Exposure} contains "-"', 'column_id': 'Exposure'},
+                     'color': THEME['danger']},
+                ]
+                factor_exp_table = dash_table.DataTable(
+                    data=fr_rows,
+                    columns=[{'name': c, 'id': c} for c in
+                             ['Risk Factor', 'Exposure', 'Vol (% ann.)', 'RC (%)']],
+                    style_cell={'textAlign': 'center', 'padding': '5px 10px', 'fontSize': '12px',
+                                'backgroundColor': THEME['table_row_odd'],
+                                'color': THEME['text_main'], 'border': 'none'},
+                    style_header={'backgroundColor': THEME['table_header'],
+                                  'color': THEME['text_main'], 'fontWeight': 'bold', 'border': 'none'},
+                    style_data_conditional=[
+                        {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                        *_exp_styles,
+                    ],
+                    style_table={'overflowX': 'auto', 'maxWidth': '520px'},
+                )
+            else:
+                factor_exp_table = _no_data_div(
+                    "No non-zero IR/CMD/FX factor exposures found (run Beta Analysis first).")
+        else:
+            factor_exp_table = _no_data_div(
+                "Beta factor risk not yet computed — run RUN ANALYSIS in Beta Book first.")
+
+        # ── Key Term Exposure ladder ──────────────────────────────────────────
+        # Compute row totals; skip entirely-zero rows
+        kt_display = []
+        for tenor in _TENOR_ORDER:
+            row = kt_grid[tenor]
+            total = round(sum(row.values()), 4)
+            if all(abs(v) < 1e-8 for v in row.values()):
+                continue
+            kt_display.append({
+                'Tenor': tenor,
+                'CGB':    f"{row['CGB']:+.4f}" if abs(row['CGB']) > 1e-8 else '',
+                'PBB':    f"{row['PBB']:+.4f}" if abs(row['PBB']) > 1e-8 else '',
+                'Others': f"{row['Others']:+.4f}" if abs(row['Others']) > 1e-8 else '',
+                'Repo7d': f"{row['Repo7d']:+.4f}" if abs(row['Repo7d']) > 1e-8 else '',
+                'Shi3M':  f"{row['Shi3M']:+.4f}" if abs(row['Shi3M']) > 1e-8 else '',
+                'Total':  f"{total:+.4f}" if abs(total) > 1e-8 else '',
+            })
+
+        _kt_pos_style = [
+            {'if': {'filter_query': f'{{{c}}} contains "+"', 'column_id': c},
+             'color': THEME['success']}
+            for c in ['CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M', 'Total']
+        ]
+        _kt_neg_style = [
+            {'if': {'filter_query': f'{{{c}}} contains "-"', 'column_id': c},
+             'color': THEME['danger']}
+            for c in ['CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M', 'Total']
+        ]
+
+        kt_table = (
+            dash_table.DataTable(
+                data=kt_display,
+                columns=[{'name': c, 'id': c} for c in
+                         ['Tenor', 'CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M', 'Total']],
+                style_cell={'textAlign': 'center', 'padding': '5px 10px', 'fontSize': '12px',
+                            'backgroundColor': THEME['table_row_odd'],
+                            'color': THEME['text_main'], 'border': 'none'},
+                style_cell_conditional=[
+                    {'if': {'column_id': 'Tenor'}, 'fontWeight': 'bold',
+                     'color': THEME['accent'], 'textAlign': 'left'},
+                ],
+                style_header={'backgroundColor': THEME['table_header'],
+                              'color': THEME['text_main'], 'fontWeight': 'bold', 'border': 'none'},
+                style_data_conditional=[
+                    {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                    *_kt_pos_style, *_kt_neg_style,
+                ],
+                style_table={'overflowX': 'auto', 'maxWidth': '700px'},
+            )
+            if kt_display
+            else _no_data_div("No rate positions found for Key Term Exposure.")
+        )
+
+        # ── Assemble second panel: Factor Exposure + Key Term side-by-side ────
+        exposure_panel = html.Div([
+            html.Div([
+                html.H6("Factor Risk Exposure  (Beta book · IR/CMD/FX factors)",
+                        style={'color': THEME['warning'], 'fontSize': '12px', 'marginBottom': '8px'}),
+                factor_exp_table,
+            ], style={'flex': '1', 'minWidth': '280px', 'marginRight': '20px'}),
+            html.Div([
+                html.H6("Key Term Exposure  DV01 ladder MM CNY/bp  (Beta + Alpha)",
+                        style={'color': THEME['accent'], 'fontSize': '12px', 'marginBottom': '8px'}),
+                html.Div(
+                    "CGB = Gov Bond  ·  PBB = Policybank Bond  ·  Repo7d = FR007 IRS  ·  Shi3M = ICP/SHIBOR",
+                    style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginBottom': '6px',
+                           'fontStyle': 'italic'},
+                ),
+                kt_table,
+            ], style={'flex': '1', 'minWidth': '340px'}),
+        ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '16px', 'alignItems': 'flex-start'})
+
+        n_beta  = len(beta_rows)
+        n_alpha = len(alpha_rows)
+        status  = (f"{n_beta} beta · {n_alpha} alpha positions · "
+                   f"updated {datetime.now().strftime('%H:%M:%S')}")
+        return inventory_table, exposure_panel, status
 

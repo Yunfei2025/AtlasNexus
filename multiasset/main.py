@@ -76,7 +76,7 @@ def create_bond_universe(analyzer=None) -> List[MultiFactorBondAsset]:
         'CN': 'CN'
     }
     
-    tenors = ['1Y', '2Y', '5Y', '10Y', '30Y']
+    tenors = ['1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
     
     bonds: List[MultiFactorBondAsset] = []
     for display_country, rf_country in country_mapping.items():

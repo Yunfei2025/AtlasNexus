@@ -108,7 +108,7 @@ def get_universe(asset_name):
 
 def get_sector(asset_name):
     """Get the sector/tenor for the asset."""
-    for tenor in ['30Y', '10Y', '5Y', '2Y', '1Y']:  # longest first to avoid '1Y' matching '10Y'
+    for tenor in ['30Y', '20Y', '10Y', '5Y', '2Y', '1Y']:  # longest first to avoid partial matches
         if tenor in asset_name:
             return tenor
     return 'N/A'
@@ -158,6 +158,7 @@ def get_asset_yield_series(asset_name, market_data):
                 '2Y': '中债国债到期收益率:2年',
                 '5Y': '中债国债到期收益率:5年',
                 '10Y': '中债国债到期收益率:10年',
+                '20Y': '中债国债到期收益率:20年',
                 '30Y': '中债国债到期收益率:30年'
             }
             col = tenor_map.get(sector)
@@ -187,6 +188,7 @@ def get_asset_yield_series(asset_name, market_data):
                 '2Y': '中债国开债到期收益率:2年',
                 '5Y': '中债国开债到期收益率:5年',
                 '10Y': '中债国开债到期收益率:10年',
+                '20Y': '中债国开债到期收益率:20年',
                 '30Y': '中债国开债到期收益率:30年'
             }
             col = tenor_map.get(sector)
@@ -382,12 +384,14 @@ def calculate_asset_monthly_return(asset_name, start_date, end_date, market_data
                     '2Y': '中债国债到期收益率:2年',
                     '5Y': '中债国债到期收益率:5年',
                     '10Y': '中债国债到期收益率:10年',
+                    '20Y': '中债国债到期收益率:20年',
                     '30Y': '中债国债到期收益率:30年'
                 }
                 col = tenor_map.get(sector)
                 if not col or col not in cn_data.columns:
                     # Fallback or skip
                     if sector == '2Y': col = '中债国债到期收益率:1年'  # Approx
+                    elif sector == '20Y': col = '中债国债到期收益率:10年'  # Approx
                     elif sector == '30Y': col = '中债国债到期收益率:10年'  # Approx
                     else: return 0.0, 0.0, 0.0, 0.0
                 

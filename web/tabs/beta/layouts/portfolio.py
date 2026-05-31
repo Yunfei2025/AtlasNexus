@@ -65,6 +65,7 @@ def build_multiasset_portfolio_layout():
         dcc.Store(id='portfolio-data-store'),
         dcc.Store(id='asset-pool-store', data=initial_pool),
         dcc.Store(id='rp-budget-store', data={}),
+        dcc.Store(id='vol-adj-store', data={}),
 
         html.Div([
             # Section 1: Configuration Header & Capital
@@ -92,6 +93,19 @@ def build_multiasset_portfolio_layout():
                         style={'width': '100px', 'marginRight': '5px', 'fontSize': '12px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
                     ),
                     html.Span("CNY", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginRight': '20px'}),
+
+                    html.Label("Max Dur:", style={'fontWeight': 'bold', 'marginRight': '5px', 'fontSize': '12px', 'color': THEME['text_main']}),
+                    dcc.Input(
+                        id='max-duration-input',
+                        type='number',
+                        value=5,
+                        min=0.1, max=50, step=0.1,
+                        style={'width': '60px', 'marginRight': '4px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
+                    ),
+                    html.Span(
+                        id='max-dv01-display',
+                        style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginRight': '20px', 'fontStyle': 'italic'}
+                    ),
 
                     html.Label("Model:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '12px', 'color': THEME['text_main']}),
                     html.Span(
@@ -122,7 +136,6 @@ def build_multiasset_portfolio_layout():
                                 id='asset-type-selector',
                                 options=[
                                     {'label': ' Rates', 'value': 'Rates'},
-                                    {'label': ' Spread', 'value': 'Spread'},
                                     {'label': ' Cmdty', 'value': 'Commodities'},
                                 ],
                                 value=None,
@@ -151,6 +164,7 @@ def build_multiasset_portfolio_layout():
                                         {'label': ' 2Y', 'value': '2Y'},
                                         {'label': ' 5Y', 'value': '5Y'},
                                         {'label': ' 10Y', 'value': '10Y'},
+                                        {'label': ' 20Y', 'value': '20Y'},
                                         {'label': ' 30Y', 'value': '30Y'},
                                     ],
                                     value=[], inline=True,
@@ -220,10 +234,12 @@ def build_multiasset_portfolio_layout():
                         ),
                         html.Span(id='factor-signals-toggle-status', style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '8px'}),
                     ], style={'marginBottom': '8px'}),
-                    # Column headers: Factor | Vol% ann | RP Max | Coeff | Exposure
+                    # Column headers: Factor | Vol% ann | ×adj | RP Max | Coeff | Exposure
                     html.Div([
                         html.Span("Factor",   style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0'}),
                         html.Span("Vol %ann", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '62px', 'textAlign': 'right', 'flexShrink': '0'}),
+                        html.Span("×adj",     style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '48px', 'textAlign': 'center', 'flexShrink': '0'},
+                                  title='Vol multiplier: effective vol = measured vol × adj. Set >1 to reduce RP Max (e.g. discount IRCV over-allocation).'),
                         html.Span("RP Max",   style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '54px', 'textAlign': 'right', 'flexShrink': '0'}),
                         html.Span("Coeff",    style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '44px', 'textAlign': 'center', 'flexShrink': '0'}),
                         html.Span("Exposure", style={'color': THEME['text_sub'], 'fontSize': '11px', 'flex': '1', 'textAlign': 'right'}),
@@ -244,46 +260,7 @@ def build_multiasset_portfolio_layout():
 
         ], style={'backgroundColor': THEME['bg_card'], 'marginBottom': '20px', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '8px'}),
 
-        # ── Factor Model Signals Panel (collapsible) ─────────────────────────
-        html.Details([
-            html.Summary([
-                html.Span("📡 Factor Model Signals",
-                          style={'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '13px'}),
-                html.Span("  ·  expand to refresh live signal buckets from the factor prediction engine",
-                          style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-            ], style={'padding': '10px 16px', 'cursor': 'pointer', 'listStyleType': 'none',
-                      'WebkitAppearance': 'none', 'MozAppearance': 'none',
-                      'backgroundColor': THEME['bg_input'], 'borderRadius': '5px',
-                      'userSelect': 'none'}),
-            html.Div([
-                html.Div([
-                    html.Button(
-                        "Refresh Signals",
-                        id='refresh-factor-signals-btn',
-                        n_clicks=0,
-                        style={
-                            'backgroundColor': THEME['accent'],
-                            'color': 'white', 'padding': '5px 15px',
-                            'border': 'none', 'borderRadius': '4px',
-                            'cursor': 'pointer', 'fontWeight': 'bold',
-                            'fontSize': '12px', 'marginRight': '15px',
-                        }),
-                    html.Span(id='factor-signals-status',
-                              style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-                ], style={'marginBottom': '12px'}),
-                dcc.Loading(
-                    id='loading-factor-signals',
-                    type='default',
-                    children=html.Div(id='factor-signals-table-container'),
-                ),
-            ], style={'padding': '14px 16px', 'borderTop': f'1px solid {THEME["table_header"]}'}),
-        ], style={
-            'backgroundColor': THEME['bg_card'],
-            'borderRadius': '5px',
-            'border': f'1px solid {THEME["table_header"]}',
-            'marginBottom': '20px',
-        }),
-        # Store for the latest signal snapshot (consumed by Portfolio allocation)
+        # Store for the latest signal snapshot (populated by Candidates tab Predict button)
         dcc.Store(id='factor-signals-snapshot-store', data={}),
 
         # Portfolio Table Results

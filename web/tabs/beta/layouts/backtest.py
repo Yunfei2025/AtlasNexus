@@ -8,11 +8,192 @@ from datetime import datetime, timedelta
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
-from ..data import THEME, FUTURES_AVAILABLE
+from ..data import THEME, FUTURES_AVAILABLE, SELECTED_FACTOR_POOL
 
 # Conditionally import futures discovery helper
 if FUTURES_AVAILABLE:
     from futures.backtest.data_loader import discover_pkl_files
+
+
+def build_factor_history_layout():
+    """Factor Explorer tab — sidebar controls + full-width history chart.
+
+    Styled analogously to the alpha book's Spread tab: a narrow left control
+    panel with UPPERCASE section labels, and a full-height chart area on the right.
+    """
+    _SB_BG   = '#0a1e3d'
+    _LBL_COL = '#8fb3d9'
+
+    def _field_label(text):
+        return html.Div(text, style={
+            'color': _LBL_COL,
+            'fontSize': '10px',
+            'fontWeight': 'bold',
+            'letterSpacing': '0.6px',
+            'textTransform': 'uppercase',
+            'marginTop': '14px',
+            'marginBottom': '4px',
+        })
+
+    dd_style = {'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
+                'fontSize': '12px'}
+
+    sidebar = html.Div([
+        html.Div("FACTOR EXPLORER", style={
+            'color': '#ffffff',
+            'fontSize': '11px',
+            'fontWeight': 'bold',
+            'letterSpacing': '1px',
+            'paddingBottom': '10px',
+            'borderBottom': '1px solid #1e4a8a',
+            'marginBottom': '4px',
+        }),
+        html.P(
+            "Browse the historical level of any risk factor. "
+            "Select asset class → region → factor types.",
+            style={'color': _LBL_COL, 'fontSize': '10px',
+                   'lineHeight': '1.5', 'marginBottom': '4px',
+                   'fontStyle': 'italic'},
+        ),
+
+        _field_label("Asset Class"),
+        dcc.Dropdown(
+            id='factor-asset-class-selector',
+            options=[
+                {'label': 'Rates',       'value': 'Rates'},
+                {'label': 'Spread',      'value': 'Spread'},
+                {'label': 'FX',          'value': 'FX'},
+                {'label': 'Commodities', 'value': 'Commodities'},
+            ],
+            value=None,
+            placeholder="Select asset class…",
+            clearable=True,
+            style=dd_style,
+        ),
+
+        _field_label("Region / Type"),
+        dcc.Dropdown(
+            id='factor-region-selector',
+            options=[],
+            value=None,
+            placeholder="Select region…",
+            clearable=True,
+            style=dd_style,
+        ),
+
+        _field_label("Factor(s)"),
+        dcc.Dropdown(
+            id='factor-type-selector',
+            options=[],
+            value=[],
+            multi=True,
+            placeholder="Select factors…",
+            style=dd_style,
+        ),
+
+        html.Hr(style={'borderColor': '#1e4a8a', 'margin': '18px 0 8px'}),
+        html.P(
+            "Factor naming convention:\n"
+            "IRDL = Level · IRSL = Slope · IRCV = Curvature\n"
+            "FXDL = FX spot · CMDL = Commodity",
+            style={'color': _LBL_COL, 'fontSize': '10px',
+                   'whiteSpace': 'pre-line', 'lineHeight': '1.6'},
+        ),
+    ], style={
+        'width': '220px',
+        'flexShrink': '0',
+        'backgroundColor': _SB_BG,
+        'borderRadius': '8px',
+        'padding': '14px 12px',
+        'overflowY': 'auto',
+    })
+
+    chart_area = html.Div([
+        html.Div(
+            "HISTORICAL PERFORMANCE",
+            style={
+                'color': _LBL_COL,
+                'fontSize': '11px',
+                'fontWeight': 'bold',
+                'letterSpacing': '0.5px',
+                'textTransform': 'uppercase',
+                'padding': '6px 0 8px 2px',
+            },
+        ),
+        dcc.Graph(
+            id='factor-history-chart',
+            config={'displayModeBar': True},
+            style={'height': '580px'},
+        ),
+    ], style={'flex': '1', 'minWidth': '0', 'paddingLeft': '16px'})
+
+    return html.Div([
+        sidebar,
+        chart_area,
+    ], style={
+        'display': 'flex',
+        'flexDirection': 'row',
+        'alignItems': 'flex-start',
+        'backgroundColor': THEME['bg_main'],
+        'padding': '20px',
+        'borderRadius': '5px',
+        'margin': '10px',
+        'minHeight': '640px',
+    })
+
+
+def build_beta_backtest_combined_layout():
+    """Wrap the Backtest subtab as two inner sheets — Individual Factors and Portfolio.
+
+    Individual Factors: risk-factor model backtest (full controls + enhanced charts).
+    Portfolio:          historical allocation analysis (previously the Rebalance subtab).
+    """
+    _inner_tab_style = {
+        'backgroundColor': THEME['bg_card'],
+        'color': THEME['text_main'],
+        'padding': '7px 16px',
+        'fontSize': '12px',
+        'borderRadius': '4px 4px 0 0',
+    }
+    _inner_tab_selected = {
+        'backgroundColor': THEME['accent'],
+        'color': 'white',
+        'padding': '7px 16px',
+        'fontSize': '12px',
+        'borderRadius': '4px 4px 0 0',
+        'fontWeight': 'bold',
+    }
+
+    return html.Div([
+        html.H6("Beta Backtest",
+                style={'color': THEME['text_main'], 'marginBottom': '10px'}),
+        html.P(
+            "Backtest individual factor or the full portfolio using historical data. "
+            "Evaluate factor-model signal performance with IC-weighted positioning, "
+            "risk-parity vol scaling, and transaction cost modelling.",
+            style={'color': THEME['text_sub'], 'fontSize': '13px',
+                   'marginBottom': '18px'}
+        ),
+
+        dcc.Tabs(
+            id='beta-backtest-inner-tabs',
+            value='individual-factors',
+            children=[
+                dcc.Tab(label='Individual Factors', value='individual-factors',
+                        style=_inner_tab_style, selected_style=_inner_tab_selected),
+                dcc.Tab(label='Portfolio', value='portfolio',
+                        style=_inner_tab_style, selected_style=_inner_tab_selected),
+            ],
+            style={'marginBottom': '0px'},
+        ),
+        # Both panels are pre-rendered; CSS show/hide via callback.
+        html.Div(id='beta-backtest-indiv-div',
+                 children=build_risk_factor_backtest_layout(),
+                 style={'display': 'block'}),
+        html.Div(id='beta-backtest-port-div',
+                 children=build_multiasset_backtest_layout(),
+                 style={'display': 'none'}),
+    ], style={'backgroundColor': THEME['bg_main']})
 
 
 def build_multiasset_backtest_layout():
@@ -171,12 +352,6 @@ def build_risk_factor_backtest_layout():
         {'label': 'IRSL.CN (China Slope)',    'value': 'IRSL.CN'},
         {'label': 'IRSL.US (US Slope)',       'value': 'IRSL.US'},
         {'label': 'IRCV.CN (China Curvature)','value': 'IRCV.CN'},
-        # Spread
-        {'label': 'SPDL.IRS (IRS Level)',     'value': 'SPDL.IRS'},
-        {'label': 'SPSL.IRS (IRS Slope)',     'value': 'SPSL.IRS'},
-        {'label': 'SPDL.CDB (CDB Level)',     'value': 'SPDL.CDB'},
-        {'label': 'SPSL.CDB (CDB Slope)',     'value': 'SPSL.CDB'},
-        {'label': 'SPDL.ICP (ICP Level)',     'value': 'SPDL.ICP'},
         # FX
         {'label': 'FXDL.USDCNY',             'value': 'FXDL.USDCNY'},
         {'label': 'FXDL.EURCNY',             'value': 'FXDL.EURCNY'},
@@ -187,120 +362,152 @@ def build_risk_factor_backtest_layout():
         {'label': 'CMDL.SC (Crude Oil)',      'value': 'CMDL.SC'},
     ]
 
-    default_factors = ['IRDL.CN', 'IRSL.CN', 'SPDL.CDB', 'FXDL.USDCNY']
+    # Default factors mirror the Factor subtab's active Risk Factor Pool selection
+    default_factors = list(dict.fromkeys(
+        SELECTED_FACTOR_POOL['ir_factors'] +
+        SELECTED_FACTOR_POOL['fx_factors'] +
+        SELECTED_FACTOR_POOL['cmd_factors']
+    )) or ['IRDL.CN', 'IRSL.CN', 'FXDL.USDCNY']
+
+    # Shared dark-input style — matches alpha book's strategy parameter inputs
+    _inp = {
+        'padding': '5px', 'borderRadius': '4px',
+        'border': '1px solid #4a6f9f',
+        'backgroundColor': '#2a3f5f', 'color': '#fff',
+    }
+    # Card container — matches alpha book's section cards
+    _card = {
+        'backgroundColor': THEME['bg_card'],
+        'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px',
+    }
+    _lbl = {'fontWeight': 'bold', 'color': THEME['text_main'],
+            'marginBottom': '5px', 'display': 'block'}
 
     return html.Div([
-        html.H4("Risk Factor Backtest",
-                 style={'color': THEME['text_main'], 'marginBottom': '6px'}),
-        html.P("Backtest technical strategies on risk factors from the PORTFOLIO tab. "
-               "Yield factors use duration-adjusted returns; FX/Commodity use price returns.",
-               style={'color': THEME['text_sub'], 'fontSize': '12px',
-                      'marginBottom': '16px', 'fontStyle': 'italic'}),
-
-        # ── Row 1: Factor selection ─────────────────────────────────────
+        # ── Section 1: Factor selection (Spread-Selection pattern) ─────
         html.Div([
-            html.Div([
-                html.Label("Factors:", style={'fontWeight': 'bold', 'marginRight': '10px',
-                                              'color': THEME['text_main'], 'fontSize': '13px'}),
-                dcc.Dropdown(
-                    id='rfbt-factor-selector',
-                    options=all_factor_options,
-                    value=default_factors,
-                    multi=True,
-                    placeholder="Select factors…",
-                    style={'flex': '1', 'minWidth': '360px',
-                           'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center', 'flex': '1'}),
+            html.H6("Factor Selection", style={'color': THEME['accent'], 'marginBottom': '15px'}),
 
-            # Hidden store – always FactorModel
+            html.Div([
+                html.Div([
+                    html.Label("Asset Class:", style={**_lbl}),
+                    dcc.Dropdown(
+                        id='rfbt-asset-class',
+                        options=[
+                            {'label': 'Rates',       'value': 'Rates'},
+                            {'label': 'Spread',      'value': 'Spread'},
+                            {'label': 'FX',          'value': 'FX'},
+                            {'label': 'Commodities', 'value': 'Commodities'},
+                        ],
+                        value='Rates',
+                        clearable=False,
+                        style={'width': '200px', 'fontSize': '13px'},
+                    ),
+                ], style={'marginRight': '20px'}),
+
+                html.Div([
+                    html.Label("Factor:", style={**_lbl}),
+                    dcc.Dropdown(
+                        id='rfbt-factor',
+                        options=[],
+                        value=None,
+                        clearable=False,
+                        placeholder="Select factor…",
+                        style={'width': '260px', 'fontSize': '13px'},
+                    ),
+                ]),
+            ], style={'display': 'flex', 'marginBottom': '5px'}),
+
+            # Hidden legacy IDs kept for strategy-param callbacks
             dcc.Store(id='rfbt-strategy-selector', data='FactorModel'),
-        ], style={'display': 'flex', 'gap': '20px', 'flexWrap': 'wrap',
-                  'marginBottom': '12px'}),
-
-        # ── Row 2: Date range & strategy params ─────────────────────────
-        html.Div([
-            html.Div([
-                html.Label("Period:", style={'fontWeight': 'bold', 'marginRight': '10px',
-                                             'color': THEME['text_main'], 'fontSize': '13px'}),
-                dcc.DatePickerRange(
-                    id='rfbt-date-range',
-                    min_date_allowed=datetime(2015, 1, 1).date(),
-                    max_date_allowed=datetime.now().date(),
-                    start_date=datetime(2023, 1, 1).date(),
-                    end_date=datetime.now().date(),
-                    display_format='YYYY-MM-DD',
-                    style={'backgroundColor': THEME['bg_input']},
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center'}),
-
-            # Hidden placeholders (keep IDs for callback State refs)
             html.Div(id='rfbt-ma-params', children=[
                 dcc.Input(id='rfbt-ma-short', type='number', value=10, style={'display': 'none'}),
-                dcc.Input(id='rfbt-ma-long', type='number', value=30, style={'display': 'none'}),
+                dcc.Input(id='rfbt-ma-long',  type='number', value=30, style={'display': 'none'}),
             ], style={'display': 'none'}),
-
             html.Div(id='rfbt-boll-params', children=[
                 dcc.Input(id='rfbt-boll-window', type='number', value=20, style={'display': 'none'}),
-                dcc.Input(id='rfbt-boll-std', type='number', value=1.5, style={'display': 'none'}),
+                dcc.Input(id='rfbt-boll-std',    type='number', value=1.5, style={'display': 'none'}),
             ], style={'display': 'none'}),
             html.Div(id='rfbt-mom-params', children=[
                 dcc.Input(id='rfbt-mom-window', type='number', value=20, style={'display': 'none'}),
             ], style={'display': 'none'}),
             html.Div(id='rfbt-zscore-params', children=[
-                dcc.Input(id='rfbt-zscore-window', type='number', value=60, style={'display': 'none'}),
-                dcc.Input(id='rfbt-zscore-entry', type='number', value=1.5, style={'display': 'none'}),
-                dcc.Input(id='rfbt-zscore-exit', type='number', value=0.5, style={'display': 'none'}),
+                dcc.Input(id='rfbt-zscore-window', type='number', value=60,  style={'display': 'none'}),
+                dcc.Input(id='rfbt-zscore-entry',  type='number', value=1.5, style={'display': 'none'}),
+                dcc.Input(id='rfbt-zscore-exit',   type='number', value=0.5, style={'display': 'none'}),
             ], style={'display': 'none'}),
+        ], style=_card),
 
-            # Factor Model params
-            html.Div(id='rfbt-fm-params', children=[
-                html.Label("Train (months):", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                                     'color': THEME['text_main'], 'fontSize': '12px'}),
-                dcc.Input(id='rfbt-fm-train', type='number', value=12, min=3,
-                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
-                html.Label("IC thr:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                             'color': THEME['text_main'], 'fontSize': '12px'}),
-                dcc.Input(id='rfbt-fm-ic', type='number', value=0.05, step=0.01, min=0.01,
-                          style={'width': '60px', 'marginRight': '10px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
-                html.Label("Top N:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                            'color': THEME['text_main'], 'fontSize': '12px'}),
-                dcc.Input(id='rfbt-fm-topn', type='number', value=8, min=1,
-                          style={'width': '55px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
-            ], style={'display': 'flex', 'alignItems': 'center'}),
-
-        ], style={'display': 'flex', 'gap': '16px', 'flexWrap': 'wrap',
-                  'marginBottom': '14px', 'alignItems': 'center'}),
-
-        # ── Row 3: Buttons ──────────────────────────────────────────────
+        # ── Section 2: Model parameters ─────────────────────────────────
         html.Div([
-            html.Button("Generate factor-rates.pkl", id='rfbt-generate-btn', n_clicks=0,
-                        style={'backgroundColor': THEME['accent'], 'color': 'white',
-                               'padding': '8px 16px', 'border': 'none', 'borderRadius': '5px',
-                               'cursor': 'pointer', 'fontSize': '12px', 'fontWeight': 'bold',
-                               'marginRight': '12px'}),
-            html.Button("Run Backtest & Save", id='rfbt-run-btn', n_clicks=0,
-                        style={'backgroundColor': THEME['success'], 'color': 'white',
-                               'padding': '8px 16px', 'border': 'none', 'borderRadius': '5px',
-                               'cursor': 'pointer', 'fontSize': '12px', 'fontWeight': 'bold'}),
-            html.Span(id='rfbt-status', style={'marginLeft': '16px',
-                                               'color': THEME['text_sub'], 'fontSize': '12px'}),
-        ], style={'marginBottom': '16px'}),
+            html.H6("Strategy Parameters", style={'color': THEME['accent'], 'marginBottom': '15px'}),
+            html.Div(id='rfbt-fm-params', children=[
+                html.Div([
+                    html.Label("Train window (months):", style={**_lbl}),
+                    dcc.Input(id='rfbt-fm-train', type='number', value=12, min=3,
+                              style={**_inp, 'width': '70px'}),
+                ], style={'marginRight': '25px'}),
+                html.Div([
+                    html.Label("IC threshold:", style={**_lbl}),
+                    dcc.Input(id='rfbt-fm-ic', type='number', value=0.05, step=0.01, min=0.01,
+                              style={**_inp, 'width': '70px'}),
+                ], style={'marginRight': '25px'}),
+                html.Div([
+                    html.Label("Top N features:", style={**_lbl}),
+                    dcc.Input(id='rfbt-fm-topn', type='number', value=8, min=1,
+                              style={**_inp, 'width': '70px'}),
+                ], style={'marginRight': '25px'}),
+                html.Div([
+                    html.Label("Backtest Period:", style={**_lbl}),
+                    dcc.Dropdown(
+                        id='rfbt-period-years',
+                        options=[
+                            {'label': '1 Year',  'value': 1},
+                            {'label': '2 Years', 'value': 2},
+                            {'label': '3 Years', 'value': 3},
+                            {'label': '5 Years', 'value': 5},
+                        ],
+                        value=2,
+                        clearable=False,
+                        style={'width': '130px', 'fontSize': '13px'},
+                    ),
+                ]),
+            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '8px',
+                      'alignItems': 'flex-end'}),
+        ], style=_card),
 
-        # ── Results area ────────────────────────────────────────────────
+        # ── Section 3: Actions ──────────────────────────────────────────
+        html.Div([
+            html.Button(
+                "Generate factor-rates.pkl",
+                id='rfbt-generate-btn', n_clicks=0,
+                style={'backgroundColor': THEME['accent'], 'color': 'white',
+                       'padding': '10px 22px', 'border': 'none', 'borderRadius': '4px',
+                       'cursor': 'pointer', 'fontWeight': 'bold', 'fontSize': '14px',
+                       'marginRight': '12px'},
+            ),
+            html.Button(
+                "▶️ Run Backtest & Save",
+                id='rfbt-run-btn', n_clicks=0,
+                title="Trains selected factors and incrementally merges them into "
+                      "the .joblib model file. Previously trained factors are preserved.",
+                style={'backgroundColor': THEME['success'], 'color': 'white',
+                       'padding': '10px 22px', 'border': 'none', 'borderRadius': '4px',
+                       'cursor': 'pointer', 'fontWeight': 'bold', 'fontSize': '14px',
+                       'marginRight': '12px'},
+            ),
+            html.Span(id='rfbt-status',
+                      style={'color': THEME['text_sub'], 'fontSize': '12px',
+                             'marginLeft': '10px'}),
+        ], style={'marginBottom': '20px'}),
+
+        # ── Results ─────────────────────────────────────────────────────
         dcc.Loading(
             type='default',
             children=html.Div(id='rfbt-results-container', style={'minHeight': '200px'}),
         ),
 
-    ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px',
-              'borderRadius': '5px', 'margin': '10px'})
+    ], style={'padding': '10px'})
 
 
 def build_factor_backtest_layout():

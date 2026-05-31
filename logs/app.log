@@ -1202,3 +1202,1542 @@ ERROR:     raise ValueError(
 ERROR:         "cannot set a frame with no defined index and a scalar"
 ERROR:     )
 ERROR: ValueError: cannot set a frame with no defined index and a scalar
+WARNING: Using empty forward shifts as fallback
+ERROR: Address already in use
+ERROR: Port 8080 is in use by another program. Either identify and stop that program, or start the server with a different port.
+ERROR: Traceback (most recent call last):
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/backtest_rfbt.py", line 211, in run_risk_factor_backtest
+ERROR:     dcc.Graph(figure=fig),
+ERROR:     ^^^
+ERROR: NameError: name 'dcc' is not defined
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+ERROR: Address already in use
+ERROR: Port 8080 is in use by another program. Either identify and stop that program, or start the server with a different port.
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/factor.py", line 217, in rescale_factor_history_yaxis
+    patched = Patch()
+              ^^^^^
+NameError: name 'Patch' is not defined
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/factor.py", line 217, in rescale_factor_history_yaxis
+    patched = Patch()
+              ^^^^^
+NameError: name 'Patch' is not defined
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+WARNING: Using empty forward shifts as fallback
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/factor.py", line 217, in rescale_factor_history_yaxis
+    patched = Patch()
+              ^^^^^
+NameError: name 'Patch' is not defined
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/factor.py", line 217, in rescale_factor_history_yaxis
+    patched = Patch()
+              ^^^^^
+NameError: name 'Patch' is not defined
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/factor.py", line 217, in rescale_factor_history_yaxis
+    patched = Patch()
+              ^^^^^
+NameError: name 'Patch' is not defined
+ERROR: ❌ Failed to start AtlasNexus Daily Console: list index out of range
+ERROR: ❌ Failed to start AtlasNexus Daily Console: list index out of range
+ERROR: ❌ Failed to start AtlasNexus Daily Console: list index out of range
+ERROR: ❌ Failed to start AtlasNexus Daily Console: list index out of range
+ERROR: Traceback (most recent call last):
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 493, in run_analysis
+ERROR:     summary, returns, vols, factor_exp, factor_risk, portfolio = run_risk_parity_allocation(
+ERROR:                                                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~^
+ERROR:         total_capital=total_capital_cny, use_cache=True, selected_assets=selected_asset_names,
+ERROR:         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR:         risk_budgets=risk_budgets, use_deterministic=True
+ERROR:         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR:     )
+ERROR:     ^
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/multiasset/main.py", line 348, in run_risk_parity_allocation
+ERROR:     portfolio = create_custom_portfolio(
+ERROR:         selected_assets,
+ERROR:     ...<2 lines>...
+ERROR:         hedge_asset_names=hedge_asset_names,
+ERROR:     )
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/multiasset/main.py", line 300, in create_custom_portfolio
+ERROR:     all_bonds = create_bond_universe(analyzer=analyzer)
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/multiasset/main.py", line 89, in create_bond_universe
+ERROR:     sensitivities = analyzer.get_tenor_sensitivities(rf_country, tenor)
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/multiasset/pca_analyzer.py", line 322, in get_tenor_sensitivities
+ERROR:     tenor_idx = tenor_order.index(tenor)
+ERROR: ValueError: '20Y' is not in list
+ERROR: Traceback (most recent call last):
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 493, in run_analysis
+ERROR:     summary, returns, vols, factor_exp, factor_risk, portfolio = run_risk_parity_allocation(
+ERROR:                                                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~^
+ERROR:         total_capital=total_capital_cny, use_cache=True, selected_assets=selected_asset_names,
+ERROR:         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR:         risk_budgets=risk_budgets, use_deterministic=True
+ERROR:         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ERROR:     )
+ERROR:     ^
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/multiasset/main.py", line 348, in run_risk_parity_allocation
+ERROR:     portfolio = create_custom_portfolio(
+ERROR:         selected_assets,
+ERROR:     ...<2 lines>...
+ERROR:         hedge_asset_names=hedge_asset_names,
+ERROR:     )
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/multiasset/main.py", line 300, in create_custom_portfolio
+ERROR:     all_bonds = create_bond_universe(analyzer=analyzer)
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/multiasset/main.py", line 89, in create_bond_universe
+ERROR:     sensitivities = analyzer.get_tenor_sensitivities(rf_country, tenor)
+ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/multiasset/pca_analyzer.py", line 322, in get_tenor_sensitivities
+ERROR:     tenor_idx = tenor_order.index(tenor)
+ERROR: ValueError: '20Y' is not in list
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AU'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 202, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/beta/callbacks/portfolio_run.py", line 205, in update_risk_budget_inputs
+    dcc.Input(
+    ~~~~~~~~~^
+        id={'type': 'vol-adj-input', 'index': factor},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        }
+        ^
+    ),
+    ^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 482, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dcc/Input.py", line 402, in __init__
+    super(Input, self).__init__(**args)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/development/base_component.py", line 184, in __init__
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: The `dcc.Input` component (version 4.1.0) with the ID "{'type': 'vol-adj-input', 'index': 'CMDL.AL'}" received an unexpected keyword argument: `title`
+Allowed arguments: autoComplete, autoFocus, className, componentPath, debounce, disabled, id, inputMode, list, max, maxLength, min, minLength, multiple, n_blur, n_blur_timestamp, n_submit, n_submit_timestamp, name, pattern, persisted_props, persistence, persistence_type, placeholder, readOnly, required, selectionDirection, selectionEnd, selectionStart, size, spellCheck, step, style, type, value

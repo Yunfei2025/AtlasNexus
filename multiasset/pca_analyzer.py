@@ -318,7 +318,7 @@ class DeterministicRiskFactorAnalyzer:
         Returns:
             Dict with IRDL, IRSL, IRCV sensitivities (value change per 1-unit factor change)
         """
-        tenor_order = ['1Y', '2Y', '5Y', '10Y', '30Y']
+        tenor_order = ['1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
         tenor_idx = tenor_order.index(tenor)
         
         sensitivities = {}

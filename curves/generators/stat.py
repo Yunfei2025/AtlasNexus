@@ -447,7 +447,7 @@ class StatGenerator:
             return pd.to_numeric(v, errors='coerce')
 
         cgb_cols = self._resolve_curve_column_map(cgb, [5, 10, 20, 30])
-        cdb_cols = self._resolve_curve_column_map(cdb, [5, 10, 30])
+        cdb_cols = self._resolve_curve_column_map(cdb, [5, 10])
 
         cgb5  = _series(cgb, cgb_cols.get(5))
         cgb10 = _series(cgb, cgb_cols.get(10))
@@ -455,17 +455,14 @@ class StatGenerator:
         cgb30 = _series(cgb, cgb_cols.get(30))
         cdb5  = _series(cdb, cdb_cols.get(5))
         cdb10 = _series(cdb, cdb_cols.get(10))
-        cdb30 = _series(cdb, cdb_cols.get(30))
 
         instruments = {}
         if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10  - cgb5
         if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30  - cgb10
         if cgb10 is not None and cgb20 is not None: instruments['CGB-10s20s'] = cgb20  - cgb10
         if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10  - cdb5
-        if cdb10 is not None and cdb30 is not None: instruments['CDB-10s30s'] = cdb30  - cdb10
         if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5   - cgb5
         if cdb10 is not None and cgb10 is not None: instruments['CDBCGB-10y'] = cdb10  - cgb10
-        if cdb30 is not None and cgb30 is not None: instruments['CDBCGB-30y'] = cdb30  - cgb30
 
         if not instruments:
             print('Warning: Could not build any tenor-spread series.')

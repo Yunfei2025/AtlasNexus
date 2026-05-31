@@ -26,6 +26,7 @@ CURVE_CONFIG: Dict[str, Tuple[str, Optional[str], Optional[List[str]]]] = {
             '中债国债到期收益率:2年',
             '中债国债到期收益率:5年',
             '中债国债到期收益率:10年',
+            '中债国债到期收益率:20年',
             '中债国债到期收益率:30年',
         ],
     ),

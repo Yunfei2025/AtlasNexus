@@ -19,12 +19,31 @@ from ..data import (
     load_spread_data, load_spread_timeseries, load_carry_roll_timeseries,
     load_macro_series, _get_duration_mult, _get_borrow_cost_annual_bp,
 )
+from .portfolio import _SUMMARY_ALPHA_PARQUET
 from ..layouts import build_individual_backtest_panel, build_portfolio_backtest_panel
 from ..backtest import run_spread_backtest, run_trend_backtest_dc, build_backtest_results_display
 
 
 def register_backtest_callbacks(app) -> None:
     """Register all Backtest subtab callbacks."""
+
+    def _load_portfolio_snapshot(optimized_data):
+        """Prefer the persisted Alpha snapshot so Backtest matches Summary."""
+        try:
+            import os
+
+            if os.path.exists(_SUMMARY_ALPHA_PARQUET):
+                df_snap = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
+                if isinstance(df_snap, pd.DataFrame) and not df_snap.empty:
+                    if 'ID' in df_snap.columns:
+                        df_snap = df_snap[df_snap['ID'].astype(str).ne('TOTAL')].copy()
+                    if '_timestamp' in df_snap.columns:
+                        df_snap = df_snap.sort_values('_timestamp')
+                    return df_snap.to_dict('records')
+        except Exception:
+            pass
+
+        return optimized_data or []
 
     # -------------------------------------------------------------------------
     # BACKTEST: Mode Tab Selector
@@ -96,8 +115,6 @@ def register_backtest_callbacks(app) -> None:
                     s = info.get('style', 'MeanReversion')
                     if s == 'Trend':
                         style_key = 'trend'
-                    elif s == 'Carry' or (s == 'Mixed' and spread_type in ['TBondSwap', 'CBondSwap', 'TenorSpread']):
-                        style_key = 'carry'
                     break
 
         if not instrument or not spread_type:
@@ -173,11 +190,11 @@ def register_backtest_callbacks(app) -> None:
                 style_key = 'trend'
                 auto_options = _BT_DISABLED_OPTIONS
             else:
-                # Uncertain regime: use carry_roll sign as tiebreaker.
-                # Positive carry rewards waiting for reversion → MR.
-                # Negative/zero carry means holding costs money → follow Trend.
+                # Uncertain regime: use the sign of the 3m edge as a tiebreaker.
+                # Positive edge rewards waiting for reversion → MR.
+                # Negative/zero edge means follow Trend.
                 auto_options = _BT_BASE_OPTIONS
-                carry_roll_val = np.nan
+                edge_val = np.nan
                 try:
                     snap_df = load_spread_data(spread_type)
                     if isinstance(snap_df, pd.DataFrame) and not snap_df.empty:
@@ -192,20 +209,20 @@ def register_backtest_callbacks(app) -> None:
                             for _c in ['carry_roll', 'carry_3m_bp', 'Carry(3m,bp)', 'carry']:
                                 _v = _row.get(_c, np.nan)
                                 if _v is not None and np.isfinite(float(_v)):
-                                    carry_roll_val = float(_v)
+                                    edge_val = float(_v)
                                     break
                 except Exception:
                     pass
-                if not np.isnan(carry_roll_val):
-                    style_key = 'mr' if carry_roll_val > 0 else 'trend'
-                    carry_hint = f"carry={carry_roll_val:+.1f}bp → {'MR' if carry_roll_val > 0 else 'Trend'} suggested"
+                if not np.isnan(edge_val):
+                    style_key = 'mr' if edge_val > 0 else 'trend'
+                    edge_hint = f"edge={edge_val:+.1f}bp → {'MR' if edge_val > 0 else 'Trend'} suggested"
                 else:
                     style_key = 'mr'
-                    carry_hint = "carry unavailable → MR suggested"
+                    edge_hint = "edge unavailable → MR suggested"
 
             if regime == 'uncertain':
                 badge_extra = html.Span(
-                    f"  (score: {score:+.2f})  {carry_hint}",
+                    f"  (score: {score:+.2f})  {edge_hint}",
                     style={'color': THEME['warning'], 'fontSize': '11px'},
                 )
             else:
@@ -502,26 +519,26 @@ def register_backtest_callbacks(app) -> None:
         Input('alpha-optimized-weights', 'data')
     )
     def update_portfolio_preview(optimized_data):
-        if not optimized_data:
+        portfolio_data = _load_portfolio_snapshot(optimized_data)
+
+        if not portfolio_data:
             return html.P("No portfolio data loaded. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.", style={'color': THEME['warning'], 'fontStyle': 'italic'})
 
         try:
-            n_assets = len(optimized_data)
-            total_weight = sum(item.get('weight', 0) for item in optimized_data)
-            n_buy  = sum(1 for item in optimized_data if item.get('direction') == 'BUY')
-            n_sell = sum(1 for item in optimized_data if item.get('direction') == 'SELL')
+            n_assets = len(portfolio_data)
+            total_weight = sum(float(item.get('weight', 0) or 0) for item in portfolio_data)
+            n_buy  = sum(1 for item in portfolio_data if item.get('direction') == 'BUY')
+            n_sell = sum(1 for item in portfolio_data if item.get('direction') == 'SELL')
 
             style_counts: dict = {}
-            for item in optimized_data:
+            for item in portfolio_data:
                 style = item.get('style', 'Unknown')
                 style_counts[style] = style_counts.get(style, 0) + 1
 
-            sorted_assets = sorted(optimized_data, key=lambda x: x.get('weight', 0), reverse=True)
+            sorted_assets = sorted(portfolio_data, key=lambda x: float(x.get('weight', 0) or 0), reverse=True)
             asset_list = []
             for item in sorted_assets:
-                w = item.get('weight', 0)
-                if w <= 0.0001:
-                    continue
+                w = float(item.get('weight', 0) or 0)
                 asset_list.append(html.Li(f"{item.get('ID', 'Unknown')} - {w*100:.1f}% ({item.get('direction', 'N/A')})", style={'color': THEME['text_main'], 'fontSize': '11px', 'marginBottom': '3px'}))
 
             return html.Div([
@@ -555,6 +572,8 @@ def register_backtest_callbacks(app) -> None:
     def run_portfolio_backtest(n_clicks, optimized_data, capital, txn_cost, period):
         if not n_clicks:
             return html.Div(), ""
+
+        optimized_data = _load_portfolio_snapshot(optimized_data)
 
         if not optimized_data:
             return html.Div("No optimized portfolio data found. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.", style={'color': THEME['warning'], 'padding': '20px'}), "Waiting for portfolio data..."

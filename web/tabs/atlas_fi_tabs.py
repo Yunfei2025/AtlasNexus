@@ -673,6 +673,27 @@ def register_callbacks(app) -> None:
                                         data_rt_js = json.dumps(data_rt)
                         except Exception:
                             pass
+                    if stype == 'TenorSpread':
+                        try:
+                            import pandas as pd
+                            _tenor_static = Utils.load_pickle_cached(os.path.join(DIR_INPUT, 'Tenor-spds.pkl'))
+                            if isinstance(_tenor_static, Mapping) and 'TenorSpread' in _tenor_static:
+                                _ts = _tenor_static['TenorSpread']
+                                if isinstance(_ts, dict):
+                                    _spread = _ts.get('Spread')
+                                    _stat = _ts.get('StatInfo')
+                                    if (isinstance(_spread, pd.DataFrame) and not _spread.empty
+                                            and isinstance(_stat, pd.DataFrame) and not _stat.empty):
+                                        _current = _spread.iloc[-1].rename('spread').to_frame()
+                                        _current = _current.join(_stat[['mean', 'vol']], how='inner')
+                                        _vol = pd.to_numeric(_current['vol'], errors='coerce').replace(0, float('nan'))
+                                        _mean = pd.to_numeric(_current['mean'], errors='coerce')
+                                        _current['Zscore'] = (pd.to_numeric(_current['spread'], errors='coerce') - _mean) / _vol
+                                        _current['color'] = 'grey'
+                                        data_rt['TenorSpread'] = _current.to_dict()
+                                        data_rt_js = json.dumps(data_rt)
+                        except Exception:
+                            pass
                     if stype not in data_rt or data_rt.get(stype) is None:
                         # Return a friendly empty chart instead of crashing
                         return go.Figure(data=[], layout=dict(

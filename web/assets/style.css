@@ -261,89 +261,74 @@ input[type="button"] {
     color: #aab0c0;
 }
 
-/* DatePicker popup dark theme (react-dates) */
-.SingleDatePicker_picker,
-.SingleDatePicker_picker_1,
-.SingleDatePicker_picker__directionLeft,
-.SingleDatePicker_picker__directionLeft_2,
-.DateRangePicker_picker,
-.DateRangePicker_picker_1 {
+/* DatePicker dark theme — Dash 4.x (new custom component, replaces react-dates) */
+/* Override the Dash Design System CSS variables scoped to the datepicker. */
+.dash-datepicker,
+.dash-datepicker-content {
+    --Dash-Fill-Inverse-Strong:    #0c2b64;
+    --Dash-Fill-Interactive-Strong: #2e86c1;
+    --Dash-Fill-Interactive-Weak:  rgba(46, 134, 193, 0.20);
+    --Dash-Text-Strong:            #e8eaf6;
+    --Dash-Text-Weak:              #aab0c0;
+    --Dash-Text-Disabled:          #5a6278;
+    --Dash-Stroke-Strong:          #1a3a6e;
+    --Dash-Shading-Strong:         rgba(0, 0, 0, 0.60);
+    --Dash-Shading-Weak:           rgba(0, 0, 0, 0.30);
+    --Dash-Spacing:                4px;
+    color: #e8eaf6;
+}
+
+/* Month header and weekday row */
+.dash-datepicker-calendar-month-header,
+.dash-datepicker-controls,
+.dash-datepicker-month-nav {
     background: #0c2b64 !important;
-    border: 1px solid #1a3a6e !important;
+    color: #e8eaf6 !important;
 }
 
-.DayPicker,
-.DayPicker__withBorder,
-.DayPicker__withBorder_2,
-.DayPicker_weekHeader,
-.DayPicker_weekHeader_ul {
-    background: #0c2b64 !important;
+/* Nav buttons */
+.dash-datepicker-month-nav button {
+    background: transparent !important;
+    color: #e8eaf6 !important;
+    border: none;
+}
+.dash-datepicker-month-nav button:hover {
+    color: #2e86c1 !important;
 }
 
-.CalendarMonth,
-.CalendarMonthGrid,
-.CalendarMonth_caption,
-.CalendarMonth_caption_1,
-.DayPickerNavigation,
-.DayPickerNavigation_button,
-.DayPickerNavigation_button_1,
-.DayPickerNavigation_button__default,
-.DayPickerNavigation_button__default_2 {
-    background: #0c2b64 !important;
-    color: #ffffff !important;
-    border-color: #1a3a6e !important;
-}
-
-.CalendarMonth_caption,
-.CalendarMonth_caption_1,
-.DayPicker_weekHeader_li {
-    color: #ffffff !important;
-}
-
-.CalendarDay__default,
-.CalendarDay__default_2 {
+/* Calendar grid cells */
+.dash-datepicker-calendar td,
+.dash-datepicker-calendar th {
     background: #112e66 !important;
-    border: 1px solid #1a3a6e !important;
-    color: #ffffff !important;
+    color: #e8eaf6 !important;
 }
 
-.CalendarDay__default:hover,
-.CalendarDay__default_2:hover,
-.CalendarDay__hovered_span,
-.CalendarDay__hovered_span_2 {
+.dash-datepicker-calendar td:hover {
     background: #1a3a6e !important;
-    border: 1px solid #2e86c1 !important;
     color: #ffffff !important;
 }
 
-.CalendarDay__selected,
-.CalendarDay__selected_2,
-.CalendarDay__selected_span,
-.CalendarDay__selected_span_2,
-.CalendarDay__selected_start,
-.CalendarDay__selected_start_2,
-.CalendarDay__selected_end,
-.CalendarDay__selected_end_2 {
+/* Selected date */
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-selected {
     background: #2e86c1 !important;
-    border: 1px solid #2e86c1 !important;
     color: #ffffff !important;
+    border-radius: 4px;
 }
 
-.CalendarDay__blocked_out_of_range,
-.CalendarDay__blocked_out_of_range_2 {
-    background: #0f2552 !important;
-    border: 1px solid #163263 !important;
-    color: #7a8499 !important;
+/* Highlighted range */
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-highlighted {
+    background: rgba(46, 134, 193, 0.25) !important;
+    color: #e8eaf6 !important;
 }
 
-.CalendarDay__today,
-.CalendarDay__today_2 {
-    border: 1px solid #f39c12 !important;
-    color: #ffffff !important;
+/* Outside-month days */
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-outside {
+    color: #5a6278 !important;
+    background: #0c2440 !important;
 }
 
-.DayPickerKeyboardShortcuts_buttonReset,
-.DayPickerKeyboardShortcuts_buttonReset_1 {
-    background: #0c2b64 !important;
-    color: #ffffff !important;
+/* Disabled days */
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-disabled {
+    color: #5a6278 !important;
+    background: #0c2440 !important;
 }

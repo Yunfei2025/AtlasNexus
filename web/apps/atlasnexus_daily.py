@@ -65,6 +65,8 @@ from web.tabs.atlas_multiasset_tabs import (
     build_multiasset_backtest_layout,
     build_risk_factor_backtest_layout,
     build_factor_backtest_layout,
+    build_beta_backtest_combined_layout,
+    build_factor_history_layout,
     register_multiasset_callbacks,
 )
 
@@ -253,27 +255,23 @@ def build_tabs_panel():
                     # Start date
                     html.Div([
                         html.Label("Start Date", style=_lbl_style),
-                        dcc.Input(
+                        dcc.DatePickerSingle(
                             id="an-bt-start",
-                            type="text",
-                            value=start_default,
-                            placeholder="YYYY-MM-DD",
-                            debounce=True,
-                            style=_input_style,
+                            date=start_default,
+                            display_format='YYYY-MM-DD',
+                            style={'fontSize': '13px'},
                         ),
-                    ], style={'minWidth': '120px', 'flex': '0 0 120px'}),
+                    ], style={'minWidth': '130px', 'flex': '0 0 130px'}),
                     # End date
                     html.Div([
                         html.Label("End Date", style=_lbl_style),
-                        dcc.Input(
+                        dcc.DatePickerSingle(
                             id="an-bt-end",
-                            type="text",
-                            value=end_default,
-                            placeholder="YYYY-MM-DD",
-                            debounce=True,
-                            style=_input_style,
+                            date=end_default,
+                            display_format='YYYY-MM-DD',
+                            style={'fontSize': '13px'},
                         ),
-                    ], style={'minWidth': '120px', 'flex': '0 0 120px'}),
+                    ], style={'minWidth': '130px', 'flex': '0 0 130px'}),
                     # Workers
                     html.Div([
                         html.Label("Workers", style=_lbl_style),
@@ -320,23 +318,23 @@ def build_tabs_panel():
                 id="an-beta-subtabs",
                 value="factor",
                 children=[
-                    dcc.Tab(label="Factor",    value="factor",             style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Portfolio", value="portfolio",          style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Rebalance", value="backtest-portfolio", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Bond",      value="bond",               style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Backtest",  value="factor-model-bt",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Futures",   value="backtest-factor",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Candidates", value="factor",           style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Portfolio",  value="portfolio",        style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Backtest",   value="factor-model-bt",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Factor",     value="factor-history",   style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Bond",       value="bond",             style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Futures",    value="backtest-factor",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
                 ],
                 style={**summary_subtabs_style, "marginTop": "8px"},
                 colors=summary_subtabs_colors,
             ),
             html.Div([
-                html.Div(id="beta-factor-div",             children=build_multiasset_factor_layout(),     style={"display": "block"}),
-                html.Div(id="beta-portfolio-div",          children=build_multiasset_portfolio_layout(),  style={"display": "none"}),
-                html.Div(id="beta-bond-div",               children=build_multiasset_bond_layout(),       style={"display": "none"}),
-                html.Div(id="beta-factor-model-bt-div",    children=build_risk_factor_backtest_layout(),  style={"display": "none"}),
-                html.Div(id="beta-backtest-factor-div",    children=build_factor_backtest_layout(),       style={"display": "none"}),
-                html.Div(id="beta-backtest-portfolio-div", children=build_multiasset_backtest_layout(),   style={"display": "none"}),
+                html.Div(id="beta-factor-div",          children=build_multiasset_factor_layout(),       style={"display": "block"}),
+                html.Div(id="beta-portfolio-div",       children=build_multiasset_portfolio_layout(),    style={"display": "none"}),
+                html.Div(id="beta-bond-div",            children=build_multiasset_bond_layout(),         style={"display": "none"}),
+                html.Div(id="beta-factor-model-bt-div", children=build_beta_backtest_combined_layout(),  style={"display": "none"}),
+                html.Div(id="beta-factor-history-div",  children=build_factor_history_layout(),          style={"display": "none"}),
+                html.Div(id="beta-backtest-factor-div", children=build_factor_backtest_layout(),         style={"display": "none"}),
             ], style={"position": "relative"}),
         ],
         style={"padding": "20px", "margin": "10px", "boxSizing": "border-box"},
@@ -580,8 +578,8 @@ def _run_core_autoruns(n_intervals):
     Input("an-btn-backtest", "n_clicks"),
     State("an-bt-btype", "value"),
     State("an-bt-update-list", "value"),
-    State("an-bt-start", "value"),
-    State("an-bt-end", "value"),
+    State("an-bt-start", "date"),
+    State("an-bt-end", "date"),
     State("an-bt-processes", "value"),
     prevent_initial_call=True,
 )
@@ -632,9 +630,14 @@ _make_tab_switcher(
 _make_tab_switcher(
     "an-beta-subtabs",
     ["beta-factor-div", "beta-portfolio-div", "beta-bond-div",
-     "beta-factor-model-bt-div", "beta-backtest-factor-div", "beta-backtest-portfolio-div"],
+     "beta-factor-model-bt-div", "beta-factor-history-div", "beta-backtest-factor-div"],
     ["factor",          "portfolio",          "bond",
-     "factor-model-bt", "backtest-factor",     "backtest-portfolio"],
+     "factor-model-bt", "factor-history",      "backtest-factor"],
+)
+_make_tab_switcher(
+    "beta-backtest-inner-tabs",
+    ["beta-backtest-indiv-div", "beta-backtest-port-div"],
+    ["individual-factors",      "portfolio"],
 )
 _make_tab_switcher(
     "an-market-subtabs",
