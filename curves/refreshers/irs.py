@@ -32,6 +32,23 @@ from curves.utils.file import updatePKL
 from curves.utils.plot import plotIRSSpotCurve, plotIRSForwardCurve
 from curves.calibration import irscurves as irs
 
+
+def _normalize_legacy_repo_label(value):
+	if isinstance(value, str):
+		return value.replace('Repo-', 'Repo7d-', 1)
+	return value
+
+
+def _normalize_legacy_repo_frame(frame):
+	if not isinstance(frame, pd.DataFrame):
+		return frame
+	out = frame.copy()
+	if out.index.dtype == object:
+		out.index = out.index.map(_normalize_legacy_repo_label)
+	if out.columns.dtype == object:
+		out.columns = out.columns.map(_normalize_legacy_repo_label)
+	return out
+
 class IRSRefresher:
 	def __init__(self, skip_excel_update: bool = True):
 		self.today_date = DateConfig.get_date_mappings()['d'].date()
@@ -301,7 +318,8 @@ class IRSRefresher:
 		
 		# Load existing statistics
 		cvpx_stat = updatePKL({}, os.path.join(DIR_INPUT, 'IRS-pxspds.pkl'))
-		spreads = cvpx_stat['StatInfo']
+		spreads = _normalize_legacy_repo_frame(cvpx_stat['StatInfo'])
+		cvpx_stat['StatInfo'] = spreads
 		logger.info(f"Loaded existing statistics for {len(spreads)} instruments")
 		
 		# Update pricing data

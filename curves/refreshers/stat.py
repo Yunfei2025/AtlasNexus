@@ -18,7 +18,6 @@ PATH = pathlib.Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PATH))
 
 from curves.utils import loader as ld
-from utils.io import save_frame
 from curves.utils import retrieve as rd
 from settings.paths import DIR_INPUT, DIR_OUTPUT
 from settings.general import DateConfig, GeneralConfig
@@ -164,7 +163,8 @@ class StatRefresher:
 
     def _write_pickle(self, obj, filename: str) -> None:
         path = os.path.join(DIR_INPUT, filename)
-        save_frame(obj, path)
+        with open(path, 'wb') as file:
+            pickle.dump(obj, file, protocol=pickle.HIGHEST_PROTOCOL)
 
     @staticmethod
     def _repair_reference_sensitivities(curve, env: dict, sen: pd.DataFrame) -> tuple[pd.DataFrame, int]:

@@ -16,6 +16,7 @@ sys.path.insert(0, str(PATH))
 
 from curves.utils.loader import loadInstrumentDefinition, loadCNBDTS, loadRefData
 import curves.calibration.stat as st
+from curves.calibration import irscurves as irs
 from curves.utils.file import updatePKL
 from settings.paths import DIR_INPUT, DIR_OUTPUT 
 from settings.fixed_income import BondConfig, IRSConfig
@@ -133,6 +134,7 @@ class StatGenerator:
             curve_objs = updatePKL({}, os.path.join(DIR_INPUT, f'{btype}-cvobj.pkl'))
             bond_px = updatePKL({}, os.path.join(DIR_INPUT, f'{btype}-cvpx.pkl'))
             ref = loadRefData(btype)
+            curve = curve_objs[self.dp]
 
             bonds = bond_px['ytm_quo'].columns.intersection(env['Def'].index)
             df_act = bond_px['ytm_act'].loc[self.start:self.da, bonds].drop_duplicates()
@@ -168,12 +170,24 @@ class StatGenerator:
             # import pdb; pdb.set_trace()
             # Build spot TS
             self.spot_ts[btype] = ref['Spot']
-            curve0 = curve_objs[self.dp]
-            spot_dp = curve0.fitting()['SpotRate']
+            spot_dp = curve.fitting()['SpotRate']
             spot_dp.index = [f"{btype}-{t}Y" for t in spot_dp.index]
             clist_ = list(self.spot_ts[btype].columns)
             self.spot_ts[btype].loc[self.dp, clist_] = spot_dp.loc[clist_]
             self.spot_ts[btype] = self.spot_ts[btype].astype(float)
+
+            curve_data_path = os.path.join(DIR_INPUT, f'{btype}-cvdata.pkl')
+            curve_data = updatePKL({}, curve_data_path)
+            if not isinstance(curve_data, dict):
+                curve_data = {}
+            fitted = curve.fitting()
+            if 'spot' not in curve_data or not isinstance(curve_data.get('spot'), pd.DataFrame):
+                curve_data['spot'] = pd.DataFrame()
+            if 'forward' not in curve_data or not isinstance(curve_data.get('forward'), pd.DataFrame):
+                curve_data['forward'] = pd.DataFrame()
+            curve_data['spot'].loc[self.dp, fitted['SpotRate'].index] = fitted['SpotRate'].values
+            curve_data['forward'].loc[self.dp, fitted['ForwardRate'].index] = fitted['ForwardRate'].values
+            updatePKL(curve_data, curve_data_path)
 
             # Bond groups by tenor buckets
             bond_common = df_act.columns.intersection(env['Def'].index)
@@ -216,6 +230,17 @@ class StatGenerator:
 
         cvpx_stat['CarryRoll3m'] = spds_cpr
         updatePKL(cvpx_stat, os.path.join(DIR_INPUT, f'{btype}-pxspds.pkl'))
+
+        # Keep the shared IRS curve-data cache in sync with the daily generator path.
+        # This persists IRS-cvdata.pkl for the previous business day used by curve pricing.
+        try:
+            irs_ref = {
+                'r7d': list(IRSConfig.R7D_LIST.keys()),
+                's3m': list(IRSConfig.S3M_LIST.keys()),
+            }
+            irs.genIRSCurves(self.env_ts['SwapTS'], irs_ref, self.d)
+        except Exception as exc:
+            print(f'WARN: Could not refresh IRS-cvdata.pkl from daily generator: {exc}')
 
         # Use a filtered copy instead of mutating config.irs_terms
         excluded = {'SHIBOR3M.IR', 'SHI3MS7Y.IR', 'SHI3MS10Y.IR', 'FR007S7Y.IR', 'FR007S10Y.IR'}

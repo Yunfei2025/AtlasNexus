@@ -146,19 +146,57 @@ def _get_input_dir() -> Path:
 
 
 def _load_pickle_safe(filepath: Path) -> Optional[Any]:
+    def _normalize_repo_label(value: Any) -> Any:
+        if isinstance(value, str):
+            return re.sub(r'^Repo-', 'Repo7d-', value, flags=re.IGNORECASE)
+        return value
+
+    def _normalize_repo_obj(obj: Any) -> Any:
+        if isinstance(obj, pd.DataFrame):
+            out = obj.copy()
+            if out.index.dtype == object:
+                out.index = out.index.map(_normalize_repo_label)
+            if out.columns.dtype == object:
+                out.columns = out.columns.map(_normalize_repo_label)
+            return out
+        if isinstance(obj, pd.Series):
+            out = obj.copy()
+            if out.index.dtype == object:
+                out.index = out.index.map(_normalize_repo_label)
+            out.name = _normalize_repo_label(out.name)
+            return out
+        if isinstance(obj, dict):
+            return {_normalize_repo_label(k): _normalize_repo_obj(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_normalize_repo_obj(v) for v in obj]
+        if isinstance(obj, tuple):
+            return tuple(_normalize_repo_obj(v) for v in obj)
+        return obj
+
     if not filepath.exists():
         print(f"Warning: {filepath} not found")
         return None
     try:
         with open(filepath, 'rb') as f:
-            return pickle.load(f)
+            return _normalize_repo_obj(pickle.load(f))
     except Exception as e:
         print(f"Error loading {filepath}: {e}")
         try:
-            return pd.read_pickle(filepath)
+            return _normalize_repo_obj(pd.read_pickle(filepath))
         except Exception as e2:
             print(f"Fallback also failed: {e2}")
             return None
+
+
+def _normalize_repo_frame(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    if not isinstance(df, pd.DataFrame):
+        return df
+    out = df.copy()
+    if out.index.dtype == object:
+        out.index = out.index.map(lambda x: re.sub(r'^Repo-', 'Repo7d-', str(x), flags=re.IGNORECASE))
+    if out.columns.dtype == object:
+        out.columns = out.columns.map(lambda x: re.sub(r'^Repo-', 'Repo7d-', str(x), flags=re.IGNORECASE))
+    return out
 
 
 def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
@@ -170,6 +208,7 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
 
         snap_df = get_alpha_spread_table(spread_type, dir_input=dir_input)
         if snap_df is not None and isinstance(snap_df, pd.DataFrame) and not snap_df.empty:
+            snap_df = _normalize_repo_frame(snap_df)
             if spread_type == 'SwapSpread':
                 snap_df = snap_df[~snap_df.index.astype(str).str.endswith('.IR')].copy()
                 snap_df = snap_df[_exclude_swapspread_butterflies(snap_df.index)].copy()
@@ -623,7 +662,7 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         if isinstance(data, dict) and key in data:
             nested = data[key]
             if isinstance(nested, dict) and 'Spread' in nested:
-                result = nested['Spread']
+                result = _normalize_repo_frame(nested['Spread'])
                 return result
         return None
 
@@ -636,7 +675,7 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         if isinstance(data, dict) and key in data:
             nested = data[key]
             if isinstance(nested, dict) and 'Spread' in nested:
-                result = nested['Spread']
+                result = _normalize_repo_frame(nested['Spread'])
                 return result
         return None
 
@@ -648,7 +687,7 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         if isinstance(data, dict) and 'PCASpread' in data:
             nested = data['PCASpread']
             if isinstance(nested, dict) and 'Spread' in nested:
-                result = nested['Spread']
+                result = _normalize_repo_frame(nested['Spread'])
                 return result
         return None
 
@@ -660,6 +699,7 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         if isinstance(data, dict) and 'Spread' in data:
             df_spread = data.get('Spread')
             if isinstance(df_spread, pd.DataFrame) and not df_spread.empty:
+                df_spread = _normalize_repo_frame(df_spread)
                 cols = pd.Index(df_spread.columns.astype(str))
                 df_spread = df_spread.loc[:, ~cols.str.endswith('.IR')].copy()
                 df_spread = df_spread.loc[:, _exclude_swapspread_butterflies(pd.Index(df_spread.columns))].copy()
@@ -735,17 +775,17 @@ def load_realtime_spreads(spread_type: str) -> Optional[pd.DataFrame]:
         if data is None:
             return None
         key = 'BondCurve' if spread_type == 'TBondCurve' else 'BondSwap'
-        return data.get(key)
+        return _normalize_repo_frame(data.get(key))
 
     elif spread_type in ['CBondCurve', 'CBondSwap']:
         data = _load_pickle_safe(dir_input / 'CBond-spdsrt.pkl')
         if data is None:
             return None
         key = 'BondCurve' if spread_type == 'CBondCurve' else 'BondSwap'
-        return data.get(key)
+        return _normalize_repo_frame(data.get(key))
 
     elif spread_type == 'SwapSpread':
-        return _load_pickle_safe(dir_input / 'IRS-spdsrt.pkl')
+        return _normalize_repo_frame(_load_pickle_safe(dir_input / 'IRS-spdsrt.pkl'))
 
     elif spread_type in ['NetBasis', 'TermBasis']:
         return _load_pickle_safe(dir_input / 'futures-spdsrt.pkl')

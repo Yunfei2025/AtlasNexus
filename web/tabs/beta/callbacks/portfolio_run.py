@@ -202,19 +202,21 @@ def register_portfolio_run_callbacks(app):
                         'width': '62px', 'textAlign': 'right', 'flexShrink': '0',
                         'fontFamily': 'monospace',
                     }),
-                    dcc.Input(
-                        id={'type': 'vol-adj-input', 'index': factor},
-                        type='number',
-                        value=adj_val,
-                        min=0.1, max=10.0, step=0.1,
+                    html.Span(
+                        dcc.Input(
+                            id={'type': 'vol-adj-input', 'index': factor},
+                            type='number',
+                            value=adj_val,
+                            min=0.1, max=10.0, step=0.1,
+                            style={
+                                'width': '48px', 'fontSize': '12px', 'padding': '2px 4px',
+                                'backgroundColor': '#fff', 'color': '#000',
+                                'border': _adj_border,
+                                'borderRadius': '2px', 'textAlign': 'right',
+                            }
+                        ),
                         title='Vol adj multiplier: effective vol = measured vol × adj. '
-                              'Set >1 to discount allocation (e.g. IRCV over-allocation).',
-                        style={
-                            'width': '48px', 'fontSize': '12px', 'padding': '2px 4px',
-                            'backgroundColor': '#fff', 'color': '#000',
-                            'border': _adj_border,
-                            'borderRadius': '2px', 'textAlign': 'right',
-                        }
+                              'Set >1 to discount allocation (e.g. IRCV over-allocation).'
                     ),
                     html.Span(f"{rp_max:.1f}M", style={
                         'color': THEME['text_sub'], 'fontSize': '12px',

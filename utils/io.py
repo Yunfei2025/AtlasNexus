@@ -24,7 +24,43 @@ from __future__ import annotations
 
 import os
 import pickle
+import re
 import pandas as pd
+
+
+_LEGACY_REPO_PREFIX = re.compile(r'^Repo-', re.IGNORECASE)
+
+
+def _normalize_legacy_repo_label(value):
+    if isinstance(value, str):
+        return _LEGACY_REPO_PREFIX.sub('Repo7d-', value)
+    return value
+
+
+def _normalize_legacy_repo_obj(obj):
+    if isinstance(obj, pd.DataFrame):
+        out = obj.copy()
+        if out.index.dtype == object:
+            out.index = out.index.map(_normalize_legacy_repo_label)
+        if out.columns.dtype == object:
+            out.columns = out.columns.map(_normalize_legacy_repo_label)
+        return out
+    if isinstance(obj, pd.Series):
+        out = obj.copy()
+        if out.index.dtype == object:
+            out.index = out.index.map(_normalize_legacy_repo_label)
+        out.name = _normalize_legacy_repo_label(out.name)
+        return out
+    if isinstance(obj, dict):
+        return {
+            _normalize_legacy_repo_label(key): _normalize_legacy_repo_obj(value)
+            for key, value in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_normalize_legacy_repo_obj(value) for value in obj]
+    if isinstance(obj, tuple):
+        return tuple(_normalize_legacy_repo_obj(value) for value in obj)
+    return obj
 
 
 def _parquet_path(path: str) -> str:
@@ -58,5 +94,5 @@ def load_frame(path: str):
     """
     parquet = _parquet_path(path)
     if os.path.exists(parquet):
-        return pd.read_parquet(parquet, engine='pyarrow')
-    return pd.read_pickle(path)
+        return _normalize_legacy_repo_obj(pd.read_parquet(parquet, engine='pyarrow'))
+    return _normalize_legacy_repo_obj(pd.read_pickle(path))

@@ -41,12 +41,45 @@ _CARRY_BASIS_DAYS: float = 90.0      # carry_roll is stored as a ~3-month quanti
 _ANNUAL_CARRY_BASIS_DAYS: float = 360.0
 _BOND_CURVE_BORROW_COST_BP_ANNUAL: float = 30.0
 _SWAP_SPREAD_BUTTERFLY_PATTERN = re.compile(r"^(?:Repo7d|Shi3M)-(?:\d+[my]){3,}$", re.IGNORECASE)
+_LEGACY_REPO_PREFIX = re.compile(r"^Repo-", re.IGNORECASE)
 
 
 def _exclude_swapspread_butterflies(labels: pd.Index | pd.Series):
 	"""Return mask that excludes IRS butterfly IDs such as Repo7d-1y2y5y or Shi3M-3m6m9m."""
 	text = labels.astype(str)
 	return ~text.str.match(_SWAP_SPREAD_BUTTERFLY_PATTERN)
+
+
+def _normalize_legacy_repo_label(value: object) -> object:
+	if isinstance(value, str):
+		return _LEGACY_REPO_PREFIX.sub("Repo7d-", value)
+	return value
+
+
+def _normalize_legacy_repo_obj(obj: object) -> object:
+	if isinstance(obj, pd.DataFrame):
+		out = obj.copy()
+		if out.index.dtype == object:
+			out.index = out.index.map(_normalize_legacy_repo_label)
+		if out.columns.dtype == object:
+			out.columns = out.columns.map(_normalize_legacy_repo_label)
+		return out
+	if isinstance(obj, pd.Series):
+		out = obj.copy()
+		if out.index.dtype == object:
+			out.index = out.index.map(_normalize_legacy_repo_label)
+		out.name = _normalize_legacy_repo_label(out.name)
+		return out
+	if isinstance(obj, dict):
+		return {
+			_normalize_legacy_repo_label(key): _normalize_legacy_repo_obj(value)
+			for key, value in obj.items()
+		}
+	if isinstance(obj, list):
+		return [_normalize_legacy_repo_obj(value) for value in obj]
+	if isinstance(obj, tuple):
+		return tuple(_normalize_legacy_repo_obj(value) for value in obj)
+	return obj
 
 
 @dataclass(frozen=True)
@@ -105,7 +138,7 @@ class AlphaSnapshotPaths:
 def _read_pickle(path: Path) -> object:
 	if not path.exists():
 		raise FileNotFoundError(str(path))
-	return _io_load_frame(str(path))
+	return _normalize_legacy_repo_obj(_io_load_frame(str(path)))
 
 
 def _snapshot_is_stale(paths: AlphaSnapshotPaths) -> bool:
@@ -444,11 +477,11 @@ def load_alpha_spreads_snapshot(
 	"""Load snapshot; optionally rebuild if missing/stale."""
 	paths = AlphaSnapshotPaths(Path(dir_input))
 	if not refresh and not _snapshot_is_stale(paths):
-		obj = pd.read_pickle(paths.out_snapshot)
+		obj = _normalize_legacy_repo_obj(pd.read_pickle(paths.out_snapshot))
 		if isinstance(obj, dict):
 			return obj
 	save_alpha_spreads_snapshot(dir_input=paths.dir_input, rewrite=True)
-	obj = pd.read_pickle(paths.out_snapshot)
+	obj = _normalize_legacy_repo_obj(pd.read_pickle(paths.out_snapshot))
 	return obj if isinstance(obj, dict) else {}
 
 

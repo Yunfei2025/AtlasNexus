@@ -40,16 +40,48 @@ PATH = pathlib.Path(__file__).resolve().parent.parent.parent
 DATA_PATH = PATH.joinpath("input").resolve()
 
 
+def _normalize_legacy_repo_label(value: object) -> object:
+    if isinstance(value, str):
+        return re.sub(r'^Repo-', 'Repo7d-', value, flags=re.IGNORECASE)
+    return value
+
+
+def _normalize_legacy_repo_obj(obj: object) -> object:
+    if isinstance(obj, pd.DataFrame):
+        out = obj.copy()
+        if out.index.dtype == object:
+            out.index = out.index.map(_normalize_legacy_repo_label)
+        if out.columns.dtype == object:
+            out.columns = out.columns.map(_normalize_legacy_repo_label)
+        return out
+    if isinstance(obj, pd.Series):
+        out = obj.copy()
+        if out.index.dtype == object:
+            out.index = out.index.map(_normalize_legacy_repo_label)
+        out.name = _normalize_legacy_repo_label(out.name)
+        return out
+    if isinstance(obj, dict):
+        return {
+            _normalize_legacy_repo_label(key): _normalize_legacy_repo_obj(value)
+            for key, value in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_normalize_legacy_repo_obj(value) for value in obj]
+    if isinstance(obj, tuple):
+        return tuple(_normalize_legacy_repo_obj(value) for value in obj)
+    return obj
+
+
 def _load_pickle(path: pathlib.Path):
     """Load pickle while being tolerant to legacy formats and corruption."""
     start = time.time()
     try:
-        return pd.read_pickle(path)
+        return _normalize_legacy_repo_obj(pd.read_pickle(path))
     except Exception as e:
         print(f"Warning: Error loading {path} with pd.read_pickle: {e}")
         try:
             with open(path, "rb") as f:
-                return pickle.load(f)
+                return _normalize_legacy_repo_obj(pickle.load(f))
         except Exception as pickle_error:
             error_str = str(pickle_error).lower()
             corruption_indicators = ["invalid load key", "\x00", "unexpected end of file"]
@@ -78,11 +110,11 @@ def _load_pickle_optional(path: pathlib.Path):
     if not path.exists():
         return None
     try:
-        return pd.read_pickle(path)
+        return _normalize_legacy_repo_obj(pd.read_pickle(path))
     except Exception:
         try:
             with open(path, "rb") as f:
-                return pickle.load(f)
+                return _normalize_legacy_repo_obj(pickle.load(f))
         except Exception:
             return None
 

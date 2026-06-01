@@ -589,13 +589,24 @@ def _build_swap_rows(subtype: str) -> list[dict]:
             lambda x: re.sub(r'^Repo-', 'Repo7d-', str(x))
         )
 
+    if df.index.has_duplicates:
+        df = df.groupby(level=0, sort=False).last()
+
     # Filter by category (works for both "Swaps" and all spread subtypes)
     mask = [_swap_category(str(idx)) == subtype for idx in df.index]
     df = df[mask]
     if df.empty:
         return []
 
-    outright_rows = irs_rt.get("spreads", pd.DataFrame()).reindex(IRSConfig.IRS_LIST)
+    outright_source = irs_rt.get("spreads", pd.DataFrame())
+    if isinstance(outright_source, pd.DataFrame) and outright_source.index.dtype == object:
+        outright_source = outright_source.copy()
+        outright_source.index = outright_source.index.map(
+            lambda x: re.sub(r'^Repo-', 'Repo7d-', str(x))
+        )
+        if outright_source.index.has_duplicates:
+            outright_source = outright_source.groupby(level=0, sort=False).last()
+    outright_rows = outright_source.reindex(IRSConfig.IRS_LIST)
     base_bid = pd.to_numeric(outright_rows.get("Bid"), errors="coerce") if not outright_rows.empty else pd.Series(dtype=float)
     base_ofr = pd.to_numeric(outright_rows.get("Ofr"), errors="coerce") if not outright_rows.empty else pd.Series(dtype=float)
 
@@ -823,3 +834,5 @@ def register_pricer_callbacks(app) -> None:
             ),
             _make_table("pricer-swap-tbl", rows, extra_styles=styles),
         ]), ts
+
+

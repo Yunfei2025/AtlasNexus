@@ -1,17 +1,40 @@
 # -*- coding: utf-8 -*-
 """Swap real-time quote frame helpers (bid/ofr/mid with fallback)."""
 
+import re
+
 import numpy as np
 import pandas as pd
 
 
+_LEGACY_REPO_PREFIX = re.compile(r'^Repo-', re.IGNORECASE)
+
+
+def _normalize_legacy_repo_label(value):
+    if isinstance(value, str):
+        return _LEGACY_REPO_PREFIX.sub('Repo7d-', value)
+    return value
+
+
+def _normalize_legacy_repo_frame(swap_rt: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(swap_rt, pd.DataFrame):
+        return swap_rt
+    out = swap_rt.copy()
+    if out.index.dtype == object:
+        out.index = out.index.map(_normalize_legacy_repo_label)
+    if out.columns.dtype == object:
+        out.columns = out.columns.map(_normalize_legacy_repo_label)
+    return out
+
+
 def get_swap_quote_frame(swap_rt, tickers=None, threshold_bp=10, fallback_quotes=None):
     """Return Bid/Ofr/Mid swap quotes with guarded realtime fallbacks."""
+    swap_rt = _normalize_legacy_repo_frame(swap_rt)
     cols = ['买价收益率', '卖价收益率', '成交收益率']
     if tickers is None:
         quote_frame = swap_rt.loc[:, cols].copy()
     else:
-        quote_frame = swap_rt.loc[tickers, cols].copy()
+        quote_frame = swap_rt.reindex(index=tickers, columns=cols).copy()
 
     quote_frame = quote_frame.apply(pd.to_numeric, errors='coerce')
     bid_quotes = quote_frame['买价收益率'].copy()

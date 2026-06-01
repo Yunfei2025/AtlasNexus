@@ -16,6 +16,9 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
+
+import re
+
 # local libraries
 PATH = pathlib.Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PATH))
@@ -26,6 +29,26 @@ from settings.general import GeneralConfig, DateConfig
 from curves.calibration.irscurves import evalueContract, irsSpreads, genIRSCurves, curves2Fixings
 from curves.utils.loader import loadInstrumentDefinition, loadCNBDTS, loadCurvePxTS
 from curves.utils.file import updatePKL
+
+
+_LEGACY_REPO_PREFIX = re.compile(r'^Repo-', re.IGNORECASE)
+
+
+def _normalize_legacy_repo_label(value):
+    if isinstance(value, str):
+        return _LEGACY_REPO_PREFIX.sub('Repo7d-', value)
+    return value
+
+
+def _normalize_legacy_repo_frame(frame):
+    if not isinstance(frame, pd.DataFrame):
+        return frame
+    out = frame.copy()
+    if out.index.dtype == object:
+        out.index = out.index.map(_normalize_legacy_repo_label)
+    if out.columns.dtype == object:
+        out.columns = out.columns.map(_normalize_legacy_repo_label)
+    return out
 
 
 class IRSGenerator:
@@ -45,7 +68,7 @@ class IRSGenerator:
     def load_environment(self) -> None:
         """Load instrument definition and time series"""
         self.environment = loadInstrumentDefinition(self.btype)
-        self.environment_ts = loadCNBDTS()['SwapTS']
+        self.environment_ts = _normalize_legacy_repo_frame(loadCNBDTS()['SwapTS'])
        
     def generate_close_curves(self) -> None:
         """Generate IRS close curves"""

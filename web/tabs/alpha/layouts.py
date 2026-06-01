@@ -236,6 +236,7 @@ def build_portfolio_layout() -> html.Div:
             html.P(
                 "Run Check Correlation in the Candidates subtab first. "
                 "The lowest-correlation pairs are transferred here automatically. "
+                "Saved positions from alpha_book_positions.parquet are included automatically. "
                 "Add or remove instruments to customise your trade set.",
                 style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '14px'},
             ),

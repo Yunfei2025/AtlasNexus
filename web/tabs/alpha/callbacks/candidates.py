@@ -25,6 +25,127 @@ from ..scoring import (
 )
 
 
+_ALPHA_BOOK_POSITIONS_PARQUET = _get_input_dir() / 'alpha_book_positions.parquet'
+_REGIME_LOOKUP_CACHE: dict[str, dict[str, str]] = {}
+
+
+def _style_to_regime(style: object) -> str:
+    style_value = str(style or '').strip().lower()
+    if style_value in {'meanreversion', 'mean_reverting', 'mean-reverting'}:
+        return 'mean-reverting'
+    if style_value in {'trend', 'trendfollowing', 'trend_following', 'carry', 'mixed', 'momentum'}:
+        return 'momentum'
+    return 'uncertain'
+
+
+def _get_upstream_regime(spread_type: str, instrument: str) -> str:
+    spread_type = str(spread_type or '').strip()
+    instrument = str(instrument or '').strip()
+    if not spread_type or not instrument:
+        return 'uncertain'
+
+    cache = _REGIME_LOOKUP_CACHE.get(spread_type)
+    if cache is None:
+        cache = {}
+        try:
+            snap = load_spread_data(spread_type)
+            if isinstance(snap, pd.DataFrame) and not snap.empty and 'style' in snap.columns:
+                style_series = snap['style'].astype(str).str.strip().str.lower()
+                for idx, style in style_series.items():
+                    cache[str(idx)] = _style_to_regime(style)
+        except Exception:
+            cache = {}
+        _REGIME_LOOKUP_CACHE[spread_type] = cache
+
+    return cache.get(instrument, 'uncertain')
+
+
+def _normalize_curated_entry(entry: dict, *, infer_regime: bool = True) -> dict:
+    instrument = str(entry.get('instrument') or entry.get('ID') or '').strip()
+    spread_type = str(entry.get('spread_type') or entry.get('type') or '').strip()
+    regime = str(entry.get('regime') or '').strip() or 'uncertain'
+    direction = str(entry.get('direction') or '').strip().upper()
+
+    if infer_regime and regime == 'uncertain':
+        regime = _get_upstream_regime(spread_type, instrument)
+
+    normalized = dict(entry)
+    normalized['instrument'] = instrument
+    normalized['spread_type'] = spread_type
+    normalized['regime'] = regime
+    normalized['direction'] = direction if direction in {'BUY', 'SELL'} else ''
+    normalized['manual'] = bool(entry.get('manual', False))
+    return normalized
+
+
+def _load_alpha_book_positions() -> list[dict]:
+    if not _ALPHA_BOOK_POSITIONS_PARQUET.exists():
+        return []
+    try:
+        df = pd.read_parquet(_ALPHA_BOOK_POSITIONS_PARQUET)
+    except Exception:
+        return []
+
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return []
+
+    rows: list[dict] = []
+    for _, row in df.iterrows():
+        entry = row.to_dict()
+        entry.setdefault('instrument', entry.get('ID', ''))
+        entry.setdefault('spread_type', entry.get('spread_type', ''))
+        entry.setdefault('regime', entry.get('regime', 'uncertain'))
+        entry.setdefault('direction', entry.get('direction', ''))
+        entry.setdefault('manual', False)
+        entry = _normalize_curated_entry(entry, infer_regime=True)
+        if entry['instrument'] and entry['spread_type']:
+            rows.append(entry)
+    return rows
+
+
+def _merge_curated_entries(*groups: list[dict] | None) -> list[dict]:
+    merged: list[dict] = []
+    index: dict[tuple[str, str], int] = {}
+
+    for group in groups:
+        if not group:
+            continue
+        for raw_entry in group:
+            if not isinstance(raw_entry, dict):
+                continue
+            entry = _normalize_curated_entry(raw_entry, infer_regime=True)
+            key = (entry['spread_type'], entry['instrument'])
+            if not key[0] or not key[1]:
+                continue
+
+            existing_idx = index.get(key)
+            if existing_idx is None:
+                index[key] = len(merged)
+                merged.append(entry)
+                continue
+
+            existing = merged[existing_idx]
+            for field, value in entry.items():
+                if field == 'manual':
+                    existing[field] = bool(existing.get(field, False)) or bool(value)
+                elif field == 'regime':
+                    existing_value = str(existing.get(field, '') or '').strip()
+                    new_value = str(value or '').strip()
+                    if existing_value in {'', 'uncertain'} and new_value:
+                        existing[field] = new_value
+                elif field == 'direction':
+                    existing_value = str(existing.get(field, '') or '').strip()
+                    new_value = str(value or '').strip()
+                    if existing_value and not new_value:
+                        continue
+                    if new_value:
+                        existing[field] = new_value
+                elif value not in (None, '', [], {}):
+                    existing[field] = value
+
+    return merged
+
+
 def register_candidate_callbacks(app) -> None:
     """Register all Candidates subtab callbacks."""
 
@@ -478,24 +599,33 @@ def register_candidate_callbacks(app) -> None:
                     id_to_type[c['ID']] = c['spread_type']
 
         seen_insts: set = set()
-        curated_instruments: list = []
+        curated_instruments: list = _load_alpha_book_positions()
         for _, pair_row in low_corr_pairs.iterrows():
             for col in ['Asset A', 'Asset B']:
                 inst = pair_row[col]
                 if inst not in seen_insts and inst in corr_matrix.columns:
                     seen_insts.add(inst)
-                    row_meta = {'spread_type': id_to_type.get(inst, 'Unknown'), 'instrument': inst, 'manual': False}
+                    row_meta = {
+                        'spread_type': id_to_type.get(inst, 'Unknown'),
+                        'instrument': inst,
+                        'manual': False,
+                        'regime': 'uncertain',
+                        'direction': '',
+                    }
                     if all_candidates:
                         for c in all_candidates:
                             if c.get('ID') == inst and c.get('spread_type') == row_meta['spread_type']:
                                 row_meta['regime'] = c.get('regime', 'uncertain')
                                 row_meta['direction'] = c.get('direction', '')
                                 break
+                    row_meta['regime'] = row_meta['regime'] or _get_upstream_regime(row_meta['spread_type'], inst)
                     curated_instruments.append(row_meta)
                     if len(curated_instruments) >= 10:
                         break
             if len(curated_instruments) >= 10:
                 break
+
+        curated_instruments = _merge_curated_entries(curated_instruments)
 
         return html.Div([
             heatmap_div,
@@ -544,6 +674,8 @@ def register_candidate_callbacks(app) -> None:
             raise PreventUpdate
 
         current = current or []
+        if not current:
+            current = _load_alpha_book_positions()
 
         raw_prop = ctx.triggered[0]['prop_id']
         raw_id   = raw_prop.rsplit('.', 1)[0]
@@ -564,19 +696,21 @@ def register_candidate_callbacks(app) -> None:
                 snap = load_spread_data(spread_type)
                 if snap is not None and instrument in snap.index:
                     snap_row = snap.loc[instrument]
-                    raw_style = str(snap_row.get('style', '') or '').strip().lower()
-                    if raw_style in {'meanreversion', 'mean_reverting', 'mean-reverting'}:
-                        _regime = 'mean-reverting'
-                    elif raw_style in {'trend', 'trendfollowing', 'carry', 'mixed', 'momentum'}:
-                        _regime = 'momentum'
+                    _regime = _style_to_regime(snap_row.get('style', ''))
                     raw_dir = str(snap_row.get('direction', '') or '').strip().upper()
                     if raw_dir in {'BUY', 'SELL'}:
                         _direction = raw_dir
             except Exception:
                 pass
-            return current + [{'spread_type': spread_type, 'instrument': instrument,
-                               'regime': _regime, 'direction': _direction,
-                               'manual': True}]
+            if _regime == 'uncertain':
+                _regime = _get_upstream_regime(spread_type, instrument)
+            return _merge_curated_entries(current, [{
+                'spread_type': spread_type,
+                'instrument': instrument,
+                'regime': _regime,
+                'direction': _direction,
+                'manual': True,
+            }])
 
         if trig_dict and trig_dict.get('type') == 'curated-del':
             if not any(nc for nc in del_clicks if nc):
@@ -672,7 +806,7 @@ def register_candidate_callbacks(app) -> None:
         for i, entry in enumerate(instruments):
             stype     = entry.get('spread_type', '')
             inst      = entry.get('instrument', '')
-            regime    = entry.get('regime', 'uncertain') or 'uncertain'
+            regime    = entry.get('regime', 'uncertain') or _get_upstream_regime(stype, inst) or 'uncertain'
             direction = entry.get('direction', '') or ''
             manual    = bool(entry.get('manual', False))
             in_m      = inst in matrix_cols
