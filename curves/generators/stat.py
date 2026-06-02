@@ -135,7 +135,6 @@ class StatGenerator:
             bond_px = updatePKL({}, os.path.join(DIR_INPUT, f'{btype}-cvpx.pkl'))
             ref = loadRefData(btype)
             curve = curve_objs[self.dp]
-
             bonds = bond_px['ytm_quo'].columns.intersection(env['Def'].index)
             df_act = bond_px['ytm_act'].loc[self.start:self.da, bonds].drop_duplicates()
             df_quo = bond_px['ytm_quo'].loc[self.start:self.da, bonds].drop_duplicates()
