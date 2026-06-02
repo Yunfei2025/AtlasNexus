@@ -96,6 +96,8 @@ def _persist_alpha_summary_rows(rows: list[dict]) -> None:
     records = [{
         'spread_type': str(r.get('Spread Type', '')),
         'ID': str(r.get('ID', '')),
+        'style': str(r.get('Style', '')),
+        'direction': str(r.get('Direction', '')),
         'open_price_bp': r.get('Open price (bp)', ''),
         'volume_mm': r.get('Volume (mm)', ''),
         'open_date': str(r.get('Open date', '')),
@@ -487,12 +489,24 @@ def register_risk_callbacks(app):
                     try:
                         open_price_bp = float(open_price_str) if open_price_str else None
                         volume_mm     = float(volume_str)     if volume_str     else None
-                        mtm_spd_bp    = open_price_bp
+                        direction     = row.get('direction', '').upper()
 
-                        if open_price_bp is not None and volume_mm is not None and cp_bp is not None:
-                            # Price P&L: Volume × Duration × ΔSpread / 10000  (MM CNY)
+                        if open_price_bp is not None and cp_bp is not None:
+                            # MTM SPD profit conventions by spread type:
+                            # - TBondCurve/TBondSpread (BUY): profit when yield drops (open > close)
+                            # - SwapSpread (SELL): profit when spread tightens (open > close)
+                            # - SwapSpread/TenorSpread (BUY): profit when spread widens (close > open)
+                            if spread_type in ['TBondCurve', 'TBondSpread']:
+                                mtm_spd_bp = open_price_bp - cp_bp
+                            elif spread_type == 'TenorSpread':
+                                mtm_spd_bp = cp_bp - open_price_bp
+                            else:  # SwapSpread and others
+                                mtm_spd_bp = (open_price_bp - cp_bp) if direction == 'SELL' else (cp_bp - open_price_bp)
+
+                        if mtm_spd_bp is not None and volume_mm is not None:
+                            # Price P&L: MTM SPD (bp) × Duration × Volume / 10000  (MM CNY)
                             mtm_price_mm = round(
-                                volume_mm * duration * (cp_bp - open_price_bp) / 10000.0, 4
+                                mtm_spd_bp * duration * volume_mm / 10000.0, 4
                             )
                         if volume_mm is not None:
                             mtm_carry_mm = _compute_carry_mtm(

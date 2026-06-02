@@ -223,26 +223,28 @@ def build_multiasset_portfolio_layout():
                         dcc.RadioItems(
                             id='allocation-mode',
                             options=[
-                                {'label': ' Pure Risk Parity', 'value': 'risk_parity'},
                                 {'label': ' Factor Model Scaling', 'value': 'factor_scaling'},
                                 {'label': ' User Defined', 'value': 'user_defined'},
                             ],
-                            value='risk_parity',
+                            value='factor_scaling',
                             inputStyle={'marginRight': '5px'},
                             labelStyle={'display': 'inline', 'marginRight': '16px', 'color': THEME['text_main'], 'fontSize': '12px'},
                             style={'display': 'inline-flex'},
                         ),
                         html.Span(id='factor-signals-toggle-status', style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '8px'}),
                     ], style={'marginBottom': '8px'}),
-                    # Column headers: Factor | Vol% ann | ×adj | RP Max | Coeff | Exposure
+                    # Column headers: Factor | Vol% ann | ×adj | RP Max (MM) | DV01 (MM/bp) | Coeff | Exposure (MM)
                     html.Div([
-                        html.Span("Factor",   style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0'}),
-                        html.Span("Vol %ann", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '62px', 'textAlign': 'right', 'flexShrink': '0'}),
-                        html.Span("×adj",     style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '48px', 'textAlign': 'center', 'flexShrink': '0'},
+                        html.Span("Factor",          style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0'}),
+                        html.Span("Vol %ann",        style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '62px', 'textAlign': 'right', 'flexShrink': '0'}),
+                        html.Span("×adj",            style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '48px', 'textAlign': 'center', 'flexShrink': '0'},
                                   title='Vol multiplier: effective vol = measured vol × adj. Set >1 to reduce RP Max (e.g. discount IRCV over-allocation).'),
-                        html.Span("RP Max",   style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '54px', 'textAlign': 'right', 'flexShrink': '0'}),
-                        html.Span("Coeff",    style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '44px', 'textAlign': 'center', 'flexShrink': '0'}),
-                        html.Span("Exposure", style={'color': THEME['text_sub'], 'fontSize': '11px', 'flex': '1', 'textAlign': 'right'}),
+                        html.Span("RP Max (MM CNY)", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '105px', 'textAlign': 'right', 'flexShrink': '0'},
+                                  title='Risk Parity Max allocation in millions CNY'),
+                        html.Span("DV01 (MM/bp)",    style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '85px', 'textAlign': 'right', 'flexShrink': '0'},
+                                  title='Duration risk in MM CNY per basis point (IR factors only; blank for commodities/FX)'),
+                        html.Span("Coeff",           style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '44px', 'textAlign': 'center', 'flexShrink': '0'}),
+                        html.Span("Exposure (MM CNY)",style={'color': THEME['text_sub'], 'fontSize': '11px', 'flex': '1', 'textAlign': 'right'}),
                     ], style={'display': 'flex', 'alignItems': 'center', 'padding': '0 8px 4px 8px',
                               'borderBottom': f'1px solid {THEME["table_header"]}', 'marginBottom': '4px', 'gap': '4px'}),
                     html.Div(

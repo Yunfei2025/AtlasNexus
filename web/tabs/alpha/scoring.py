@@ -110,6 +110,10 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
         risk_contrib = np.ones(n) / n
         return weights, risk_contrib
 
+    # Normalise index types (datetime.date vs str mismatch causes all rows to be NaN
+    # after DataFrame alignment, triggering the equal-weight fallback).
+    for _s in spread_series.values():
+        _s.index = _s.index.astype(str)
     spread_df = pd.DataFrame(spread_series).dropna()
 
     if len(spread_df) < 20:
@@ -120,6 +124,15 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
         return weights, risk_contrib
 
     returns = spread_df.diff().dropna()
+    # Winsorise each column using Tukey fences (IQR-based) to remove bad-tick
+    # spikes that would otherwise inflate the covariance matrix by orders of
+    # magnitude and make all risk contributions collapse to near zero.
+    for col in returns.columns:
+        _q1 = returns[col].quantile(0.25)
+        _q3 = returns[col].quantile(0.75)
+        _iqr = _q3 - _q1
+        if _iqr > 0:
+            returns[col] = returns[col].clip(lower=_q1 - 5 * _iqr, upper=_q3 + 5 * _iqr)
     cov_matrix = returns.cov()
     cov = cov_matrix.values
     n = len(cov)

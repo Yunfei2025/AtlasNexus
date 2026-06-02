@@ -1,270 +1,113 @@
-ERROR: Traceback (most recent call last):
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/atlas_fi_tabs.py", line 756, in _update_spread_ts
-ERROR:     return orig_spreadts(stype, season, ticker)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/graphs.py", line 381, in spreadts
-ERROR:     dfc = build_spread_series(b, season, stype)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/graphs.py", line 193, in build_spread_series
-ERROR:     figinfo = getInfo(b, primary_series, dfts, "", stype)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/styles.py", line 98, in getInfo
-ERROR:     if (df_stat.loc[b,'halflife']=='')|(df_stat.loc[b,'stationary']=='NO'):
-ERROR:        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/generic.py", line 1513, in __bool__
-ERROR:     raise ValueError(
-ERROR:     ...<2 lines>...
-ERROR:     )
-ERROR: ValueError: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
-ERROR: Traceback (most recent call last):
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/atlas_fi_tabs.py", line 756, in _update_spread_ts
-ERROR:     return orig_spreadts(stype, season, ticker)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/graphs.py", line 381, in spreadts
-ERROR:     dfc = build_spread_series(b, season, stype)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/graphs.py", line 193, in build_spread_series
-ERROR:     figinfo = getInfo(b, primary_series, dfts, "", stype)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/styles.py", line 98, in getInfo
-ERROR:     if (df_stat.loc[b,'halflife']=='')|(df_stat.loc[b,'stationary']=='NO'):
-ERROR:        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/generic.py", line 1513, in __bool__
-ERROR:     raise ValueError(
-ERROR:     ...<2 lines>...
-ERROR:     )
-ERROR: ValueError: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
-ERROR: Traceback (most recent call last):
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/atlas_fi_tabs.py", line 756, in _update_spread_ts
-ERROR:     return orig_spreadts(stype, season, ticker)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/graphs.py", line 390, in spreadts
-ERROR:     trace_add = getTraceAdd(df1, stype)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/styles.py", line 242, in getTraceAdd
-ERROR:     trace2 = [go.Scatter(
-ERROR:               ~~~~~~~~~~^
-ERROR:         name = 'CR(3m,bp)',
-ERROR:         ^^^^^^^^^^^^^^^^^^^
-ERROR:     ...<7 lines>...
-ERROR:         }
-ERROR:         ^
-ERROR:     )]
-ERROR:     ^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/graph_objs/_scatter.py", line 2832, in __init__
-ERROR:     self._set_property("y", arg, y)
-ERROR:     ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 4403, in _set_property
-ERROR:     _set_property_provided_value(self, name, arg, provided)
-ERROR:     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 398, in _set_property_provided_value
-ERROR:     obj[name] = val
-ERROR:     ~~~^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 4932, in __setitem__
-ERROR:     self._set_prop(prop, value)
-ERROR:     ~~~~~~~~~~~~~~^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 5276, in _set_prop
-ERROR:     raise err
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 5271, in _set_prop
-ERROR:     val = validator.validate_coerce(val)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/_plotly_utils/basevalidators.py", line 420, in validate_coerce
-ERROR:     v = copy_to_readonly_numpy_array(v)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/_plotly_utils/basevalidators.py", line 110, in copy_to_readonly_numpy_array
-ERROR:     v = nw.from_native(v, allow_series=True, pass_through=True)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/stable/v1/__init__.py", line 659, in from_native
-ERROR:     return _from_native_impl(  # type: ignore[no-any-return]
-ERROR:         native_object,
-ERROR:     ...<5 lines>...
-ERROR:         version=Version.V1,
-ERROR:     )
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/translate.py", line 368, in _from_native_impl
-ERROR:     .compliant.from_native(native_object)
-ERROR:                ~~~~~~~~~~~^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_compliant/namespace.py", line 255, in from_native
-ERROR:     return self._dataframe.from_native(data, context=self)
-ERROR:            ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_pandas_like/dataframe.py", line 235, in from_native
-ERROR:     return cls(
-ERROR:         data,
-ERROR:     ...<2 lines>...
-ERROR:         validate_column_names=True,
-ERROR:     )
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_pandas_like/dataframe.py", line 118, in __init__
-ERROR:     check_column_names_are_unique(native_dataframe.columns)
-ERROR:     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_utils.py", line 1517, in check_column_names_are_unique
-ERROR:     raise DuplicateError(msg)
-ERROR: narwhals.exceptions.DuplicateError: Expected unique column names, got:
-ERROR: - 'Repo7d-3m2y5y' 2 times
-ERROR: Traceback (most recent call last):
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/atlas_fi_tabs.py", line 756, in _update_spread_ts
-ERROR:     return orig_spreadts(stype, season, ticker)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/graphs.py", line 390, in spreadts
-ERROR:     trace_add = getTraceAdd(df1, stype)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/styles.py", line 242, in getTraceAdd
-ERROR:     trace2 = [go.Scatter(
-ERROR:               ~~~~~~~~~~^
-ERROR:         name = 'CR(3m,bp)',
-ERROR:         ^^^^^^^^^^^^^^^^^^^
-ERROR:     ...<7 lines>...
-ERROR:         }
-ERROR:         ^
-ERROR:     )]
-ERROR:     ^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/graph_objs/_scatter.py", line 2832, in __init__
-ERROR:     self._set_property("y", arg, y)
-ERROR:     ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 4403, in _set_property
-ERROR:     _set_property_provided_value(self, name, arg, provided)
-ERROR:     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 398, in _set_property_provided_value
-ERROR:     obj[name] = val
-ERROR:     ~~~^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 4932, in __setitem__
-ERROR:     self._set_prop(prop, value)
-ERROR:     ~~~~~~~~~~~~~~^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 5276, in _set_prop
-ERROR:     raise err
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 5271, in _set_prop
-ERROR:     val = validator.validate_coerce(val)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/_plotly_utils/basevalidators.py", line 420, in validate_coerce
-ERROR:     v = copy_to_readonly_numpy_array(v)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/_plotly_utils/basevalidators.py", line 110, in copy_to_readonly_numpy_array
-ERROR:     v = nw.from_native(v, allow_series=True, pass_through=True)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/stable/v1/__init__.py", line 659, in from_native
-ERROR:     return _from_native_impl(  # type: ignore[no-any-return]
-ERROR:         native_object,
-ERROR:     ...<5 lines>...
-ERROR:         version=Version.V1,
-ERROR:     )
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/translate.py", line 368, in _from_native_impl
-ERROR:     .compliant.from_native(native_object)
-ERROR:                ~~~~~~~~~~~^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_compliant/namespace.py", line 255, in from_native
-ERROR:     return self._dataframe.from_native(data, context=self)
-ERROR:            ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_pandas_like/dataframe.py", line 235, in from_native
-ERROR:     return cls(
-ERROR:         data,
-ERROR:     ...<2 lines>...
-ERROR:         validate_column_names=True,
-ERROR:     )
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_pandas_like/dataframe.py", line 118, in __init__
-ERROR:     check_column_names_are_unique(native_dataframe.columns)
-ERROR:     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_utils.py", line 1517, in check_column_names_are_unique
-ERROR:     raise DuplicateError(msg)
-ERROR: narwhals.exceptions.DuplicateError: Expected unique column names, got:
-ERROR: - 'Repo7d-3m2y5y' 2 times
-ERROR: Traceback (most recent call last):
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/atlas_fi_tabs.py", line 756, in _update_spread_ts
-ERROR:     return orig_spreadts(stype, season, ticker)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/graphs.py", line 390, in spreadts
-ERROR:     trace_add = getTraceAdd(df1, stype)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/styles.py", line 242, in getTraceAdd
-ERROR:     trace2 = [go.Scatter(
-ERROR:               ~~~~~~~~~~^
-ERROR:         name = 'CR(3m,bp)',
-ERROR:         ^^^^^^^^^^^^^^^^^^^
-ERROR:     ...<7 lines>...
-ERROR:         }
-ERROR:         ^
-ERROR:     )]
-ERROR:     ^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/graph_objs/_scatter.py", line 2832, in __init__
-ERROR:     self._set_property("y", arg, y)
-ERROR:     ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 4403, in _set_property
-ERROR:     _set_property_provided_value(self, name, arg, provided)
-ERROR:     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 398, in _set_property_provided_value
-ERROR:     obj[name] = val
-ERROR:     ~~~^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 4932, in __setitem__
-ERROR:     self._set_prop(prop, value)
-ERROR:     ~~~~~~~~~~~~~~^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 5276, in _set_prop
-ERROR:     raise err
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 5271, in _set_prop
-ERROR:     val = validator.validate_coerce(val)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/_plotly_utils/basevalidators.py", line 420, in validate_coerce
-ERROR:     v = copy_to_readonly_numpy_array(v)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/_plotly_utils/basevalidators.py", line 110, in copy_to_readonly_numpy_array
-ERROR:     v = nw.from_native(v, allow_series=True, pass_through=True)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/stable/v1/__init__.py", line 659, in from_native
-ERROR:     return _from_native_impl(  # type: ignore[no-any-return]
-ERROR:         native_object,
-ERROR:     ...<5 lines>...
-ERROR:         version=Version.V1,
-ERROR:     )
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/translate.py", line 368, in _from_native_impl
-ERROR:     .compliant.from_native(native_object)
-ERROR:                ~~~~~~~~~~~^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_compliant/namespace.py", line 255, in from_native
-ERROR:     return self._dataframe.from_native(data, context=self)
-ERROR:            ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_pandas_like/dataframe.py", line 235, in from_native
-ERROR:     return cls(
-ERROR:         data,
-ERROR:     ...<2 lines>...
-ERROR:         validate_column_names=True,
-ERROR:     )
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_pandas_like/dataframe.py", line 118, in __init__
-ERROR:     check_column_names_are_unique(native_dataframe.columns)
-ERROR:     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_utils.py", line 1517, in check_column_names_are_unique
-ERROR:     raise DuplicateError(msg)
-ERROR: narwhals.exceptions.DuplicateError: Expected unique column names, got:
-ERROR: - 'Repo7d-1y3y' 2 times
-ERROR: Traceback (most recent call last):
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/atlas_fi_tabs.py", line 756, in _update_spread_ts
-ERROR:     return orig_spreadts(stype, season, ticker)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/graphs.py", line 390, in spreadts
-ERROR:     trace_add = getTraceAdd(df1, stype)
-ERROR:   File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/core/styles.py", line 242, in getTraceAdd
-ERROR:     trace2 = [go.Scatter(
-ERROR:               ~~~~~~~~~~^
-ERROR:         name = 'CR(3m,bp)',
-ERROR:         ^^^^^^^^^^^^^^^^^^^
-ERROR:     ...<7 lines>...
-ERROR:         }
-ERROR:         ^
-ERROR:     )]
-ERROR:     ^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/graph_objs/_scatter.py", line 2832, in __init__
-ERROR:     self._set_property("y", arg, y)
-ERROR:     ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 4403, in _set_property
-ERROR:     _set_property_provided_value(self, name, arg, provided)
-ERROR:     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 398, in _set_property_provided_value
-ERROR:     obj[name] = val
-ERROR:     ~~~^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 4932, in __setitem__
-ERROR:     self._set_prop(prop, value)
-ERROR:     ~~~~~~~~~~~~~~^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 5276, in _set_prop
-ERROR:     raise err
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/plotly/basedatatypes.py", line 5271, in _set_prop
-ERROR:     val = validator.validate_coerce(val)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/_plotly_utils/basevalidators.py", line 420, in validate_coerce
-ERROR:     v = copy_to_readonly_numpy_array(v)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/_plotly_utils/basevalidators.py", line 110, in copy_to_readonly_numpy_array
-ERROR:     v = nw.from_native(v, allow_series=True, pass_through=True)
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/stable/v1/__init__.py", line 659, in from_native
-ERROR:     return _from_native_impl(  # type: ignore[no-any-return]
-ERROR:         native_object,
-ERROR:     ...<5 lines>...
-ERROR:         version=Version.V1,
-ERROR:     )
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/translate.py", line 368, in _from_native_impl
-ERROR:     .compliant.from_native(native_object)
-ERROR:                ~~~~~~~~~~~^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_compliant/namespace.py", line 255, in from_native
-ERROR:     return self._dataframe.from_native(data, context=self)
-ERROR:            ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_pandas_like/dataframe.py", line 235, in from_native
-ERROR:     return cls(
-ERROR:         data,
-ERROR:     ...<2 lines>...
-ERROR:         validate_column_names=True,
-ERROR:     )
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_pandas_like/dataframe.py", line 118, in __init__
-ERROR:     check_column_names_are_unique(native_dataframe.columns)
-ERROR:     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
-ERROR:   File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/narwhals/_utils.py", line 1517, in check_column_names_are_unique
-ERROR:     raise DuplicateError(msg)
-ERROR: narwhals.exceptions.DuplicateError: Expected unique column names, got:
-ERROR: - 'Repo7d-6m3y' 2 times
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/alpha/callbacks/portfolio.py", line 93, in recalc_curated_correlation
+    df_spreads = pd.DataFrame(all_spreads).tail(lookback)
+                 ~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/frame.py", line 769, in __init__
+    mgr = dict_to_mgr(data, index, columns, dtype=dtype, copy=copy)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 460, in dict_to_mgr
+    return arrays_to_mgr(arrays, columns, index, dtype=dtype, consolidate=copy)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 113, in arrays_to_mgr
+    index = _extract_index(arrays)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 637, in _extract_index
+    index = union_indexes(indexes)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexes/api.py", line 261, in union_indexes
+    index = index.sort_values()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 5974, in sort_values
+    _as = nargsort(
+        items=self, ascending=ascending, na_position=na_position, key=key
+    )
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/sorting.py", line 442, in nargsort
+    indexer = non_nan_idx[non_nans.argsort(kind=kind)]
+                          ~~~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: '<' not supported between instances of 'datetime.date' and 'str'
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/alpha/callbacks/portfolio.py", line 93, in recalc_curated_correlation
+    df_spreads = pd.DataFrame(all_spreads).tail(lookback)
+                 ~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/frame.py", line 769, in __init__
+    mgr = dict_to_mgr(data, index, columns, dtype=dtype, copy=copy)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 460, in dict_to_mgr
+    return arrays_to_mgr(arrays, columns, index, dtype=dtype, consolidate=copy)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 113, in arrays_to_mgr
+    index = _extract_index(arrays)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 637, in _extract_index
+    index = union_indexes(indexes)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexes/api.py", line 261, in union_indexes
+    index = index.sort_values()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 5974, in sort_values
+    _as = nargsort(
+        items=self, ascending=ascending, na_position=na_position, key=key
+    )
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/sorting.py", line 442, in nargsort
+    indexer = non_nan_idx[non_nans.argsort(kind=kind)]
+                          ~~~~~~~~~~~~~~~~^^^^^^^^^^^
+TypeError: '<' not supported between instances of 'datetime.date' and 'str'
+ERROR: Exception on /_dash-update-component [POST]
+Traceback (most recent call last):
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
+    return ctx.run(func, self, *args, **kwargs)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
+    response_data = ctx.run(partial_func)
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
+    raise err
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
+    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
+  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
+    return func(*args, **kwargs)  # %% callback invoked %%
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/apps/atlasnexus_daily.py", line 616, in _start_jobs
+    job = start_engine_job(argv=argv)
+  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/services/jobs.py", line 249, in start_engine_job
+    raise RuntimeError(conflict)
+RuntimeError: ⛔ Cannot start 'curve-backtest': job 0414aba573ed (curve-backtest) is already RUNNING and shares data artifacts. Wait for it to finish first.

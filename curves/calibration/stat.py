@@ -33,10 +33,7 @@ def _suppress_curve_yield_outliers(
         return curve
 
     curve = curve.mask(outlier)
-    original_index = curve.index
-    curve.index = pd.to_datetime(curve.index)
-    curve = curve.interpolate(method='time', limit_area='inside').ffill().bfill()
-    curve.index = original_index
+    curve = curve.interpolate(method='index', limit_area='inside').ffill().bfill()
     return curve
 
 # Constants reused across functions
@@ -160,6 +157,7 @@ def statAnalysis_BC(env, df1, df2, zscore_lookback: int = 252):
         df2[b] = _suppress_curve_yield_outliers(df2[b], df1[b])
 
     vol_ratio = df1.std() / df2.std().replace(0, np.nan)
+    df2 = df2.reindex(index=df1.index)
     spread = df1 - df2
     spread = spread[bonds]
     # Use a 1-year rolling window for mean/vol/stationarity so old regimes

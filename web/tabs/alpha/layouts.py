@@ -216,6 +216,7 @@ def build_candidates_layout() -> html.Div:
         dcc.Store(id='alpha-corr-pairs-store', data=[]),
         dcc.Store(id='alpha-corr-matrix-store', storage_type='memory', data={}),
         dcc.Store(id='alpha-curated-instruments-store', storage_type='memory', data=[]),
+        dcc.Store(id='alpha-book-positions-store', storage_type='session', data=[]),
         dcc.Store(id='alpha-regime-store', storage_type='session', data={}),
 
     ], style={'padding': '10px'})
@@ -234,10 +235,9 @@ def build_portfolio_layout() -> html.Div:
         html.Div([
             html.H5("Step 1 — Instrument Selection & Correlation", style={'color': THEME['text_main'], 'marginBottom': '6px'}),
             html.P(
-                "Run Check Correlation in the Candidates subtab first. "
-                "The lowest-correlation pairs are transferred here automatically. "
-                "Saved positions from alpha_book_positions.parquet are included automatically. "
-                "Add or remove instruments to customise your trade set.",
+                "Run Check Correlation in the Candidates subtab first to populate the candidate list. "
+                "Saved positions from alpha_book_positions.parquet are shown separately below. "
+                "Both tables feed into the correlation matrix and portfolio optimisation.",
                 style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '14px'},
             ),
 

@@ -33,7 +33,7 @@ def _style_to_regime(style: object) -> str:
     style_value = str(style or '').strip().lower()
     if style_value in {'meanreversion', 'mean_reverting', 'mean-reverting'}:
         return 'mean-reverting'
-    if style_value in {'trend', 'trendfollowing', 'trend_following', 'carry', 'mixed', 'momentum'}:
+    if style_value in {'trend', 'trendfollowing', 'trend_following', 'trending', 'carry', 'mixed', 'momentum'}:
         return 'momentum'
     return 'uncertain'
 
@@ -63,7 +63,9 @@ def _get_upstream_regime(spread_type: str, instrument: str) -> str:
 def _normalize_curated_entry(entry: dict, *, infer_regime: bool = True) -> dict:
     instrument = str(entry.get('instrument') or entry.get('ID') or '').strip()
     spread_type = str(entry.get('spread_type') or entry.get('type') or '').strip()
-    regime = str(entry.get('regime') or '').strip() or 'uncertain'
+    # Prefer 'style' (already a raw category) over 'regime' when regime is absent/uncertain.
+    _raw = str(entry.get('regime') or entry.get('style') or '').strip()
+    regime = _style_to_regime(_raw) if _raw else 'uncertain'
     direction = str(entry.get('direction') or '').strip().upper()
 
     if infer_regime and regime == 'uncertain':
@@ -89,14 +91,48 @@ def _load_alpha_book_positions() -> list[dict]:
     if not isinstance(df, pd.DataFrame) or df.empty:
         return []
 
+    # Deduplicate by (spread_type, ID) — keep first occurrence.
+    _id_cols = [c for c in ('spread_type', 'ID') if c in df.columns]
+    if _id_cols:
+        df = df.drop_duplicates(subset=_id_cols, keep='first')
+
+    _snap_cache: dict = {}
     rows: list[dict] = []
     for _, row in df.iterrows():
         entry = row.to_dict()
         entry.setdefault('instrument', entry.get('ID', ''))
         entry.setdefault('spread_type', entry.get('spread_type', ''))
-        entry.setdefault('regime', entry.get('regime', 'uncertain'))
-        entry.setdefault('direction', entry.get('direction', ''))
         entry.setdefault('manual', False)
+
+        inst  = str(entry.get('instrument', '') or '').strip()
+        stype = str(entry.get('spread_type', '') or '').strip()
+
+        # Regime: file 'style' column (from Summary save) > 'regime' column > snap lookup.
+        raw_regime = str(entry.get('style', '') or entry.get('regime', '') or '').strip()
+        if not raw_regime or raw_regime == 'uncertain':
+            if stype not in _snap_cache:
+                try:
+                    _snap_cache[stype] = load_spread_data(stype)
+                except Exception:
+                    _snap_cache[stype] = None
+            snap = _snap_cache[stype]
+            if snap is not None and inst in snap.index and 'style' in snap.columns:
+                raw_regime = str(snap.loc[inst, 'style'] or '').strip()
+        entry['regime'] = raw_regime or 'uncertain'
+
+        # Direction: file 'direction' column > snap lookup.
+        raw_dir = str(entry.get('direction', '') or '').strip().upper()
+        if raw_dir not in {'BUY', 'SELL'}:
+            if stype not in _snap_cache:
+                try:
+                    _snap_cache[stype] = load_spread_data(stype)
+                except Exception:
+                    _snap_cache[stype] = None
+            snap = _snap_cache[stype]
+            if snap is not None and inst in snap.index and 'direction' in snap.columns:
+                raw_dir = str(snap.loc[inst, 'direction'] or '').strip().upper()
+        entry['direction'] = raw_dir if raw_dir in {'BUY', 'SELL'} else ''
+
         entry = _normalize_curated_entry(entry, infer_regime=True)
         if entry['instrument'] and entry['spread_type']:
             rows.append(entry)
@@ -349,6 +385,9 @@ def register_candidate_callbacks(app) -> None:
         df_display = df_all.copy()
         if 'ID' not in df_display.columns and df_display.index.name == 'ID':
             df_display = df_display.reset_index()
+        # Deduplicate by ID: keep the row with the highest score (df_all is already sorted desc).
+        if 'ID' in df_display.columns:
+            df_display = df_display.drop_duplicates(subset=['ID'], keep='first')
         available_all = [c for c in _all_display_cols if c in df_display.columns]
         df_display = df_display[available_all].copy()
 
@@ -363,7 +402,11 @@ def register_candidate_callbacks(app) -> None:
 
             df_display['style'] = df_display['style'].map(_style_to_regime_label)
 
-        # carry_roll is stored as the BUY-side value; flip sign for SELL direction.
+        # Store raw (BUY-side) carry_roll in candidates so the portfolio display
+        # flip is applied exactly once. The candidates DataTable flips for display only.
+        candidate_data = df_display.to_dict('records')
+
+        # carry_roll display-only sign flip: positive = earns carry from this direction.
         if 'carry_roll' in df_display.columns and 'direction' in df_display.columns:
             _sell_mask = df_display['direction'].astype(str).str.strip().str.upper().eq('SELL')
             df_display.loc[_sell_mask, 'carry_roll'] = (
@@ -395,11 +438,12 @@ def register_candidate_callbacks(app) -> None:
         trend_by_regime = regime_s.eq('trending')
         uncertain_mask  = regime_s.eq('uncertain')
         no_regime       = ~mr_by_regime & ~trend_by_regime & ~uncertain_mask
-        style_mr    = no_regime & style_s.eq('meanreversion')
-        style_trend = no_regime & style_s.isin({'carry', 'trend', 'trendfollowing'})
+        style_mr    = (no_regime | uncertain_mask) & style_s.eq('meanreversion')
+        style_trend = (no_regime | uncertain_mask) & style_s.isin({'carry', 'trend', 'trendfollowing'})
+        uncertain_unmapped = uncertain_mask & ~style_mr & ~style_trend
 
-        df_mr    = df_display[mr_by_regime    | uncertain_mask | style_mr   ][_mr_avail   ].copy()
-        df_trend = df_display[trend_by_regime | uncertain_mask | style_trend][_trend_avail].copy()
+        df_mr    = df_display[mr_by_regime | style_mr | uncertain_unmapped][_mr_avail   ].copy()
+        df_trend = df_display[trend_by_regime | style_trend][_trend_avail].copy()
 
         regime_counts  = regime_s.value_counts(dropna=False)
         regime_summary = ', '.join([f"{k}: {int(v)}" for k, v in regime_counts.items()])
@@ -457,7 +501,7 @@ def register_candidate_callbacks(app) -> None:
 
         table_out = html.Div([table_mr, table_trend])
         status = f"Found {len(df_all)} candidates at {scanned_time}"
-        candidate_data = df_display.to_dict('records')
+        # candidate_data was already captured above (before carry_roll display flip)
 
         regime_store: dict = {}
         if 'regime' in df_all.columns and 'ID' in df_all.columns and 'spread_type' in df_all.columns:
@@ -508,6 +552,8 @@ def register_candidate_callbacks(app) -> None:
                         all_spreads[trade_id] = ts[trade_id]
 
                 if len(all_spreads) >= 2:
+                    for key in all_spreads:
+                        all_spreads[key].index = all_spreads[key].index.astype(str)
                     df_spreads = pd.DataFrame(all_spreads).tail(lookback)
                     df_changes = df_spreads.diff().dropna()
                     if len(df_changes) >= 20:
@@ -599,7 +645,7 @@ def register_candidate_callbacks(app) -> None:
                     id_to_type[c['ID']] = c['spread_type']
 
         seen_insts: set = set()
-        curated_instruments: list = _load_alpha_book_positions()
+        curated_instruments: list = []
         for _, pair_row in low_corr_pairs.iterrows():
             for col in ['Asset A', 'Asset B']:
                 inst = pair_row[col]
@@ -615,10 +661,15 @@ def register_candidate_callbacks(app) -> None:
                     if all_candidates:
                         for c in all_candidates:
                             if c.get('ID') == inst and c.get('spread_type') == row_meta['spread_type']:
-                                row_meta['regime'] = c.get('regime', 'uncertain')
+                                # 'style' is already normalized to 'mean-reverting'/'momentum' by scan;
+                                # fall back to 'regime' for older store entries.
+                                _cand_style = str(c.get('style', '') or '').strip()
+                                _cand_regime = str(c.get('regime', '') or '').strip()
+                                row_meta['regime'] = _style_to_regime(_cand_style or _cand_regime)
                                 row_meta['direction'] = c.get('direction', '')
                                 break
-                    row_meta['regime'] = row_meta['regime'] or _get_upstream_regime(row_meta['spread_type'], inst)
+                    if row_meta['regime'] == 'uncertain':
+                        row_meta['regime'] = _get_upstream_regime(row_meta['spread_type'], inst) or 'uncertain'
                     curated_instruments.append(row_meta)
                     if len(curated_instruments) >= 10:
                         break
@@ -758,28 +809,44 @@ def register_candidate_callbacks(app) -> None:
         return updated
 
     # -------------------------------------------------------------------------
+    # PORTFOLIO: Populate saved-positions store from alpha_book_positions.parquet
+    # -------------------------------------------------------------------------
+    @app.callback(
+        Output('alpha-book-positions-store', 'data'),
+        Input('an-alpha-subtabs', 'value'),
+    )
+    def refresh_positions_store(active_subtab):
+        if active_subtab != 'portfolio':
+            raise PreventUpdate
+        return _load_alpha_book_positions()
+
+    # -------------------------------------------------------------------------
     # CANDIDATES: Render curated instrument table + curated correlation view
     # -------------------------------------------------------------------------
     @app.callback(
         [Output('alpha-curated-table-div', 'children'),
          Output('alpha-curated-corr-div', 'children')],
         [Input('alpha-curated-instruments-store', 'data'),
+         Input('alpha-book-positions-store', 'data'),
          Input('an-alpha-subtabs', 'value'),
          Input('alpha-corr-matrix-store', 'data')],
     )
-    def render_curated_content(instruments, active_subtab, matrix_data):
+    def render_curated_content(instruments, positions, active_subtab, matrix_data):
         if active_subtab is not None and active_subtab != 'portfolio':
             raise PreventUpdate
 
-        _sub = {'color': THEME['text_sub'], 'fontSize': '12px', 'fontStyle': 'italic'}
+        _sub  = {'color': THEME['text_sub'], 'fontSize': '12px', 'fontStyle': 'italic'}
+        _cell = {'padding': '6px 10px', 'fontSize': '12px', 'color': THEME['text_main']}
+        _hdr  = {**_cell, 'color': THEME['text_sub'], 'fontWeight': '600', 'fontSize': '11px',
+                 'borderBottom': f"1px solid {THEME['table_header']}"}
 
-        if not instruments:
-            return html.Div("No instruments in list — run Check Correlation in the Candidates subtab first.", style=_sub), html.Div()
-
+        instruments = instruments or []
+        positions   = positions   or []
         matrix_cols = set(matrix_data.keys()) if matrix_data else set()
 
-        _cell = {'padding': '6px 10px', 'fontSize': '12px', 'color': THEME['text_main']}
-        _hdr  = {**_cell, 'color': THEME['text_sub'], 'fontWeight': '600', 'fontSize': '11px', 'borderBottom': f"1px solid {THEME['table_header']}"}
+        # Remove from Table A any instrument already present in Table B (Saved Positions).
+        _pos_inst_set = {e.get('instrument', '') for e in positions}
+        instruments = [e for e in instruments if e.get('instrument', '') not in _pos_inst_set]
 
         _REGIME_OPTIONS = [
             {'label': 'mean-reverting', 'value': 'mean-reverting'},
@@ -790,10 +857,15 @@ def register_candidate_callbacks(app) -> None:
             {'label': 'SELL', 'value': 'SELL'},
         ]
         _dd_style = {'fontSize': '12px', 'minWidth': '130px'}
-        _dd_warn  = {'fontSize': '12px', 'minWidth': '130px', 'border': f"1px solid {THEME['warning']}",
-                     'borderRadius': '4px'}
+        _dd_warn  = {'fontSize': '12px', 'minWidth': '130px',
+                     'border': f"1px solid {THEME['warning']}", 'borderRadius': '4px'}
 
-        header_row = html.Tr([
+        def _in_matrix_cell(inst):
+            return (html.Span("✓", style={'color': THEME['success']})
+                    if inst in matrix_cols
+                    else html.Span("—", style={'color': THEME['text_sub']}))
+
+        shared_header = html.Tr([
             html.Th("Spread Type", style=_hdr),
             html.Th("Instrument",  style=_hdr),
             html.Th("Regime",      style=_hdr),
@@ -802,64 +874,122 @@ def register_candidate_callbacks(app) -> None:
             html.Th("",            style=_hdr),
         ])
 
-        body_rows = []
+        # ── Table A: candidate instruments (from correlation check + user-added) ──
+        curated_rows = []
         for i, entry in enumerate(instruments):
-            stype     = entry.get('spread_type', '')
-            inst      = entry.get('instrument', '')
-            regime    = entry.get('regime', 'uncertain') or _get_upstream_regime(stype, inst) or 'uncertain'
+            stype = entry.get('spread_type', '')
+            inst  = entry.get('instrument', '')
+            stored_regime = entry.get('regime', 'uncertain')
+            regime    = (_get_upstream_regime(stype, inst) or 'uncertain'
+                         if stored_regime == 'uncertain' else stored_regime)
             direction = entry.get('direction', '') or ''
             manual    = bool(entry.get('manual', False))
-            in_m      = inst in matrix_cols
-            indicator = (html.Span("✓", style={'color': THEME['success']}) if in_m else html.Span("—", style={'color': THEME['text_sub']}))
 
             regime_known = regime in {'mean-reverting', 'momentum'}
             dir_known    = direction in {'BUY', 'SELL'}
-            regime_editable = manual or not regime_known
+            regime_editable    = manual or not regime_known
             direction_editable = manual or not dir_known
 
-            if regime_editable:
-                regime_cell = dcc.Dropdown(
+            regime_cell = (
+                dcc.Dropdown(
                     id={'type': 'curated-regime', 'index': i},
                     options=_REGIME_OPTIONS,
                     value=regime if regime_known else None,
-                    placeholder='Assign regime…',
-                    clearable=False,
+                    placeholder='Assign regime…', clearable=False,
                     style=_dd_style if regime_known else _dd_warn,
-                )
-            else:
-                regime_cell = html.Div(regime, style={'padding': '6px 2px', 'fontSize': '12px', 'color': THEME['text_main']})
-
-            if direction_editable:
-                dir_cell = dcc.Dropdown(
+                ) if regime_editable
+                else html.Div(regime, style={'padding': '6px 2px', 'fontSize': '12px', 'color': THEME['text_main']})
+            )
+            dir_cell = (
+                dcc.Dropdown(
                     id={'type': 'curated-direction', 'index': i},
                     options=_DIR_OPTIONS,
                     value=direction if dir_known else None,
-                    placeholder='Assign…',
-                    clearable=False,
+                    placeholder='Assign…', clearable=False,
                     style=_dd_style if dir_known else _dd_warn,
-                )
-            else:
-                dir_cell = html.Div(direction, style={'padding': '6px 2px', 'fontSize': '12px', 'color': THEME['text_main']})
-
-            body_rows.append(html.Tr([
+                ) if direction_editable
+                else html.Div(direction, style={'padding': '6px 2px', 'fontSize': '12px', 'color': THEME['text_main']})
+            )
+            curated_rows.append(html.Tr([
                 html.Td(stype, style=_cell),
                 html.Td(inst,  style={**_cell, 'fontWeight': '500'}),
-                html.Td(regime_cell,  style={**_cell, 'padding': '2px 6px'}),
-                html.Td(dir_cell,     style={**_cell, 'padding': '2px 6px'}),
-                html.Td(indicator, style={**_cell, 'textAlign': 'center'}),
+                html.Td(regime_cell, style={**_cell, 'padding': '2px 6px'}),
+                html.Td(dir_cell,    style={**_cell, 'padding': '2px 6px'}),
+                html.Td(_in_matrix_cell(inst), style={**_cell, 'textAlign': 'center'}),
                 html.Td(
                     html.Button("×", id={'type': 'curated-del', 'index': i}, n_clicks=0,
-                                style={'background': 'none', 'border': f"1px solid {THEME['danger']}", 'color': THEME['danger'], 'borderRadius': '3px', 'cursor': 'pointer', 'padding': '1px 7px', 'fontSize': '13px', 'lineHeight': '1.2'}),
+                                style={'background': 'none', 'border': f"1px solid {THEME['danger']}",
+                                       'color': THEME['danger'], 'borderRadius': '3px',
+                                       'cursor': 'pointer', 'padding': '1px 7px',
+                                       'fontSize': '13px', 'lineHeight': '1.2'}),
                     style={'textAlign': 'center'},
                 ),
             ], style={'borderBottom': 'rgba(42,82,152,0.25) solid 1px'}))
 
-        table_div = html.Div(
-            html.Table([html.Thead(header_row), html.Tbody(body_rows)], style={'width': '100%', 'borderCollapse': 'collapse'}),
-            style={'overflowY': 'auto', 'maxHeight': '240px', 'border': f"1px solid {THEME['table_header']}", 'borderRadius': '4px'},
-        )
+        if curated_rows:
+            table_a = html.Div(
+                html.Table([html.Thead(shared_header), html.Tbody(curated_rows)],
+                           style={'width': '100%', 'borderCollapse': 'collapse'}),
+                style={'overflowY': 'auto', 'maxHeight': '220px',
+                       'border': f"1px solid {THEME['table_header']}", 'borderRadius': '4px'},
+            )
+        else:
+            table_a = html.Div(
+                "Run Check Correlation in the Candidates subtab to populate this list.",
+                style=_sub,
+            )
 
-        valid_ids = [e['instrument'] for e in instruments if e['instrument'] in matrix_cols]
+        # ── Table B: saved positions (alpha_book_positions.parquet, read-only) ──
+        pos_rows = []
+        pos_header = html.Tr([
+            html.Th("Spread Type", style=_hdr),
+            html.Th("Instrument",  style=_hdr),
+            html.Th("Regime",      style=_hdr),
+            html.Th("Direction",   style=_hdr),
+            html.Th("In Matrix",   style={**_hdr, 'textAlign': 'center'}),
+            html.Th("",            style=_hdr),  # empty column to match Table A width
+        ])
+        for entry in positions:
+            stype = entry.get('spread_type', '')
+            inst  = entry.get('instrument', '')
+            stored_regime = entry.get('regime', 'uncertain')
+            regime    = (_get_upstream_regime(stype, inst) or 'uncertain'
+                         if stored_regime == 'uncertain' else stored_regime)
+            direction = entry.get('direction', '') or '—'
+            _regime_color = (THEME['text_main'] if regime in {'mean-reverting', 'momentum'}
+                             else THEME['text_sub'])
+            pos_rows.append(html.Tr([
+                html.Td(stype, style=_cell),
+                html.Td(inst,  style={**_cell, 'fontWeight': '500'}),
+                html.Td(regime,    style={**_cell, 'color': _regime_color}),
+                html.Td(direction, style=_cell),
+                html.Td(_in_matrix_cell(inst), style={**_cell, 'textAlign': 'center'}),
+                html.Td("", style=_cell),
+            ], style={'borderBottom': 'rgba(42,82,152,0.25) solid 1px'}))
+
+        if pos_rows:
+            table_b = html.Div(
+                html.Table([html.Thead(pos_header), html.Tbody(pos_rows)],
+                           style={'width': '100%', 'borderCollapse': 'collapse'}),
+                style={'overflowY': 'auto', 'maxHeight': '220px',
+                       'border': f"1px solid {THEME['table_header']}", 'borderRadius': '4px'},
+            )
+        else:
+            table_b = html.Div("No saved positions found in alpha_book_positions.parquet.", style=_sub)
+
+        table_div = html.Div([
+            html.H6("Candidate Instruments", style={'color': THEME['text_main'],
+                    'fontSize': '13px', 'marginBottom': '6px', 'marginTop': '0'}),
+            table_a,
+            html.H6("Saved Positions", style={'color': THEME['text_main'],
+                    'fontSize': '13px', 'marginBottom': '6px', 'marginTop': '14px'}),
+            table_b,
+        ])
+
+        # ── Combined correlation matrix (all instruments from both tables) ──
+        all_instruments = instruments + [p for p in positions
+                                         if p.get('instrument') not in {e.get('instrument') for e in instruments}]
+        valid_ids = [e['instrument'] for e in all_instruments if e['instrument'] in matrix_cols]
 
         if matrix_data and len(valid_ids) >= 2:
             sub_dict = {
@@ -878,7 +1008,7 @@ def register_candidate_callbacks(app) -> None:
                 hovertemplate='%{y} vs %{x}<br>Corr: %{z:.3f}<extra></extra>',
             ))
             hm.update_layout(
-                title='Curated Instrument Correlation',
+                title='Curated Correlation Matrix',
                 height=max(260, 28 * len(valid_ids) + 100),
                 margin=dict(l=110, r=20, t=40, b=80),
                 plot_bgcolor=THEME['bg_main'], paper_bgcolor=THEME['bg_main'],
@@ -894,16 +1024,18 @@ def register_candidate_callbacks(app) -> None:
                 columns=[{'name': c, 'id': c} for c in ['Asset A', 'Asset B', 'Correlation', 'AbsCorr']],
                 data=curated_pairs[['Asset A', 'Asset B', 'Correlation', 'AbsCorr']].to_dict('records'),
                 style_table={'overflowX': 'auto', 'maxHeight': '180px'},
-                style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_sub'], 'fontWeight': '600', 'fontSize': '11px', 'padding': '6px 10px'},
-                style_cell={'backgroundColor': THEME['bg_card'], 'color': THEME['text_main'], 'fontSize': '12px', 'padding': '6px 10px'},
+                style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_sub'],
+                              'fontWeight': '600', 'fontSize': '11px', 'padding': '6px 10px'},
+                style_cell={'backgroundColor': THEME['bg_card'], 'color': THEME['text_main'],
+                            'fontSize': '12px', 'padding': '6px 10px'},
                 page_size=15,
             )
 
-            not_in_count = len(instruments) - len(valid_ids)
+            not_in_count = len(all_instruments) - len(valid_ids)
             notice = (
                 html.P(
                     f"ℹ️ {not_in_count} instrument(s) marked '—' are not yet in the matrix. "
-                    "Click ↻ Recalculate Correlation below to rebuild the matrix including all curated instruments.",
+                    "Click ↻ Recalculate Correlation below to rebuild the matrix.",
                     style={**_sub, 'marginTop': '6px'},
                 ) if not_in_count > 0 else html.Div()
             )
@@ -911,12 +1043,15 @@ def register_candidate_callbacks(app) -> None:
             corr_div = html.Div([
                 html.H6("Curated Correlation Matrix", style={'color': THEME['text_main'], 'marginBottom': '8px'}),
                 dcc.Graph(figure=hm),
-                html.H6("Curated Pairs — Lowest Correlation", style={'color': THEME['text_main'], 'marginTop': '14px', 'marginBottom': '8px'}),
+                html.H6("Lowest Correlation Pairs", style={'color': THEME['text_main'],
+                        'marginTop': '14px', 'marginBottom': '8px'}),
                 pairs_tbl,
                 notice,
             ])
-
-        elif len(valid_ids) < 2:
-            corr_div = html.Div("Click ↻ Recalculate Correlation to build the matrix for your curated instruments.", style=_sub)
+        else:
+            corr_div = html.Div(
+                "Click ↻ Recalculate Correlation to build the matrix for all instruments.",
+                style=_sub,
+            )
 
         return table_div, corr_div

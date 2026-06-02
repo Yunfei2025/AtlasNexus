@@ -68,24 +68,30 @@ def register_portfolio_callbacks(app) -> None:
          Output('alpha-curated-recalc-status', 'children')],
         Input('alpha-curated-recalc-btn', 'n_clicks'),
         [State('alpha-curated-instruments-store', 'data'),
+         State('alpha-book-positions-store', 'data'),
          State('alpha-corr-lookback', 'value')],
         prevent_initial_call=True,
     )
-    def recalc_curated_correlation(n_clicks, instruments, lookback):
-        if not instruments:
+    def recalc_curated_correlation(n_clicks, instruments, positions, lookback):
+        all_entries = list(instruments or []) + list(positions or [])
+        if not all_entries:
             raise PreventUpdate
 
         lookback = lookback or 252
 
+        seen: set = set()
         all_spreads = {}
-        for entry in instruments:
+        for entry in all_entries:
             inst = entry.get('instrument', '')
             spread_type = entry.get('spread_type', '')
-            if not inst or not spread_type:
+            if not inst or not spread_type or inst in seen:
                 continue
+            seen.add(inst)
             ts = load_spread_timeseries(spread_type)
             if ts is not None and isinstance(ts, pd.DataFrame) and inst in ts.columns:
-                all_spreads[inst] = ts[inst]
+                s = ts[inst]
+                s.index = s.index.astype(str)
+                all_spreads[inst] = s
 
         if len(all_spreads) < 2:
             return no_update, "⚠ Need ≥ 2 instruments with time-series data."
@@ -117,10 +123,11 @@ def register_portfolio_callbacks(app) -> None:
          State('alpha-alloc-method', 'value'),
          State('alpha-enforce-corr', 'value'),
          State('alpha-curated-instruments-store', 'data'),
+         State('alpha-book-positions-store', 'data'),
          State('alpha-dv01-budget', 'value')],
         prevent_initial_call=True
     )
-    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, alloc_method, enforce_corr, curated_instruments, total_dv01_budget):
+    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, alloc_method, enforce_corr, curated_instruments, book_positions, total_dv01_budget):
         if not n_clicks:
             return html.Div(), html.Div(), html.Div(), []
 
@@ -135,11 +142,25 @@ def register_portfolio_callbacks(app) -> None:
             total_capital_mm = total_capital * 1000
             total_dv01_budget = float(total_dv01_budget) if total_dv01_budget is not None else 5.0
 
+            # Merge candidate instruments (Table A) and saved positions (Table B),
+            # deduplicating by instrument name (Table A takes precedence for metadata).
+            _seen_insts: set = set()
+            _merged_curated: list = []
+            for _e in list(curated_instruments or []) + list(book_positions or []):
+                _iname = _e.get('instrument', '')
+                if _iname and _iname not in _seen_insts:
+                    _seen_insts.add(_iname)
+                    _merged_curated.append(_e)
+            curated_instruments = _merged_curated
+
             df = pd.DataFrame(candidates)
 
             if curated_instruments:
                 curated_ids = {e['instrument'] for e in curated_instruments}
                 df_curated = df[df['ID'].isin(curated_ids)].copy()
+                # Drop duplicates: candidates store may have the same ID under both
+                # MR and trend sections; keep highest-score occurrence (already sorted).
+                df_curated = df_curated.drop_duplicates(subset=['ID'], keep='first')
                 present_ids = set(df_curated['ID'].tolist())
                 median_score = df_curated['score'].median() if len(df_curated) > 0 and 'score' in df_curated.columns else 0.01
                 extra_rows = []
@@ -167,6 +188,14 @@ def register_portfolio_callbacks(app) -> None:
                                     inst_row[col] = snap_row[col]
                         inst_row.setdefault('score', median_score)
                         inst_row.setdefault('direction', 'N/A')
+                        # Snap carry_roll is BUY-side raw; flip for SELL so it matches
+                        # the convention stored in alpha-selected-candidates.
+                        _inst_dir = str(inst_row.get('direction', '') or '').strip().upper()
+                        if _inst_dir == 'SELL' and 'carry_roll' in inst_row:
+                            try:
+                                inst_row['carry_roll'] = -float(inst_row['carry_roll'])
+                            except (TypeError, ValueError):
+                                pass
                         extra_rows.append(inst_row)
                 if extra_rows:
                     df_curated = pd.concat([df_curated, pd.DataFrame(extra_rows)], ignore_index=True)
@@ -301,7 +330,7 @@ def register_portfolio_callbacks(app) -> None:
 
             for col in df_display.columns:
                 if col == 'risk_contribution':
-                    df_display[col] = df_display[col].round(2)
+                    df_display[col] = df_display[col].round(4)
                 elif df_display[col].dtype in ['float64', 'float32']:
                     df_display[col] = df_display[col].round(4)
 

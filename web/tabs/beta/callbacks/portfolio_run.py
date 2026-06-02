@@ -32,7 +32,7 @@ from multiasset.layout import prepare_portfolio_table
 from multiasset.main import run_risk_parity_allocation, create_custom_portfolio, compute_irdl_hedge
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
-from multiasset.factor_backtest import compute_ewma_factor_vols
+from multiasset.factor_backtest import compute_ewma_factor_vols, get_factor_weighted_duration
 from multiasset.config import RiskModelConfig
 from settings.paths import DIR_INPUT
 
@@ -150,7 +150,27 @@ def register_portfolio_run_callbacks(app):
 
         # ── Per-factor vol multiplier (adj) — user can inflate IRCV/low-vol factor vols
         #    to prevent over-allocation under pure risk parity.
-        _vol_adj = vol_adj_store or {}
+        # Default adjustments based on empirical vol ratios: IRDL:IRSL:IRCV ≈ 5:3:2
+        # Applying 1.0:1.5:2.5 gives roughly equal allocations across levels
+        def get_default_vol_adj(factor):
+            prefix = factor.split('.')[0]
+            if prefix == 'IRDL':
+                return 1.0
+            elif prefix == 'IRSL':
+                return 1.5
+            elif prefix == 'IRCV':
+                return 2.5
+            else:
+                return 1.0
+
+        _vol_adj = {}
+        for _f in sorted_factors:
+            if _f in (vol_adj_store or {}):
+                # User has manually set this value, preserve it
+                _vol_adj[_f] = vol_adj_store[_f]
+            else:
+                # Use default based on factor type
+                _vol_adj[_f] = get_default_vol_adj(_f)
 
         # ── Inverse-vol proportional RP Max (stable base for risk_parity / factor_scaling) ─
         _inv_vols = {}
@@ -187,9 +207,18 @@ def register_portfolio_run_callbacks(app):
 
             vol_val = _vol_map.get(factor)
             vol_str = f"{vol_val:.2f}%" if vol_val is not None and pd.notna(vol_val) else "–"
-            adj_val = float(_vol_adj.get(factor, 1.0) or 1.0)
+            adj_val = float(_vol_adj.get(factor, 1.0))
             # Highlight the adj input when it deviates from 1.0 (user override active)
             _adj_border = f'1px solid {THEME["accent"]}' if adj_val != 1.0 else f'1px solid {THEME["table_header"]}'
+
+            # Compute DV01 for IR factors (IRDL, IRSL, IRCV, SPDL, SPSL)
+            dv01_str = ""
+            factor_prefix = factor.split('.')[0]
+            if factor_prefix in ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL'):
+                dur = get_factor_weighted_duration(factor)
+                if dur is not None and dur > 0:
+                    dv01 = round(rp_max * dur / 10_000, 2)
+                    dv01_str = f"{dv01:.2f}"
 
             rows.append(
                 html.Div([
@@ -218,9 +247,15 @@ def register_portfolio_run_callbacks(app):
                         title='Vol adj multiplier: effective vol = measured vol × adj. '
                               'Set >1 to discount allocation (e.g. IRCV over-allocation).'
                     ),
-                    html.Span(f"{rp_max:.1f}M", style={
+                    html.Span(f"{round(rp_max)}", style={
                         'color': THEME['text_sub'], 'fontSize': '12px',
-                        'width': '54px', 'textAlign': 'right', 'flexShrink': '0',
+                        'width': '105px', 'textAlign': 'right', 'flexShrink': '0',
+                        'fontFamily': 'monospace',
+                    }),
+                    html.Span(dv01_str, style={
+                        'color': THEME['text_sub'], 'fontSize': '12px',
+                        'width': '85px', 'textAlign': 'right', 'flexShrink': '0',
+                        'fontFamily': 'monospace',
                     }),
                     html.Span(
                         f"×{coeff:+.1f}",
@@ -235,16 +270,16 @@ def register_portfolio_run_callbacks(app):
                     dcc.Input(
                         id={'type': 'risk-budget-input', 'index': factor},
                         type='number',
-                        value=suggested,
-                        step=0.1,
+                        value=round(suggested),
+                        step=1,
                         style={
-                            'width': '52px', 'fontSize': '12px', 'padding': '2px 4px',
+                            'flex': '1', 'minWidth': '100px', 'fontSize': '12px', 'padding': '2px 4px',
                             'backgroundColor': '#fff', 'color': '#000',
                             'border': f'1px solid {THEME["table_header"]}',
                             'borderRadius': '2px', 'textAlign': 'right',
+                            'fontFamily': 'monospace',
                         }
                     ),
-                    html.Span("M", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '2px'}),
                 ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px', 'gap': '4px'})
             )
 
