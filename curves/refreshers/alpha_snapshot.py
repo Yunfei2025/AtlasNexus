@@ -354,6 +354,11 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 			df_irs["carry_roll"] = df_irs["Carry(3m,bp)"] + df_irs["Roll(3m,bp)"]
 		df_irs["spread_type"] = "SwapSpread"
 		df_irs["category"] = "Swap-Spread"
+		# Merge stationary from historical StatInfo (not present in real-time spreads)
+		if "stationary" not in df_irs.columns and isinstance(irs_pxspd, dict):
+			_stat_info = irs_pxspd.get("StatInfo")
+			if isinstance(_stat_info, pd.DataFrame) and "stationary" in _stat_info.columns:
+				df_irs["stationary"] = _stat_info["stationary"].reindex(df_irs.index)
 		if not df_irs.empty:
 			out["SwapSpread"] = df_irs
 

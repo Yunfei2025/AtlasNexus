@@ -28,7 +28,14 @@ class BootstrapYieldCurve(object):
             return []
         self.__bootstrap_zero_coupons__(maturities)
         self.__get_bond_spot_rates__(maturities)
-        return [100*self.zero_rates[T] for T in maturities]
+        # Remove failed bootstrap results (NaN or implausible rates >200%) so
+        # subsequent bootstraps don't interpolate through garbage values.
+        self.zero_rates = {
+            T: r for T, r in self.zero_rates.items()
+            if r is not None and r == r and math.isfinite(r) and abs(r) < 2.0
+        }
+        # Return NaN for any maturity that failed so the caller list stays aligned.
+        return [100 * self.zero_rates.get(T, float('nan')) for T in maturities]
         
     def get_maturities(self):
         """ Return sorted maturities from added instruments. """
@@ -55,12 +62,11 @@ class BootstrapYieldCurve(object):
                 
     def __calculate_bond_spot_rate__(self, T, instrument):
         """ Get spot rate of a bond by bootstrapping """
-        #try:
         (par, coup, price, freq) = instrument
         periods = T * freq  # Number of coupon payments
         value = price
         per_coupon = coup / freq  # Coupon per period
-              
+
         if self.zero_rates:
             # Build sorted arrays only once per call
             items = sorted(self.zero_rates.items())
@@ -69,9 +75,16 @@ class BootstrapYieldCurve(object):
         else:
             x = np.array([], dtype=float)
             y = np.array([], dtype=float)
-        
+
+        # For coupon bonds, require at least some prior zero rates so intermediate
+        # coupons can be discounted.  Without them the formula degenerates to a
+        # zero-coupon approximation that can produce wildly incorrect (including
+        # negative) spot rates when the bond is priced away from par.
+        if coup != 0 and x.size == 0:
+            return float('nan')
+
         if int(periods) == 0:
-            spot_rate = ((par+per_coupon)/value - 1)/T# math.exp(math.log((par+per_coupon)/value)/T)-1
+            spot_rate = ((par+per_coupon)/value - 1)/T
         else:
             dt = 1/float(freq)
             n = int(periods)
@@ -86,8 +99,12 @@ class BootstrapYieldCurve(object):
                 discounts = (1.0 + rates) ** (-x0s[mask])
                 value -= per_coupon * float(discounts.sum())
             # Derive spot rate for a particular maturity
-            last_period = T
-            spot_rate = math.exp(math.log((par+per_coupon)/value)/T)-1
+            if value <= 0:
+                return float('nan')
+            ratio = (par + per_coupon) / value
+            if ratio <= 0:
+                return float('nan')
+            spot_rate = math.exp(math.log(ratio) / T) - 1
         return spot_rate
             
     def zero_coupon_spot_rate(self, par, price, T):

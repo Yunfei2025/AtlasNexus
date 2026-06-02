@@ -37,18 +37,43 @@ def _normalize_legacy_repo_label(value):
     return value
 
 
+def _drop_legacy_repo_labels(labels):
+    """Boolean mask: drop Repo- entries that have a Repo7d- equivalent."""
+    repo7d = {str(v) for v in labels if isinstance(v, str) and v.startswith('Repo7d-')}
+    return [
+        not (isinstance(v, str) and v.startswith('Repo-')
+             and v.replace('Repo-', 'Repo7d-', 1) in repo7d)
+        for v in labels
+    ]
+
+
 def _normalize_legacy_repo_obj(obj):
     if isinstance(obj, pd.DataFrame):
         out = obj.copy()
         if out.index.dtype == object:
+            keep = _drop_legacy_repo_labels(out.index)
+            if not all(keep):
+                out = out.loc[keep]
             out.index = out.index.map(_normalize_legacy_repo_label)
+            if out.index.has_duplicates:
+                out = out[~out.index.duplicated(keep='last')]
         if out.columns.dtype == object:
+            keep = _drop_legacy_repo_labels(out.columns)
+            if not all(keep):
+                out = out.loc[:, keep]
             out.columns = out.columns.map(_normalize_legacy_repo_label)
+            if out.columns.has_duplicates:
+                out = out.loc[:, ~out.columns.duplicated(keep='last')]
         return out
     if isinstance(obj, pd.Series):
         out = obj.copy()
         if out.index.dtype == object:
+            keep = _drop_legacy_repo_labels(out.index)
+            if not all(keep):
+                out = out.loc[keep]
             out.index = out.index.map(_normalize_legacy_repo_label)
+            if out.index.has_duplicates:
+                out = out[~out.index.duplicated(keep='last')]
         out.name = _normalize_legacy_repo_label(out.name)
         return out
     if isinstance(obj, dict):

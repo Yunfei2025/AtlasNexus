@@ -54,10 +54,15 @@ def _suppress_curve_yield_jumps(
     if not outlier.any():
         return curve
 
-    curve = curve.mask(outlier)
+    # Explicit float64 cast after mask prevents object-dtype regression on some
+    # pandas/numpy versions where mask() on nullable-float columns loses dtype.
+    curve = curve.mask(outlier).astype('float64')
     original_index = curve.index
-    curve.index = pd.to_datetime(curve.index)
-    curve = curve.interpolate(method='time', limit_area='inside').ffill().bfill()
+    try:
+        curve.index = pd.to_datetime(curve.index)
+        curve = curve.interpolate(method='time', limit_area='inside').ffill().bfill()
+    except Exception:
+        curve = curve.interpolate(method='linear', limit_area='inside').ffill().bfill()
     curve.index = original_index
     return curve
 
@@ -347,12 +352,12 @@ def statistics(interval, data_rt_js, stype, season):
         raise PreventUpdate
     df_ = pd.DataFrame(df_raw)
     yunit = "Z-score"
-    spread = df_[['spread', 'Zscore']].dropna()
+    spread = df_[['spread', 'Zscore']].dropna().copy()
+    spread['color'] = 'grey'
     buy = spread[spread["Zscore"] >= thd].index
     sell = spread[spread["Zscore"] <= -thd].index
     spread.loc[buy, 'color'] = 'green'
     spread.loc[sell, 'color'] = 'red'
-    spread['color'].fillna('grey', inplace=True)
 
     # Sort by index (ticker code) for better readability
     if stype == 'SectorPCASpread':

@@ -656,7 +656,7 @@ def register_callbacks(app) -> None:
                         try:
                             import pandas as pd
                             import re as _re
-                            _misc_static = Utils.load_pickle_cached(os.path.join(DIR_INPUT, "Misc-spds.pkl"))
+                            _misc_static = _load_pickle_cached(os.path.join(DIR_INPUT, "Misc-spds.pkl"))
                             if isinstance(_misc_static, Mapping):
                                 _bucket = _misc_static.get(_misc_spd_key, {})
                                 if isinstance(_bucket, dict):
@@ -676,7 +676,7 @@ def register_callbacks(app) -> None:
                     if stype == 'TenorSpread':
                         try:
                             import pandas as pd
-                            _tenor_static = Utils.load_pickle_cached(os.path.join(DIR_INPUT, 'Tenor-spds.pkl'))
+                            _tenor_static = _load_pickle_cached(os.path.join(DIR_INPUT, 'Tenor-spds.pkl'))
                             if isinstance(_tenor_static, Mapping) and 'TenorSpread' in _tenor_static:
                                 _ts = _tenor_static['TenorSpread']
                                 if isinstance(_ts, dict):
