@@ -123,15 +123,16 @@ def register_portfolio_run_callbacks(app):
         equal_share = round(total_capital_m / n_factors, 2) if n_factors else 1.0
 
         # ── Factor model signal lookup (scalar + colour) ───────────────────────
-        SCALAR_META = {
-            -1.5: ('Strong Short', THEME.get('danger', '#e74c3c')),
-            -1.0: ('Short',        '#e74c3c'),
-            -0.5: ('Mild Short',   '#e67e22'),
-             0.0: ('Neutral',      THEME.get('text_sub', '#aaa')),
-             0.5: ('Mild Long',    '#27ae60'),
-             1.0: ('Long',         THEME.get('success', '#2ecc71')),
-             1.5: ('Strong Long',  '#2ecc71'),
-        }
+        # Discrete target in [-1,1] (0.2 tick) from the Beta-book factor backtest.
+        # Derive a label + colour from the sign and magnitude of the scalar.
+        def _scalar_meta(c):
+            if c == 0:
+                return ('Neutral', THEME.get('text_sub', '#aaa'))
+            mag = abs(c)
+            strength = 'Strong ' if mag >= 0.8 else ('' if mag >= 0.4 else 'Mild ')
+            if c > 0:
+                return (f'{strength}Long', THEME.get('success', '#2ecc71'))
+            return (f'{strength}Short', THEME.get('danger', '#e74c3c'))
         snapshot_by_rf = {}
         if snapshot_data:
             for rec in snapshot_data:
@@ -202,7 +203,7 @@ def register_portfolio_run_callbacks(app):
             coeff  = get_coeff(factor)
             # factor_scaling: scale exposure by signal coeff; other modes: exposure = RP Max
             suggested = round(rp_max * coeff, 2) if allocation_mode == 'factor_scaling' else rp_max
-            label, color = SCALAR_META.get(coeff, (f'{coeff:+.1f}×', THEME.get('text_main', '#fff')))
+            label, color = _scalar_meta(coeff)
             is_default_coeff = factor not in snapshot_by_rf
 
             vol_val = _vol_map.get(factor)
@@ -586,23 +587,22 @@ def register_portfolio_run_callbacks(app):
 
             # ── Save Beta snapshot for Summary tab ────────────────────────────
             try:
-                import pathlib
                 pathlib.Path(_SUMMARY_BETA_PARQUET).parent.mkdir(parents=True, exist_ok=True)
-                _snap = portfolio_df.copy()
+                _keep_cols = [c for c in [
+                    'Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument',
+                    'Duration', 'Capital (CNY)', 'DV01 (MM CNY)', 'Weight (%)',
+                ] if c in portfolio_df.columns]
+                _snap = portfolio_df[_keep_cols].copy()
                 _snap['_timestamp'] = datetime.now().isoformat()
-                _snap['_capital_cny'] = _snap['Capital (CNY)']
-                # Ensure all factor-sensitivity columns are float (serialisable)
-                for _c in _snap.columns:
-                    if _c not in ('Asset Type', 'Universe', 'Sector', 'Asset Name',
-                                  '_timestamp', '_capital_cny'):
+                for _c in ('Duration', 'Capital (CNY)', 'DV01 (MM CNY)'):
+                    if _c in _snap.columns:
                         _snap[_c] = pd.to_numeric(_snap[_c], errors='coerce')
-                # Upsert by Asset Name: keeps prior assets that aren't in this run,
-                # replaces values for assets that re-appear, adds new ones.
                 _id_cols = ['Asset Name'] if 'Asset Name' in _snap.columns else []
                 merged = _upsert_snapshot(_snap, _SUMMARY_BETA_PARQUET, _id_cols)
-                print(f"✓ Beta snapshot merged → {_SUMMARY_BETA_PARQUET} ({len(merged)} rows after upsert)")
+                print(f"✓ Beta snapshot saved → {_SUMMARY_BETA_PARQUET} ({len(merged)} rows)")
             except Exception as _se:
                 print(f"Warning: Could not save Beta snapshot: {_se}")
+                traceback.print_exc()
 
             return (portfolio_table, status_msg, timestamp_msg, {'status': 'success'}, rp_budgets_out)
             

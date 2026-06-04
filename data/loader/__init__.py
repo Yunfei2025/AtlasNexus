@@ -11,7 +11,7 @@ import pickle
 import datetime as dt
 from tools.config import DIR_INPUT, BondConfig, WindConfig
 import tools.calcn as cd
-from curves.utils.calendar import is_cn_workday
+from curves.utils.cn_calendar import is_cn_workday
 from dateutil.relativedelta import relativedelta     
 
 

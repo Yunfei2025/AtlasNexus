@@ -12,14 +12,15 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from datetime import datetime as dt
-from dateutil.relativedelta import relativedelta 
-from data.providers.retrieve import _wsd, _wset, _wss, _edb, _wsq, _wst, _is_trading_hours
+from dateutil.relativedelta import relativedelta
 
-# Add project root to Python path
+# Add project root to Python path FIRST
 project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+# Now import modules that depend on sys.path
+from data.providers.retrieve import _wsd, _wset, _wss, _edb, _wsq, _wst, _is_trading_hours
 from settings.general import GeneralConfig, DateConfig
 from settings.futures import FuturesConfig
 from settings.fixed_income import BondConfig, IRSConfig
@@ -208,7 +209,7 @@ def updateInstrumentDef():
                 def_file = DIR_INPUT / (btype + "-InstrumentInfo.pkl")
                 interval = get_mtime_date(def_file) - dp.date()
 
-                if interval.days == 10: # update the pool every 5 days
+                if interval.days == 7: # update the pool every 5 days
                     pool = updateInstrumentPool(btype, dps)
                     bonds = pool.index
                 else:

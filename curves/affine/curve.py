@@ -14,7 +14,7 @@ import curves.affine.affine as af
 import curves.affine.pricingYield as yd
 from settings.general import GeneralConfig
 from settings.fixed_income import IRSConfig, BondConfig
-from curves.utils.calendar import getScheduleDays
+from curves.utils.cn_calendar import getScheduleDays
 
 
 def _instantaneous_forward_from_log_discount(log_discount, tenors):

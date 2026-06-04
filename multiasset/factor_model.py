@@ -83,12 +83,24 @@ class FactorModelConfig:
     # Target horizon
     target_horizon: int = 1                  # predict N-day forward return
     # ── Position sizing (doc §3.1) ──────────────────────────────────────────
-    sizing_mode: str = 'continuous'          # 'binary' (legacy) | 'continuous'
+    sizing_mode: str = 'continuous'          # 'binary' (legacy) | 'continuous' | 'discrete'
     target_vol: float = 0.10                 # annualised vol target for vol-scaling
     vol_scale_window: int = 60               # realised-vol lookback (days)
     icir_window: int = 60                    # rolling OOS-IC window for ICIR weight
     icir_saturation: float = 0.25            # tanh saturation constant (doc §3.1)
     max_leverage: float = 2.0                # cap |position|
+    # ── Discrete sizing (Beta book) ─────────────────────────────────────────
+    # 'discrete' mode: map the z-scored prediction to a target position in
+    # [-1, 1] (or [0, 1] when long_only), quantised to a fixed tick (the
+    # "signal"), then take an N-day moving average of that target to obtain a
+    # feasible, gradually-ramping position.  The SMA is a stateless filter (no
+    # path dependence on the held position) whose daily move is bounded by
+    # (range) / position_smooth_window.  With ±1 mapped to ±10B capital
+    # (1 tick of 0.2 = 2B), the [-1,1] span = 20B ⇒ N=10 gives ≤2B/day.
+    position_smooth_window: int = 10         # SMA window: target → position ramp
+    discrete_tick: float = 0.2               # quantisation step of the target
+    discrete_max_z: float = 1.5              # |z| at which the target saturates to ±1
+    discrete_deadzone_z: float = 0.5         # |z| below which target is exactly 0
     # ── Turnover & costs (doc §3.3 / §5.1) ──────────────────────────────────
     turnover_threshold: float = 0.10         # min |Δposition| to trade
     # tx cost is read from settings.fixed_income.FACTOR_TX_COST_BP (flat notional bp)
@@ -598,6 +610,49 @@ def factor_tx_cost_per_unit(factor_code: str, cfg: FactorModelConfig) -> float:
     return FACTOR_TX_COST_BP / 1e4
 
 
+def discrete_target_level(
+    z: float,
+    tick: float = 0.2,
+    max_z: float = 1.5,
+    deadzone_z: float = 0.5,
+    long_only: bool = False,
+) -> float:
+    """Map a z-score to a quantised target position in ``[-1, 1]``.
+
+    Dead-zone: ``|z| <= deadzone_z`` → returns exactly 0 ("no conviction").
+
+    Above the dead-zone, scales the remaining range ``(deadzone_z, max_z]``
+    linearly to ``(0, 1]``, then rounds to the nearest tick (minimum 1 tick so
+    the first non-zero level is always ``±tick``).  With ``tick=0.2``,
+    ``deadzone_z=0.5``, ``max_z=1.5``:
+
+        |z| ≤ 0.5                → 0
+        0.5 < |z| ≤ 0.7  → ±0.2
+        0.7 < |z| ≤ 0.9  → ±0.4
+        0.9 < |z| ≤ 1.1  → ±0.6
+        1.1 < |z| ≤ 1.3  → ±0.8
+        |z| > 1.3         → ±1.0
+
+    Long-only clips negatives to 0 (e.g. IRDL).
+
+    Shared by the engine's ``discrete`` sizing mode, the predict-from-saved
+    path and the live signal snapshot so the level is identical everywhere.
+    """
+    if z is None or not np.isfinite(z):
+        return 0.0
+    if abs(z) <= deadzone_z:
+        return 0.0
+    sign = 1.0 if z > 0 else -1.0
+    span = max(max_z - deadzone_z, 1e-9)
+    raw = min((abs(z) - deadzone_z) / span, 1.0)   # in (0, 1]
+    # round to nearest tick; enforce minimum of 1 tick (already past dead-zone)
+    n_ticks = max(1, int(round(raw / tick)))
+    level = sign * min(n_ticks * tick, 1.0)
+    if long_only and level < 0:
+        level = 0.0
+    return round(level, 10)
+
+
 def build_position_series(
     predicted_return: pd.Series,
     daily_returns: pd.Series,
@@ -612,7 +667,12 @@ def build_position_series(
     ``sizing_mode='binary'`` reproduces the legacy ``sign(smoothed pred)``
     behaviour exactly (turnover = |Δsign|).  ``'continuous'`` applies the
     doc §3.1 recipe: ``z(pred) × tanh(ICIR/κ) × vol_scale``, turnover-filtered
-    and leverage-capped.  All inputs are causal (shifted) to avoid look-ahead.
+    and leverage-capped.  ``'discrete'`` bins the z-scored prediction into
+    integer levels {-2..2} (``signal``) and takes an N-day moving average of
+    that target to obtain a feasible, gradually-ramping ``position`` — a
+    stateless filter whose daily move is bounded by
+    ``2*discrete_max_level / position_smooth_window`` (no path dependence on
+    the held position).  All inputs are causal (shifted) to avoid look-ahead.
 
     ``long_only=True`` clips the final position to ``[0, max_leverage]`` so
     the factor can never go short — appropriate for IRDL (duration level)
@@ -620,11 +680,25 @@ def build_position_series(
     """
     pred = predicted_return.astype(float)
 
-    # Smoothed prediction (shared by both modes)
+    # Smoothed prediction (shared by all modes)
     if cfg.signal_smooth_days > 1:
         smoothed = pred.rolling(cfg.signal_smooth_days, min_periods=1).mean()
     else:
         smoothed = pred
+
+    if cfg.sizing_mode == 'discrete':
+        # 1. Standardise so the level is regime-relative (causal rolling z).
+        pred_z = _rolling_zscore(smoothed, cfg.icir_window).fillna(0.0)
+        # 2. Quantised target in [-1,1] on a 0.2 tick — the "signal" (path-independent).
+        target = pred_z.map(lambda v: discrete_target_level(
+            v, cfg.discrete_tick, cfg.discrete_max_z, cfg.discrete_deadzone_z, long_only,
+        )).astype(float)
+        # 3. N-day SMA of the target → feasible, gradually-ramping position.
+        win = max(int(cfg.position_smooth_window), 1)
+        position = target.rolling(win, min_periods=1).mean()
+        out = pd.DataFrame({'signal': target, 'position': position})
+        out['turnover'] = out['position'].diff().abs().fillna(out['position'].abs())
+        return out[['signal', 'position', 'turnover']]
 
     if cfg.sizing_mode == 'binary':
         raw_sig = np.sign(smoothed).fillna(0).astype(float)

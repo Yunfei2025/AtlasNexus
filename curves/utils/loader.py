@@ -13,7 +13,7 @@ import datetime as dt
 from settings.paths import DIR_INPUT, DIR_DATA
 from settings.fixed_income import BondConfig
 from settings.wind import WindConfig
-from curves.utils.calendar import getCalendar, is_cn_workday
+from curves.utils.cn_calendar import getCalendar, is_cn_workday
 from dateutil.relativedelta import relativedelta     
 
 sys.modules.setdefault('numpy._core', np.core)

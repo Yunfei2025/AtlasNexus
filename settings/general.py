@@ -5,7 +5,7 @@ General application configuration, including dates and app constants.
 """
 import datetime
 from dateutil.relativedelta import relativedelta
-from curves.utils.calendar import is_cn_workday, is_cn_holiday, get_cn_holiday_detail
+from curves.utils.cn_calendar import is_cn_workday, is_cn_holiday, get_cn_holiday_detail
 from .paths import PATH, DIR_INPUT, DIR_OUTPUT, DIR_DATA, DIR_MODELS
 
 app_color = {"graph_bg": "#082255", "graph_line": "#007ACE"}

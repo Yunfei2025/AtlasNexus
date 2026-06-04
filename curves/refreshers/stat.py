@@ -61,6 +61,29 @@ class StatRefresher:
         return pd.Series(y_new, index=x_new.index)
 
     @staticmethod
+    def _asof_index_label(index: pd.Index, target) -> object:
+        """Return the last index label at or before target, normalizing date-like types."""
+        if index is None or len(index) == 0:
+            return pd.NaT
+
+        target_ts = pd.Timestamp(target)
+        index_ts = pd.to_datetime(index, errors='coerce')
+        valid = ~pd.isna(index_ts)
+        if not bool(np.any(valid)):
+            return pd.NaT
+
+        index_ts = index_ts[valid]
+        valid_labels = index[valid]
+        order = np.argsort(index_ts.to_numpy())
+        index_ts = index_ts[order]
+        valid_labels = valid_labels[order]
+
+        pos = index_ts.searchsorted(target_ts, side='right') - 1
+        if pos < 0:
+            return pd.NaT
+        return valid_labels[pos]
+
+    @staticmethod
     def _update_excel(bonddata: pd.DataFrame, sheet_name: str) -> None:
         """Update Excel dashboard with bond data using simplified robust approach."""
         try:
@@ -380,9 +403,15 @@ class StatRefresher:
             self.spot_ref['CBond'],
             self.px_irs_rt,
         ], axis=0)
-        spot0 = stat['SpotTS'].loc[self.dp].loc[spot.index]
+        dp_key = self._asof_index_label(stat['SpotTS'].index, self.dp)
+        if pd.isna(dp_key):
+            raise KeyError(f"No SpotTS data available on or before {self.dp}")
+        spread_dp_key = self._asof_index_label(stat['SpreadTS'].index, self.dp)
+        if pd.isna(spread_dp_key):
+            raise KeyError(f"No SpreadTS data available on or before {self.dp}")
+        spot0 = stat['SpotTS'].loc[dp_key].loc[spot.index]
         spreads['PCASpread'] = stat['PCASpread'].loc[spot.index]
-        spreads['PCASpread']['spread'] = stat['SpreadTS'].loc[self.dp].loc[spot.index] + spot - spot0
+        spreads['PCASpread']['spread'] = stat['SpreadTS'].loc[spread_dp_key].loc[spot.index] + spot - spot0
 
         for t in spreads.keys():
             spreads[t]['Zscore'] = (spreads[t]['spread'] - spreads[t]['mean']) / spreads[t]['vol']

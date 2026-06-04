@@ -229,15 +229,15 @@ def register_risk_callbacks(app):
 
         # ── Beta tab ──────────────────────────────────────────────────────────
         if tab_value == 'beta':
-            if not _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET) and not _os.path.exists(_SUMMARY_BETA_PARQUET):
+            if not _os.path.exists(_SUMMARY_BETA_PARQUET) and not _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
                 return _no_data(
                     "No Beta snapshot found. Click RUN ANALYSIS in the Beta Book → Portfolio tab first."
                 )
             try:
-                if _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
-                    df = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
-                else:
+                if _os.path.exists(_SUMMARY_BETA_PARQUET):
                     df = pd.read_parquet(_SUMMARY_BETA_PARQUET)
+                else:
+                    df = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
 
                 if df.empty:
                     return _no_data("Beta snapshot is empty.")
@@ -250,7 +250,7 @@ def register_risk_callbacks(app):
                     except Exception:
                         ts = "unknown"
 
-                # Load user-editable fields (open_yld, open_date, volume) keyed by asset_name+instrument
+                # Load user-editable fields (open_price, open_date, volume) keyed by asset_name+instrument
                 user_data: dict = {}
                 if _os.path.exists(_BETA_BOOK_USER_PARQUET):
                     try:
@@ -258,61 +258,88 @@ def register_risk_callbacks(app):
                         for _, r in udf.iterrows():
                             key = (str(r.get('asset_name', '')), str(r.get('instrument', '')))
                             user_data[key] = {
-                                'open_yld':  str(r.get('open_yld', '')),
-                                'open_date': str(r.get('open_date', '')),
-                                'volume':    str(r.get('volume', '')),
+                                'open_price': str(r.get('open_price', r.get('open_yld', ''))),
+                                'open_date':  str(r.get('open_date', '')),
+                                'volume':     str(r.get('volume', '')),
                             }
                     except Exception:
                         pass
 
-                # Get latest close yields from factor levels
+                # Get latest close yields from factor levels (Rates only)
                 close_prices = _get_beta_close_prices()  # {prefix: yield_pct}
+
+                _RATES_TYPE = 'Rates'
 
                 display_rows = []
                 for _, row in df.iterrows():
                     asset_type = str(row.get('Asset Type', ''))
                     if asset_type == 'TOTAL':
                         continue
+                    is_rates   = (asset_type == _RATES_TYPE)
                     asset_name = str(row.get('Asset Name', ''))
                     instrument = str(row.get('Instrument', ''))
                     key = (asset_name, instrument)
                     saved = user_data.get(key, {})
 
-                    open_yld_str  = str(saved.get('open_yld', ''))
-                    open_date_str = str(saved.get('open_date', ''))
-                    volume_str    = str(saved.get('volume', ''))
+                    open_price_str = str(saved.get('open_price', ''))
+                    open_date_str  = str(saved.get('open_date', ''))
+                    volume_str     = str(saved.get('volume', ''))
 
-                    # Close yield: look up by asset-name prefix (e.g. 'CN' → IRDL.CN)
-                    prefix = asset_name[:2]
-                    close_yld = close_prices.get(prefix)
-                    close_yld_str = f"{close_yld:.4f}%" if close_yld is not None else ''
-
-                    # MtM price P&L: Volume × Duration × (Close - Open) / 10000  (MM CNY)
-                    mtm_str = ''
-                    try:
+                    # Duration: only meaningful for Rates
+                    _dur = None
+                    if is_rates:
                         _dur_raw = row.get('Duration', None)
-                        _dur = float(str(_dur_raw).replace(',', '')) if _dur_raw not in (None, '', 'N/A') else None
-                        _vol = float(volume_str) if volume_str else None
-                        _open_y = float(open_yld_str) if open_yld_str else None
-                        if _dur and _vol and _open_y and close_yld is not None:
-                            mtm = round(_vol * _dur * (close_yld - _open_y) / 10000.0, 4)
-                            mtm_str = f"{mtm:+.4f}"
+                        try:
+                            _dur = float(str(_dur_raw).replace(',', '')) if _dur_raw not in (None, '', 'N/A') else None
+                            duration_str = f"{_dur:.2f}" if _dur is not None else ''
+                        except (ValueError, TypeError):
+                            duration_str = ''
+                    else:
+                        duration_str = ''
+
+                    # Capital in MM CNY (parquet stores raw CNY)
+                    try:
+                        _cap_raw = float(str(row.get('Capital (CNY)', 0) or 0).replace(',', ''))
+                        cap_mm_str = f"{_cap_raw / 1e6:,.2f}" if _cap_raw else ''
                     except (ValueError, TypeError):
-                        pass
+                        cap_mm_str = ''
+
+                    # Weight rounded to 2 decimal digits
+                    try:
+                        _wt_raw = str(row.get('Weight (%)', '') or '').replace('%', '').replace(',', '').strip()
+                        weight_str = f"{float(_wt_raw):.2f}%" if _wt_raw else ''
+                    except (ValueError, TypeError):
+                        weight_str = ''
+
+                    # Close Price: yield for Rates, empty for others
+                    prefix = asset_name[:2]
+                    close_yld = close_prices.get(prefix) if is_rates else None
+                    close_price_str = f"{close_yld:.4f}%" if close_yld is not None else ''
+
+                    # MtM P&L: Rates only — Volume × Duration × (Close − Open) / 10000
+                    mtm_str = ''
+                    if is_rates:
+                        try:
+                            _vol   = float(volume_str) if volume_str else None
+                            _open  = float(open_price_str) if open_price_str else None
+                            if _dur and _vol and _open and close_yld is not None:
+                                mtm = round(_vol * _dur * (close_yld - _open) / 10000.0, 4)
+                                mtm_str = f"{mtm:+.4f}"
+                        except (ValueError, TypeError):
+                            pass
 
                     display_rows.append({
                         'Asset Type':       asset_type,
                         'Universe':         str(row.get('Universe', '')),
-                        'Sector':           str(row.get('Sector', '')),
-                        'Asset Name':       asset_name,
+                        'Asset Name':       asset_name,   # kept in data for autosave key, not shown as column
                         'Instrument':       instrument,
-                        'Duration':         str(row.get('Duration', '')),
-                        'Capital (MM CNY)': str(row.get('Capital (CNY)', '')),
-                        'Weight (%)':       str(row.get('Weight (%)', '')),
-                        'Open Yld (%)':     open_yld_str,
+                        'Duration':         duration_str,
+                        'Capital (MM CNY)': cap_mm_str,
+                        'Weight (%)':       weight_str,
+                        'Open Price':       open_price_str,
                         'Open Date':        open_date_str,
                         'Volume (MM)':      volume_str,
-                        'Close Yld (%)':    close_yld_str,
+                        'Close Price':      close_price_str,
                         'MtM (MM CNY)':     mtm_str,
                     })
 
@@ -323,7 +350,7 @@ def register_risk_callbacks(app):
                 def _sum_num(col):
                     t, any_ = 0.0, False
                     for r in display_rows:
-                        v = str(r.get(col, '')).replace(',', '').replace('+', '').strip()
+                        v = str(r.get(col, '')).replace(',', '').replace('%', '').replace('+', '').strip()
                         if v:
                             try:
                                 t += float(v); any_ = True
@@ -344,7 +371,9 @@ def register_risk_callbacks(app):
                     total_row['MtM (MM CNY)'] = f"{_s_mtm:+.4f}"
                 display_rows.append(total_row)
 
-                _editable_cols = {'Open Yld (%)', 'Open Date', 'Volume (MM)'}
+                _editable_cols = {'Open Price', 'Open Date', 'Volume (MM)'}
+                # Columns shown in table — Asset Name kept in data dict but not defined here
+                _display_col_ids = [c for c in display_rows[0].keys() if c != 'Asset Name']
                 columns = [
                     {
                         'name': c,
@@ -352,7 +381,7 @@ def register_risk_callbacks(app):
                         'editable': c in _editable_cols,
                         **({'type': 'datetime'} if c == 'Open Date' else {}),
                     }
-                    for c in display_rows[0].keys()
+                    for c in _display_col_ids
                 ]
 
                 _editable_style = [
@@ -397,11 +426,11 @@ def register_risk_callbacks(app):
                     sort_action='native',
                     page_size=30,
                     tooltip_header={
-                        'Open Yld (%)':   'User-editable: yield at which position was opened (%)',
-                        'Open Date':      'User-editable: trade open date (YYYY-MM-DD)',
-                        'Volume (MM)':    'User-editable: position size in MM CNY',
-                        'Close Yld (%)':  'Latest yield from factor levels',
-                        'MtM (MM CNY)':   'Volume × Duration × (Close Yld − Open Yld) / 10000',
+                        'Open Price':    'User-editable: entry yield (%) for Rates, price for others',
+                        'Open Date':     'User-editable: trade open date (YYYY-MM-DD)',
+                        'Volume (MM)':   'User-editable: position size in MM CNY',
+                        'Close Price':   'Latest yield (%) from factor levels — Rates only',
+                        'MtM (MM CNY)':  'Rates only: Volume × Duration × (Close − Open) / 10000',
                     },
                     tooltip_delay=0,
                     tooltip_duration=None,
@@ -450,6 +479,13 @@ def register_risk_callbacks(app):
                 df  = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
                 ts  = df['_timestamp'].iloc[0] if '_timestamp' in df.columns else "unknown"
                 pos = _load_positions()  # persisted user-editable fields
+
+                def _fmt1(v):
+                    try:
+                        f = float(v)
+                        return f"{f:.1f}" if pd.notna(f) else ''
+                    except (TypeError, ValueError):
+                        return ''
 
                 display_rows = []
                 for _, row in df.iterrows():
@@ -532,6 +568,10 @@ def register_risk_callbacks(app):
                         'Close Price (bp)':         f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
                         'Target Volume (MM CNY)':   f"{notional:,.1f}",
                         'DV01 (k CNY/bp)':          f"{dv01_k:.1f}",
+                        'Carry+Roll (3m,bp)':       _fmt1(-float(row.get('carry_roll', 0) or 0) if str(row.get('direction', '')).strip().upper() == 'SELL' else row.get('carry_roll')),
+                        'Breakeven (3m,bp)':        _fmt1(row.get('breakeven_3m')),
+                        'Stop (bp)':                _fmt1(row.get('stop_loss')),
+                        'Target (bp)':              _fmt1(row.get('profit_target')),
                         'MTM spd (bp)':             f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else '',
                         'MtM Carry (MM CNY)':       f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
                         'MtM Value (MM CNY)':       f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
@@ -580,6 +620,7 @@ def register_risk_callbacks(app):
 
                 _s_vol     = _sum_col('Volume (mm)',            _BOND_OUTRIGHT_TYPES)
                 _s_tvol    = _sum_col('Target Volume (MM CNY)', _BOND_OUTRIGHT_TYPES)
+                _s_dv01    = _sum_col('DV01 (k CNY/bp)')
                 _s_carry   = _sum_col('MtM Carry (MM CNY)')
                 _s_mtm     = _sum_col('MtM Value (MM CNY)')
                 _s_tgt_wt  = _sum_col('Target Weight (%)')
@@ -589,6 +630,7 @@ def register_risk_callbacks(app):
                 total_row['ID']                     = 'TOTAL'
                 total_row['Volume (mm)']            = f"{_s_vol:,.1f}"    if _s_vol    is not None else ''
                 total_row['Target Volume (MM CNY)'] = f"{_s_tvol:,.1f}"   if _s_tvol   is not None else ''
+                total_row['DV01 (k CNY/bp)']        = f"{_s_dv01:.1f}"    if _s_dv01   is not None else ''
                 total_row['MtM Carry (MM CNY)']     = f"{_s_carry:,.4f}"  if _s_carry  is not None else ''
                 total_row['MtM Value (MM CNY)']     = f"{_s_mtm:,.4f}"    if _s_mtm    is not None else ''
                 total_row['Target Weight (%)']      = f"{_s_tgt_wt:.2f}%" if _s_tgt_wt is not None else ''
@@ -777,12 +819,12 @@ def register_risk_callbacks(app):
 
     # ── Auto-save edits on the Beta positions table ───────────────────────────
     def _persist_beta_user_rows(rows: list[dict]) -> None:
-        """Persist user-editable fields (open_yld, open_date, volume) to parquet."""
+        """Persist user-editable fields (open_price, open_date, volume) to parquet."""
         records = [
             {
                 'asset_name':  str(r.get('Asset Name', '')),
                 'instrument':  str(r.get('Instrument', '')),
-                'open_yld':    str(r.get('Open Yld (%)', '')),
+                'open_price':  str(r.get('Open Price', '')),
                 'open_date':   str(r.get('Open Date', '')),
                 'volume':      str(r.get('Volume (MM)', '')),
             }

@@ -1,113 +1,32 @@
-ERROR: Exception on /_dash-update-component [POST]
-Traceback (most recent call last):
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
-    response = self.full_dispatch_request()
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
-    rv = self.handle_user_exception(e)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
-    rv = self.dispatch_request()
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
-    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
-           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
-    return ctx.run(func, self, *args, **kwargs)
-           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
-    response_data = ctx.run(partial_func)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
-    raise err
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
-    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
-    return func(*args, **kwargs)  # %% callback invoked %%
-  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/alpha/callbacks/portfolio.py", line 93, in recalc_curated_correlation
-    df_spreads = pd.DataFrame(all_spreads).tail(lookback)
-                 ~~~~~~~~~~~~^^^^^^^^^^^^^
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/frame.py", line 769, in __init__
-    mgr = dict_to_mgr(data, index, columns, dtype=dtype, copy=copy)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 460, in dict_to_mgr
-    return arrays_to_mgr(arrays, columns, index, dtype=dtype, consolidate=copy)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 113, in arrays_to_mgr
-    index = _extract_index(arrays)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 637, in _extract_index
-    index = union_indexes(indexes)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexes/api.py", line 261, in union_indexes
-    index = index.sort_values()
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 5974, in sort_values
-    _as = nargsort(
-        items=self, ascending=ascending, na_position=na_position, key=key
-    )
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/sorting.py", line 442, in nargsort
-    indexer = non_nan_idx[non_nans.argsort(kind=kind)]
-                          ~~~~~~~~~~~~~~~~^^^^^^^^^^^
-TypeError: '<' not supported between instances of 'datetime.date' and 'str'
-ERROR: Exception on /_dash-update-component [POST]
-Traceback (most recent call last):
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
-    response = self.full_dispatch_request()
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
-    rv = self.handle_user_exception(e)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
-    rv = self.dispatch_request()
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
-    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
-           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
-    return ctx.run(func, self, *args, **kwargs)
-           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
-    response_data = ctx.run(partial_func)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
-    raise err
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
-    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
-    return func(*args, **kwargs)  # %% callback invoked %%
-  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/tabs/alpha/callbacks/portfolio.py", line 93, in recalc_curated_correlation
-    df_spreads = pd.DataFrame(all_spreads).tail(lookback)
-                 ~~~~~~~~~~~~^^^^^^^^^^^^^
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/frame.py", line 769, in __init__
-    mgr = dict_to_mgr(data, index, columns, dtype=dtype, copy=copy)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 460, in dict_to_mgr
-    return arrays_to_mgr(arrays, columns, index, dtype=dtype, consolidate=copy)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 113, in arrays_to_mgr
-    index = _extract_index(arrays)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/internals/construction.py", line 637, in _extract_index
-    index = union_indexes(indexes)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexes/api.py", line 261, in union_indexes
-    index = index.sort_values()
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 5974, in sort_values
-    _as = nargsort(
-        items=self, ascending=ascending, na_position=na_position, key=key
-    )
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/pandas/core/sorting.py", line 442, in nargsort
-    indexer = non_nan_idx[non_nans.argsort(kind=kind)]
-                          ~~~~~~~~~~~~~~~~^^^^^^^^^^^
-TypeError: '<' not supported between instances of 'datetime.date' and 'str'
-ERROR: Exception on /_dash-update-component [POST]
-Traceback (most recent call last):
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 1511, in wsgi_app
-    response = self.full_dispatch_request()
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 919, in full_dispatch_request
-    rv = self.handle_user_exception(e)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
-    rv = self.dispatch_request()
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
-    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
-           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_get_app.py", line 17, in wrap
-    return ctx.run(func, self, *args, **kwargs)
-           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/dash.py", line 1601, in dispatch
-    response_data = ctx.run(partial_func)
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 720, in add_context
-    raise err
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 711, in add_context
-    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
-  File "/Users/mayunfei/opt/anaconda3/envs/dev/lib/python3.13/site-packages/dash/_callback.py", line 58, in _invoke_callback
-    return func(*args, **kwargs)  # %% callback invoked %%
-  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/apps/atlasnexus_daily.py", line 616, in _start_jobs
-    job = start_engine_job(argv=argv)
-  File "/Users/mayunfei/Documents/FIEngine/bin-v4.0/web/services/jobs.py", line 249, in start_engine_job
-    raise RuntimeError(conflict)
-RuntimeError: ⛔ Cannot start 'curve-backtest': job 0414aba573ed (curve-backtest) is already RUNNING and shares data artifacts. Wait for it to finish first.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.
+WARNING: [Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.

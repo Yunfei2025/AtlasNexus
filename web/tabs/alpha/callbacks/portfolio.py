@@ -419,7 +419,8 @@ def register_portfolio_callbacks(app) -> None:
                 _save_cols = [
                     c for c in [
                         'ID', 'spread_type', 'category', 'style', 'direction',
-                        'Zscore', 'spread', 'carry_roll', 'vol', 'halflife',
+                        'Zscore', 'spread', 'carry_roll', 'breakeven_3m', 'vol', 'halflife',
+                        'stop_loss', 'profit_target',
                         'notional_mm', '_duration', 'DV01_k', 'weight', 'risk_contribution',
                     ] if c in df_scored.columns
                 ]

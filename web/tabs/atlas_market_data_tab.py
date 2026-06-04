@@ -401,34 +401,20 @@ _ON_THE_RUN_TENOR_BANDS: dict[str, tuple[float, float]] = {
 
 
 def _select_on_the_run_bonds(btype: str, tenors: list[str]) -> dict[str, Any]:
-    """Pick the highest-turnover bond inside each tenor band for the latest date."""
+    """Pick the most recently issued bond inside each tenor band (true on-the-run definition)."""
     try:
         bond_info = pd.read_pickle(str(DIR_DATA / f"{btype}-bondpool.pkl"))
     except Exception:
         return {}
 
-    try:
-        bond_px = pd.read_pickle(str(DIR_DATA / f"{btype}-px.pkl"))
-    except Exception:
-        return {}
-
-    if isinstance(bond_px, dict):
-        volume_df = bond_px.get("Volume", pd.DataFrame())
-    elif isinstance(bond_px, pd.DataFrame):
-        volume_df = bond_px.get("Volume", pd.DataFrame()) if "Volume" in bond_px.columns else bond_px
-    else:
-        volume_df = pd.DataFrame()
-
-    if not isinstance(bond_info, pd.DataFrame) or bond_info.empty or not isinstance(volume_df, pd.DataFrame) or volume_df.empty:
+    if not isinstance(bond_info, pd.DataFrame) or bond_info.empty:
         return {}
 
     bond_info = bond_info.copy()
     if "债券余额:亿" not in bond_info.columns or "到期日期" not in bond_info.columns or "起息日期" not in bond_info.columns:
         return {}
 
-    latest_date = volume_df.index[-1]
-    latest_volume = pd.to_numeric(volume_df.loc[latest_date], errors="coerce")
-    latest_volume = latest_volume.replace([pd.NA, pd.NaT], pd.NA).dropna()
+    today = pd.Timestamp.today().normalize()
 
     balance = pd.to_numeric(bond_info["债券余额:亿"], errors="coerce")
     if btype == "TBond":
@@ -442,8 +428,7 @@ def _select_on_the_run_bonds(btype: str, tenors: list[str]) -> dict[str, Any]:
 
     maturity = pd.to_datetime(bond_info.loc[valid_bonds, "到期日期"], errors="coerce")
     start_date = pd.to_datetime(bond_info.loc[valid_bonds, "起息日期"], errors="coerce")
-    terms = (maturity - pd.Timestamp(latest_date)).dt.days / 365.0
-    turnover = latest_volume.reindex(valid_bonds).div(balance.reindex(valid_bonds)).div(1e4)
+    terms = (maturity - today).dt.days / 365.0
 
     selected: dict[str, Any] = {}
     for tenor in tenors:
@@ -451,16 +436,17 @@ def _select_on_the_run_bonds(btype: str, tenors: list[str]) -> dict[str, Any]:
         bucket_mask = (
             terms.notna()
             & start_date.notna()
-            & (start_date < pd.Timestamp(latest_date))
-            & (maturity > pd.Timestamp(latest_date))
+            & (start_date < today)
+            & (maturity > today)
             & (terms > lo)
             & (terms <= hi)
         )
-        bucket_turnover = turnover[bucket_mask].dropna()
-        if bucket_turnover.empty:
+        bucket_start = start_date[bucket_mask].dropna()
+        if bucket_start.empty:
             selected[tenor] = "—"
             continue
-        selected[tenor] = bucket_turnover.idxmax()
+        # On-the-run = most recently issued bond in the tenor band
+        selected[tenor] = bucket_start.idxmax()
 
     return selected
 

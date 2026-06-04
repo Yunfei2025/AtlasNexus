@@ -121,14 +121,16 @@ def register_backtest_rfbt_callbacks(app):
          State('rfbt-zscore-exit', 'value'),
          State('rfbt-fm-train', 'value'),
          State('rfbt-fm-ic', 'value'),
-         State('rfbt-fm-topn', 'value')],
+         State('rfbt-fm-topn', 'value'),
+         State('rfbt-fm-sizing', 'value'),
+         State('rfbt-fm-possmooth', 'value')],
         prevent_initial_call=True,
     )
     def run_risk_factor_backtest(
         n_clicks, factor_val, strategy, period_years,
         ma_short, ma_long, boll_window, boll_std,
         mom_window, zscore_window, zscore_entry, zscore_exit,
-        fm_train, fm_ic, fm_topn,
+        fm_train, fm_ic, fm_topn, fm_sizing, fm_possmooth,
     ):
         if not n_clicks or not factor_val:
             raise dash.exceptions.PreventUpdate
@@ -149,7 +151,9 @@ def register_backtest_rfbt_callbacks(app):
             strategy = 'FactorModel'
             kwargs = {'train_months': int(fm_train or 12),
                       'ic_threshold': float(fm_ic or 0.05),
-                      'top_n': int(fm_topn or 8)}
+                      'top_n': int(fm_topn or 8),
+                      'sizing_mode': fm_sizing or 'discrete',
+                      'position_smooth_window': int(fm_possmooth or 10)}
 
             results, _ = run_factor_backtest(
                 factors=factors,
@@ -178,7 +182,7 @@ def register_backtest_rfbt_callbacks(app):
                 pred = df['predicted_return'].dropna()
                 sig  = df['signal'].dropna()
 
-                last_signal   = int(sig.iloc[-1])   if not sig.empty  else 0
+                last_signal   = float(sig.iloc[-1]) if not sig.empty  else 0.0
                 last_pred_val = float(pred.iloc[-1]) if not pred.empty else 0.0
 
                 # Z-score of latest prediction vs trailing 252 days
@@ -218,6 +222,11 @@ def register_backtest_rfbt_callbacks(app):
                 else:
                     m_gross = m
                 avg_turnover = float(df['turnover'].abs().mean()) if 'turnover' in df.columns else 0.0
+                # Max daily position move in B/day (position ±1 = ±10B → ×10). Feasibility check.
+                if 'position' in df.columns:
+                    max_dpos_b = float(df['position'].diff().abs().max()) * 10.0
+                else:
+                    max_dpos_b = 0.0
                 s   = factor_stats[factor]
                 # Weighted duration — rates factors only (IRDL/IRSL/IRCV)
                 w_dur = get_factor_weighted_duration(factor)
@@ -230,6 +239,7 @@ def register_backtest_rfbt_callbacks(app):
                     'Sharpe':    f"{m.get('Sharpe', 0):.2f}",
                     'Sharpe(gr)':f"{m_gross.get('Sharpe', 0):.2f}",
                     'Avg Turn':  f"{avg_turnover:.2f}",
+                    'Max ΔPos (B/day)': f"{max_dpos_b:.2f}",
                     'Max DD':    f"{m.get('Max Drawdown', 0):.2%}",
                     'Win%':      f"{m.get('Win Rate', 0):.1%}",
                     'Mean IC':   f"{s['mean_ic']:.4f}",
@@ -257,7 +267,13 @@ def register_backtest_rfbt_callbacks(app):
             # ── Sections 3+: Per-factor stacked 5-panel charts ──────────
             # One figure per factor, 5 rows with shared x-axis so all panels
             # are vertically aligned: Level | Signal | Position | IC | PnL.
-            _sig_colors = {1: THEME['success'], -1: THEME['danger'], 0: THEME['text_sub']}
+            # signal is now a continuous target in [-1,1]; colour bars by sign
+            def _sig_color(v):
+                if v > 0:
+                    return THEME['success']
+                if v < 0:
+                    return THEME['danger']
+                return THEME['text_sub']
             _panel_base = dict(
                 template=THEME['chart_template'],
                 paper_bgcolor=THEME['bg_main'],
@@ -280,8 +296,8 @@ def register_backtest_rfbt_callbacks(app):
                     row_heights=[0.22, 0.16, 0.16, 0.22, 0.24],
                     subplot_titles=[
                         'Historical Level',
-                        'Signal  (+1 Long / −1 Short)',
-                        'Position  (continuous)',
+                        'Signal Level  (−1 … +1, 0.2 tick)',
+                        'Position  (smoothed · ≤2B/day)',
                         'Rolling 60-day IC',
                         'Cumulative PnL',
                     ],
@@ -297,7 +313,7 @@ def register_backtest_rfbt_callbacks(app):
 
                 # Row 2: signal bar chart
                 sig = df['signal'].dropna()
-                bar_colors = [_sig_colors.get(int(v), THEME['text_sub']) for v in sig.values]
+                bar_colors = [_sig_color(v) for v in sig.values]
                 fig.add_trace(go.Bar(
                     x=sig.index, y=sig.values,
                     marker_color=bar_colors,
@@ -453,6 +469,8 @@ def register_backtest_rfbt_callbacks(app):
             'ic_threshold': float(fm_ic or 0.05),
             'top_n': int(fm_topn or 8),
             'signal_smooth_days': 5,
+            'sizing_mode': 'discrete',
+            'position_smooth_window': 10,
         }
 
         try:
@@ -625,26 +643,23 @@ def register_backtest_rfbt_callbacks(app):
             status_prefix = "🔮 Model predicted" if action == 'predict' else "⚡ Model trained"
             status_msg = (f"{status_prefix} · {persist_note} · Mean ICIR: {mean_icir:.2f}")
 
-            # Build snapshot records for the Portfolio tab's factor-signals-snapshot-store
-            _BUCKET_LABELS = {
-                1.5: 'Strong Long', 1.0: 'Long', 0.5: 'Mild Long',
-                0.0: 'Neutral',
-                -0.5: 'Mild Short', -1.0: 'Short', -1.5: 'Strong Short',
-            }
+            # Build snapshot records for the Portfolio tab's factor-signals-snapshot-store.
+            # With discrete sizing the 'signal' column IS the quantised target in [-1,1],
+            # so last_signal is the exact level the backtest holds — use it as the scalar
+            # directly so the portfolio factor_scaling exposure matches the backtest.
+            def _bucket_label(c):
+                if c == 0:
+                    return 'Neutral'
+                mag = abs(c)
+                strength = 'Strong ' if mag >= 0.8 else ('' if mag >= 0.4 else 'Mild ')
+                return f"{strength}{'Long' if c > 0 else 'Short'}"
             snapshot_records = []
             for _f, _s in factor_stats.items():
                 _z = _s.get('z_score', 0.0)
-                _ls = _s.get('last_signal', 0)
+                _ls = _s.get('last_signal', 0.0)
                 _icir = _s.get('icir', 0.0)
-                if _ls == 1:
-                    _scalar = min(1.5, max(0.5, abs(_z)))
-                elif _ls == -1:
-                    _scalar = -min(1.5, max(0.5, abs(_z)))
-                else:
-                    _scalar = 0.0
-                # Round to nearest 0.5 step for bucket lookup
-                _rounded = round(_scalar * 2) / 2
-                _bucket = _BUCKET_LABELS.get(_rounded, f'{_scalar:+.1f}×')
+                _scalar = float(_ls)   # quantised target in [-1,1]
+                _bucket = _bucket_label(_scalar)
                 _conf = (abs(_icir) >= 0.5) and 1.0 or (abs(_icir) >= 0.25) and 0.5 or 0.2
                 snapshot_records.append({
                     'risk_factor': _f,

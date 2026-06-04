@@ -33,7 +33,7 @@ def _suppress_curve_yield_outliers(
         return curve
 
     curve = curve.mask(outlier)
-    curve = curve.interpolate(method='index', limit_area='inside').ffill().bfill()
+    curve = curve.interpolate(method='linear', limit_area='inside').ffill().bfill()
     return curve
 
 # Constants reused across functions

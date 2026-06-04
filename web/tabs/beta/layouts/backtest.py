@@ -458,6 +458,24 @@ def build_risk_factor_backtest_layout():
                               style={**_inp, 'width': '70px'}),
                 ], style={'marginRight': '25px'}),
                 html.Div([
+                    html.Label("Sizing:", style={**_lbl}),
+                    dcc.Dropdown(
+                        id='rfbt-fm-sizing',
+                        options=[
+                            {'label': 'Discrete 5-level', 'value': 'discrete'},
+                            {'label': 'Continuous',       'value': 'continuous'},
+                        ],
+                        value='discrete',
+                        clearable=False,
+                        style={'width': '160px', 'fontSize': '13px'},
+                    ),
+                ], style={'marginRight': '25px'}),
+                html.Div([
+                    html.Label("Smooth window (days):", style={**_lbl}),
+                    dcc.Input(id='rfbt-fm-possmooth', type='number', value=10, min=1,
+                              style={**_inp, 'width': '70px'}),
+                ], style={'marginRight': '25px'}),
+                html.Div([
                     html.Label("Backtest Period:", style={**_lbl}),
                     dcc.Dropdown(
                         id='rfbt-period-years',

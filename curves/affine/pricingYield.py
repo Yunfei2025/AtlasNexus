@@ -14,7 +14,7 @@ import pandas as pd
 from scipy import optimize
 from dateutil.relativedelta import relativedelta
 
-from curves.utils.calendar import getNextTradingDate
+from curves.utils.cn_calendar import getNextTradingDate
 from settings.general import DateConfig
 from curves.affine.affine import Affine, calAB_np
 

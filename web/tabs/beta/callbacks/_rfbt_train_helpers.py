@@ -48,7 +48,7 @@ def _compute_factor_stats(results: Dict) -> Dict:
     for factor, df in results.items():
         pred = df['predicted_return'].dropna()
         sig = df['signal'].dropna()
-        last_signal = int(sig.iloc[-1]) if not sig.empty else 0
+        last_signal = float(sig.iloc[-1]) if not sig.empty else 0.0
         last_pred_val = float(pred.iloc[-1]) if not pred.empty else 0.0
         pred_hist = pred.tail(252)
         z_score = ((last_pred_val - pred_hist.mean()) / (pred_hist.std() + 1e-8)
@@ -84,12 +84,13 @@ def _render_signal_cards(factor_stats: Dict) -> html.Div:
     _IR_PREFIXES = ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL', 'SPCV')
 
     def _sc(factor, stats):
-        ls = stats['last_signal']
+        ls = stats['last_signal']            # quantised target in [-1,1]; sign = direction
+        _strong = '⬆⬆ ' if ls >= 0.8 else ('⬇⬇ ' if ls <= -0.8 else '')
         prefix = factor.split('.')[0]
         is_yield = prefix in _IR_PREFIXES
         is_slope = prefix == 'IRSL'
         is_curv = prefix == 'IRCV'
-        if ls == 1:
+        if ls > 0:
             if is_slope:
                 dir_label, sub_label = '⬆ Flattener', 'curve expected to flatten'
             elif is_curv:
@@ -98,8 +99,9 @@ def _render_signal_cards(factor_stats: Dict) -> html.Div:
                 dir_label, sub_label = '⬆ Bullish', 'rate expected ↓'
             else:
                 dir_label, sub_label = '⬆ LONG', ''
+            dir_label = _strong + dir_label
             dir_color = THEME['success']
-        elif ls == -1:
+        elif ls < 0:
             if is_slope:
                 dir_label, sub_label = '⬇ Steepener', 'curve expected to steepen'
             elif is_curv:
@@ -108,6 +110,7 @@ def _render_signal_cards(factor_stats: Dict) -> html.Div:
                 dir_label, sub_label = '⬇ Bearish', 'rate expected ↑'
             else:
                 dir_label, sub_label = '⬇ SHORT', ''
+            dir_label = _strong + dir_label
             dir_color = THEME['danger']
         else:
             dir_label, sub_label, dir_color = '⏸ NEUTRAL', '', THEME['text_sub']
@@ -166,6 +169,8 @@ def _build_results_from_saved_artifact(
     smooth_days: int,
     factors: List[str],
     factor_subset: Optional[List[str]] = None,
+    sizing_mode: str = 'discrete',
+    position_smooth_window: int = 10,
 ) -> Dict:
     """Build results DataFrames from a saved *artifact*.
 
@@ -180,6 +185,9 @@ def _build_results_from_saved_artifact(
     factor_subset:
         Restrict prediction to this subset of factors.
         ``None`` → use the full *factors* list.
+    sizing_mode, position_smooth_window:
+        Position sizing applied fresh from the saved predictions (not baked
+        into the .joblib), so the discrete 5-level mapping needs no retrain.
     """
     from multiasset.factor_backtest import load_factor_rates
     from multiasset.factor_model import (
@@ -187,7 +195,11 @@ def _build_results_from_saved_artifact(
         build_position_series, factor_tx_cost_per_unit, FactorModelConfig,
     )
 
-    size_cfg = FactorModelConfig(signal_smooth_days=smooth_days)
+    size_cfg = FactorModelConfig(
+        signal_smooth_days=smooth_days,
+        sizing_mode=sizing_mode,
+        position_smooth_window=position_smooth_window,
+    )
 
     try:
         factor_levels = load_factor_rates(DIR_INPUT)
