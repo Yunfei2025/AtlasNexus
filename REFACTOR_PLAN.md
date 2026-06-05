@@ -49,32 +49,46 @@
 > ⚠️ Each removal in this section must be preceded by a repo-wide import grep + one app
 > smoke-run. Do them in a dedicated branch, one package at a time.
 
-## 3. Duplicated logic to consolidate
+## 3. Duplicated logic (audit + design decision)
 
-- **Backtest engines (≥6 implementations):** `backtest/`, `curves/backtest/`,
-  `futures/backtest/`, `factors/backtest/`, `multiasset/factor_backtest.py`,
-  `web/tabs/alpha/backtest/`. They re-implement returns/PnL/metrics independently.
-  → Define one shared backtest core (returns → PnL → metrics → attribution) and have
-  each strategy feed it signals/weights. Biggest structural win.
-- **Performance metrics:** `backtest/metrics.py` (`PerformanceMetrics`) vs
-  `futures/backtest/metrics.py` (`calculate_metrics*`) — overlapping Sharpe/DD/return math.
-  → Single `core/metrics.py`.
-- **`portfolio.py` ×6** and **`plot.py` ×5 / `styles.py` ×2 / `layout.py` ×5:** overlapping
-  helpers. → Extract shared plotting/styling into `web/core` (styles already exist there)
-  and a shared `portfolio` primitive; keep only genuinely strategy-specific code local.
+**Conclusion: Keep architectures separate.**
 
-## 4. Structure & architecture recommendations
+- **Backtest engines (6+ implementations):** `curves/backtest/`, `futures/backtest/`,
+  `factors/backtest/`, `multiasset/factor_backtest.py`, `derivatives/vol/backtest.py`,
+  `web/tabs/alpha/backtest/`. ✓ **KEEP SEPARATE — different instruments, different logic.**
+  - Curves/bonds: fixed-income math, duration, convexity, carry decomposition
+  - Futures: high-frequency signals, momentum/trend, intraday re-hedge logic
+  - Factors: cross-sectional rank/decay, IC decay, exposure dynamics
+  - Each domain's backtest logic is fundamentally different; consolidating would be over-engineering.
+  - **Better approach (Step 4):** Define a **consistent output format** (`backtest_result.json`)
+    so UI can read results uniformly without reimplementing metrics on load.
 
-1. **Finish the `engine/` artifact-first vision** (per `engine/README.md`). `eod.py`/`intraday.py`
-   are still thin (145 / 71 lines). Make pipelines write `runs/<run_id>/{signals,targets,risk,tickets}`
-   and have `web/` **read artifacts instead of recomputing** in callbacks. This removes most
-   heavy compute from the request path.
-2. **Standardize package layout.** Adopt a consistent `data.py / compute.py / viz.py` (or
-   `retrieve / model / dashboard`) split per package so the 13 modules look alike. The
-   repeated-filename sprawl (9× `main.py`, 9× `dashboard.py`, 7× `retrieve.py`) is a symptom
-   of copy-paste scaffolding.
-3. **One UI surface.** Treat `web/` as the only UI; demote per-package dashboards to optional
-   debug entry points or delete (§2).
+- **Performance metrics:** `futures/backtest/metrics.py` (portfolio Sharpe/Calmar) vs
+  `factors/analysis/metrics.py` (factor IC/IR) are **fundamentally different.**
+  No consolidation needed. ✓
+
+- **`portfolio.py` ×5, `plot.py` ×5, `layout.py` ×5:** ✓ **KEEP SEPARATE — domain-specific.**
+  No consolidation value without violating separation of concerns.
+
+## 4. Architecture improvements (high-value, no consolidation)
+
+1. **Finish the `engine/` artifact-first vision** (per `engine/README.md`). Key insight: each
+   backtest engine should write a **standardized result format** (e.g., `backtest_result.json`
+   with common fields: `returns`, `pnl`, `metrics.sharpe`, `metrics.calmar`, `metrics.max_dd`).
+   Then `web/` reads artifacts instead of reimplementing metrics in callbacks.
+   - Pipeline writes: `runs/<run_id>/{signals,targets,backtest_results,risk,tickets}`
+   - UI reads and renders without heavy compute
+   - This removes most latency from the request path without forcing backtest engines to unify.
+
+2. **Standardize pipeline outputs.** Define schema for:
+   - Backtest results (curves, futures, factors, multiasset)
+   - Risk snapshots (VaR, Greeks, factor exposures)
+   - Signal snapshots (factor signals, pair signals, regime)
+   - This lets UI be data-driven, not compute-driven.
+
+3. **One UI surface.** `web/` is the only production UI. Per-package dashboards/mains remain
+   as standalone dev/test tools (as you chose in §2).
+
 4. **Separate the intraday "clock"** (per engine README): distinct data cache, risk limits,
    and refresh scheduler from EOD.
 
@@ -98,13 +112,16 @@
 
 ---
 
-## Suggested execution order (each = its own PR/branch)
+## Suggested execution order (each = its own PR)
 
-1. **Hygiene** (§1): untrack `logs/`, untrack generated HTML, fix `.gitignore`, dedupe requirements. *(no behavior change)*
-2. **Top-level README + dev tooling** (§6 partial): document wiring, add ruff/black.
-3. **Dead-code sweep** (§2): one package at a time, grep-verify, smoke-test, delete.
-4. **Shared `core/`** (§3): unify metrics first (smallest), then plotting/styles.
-5. **Unified backtest engine** (§3): largest; do after metrics are shared and tests exist.
-6. **Engine artifact-first + UI reads artifacts** (§4.1/§5): the strategic refactor.
+### Completed ✓
+1. **Step 1 — Hygiene** (§1): untrack logs/HTML, fix `.gitignore`, consolidate requirements. ✓
+2. **Step 2 — Dead-code sweep** (§2): remove unused files, keep standalone dashboards for testing. ✓
 
-> Recommendation: get sign-off on §1–§2 (safe, high-signal) before starting §3–§6 (structural).
+### Recommended next
+3. **Step 3 — Top-level README** (§6 partial): document entry points, CLI, package roles. **Fast, high-signal.**
+4. **Step 4 — Engine artifact-first design** (§4): define output schema (backtest_results.json, risk_snapshot.json, etc.), have pipelines write artifacts, update UI to read them. **Strategic win — moves compute out of callbacks.**
+5. **Step 5 — Testing baseline** (§6 partial): add pytest fixtures for golden-master backtest, risk snapshot, metrics. **Protects refactoring.**
+6. **Step 6 — Performance tuning** (§5): caching/memoization, vectorization, lazy imports.
+
+**Key decision:** Do you want to tackle **Step 3 (README)** next for clarity, or jump to **Step 4 (artifact-first)** for the architectural win?
