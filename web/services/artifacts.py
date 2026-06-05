@@ -86,6 +86,31 @@ def format_run_meta(meta: RunMeta | None) -> str:
     return " | ".join(parts)
 
 
+def load_step_result(step_name: str, mode: str = "eod") -> dict[str, Any] | None:
+    """Load the persisted result for a pipeline step from the latest run dir.
+
+    The EOD pipeline writes ``<step>_result.json`` for every calibrate() call
+    that returns a JSON-serializable value. This is the reader-side counterpart
+    so web callbacks can display pre-computed results instead of recomputing.
+
+    Returns None if no matching run or artifact is found.
+
+    Example::
+
+        result = load_step_result("futures")
+        if result:
+            best_sharpe = max(
+                s["sharpe"] for s in result["strategies"].values()
+            )
+    """
+    run = find_latest_run(mode=mode)
+    if run is None or run.path is None:
+        return None
+    artifact_path = run.path / f"{step_name}_result.json"
+    data = _safe_read_json(artifact_path)
+    return data  # None if missing or malformed
+
+
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
