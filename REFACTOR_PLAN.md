@@ -102,12 +102,13 @@
 - **Lazy imports:** `main.py` already lazy-imports heavy apps; extend this so starting one
   console doesn't import every strategy package.
 
-## 6. Testing & tooling (currently absent)
+## 6. Testing & tooling
 
-- **There are effectively zero unit tests.** Add `tests/` with, at minimum, golden-master
-  tests for: metrics math, one backtest end-to-end, curve calibration, factor model output.
-- Add `ruff` + `black` config and a pre-commit hook; the 168 TODO markers and inconsistent
-  layout suggest no linter is enforced.
+- **Baseline started** (Step 4 Slice 1): `tests/test_engine_schema.py` (15 tests) +
+  `pytest.ini`. Pure-python, no Wind dependency → runnable in CI. Run: `pytest`.
+- **Next:** golden-master tests for one real backtest end-to-end, curve calibration,
+  factor model output (needs fixture data extracted from a known run).
+- Add `ruff` + `black` config and a pre-commit hook (ruff/black now in `requirements/development.txt`).
 - Add a top-level `README.md` (none exists) documenting the entry points in §0.
 
 ---
@@ -117,11 +118,18 @@
 ### Completed ✓
 1. **Step 1 — Hygiene** (§1): untrack logs/HTML, fix `.gitignore`, consolidate requirements. ✓
 2. **Step 2 — Dead-code sweep** (§2): remove unused files, keep standalone dashboards for testing. ✓
+3. **Step 3 — Consolidation decision** (§3): keep backtest engines separate (different instruments). ✓
+4. **Step 4 Slice 1 — Artifact contract + test baseline** (§4, §6): ✓
+   - `engine/schema.py`: `PerformanceMetrics` / `BacktestResult` / `RunManifest` (versioned, JSON round-trip).
+   - `RunManifest` reproduces the legacy `run_meta.json` shape (web reader unaffected).
+   - `eod.py` now **captures** previously-discarded `calibrate()` returns into the run dir.
+   - `update-data` writes a manifest → no more empty `runs/*-data-*` dirs.
+   - `tests/` + `pytest.ini`: 15 passing tests (Step 5 baseline starts here).
 
 ### Recommended next
-3. **Step 3 — Top-level README** (§6 partial): document entry points, CLI, package roles. **Fast, high-signal.**
-4. **Step 4 — Engine artifact-first design** (§4): define output schema (backtest_results.json, risk_snapshot.json, etc.), have pipelines write artifacts, update UI to read them. **Strategic win — moves compute out of callbacks.**
-5. **Step 5 — Testing baseline** (§6 partial): add pytest fixtures for golden-master backtest, risk snapshot, metrics. **Protects refactoring.**
-6. **Step 6 — Performance tuning** (§5): caching/memoization, vectorization, lazy imports.
-
-**Key decision:** Do you want to tackle **Step 3 (README)** next for clarity, or jump to **Step 4 (artifact-first)** for the architectural win?
+5. **Step 4 Slice 2 — One vertical end-to-end:** pick the futures backtest, have it emit a
+   `BacktestResult` to the run dir, and make one `web/` tab read it instead of recomputing.
+   Proves the artifact-first pattern before rolling out to the other engines.
+6. **Step 4 Slice 3+ — Roll out** the artifact contract to curves/factors/multiasset + their UI tabs.
+7. **Step 6 — Top-level README** (§6): document entry points, CLI, package roles. Fast, high-signal.
+8. **Step 7 — Performance tuning** (§5): caching/memoization, vectorization, lazy imports.

@@ -124,10 +124,22 @@ def main(argv: list[str] | None = None, *, project_root: Path | None = None) -> 
     if args.cmd == "update-data":
         # Lazy import to keep CLI snappy
         from engine.data_update import load_default_retrievers, run_data_update
+        from engine.schema import RunManifest
 
         cfg = build_run_config(project_root=project_root, mode="data", asof=date.today())
         load_default_retrievers(extra_modules=args.modules)
-        run_data_update(cfg, names=args.retrievers, force=args.force)
+        status = run_data_update(cfg, names=args.retrievers, force=args.force)
+        # Record a manifest so the run dir is non-empty and discoverable by
+        # web/services/artifacts.find_latest_run("data") — previously these
+        # dirs were created empty.
+        RunManifest(
+            run_id=cfg.run_id,
+            mode=cfg.mode,
+            asof=cfg.asof.isoformat(),
+            generated_at=datetime.utcnow().isoformat(),
+            status="completed",
+            steps=status,
+        ).write(cfg.output_dir / "run_meta.json")
         return 0
 
     raise ValueError(f"Unknown cmd: {args.cmd}")

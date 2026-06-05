@@ -123,7 +123,9 @@ def load_default_retrievers(extra_modules: Iterable[str] | None = None) -> None:
             _try_register_module(m)
 
 
-def run_data_update(cfg: RunConfig, *, names: list[str] | None = None, force: bool = False) -> None:
+def run_data_update(
+    cfg: RunConfig, *, names: list[str] | None = None, force: bool = False
+) -> dict[str, str]:
     """Run 0..N data retrieval/update routines.
 
     If names is None: run all registered.
@@ -132,8 +134,12 @@ def run_data_update(cfg: RunConfig, *, names: list[str] | None = None, force: bo
     Note: Many existing retrieve.py scripts likely have custom signatures.
     The goal here is to start with a best-effort wrapper. If a module needs
     arguments, we can adapt it by adding a tiny adapter in engine/data_update.py.
+
+    Returns a ``{retriever_name: status}`` mapping (``ok`` | ``failed`` |
+    ``not_found``) so callers can record a run manifest.
     """
 
+    status: dict[str, str] = {}
     retrievers = get_retrievers()
     selected = names or sorted(retrievers.keys())
     effective_cfg = replace(cfg, params={**cfg.params, "force_update": force}) if force else cfg
@@ -144,7 +150,7 @@ def run_data_update(cfg: RunConfig, *, names: list[str] | None = None, force: bo
             "This usually means no retrieve modules were successfully imported. "
             "Try `python main.py update-data --modules <module.path.retrieve>` or run without --retrievers to run all registered."
         )
-        return
+        return status
 
     if not retrievers:
         logger.warning(
@@ -159,6 +165,7 @@ def run_data_update(cfg: RunConfig, *, names: list[str] | None = None, force: bo
         fn = retrievers.get(name)
         if fn is None:
             logger.warning("Retriever not found: %s", name)
+            status[name] = "not_found"
             continue
 
         logger.info("Running data retriever: %s", name)
@@ -168,5 +175,9 @@ def run_data_update(cfg: RunConfig, *, names: list[str] | None = None, force: bo
                 fn(effective_cfg)
             except TypeError:
                 fn()
+            status[name] = "ok"
         except Exception as e:
             logger.exception("Retriever failed: %s (%s)", name, e)
+            status[name] = "failed"
+
+    return status

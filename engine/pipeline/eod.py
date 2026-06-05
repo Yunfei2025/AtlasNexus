@@ -6,6 +6,7 @@ from datetime import datetime
 from engine.artifacts import ArtifactStore, write_json
 from engine.context import RunConfig
 from engine.data_update import load_default_retrievers, run_data_update
+from engine.schema import RunManifest
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ def run(cfg: RunConfig, *, update_data: bool = False) -> dict[str, str]:
 
     # ── 1-6. Module calibration steps ──────────────────────────────────
     step_status: dict[str, str] = {}
+    artifacts: list[str] = []
     import importlib
 
     for step_name, module_path, func_name in _EOD_STEPS:
@@ -55,8 +57,14 @@ def run(cfg: RunConfig, *, update_data: bool = False) -> dict[str, str]:
         try:
             mod = importlib.import_module(module_path)
             fn = getattr(mod, func_name)
-            fn(cfg, store)
+            result = fn(cfg, store)
             step_status[step_name] = "ok"
+            # Capture the step's return value as a run artifact. Previously
+            # discarded; persisted now (best-effort) so the run dir is a
+            # reproducible record and the UI can read it instead of recomputing.
+            saved = _persist_step_result(cfg, step_name, result)
+            if saved:
+                artifacts.append(saved)
         except Exception:
             logger.exception("Step '%s' failed — continuing with next step", step_name)
             step_status[step_name] = "failed"
@@ -65,22 +73,42 @@ def run(cfg: RunConfig, *, update_data: bool = False) -> dict[str, str]:
     signal_snapshot = _compute_factor_signals(cfg)
     if signal_snapshot:
         step_status["factor_signals"] = "ok"
+        artifacts.append("factor_signals.json")
 
-    # ── Write run metadata ─────────────────────────────────────────────
-    write_json(
-        cfg.output_dir / "run_meta.json",
-        {
-            "mode": cfg.mode,
-            "run_id": cfg.run_id,
-            "asof": cfg.asof.isoformat(),
-            "generated_at": datetime.utcnow().isoformat(),
-            "status": "completed",
-            "steps": step_status,
-        },
-    )
+    # ── Write run manifest (backward-compatible run_meta.json) ─────────
+    RunManifest(
+        run_id=cfg.run_id,
+        mode=cfg.mode,
+        asof=cfg.asof.isoformat(),
+        generated_at=datetime.utcnow().isoformat(),
+        status="completed",
+        steps=step_status,
+        artifacts=artifacts,
+    ).write(cfg.output_dir / "run_meta.json")
 
     logger.info("EOD run finished. Steps: %s  Output: %s", step_status, cfg.output_dir)
     return step_status
+
+
+def _persist_step_result(cfg: RunConfig, step_name: str, result: object) -> str | None:
+    """Best-effort persistence of a calibrate() return value to the run dir.
+
+    Only JSON-serializable results are written (as ``<step>_result.json``);
+    non-serializable returns (DataFrames, custom objects) are skipped without
+    failing the run. Returns the artifact filename if written, else ``None``.
+    """
+    if result is None:
+        return None
+    name = f"{step_name}_result.json"
+    try:
+        write_json(cfg.output_dir / name, result)
+        return name
+    except TypeError:
+        logger.debug("Step '%s' result not JSON-serializable — skipping persist", step_name)
+        return None
+    except Exception:
+        logger.warning("Failed to persist result for step '%s'", step_name, exc_info=True)
+        return None
 
 
 # ── helpers ────────────────────────────────────────────────────────────
