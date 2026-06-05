@@ -35,14 +35,16 @@
   These are used for independent testing and debugging of individual strategy modules.
   Keep: `backtest/`, `derivatives/`, `factors/`, `futures/`, and others.
 - **Still imported in production — keep:** `pairs/dashboard.py`, `pairs/main.py`,
-  `multiasset/main.py`, `multiasset/layout.py`, `curves/interface.py` (`refresh_rates`),
-  `surface/{callbacks,layout}.py`.
-- **`interface.py` (6 files):** only `curves/interface.py` is referenced. The other five
-  (`derivatives`, `factors`, `futures`, `multiasset`, `pairs`) appear unused → remove
-  if not used for independent testing.
+  `multiasset/main.py`, `multiasset/layout.py`, `surface/{callbacks,layout}.py`.
+- **`interface.py` (6 files) → KEEP ALL.** All 6 are actively used: 5 as EOD pipeline
+  adapters (`engine/pipeline/eod.py` calls `calibrate(cfg, store)` on each), 1
+  (`curves/interface.py`) by the intraday refresh pipeline. These are well-designed.
 - **Per-module launchers:** `factors/START_FACTOR_DASHBOARD.bat`,
-  `backtest/START_PORTFOLIO_SERVER.bat` may be kept with their dashboards if used.
+  `backtest/START_PORTFOLIO_SERVER.bat` — keep with their dashboards.
   Keep the top-level `START.sh` / `START_mac.command` / `START_win.bat` in any case.
+- **Removed:** `web/tabs/inspect_data2.py` — misplaced debug script, no importers. ✓
+- **Pending decision:** `utils/migrate_cvobj.py` + `utils/migrate_pkl.py` — one-shot
+  pickle migration scripts. Remove once migrations are confirmed done.
 
 > ⚠️ Each removal in this section must be preceded by a repo-wide import grep + one app
 > smoke-run. Do them in a dedicated branch, one package at a time.
