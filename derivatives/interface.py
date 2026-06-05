@@ -18,13 +18,18 @@ def calibrate(cfg: RunConfig, store: ArtifactStore) -> dict[str, Any] | None:
     """Run derivative pricing / vol analysis (daily EOD).
 
     This step is optional and only runs if the pricer module is available.
+
+    Returns a JSON-serializable dict of option greeks (price, delta, gamma,
+    vega, theta, rho) enriched with the run asof date.
     """
     logger.info("[derivatives] Starting pricing (asof=%s)", cfg.asof)
     try:
         from derivatives.pricer.main import main as _pricer_main
         results = _pricer_main(option_type_choice="bond")
         logger.info("[derivatives] Pricing completed")
-        return results
+        if isinstance(results, dict):
+            return {"asof": cfg.asof.isoformat(), **results}
+        return {"asof": cfg.asof.isoformat()}
     except ImportError:
         logger.info("[derivatives] Pricer module not available — skipping")
         return None

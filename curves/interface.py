@@ -19,18 +19,22 @@ logger = logging.getLogger(__name__)
 
 # ── EOD (full calibration) ────────────────────────────────────────────────
 
-def calibrate(cfg: RunConfig, store: ArtifactStore) -> None:
+def calibrate(cfg: RunConfig, store: ArtifactStore) -> dict:
     """Run the full curve generation chain (daily EOD).
 
     Delegates to :func:`curves.initialise.main` which runs
     Trend → BondCurve(TBond/CBond) → CreditSpread → IRS → Stat → Pairs
     generators sequentially, writing artifacts to ``DIR_INPUT``.
+
+    Returns a slim JSON-serializable summary persisted by the engine as
+    ``curves_result.json`` in the run dir.
     """
     logger.info("[curves] Starting full calibration (asof=%s)", cfg.asof)
     try:
         from curves.initialise import main as _calibrate_main
-        _calibrate_main()
-        logger.info("[curves] Full calibration completed")
+        status = _calibrate_main()
+        logger.info("[curves] Full calibration completed: %s", status)
+        return {"asof": cfg.asof.isoformat(), "status": status or "completed"}
     except Exception:
         logger.exception("[curves] Full calibration failed")
         raise
