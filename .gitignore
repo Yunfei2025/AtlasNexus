@@ -6,10 +6,13 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
 
+# Virtual environment
+.venv/
+
+# Logs
+logs/
 
 # Cache and Database
 cache/
@@ -18,13 +21,16 @@ web/apps/cache/
 *.db-shm
 *.db-wal
 
+# Engine run artifacts
 runs/_jobs/*
 runs/*
 
-# Generated outputs (regenerable)
+# Generated outputs (regenerable — do not commit)
 factors/*.csv
 factors/*.joblib
 factors/*backtest_results*.html
 futures/techs/*.png
-backtest/portfolio_dashboard_output.html
+backtest/portfolio_dashboard*.html
+backtest/templates/
 pairs/regression_plots.html
+derivatives/vol/vol_strategy_analysis.html
