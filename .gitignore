@@ -30,7 +30,5 @@ factors/*.csv
 factors/*.joblib
 factors/*backtest_results*.html
 futures/techs/*.png
-backtest/portfolio_dashboard*.html
-backtest/templates/
 pairs/regression_plots.html
 derivatives/vol/vol_strategy_analysis.html
