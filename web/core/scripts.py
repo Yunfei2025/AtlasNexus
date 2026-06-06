@@ -21,6 +21,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Mapping
 
+import re
 import pandas as pd
 from dash.dependencies import Input, Output, State
 
@@ -34,17 +35,24 @@ from web.core.load import t_int, DATA_PATH
 from settings.fixed_income import BondConfig
 from settings.general import TradingHoursConfig
 from settings.paths import DIR_INPUT
-from curves.refreshers.irs import IRSRefresher
-from curves.refreshers.rates import BondCurveRefresher
-from curves.refreshers.credit import CreditSpreadRefresher
-from curves.refreshers.stat import StatRefresher
 
+# Curve refreshers are imported lazily inside _autoruns1_tick() so that this
+# module loads in ~ms at startup. The first refresh tick pays the import cost
+# once; subsequent ticks hit the already-loaded modules.
 REFRESHERS_AVAILABLE = True
 
 if os.environ.get('WEB_LOG_TIMINGS','0') == '1':
     logger.info('web.core.scripts import took %.3fs', time.time() - _import_start)
 
+# ---------------------------------------------------------------------------
+# Bounded pickle cache
+# ---------------------------------------------------------------------------
+# mtime-keyed: {path: (mtime_float, object)}. Capped at _PICKLE_CACHE_MAX
+# entries (LRU by insertion order via dict) to prevent unbounded growth when
+# many large pickle files are loaded over a long session.
+_PICKLE_CACHE_MAX = 64
 _PICKLE_CACHE: dict[str, tuple[float, Any]] = {}
+
 BOND_TYPES = ("TBond", "CBond")
 
 _locks = {
@@ -106,6 +114,10 @@ class Utils:
         try:
             with open(path, "rb") as f:
                 obj = pickle.load(f)
+            # Enforce LRU cap: evict oldest entry when limit is reached.
+            if len(_PICKLE_CACHE) >= _PICKLE_CACHE_MAX and path not in _PICKLE_CACHE:
+                oldest_key = next(iter(_PICKLE_CACHE))
+                del _PICKLE_CACHE[oldest_key]
             _PICKLE_CACHE[path] = (mtime, obj)
             return obj
         except Exception as e:
@@ -177,6 +189,10 @@ def _autoruns1_tick() -> None:
     Body of the original ``autoruns1`` Dash callback, hoisted out so it runs
     in a plain daemon thread instead of a Dash background-callback subprocess
     (which is unreliable on Windows under DiskcacheManager).
+
+    Refreshers are imported lazily here (not at module level) so the web app
+    starts in ~ms. The first tick pays the import cost once; Python's module
+    cache means subsequent ticks are free.
     """
     if not _locks["autoruns1"].acquire(blocking=False):
         return
@@ -185,8 +201,14 @@ def _autoruns1_tick() -> None:
             _set_status("autoruns1", "Error: Direct API calls not available")
             return
 
+        # Lazy imports — paid once on first tick, cached by Python module system.
+        from curves.refreshers.rates import BondCurveRefresher
+        from curves.refreshers.credit import CreditSpreadRefresher
+        from curves.refreshers.irs import IRSRefresher
+        from curves.refreshers.stat import StatRefresher
+
         t = datetime.datetime.today()
-        date_m = Utils.get_mtime_date(os.path.join(DIR_INPUT, "macro-px.pkl"))#MNote-cvpx.pkl
+        date_m = Utils.get_mtime_date(os.path.join(DIR_INPUT, "macro-px.pkl"))
         in_window = (t.hour >= TradingHoursConfig.START_HOUR) and (t.hour <= TradingHoursConfig.END_HOUR) and (t.date() == date_m)
         in_credit_window = (t.hour >= TradingHoursConfig.CREDIT_START_HOUR) and (t.hour <= TradingHoursConfig.CREDIT_END_HOUR) and (t.date() == date_m)
 
@@ -377,7 +399,6 @@ def refresh(interval):
 
     if data_rt.get('BinarySpread') is None:
         try:
-            import pandas as pd
             ms = _load_misc_static()
             if isinstance(ms, Mapping):
                 _bs = ms.get('BinarySpread', {})
@@ -395,7 +416,6 @@ def refresh(interval):
 
     if data_rt.get('SectorPCASpread') is None:
         try:
-            import re as _re
             ms = _load_misc_static()
             if isinstance(ms, Mapping):
                 _pca = ms.get('PCASpread', {})
@@ -408,7 +428,7 @@ def refresh(interval):
                         _current['Zscore'] = (_current['spread'] - _current['mean']) / _current['vol']
                         _current['color'] = 'grey'
                         # Rename '1.0Y'-style tenors to '1Y' to match RT format
-                        _current.index = [_re.sub(r'(-\d+)\.0(Y)$', r'\1\2', idx) for idx in _current.index]
+                        _current.index = [re.sub(r'(-\d+)\.0(Y)$', r'\1\2', idx) for idx in _current.index]
                         data_rt['SectorPCASpread'] = _current
         except Exception:
             pass
@@ -441,7 +461,6 @@ def refresh(interval):
 
     out_dict = {}
     for key, value in data_rt.items():
-        import pandas as pd
         if isinstance(value, pd.DataFrame):
             out_dict[key] = value.to_dict()
         elif isinstance(value, dict):
