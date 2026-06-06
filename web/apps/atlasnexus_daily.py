@@ -205,6 +205,27 @@ def build_tabs_panel():
         end_default = '2026-05-15'
         start_default = '2026-02-15'
 
+    # As-of date default for EOD button:
+    #   before 6pm → previous CN working day (same as end_default)
+    #   from 6pm onward → today
+    try:
+        import datetime as _dt
+        import chinese_calendar as _cc
+        _now = _dt.datetime.now()
+        if _now.hour >= 18:
+            # today — walk back to nearest working day if today is a holiday/weekend
+            _asof = _now.date()
+            while not _cc.is_workday(_asof):
+                _asof -= _dt.timedelta(days=1)
+        else:
+            # previous working day
+            _asof = _now.date() - _dt.timedelta(days=1)
+            while not _cc.is_workday(_asof):
+                _asof -= _dt.timedelta(days=1)
+        asof_default = _asof.strftime('%Y-%m-%d')
+    except Exception:
+        asof_default = end_default
+
     run_center_content = html.Div(
         [
             # ── Daily Pipeline card ──────────────────────────────────────────
@@ -213,8 +234,19 @@ def build_tabs_panel():
                 html.Div([
                     html.Button("Update Data",       id="an-btn-update",     n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
                     html.Button("Run EOD",           id="an-btn-eod",        n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
-                    html.Button("Run EOD (+update)", id="an-btn-eod-update", n_clicks=0, style=_btn_style),
-                ]),
+                    html.Button("Run EOD (+update)", id="an-btn-eod-update", n_clicks=0, style={**_btn_style, 'marginRight': '16px'}),
+                    # As-of date for EOD — on the same row as the buttons
+                    html.Div([
+                        html.Label("As Of Date", style={**_lbl_style, 'marginBottom': '4px', 'display': 'block'}),
+                        dcc.DatePickerSingle(
+                            id="an-eod-asof",
+                            date=asof_default,
+                            display_format='YYYY-MM-DD',
+                            first_day_of_week=1,
+                            style={'fontSize': '13px'},
+                        ),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center'}),
+                ], style={'display': 'flex', 'flexDirection': 'row', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '4px'}),
             ], style=_card_style),
 
             # ── Curve Backtest card ─────────────────────────────────────────
@@ -576,6 +608,7 @@ def _run_core_autoruns(n_intervals):
     Input("an-btn-eod", "n_clicks"),
     Input("an-btn-eod-update", "n_clicks"),
     Input("an-btn-backtest", "n_clicks"),
+    State("an-eod-asof", "date"),
     State("an-bt-btype", "value"),
     State("an-bt-update-list", "value"),
     State("an-bt-start", "date"),
@@ -584,6 +617,7 @@ def _run_core_autoruns(n_intervals):
     prevent_initial_call=True,
 )
 def _start_jobs(n_update, n_eod, n_eod_update, n_bt,
+                eod_asof,
                 bt_btype, bt_update_list, bt_start, bt_end, bt_processes):
     ctx = __import__("dash").callback_context
     if not ctx.triggered:
@@ -596,12 +630,20 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt,
         return job.job_id, f"Started job {job.job_id}: update-data --force"
 
     if trig == "an-btn-eod":
-        job = start_engine_job(argv=["eod"])
-        return job.job_id, f"Started job {job.job_id}: eod"
+        asof = (eod_asof or "").strip()
+        argv = ["eod", "--asof", asof] if asof else ["eod"]
+        # FI_FORCE_RERUN=1: bypass the "already run today" completion guard in
+        # curves/initialise.py so the user can re-run EOD for any date at any time.
+        job = start_engine_job(argv=argv, extra_env={"FI_FORCE_RERUN": "1"})
+        label = f"eod --asof {asof}" if asof else "eod"
+        return job.job_id, f"Started job {job.job_id}: {label}"
 
     if trig == "an-btn-eod-update":
-        job = start_engine_job(argv=["eod", "--update-data"])
-        return job.job_id, f"Started job {job.job_id}: eod --update-data"
+        asof = (eod_asof or "").strip()
+        argv = ["eod", "--asof", asof, "--update-data"] if asof else ["eod", "--update-data"]
+        job = start_engine_job(argv=argv, extra_env={"FI_FORCE_RERUN": "1"})
+        label = f"eod --update-data --asof {asof}" if asof else "eod --update-data"
+        return job.job_id, f"Started job {job.job_id}: {label}"
 
     if trig == "an-btn-backtest":
         btype = bt_btype or "IRS"

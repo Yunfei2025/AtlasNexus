@@ -235,7 +235,7 @@ def check_conflict(new_argv: list[str]) -> str | None:
 
 # ── Job launcher ──────────────────────────────────────────────────────────────
 
-def start_engine_job(*, argv: list[str]) -> JobInfo:
+def start_engine_job(*, argv: list[str], extra_env: dict | None = None) -> JobInfo:
     """Start an engine job as a subprocess and write status/log files.
 
     The subprocess runs:
@@ -243,6 +243,9 @@ def start_engine_job(*, argv: list[str]) -> JobInfo:
 
     Status file is created immediately as RUNNING.
     Raises ``RuntimeError`` if a conflicting job is already running.
+
+    ``extra_env`` values are merged into the child process environment after
+    the defaults (FI_SHOW_LOG_WINDOW, PYTHONUNBUFFERED) are applied.
     """
     conflict = check_conflict(argv)
     if conflict:
@@ -275,6 +278,8 @@ def start_engine_job(*, argv: list[str]) -> JobInfo:
     child_env = os.environ.copy()
     child_env.setdefault("FI_SHOW_LOG_WINDOW", "0")
     child_env.setdefault("PYTHONUNBUFFERED", "1")
+    if extra_env:
+        child_env.update(extra_env)
     try:
         p = subprocess.Popen(
             cmd,

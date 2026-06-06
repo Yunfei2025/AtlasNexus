@@ -9,8 +9,11 @@ It orchestrates various generators for financial curve processing.
 Author: Yunfei Ma
 """
 
+from __future__ import annotations
+
 import datetime
 import json
+import os
 import pathlib
 import sys
 import traceback
@@ -26,6 +29,7 @@ if __name__ == "__main__":
 from curves.utils.generator_utils import get_mtime_date
 from curves.utils.retrieve import updateInstrumentDef, retrieveCNBDTS, retrieveFuturesTS
 from settings.fixed_income import BondConfig
+from settings.general import GeneralConfig
 from settings.paths import DIR_INPUT
 
 # Import generators dynamically to avoid dependency issues at module load time
@@ -119,8 +123,7 @@ def run_data_updates() -> None:
         # Update bond database if needed
         bond_file = DIR_INPUT / "database-px.pkl"
         if t.date() != get_mtime_date(bond_file):
-            print("INFO: Updating bond database...")
-            retrieveCNBDTS()
+            print("INFO: Bond database refresh is deferred; using the existing database-px.pkl if available.")
 
         # Update futures database if needed
         futures_px_file = DIR_INPUT / "futures-px.pkl"
@@ -135,13 +138,16 @@ def main() -> str:
     """Main curve generation workflow (INFO/WARNING only)."""
     print("INFO: Starting curve generation...")
     print(f"INFO: curves package path: {pathlib.Path(__file__).resolve().parent}")
+    GeneralConfig.N_CORE = 1
     asof = datetime.datetime.today().date()
     
+    force = os.environ.get("FI_FORCE_RERUN", "0").strip().lower() in {"1", "true", "yes"}
     try:
-        if _generation_completed_today(asof):
+        if not force and _generation_completed_today(asof):
             print(
                 f"INFO: Curve generation already completed for {asof.isoformat()} "
-                f"({_COMPLETION_ARTIFACT.name} updated today) — skipping rerun."
+                f"({_COMPLETION_ARTIFACT.name} updated today) — skipping rerun. "
+                f"Set FI_FORCE_RERUN=1 to override."
             )
             return "Skipped: MNote-spds.pkl already updated today"
 
