@@ -157,7 +157,19 @@ def retrieveWindBondTS(bondlist, prange, close=False):
         database_update['Volume'] = database_update['Volume'].ffill()        
     return database_update
 
-def updateInstrumentPool(btype,date_str,hist=False):
+def updateInstrumentPool(btype, date_str, hist=False, on_demand=False):
+    """Update instrument pool from Wind API.
+
+    Args:
+        btype: Bond type (TBond, CBond, etc.)
+        date_str: Date string in YYYYMMDD format
+        hist: If True, apply historical filtering
+        on_demand: If True, allow non-trading hour retrieval
+    """
+    if on_demand:
+        from data.providers.retrieve import set_allow_nontrading_retrieval
+        set_allow_nontrading_retrieval(True)
+
     try:
         pool = _wset("sectorconstituent","date="+date_str+";sectorid="+BondConfig.SECTOR_MAP[btype])
         # Filtering by name and dates
@@ -180,11 +192,38 @@ def updateInstrumentPool(btype,date_str,hist=False):
         print('Check if Wind data quota exceeded. ',ex,btype)
     return pool
 
-def updateInstrumentDef():
-    print("Updating instrument definition...")
+def updateInstrumentDef(asof=None, on_demand=False):
+    """Update instrument definitions for all bond types and futures.
+
+    Args:
+        asof: Optional date (datetime.date or YYYY-MM-DD/YYYYMMDD str).
+              Defaults to previous working day derived from today.
+        on_demand: If True, allow non-trading hour retrieval and suppress Wind API warnings.
+    """
+    # For on-demand retrieval, allow Wind API access outside trading hours
+    if on_demand:
+        from data.providers.retrieve import set_allow_nontrading_retrieval
+        set_allow_nontrading_retrieval(True)
+        os.environ['FI_SUPPRESS_WIND_WARNINGS'] = '1'
+
+    print("Updating instrument definitions...")
     obond = list(BondConfig.INCLUDE_FILTERS.keys())
-    dp = _dates['dp']
-    dps = _date_strs['dp']
+
+    if asof is not None:
+        from datetime import datetime as _dt
+        if isinstance(asof, str):
+            # Handle both YYYY-MM-DD and YYYYMMDD formats
+            try:
+                asof = _dt.strptime(asof, '%Y-%m-%d').date()
+            except ValueError:
+                asof = _dt.strptime(asof, '%Y%m%d').date()
+        dates = DateConfig.get_date_mappings(asof=asof)
+        dp = dates['dp']
+        dps = dp.strftime('%Y%m%d')
+    else:
+        dp = _dates['dp']
+        dps = _date_strs['dp']
+
     for btype in ['TBond', 'CBond', 'IRS', 'futures']+obond:
         try:
             if btype == 'IRS':
@@ -210,7 +249,7 @@ def updateInstrumentDef():
                 interval = get_mtime_date(def_file) - dp.date()
 
                 if interval.days == 7: # update the pool every 5 days
-                    pool = updateInstrumentPool(btype, dps)
+                    pool = updateInstrumentPool(btype, dps, on_demand=on_demand)
                     bonds = pool.index
                 else:
                     with open(def_file, 'rb') as filed:
@@ -229,8 +268,12 @@ def updateInstrumentDef():
                 col_map = BondConfig.get_column_mapping()
                 bond_info.columns = [col_map[c] for c in bond_info.columns]
             _save_pickle(bond_info, os.path.join(DIR_INPUT, btype + '-InstrumentInfo.pkl'))
+            print(f"✅ Updated {btype}-InstrumentInfo.pkl")
         except Exception as ex:
-            print('Check if Wind data quota exceeded. ',ex,btype)
+            if on_demand:
+                print(f"⚠️ Failed to update {btype}-InstrumentInfo.pkl (Wind API: {ex})")
+            else:
+                print('Check if Wind data quota exceeded. ',ex,btype)
             
 def retrieveCNBDTS():
     print("Updating irs and china bond time series...")
@@ -251,6 +294,7 @@ def retrieveCNBDTS():
         ts[k] = edb_ts
     file_path = os.path.join(DIR_INPUT, 'database-px.pkl')
     ts = updatePKL(ts, file_path)
+    return ts
 
 
 
