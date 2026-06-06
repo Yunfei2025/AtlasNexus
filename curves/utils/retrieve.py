@@ -248,7 +248,7 @@ def updateInstrumentDef(asof=None, on_demand=False):
                 def_file = DIR_INPUT / (btype + "-InstrumentInfo.pkl")
                 interval = get_mtime_date(def_file) - dp.date()
 
-                if interval.days == 7: # update the pool every 5 days
+                if on_demand or interval.days == 7: # always update on demand, otherwise every 7 days
                     pool = updateInstrumentPool(btype, dps, on_demand=on_demand)
                     bonds = pool.index
                 else:
