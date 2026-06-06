@@ -20,6 +20,7 @@ import re
 import traceback
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output
@@ -401,9 +402,9 @@ _ON_THE_RUN_TENOR_BANDS: dict[str, tuple[float, float]] = {
 
 
 def _select_on_the_run_bonds(btype: str, tenors: list[str]) -> dict[str, Any]:
-    """Pick the most recently issued bond inside each tenor band (true on-the-run definition)."""
+    """Pick the most liquid (highest turnover ratio) bond inside each tenor band."""
     try:
-        bond_info = pd.read_pickle(str(DIR_DATA / f"{btype}-bondpool.pkl"))
+        bond_info = pd.read_pickle(str(DIR_INPUT / f"{btype}-InstrumentInfo.pkl"))
     except Exception:
         return {}
 
@@ -411,24 +412,26 @@ def _select_on_the_run_bonds(btype: str, tenors: list[str]) -> dict[str, Any]:
         return {}
 
     bond_info = bond_info.copy()
-    if "债券余额:亿" not in bond_info.columns or "到期日期" not in bond_info.columns or "起息日期" not in bond_info.columns:
+    required_cols = ["起息日期", "到期日期", "证券全称", "成交量", "债券余额:亿"]
+    if not all(col in bond_info.columns for col in required_cols):
         return {}
 
     today = pd.Timestamp.today().normalize()
 
+    # Calculate turnover ratio: volume / balance (normalized by 1e4 for unit consistency)
+    volume = pd.to_numeric(bond_info["成交量"], errors="coerce")
     balance = pd.to_numeric(bond_info["债券余额:亿"], errors="coerce")
+    turnover = volume / balance / 1e4
+    turnover = turnover.replace([np.inf, -np.inf], 0).fillna(0)
+
+    maturity = pd.to_datetime(bond_info["到期日期"], errors="coerce")
+    start_date = pd.to_datetime(bond_info["起息日期"], errors="coerce")
+    terms = (maturity - today).dt.days / 365.0
+
     if btype == "TBond":
         name_mask = bond_info["证券全称"].astype(str).str.contains("国债", na=False)
     else:
         name_mask = bond_info["证券全称"].astype(str).str.contains("国家开发银行", na=False)
-
-    valid_bonds = bond_info.index[name_mask & balance.notna() & (balance != 0)]
-    if len(valid_bonds) == 0:
-        return {}
-
-    maturity = pd.to_datetime(bond_info.loc[valid_bonds, "到期日期"], errors="coerce")
-    start_date = pd.to_datetime(bond_info.loc[valid_bonds, "起息日期"], errors="coerce")
-    terms = (maturity - today).dt.days / 365.0
 
     selected: dict[str, Any] = {}
     for tenor in tenors:
@@ -440,13 +443,18 @@ def _select_on_the_run_bonds(btype: str, tenors: list[str]) -> dict[str, Any]:
             & (maturity > today)
             & (terms > lo)
             & (terms <= hi)
+            & name_mask
+            & (balance > 0)
+            & (volume > 0)
         )
-        bucket_start = start_date[bucket_mask].dropna()
-        if bucket_start.empty:
+
+        bucket_turnover = turnover[bucket_mask]
+        if bucket_turnover.empty or (bucket_turnover <= 0).all():
             selected[tenor] = "—"
             continue
-        # On-the-run = most recently issued bond in the tenor band
-        selected[tenor] = bucket_start.idxmax()
+
+        # On-the-run = bond with highest turnover ratio (most liquid) in the tenor band
+        selected[tenor] = bucket_turnover.idxmax()
 
     return selected
 
