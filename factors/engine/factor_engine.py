@@ -298,5 +298,63 @@ def run_analysis(start_date: str = None, end_date: str = None, ticker: str = Non
         return None
 
 
+def run_eod_calibration(ticker: str) -> dict:
+    """EOD signal generation using pre-trained monthly models.
+
+    Does NOT train models (training happens monthly via Beta Book tab).
+    Just loads latest trained model and generates daily signals.
+    Returns lightweight summary for artifact persistence.
+    """
+    try:
+        config = config_manager.model_config
+        if ticker:
+            config.ticker = ticker
+
+        print(f"📊 EOD Factor Signal Generation for {ticker}")
+
+        # Try to load pre-trained model
+        import os
+        import joblib
+        from pathlib import Path
+        model_dir = Path(__file__).parent.parent
+        model_files = sorted(model_dir.glob('trained_model_*.joblib'))
+
+        if not model_files:
+            print(f"ℹ️ No pre-trained models found (train via Beta Book tab)")
+            return {'status': 'skipped', 'reason': 'no_pre_trained_model'}
+
+        latest_model_file = model_files[-1]
+        print(f"📌 Using model: {latest_model_file.name}")
+
+        # Load the model
+        trained_model = joblib.load(latest_model_file)
+        if not trained_model:
+            return {'status': 'failed', 'error': 'Failed to load pre-trained model'}
+
+        # Load today's data for prediction
+        data, all_factors = load_and_prepare_factors(config.ticker)
+        if data is None or data.empty or all_factors.empty:
+            return {'status': 'failed', 'error': 'No data available'}
+
+        # Generate predictions using latest data
+        predictions = predict_returns(all_factors, trained_model,
+                                      trained_model.get('selected_factors', []))
+
+        if predictions is None or predictions.empty:
+            return {'status': 'skipped', 'reason': 'no_predictions'}
+
+        print(f"✅ Generated {len(predictions)} daily signals")
+
+        return {
+            'status': 'success',
+            'num_signals': len(predictions),
+            'latest_signal': float(predictions.iloc[-1]) if len(predictions) > 0 else None
+        }
+
+    except Exception as e:
+        print(f"⚠️ EOD signal generation skipped: {e}")
+        return {'status': 'skipped', 'reason': str(e)}
+
+
 if __name__ == "__main__":
     print("FactorEngine module loaded. Use 'factors/main.py' for main execution.")

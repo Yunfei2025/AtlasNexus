@@ -7,13 +7,13 @@ This module contains the macro factors calculator class.
 import pandas as pd
 import os
 
-from settings.paths import DIR_DATA
+from settings.paths import DIR_INPUT
 class MacroFactors:
     """
     Macro factor generator: loads macro-px.pkl and creates level and pct_change features.
     """
     def __init__(self):
-        self.macro_path = os.path.join(DIR_DATA, 'macro-px.pkl')
+        self.macro_path = os.path.join(DIR_INPUT, 'macro-px.pkl')
         self.macro_df = self._load_macro()
 
     def _load_macro(self):

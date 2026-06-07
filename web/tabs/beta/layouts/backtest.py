@@ -205,139 +205,169 @@ def build_multiasset_backtest_layout():
     - Run Risk Parity allocation on the selected assets
     - Track asset pool changes over time
     """
+    # Shared style tokens — mirror the Individual Factors sheet for visual parity
+    _inp = {
+        'padding': '5px', 'borderRadius': '4px',
+        'border': '1px solid #4a6f9f',
+        'backgroundColor': '#2a3f5f', 'color': '#fff',
+    }
+    _card = {
+        'backgroundColor': THEME['bg_card'],
+        'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px',
+    }
+    _lbl = {'fontWeight': 'bold', 'color': THEME['text_main'],
+            'marginBottom': '5px', 'display': 'block'}
+
     return html.Div([
-        html.H4("Historical Allocation Analysis (Correlation-Based)", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
-        html.P(
-            "Strategy: At each month start, run correlation analysis to select diversified assets, then apply factor risk parity allocation.",
-            style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '10px', 'fontStyle': 'italic'}
-        ),
-
-        # Factor Pool Info Banner
+        # ── Section 1: Strategy overview + factor pool ──────────────────
         html.Div([
-            html.Span("📊 Using Factor Pool from Factor tab: ", style={'fontWeight': 'bold', 'color': THEME['text_main']}),
-            html.Span(id='backtest-factor-pool-display', style={'color': THEME['accent'], 'fontSize': '12px'}),
-        ], style={'padding': '8px 12px', 'backgroundColor': THEME['bg_input'], 'borderRadius': '4px', 'marginBottom': '10px', 'border': f'1px solid {THEME["accent"]}'}),
-
-        # Dynamic Data Range Info (will be updated based on selected factors)
-        html.Div([
-            html.Span(id='backtest-min-date-info', children="ℹ️ Calculating minimum supported date...",
-                     style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'}),
-        ], style={'marginBottom': '15px'}),
-
-        # Row 1: Date Range and Capital
-        html.Div([
-            # Backtest Period
-            html.Div([
-                html.Label("Backtest Period:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
-                html.Div([
-                    dcc.DatePickerRange(
-                        id='history-date-range',
-                        min_date_allowed=datetime(2019, 1, 1).date(),
-                        max_date_allowed=datetime.now().date(),
-                        start_date=datetime(2024, 1, 1).date(),
-                        end_date=datetime.now().date(),
-                        display_format='YYYY-MM-DD',
-                        style={'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
-                        updatemode='bothdates'
-                    )
-                ], style={'display': 'inline-block', 'position': 'relative', 'zIndex': 1000}),
-            ], style={'display': 'flex', 'alignItems': 'center'}),
-
-            # Total Capital (dedicated for backtest)
-            html.Div([
-                html.Label("Capital:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
-                dcc.Input(
-                    id='backtest-capital-input',
-                    type='number',
-                    value=10,
-                    style={'width': '80px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
-                ),
-                dcc.Dropdown(
-                    id='backtest-capital-unit',
-                    options=[
-                        {"label": "Million", "value": "million"},
-                        {"label": "Billion", "value": "billion"},
-                    ],
-                    value="billion",
-                    clearable=False,
-                    style={'width': '100px', 'fontSize': '13px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
-                ),
-                html.Span("CNY", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginLeft': '5px'}),
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginLeft': '20px'}),
-        ], style={'marginBottom': '10px', 'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '10px'}),
-
-        # Row 2: Correlation Settings
-        html.Div([
-            # Correlation Lookback Period
-            html.Div([
-                html.Label("Correlation Lookback:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
-                dcc.Dropdown(
-                    id='backtest-corr-lookback',
-                    options=[
-                        {'label': '3 Months', 'value': '3M'},
-                        {'label': '6 Months', 'value': '6M'},
-                        {'label': '1 Year', 'value': '1Y'},
-                    ],
-                    value='1Y',
-                    clearable=False,
-                    style={'width': '120px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center'}),
-
-            # Number of low-correlation pairs to use
-            html.Div([
-                html.Label("Top Low-Corr Pairs:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
-                dcc.Input(
-                    id='backtest-top-pairs',
-                    type='number',
-                    value=10,
-                    min=5,
-                    max=20,
-                    style={'width': '60px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginLeft': '20px'}),
-
-            # Performance Metrics Table
-            html.Div(id='performance-metrics-container', style={'marginLeft': '20px'}),
-        ], style={'marginBottom': '15px', 'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '10px'}),
-
-        # Row 3: Allocation Mode
-        html.Div([
-            html.Label("Allocation Mode:", style={'fontWeight': 'bold', 'marginRight': '12px', 'color': THEME['text_main']}),
-            dcc.RadioItems(
-                id='backtest-alloc-mode',
-                options=[
-                    {'label': ' Pure Risk Parity', 'value': 'risk_parity'},
-                    {'label': ' Factor Model Scaling  (not available — factor backtests pending)', 'value': 'factor_scaling', 'disabled': True},
-                ],
-                value='risk_parity',
-                inline=True,
-                inputStyle={'marginRight': '4px'},
-                labelStyle={'marginRight': '20px', 'color': THEME['text_main'], 'fontSize': '13px'},
+            html.H6("Historical Allocation (Correlation-Based)",
+                    style={'color': THEME['accent'], 'marginBottom': '15px'}),
+            html.P(
+                "Strategy: At each month start, run correlation analysis to select diversified "
+                "assets, then apply factor risk parity allocation.",
+                style={'color': THEME['text_sub'], 'fontSize': '12px',
+                       'marginBottom': '12px', 'fontStyle': 'italic'}
             ),
-        ], style={'marginBottom': '15px', 'display': 'flex', 'alignItems': 'center'}),
 
+            # Factor Pool Info Banner
+            html.Div([
+                html.Span("📊 Using Factor Pool from Factor tab: ",
+                          style={'fontWeight': 'bold', 'color': THEME['text_main']}),
+                html.Span(id='backtest-factor-pool-display',
+                          style={'color': THEME['accent'], 'fontSize': '12px'}),
+            ], style={'padding': '8px 12px', 'backgroundColor': THEME['bg_input'],
+                      'borderRadius': '4px', 'marginBottom': '8px',
+                      'border': f'1px solid {THEME["accent"]}'}),
+
+            # Dynamic Data Range Info (updated based on selected factors)
+            html.Span(id='backtest-min-date-info',
+                      children="ℹ️ Calculating minimum supported date...",
+                      style={'color': THEME['text_sub'], 'fontSize': '11px',
+                             'fontStyle': 'italic'}),
+        ], style=_card),
+
+        # ── Section 2: Backtest settings ────────────────────────────────
+        html.Div([
+            html.H6("Backtest Settings", style={'color': THEME['accent'], 'marginBottom': '15px'}),
+            html.Div([
+                # Backtest Period
+                html.Div([
+                    html.Label("Backtest Period:", style={**_lbl}),
+                    html.Div([
+                        dcc.DatePickerRange(
+                            id='history-date-range',
+                            min_date_allowed=datetime(2019, 1, 1).date(),
+                            max_date_allowed=datetime.now().date(),
+                            start_date=datetime(2024, 1, 1).date(),
+                            end_date=datetime.now().date(),
+                            display_format='YYYY-MM-DD',
+                            style={'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
+                            updatemode='bothdates'
+                        )
+                    ], style={'display': 'inline-block', 'position': 'relative', 'zIndex': 1000}),
+                ], style={'marginRight': '25px'}),
+
+                # Total Capital (dedicated for backtest)
+                html.Div([
+                    html.Label("Capital:", style={**_lbl}),
+                    html.Div([
+                        dcc.Input(
+                            id='backtest-capital-input',
+                            type='number',
+                            value=10,
+                            style={**_inp, 'width': '80px', 'marginRight': '5px'}
+                        ),
+                        dcc.Dropdown(
+                            id='backtest-capital-unit',
+                            options=[
+                                {"label": "Million", "value": "million"},
+                                {"label": "Billion", "value": "billion"},
+                            ],
+                            value="billion",
+                            clearable=False,
+                            style={'width': '110px', 'fontSize': '13px'}
+                        ),
+                        html.Span("CNY", style={'color': THEME['text_sub'], 'fontSize': '12px',
+                                                'marginLeft': '6px'}),
+                    ], style={'display': 'flex', 'alignItems': 'center'}),
+                ], style={'marginRight': '25px'}),
+
+                # Correlation Lookback Period
+                html.Div([
+                    html.Label("Correlation Lookback:", style={**_lbl}),
+                    dcc.Dropdown(
+                        id='backtest-corr-lookback',
+                        options=[
+                            {'label': '3 Months', 'value': '3M'},
+                            {'label': '6 Months', 'value': '6M'},
+                            {'label': '1 Year', 'value': '1Y'},
+                        ],
+                        value='1Y',
+                        clearable=False,
+                        style={'width': '130px', 'fontSize': '13px'}
+                    ),
+                ], style={'marginRight': '25px'}),
+
+                # Number of low-correlation pairs to use
+                html.Div([
+                    html.Label("Top Low-Corr Pairs:", style={**_lbl}),
+                    dcc.Input(
+                        id='backtest-top-pairs',
+                        type='number',
+                        value=10, min=5, max=20,
+                        style={**_inp, 'width': '70px'}
+                    ),
+                ]),
+            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px',
+                      'alignItems': 'flex-start'}),
+
+            # Allocation Mode
+            html.Div([
+                html.Label("Allocation Mode:", style={**_lbl}),
+                dcc.RadioItems(
+                    id='backtest-alloc-mode',
+                    options=[
+                        {'label': ' Pure Risk Parity', 'value': 'risk_parity'},
+                        {'label': ' Factor Model Scaling', 'value': 'factor_scaling'},
+                    ],
+                    value='risk_parity',
+                    inline=True,
+                    inputStyle={'marginRight': '4px'},
+                    labelStyle={'marginRight': '20px', 'color': THEME['text_main'], 'fontSize': '13px'},
+                ),
+            ], style={'marginTop': '15px'}),
+        ], style=_card),
+
+        # ── Section 3: Action ───────────────────────────────────────────
         html.Div([
             html.Button(
-                "Run Historical Analysis",
+                "▶️ Run Historical Analysis",
                 id='run-history-button',
                 n_clicks=0,
-                style={'backgroundColor': THEME['success'], 'color': 'white', 'padding': '10px 20px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold', 'marginBottom': '15px'}
+                style={'backgroundColor': THEME['success'], 'color': 'white',
+                       'padding': '10px 22px', 'border': 'none', 'borderRadius': '4px',
+                       'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold',
+                       'marginRight': '12px'}
             ),
-            dcc.Loading(
-                id="loading-history",
-                type="default",
-                children=[
-                    dcc.Graph(id='historical-allocation-chart'),
-                    html.Div(style={'height': '20px'}),
-                    dcc.Graph(id='pnl-attribution-chart'),
-                    html.Div(style={'height': '20px'}),
-                    # Asset Pool Changes Section
-                    html.Div(id='asset-changes-container')
-                ]
-            )
-        ])
-    ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px', 'borderRadius': '5px', 'margin': '10px'})
+            html.Div(id='performance-metrics-container',
+                     style={'marginTop': '15px'}),
+        ], style={'marginBottom': '15px'}),
+
+        # ── Results ─────────────────────────────────────────────────────
+        dcc.Loading(
+            id="loading-history",
+            type="default",
+            children=[
+                dcc.Graph(id='historical-allocation-chart'),
+                html.Div(style={'height': '20px'}),
+                dcc.Graph(id='pnl-attribution-chart'),
+                html.Div(style={'height': '20px'}),
+                # Asset Pool Changes Section
+                html.Div(id='asset-changes-container')
+            ]
+        )
+    ], style={'padding': '10px'})
 
 
 def build_risk_factor_backtest_layout():

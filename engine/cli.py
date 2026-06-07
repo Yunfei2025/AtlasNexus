@@ -52,6 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pipeline to run each tick (default: refresh)",
     )
 
+    # ── Refresh instruments ────────────────────────────────────────────
+    ri = sub.add_parser("refresh-instruments", help="Refresh *-InstrumentInfo.pkl for all bond/futures types")
+    ri.add_argument("--asof", type=_parse_date, default=None, help="As-of date YYYY-MM-DD (defaults to previous working day)")
+
     # ── Data update ────────────────────────────────────────────────────
     upd = sub.add_parser("update-data", help="Run data retrieval/update routines")
     upd.add_argument(
@@ -119,6 +123,14 @@ def main(argv: list[str] | None = None, *, project_root: Path | None = None) -> 
             end_hour=args.end_hour,
         )
         scheduler.run_blocking()
+        return 0
+
+    if args.cmd == "refresh-instruments":
+        from curves.utils.retrieve import updateInstrumentDef
+        asof = args.asof  # None means use previous working day (default in updateInstrumentDef)
+        print(f"Refreshing instrument definitions (asof={asof or 'previous working day'})...")
+        updateInstrumentDef(asof=asof, on_demand=True)
+        print("Instrument definitions updated.")
         return 0
 
     if args.cmd == "update-data":

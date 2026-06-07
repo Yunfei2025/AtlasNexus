@@ -29,15 +29,24 @@ from curves.utils.file import updatePKL
 from settings.paths import DIR_INPUT 
 from settings.general import GeneralConfig, DateConfig
 
+
+def _parse_date(date_value=None) -> datetime.date:
+    if date_value is None:
+        return DateConfig.get_date_mappings()['d'].date()
+    if isinstance(date_value, datetime.datetime):
+        return date_value.date()
+    if isinstance(date_value, datetime.date):
+        return date_value
+    return datetime.datetime.strptime(str(date_value), "%Y%m%d").date()
+
 class CreditSpreadGenerator:
     """Compute and persist daily curve pricing for a given bond type."""
 
-    def __init__(self, object_type: str, num_cores: int = GeneralConfig.N_CORE) -> None:
+    def __init__(self, object_type: str, num_cores: int = GeneralConfig.N_CORE, date=None) -> None:
         self.object_type = object_type
         self.num_cores = max(1, int(num_cores))
-        dates = DateConfig.get_date_mappings()
-        self.today = dates['d']
-        self.prev_business_day = dates['dp'].date()
+        self.today = _parse_date(date)
+        self.prev_business_day = DateConfig.prev_cn_workday(self.today - datetime.timedelta(days=1))
         self._env = None
         self._curve_by_date = None
 
@@ -115,17 +124,17 @@ class CreditSpreadGenerator:
                  (datetime.datetime.now() - t0).total_seconds()))
 
     @classmethod
-    def main(cls, bond_type, num_cores=None):
+    def main(cls, bond_type, num_cores=None, date=None):
         """Main entry point for the CreditSpreadGenerator"""
         if num_cores is None:
             num_cores = GeneralConfig.N_CORE
-        instance = cls(bond_type, num_cores)
+        instance = cls(bond_type, num_cores, date=date)
         instance.run()
 
-def main(bond_type = 'LBond'):
+def main(bond_type = 'LBond', date="20260604"):#None):
     print(f"🚀 Starting {bond_type} curve generation.")
     try:
-        CreditSpreadGenerator.main(bond_type=bond_type)
+        CreditSpreadGenerator.main(bond_type=bond_type, date=date)
         print("✅ Curve generation completed successfully!")
     except Exception as e:
         print(f"❌ Curve generation failed: {e}")

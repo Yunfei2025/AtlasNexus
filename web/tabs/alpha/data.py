@@ -58,9 +58,9 @@ SPREAD_CATEGORIES = {
         'style': 'Mixed',
     },
     'Bond-Futures': {
-        'label': 'Bond vs Futures (Net Basis)',
+        'label': 'Bond vs Futures (IRR − Repo)',
         'types': ['NetBasis'],
-        'description': 'CTD bond vs futures implied yield',
+        'description': 'CTD implied repo (IRR) minus FR007 funding cost',
         'style': 'Carry',
     },
     'Futures-Term': {
@@ -68,6 +68,12 @@ SPREAD_CATEGORIES = {
         'types': ['TermBasis'],
         'description': 'Near vs far futures contract spread',
         'style': 'MeanReversion',
+    },
+    'Futures-Swap': {
+        'label': 'Futures vs Swap (FYTM − IRS)',
+        'types': ['FuturesSwap'],
+        'description': 'Futures implied YTM minus matched-tenor FR007 IRS rate',
+        'style': 'Mixed',
     },
     'PCA-Spread': {
         'label': 'Multi-Asset PCA',
@@ -276,6 +282,21 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
             return None
         return data.get('TermBasis', {}).get('StatInfo')
 
+    elif spread_type == 'FuturesSwap':
+        data = _load_pickle_safe(dir_input / 'futures-spds.pkl')
+        if data is None:
+            return None
+        fs = data.get('FuturesSwap', {})
+        if not isinstance(fs, dict) or not fs:
+            return None
+        frames = []
+        for ctype, cdata in fs.items():
+            if isinstance(cdata, dict) and 'StatInfo' in cdata:
+                df = cdata['StatInfo'].copy()
+                df['ctype'] = ctype
+                frames.append(df)
+        return pd.concat(frames, axis=0) if frames else None
+
     elif spread_type == 'PCASpread':
         data = _load_pickle_safe(dir_input / 'Misc-spds.pkl')
         if data is None:
@@ -343,6 +364,19 @@ def _get_duration_mult(instrument: str, spread_type: str) -> float:
         except Exception:
             pass
         return 1.0
+
+    if spread_type in ('NetBasis', 'TermBasis'):
+        # instrument is e.g. 'T-NQ1' or a bond code; use contract-type TTM proxy
+        _CTYPE_TENOR = {'T': 10.0, 'TL': 30.0, 'TF': 5.0, 'TS': 2.0}
+        ctype = instrument.split('-')[0] if '-' in instrument else instrument
+        tenor = _CTYPE_TENOR.get(ctype, 5.0)
+        return round(tenor * 0.92, 4)
+
+    if spread_type == 'FuturesSwap':
+        # instrument is contract type: T / TF / TS / TL
+        _CTYPE_TENOR = {'T': 10.0, 'TL': 30.0, 'TF': 5.0, 'TS': 2.0}
+        tenor = _CTYPE_TENOR.get(instrument, 5.0)
+        return round(tenor * 0.92, 4)
 
     if spread_type == 'TenorSpread':
         # TenorSpread: PnL ≈ duration_first_leg × Δspread (DV01-hedged position)
@@ -435,6 +469,21 @@ def _get_borrow_cost_annual_bp(spread_type: str, instrument: str) -> tuple[float
                     return cost, cost
         except Exception:
             pass
+        return 0.0, 0.0
+
+    if spread_type == 'NetBasis':
+        # LONG net basis = long cash bond + short futures
+        # Financing cost = bond borrow cost for the long leg
+        # instrument e.g. 'T-NQ1' → use T=10y bucket
+        _CTYPE_TENOR = {'T': 10.0, 'TL': 30.0, 'TF': 5.0, 'TS': 2.0}
+        ctype = instrument.split('-')[0] if '-' in instrument else instrument
+        tenor = _CTYPE_TENOR.get(ctype, 5.0)
+        cost  = _bucket(tenor)
+        return cost, cost   # symmetric: borrow bond regardless of direction
+
+    if spread_type == 'FuturesSwap':
+        # LONG futures-swap = long futures + pay fixed IRS
+        # No physical bond borrow; cost is in the IRS fixed rate (already in spread)
         return 0.0, 0.0
 
     return 0.0, 0.0
@@ -789,6 +838,21 @@ def load_realtime_spreads(spread_type: str) -> Optional[pd.DataFrame]:
 
     elif spread_type in ['NetBasis', 'TermBasis']:
         return _load_pickle_safe(dir_input / 'futures-spdsrt.pkl')
+
+    elif spread_type == 'FuturesSwap':
+        data = _load_pickle_safe(dir_input / 'futures-spds.pkl')
+        if data is None:
+            return None
+        fs = data.get('FuturesSwap', {})
+        if not isinstance(fs, dict):
+            return None
+        frames = []
+        for ctype, cdata in fs.items():
+            if isinstance(cdata, dict) and 'Spread' in cdata:
+                sp = cdata['Spread']
+                if isinstance(sp, pd.DataFrame) and not sp.empty:
+                    frames.append(sp)
+        return pd.concat(frames, axis=1) if frames else None
 
     elif spread_type in ['PCASpread', 'BinarySpread']:
         data = _load_pickle_safe(dir_input / 'Misc-spdsrt.pkl')

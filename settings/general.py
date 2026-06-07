@@ -4,7 +4,9 @@
 General application configuration, including dates and app constants.
 """
 import datetime
+from datetime import date
 from dateutil.relativedelta import relativedelta
+from typing import Optional
 from curves.utils.cn_calendar import is_cn_workday, is_cn_holiday, get_cn_holiday_detail
 from .paths import PATH, DIR_INPUT, DIR_OUTPUT, DIR_DATA, DIR_MODELS
 
@@ -13,11 +15,11 @@ app_color = {"graph_bg": "#082255", "graph_line": "#007ACE"}
 
 class TradingHoursConfig:
     START_HOUR: int = 9
-    END_HOUR: int = 17
+    END_HOUR: int = 17 #17
     CREDIT_START_HOUR: int = 10
     CREDIT_END_HOUR: int = 12
-    INIT_END_HOUR: int = 18
-    WEEKDAYS_ONLY: bool = True
+    INIT_END_HOUR: int = 18 # 18
+    WEEKDAYS_ONLY: bool = True 
 
 
 class GeneralConfig:
@@ -64,9 +66,18 @@ class DateConfig:
         return d
 
     @classmethod
-    def get_date_mappings(cls):
-        today = datetime.datetime.today()
-        d_prev = cls.prev_cn_workday(today - datetime.timedelta(days=1))
+    def get_date_mappings(cls, asof: Optional[date] = None):
+        """Return date mappings anchored to *asof* (defaults to today).
+
+        Pass an explicit date when running historical EOD calibrations to avoid
+        lookahead bias — all derived dates will be relative to *asof*, never
+        past it.
+        """
+        if asof is None:
+            today = datetime.datetime.today()
+        else:
+            today = datetime.datetime.combine(asof, datetime.time.min)
+        d_prev = cls.prev_cn_workday(today.date() - datetime.timedelta(days=1))
         return {
             'd': today,
             'dp': datetime.datetime.combine(d_prev, datetime.time.min),

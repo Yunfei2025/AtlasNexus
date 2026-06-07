@@ -123,6 +123,10 @@ class AlphaSnapshotPaths:
 		return self.dir_input / "database-px.pkl"
 
 	@property
+	def futures_spds(self) -> Path:
+		return self.dir_input / "futures-spds.pkl"
+
+	@property
 	def source_pickles(self) -> tuple[Path, ...]:
 		return (
 			self.tbond_spds,
@@ -403,6 +407,105 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		df_tenor["spread_type"] = "TenorSpread"
 		df_tenor["category"] = "Tenor-Spread"
 		out["TenorSpread"] = df_tenor
+
+	# -----------------------
+	# Futures spreads: NetBasis, TermBasis, FuturesSwap
+	# -----------------------
+	try:
+		futures_spd = _read_pickle(paths.futures_spds)
+		if isinstance(futures_spd, dict):
+			# NetBasis — flattened across seasons; one row per ctype-season key
+			nb_raw = futures_spd.get("NetBasis", {})
+			if isinstance(nb_raw, dict) and nb_raw:
+				frames = []
+				for season, sdata in nb_raw.items():
+					if not isinstance(sdata, dict):
+						continue
+					si = sdata.get("StatInfo")
+					sp = sdata.get("Spread")
+					if not isinstance(si, pd.DataFrame) or si.empty:
+						continue
+					df_nb = si.copy()
+					df_nb["contract"] = season
+					if isinstance(sp, pd.DataFrame) and not sp.empty:
+						latest = sp.ffill().iloc[-1]
+						df_nb["spread"] = latest.reindex(df_nb.index)
+					frames.append(df_nb)
+				if frames:
+					df_netbasis = pd.concat(frames)
+					df_netbasis = _normalize_index(df_netbasis)
+					for col in ["mean", "vol", "spread"]:
+						if col not in df_netbasis.columns:
+							df_netbasis[col] = np.nan
+					df_netbasis["mean"]  = pd.to_numeric(df_netbasis["mean"],  errors="coerce")
+					df_netbasis["vol"]   = pd.to_numeric(df_netbasis["vol"],   errors="coerce").replace(0, np.nan)
+					df_netbasis["spread"] = pd.to_numeric(df_netbasis["spread"], errors="coerce")
+					df_netbasis["Zscore"] = (
+						(df_netbasis["spread"] - df_netbasis["mean"]) /
+						df_netbasis["vol"]
+					)
+					# Carry: annualised (price terms basis, ~3m)
+					if "carry_3m_bp" in df_netbasis.columns:
+						df_netbasis["carry_roll"] = pd.to_numeric(df_netbasis["carry_3m_bp"], errors="coerce")
+					df_netbasis["spread_type"] = "NetBasis"
+					df_netbasis["category"]    = "Bond-Futures"
+					out["NetBasis"] = df_netbasis
+
+			# TermBasis — flat StatInfo
+			tb_raw = futures_spd.get("TermBasis", {})
+			if isinstance(tb_raw, dict):
+				si_tb = tb_raw.get("StatInfo")
+				sp_tb = tb_raw.get("Spread")
+				if isinstance(si_tb, pd.DataFrame) and not si_tb.empty:
+					df_tb = si_tb.copy()
+					df_tb = _normalize_index(df_tb)
+					if isinstance(sp_tb, pd.DataFrame) and not sp_tb.empty:
+						latest_tb = sp_tb.ffill().iloc[-1]
+						df_tb["spread"] = latest_tb.reindex(df_tb.index)
+					for col in ["mean", "vol", "spread"]:
+						if col not in df_tb.columns:
+							df_tb[col] = np.nan
+					df_tb["mean"]   = pd.to_numeric(df_tb["mean"],   errors="coerce")
+					df_tb["vol"]    = pd.to_numeric(df_tb["vol"],    errors="coerce").replace(0, np.nan)
+					df_tb["spread"] = pd.to_numeric(df_tb["spread"], errors="coerce")
+					df_tb["Zscore"] = (df_tb["spread"] - df_tb["mean"]) / df_tb["vol"]
+					df_tb["spread_type"] = "TermBasis"
+					df_tb["category"]    = "Futures-Term"
+					out["TermBasis"] = df_tb
+
+			# FuturesSwap — one row per contract type (T / TF / TS / TL)
+			fs_raw = futures_spd.get("FuturesSwap", {})
+			if isinstance(fs_raw, dict) and fs_raw:
+				fs_frames = []
+				for ctype, cdata in fs_raw.items():
+					if not isinstance(cdata, dict):
+						continue
+					si_fs = cdata.get("StatInfo")
+					sp_fs = cdata.get("Spread")
+					cr_fs = cdata.get("CarryRoll3m")
+					if not isinstance(si_fs, pd.DataFrame) or si_fs.empty:
+						continue
+					df_fs = si_fs.copy()
+					if isinstance(sp_fs, pd.DataFrame) and not sp_fs.empty:
+						df_fs["spread"] = float(pd.to_numeric(sp_fs.ffill().iloc[-1].iloc[0], errors="coerce"))
+					if isinstance(cr_fs, pd.Series) and len(cr_fs):
+						df_fs["carry_roll"] = float(pd.to_numeric(cr_fs.dropna().iloc[-1], errors="coerce"))
+					fs_frames.append(df_fs)
+				if fs_frames:
+					df_fswap = pd.concat(fs_frames)
+					df_fswap = _normalize_index(df_fswap)
+					for col in ["mean", "vol", "spread"]:
+						if col not in df_fswap.columns:
+							df_fswap[col] = np.nan
+					df_fswap["mean"]   = pd.to_numeric(df_fswap["mean"],   errors="coerce")
+					df_fswap["vol"]    = pd.to_numeric(df_fswap["vol"],    errors="coerce").replace(0, np.nan)
+					df_fswap["spread"] = pd.to_numeric(df_fswap["spread"], errors="coerce")
+					df_fswap["Zscore"] = (df_fswap["spread"] - df_fswap["mean"]) / df_fswap["vol"]
+					df_fswap["spread_type"] = "FuturesSwap"
+					df_fswap["category"]    = "Futures-Swap"
+					out["FuturesSwap"] = df_fswap
+	except Exception:
+		pass  # futures data optional; never abort other spread types
 
 	return out
 

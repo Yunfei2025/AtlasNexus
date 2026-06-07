@@ -2,9 +2,11 @@ import os
 import sys
 import pickle
 import datetime
+from datetime import date
 import pathlib
 import pandas as pd
 from dateutil.relativedelta import relativedelta
+from typing import Optional
 
 # local libraries
 PATH = pathlib.Path(__file__).parent.parent.parent
@@ -126,9 +128,20 @@ class TrendGenerator:
 
 
     @classmethod
-    def main(cls):
-        """Class method to run trend generation."""
-        instance = cls()
+    def main(cls, date: Optional[str] = None):
+        """Class method to run trend generation.
+
+        Args:
+            date: Optional date string in YYYYMMDD format
+        """
+        import datetime as dt
+        as_of_date = None
+        if date:
+            try:
+                as_of_date = dt.datetime.strptime(date, '%Y%m%d').date()
+            except (ValueError, TypeError):
+                pass
+        instance = cls(as_of_date=as_of_date)
         instance.generate_and_save_trends()
     
     def generate_and_save_trends(self):

@@ -28,14 +28,30 @@ def calibrate(cfg: RunConfig, store: ArtifactStore) -> dict:
 
     Returns a slim JSON-serializable summary persisted by the engine as
     ``curves_result.json`` in the run dir.
+
+    Note: Requires data retrieval (Wind, Bloomberg, etc.) to have been run first.
+    If data is unavailable, calibration is skipped and logged as a warning.
     """
     logger.info("[curves] Starting full calibration (asof=%s)", cfg.asof)
     try:
         from curves.initialise import main as _calibrate_main
-        status = _calibrate_main()
+        status = _calibrate_main(asof=cfg.asof.date() if hasattr(cfg.asof, 'date') else cfg.asof)
         logger.info("[curves] Full calibration completed: %s", status)
         return {"asof": cfg.asof.isoformat(), "status": status or "completed"}
-    except Exception:
+    except Exception as e:
+        error_msg = str(e).lower()
+        # If data hasn't been retrieved (Wind/Bloomberg unavailable), skip gracefully
+        if any(keyword in error_msg for keyword in ["wind", "outside trading hours", "quota"]):
+            logger.warning(
+                "[curves] Calibration skipped (data retrieval required): %s. "
+                "Run with data_update=True to fetch Wind/Bloomberg data first.",
+                e
+            )
+            return {
+                "asof": cfg.asof.isoformat(),
+                "status": "skipped",
+                "reason": "data_retrieval_required"
+            }
         logger.exception("[curves] Full calibration failed")
         raise
 

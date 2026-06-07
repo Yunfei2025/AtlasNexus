@@ -25,6 +25,26 @@ class FuturesConfig:
     INTERVAL_LIST = ['1Min', '2Min', '5Min']
     CRITERIA_LIST = [1, 2, 4]
     SEASONS = {'本季': 'NQ1', '近季': 'NQ2', '远季': 'NQ3'}
+
+    # ── Net Basis / FuturesSwap analytics ──────────────────────────────
+    # Actual repo = FR007 + FUNDING_BASIS_BP.  Institutions adjust this
+    # to reflect their own cost of funds (treasury desk charges).
+    FUNDING_BASIS_BP: float = 20.0
+
+    # CFFEX face value per contract (CNY).  Used for DV01 → contracts sizing.
+    CONTRACT_FACE = {'T': 1_000_000, 'TF': 1_000_000, 'TS': 2_000_000, 'TL': 1_000_000}
+
+    # Matched IRS tenor (years) for FuturesSwap = FYTM − IRS(matched_tenor).
+    # T(10Y) and TL(30Y) exceed the FR007 curve max (5Y) so we extrapolate.
+    CONTRACT_TENOR = {'T': 10.0, 'TF': 5.0, 'TS': 2.0, 'TL': 30.0}
+
+    # FR007-based IRS anchor tickers and their tenors (years).
+    # Used to build the swap curve for FYTM−IRS interpolation.
+    IRS_ANCHORS = [
+        'FR007.IR', 'FR007S3M.IR', 'FR007S6M.IR', 'FR007S9M.IR',
+        'FR007S1Y.IR', 'FR007S2Y.IR', 'FR007S5Y.IR',
+    ]
+    IRS_TERMS = [0.0, 0.25, 0.5, 0.75, 1.0, 2.0, 5.0]  # matching years
     SYMBOLS = [
         'T.CFE', 
         'TL.CFE', 

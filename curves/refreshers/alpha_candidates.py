@@ -280,7 +280,7 @@ def build_alpha_candidates(
 		df_all["style"] = df_all["category"].map(cat_to_style)
 
 	# Dynamic style for mixed categories: MR if stationary, else Carry.
-	for dynamic_category in ["Swap-Spread", "Tenor-Spread"]:
+	for dynamic_category in ["Swap-Spread", "Tenor-Spread", "Bond-Futures", "Futures-Term", "Futures-Swap"]:
 		mask_dynamic = df_all["category"] == dynamic_category
 		if mask_dynamic.any():
 			df_all.loc[mask_dynamic, "style"] = "Carry"

@@ -278,6 +278,17 @@ input[type="button"] {
     color: #e8eaf6;
 }
 
+/* Ensure calendar popup is fully visible and not clipped */
+.dash-datepicker {
+    overflow: visible !important;
+}
+
+.dash-datepicker-content {
+    position: absolute;
+    overflow: visible !important;
+    z-index: 1000;
+}
+
 /* Month header and weekday row */
 .dash-datepicker-calendar-month-header,
 .dash-datepicker-controls,

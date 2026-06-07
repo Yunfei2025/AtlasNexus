@@ -17,37 +17,43 @@ logger = logging.getLogger(__name__)
 
 
 def calibrate(cfg: RunConfig, store: ArtifactStore) -> dict[str, Any] | None:
-    """Run full factor analysis (daily EOD).
+    """EOD factor signal generation using pre-trained monthly models.
 
-    Delegates to :func:`factors.engine.factor_engine.run_analysis` via
-    the config manager for dates and tickers.
-
-    Returns a slim JSON-serializable summary — the full ``FactorAnalysisResults``
-    object contains DataFrames and trained models that cannot be JSON-serialized,
-    so only scalar metrics and factor names are extracted.
+    Does NOT train models (training happens monthly in Beta Book tab).
+    Just generates daily signals from the latest pre-trained model.
+    Returns a lightweight summary for artifact persistence.
     """
-    logger.info("[factors] Starting factor analysis (asof=%s)", cfg.asof)
+    logger.info("[factors] Starting EOD signal generation (asof=%s)", cfg.asof)
     try:
         import importlib
         fe = importlib.import_module("factors.engine.factor_engine")
         cfg_mod = importlib.import_module("factors.config")
         config_manager = cfg_mod.config_manager
 
-        date_config = config_manager.date_config
         model_config = config_manager.model_config
+        ticker = model_config.ticker
 
-        results = fe.run_analysis(
-            start_date=date_config.day_data_start_date,
-            end_date=date_config.day_data_end_date,
-            ticker=model_config.ticker,
-        )
+        # Generate signals using pre-trained models
+        result = fe.run_eod_calibration(ticker)
+        status = result.get("status")
 
-        summary = _extract_factors_summary(cfg.asof.isoformat(), results, model_config)
-        logger.info("[factors] Factor analysis completed (status=%s)", summary.get("status"))
-        return summary
+        if status == "skipped":
+            logger.info("[factors] Signal generation skipped: %s", result.get("reason"))
+        elif status == "success":
+            logger.info("[factors] Signal generation completed: %d signals", result.get("num_signals", 0))
+        else:
+            logger.warning("[factors] Signal generation failed: %s", result.get("error"))
+
+        return {
+            "asof": cfg.asof.isoformat(),
+            "ticker": ticker,
+            "status": status,
+            "num_signals": result.get("num_signals", 0),
+            "latest_signal": result.get("latest_signal"),
+        }
 
     except Exception:
-        logger.exception("[factors] Factor analysis failed")
+        logger.exception("[factors] EOD signal generation failed")
         raise
 
 

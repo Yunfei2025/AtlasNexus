@@ -17,8 +17,9 @@ _BACKTEST_SPREAD_TYPE_OPTIONS = [
     {'label': 'Bond-Swap (Policybank)', 'value': 'CBondSwap'},
     {'label': 'Swap Spread', 'value': 'SwapSpread'},
     {'label': 'Tenor Spreads', 'value': 'TenorSpread'},
-    {'label': 'Net Basis (Futures)', 'value': 'NetBasis'},
+    {'label': 'Bond-Futures (IRR−Repo)', 'value': 'NetBasis'},
     {'label': 'Term Basis (Futures)', 'value': 'TermBasis'},
+    {'label': 'Futures vs Swap (FYTM−IRS)', 'value': 'FuturesSwap'},
     {'label': 'PCA Spread', 'value': 'PCASpread'},
 ]
 
@@ -111,12 +112,13 @@ def build_candidates_layout() -> html.Div:
                 dcc.Checklist(
                     id='alpha-spread-categories',
                     options=[
-                        {'label': ' Bond-Curve (MR)', 'value': 'Bond-Curve'},
-                        {'label': ' Bond-Swap (Trend)', 'value': 'Bond-Swap'},
-                        {'label': ' Swap Spreads (MR/Trend)', 'value': 'Swap-Spread'},
-                        {'label': ' Tenor Spreads (MR/Trend)', 'value': 'Tenor-Spread'},
-                        {'label': ' Net Basis (Trend)', 'value': 'Bond-Futures'},
-                        {'label': ' Term Basis (MR)', 'value': 'Futures-Term'},
+                        {'label': ' Bond-Curve', 'value': 'Bond-Curve'},
+                        {'label': ' Bond-Swap', 'value': 'Bond-Swap'},
+                        {'label': ' Swap Spreads', 'value': 'Swap-Spread'},
+                        {'label': ' Tenor Spreads', 'value': 'Tenor-Spread'},
+                        {'label': ' Bond-Futures IRR−Repo', 'value': 'Bond-Futures'},
+                        {'label': ' Term Basis', 'value': 'Futures-Term'},
+                        {'label': ' Futures vs Swap', 'value': 'Futures-Swap'},
                     ],
                     value=['Bond-Curve', 'Bond-Swap', 'Swap-Spread', 'Tenor-Spread'],
                     inline=True,

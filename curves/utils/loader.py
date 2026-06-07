@@ -23,7 +23,7 @@ class LegacyPickleCompatibilityError(RuntimeError):
     pass
 
 
-def _read_pickle_compat(file_path, label=None):
+def _read_pickle_compat(file_path, label=None, *, allow_pickle_fallback=False):
     try:
         return pd.read_pickle(file_path)
     except Exception as e:
@@ -37,14 +37,8 @@ def _read_pickle_compat(file_path, label=None):
         if not legacy_layout:
             display = label or file_path
             print(f"Warning: Error loading {display} with pd.read_pickle: {e}")
-            print("Falling back to pickle.load...")
-        try:
-            with open(file_path, 'rb') as f:
-                return pickle.load(f)
-        except Exception:
-            if legacy_layout:
-                raise LegacyPickleCompatibilityError(label or file_path) from e
-            raise
+            raise LegacyPickleCompatibilityError(label or file_path) from e
+        raise LegacyPickleCompatibilityError(label or file_path) from e
 
 def loadWorkday(start,end,update=False):
     date_range = pd.date_range(start=start, end=end, freq='D')
@@ -54,7 +48,20 @@ def loadWorkday(start,end,update=False):
 def loadCNBDTS():
     file_path = os.path.join(DIR_INPUT, 'database-px.pkl')
     # file_path = os.path.join(DIR_DATA, 'CNDBCurve-px.pkl')
-    ts = _read_pickle_compat(file_path)
+    try:
+        ts = _read_pickle_compat(file_path, allow_pickle_fallback=False)
+    except LegacyPickleCompatibilityError:
+        print(f"Warning: {file_path} could not be loaded safely; using empty time-series placeholders.")
+        empty_frame = pd.DataFrame()
+        return {
+            'SwapTS': empty_frame,
+            'CGB': empty_frame,
+            'CDB': empty_frame,
+            'SOFR': empty_frame,
+            'FX': empty_frame,
+            'FXSwap': empty_frame,
+            'Factors': empty_frame,
+        }
     env = {}
     env['SwapTS'] = ts['IRS']
     env['CGB'] = ts['CGB']

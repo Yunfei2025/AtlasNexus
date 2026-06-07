@@ -10,8 +10,22 @@ import json
 import pandas as pd
 import re
 import warnings
-from chinese_calendar import get_holiday_detail, is_holiday, is_workday
 from dateutil.relativedelta import relativedelta
+
+try:
+    from chinese_calendar import get_holiday_detail, is_holiday, is_workday
+    _CHINESE_CALENDAR_AVAILABLE = True
+except ImportError:
+    _CHINESE_CALENDAR_AVAILABLE = False
+
+    def get_holiday_detail(target_date):
+        raise NotImplementedError
+
+    def is_holiday(target_date):
+        raise NotImplementedError
+
+    def is_workday(target_date):
+        raise NotImplementedError
 
 warnings.filterwarnings("ignore")
 
@@ -40,18 +54,21 @@ def _get_calendar_frame(year):
     if year in _CALENDAR_CACHE:
         return _CALENDAR_CACHE[year]
 
-    try:
-        dates = pd.date_range(start=f'{year}-01-01', end=f'{year}-12-31', freq='D')
-        holidays = [is_holiday(d.date()) for d in dates]
-        details = []
-        for current_date, holiday_flag in zip(dates, holidays):
-            if holiday_flag:
-                details.append(get_holiday_detail(current_date.date())[1])
-            else:
-                details.append(None)
-        frame = pd.DataFrame({'Holiday': holidays, 'Detail': details}, index=dates)
-    except NotImplementedError:
+    if not _CHINESE_CALENDAR_AVAILABLE:
         frame = _build_weekend_calendar(year)
+    else:
+        try:
+            dates = pd.date_range(start=f'{year}-01-01', end=f'{year}-12-31', freq='D')
+            holidays = [is_holiday(d.date()) for d in dates]
+            details = []
+            for current_date, holiday_flag in zip(dates, holidays):
+                if holiday_flag:
+                    details.append(get_holiday_detail(current_date.date())[1])
+                else:
+                    details.append(None)
+            frame = pd.DataFrame({'Holiday': holidays, 'Detail': details}, index=dates)
+        except NotImplementedError:
+            frame = _build_weekend_calendar(year)
 
     _CALENDAR_CACHE[year] = frame
     return frame
@@ -59,6 +76,8 @@ def _get_calendar_frame(year):
 
 def is_cn_holiday(target_date):
     date_value = _to_date(target_date)
+    if not _CHINESE_CALENDAR_AVAILABLE:
+        return _weekend_is_holiday(date_value)
     try:
         return is_holiday(date_value)
     except NotImplementedError:
@@ -68,6 +87,8 @@ def is_cn_holiday(target_date):
 
 def is_cn_workday(target_date):
     date_value = _to_date(target_date)
+    if not _CHINESE_CALENDAR_AVAILABLE:
+        return not _weekend_is_holiday(date_value)
     try:
         return is_workday(date_value)
     except NotImplementedError:
@@ -77,6 +98,10 @@ def is_cn_workday(target_date):
 
 def get_cn_holiday_detail(target_date):
     date_value = _to_date(target_date)
+    if not _CHINESE_CALENDAR_AVAILABLE:
+        holiday_flag = _weekend_is_holiday(date_value)
+        detail = 'Weekend fallback' if holiday_flag else None
+        return holiday_flag, detail
     try:
         return get_holiday_detail(date_value)
     except NotImplementedError:

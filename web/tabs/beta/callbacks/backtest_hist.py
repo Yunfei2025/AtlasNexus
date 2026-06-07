@@ -12,14 +12,15 @@ import numpy as np
 import traceback
 from dateutil.relativedelta import relativedelta
 
-from multiasset.data import load_raw_market_data
+from multiasset.data import load_raw_market_data, calculate_daily_returns_series
 from multiasset.main import create_custom_portfolio
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
+from multiasset.factor_backtest import load_factor_backtest
 from multiasset.config import RiskModelConfig
 from settings.paths import DIR_INPUT
 
-from ..data import THEME, SELECTED_FACTOR_POOL, get_assets_from_factors
+from ..data import THEME, SELECTED_FACTOR_POOL, get_assets_from_factors, FACTOR_TO_ASSET_MAP
 
 
 def register_backtest_hist_callbacks(app):
@@ -125,26 +126,53 @@ def register_backtest_hist_callbacks(app):
 
         alloc_mode = alloc_mode or 'risk_parity'
 
+        # ── Factor Model Scaling: load saved per-factor signal series ──────────
+        # When factor scaling is requested, each asset's risk-parity weight is
+        # tilted by the FactorModel signal (`position` in ~[-1, 1]) of the
+        # factor(s) it maps from, as of each rebalance date. Signals come from
+        # the walk-forward factor backtest persisted in factor-backtest.pkl.
+        factor_signal_series = {}
         if alloc_mode == 'factor_scaling':
-            unavail_fig = go.Figure()
-            unavail_fig.update_layout(
-                title="Factor Model Scaling — not available yet",
-                annotations=[{
-                    'text': 'Factor Model Scaling requires per-factor signal backtests which are still in development.<br>'
-                            'Please use Pure Risk Parity.',
-                    'xref': 'paper', 'yref': 'paper', 'x': 0.5, 'y': 0.5,
-                    'showarrow': False, 'font': {'size': 14, 'color': THEME['warning']},
-                    'align': 'center',
-                }],
-                template=THEME['chart_template'],
-                paper_bgcolor=THEME['bg_main'],
-                plot_bgcolor=THEME['bg_main'],
-                font={'color': THEME['text_main']},
-            )
-            return unavail_fig, unavail_fig, None, html.Div(
-                "Factor Model Scaling is not yet available — factor signal backtests are pending.",
-                style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'},
-            )
+            try:
+                fm_results = load_factor_backtest(DIR_INPUT).get('FactorModel', {})
+                for f_code, f_df in fm_results.items():
+                    if 'position' in f_df.columns:
+                        s = f_df['position'].dropna()
+                        if not isinstance(s.index, pd.DatetimeIndex):
+                            s.index = pd.to_datetime(s.index)
+                        factor_signal_series[f_code] = s.sort_index()
+            except Exception as e:
+                print(f"  Warning: Could not load factor model signals: {e}")
+
+            if not factor_signal_series:
+                unavail_fig = go.Figure()
+                unavail_fig.update_layout(
+                    title="Factor Model Scaling — no signals available",
+                    annotations=[{
+                        'text': 'No FactorModel signals found in factor-backtest.pkl.<br>'
+                                'Run the Individual Factors backtest first to generate signals.',
+                        'xref': 'paper', 'yref': 'paper', 'x': 0.5, 'y': 0.5,
+                        'showarrow': False, 'font': {'size': 14, 'color': THEME['warning']},
+                        'align': 'center',
+                    }],
+                    template=THEME['chart_template'],
+                    paper_bgcolor=THEME['bg_main'],
+                    plot_bgcolor=THEME['bg_main'],
+                    font={'color': THEME['text_main']},
+                )
+                return unavail_fig, unavail_fig, None, html.Div(
+                    "Factor Model Scaling needs factor signals — run the Individual Factors "
+                    "backtest to populate factor-backtest.pkl, then retry.",
+                    style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'},
+                )
+
+        def _factor_signal_asof(factor_code, asof_date):
+            """Most-recent FactorModel position for `factor_code` on/before `asof_date`."""
+            s = factor_signal_series.get(factor_code)
+            if s is None:
+                return None
+            s = s.loc[s.index <= asof_date]
+            return float(s.iloc[-1]) if len(s) else None
 
         try:
             # Parse dates
@@ -369,7 +397,34 @@ def register_backtest_hist_callbacks(app):
                     weights = {k: v / weight_sum for k, v in weights.items()}
                 else:
                     continue
-                
+
+                # ── Factor Model Scaling: tilt each asset's risk-parity weight by
+                #    the FactorModel signal of the factor(s) it maps from. The
+                #    resulting weights are directional (can be negative = short)
+                #    and intentionally NOT renormalised — when signals are weak the
+                #    book is smaller, when strong it is fuller.
+                if alloc_mode == 'factor_scaling':
+                    asset_to_factors = {}
+                    for f in low_corr_factors_list:
+                        for a in FACTOR_TO_ASSET_MAP.get(f, []):
+                            asset_to_factors.setdefault(a['name'], set()).add(f)
+
+                    scaled = {}
+                    for name, weight in weights.items():
+                        sigs = [_factor_signal_asof(f, pd.Timestamp(rebalance_date))
+                                for f in asset_to_factors.get(name, ())]
+                        sigs = [s for s in sigs if s is not None]
+                        # Default to neutral long (1.0) when no model signal exists,
+                        # so un-modelled sleeves keep their risk-parity exposure.
+                        coeff = float(np.mean(sigs)) if sigs else 1.0
+                        scaled[name] = weight * coeff
+
+                    # Drop assets the model flattened to ~0 exposure
+                    weights = {k: v for k, v in scaled.items() if abs(v) >= 1e-6}
+                    if not weights:
+                        print(f"  {rebalance_date.date()}: Skipped (all factor signals flat)")
+                        continue
+
                 # Store only assets with non-negligible weights in asset pool tracking
                 filtered_assets = [a for a in selected_assets if a['name'] in weights]
                 asset_pools_by_date[rebalance_date] = filtered_assets

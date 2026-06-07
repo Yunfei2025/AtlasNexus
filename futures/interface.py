@@ -26,11 +26,9 @@ def calibrate(cfg: RunConfig, store: ArtifactStore) -> dict[str, Any] | None:
     """
     logger.info("[futures] Starting daily analysis (asof=%s)", cfg.asof)
     try:
-        from futures.daily.main import main as _daily_main, run_with_summary
-        _daily_main()
-        logger.info("[futures] Daily analysis completed")
+        from futures.daily.main import run_with_summary
 
-        # Build a serializable summary for the run artifact.
+        # Build a serializable summary for the run artifact (no full backtest for EOD).
         summary = run_with_summary()
         if summary:
             logger.info(

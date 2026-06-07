@@ -296,25 +296,184 @@ def retrieveCNBDTS():
     ts = updatePKL(ts, file_path)
     return ts
 
+def _extract_contract_close(contract_df, close_df):
+    """Extract close prices for contracts based on their codes.
+
+    For each date and ticker, looks up the contract code and retrieves its close price.
+
+    Parameters
+    ----------
+    contract_df : pd.DataFrame
+        DataFrame with contract codes (indexed by date, columns are tickers)
+    close_df : pd.DataFrame
+        DataFrame with close prices for all contracts (indexed by date, columns are contract codes)
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with close prices aligned to contract_df structure
+    """
+    # Create a new dataframe with same structure but float dtype
+    contract_cls = pd.DataFrame(index=contract_df.index, columns=contract_df.columns, dtype='float64')
+
+    for col in contract_cls.columns:
+        for date_idx in contract_cls.index:
+            code = contract_df.loc[date_idx, col]
+            if isinstance(code, str) and code in close_df.columns:
+                try:
+                    contract_cls.loc[date_idx, col] = close_df.loc[date_idx, code]
+                except (KeyError, IndexError):
+                    contract_cls.loc[date_idx, col] = np.nan
+            else:
+                contract_cls.loc[date_idx, col] = np.nan
+
+    return contract_cls
 
 
-def retrieveFuturesTS():
+def _get_next_season_contract(contract_df, dps, ds):
+    """Transform contract codes to next quarterly season for date range [dps, ds].
+
+    Converts contract codes like T2603.CFE -> T2606.CFE, handling year rollover.
+    Quarterly cycle: 03 (Mar) -> 06 (Jun) -> 09 (Sep) -> 12 (Dec) -> 03 (next year).
+
+    Parameters
+    ----------
+    contract_df : pd.DataFrame
+        DataFrame with contract codes (indexed by date)
+    dps : str
+        Start date in YYYYMMDD format
+    ds : str
+        End date in YYYYMMDD format
+    """
+    start_date = pd.to_datetime(dps, format='%Y%m%d').date()
+    end_date = pd.to_datetime(ds, format='%Y%m%d').date()
+
+    # Filter to date range
+    mask = (contract_df.index >= start_date) & (contract_df.index <= end_date)
+    contract1_df = contract_df.loc[mask].copy()
+
+    def transform_contract(code):
+        if pd.isna(code) or not isinstance(code, str):
+            return code
+        try:
+            # Extract ticker prefix and date from code (e.g., "T2603.CFE" -> "T", "26", "03", ".CFE")
+            parts = code.split('.')
+            if len(parts) != 2:
+                return code
+
+            base_code = parts[0]
+            suffix = '.' + parts[1]
+
+            # Extract year and month from base_code (e.g., "T2603" -> "T", "26", "03")
+            if len(base_code) < 4:
+                return code
+
+            ticker = base_code[:-4]
+            year_str = base_code[-4:-2]
+            month_str = base_code[-2:]
+
+            year = int(year_str)
+            month = int(month_str)
+
+            # Advance by 3 months (quarterly cycle)
+            month += 3
+            if month > 12:
+                month -= 12
+                year += 1
+
+            # Format as YYMM and reconstruct code
+            new_code = ticker + f"{year:02d}{month:02d}" + suffix
+            return new_code
+        except (ValueError, IndexError):
+            return code
+
+    for col in contract1_df.columns:
+        contract1_df[col] = contract1_df[col].apply(transform_contract)
+
+    return contract1_df
+
+
+def fetchFuturesDatabaseWindow(prange, on_demand=False):
+    """Fetch the bond-futures analytics window from Wind without persisting.
+
+    Returns a dict with per-date, per-ctype (TS/TF/T/TL.CFE) frames:
+    ``contract``/``contract1``/``contract2`` (codes), ``close`` (all contract
+    closes), ``contract_cls``/``contract1_cls``/``contract2_cls`` (front/next/
+    next-next close), ``irr`` (tbf_irr02 %), ``ytm`` (tbf_fytm02 %) and
+    ``ctd`` (CTD bond code).  Used by both the full-history backfill
+    (:func:`retrieveFuturesDatabaseTS`) and the daily incremental analytics
+    update in ``FuturesAnalyticsGenerator``.
+    """
+    d = prange[-1]
+    ds = d.strftime("%Y%m%d")
+    dp = prange[0] - relativedelta(months=1)
+    dps = dp.strftime("%Y%m%d")
+    flist = ["TS.CFE", "TF.CFE", "T.CFE", "TL.CFE"]
+    database_update = {}
+    database_update['contract'] = _wsd(flist, "trade_hiscode", dps, ds, "", on_demand=on_demand)
+    database_update['contract1'] = _get_next_season_contract(database_update['contract'], dps, ds)
+    database_update['contract2'] = _get_next_season_contract(database_update['contract1'], dps, ds)
+    tlist = list(database_update['contract'].iloc[0])+list(database_update['contract1'].iloc[0])+list(database_update['contract2'].iloc[0])
+    database_update['close'] = pd.DataFrame(columns=tlist)
+    database_update['close'][tlist] = _wsd(tlist, "close", dps, ds, "futurePriceType=1;bondTradingVenue=1;", on_demand=on_demand)
+    database_update['contract_cls'] = _extract_contract_close(database_update['contract'], database_update['close'])
+    database_update['contract1_cls'] = _extract_contract_close(database_update['contract1'], database_update['close'])
+    database_update['contract2_cls'] = _extract_contract_close(database_update['contract2'], database_update['close'])
+    database_update['irr'] = _wsd(flist, "tbf_irr02", dps, ds, "futurePriceType=1;bondTradingVenue=1;", on_demand=on_demand)
+    database_update['ytm'] = _wsd(flist, "tbf_fytm02", dps, ds, "futurePriceType=1;bondTradingVenue=1;", on_demand=on_demand)
+    database_update['ctd'] = _wsd(flist, "tbf_ctd02", dps, ds, "futurePriceType=1;bondTradingVenue=1;", on_demand=on_demand)
+    return database_update
+
+
+def retrieveFuturesDatabaseTS(prange, on_demand=False):
+    """Fetch full-history bond-futures analytics and persist to futures-db.pkl.
+
+    Backfill-only path (run-center).  Daily EOD does an incremental append into
+    ``futures-analytics.pkl`` instead — see ``FuturesAnalyticsGenerator``.
+    """
+    database_update = fetchFuturesDatabaseWindow(prange, on_demand=on_demand)
+    database_update = updatePKL(database_update, os.path.join(DIR_DATA, 'futures-db.pkl'))
+
+def retrieveFuturesTS(backfill: bool = False):
+    """Update bond futures time series in futures-px.pkl.
+
+    Parameters
+    ----------
+    backfill : bool
+        When True, fetch up to 1 year of history for basis/netbasis/irr/ctd
+        (Wind computes these correctly for each historically-correct NQ1/NQ2/NQ3
+        contract via contractType=, so CF and CTD are accurate for all dates).
+        Use False (default) for daily incremental updates.
+    on_demand : bool
+        When True, allow retrieval outside trading hours by bypassing time checks.
+    """
     print("Updating bond futures time series...")
     with open(os.path.join(DIR_INPUT, 'futures-InstrumentInfo.pkl'), 'rb') as file:
         futures = pickle.load(file)
-    starts = _date_strs['d7d']
+
     dps = _date_strs['dp']
-    futures_ts = {'close': {}, 'basis': {}, 'netbasis': {},'position': {}, 'irr': {},'ctd':{}}
+    # Close / OI: always fetch recent window (specific contract codes, e.g. T2606)
+    starts_recent = _date_strs['d7d']
+    # Basis/netbasis/IRR/CTD: contractType= makes Wind roll automatically, so we
+    # can fetch longer history and get correct values for historical contracts.
+    if backfill:
+        starts_basis = _date_strs.get('d1y', _date_strs['d7d'])
+        print("  backfill mode: fetching up to 1 year of basis/IRR/CTD history")
+    else:
+        starts_basis = _date_strs['d7d']
+
+    futures_ts = {'close': {}, 'basis': {}, 'netbasis': {}, 'position': {}, 'irr': {}, 'ctd': {}}
     for b in futures['Bucket'].keys():
         bond_list = []
         for t in futures['Bucket'][b]:
             bond_list.extend(list(futures['DeliveryPool'][t].index))
-        futures_ts['close'][b] = _wsd(futures['Bucket'][b], "close", starts, dps)
-        futures_ts['position'][b] = _wsd(futures['Bucket'][b], "oi", starts, dps)
-        futures_ts['basis'][b] = _wsd(bond_list, "tbf_basis", starts, dps, "contractType=" + b)
-        futures_ts['netbasis'][b] = _wsd(bond_list, "tbf_netbasis", starts, dps, "contractType=" + b)
-        futures_ts['irr'][b] = _wsd(bond_list, "tbf_IRR", starts, dps, "contractType=" + b)
-        futures_ts['ctd'][b] = _wsd(futures['Bucket'][b], "tbf_CTD2", starts, dps, "exchangeType=NIB;bondPriceType=1")
+        # Current contract close/OI (T2606 etc.) — short window only
+        futures_ts['close'][b]    = _wsd(futures['Bucket'][b], "close", starts_recent, dps)
+        futures_ts['position'][b] = _wsd(futures['Bucket'][b], "oi",    starts_recent, dps)
+        # Wind-computed basis fields use contractType= which handles historical roll
+        futures_ts['basis'][b]    = _wsd(bond_list, "tbf_basis",   starts_basis, dps, "contractType=" + b)
+        futures_ts['netbasis'][b] = _wsd(bond_list, "tbf_netbasis", starts_basis, dps, "contractType=" + b)
+        futures_ts['irr'][b]      = _wsd(bond_list, "tbf_IRR",     starts_basis, dps, "contractType=" + b)
     futures_ts = updatePKL(futures_ts, os.path.join(DIR_INPUT, 'futures-px.pkl'))
     
 

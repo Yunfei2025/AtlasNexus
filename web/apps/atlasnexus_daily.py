@@ -232,10 +232,11 @@ def build_tabs_panel():
             html.Div([
                 html.Div("DAILY PIPELINE", style=_card_hdr),
                 html.Div([
-                    html.Button("Update Data",       id="an-btn-update",     n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
-                    html.Button("Run EOD",           id="an-btn-eod",        n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
-                    html.Button("Run EOD (+update)", id="an-btn-eod-update", n_clicks=0, style={**_btn_style, 'marginRight': '16px'}),
-                    # As-of date for EOD — on the same row as the buttons
+                    html.Button("Update Data",         id="an-btn-update",     n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
+                    html.Button("Run EOD",             id="an-btn-eod",        n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
+                    html.Button("Run EOD (+update)",   id="an-btn-eod-update", n_clicks=0, style={**_btn_style, 'marginRight': '16px'}),
+                    html.Button("Refresh Instruments", id="an-btn-refresh-instruments", n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
+                    # As-of date shared by all buttons — on the same row
                     html.Div([
                         html.Label("As Of Date", style={**_lbl_style, 'marginBottom': '4px', 'display': 'block'}),
                         dcc.DatePickerSingle(
@@ -243,15 +244,15 @@ def build_tabs_panel():
                             date=asof_default,
                             display_format='YYYY-MM-DD',
                             first_day_of_week=1,
-                            style={'fontSize': '13px'},
+                            style={'fontSize': '13px', 'minWidth': '140px'},
                         ),
-                    ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center'}),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'position': 'relative', 'zIndex': '10'}),
                 ], style={'display': 'flex', 'flexDirection': 'row', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '4px'}),
             ], style=_card_style),
 
-            # ── Curve Backtest card ─────────────────────────────────────────
+            # ── Data Backfill card ──────────────────────────────────────────
             html.Div([
-                html.Div("CURVE BACKTEST", style={**_card_hdr, 'marginBottom': '12px'}),
+                html.Div("DATA BACKFILL", style={**_card_hdr, 'marginBottom': '12px'}),
                 html.Div([
                     # Instrument type
                     html.Div([
@@ -259,24 +260,28 @@ def build_tabs_panel():
                         dcc.Dropdown(
                             id="an-bt-btype",
                             options=[
-                                {'label': 'IRS',   'value': 'IRS'},
-                                {'label': 'TBond', 'value': 'TBond'},
-                                {'label': 'CBond', 'value': 'CBond'},
+                                {'label': 'IRS',             'value': 'IRS'},
+                                {'label': 'TBond',           'value': 'TBond'},
+                                {'label': 'CBond',           'value': 'CBond'},
+                                {'label': 'Futures Analytics', 'value': 'Futures'},
                             ],
                             value='IRS',
                             clearable=False,
                             style=_dd_style,
                         ),
-                    ], style={'minWidth': '120px', 'flex': '0 0 120px'}),
+                    ], style={'minWidth': '150px', 'flex': '0 0 150px'}),
                     # Update steps
+                    # pool/bonds/cbts: curve-backtest steps
+                    # rewrite: futures-analytics full rebuild flag
                     html.Div([
                         html.Label("Update Steps", style=_lbl_style),
                         dcc.Dropdown(
                             id="an-bt-update-list",
                             options=[
-                                {'label': 'pool',  'value': 'pool'},
-                                {'label': 'bonds', 'value': 'bonds'},
-                                {'label': 'cbts',  'value': 'cbts'},
+                                {'label': 'pool',    'value': 'pool'},
+                                {'label': 'bonds',   'value': 'bonds'},
+                                {'label': 'cbts',    'value': 'cbts'},
+                                {'label': 'rewrite', 'value': 'rewrite'},
                             ],
                             value=['pool'],
                             multi=True,
@@ -291,9 +296,9 @@ def build_tabs_panel():
                             id="an-bt-start",
                             date=start_default,
                             display_format='YYYY-MM-DD',
-                            style={'fontSize': '13px'},
+                            style={'fontSize': '13px', 'minWidth': '140px'},
                         ),
-                    ], style={'minWidth': '130px', 'flex': '0 0 130px'}),
+                    ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '10'}),
                     # End date
                     html.Div([
                         html.Label("End Date", style=_lbl_style),
@@ -301,10 +306,10 @@ def build_tabs_panel():
                             id="an-bt-end",
                             date=end_default,
                             display_format='YYYY-MM-DD',
-                            style={'fontSize': '13px'},
+                            style={'fontSize': '13px', 'minWidth': '140px'},
                         ),
-                    ], style={'minWidth': '130px', 'flex': '0 0 130px'}),
-                    # Workers
+                    ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '10'}),
+                    # Workers (curve-backtest only)
                     html.Div([
                         html.Label("Workers", style=_lbl_style),
                         dcc.Input(
@@ -317,10 +322,10 @@ def build_tabs_panel():
                             style=_input_style,
                         ),
                     ], style={'minWidth': '80px', 'flex': '0 0 80px'}),
-                    # Run button — aligned to bottom via flex alignSelf
+                    # Run button
                     html.Div([
                         html.Button(
-                            "▶  Run Backtest",
+                            "▶  Run Backfill",
                             id="an-btn-backtest",
                             n_clicks=0,
                             style={**_btn_style, 'background': '#1a5276', 'borderColor': '#2e86c1', 'fontWeight': '600'},
@@ -608,6 +613,7 @@ def _run_core_autoruns(n_intervals):
     Input("an-btn-eod", "n_clicks"),
     Input("an-btn-eod-update", "n_clicks"),
     Input("an-btn-backtest", "n_clicks"),
+    Input("an-btn-refresh-instruments", "n_clicks"),
     State("an-eod-asof", "date"),
     State("an-bt-btype", "value"),
     State("an-bt-update-list", "value"),
@@ -616,7 +622,7 @@ def _run_core_autoruns(n_intervals):
     State("an-bt-processes", "value"),
     prevent_initial_call=True,
 )
-def _start_jobs(n_update, n_eod, n_eod_update, n_bt,
+def _start_jobs(n_update, n_eod, n_eod_update, n_bt, n_refresh_instruments,
                 eod_asof,
                 bt_btype, bt_update_list, bt_start, bt_end, bt_processes):
     ctx = __import__("dash").callback_context
@@ -628,6 +634,14 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt,
     if trig == "an-btn-update":
         job = start_engine_job(argv=["update-data", "--force"])
         return job.job_id, f"Started job {job.job_id}: update-data --force"
+
+    if trig == "an-btn-refresh-instruments":
+        asof = (eod_asof or "").strip()
+        # Convert YYYY-MM-DD to YYYY-MM-DD (CLI accepts this format via _parse_date)
+        argv = ["refresh-instruments", "--asof", asof] if asof else ["refresh-instruments"]
+        job = start_engine_job(argv=argv)
+        label = f"refresh-instruments --asof {asof}" if asof else "refresh-instruments"
+        return job.job_id, f"Started job {job.job_id}: {label}"
 
     if trig == "an-btn-eod":
         asof = (eod_asof or "").strip()
@@ -650,9 +664,24 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt,
         ul = bt_update_list or ["pool"]
         start = (bt_start or "").strip()
         end = (bt_end or "").strip()
+
+        if btype == "Futures":
+            argv = ["futures-analytics-backfill"]
+            if start:
+                argv.extend(["--start", start])
+            if end:
+                argv.extend(["--end", end])
+            if "rewrite" in ul:
+                argv.append("--rewrite")
+            job = start_engine_job(argv=argv)
+            mode = "rewrite" if "rewrite" in ul else "incremental"
+            range_label = f"{start}→{end or 'today'}" if start else (end or "today")
+            return job.job_id, f"Started job {job.job_id}: futures-analytics-backfill ({mode}, {range_label})"
+
         procs = str(int(bt_processes)) if bt_processes else "4"
+        curve_ul = [s for s in ul if s in ("pool", "bonds", "cbts")]
         argv = ["curve-backtest", "--btype", btype,
-                "--update-list", *ul,
+                "--update-list", *(curve_ul or ["pool"]),
                 "--start", start, "--end", end,
                 "--processes", procs]
         job = start_engine_job(argv=argv)

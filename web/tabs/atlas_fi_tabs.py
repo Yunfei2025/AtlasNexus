@@ -72,8 +72,9 @@ def build_spreads_layout():
         {"label": "Treasury BondSwap",      "value": "TBondSwap"},
         {"label": "Policybank BondSwap",    "value": "CBondSwap"},
         {"label": "— Futures —",           "value": "__futures__",  "disabled": True},
+        {"label": "Bond Futures Basis",     "value": "NetBasis"},
         {"label": "Futures Term Basis",     "value": "TermBasis"},
-        {"label": "Futures Net Basis",      "value": "NetBasis"},
+        {"label": "Futures Swap",           "value": "FuturesSwap"},
     ]
 
     _DD_STYLE = {"fontSize": "12px", "color": "#fff"}
@@ -474,6 +475,145 @@ def register_callbacks(app) -> None:
             print(f"Error loading {path}: {e}")
             return None
 
+    # ── Futures spread rendering (Bond-Futures / Term Basis / Futures-Swap) ──────
+    # These three read directly from futures-spds.pkl (derived from
+    # futures-analytics.pkl by StatGenerator.compute_futures_stats).  Their spreads
+    # are already in their natural units (bp for IRR−Repo and FYTM−IRS, price
+    # points for the calendar Term Basis), so we render them here instead of the
+    # legacy season-keyed graphs path which assumes %-stored spreads (×100 → bp).
+    _FUT_SPREADS = {"NetBasis", "TermBasis", "FuturesSwap"}
+    _FUT_UNIT = {"NetBasis": "bp", "FuturesSwap": "bp", "TermBasis": "pts"}
+    _FUT_TITLE = {
+        "NetBasis":    "Bond Futures Basis (IRR − Repo)",
+        "FuturesSwap": "Futures Swap (FYTM − IRS)",
+        "TermBasis":   "Futures Term Basis (Front − Next)",
+    }
+    _FUT_ZTHD = 2.0
+
+    def _fnum(v):
+        try:
+            f = float(v)
+            return f if f == f else None
+        except (TypeError, ValueError):
+            return None
+
+    def _fut_stat_bucket(stype):
+        """Return {ticker: (spread_series, mean, vol, max, min)} for a futures type."""
+        spd = _load_pickle_cached(os.path.join(DIR_INPUT, "futures-spds.pkl")) or {}
+        out = {}
+        if stype in ("NetBasis", "FuturesSwap"):
+            bucket = spd.get(stype, {})
+            if isinstance(bucket, dict):
+                for tk, d in bucket.items():
+                    if not isinstance(d, dict):
+                        continue
+                    si, sp = d.get("StatInfo"), d.get("Spread")
+                    if not isinstance(si, pd.DataFrame) or not isinstance(sp, pd.DataFrame):
+                        continue
+                    if si.empty or sp.empty or tk not in si.index:
+                        continue
+                    s = pd.to_numeric(sp.iloc[:, 0], errors="coerce").dropna()
+                    if s.empty:
+                        continue
+                    out[tk] = (s, _fnum(si.loc[tk, "mean"]), _fnum(si.loc[tk, "vol"]),
+                               _fnum(si.loc[tk, "max"]), _fnum(si.loc[tk, "min"]))
+        elif stype == "TermBasis":
+            tb = spd.get("TermBasis", {})
+            si = tb.get("StatInfo") if isinstance(tb, dict) else None
+            sp = tb.get("Spread") if isinstance(tb, dict) else None
+            if isinstance(si, pd.DataFrame) and isinstance(sp, pd.DataFrame) and not si.empty:
+                for tk in si.index:
+                    if tk not in sp.columns:
+                        continue
+                    s = pd.to_numeric(sp[tk], errors="coerce").dropna()
+                    if s.empty:
+                        continue
+                    out[tk] = (s, _fnum(si.loc[tk, "mean"]), _fnum(si.loc[tk, "vol"]),
+                               _fnum(si.loc[tk, "max"]), _fnum(si.loc[tk, "min"]))
+        return out
+
+    def _fut_empty(title):
+        return go.Figure(data=[], layout=dict(
+            plot_bgcolor=app_color["graph_bg"],
+            paper_bgcolor=app_color["graph_bg"],
+            title=title,
+        ))
+
+    def _futures_bar_figure(stype):
+        bucket = _fut_stat_bucket(stype)
+        if not bucket:
+            return _fut_empty(f"Waiting for data: {stype}...")
+        unit = _FUT_UNIT[stype]
+        rows = []
+        for tk in sorted(bucket):
+            s, mean, vol, _, _ = bucket[tk]
+            last = float(s.iloc[-1])
+            z = (last - mean) / vol if (mean is not None and vol) else None
+            color = "grey"
+            if z is not None and z >= _FUT_ZTHD:
+                color = "green"
+            elif z is not None and z <= -_FUT_ZTHD:
+                color = "red"
+            rows.append((tk, last, z, color))
+        trace = go.Bar(
+            x=[r[0] for r in rows],
+            y=[r[2] for r in rows],
+            marker=dict(color=[r[3] for r in rows]),
+            hovertext=[f"Spread: {r[1]:.2f}{unit}" for r in rows],
+            name="Zscore",
+        )
+        try:
+            from web.core.styles import layout_stat
+            layout = layout_stat("Z-score")
+        except Exception:
+            layout = dict(plot_bgcolor=app_color["graph_bg"],
+                          paper_bgcolor=app_color["graph_bg"],
+                          font=dict(color="#ffffff"), yaxis=dict(title="Z-score"))
+        fig = go.Figure(data=[trace], layout=layout)
+        fig.update_layout(clickmode="event+select")
+        return fig
+
+    def _futures_ts_figure(stype, ticker):
+        from dateutil.relativedelta import relativedelta
+        from settings.general import GeneralConfig
+        bucket = _fut_stat_bucket(stype)
+        if not bucket:
+            return _fut_empty(f"Waiting for data: {stype}...")
+        if ticker not in bucket:
+            ticker = sorted(bucket)[0]   # default to first when none clicked yet
+        s, mean, vol, vmax, vmin = bucket[ticker]
+        unit = _FUT_UNIT[stype]
+        window = getattr(GeneralConfig, "STAT_WINDOW", 12)
+        start = s.index[-1] - relativedelta(months=window)
+        fig = go.Figure(data=[go.Scatter(
+            name="Spread", x=s.index, y=s.values,
+            line={"width": 3, "color": "#2a6fd3"},
+        )])
+        if mean is not None:
+            bands = [(mean, "mean", "solid", "#aaaaaa")]
+            if vol:
+                bands += [
+                    (mean + vol, "+1σ", "dot", "#f39c12"),
+                    (mean - vol, "-1σ", "dot", "#f39c12"),
+                    (mean + 2 * vol, "+2σ", "dash", "#ef553b"),
+                    (mean - 2 * vol, "-2σ", "dash", "#ef553b"),
+                ]
+            for val, label, dash, color in bands:
+                fig.add_hline(y=val, line_dash=dash, line_color=color,
+                              annotation_text=label, annotation_position="right")
+        _fmt = lambda v: f"{v:.2f}{unit}" if v is not None else "NA"
+        title = (f"<b>{_FUT_TITLE[stype]} — {ticker}</b><br>"
+                 f"Latest: {_fmt(float(s.iloc[-1]))}, Mean: {_fmt(mean)}, "
+                 f"Vol: {_fmt(vol)}, Max: {_fmt(vmax)}, Min: {_fmt(vmin)}")
+        fig.update_layout(
+            plot_bgcolor=app_color["graph_bg"], paper_bgcolor=app_color["graph_bg"],
+            font=dict(color="#ffffff"), title=title,
+            xaxis=dict(range=[start, s.index[-1]]),
+            yaxis=dict(title=unit),
+            showlegend=False,
+        )
+        return fig
+
     # Realtime data refresh callback
     @app.callback(
         Output("realtime-data", "data"),
@@ -643,6 +783,10 @@ def register_callbacks(app) -> None:
             ))
         
         try:
+            # Futures spreads render directly from futures-spds.pkl (new pipeline).
+            if stype in _FUT_SPREADS:
+                return _futures_bar_figure(stype)
+
             # Check if key exists in data to avoid KeyError
             if data_rt_js:
                 data_rt = json.loads(data_rt_js)
@@ -746,6 +890,11 @@ def register_callbacks(app) -> None:
             ))
         
         try:
+            # Futures spreads render directly from futures-spds.pkl (new pipeline).
+            # These default to the first contract type when no bar is clicked yet.
+            if stype in _FUT_SPREADS:
+                return _futures_ts_figure(stype, ticker)
+
             # Handle empty/None ticker gracefully
             if not ticker:
                 return go.Figure(data=[], layout=dict(

@@ -54,7 +54,7 @@ def main():
         n_assets=5
     )
     
-    print(f"Selected tickers (as of {rebalance_date.date()}):")
+    print(f"Selected tickers (as of {rebalance_date}):")
     for ticker in selected_tickers:
         print(f"  - {ticker}")
     

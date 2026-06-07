@@ -10,8 +10,9 @@ import sys
 import pickle
 import pathlib
 import pandas as pd
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, date
 from dateutil.relativedelta import relativedelta
+from typing import Optional
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -54,9 +55,9 @@ def _normalize_legacy_repo_frame(frame):
 class IRSGenerator:
     """Generate IRS curves and update curve price time series with optimized operations."""
 
-    def __init__(self, btype: str = 'IRS') -> None:
+    def __init__(self, btype: str = 'IRS', asof: Optional[date] = None) -> None:
         self.btype = btype
-        dates = DateConfig.get_date_mappings()
+        dates = DateConfig.get_date_mappings(asof=asof)
         self.trade_date = dates['d'].date()
         self.pricing_date = dates['dp'].date()
         self.environment = None
@@ -153,9 +154,19 @@ class IRSGenerator:
             pass  # Skip silently if spreads fail
 
     @classmethod
-    def main(cls):
-        """Main entry point for the IRSGenerator"""
-        instance = cls()
+    def main(cls, date: Optional[str] = None):
+        """Main entry point for the IRSGenerator.
+
+        Args:
+            date: Optional date string in YYYYMMDD format. Defaults to today.
+        """
+        asof = None
+        if date:
+            try:
+                asof = datetime.strptime(date, '%Y%m%d').date()
+            except (ValueError, TypeError):
+                pass
+        instance = cls(asof=asof)
         instance.run()
 
 

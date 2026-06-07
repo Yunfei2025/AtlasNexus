@@ -13,7 +13,7 @@ import pickle as _pickle
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from typing import Tuple, Dict
-from settings.paths import DIR_DATA
+from settings.paths import DIR_INPUT
 
 from ..config import config_manager
 
@@ -270,7 +270,7 @@ def getDailyTS(ticker):
     """
     # Get the directory where this script is located
     # script_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(DIR_DATA, 'futures-dailyK_con.pkl')
+    file_path = os.path.join(DIR_INPUT, 'futures-dailyK_con.pkl')
     
     # If not found in script directory, try the current working directory
     data_dict = pd.read_pickle(file_path)

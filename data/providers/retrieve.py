@@ -172,17 +172,49 @@ def _wind_call(func_name: str, *args) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _wset(api, options):
+def _wset(api, options, on_demand: bool = False):
+    if on_demand:
+        global ALLOW_NONTRADING_RETRIEVAL
+        old_val = ALLOW_NONTRADING_RETRIEVAL
+        ALLOW_NONTRADING_RETRIEVAL = True
+        try:
+            return _wind_call("wset", api, options)
+        finally:
+            ALLOW_NONTRADING_RETRIEVAL = old_val
     return _wind_call("wset", api, options)
 
-def _wss(codes, fields, options=""):
+def _wss(codes, fields, options="", on_demand: bool = False):
+    if on_demand:
+        global ALLOW_NONTRADING_RETRIEVAL
+        old_val = ALLOW_NONTRADING_RETRIEVAL
+        ALLOW_NONTRADING_RETRIEVAL = True
+        try:
+            return _wind_call("wss", codes, fields, options)
+        finally:
+            ALLOW_NONTRADING_RETRIEVAL = old_val
     return _wind_call("wss", codes, fields, options)
 
-def _wsd(codes, fields, start, end, options=""):
+def _wsd(codes, fields, start, end, options="", on_demand: bool = False):
+    if on_demand:
+        global ALLOW_NONTRADING_RETRIEVAL
+        old_val = ALLOW_NONTRADING_RETRIEVAL
+        ALLOW_NONTRADING_RETRIEVAL = True
+        try:
+            return _wind_call("wsd", codes, fields, start, end, options)
+        finally:
+            ALLOW_NONTRADING_RETRIEVAL = old_val
     return _wind_call("wsd", codes, fields, start, end, options)
 
-def _wsi(codes, fields, start, end, options="", options2=None):
+def _wsi(codes, fields, start, end, options="", options2=None, on_demand: bool = False):
     extra = (options2,) if options2 is not None else ()
+    if on_demand:
+        global ALLOW_NONTRADING_RETRIEVAL
+        old_val = ALLOW_NONTRADING_RETRIEVAL
+        ALLOW_NONTRADING_RETRIEVAL = True
+        try:
+            return _wind_call("wsi", codes, fields, start, end, options, *extra)
+        finally:
+            ALLOW_NONTRADING_RETRIEVAL = old_val
     return _wind_call("wsi", codes, fields, start, end, options, *extra)
 
 def _wst(codes, fields, ds):

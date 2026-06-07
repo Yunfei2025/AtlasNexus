@@ -61,14 +61,14 @@ class StatGenerator:
 
     """Generate daily statistics with OOP structure and performance improvements."""
 
-    def __init__(self) -> None:
-        # Dates and windows
-        dates = DateConfig.get_date_mappings()
+    def __init__(self, asof: Optional[datetime.date] = None) -> None:
+        # Dates and windows — anchored to asof to prevent lookahead bias
+        dates = DateConfig.get_date_mappings(asof=asof)
         self.d: datetime.date = dates['d'].date()
         self.dp: datetime.date = dates['dp'].date()
         self.start: datetime.date = (self.d - relativedelta(months=GeneralConfig.STAT_WINDOW))
         self.start1y: datetime.date = (self.d - relativedelta(years=1))
-        self.da: datetime.date = self.d - timedelta(hours=1)
+        self.da: datetime.date = self.d  # upper bound for all historical slices
 
         # Global env time series
         self.env_ts: dict = loadCNBDTS()
@@ -366,7 +366,7 @@ class StatGenerator:
     # ---------------------- PCA spreads ----------------------
     def compute_pca_spreads(self) -> None:
         spot_ts_all = pd.concat(self.spot_ts, axis=1).droplevel(level=0, axis=1).sort_index()
-        spot_ts_all = spot_ts_all.loc[self.start1y:].dropna()
+        spot_ts_all = spot_ts_all.loc[self.start1y:self.da].dropna()
         
         # Clean data to handle byte strings and invalid values before PCA
         spot_ts_all = spot_ts_all.apply(pd.to_numeric, errors='coerce').dropna()
@@ -388,56 +388,138 @@ class StatGenerator:
         self.spreads['PCASpread'] = pca_spd
         updatePKL(self.spreads, os.path.join(DIR_INPUT, 'Misc-spds.pkl'))
 
-    # ---------------------- Futures ----------------------
+    # ── helpers for futures analytics ─────────────────────────────────────────
+
+    # Match each futures contract type to the same-tenor FR007-based IRS leg.
+    # FR007 IRS is quoted out to 10Y, so TL (30Y) uses the longest available 10Y
+    # anchor as the closest matched-tenor proxy.
+    _CTYPE_IRS = {
+        'TS': 'FR007S2Y.IR',
+        'TF': 'FR007S5Y.IR',
+        'T':  'FR007S10Y.IR',
+        'TL': 'FR007S10Y.IR',
+    }
+
+    # ── main futures stats method ──────────────────────────────────────────────
     def compute_futures_stats(self) -> None:
+        """Compute Bond-Futures, Term Basis, Futures-Swap and persist to futures-spds.pkl.
+
+        Sources Wind bond-futures analytics directly from ``futures-analytics.pkl``
+        (built by FuturesAnalyticsGenerator), per ctype ('T','TF','TS','TL'):
+
+          * Bond-Futures (key ``NetBasis``): IRR − repo, where repo = FR007 +
+            FUNDING_BASIS_BP.  In bp.
+          * Term Basis (key ``TermBasis``): front − next-season close
+            (``futures_close − next_close``).  In price points (yuan/100 face).
+          * Futures-Swap (key ``FuturesSwap``): FYTM − matched-tenor FR007 IRS.
+            In bp.
+        """
+        from curves.utils.file import loadPKL as _loadPKL
         btype = 'futures'
-        env = loadInstrumentDefinition(btype)
-        env_ts = updatePKL({}, os.path.join(DIR_INPUT, f'{btype}-px.pkl'))
 
-        spreads = {'NetBasis': {}, 'NetIRR': {}}
-        fundrate = self.env_ts['SwapTS']['FR007.IR']
+        analytics = _loadPKL(os.path.join(DIR_INPUT, 'futures-analytics.pkl'))
+        if not analytics:
+            print('compute_futures_stats: futures-analytics.pkl missing/empty — skipping.')
+            updatePKL({'NetBasis': {}, 'NetIRR': pd.DataFrame(), 'TermBasis': {},
+                       'FuturesSwap': {}}, os.path.join(DIR_INPUT, f'{btype}-spds.pkl'),
+                      rewrite=True)
+            return
 
-        # Term basis across seasons
-        termbasis = {}
-        for season in FuturesConfig.SEASONS.values():
-            if season == 'NQ1':
+        swap_ts = self.env_ts.get('SwapTS')
+        fr007_ts: Optional[pd.Series] = None
+        if isinstance(swap_ts, pd.DataFrame) and 'FR007.IR' in swap_ts.columns:
+            fr007_ts = pd.to_numeric(swap_ts['FR007.IR'], errors='coerce')
+            fr007_ts.index = pd.DatetimeIndex(fr007_ts.index)
+
+        funding_pct = FuturesConfig.FUNDING_BASIS_BP / 100.0  # bp → percent
+
+        spreads: dict = {'NetBasis': {}, 'NetIRR': {}, 'TermBasis': {}, 'FuturesSwap': {}}
+        nb_cols: dict[str, pd.Series] = {}   # for the flat NetIRR mirror
+        tb_cols: dict[str, pd.Series] = {}
+
+        start_ts = pd.Timestamp(self.start)
+        da_ts    = pd.Timestamp(self.da)
+
+        for ctype in FuturesConfig.CONTRACT_TYPES:
+            df = analytics.get(ctype)
+            if not isinstance(df, pd.DataFrame) or df.empty:
                 continue
-            for i in range(len(env['Bucket']['NQ1'])):
-                c0 = env['Bucket']['NQ1'][i]
-                c = env['Bucket'][season][i]
-                key = f"{c}-{c0}"
-                termbasis[key] = env_ts['close'][season][c].sub(env_ts['close']['NQ1'][c0], axis=0)
-        termbasis_df = pd.DataFrame(termbasis)
-        
-        # Clean data to handle byte strings and invalid values
-        termbasis_df = termbasis_df.apply(pd.to_numeric, errors='coerce')
-        
-        spreads['TermBasis'] = st.statAnalysis(termbasis_df)
+            df = df.copy()
+            df.index = pd.DatetimeIndex(df.index)
+            df = df.loc[start_ts:da_ts]
+            if df.empty:
+                continue
 
-        # Net basis and IRR by season
-        for season in FuturesConfig.SEASONS.values():
-            # Clean netbasis data before statistical analysis
-            netbasis_clean = env_ts['netbasis'][season].apply(pd.to_numeric, errors='coerce')
-            spreads['NetBasis'][season] = st.statAnalysis(netbasis_clean)
-            irr = env_ts['irr'][season].subtract(fundrate, axis=0)
-            irr.dropna(axis=0, how='all', inplace=True)
-            spreads['NetIRR'][season] = irr
+            tenor = FuturesConfig.CONTRACT_TENOR.get(ctype, 5.0)
+            irr   = pd.to_numeric(df['irr'],  errors='coerce')
+            fytm  = pd.to_numeric(df['fytm'], errors='coerce')
 
-        # Annotate ttm and futures name
-        statinfo_by_season = {}
-        for season in FuturesConfig.SEASONS.values():
-            for f in env['Bucket'][season]:
-                for t in env['DeliveryPool'][f].index:
-                    spreads['NetBasis'][season]['StatInfo'].loc[t, 'ttm'] = env['DeliveryPool'][f].loc[t, 'term']
-                    spreads['NetBasis'][season]['StatInfo'].loc[t, 'futures'] = f
-            statinfo_by_season[season] = spreads['NetBasis'][season]['StatInfo']
+            # ── Term Basis: front − next-season close (price points) ──────────
+            term = (
+                pd.to_numeric(df['futures_close'], errors='coerce')
+                - pd.to_numeric(df['next_close'],  errors='coerce')
+            )
+            if term.notna().sum() > 20:
+                tb_cols[ctype] = term
 
-        # Disabled for current workflow: do not generate FuturesStatInfo.xlsx
-        # with pd.ExcelWriter(os.path.join(DIR_OUTPUT, 'FuturesStatInfo.xlsx')) as writer:
-        #     for k, df in statinfo_by_season.items():
-        #         df.to_excel(writer, sheet_name=k)
+            # ── Bond-Futures: IRR − repo (FR007 + funding), in bp ─────────────
+            if fr007_ts is not None:
+                repo = fr007_ts.reindex(df.index).ffill() + funding_pct  # %
+                bf_spread = ((irr - repo) * 100).dropna()                # bp
+                bf_spread = bf_spread.loc[bf_spread.index.min():da_ts] if not bf_spread.empty else bf_spread
+                if bf_spread.notna().sum() >= 30:
+                    nb_cols[ctype] = bf_spread
+                    si = st.OU_calibrate(bf_spread.to_frame(ctype))
+                    si.loc[ctype, 'tenor']       = tenor
+                    si.loc[ctype, 'ttm']         = tenor
+                    # 3m cash-and-carry pickup from the annual IRR−repo spread.
+                    si.loc[ctype, 'carry_3m_bp'] = float(bf_spread.iloc[-1]) * (90.0 / 360.0)
+                    last = df.dropna(subset=['ctd_code']).iloc[-1] if df['ctd_code'].notna().any() else None
+                    if last is not None:
+                        si.loc[ctype, 'ctd_code'] = last['ctd_code']
+                        si.loc[ctype, 'futures']  = last.get('contract_code', ctype)
+                    spreads['NetBasis'][ctype] = {
+                        'StatInfo': si,
+                        'Spread'  : bf_spread.to_frame(ctype),
+                    }
+
+            # ── Futures-Swap: FYTM − matched-tenor FR007 IRS, in bp ───────────
+            irs_ticker = self._CTYPE_IRS.get(ctype)
+            if isinstance(swap_ts, pd.DataFrame) and irs_ticker in (swap_ts.columns if swap_ts is not None else []):
+                irs_s = pd.to_numeric(swap_ts[irs_ticker], errors='coerce')
+                irs_s.index = pd.DatetimeIndex(irs_s.index)
+                irs_s = irs_s.reindex(df.index).ffill()
+                fs_spread = ((fytm - irs_s) * 100).dropna()              # bp
+                fs_spread = fs_spread.loc[fs_spread.index.min():da_ts] if not fs_spread.empty else fs_spread
+                if fs_spread.notna().sum() >= 30:
+                    si = st.OU_calibrate(fs_spread.to_frame(ctype))
+                    si.loc[ctype, 'tenor'] = tenor
+                    # 3m carry of pay-fixed-IRS / long-futures: FYTM − IRS pickup.
+                    carry_ts = ((fytm - irs_s).dropna() * (90.0 / 360.0) * 100)
+                    si.loc[ctype, 'carry_3m_bp'] = float(carry_ts.iloc[-1]) if len(carry_ts) else np.nan
+                    spreads['FuturesSwap'][ctype] = {
+                        'StatInfo'   : si,
+                        'Spread'     : fs_spread.to_frame(ctype),
+                        'CarryRoll3m': carry_ts,
+                    }
+
+        # Term Basis: flat StatInfo across ctypes
+        if tb_cols:
+            tb_df = pd.DataFrame(tb_cols).apply(pd.to_numeric, errors='coerce')
+            tb_df = tb_df.loc[tb_df.index.min():da_ts].dropna(how='all')
+            spreads['TermBasis'] = st.statAnalysis(tb_df)
+
+        # NetIRR: flat DataFrame mirror of the Bond-Futures (IRR−repo) spread,
+        # kept for legacy web/core consumers that read futures-spds['NetIRR'].
+        if nb_cols:
+            spreads['NetIRR'] = pd.DataFrame(nb_cols).apply(pd.to_numeric, errors='coerce')
+        else:
+            spreads['NetIRR'] = pd.DataFrame()
 
         updatePKL(spreads, os.path.join(DIR_INPUT, f'{btype}-spds.pkl'), rewrite=True)
+        print(f'compute_futures_stats: BondFutures={list(spreads["NetBasis"].keys())}, '
+              f'TermBasis={list(spreads.get("TermBasis", {}).get("StatInfo", pd.DataFrame()).index)}, '
+              f'FuturesSwap={list(spreads["FuturesSwap"].keys())}')
 
     # ---------------------- Tenor spreads ----------------------
     def compute_tenor_spreads(self) -> None:
@@ -494,7 +576,7 @@ class StatGenerator:
 
         # Spread DataFrame: annual yield diff in % (e.g. 0.30 for 30bp)
         df_spread = pd.DataFrame(instruments).apply(pd.to_numeric, errors='coerce')
-        df_spread = df_spread.loc[self.start:].sort_index()
+        df_spread = df_spread.loc[self.start:self.da].sort_index()
 
         # Carry+Roll (3m) in %:
         #   XsYs (CGB-10s30s etc.)  BUY = long short-tenor, short long-tenor
@@ -531,13 +613,23 @@ class StatGenerator:
         self.compute_spread_regression()
         self.compute_pca_spreads()
         self.compute_tenor_spreads()
-        # self.compute_futures_stats()
+        self.compute_futures_stats()
         print('\nFinish initialising statistics at：', datetime.datetime.now().strftime('%H:%M:%S'))
 
     @classmethod
-    def main(cls):
-        """Main entry point for the StatGenerator"""
-        instance = cls()
+    def main(cls, date: Optional[str] = None):
+        """Main entry point for the StatGenerator.
+
+        Args:
+            date: Optional date string in YYYYMMDD format. Defaults to today.
+        """
+        asof = None
+        if date:
+            try:
+                asof = datetime.datetime.strptime(date, '%Y%m%d').date()
+            except (ValueError, TypeError):
+                pass
+        instance = cls(asof=asof)
         instance.run_all()
 
 

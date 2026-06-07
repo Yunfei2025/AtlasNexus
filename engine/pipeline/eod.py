@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 _EOD_STEPS: list[tuple[str, str, str]] = [
     ("curves",      "curves.interface",      "calibrate"),
     ("factors",     "factors.interface",      "calibrate"),
-    ("pairs",       "pairs.interface",        "calibrate"),
     ("futures",     "futures.interface",      "calibrate"),
     ("multiasset",  "multiasset.interface",   "calibrate"),
-    ("derivatives", "derivatives.interface",  "calibrate"),
+    # pairs step runs on-demand only, not in EOD pipeline
+    # derivatives step runs on-demand only, not in EOD pipeline
 ]
 
 
@@ -27,16 +27,17 @@ def run(cfg: RunConfig, *, update_data: bool = False) -> dict[str, str]:
 
     Execution order:
       0. (optional) update data via retrieve.py modules
-      1. curves   – full calibration chain (Trend → BondCurve → Credit → IRS → Stat → Pairs)
+      1. curves   – full calibration chain (Trend → BondCurve → Credit → IRS → Stat)
       2. factors  – factor model training + signal generation
-      3. pairs    – pair regression analysis
-      4. futures  – daily portfolio strategy analysis
-      5. multiasset – universe construction + factor optimizer
-      6. derivatives – option pricing / vol analysis
+      3. futures  – daily portfolio strategy analysis
+      4. multiasset – universe construction + factor optimizer
 
     Each step is isolated behind its ``interface.calibrate(cfg, store)``
     entry point.  A failing step is logged and recorded but does **not**
     abort downstream steps (best-effort).
+
+    Note: pairs (pair regression analysis) and derivatives (option pricing)
+    run on-demand only, not in EOD.
     """
 
     logger.info("EOD run started: run_id=%s asof=%s", cfg.run_id, cfg.asof)

@@ -121,6 +121,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Pipeline to run each tick (default: refresh)",
     )
 
+    ri = sub.add_parser("refresh-instruments", help="Refresh *-InstrumentInfo.pkl for all bond/futures types")
+    ri.add_argument("--asof", type=_parse_date, default=None, help="As-of date YYYY-MM-DD (defaults to previous working day)")
+
     cb = sub.add_parser("curve-backtest", help="Run curve backtest (curves/backtest)")
     cb.add_argument("--btype", choices=["TBond", "CBond", "IRS"], default="IRS",
                     help="Instrument type (default: IRS)")
@@ -129,6 +132,15 @@ def _build_parser() -> argparse.ArgumentParser:
     cb.add_argument("--start", type=_parse_date, required=True, help="Backtest start date YYYY-MM-DD")
     cb.add_argument("--end", type=_parse_date, required=True, help="Backtest end date YYYY-MM-DD")
     cb.add_argument("--processes", type=int, default=4, help="Parallel workers (default: 4)")
+
+    fa = sub.add_parser("futures-analytics-backfill",
+                        help="Refresh futures-db.pkl + rebuild futures-analytics.pkl (IRR/FYTM/CTD/closes history)")
+    fa.add_argument("--start", type=_parse_date, default=None, dest="fa_start",
+                    help="Start date YYYY-MM-DD (default: all available)")
+    fa.add_argument("--end", type=_parse_date, default=None, dest="fa_end",
+                    help="End date YYYY-MM-DD (default: today)")
+    fa.add_argument("--rewrite", action="store_true",
+                    help="Rewrite from scratch instead of incrementally appending")
 
     return p
 
@@ -228,6 +240,14 @@ def main():
         run_atlasnexus_intraday_app()
         return
 
+    if args.cmd == "refresh-instruments":
+        from curves.utils.retrieve import updateInstrumentDef
+        asof = getattr(args, "asof", None)
+        print(f"Refreshing instrument definitions (asof={asof or 'previous working day'})...")
+        updateInstrumentDef(asof=asof, on_demand=True)
+        print("Instrument definitions updated.")
+        return
+
     # Engine-driven orchestration
     if args.cmd in {"eod", "intraday", "update-data", "refresh", "scheduler"}:
         from engine.cli import main as engine_main
@@ -273,6 +293,38 @@ def main():
             serial=force_serial,
         )
         bt.run()
+        return
+
+    if args.cmd == "futures-analytics-backfill":
+        import datetime as _dt
+        from dateutil.relativedelta import relativedelta as _rd
+        from curves.utils.retrieve import retrieveFuturesDatabaseTS
+        from curves.generators.futures_analytics import FuturesAnalyticsGenerator
+        # fa_start / fa_end arrive as 'YYYY-MM-DD' strings (or None).
+        end_date = _dt.datetime.strptime(args.fa_end, "%Y-%m-%d").date() if args.fa_end else _dt.date.today()
+        start_date = _dt.datetime.strptime(args.fa_start, "%Y-%m-%d").date() if args.fa_start else (end_date - _rd(years=2))
+        # Step 1: refresh DIR_DATA/futures-db.pkl with the full Wind analytics
+        # history (irr / fytm / ctd / contract closes) over the requested window.
+        prange = [start_date, end_date]
+        logger.info(
+            f"futures-analytics-backfill: fetching futures-db.pkl {start_date} → {end_date}..."
+        )
+        try:
+            retrieveFuturesDatabaseTS(prange, on_demand=True)
+        except Exception as exc:
+            logger.warning(f"futures-analytics-backfill: Wind retrieval failed ({exc}), "
+                           "rebuilding from existing futures-db.pkl")
+        # Step 2: reshape futures-db.pkl into futures-analytics.pkl
+        start_str = args.fa_start.replace("-", "") if args.fa_start else None
+        end_str = args.fa_end.replace("-", "") if args.fa_end else None
+        rewrite = getattr(args, "rewrite", False)
+        logger.info(
+            f"futures-analytics-backfill: reshape start={start_str or 'all'}, "
+            f"end={end_str or 'today'}, rewrite={rewrite}"
+        )
+        gen = FuturesAnalyticsGenerator(asof=end_str, start=start_str)
+        gen.run(rewrite=rewrite)
+        logger.info("futures-analytics-backfill: done.")
         return
 
     raise ValueError(f"Unknown command: {args.cmd}")
