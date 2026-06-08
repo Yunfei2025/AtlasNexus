@@ -43,9 +43,10 @@ def get_dashboard_css() -> str:
     
     return """
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: 'Open Sans', sans-serif;
+            font-size: 12px;
             margin: 0;
-            padding: 20px;
+            padding: 10px;
             background: #082255;
             min-height: 100vh;
         }
@@ -131,7 +132,7 @@ def get_dashboard_css() -> str:
         }
         
         .plots-container {
-            padding: 30px;
+            padding: 15px;
             background: #082255;
         }
 
@@ -139,7 +140,7 @@ def get_dashboard_css() -> str:
         .plots-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 24px;
+            gap: 12px;
             align-items: start;
         }
 
@@ -147,40 +148,40 @@ def get_dashboard_css() -> str:
         .plots-grid > .plot-section {
             min-width: 0;
         }
-        
+
         .plot-section {
-            margin-bottom: 50px;
-            border: 1px solid #3a4251;
-            border-radius: 12px;
+            margin-bottom: 0;
+            border: 1px solid #1a3a7a;
+            border-radius: 6px;
             overflow: hidden;
             background: #082255;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
         }
-        
+
         .plot-header {
-            background: #2a3241;
+            background: #0c2b64;
             color: white;
-            padding: 15px 25px;
+            padding: 8px 12px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid #3a4251;
+            border-bottom: 1px solid #1a3a7a;
         }
-        
+
         .plot-title {
-            font-size: 1.3rem;
+            font-size: 13px;
             font-weight: 600;
             margin: 0;
         }
-        
+
         .plot-stats {
-            font-size: 0.9rem;
+            font-size: 11px;
             opacity: 0.9;
         }
-        
+
         .plot-container {
             padding: 0;
-            min-height: 520px;
+            min-height: 280px;
             box-sizing: border-box;
             overflow: hidden; /* avoid content bleeding outside container */
             position: relative;
@@ -191,7 +192,7 @@ def get_dashboard_css() -> str:
         .plot-container > div {
             display: block;
             width: 100% !important;
-            height: 500px !important;  /* Fixed height for consistency */
+            height: 300px !important;
             max-width: 100%;
             border: none;
         }
@@ -244,10 +245,10 @@ def get_plots_html(plot_configs: List[Dict]) -> str:
         
         # Build the inner HTML (iframe or placeholder div)
         if config.get('mode') == 'iframe':
-            elem_html = f"<iframe id='iframe_{i}' src='{config.get('htmlPath','')}' style='width:100%;height:600px;border:none;'></iframe>"
+            elem_html = f"<iframe id='iframe_{i}' src='{config.get('htmlPath','')}' style='width:100%;height:300px;border:none;'></iframe>"
         else:
             # Give Plotly container a fixed height and full width
-            elem_html = f"<div id='{config['id']}' style='width:100%;height:600px;'></div>"
+            elem_html = f"<div id='{config['id']}' style='width:100%;height:300px;'></div>"
 
         plots_html += f"""
             <div class="plot-section">

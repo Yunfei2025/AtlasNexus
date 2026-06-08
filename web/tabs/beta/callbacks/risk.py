@@ -458,7 +458,7 @@ def register_risk_callbacks(app):
                                    'fontStyle': 'italic'},
                         ),
                     ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
-                              'marginBottom': '10px', 'flexWrap': 'wrap'}),
+                              'marginBottom': '10px', 'flexWrap': 'wrap', 'position': 'relative', 'zIndex': '1001'}),
                     table,
                 ])
                 status = f"Beta snapshot from {ts[:19]}"
@@ -733,6 +733,8 @@ def register_risk_callbacks(app):
                         'gap': '10px',
                         'marginBottom': '10px',
                         'flexWrap': 'wrap',
+                        'position': 'relative',
+                        'zIndex': '1001',
                     }),
                     table,
                 ])
@@ -925,14 +927,175 @@ def register_risk_callbacks(app):
         t2 = _TENOR_MAP.get(pairs[1], pairs[1].upper())
         return (f'FR007S{t1}.IR', f'FR007S{t2}.IR')
 
-    def _find_reference_bond(bond_isin: str, instrument_info_df: pd.DataFrame,
-                            target_tenor: str) -> str:
-        """Find a reference bond with target tenor from instrument info.
+    def _tenor_str_to_years(tenor: str) -> float:
+        """Convert tenor string like '1Y', '6M', '10Y' to fractional years."""
+        import re as _re
+        m = _re.match(r'(\d+)([MY])', tenor.upper())
+        if not m:
+            return 0.0
+        n, unit = float(m.group(1)), m.group(2)
+        return n / 12.0 if unit == 'M' else n
 
-        For now, returns the bond code (ISIN) as the leg name.
-        In practice, would filter by tenor and return the first match.
-        """
-        return bond_isin  # Placeholder: just use the original ISIN
+    def _load_leg_data() -> dict:
+        """Load instrument data needed for alpha position leg resolution (called once per refresh)."""
+        ld: dict = {
+            'otr_cgb': {}, 'otr_cdb': {},
+            'ref_cgb': pd.Series(dtype=object), 'ref_cdb': pd.Series(dtype=object),
+            'nb': {}, 'tb_stat': None, 'futs_def': pd.DataFrame(),
+            'fs_irs': {'TS': 'FR007S2Y.IR', 'TF': 'FR007S5Y.IR',
+                       'T': 'FR007S10Y.IR', 'TL': 'FR007S10Y.IR'},
+        }
+        _OTR_BANDS = {
+            '1Y': (0.9, 1.2), '2Y': (1.6, 2.5), '5Y': (4.0, 6.0),
+            '10Y': (8.5, 10.0), '20Y': (15.0, 25.0), '30Y': (25.0, 30.0),
+        }
+
+        def _pick_otr(btype: str) -> dict:
+            try:
+                bi = pd.read_pickle(str(DIR_INPUT / f'{btype}-InstrumentInfo.pkl'))
+            except Exception:
+                return {}
+            if not isinstance(bi, pd.DataFrame) or bi.empty:
+                return {}
+            need = ['起息日期', '到期日期', '证券全称', '成交量', '债券余额:亿']
+            if not all(c in bi.columns for c in need):
+                return {}
+            today = pd.Timestamp.today().normalize()
+            vol = pd.to_numeric(bi['成交量'], errors='coerce')
+            bal = pd.to_numeric(bi['债券余额:亿'], errors='coerce')
+            tr  = (vol / bal / 1e4).replace([np.inf, -np.inf], 0).fillna(0)
+            mat = pd.to_datetime(bi['到期日期'], errors='coerce')
+            sdt = pd.to_datetime(bi['起息日期'], errors='coerce')
+            ttm = (mat - today).dt.days / 365.0
+            kw  = '国债' if btype == 'TBond' else '国家开发银行'
+            nm  = bi['证券全称'].astype(str).str.contains(kw, na=False)
+            res = {}
+            for tenor, (lo, hi) in _OTR_BANDS.items():
+                mask = (ttm.notna() & sdt.notna() & (sdt < today) & (mat > today)
+                        & (ttm > lo) & (ttm <= hi) & nm & (bal > 0) & (vol > 0))
+                bkt = tr[mask]
+                res[tenor] = bkt.idxmax() if not bkt.empty and (bkt > 0).any() else ''
+            return res
+
+        ld['otr_cgb'] = _pick_otr('TBond')
+        ld['otr_cdb'] = _pick_otr('CBond')
+
+        for key, fname in [('ref_cgb', 'TBond-cvref.pkl'), ('ref_cdb', 'CBond-cvref.pkl')]:
+            try:
+                cv = pd.read_pickle(str(DIR_INPUT / fname))
+                rb = cv.get('RefBond', pd.DataFrame()) if isinstance(cv, dict) else pd.DataFrame()
+                ld[key] = rb.iloc[-1] if not rb.empty else pd.Series(dtype=object)
+            except Exception:
+                pass
+
+        try:
+            fspds = pd.read_pickle(str(DIR_INPUT / 'futures-spds.pkl'))
+            ld['nb']      = fspds.get('NetBasis', {})
+            ld['tb_stat'] = fspds.get('TermBasis', {}).get('StatInfo')
+        except Exception:
+            pass
+
+        try:
+            fi = pd.read_pickle(str(DIR_INPUT / 'futures-InstrumentInfo.pkl'))
+            ld['futs_def'] = fi.get('Def', pd.DataFrame())
+        except Exception:
+            pass
+
+        return ld
+
+    def _resolve_legs(stype: str, tid: str, duration: float, ld: dict) -> tuple:
+        """Return (leg1, leg2) bond/contract codes for a given spread type and position ID."""
+        import re as _re
+
+        otr_cgb  = ld.get('otr_cgb', {})
+        otr_cdb  = ld.get('otr_cdb', {})
+        ref_cgb  = ld.get('ref_cgb', pd.Series(dtype=object))
+        ref_cdb  = ld.get('ref_cdb', pd.Series(dtype=object))
+        nb       = ld.get('nb', {})
+        futs_def = ld.get('futs_def', pd.DataFrame())
+        fs_irs   = ld.get('fs_irs', {})
+
+        # Integer tenor → OTR tenor label
+        _T_MAP = {1: '1Y', 2: '2Y', 5: '5Y', 10: '10Y', 20: '20Y', 30: '30Y'}
+        def _t_label(n: float) -> str:
+            ni = int(round(n))
+            if ni in _T_MAP:
+                return _T_MAP[ni]
+            return min(_T_MAP.values(), key=lambda v: abs(int(v[:-1]) - n))
+
+        # Duration → nearest reference bond from cvref series
+        _REF_TENORS = [(0.3,'0.3Y'),(0.5,'0.5Y'),(0.7,'0.7Y'),(1.0,'1Y'),(1.5,'1.5Y'),
+                       (2.0,'2Y'),(3.0,'3Y'),(5.0,'5Y'),(7.0,'7Y'),(10.0,'10Y'),
+                       (20.0,'20Y'),(30.0,'30Y')]
+        def _nearest_ref(dur: float, ref_s: pd.Series) -> str:
+            best = min(_REF_TENORS, key=lambda x: abs(x[0] - dur))
+            v = ref_s.get(f'Term near {best[1]}', '')
+            return str(v) if v and str(v) not in ('nan', 'None', '—') else ''
+
+        # Front and next futures contract codes for a given contract type
+        def _futs_front_next(ctype: str) -> tuple:
+            if futs_def.empty:
+                return ('', '')
+            parsed = []
+            for idx in futs_def.index:
+                m = _re.match(r'^([A-Z]+)\d', str(idx).replace('.CFE', ''))
+                parsed.append(m.group(1) if m else '')
+            sub = futs_def[[t == ctype for t in parsed]]
+            if sub.empty:
+                return ('', '')
+            sub_s = sub.sort_values('LASTTRADE_DATE')
+            front = str(sub_s.index[0]).replace('.CFE', '') if len(sub_s) >= 1 else ''
+            nxt   = str(sub_s.index[1]).replace('.CFE', '') if len(sub_s) >= 2 else ''
+            return (front, nxt)
+
+        if stype == 'TenorSpread':
+            upper = tid.upper()
+            if upper.startswith('CDBCGB-'):
+                m = _re.match(r'CDBCGB-(\d+)Y$', upper)
+                if m:
+                    t = _t_label(float(m.group(1)))
+                    return (otr_cdb.get(t, ''), otr_cgb.get(t, ''))
+            elif upper.startswith('CGB-'):
+                m = _re.search(r'(\d+)S(\d+)S', upper)
+                if m:
+                    return (otr_cgb.get(_t_label(float(m.group(1))), ''),
+                            otr_cgb.get(_t_label(float(m.group(2))), ''))
+            elif upper.startswith('CDB-'):
+                m = _re.search(r'(\d+)S(\d+)S', upper)
+                if m:
+                    return (otr_cdb.get(_t_label(float(m.group(1))), ''),
+                            otr_cdb.get(_t_label(float(m.group(2))), ''))
+            return ('', '')
+
+        elif stype in ('TBondCurve', 'TBondSwap'):
+            return (tid, _nearest_ref(duration, ref_cgb))
+
+        elif stype in ('CBondCurve', 'CBondSwap'):
+            return (tid, _nearest_ref(duration, ref_cdb))
+
+        elif stype == 'NetBasis':
+            ctype = tid.split('-')[0]
+            si = nb.get(ctype, {}).get('StatInfo')
+            if si is not None and not si.empty:
+                ctd = str(si['ctd_code'].iloc[0]) if 'ctd_code' in si.columns else ''
+                fut = str(si['futures'].iloc[0]).replace('.CFE', '') if 'futures' in si.columns else ''
+                return (ctd, fut)
+            return ('', '')
+
+        elif stype == 'TermBasis':
+            return _futs_front_next(tid)
+
+        elif stype == 'FuturesSwap':
+            front, _ = _futs_front_next(tid)
+            return (front, fs_irs.get(tid, ''))
+
+        elif stype == 'SwapSpread':
+            return _parse_repo_spread_legs(tid)
+
+        elif stype == 'IRS':
+            return _parse_repo_spread_legs(tid)
+
+        return ('', '')
 
     # ── Risk subtab: inventory + factor exposure + key-term DV01 ladder ─────────
     @app.callback(
@@ -970,11 +1133,13 @@ def register_risk_callbacks(app):
 
         # ── Alpha spread-type → Key Term column ──────────────────────────────
         _ALPHA_COL = {
-            'TBondCurve': 'CGB',   'TBondSwap':  'CGB',
-            'CBondCurve': 'PBB',   'CBondSwap':  'PBB',
-            'IRS':        'Repo7d',
-            'CDB':        'PBB',
-            'ICP':        'Shi3M',
+            'TBondCurve':  'CGB',   'TBondSwap':  'CGB',
+            'CBondCurve':  'PBB',   'CBondSwap':  'PBB',
+            'TenorSpread': 'CGB',   # CGB leg is always present in tenor spreads
+            'IRS':         'Repo7d',
+            'SwapSpread':  'Repo7d',  # Repo7d-XyYy IRS spreads stored as SwapSpread
+            'CDB':         'PBB',
+            'ICP':         'Shi3M',
         }
         _KT_COLS = ['CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M']
 
@@ -1014,6 +1179,7 @@ def register_risk_callbacks(app):
                 pass
 
         # ── Load Alpha positions ──────────────────────────────────────────────
+        _ld = _load_leg_data()   # instrument data for leg resolution
         alpha_rows = []
         if _os.path.exists(_SUMMARY_ALPHA_PARQUET):
             try:
@@ -1036,17 +1202,7 @@ def register_risk_callbacks(app):
                     stype     = str(r.get('spread_type', ''))
                     dir_sign  = -1.0 if direction in ('SELL', 'SHORT') else 1.0
 
-                    # Determine leg1, leg2 based on spread type and ID
-                    leg1, leg2 = '', ''
-                    if stype == 'SwapSpread':
-                        # SwapSpread: parse "Repo7d-6m1y" style
-                        leg1, leg2 = _parse_repo_spread_legs(tid)
-                    elif stype == 'TBondCurve':
-                        # TBondCurve: leg1=bond code, leg2=tenor reference (placeholder for now)
-                        leg1 = tid
-                        target_tenor = _dur_to_tenor_label(duration)
-                        leg2 = f"CGB-{target_tenor}"  # Simplified: actual lookup would be from reference data
-                    # Add more spread types as needed
+                    leg1, leg2 = _resolve_legs(stype, tid, duration, _ld)
 
                     alpha_rows.append({
                         'Book': 'Alpha', 'Name': tid, 'Instrument': tid,
@@ -1057,12 +1213,22 @@ def register_risk_callbacks(app):
                         'Direction': direction,
                     })
 
-                    # Key Term ladder
-                    tenor = _dur_to_tenor(duration)
-                    col   = _ALPHA_COL.get(stype, 'Others')
+                    # Key Term ladder: IRS spreads (any Repo7d-XyYy ID) get split
+                    # across both tenor legs; everything else goes to a single bucket.
+                    col = _ALPHA_COL.get(stype, 'Others')
                     if dv01_mm != 0.0:
-                        kt_grid[tenor][col] = round(
-                            kt_grid[tenor][col] + dv01_mm * dir_sign, 4)
+                        _l1, _l2 = _parse_repo_spread_legs(tid)
+                        _m1 = re.search(r'FR007S([^.]+)\.IR', _l1)
+                        _m2 = re.search(r'FR007S([^.]+)\.IR', _l2)
+                        if _m1 and _m2:
+                            # Two-leg IRS: +DV01 at short-tenor leg, −DV01 at long-tenor leg
+                            tenor1 = _dur_to_tenor(_tenor_str_to_years(_m1.group(1)))
+                            tenor2 = _dur_to_tenor(_tenor_str_to_years(_m2.group(1)))
+                            kt_grid[tenor1][col] = round(kt_grid[tenor1][col] + dv01_mm * dir_sign, 4)
+                            kt_grid[tenor2][col] = round(kt_grid[tenor2][col] - dv01_mm * dir_sign, 4)
+                        else:
+                            tenor = _dur_to_tenor(duration)
+                            kt_grid[tenor][col] = round(kt_grid[tenor][col] + dv01_mm * dir_sign, 4)
             except Exception:
                 pass
 
@@ -1103,6 +1269,37 @@ def register_risk_callbacks(app):
             sort_action='native', page_size=40,
         )
 
+        # ── Bar-in-cell helper ────────────────────────────────────────────────
+        def _make_bar_styles(rows: list, cols: list, shared_max: bool = True) -> list:
+            """Return style_data_conditional entries for gradient bar-in-cell effect."""
+            col_vals: dict = {}
+            for c in cols:
+                vals = []
+                for row in rows:
+                    try:
+                        vals.append(float(str(row.get(c, '')).replace(',', '').replace('+', '').strip()))
+                    except (ValueError, TypeError):
+                        vals.append(None)
+                col_vals[c] = vals
+            if shared_max:
+                max_abs = max((abs(v) for cv in col_vals.values() for v in cv if v is not None), default=0.0)
+            styles = []
+            for c in cols:
+                if not shared_max:
+                    max_abs = max((abs(v) for v in col_vals[c] if v is not None), default=0.0)
+                if max_abs < 1e-10:
+                    continue
+                for i, v in enumerate(col_vals[c]):
+                    if v is None or abs(v) < 1e-10:
+                        continue
+                    pct = min(abs(v) / max_abs * 100, 100)
+                    if v > 0:
+                        bg = f"linear-gradient(90deg, rgba(39,174,96,0.22) {pct:.1f}%, transparent {pct:.1f}%)"
+                    else:
+                        bg = f"linear-gradient(270deg, rgba(231,76,60,0.22) {pct:.1f}%, transparent {pct:.1f}%)"
+                    styles.append({'if': {'row_index': i, 'column_id': c}, 'background': bg})
+            return styles
+
         # ── Factor Risk Exposure (Beta only, no SPDL/SPSL, non-zero only) ────
         factor_risk_df = ALLOCATION_RESULTS.get('factor_risk')
         _SKIP_PREFIXES = ('SPDL', 'SPSL')
@@ -1132,6 +1329,7 @@ def register_risk_callbacks(app):
                     {'if': {'filter_query': '{Exposure} contains "-"', 'column_id': 'Exposure'},
                      'color': THEME['danger']},
                 ]
+                _exp_bar_styles = _make_bar_styles(fr_rows, ['Exposure'])
                 factor_exp_table = dash_table.DataTable(
                     data=fr_rows,
                     columns=[{'name': c, 'id': c} for c in
@@ -1144,6 +1342,7 @@ def register_risk_callbacks(app):
                     style_data_conditional=[
                         {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
                         *_exp_styles,
+                        *_exp_bar_styles,
                     ],
                     style_table={'overflowX': 'auto', 'maxWidth': '520px'},
                 )
@@ -1182,6 +1381,10 @@ def register_risk_callbacks(app):
              'color': THEME['danger']}
             for c in ['CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M', 'Total']
         ]
+        _kt_bar_styles = _make_bar_styles(
+            kt_display, ['CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M', 'Total'],
+            shared_max=True,
+        ) if kt_display else []
 
         kt_table = (
             dash_table.DataTable(
@@ -1199,7 +1402,7 @@ def register_risk_callbacks(app):
                               'color': THEME['text_main'], 'fontWeight': 'bold', 'border': 'none'},
                 style_data_conditional=[
                     {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
-                    *_kt_pos_style, *_kt_neg_style,
+                    *_kt_pos_style, *_kt_neg_style, *_kt_bar_styles,
                 ],
                 style_table={'overflowX': 'auto', 'maxWidth': '700px'},
             )
@@ -1210,12 +1413,17 @@ def register_risk_callbacks(app):
         # ── Assemble second panel: Factor Exposure + Key Term side-by-side ────
         exposure_panel = html.Div([
             html.Div([
-                html.H6("Factor Risk Exposure  (Beta book · IR/CMD/FX factors)",
-                        style={'color': THEME['warning'], 'fontSize': '12px', 'marginBottom': '8px'}),
+                html.H6("Beta book",
+                        style={'color': THEME['warning'], 'fontSize': '12px', 'marginBottom': '4px'}),
+                html.Div(
+                    "Exposure: portfolio beta to factor (signed, dimensionless = Bᵀw)",
+                    style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginBottom': '6px',
+                           'fontStyle': 'italic'},
+                ),
                 factor_exp_table,
             ], style={'flex': '1', 'minWidth': '280px', 'marginRight': '20px'}),
             html.Div([
-                html.H6("Key Term Exposure  DV01 ladder MM CNY/bp  (Beta + Alpha)",
+                html.H6("Beta + Alpha: DV01 (MM/bp)",
                         style={'color': THEME['accent'], 'fontSize': '12px', 'marginBottom': '8px'}),
                 html.Div(
                     "CGB = Gov Bond  ·  PBB = Policybank Bond  ·  Repo7d = FR007 IRS  ·  Shi3M = ICP/SHIBOR",

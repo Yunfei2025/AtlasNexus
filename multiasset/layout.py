@@ -17,37 +17,60 @@ _CGB_TENOR_BANDS: dict = {
 
 
 def get_cgb_otr_map() -> dict[str, str]:
-    """Return {tenor: on-the-run bond ID} for CGB (TBond) using highest TOR per bucket."""
+    """Return {tenor: on-the-run bond ID} for CGB (TBond) using highest TOR per bucket.
+
+    Uses fresh InstrumentInfo from DIR_INPUT, matching the Market Data tab's on-the-run selection.
+    """
     try:
-        from settings.paths import DIR_DATA
+        from settings.paths import DIR_INPUT
+        import numpy as np
         from pathlib import Path
-        bond_info = pd.read_pickle(str(Path(DIR_DATA) / "TBond-bondpool.pkl"))
-        bond_px   = pd.read_pickle(str(Path(DIR_DATA) / "TBond-px.pkl"))
-        volume_df = bond_px.get("Volume", pd.DataFrame()) if isinstance(bond_px, dict) else bond_px
-        if bond_info.empty or volume_df.empty:
+
+        bond_info = pd.read_pickle(str(Path(DIR_INPUT) / "TBond-InstrumentInfo.pkl"))
+        if not isinstance(bond_info, pd.DataFrame) or bond_info.empty:
             return {}
 
-        latest_date = volume_df.index[-1]
-        latest_vol  = pd.to_numeric(volume_df.loc[latest_date], errors="coerce").dropna()
-        balance     = pd.to_numeric(bond_info["债券余额:亿"], errors="coerce")
-        name_mask   = bond_info["证券全称"].astype(str).str.contains("国债", na=False)
-        valid       = bond_info.index[name_mask & balance.notna() & (balance != 0)]
-        maturity    = pd.to_datetime(bond_info.loc[valid, "到期日期"], errors="coerce")
-        start       = pd.to_datetime(bond_info.loc[valid, "起息日期"], errors="coerce")
-        terms       = (maturity - pd.Timestamp(latest_date)).dt.days / 365.0
-        tor         = latest_vol.reindex(valid).div(balance.reindex(valid)).div(1e4)
+        bond_info = bond_info.copy()
+        required_cols = ["起息日期", "到期日期", "证券全称", "成交量", "债券余额:亿"]
+        if not all(col in bond_info.columns for col in required_cols):
+            return {}
+
+        today = pd.Timestamp.today().normalize()
+
+        # Calculate turnover ratio: volume / balance (normalized by 1e4 for unit consistency)
+        volume = pd.to_numeric(bond_info["成交量"], errors="coerce")
+        balance = pd.to_numeric(bond_info["债券余额:亿"], errors="coerce")
+        turnover = volume / balance / 1e4
+        turnover = turnover.replace([np.inf, -np.inf], 0).fillna(0)
+
+        maturity = pd.to_datetime(bond_info["到期日期"], errors="coerce")
+        start_date = pd.to_datetime(bond_info["起息日期"], errors="coerce")
+        terms = (maturity - today).dt.days / 365.0
+
+        name_mask = bond_info["证券全称"].astype(str).str.contains("国债", na=False)
 
         result: dict[str, str] = {}
         for tenor, (lo, hi) in _CGB_TENOR_BANDS.items():
-            mask = (
-                terms.notna() & start.notna()
-                & (start < pd.Timestamp(latest_date))
-                & (maturity > pd.Timestamp(latest_date))
-                & (terms > lo) & (terms <= hi)
+            bucket_mask = (
+                terms.notna()
+                & start_date.notna()
+                & (start_date < today)
+                & (maturity > today)
+                & (terms > lo)
+                & (terms <= hi)
+                & name_mask
+                & (balance > 0)
+                & (volume > 0)
             )
-            bucket = tor[mask].dropna()
-            if not bucket.empty:
-                result[tenor] = bucket.idxmax()
+
+            bucket_turnover = turnover[bucket_mask]
+            if bucket_turnover.empty or (bucket_turnover <= 0).all():
+                result[tenor] = "—"
+                continue
+
+            # On-the-run = bond with highest turnover ratio (most liquid) in the tenor band
+            result[tenor] = bucket_turnover.idxmax()
+
         return result
     except Exception:
         return {}

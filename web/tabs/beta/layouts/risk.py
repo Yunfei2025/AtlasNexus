@@ -326,7 +326,7 @@ def build_multiasset_risk_layout():
 
             # ── Risk exposure table ───────────────────────────────────────────
             html.Div([
-                html.H6("Factor Risk Exposure  (Beta + Alpha combined)", style={
+                html.H6("Risk Exposure (Beta + Alpha)", style={
                     'color': THEME['warning'], 'marginBottom': '8px', 'fontSize': '13px',
                 }),
                 html.Div(id='risk-exposure-container',

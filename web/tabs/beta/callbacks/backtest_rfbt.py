@@ -111,6 +111,8 @@ def register_backtest_rfbt_callbacks(app):
         [State('rfbt-factor', 'value'),
          State('rfbt-strategy-selector', 'data'),
          State('rfbt-period-years', 'value'),
+         State('rfbt-custom-start', 'date'),
+         State('rfbt-custom-end', 'date'),
          State('rfbt-ma-short', 'value'),
          State('rfbt-ma-long', 'value'),
          State('rfbt-boll-window', 'value'),
@@ -128,6 +130,7 @@ def register_backtest_rfbt_callbacks(app):
     )
     def run_risk_factor_backtest(
         n_clicks, factor_val, strategy, period_years,
+        custom_start, custom_end,
         ma_short, ma_long, boll_window, boll_std,
         mom_window, zscore_window, zscore_entry, zscore_exit,
         fm_train, fm_ic, fm_topn, fm_sizing, fm_possmooth,
@@ -135,12 +138,15 @@ def register_backtest_rfbt_callbacks(app):
         if not n_clicks or not factor_val:
             raise dash.exceptions.PreventUpdate
 
-        # Single factor → list; derive date range from period_years
+        # Custom date pickers override the lookback dropdown when set
         factors = [factor_val]
         from datetime import date as _date_cls, timedelta
-        end_date   = _date_cls.today().isoformat()
-        years      = int(period_years or 2)
-        start_date = (_date_cls.today() - timedelta(days=years * 365)).isoformat()
+        end_date   = custom_end   if custom_end   else _date_cls.today().isoformat()
+        if custom_start:
+            start_date = custom_start
+        else:
+            years      = int(period_years or 2)
+            start_date = (_date_cls.today() - timedelta(days=years * 365)).isoformat()
 
         try:
             from multiasset.factor_backtest import (

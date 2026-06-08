@@ -246,7 +246,7 @@ def build_tabs_panel():
                             first_day_of_week=1,
                             style={'fontSize': '13px', 'minWidth': '140px'},
                         ),
-                    ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'position': 'relative', 'zIndex': '10'}),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'position': 'relative', 'zIndex': '1001'}),
                 ], style={'display': 'flex', 'flexDirection': 'row', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '4px'}),
             ], style=_card_style),
 
@@ -298,7 +298,7 @@ def build_tabs_panel():
                             display_format='YYYY-MM-DD',
                             style={'fontSize': '13px', 'minWidth': '140px'},
                         ),
-                    ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '10'}),
+                    ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '1001'}),
                     # End date
                     html.Div([
                         html.Label("End Date", style=_lbl_style),
@@ -308,7 +308,7 @@ def build_tabs_panel():
                             display_format='YYYY-MM-DD',
                             style={'fontSize': '13px', 'minWidth': '140px'},
                         ),
-                    ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '10'}),
+                    ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '1001'}),
                     # Workers (curve-backtest only)
                     html.Div([
                         html.Label("Workers", style=_lbl_style),

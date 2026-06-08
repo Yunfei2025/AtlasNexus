@@ -506,18 +506,39 @@ def build_risk_factor_backtest_layout():
                               style={**_inp, 'width': '70px'}),
                 ], style={'marginRight': '25px'}),
                 html.Div([
-                    html.Label("Backtest Period:", style={**_lbl}),
+                    html.Label("Lookback:", style={**_lbl}),
                     dcc.Dropdown(
                         id='rfbt-period-years',
                         options=[
-                            {'label': '1 Year',  'value': 1},
-                            {'label': '2 Years', 'value': 2},
-                            {'label': '3 Years', 'value': 3},
-                            {'label': '5 Years', 'value': 5},
+                            {'label': '1 Year',   'value': 1},
+                            {'label': '2 Years',  'value': 2},
+                            {'label': '3 Years',  'value': 3},
+                            {'label': '5 Years',  'value': 5},
+                            {'label': '10 Years', 'value': 10},
                         ],
                         value=2,
                         clearable=False,
                         style={'width': '130px', 'fontSize': '13px'},
+                    ),
+                ], style={'marginRight': '25px'}),
+                html.Div([
+                    html.Label("Start Date (optional):", style={**_lbl}),
+                    dcc.DatePickerSingle(
+                        id='rfbt-custom-start',
+                        placeholder='override start…',
+                        clearable=True,
+                        display_format='YYYY-MM-DD',
+                        style={'fontSize': '12px'},
+                    ),
+                ], style={'marginRight': '15px'}),
+                html.Div([
+                    html.Label("End Date (optional):", style={**_lbl}),
+                    dcc.DatePickerSingle(
+                        id='rfbt-custom-end',
+                        placeholder='override end…',
+                        clearable=True,
+                        display_format='YYYY-MM-DD',
+                        style={'fontSize': '12px'},
                     ),
                 ]),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '8px',
@@ -711,7 +732,7 @@ def build_factor_backtest_layout():
                         display_format='YYYY-MM-DD',
                         style={'fontSize': '1.0rem', 'width': '100%'},
                     ),
-                ], width=6),
+                ], width=6, style={'position': 'relative', 'zIndex': '1001'}),
                 dbc.Col([
                     html.Label("In-sample", style=LABEL_STYLE),
                     dcc.Dropdown(

@@ -123,6 +123,39 @@ def load_historical_spread_series(
 					s.name = f"{spread_type}|{cid}"
 					key_to_series[s.name] = s
 
+	elif spread_type in {"NetBasis", "FuturesSwap"}:
+		obj = _read_pickle(paths.futures_spds)
+		if not isinstance(obj, dict):
+			return {}
+		cat_data = obj.get("NetBasis" if spread_type == "NetBasis" else "FuturesSwap", {})
+		if not isinstance(cat_data, dict):
+			return {}
+		for cid in candidates:
+			ctype_data = cat_data.get(cid, {})
+			sp = ctype_data.get("Spread") if isinstance(ctype_data, dict) else None
+			if not isinstance(sp, pd.DataFrame) or sp.empty:
+				continue
+			col = cid if cid in sp.columns else sp.columns[0]
+			s = pd.to_numeric(sp[col], errors="coerce").dropna().sort_index().tail(int(lookback_days))
+			if not s.empty:
+				s.name = f"{spread_type}|{cid}"
+				key_to_series[s.name] = s
+
+	elif spread_type == "TermBasis":
+		obj = _read_pickle(paths.futures_spds)
+		if not isinstance(obj, dict):
+			return {}
+		sp = obj.get("TermBasis", {}).get("Spread")
+		if not isinstance(sp, pd.DataFrame) or sp.empty:
+			return {}
+		sp = sp.sort_index().tail(int(lookback_days))
+		for cid in candidates:
+			if cid in sp.columns:
+				s = pd.to_numeric(sp[cid], errors="coerce").dropna()
+				if not s.empty:
+					s.name = f"{spread_type}|{cid}"
+					key_to_series[s.name] = s
+
 	return key_to_series
 
 
@@ -280,11 +313,13 @@ def build_alpha_candidates(
 		df_all["style"] = df_all["category"].map(cat_to_style)
 
 	# Dynamic style for mixed categories: MR if stationary, else Carry.
+	# Bond-Futures is always Carry (defined as carry trade in SPREAD_CATEGORIES).
+	_MR_ELIGIBLE_DYNAMIC = {"Swap-Spread", "Tenor-Spread", "Futures-Term", "Futures-Swap"}
 	for dynamic_category in ["Swap-Spread", "Tenor-Spread", "Bond-Futures", "Futures-Term", "Futures-Swap"]:
 		mask_dynamic = df_all["category"] == dynamic_category
 		if mask_dynamic.any():
 			df_all.loc[mask_dynamic, "style"] = "Carry"
-			if "stationary" in df_all.columns:
+			if dynamic_category in _MR_ELIGIBLE_DYNAMIC and "stationary" in df_all.columns:
 				stat_mask = mask_dynamic & _stationary_yes_mask(df_all["stationary"])
 				if stat_mask.any():
 					df_all.loc[stat_mask, "style"] = "MeanReversion"
@@ -317,13 +352,21 @@ def build_alpha_candidates(
 	except Exception:
 		z_thd = 2.0
 
-	# Mean-reversion entries are governed by z-score threshold.
-	mr = mr[mr["abs_zscore"] >= z_thd].copy()
+	# Mean-reversion entries governed by z-score; futures carry categories exempt.
+	_FUTURES_CATS = {"Bond-Futures", "Futures-Term", "Futures-Swap"}
+	if "category" in mr.columns and not mr.empty:
+		mr_futures = mr[mr["category"].isin(_FUTURES_CATS)].copy()
+		mr_other   = mr[~mr["category"].isin(_FUTURES_CATS)].copy()
+		mr_other   = mr_other[mr_other["abs_zscore"] >= z_thd].copy()
+		mr = pd.concat([mr_futures, mr_other], axis=0, ignore_index=True)
+	else:
+		mr = mr[mr["abs_zscore"] >= z_thd].copy()
 
-	# Trend/Carry: Swap-Spread and Tenor-Spread carry do NOT gate by z-score.
+	# Trend/Carry: Swap-Spread, Tenor-Spread, and futures categories do NOT gate by z-score.
+	_CARRY_FREE_CATS = {"Swap-Spread", "Tenor-Spread", "Bond-Futures", "Futures-Term", "Futures-Swap"}
 	if not trend.empty and "category" in trend.columns:
-		trend_free = trend[trend["category"].astype(str).isin({"Swap-Spread", "Tenor-Spread"})].copy()
-		trend_other = trend[~trend["category"].astype(str).isin({"Swap-Spread", "Tenor-Spread"})].copy()
+		trend_free  = trend[trend["category"].astype(str).isin(_CARRY_FREE_CATS)].copy()
+		trend_other = trend[~trend["category"].astype(str).isin(_CARRY_FREE_CATS)].copy()
 		trend_other = trend_other[trend_other["abs_zscore"] >= z_thd].copy()
 		trend = pd.concat([trend_free, trend_other], axis=0, ignore_index=True)
 	else:

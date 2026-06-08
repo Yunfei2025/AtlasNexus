@@ -254,147 +254,122 @@ def build_curves_layout():
 def build_pairs_layout():
     """Build the legacy 'Pairs' tab layout."""
     from web.core.styles import app_color
+    from web.tabs.alpha.data import THEME
+
+    _inp = {
+        "width": "100%", "padding": "5px",
+        "backgroundColor": THEME["bg_input"], "color": "#fff",
+        "border": "1px solid #4a6f9f", "borderRadius": "3px",
+        "fontSize": "12px",
+    }
+    _th = {"color": THEME["text_sub"], "padding": "6px", "textAlign": "center",
+           "fontSize": "11px", "fontWeight": "bold", "minWidth": "110px"}
+    _td_label = {"color": THEME["text_main"], "padding": "6px",
+                 "fontWeight": "bold", "fontSize": "12px"}
 
     return html.Div(
         [
-            # Top Section: Configuration
+            # ── Configuration panel ────────────────────────────────────────
             html.Div(
                 [
-                    html.Div(
-                        [
-                            html.H6("Pairs Analysis", className="graph__title"),
-                            html.P(
-                                "Interactive spread analysis with confidence bands (in basis points)",
-                                style={"color": "#ffffff", "font-size": "14px", "margin": "10px 0"},
+                    html.H6("Pairs Analysis",
+                            style={"color": THEME["text_main"], "marginBottom": "6px"}),
+                    html.P(
+                        "Interactive spread analysis with confidence bands (in basis points)",
+                        style={"color": THEME["text_sub"], "fontSize": "12px", "margin": "0 0 10px 0"},
+                    ),
+
+                    # Pairs configuration table
+                    html.Div([
+                        html.Table([
+                            html.Thead(html.Tr([
+                                html.Th("", style={**_th, "textAlign": "left", "minWidth": "50px"}),
+                                html.Th("Pair 1", style=_th),
+                                html.Th("Pair 2", style=_th),
+                                html.Th("Pair 3", style=_th),
+                                html.Th("Pair 4", style=_th),
+                            ])),
+                            html.Tbody([
+                                html.Tr([
+                                    html.Td("Leg 1", style=_td_label),
+                                    html.Td(dcc.Input(id='pairs-leg1-1', value='250211.IB', type='text', style=_inp)),
+                                    html.Td(dcc.Input(id='pairs-leg1-2', value='250020.IB', type='text', style=_inp)),
+                                    html.Td(dcc.Input(id='pairs-leg1-3', value='250215.IB', type='text', style=_inp)),
+                                    html.Td(dcc.Input(id='pairs-leg1-4', value='2500006.IB', type='text', style=_inp)),
+                                ]),
+                                html.Tr([
+                                    html.Td("Leg 2", style=_td_label),
+                                    html.Td(dcc.Input(id='pairs-leg2-1', value='240024.IB', type='text', style=_inp)),
+                                    html.Td(dcc.Input(id='pairs-leg2-2', value='FR007S5Y.IR', type='text', style=_inp)),
+                                    html.Td(dcc.Input(id='pairs-leg2-3', value='250018.IB', type='text', style=_inp)),
+                                    html.Td(dcc.Input(id='pairs-leg2-4', value='210005.IB', type='text', style=_inp)),
+                                ]),
+                            ])
+                        ], style={"width": "100%", "borderCollapse": "collapse", "margin": "0 0 8px 0"}),
+
+                        html.Div([
+                            html.Label("Days:", style={"color": THEME["text_sub"], "marginRight": "8px",
+                                                        "fontWeight": "bold", "fontSize": "12px"}),
+                            dcc.Input(
+                                id='pairs-days-input', type='number', value=90, min=1,
+                                style={"width": "70px", "padding": "5px",
+                                       "backgroundColor": THEME["bg_input"], "color": "#fff",
+                                       "border": "1px solid #4a6f9f", "borderRadius": "3px",
+                                       "fontSize": "12px"},
                             ),
-                            
-                            # Pairs configuration table
-                            html.Div([
-                                html.Table([
-                                    html.Thead(html.Tr([
-                                        html.Th("", style={"color": "#ffffff", "padding": "8px", "text-align": "left", "min-width": "50px"}),
-                                        html.Th("Pair 1", style={"color": "#ffffff", "padding": "8px", "text-align": "center", "min-width": "120px"}),
-                                        html.Th("Pair 2", style={"color": "#ffffff", "padding": "8px", "text-align": "center", "min-width": "120px"}),
-                                        html.Th("Pair 3", style={"color": "#ffffff", "padding": "8px", "text-align": "center", "min-width": "120px"}),
-                                        html.Th("Pair 4", style={"color": "#ffffff", "padding": "8px", "text-align": "center", "min-width": "120px"}),
-                                    ])),
-                                    html.Tbody([
-                                        html.Tr([
-                                            html.Td("Leg1", style={"color": "#ffffff", "padding": "8px", "font-weight": "bold"}),
-                                            html.Td(dcc.Input(id='pairs-leg1-1', value='250211.IB', type='text', 
-                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
-                                            html.Td(dcc.Input(id='pairs-leg1-2', value='250020.IB', type='text',
-                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
-                                            html.Td(dcc.Input(id='pairs-leg1-3', value='250215.IB', type='text',
-                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
-                                            html.Td(dcc.Input(id='pairs-leg1-4', value='2500006.IB', type='text',
-                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
-                                        ]),
-                                        html.Tr([
-                                            html.Td("Leg2", style={"color": "#ffffff", "padding": "8px", "font-weight": "bold"}),
-                                            html.Td(dcc.Input(id='pairs-leg2-1', value='240024.IB', type='text',
-                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
-                                            html.Td(dcc.Input(id='pairs-leg2-2', value='FR007S5Y.IR', type='text',
-                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
-                                            html.Td(dcc.Input(id='pairs-leg2-3', value='250018.IB', type='text',
-                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
-                                            html.Td(dcc.Input(id='pairs-leg2-4', value='210005.IB', type='text',
-                                                             style={"width": "100%", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"})),
-                                        ]),
-                                    ])
-                                ], style={"width": "100%", "border-collapse": "collapse", "margin": "10px 0"}),
-                                
-                                html.Div([
-                                    html.Label("Days:", style={"color": "#ffffff", "margin-right": "10px", "font-weight": "bold"}),
-                                    dcc.Input(
-                                        id='pairs-days-input',
-                                        type='number',
-                                        value=90,
-                                        min=1,
-                                        style={"width": "80px", "padding": "6px", "background": "#1e3a5f", "color": "#fff", "border": "1px solid #007ACE", "border-radius": "3px"}
-                                    ),
-                                ], style={"margin": "10px 0", "display": "flex", "align-items": "center"}),
-                            ], style={"margin": "15px 0", "padding": "15px", "background": "#0f2847", "border-radius": "5px"}),
-                            
-                            html.Div(
-                                [
-                                    html.Button(
-                                        "🔄 Refresh Plots",
-                                        id="pairs-refresh-btn",
-                                        n_clicks=0,
-                                        style={
-                                            "background": "#007ACE",
-                                            "color": "white",
-                                            "border": "none",
-                                            "padding": "10px 20px",
-                                            "border-radius": "4px",
-                                            "cursor": "pointer",
-                                            "font-size": "14px",
-                                            "margin": "10px 0",
-                                            "font-weight": "bold",
-                                        },
-                                    ),
-                                    html.Div(
-                                        id="pairs-last-updated",
-                                        children="Last updated: Loading...",
-                                        style={"color": "#ffffff", "font-size": "12px", "margin": "10px 0"},
-                                    ),
-                                ],
-                                style={"margin": "15px 0"},
-                            ),
-                        ],
-                        className="graph__title",
-                    )
+                        ], style={"display": "flex", "alignItems": "center"}),
+                    ], style={"backgroundColor": THEME["bg_card"], "padding": "12px",
+                              "borderRadius": "4px", "marginBottom": "10px"}),
+
+                    html.Div([
+                        html.Button(
+                            "🔄 Refresh Plots",
+                            id="pairs-refresh-btn",
+                            n_clicks=0,
+                            style={
+                                "backgroundColor": THEME["accent"], "color": "white",
+                                "border": "none", "padding": "8px 18px",
+                                "borderRadius": "4px", "cursor": "pointer",
+                                "fontSize": "13px", "fontWeight": "bold",
+                                "marginRight": "12px",
+                            },
+                        ),
+                        html.Span(
+                            id="pairs-last-updated",
+                            children="Last updated: Loading...",
+                            style={"color": THEME["text_sub"], "fontSize": "12px"},
+                        ),
+                    ], style={"display": "flex", "alignItems": "center"}),
                 ],
                 style={
-                    "background": app_color["graph_bg"],
-                    "border-radius": "8px",
-                    "padding": "20px",
-                    "margin-bottom": "20px",
+                    "backgroundColor": app_color["graph_bg"],
+                    "borderRadius": "6px",
+                    "padding": "15px",
+                    "marginBottom": "12px",
                 },
             ),
-            
-            # Bottom Section: Real-time Pair Analysis Results
+
+            # ── Results panel ──────────────────────────────────────────────
             html.Div(
-                [
-                    html.Div(
-                        [
-                            html.H6(
-                                "Real-time Pair Analysis",
-                                className="graph__title",
-                                style={"color": "#ffffff", "background": app_color["graph_bg"], "padding": "10px"},
-                            )
-                        ]
-                    ),
-                    html.Div(
-                        id="pairs-plots-container",
-                        style={
-                            "background": app_color["graph_bg"],
-                            "border-radius": "8px",
-                            "padding": "20px",
-                            "min-height": "600px",
-                        },
-                        children=[
-                            html.Div(
-                                [
-                                    html.H4(
-                                        "Loading Pairs Analysis...",
-                                        style={"text-align": "center", "color": "#666", "margin": "50px 0"},
-                                    ),
-                                    html.P(
-                                        "Please wait while we load the regression plots.",
-                                        style={"text-align": "center", "color": "#999"},
-                                    ),
-                                ]
-                            )
-                        ],
-                    ),
-                    html.Div(id="pairs-content-loader", style={"display": "none"}),
-                ],
+                id="pairs-plots-container",
                 style={
-                    "width": "100%",
+                    "backgroundColor": app_color["graph_bg"],
+                    "borderRadius": "6px",
+                    "padding": "10px",
+                    "minHeight": "400px",
                 },
+                children=[
+                    html.Div([
+                        html.P("Loading Pairs Analysis…",
+                               style={"textAlign": "center", "color": THEME["text_sub"],
+                                      "margin": "40px 0 6px 0", "fontSize": "13px"}),
+                        html.P("Please wait while we load the regression plots.",
+                               style={"textAlign": "center", "color": THEME["text_sub"],
+                                      "fontSize": "12px"}),
+                    ])
+                ],
             ),
+            html.Div(id="pairs-content-loader", style={"display": "none"}),
         ]
     )
 
@@ -585,10 +560,51 @@ def register_callbacks(app) -> None:
         unit = _FUT_UNIT[stype]
         window = getattr(GeneralConfig, "STAT_WINDOW", 12)
         start = s.index[-1] - relativedelta(months=window)
-        fig = go.Figure(data=[go.Scatter(
-            name="Spread", x=s.index, y=s.values,
+
+        traces = [go.Scatter(
+            name="Spread (bp)", x=s.index, y=s.values,
             line={"width": 3, "color": "#2a6fd3"},
-        )])
+        )]
+
+        # For NetBasis: overlay IRR and Repo (%) on a secondary y-axis
+        _yaxis2 = None
+        if stype == "NetBasis":
+            try:
+                from settings.futures import FuturesConfig
+                _ana = _load_pickle_cached(os.path.join(DIR_INPUT, "futures-analytics.pkl")) or {}
+                _dbpx = _load_pickle_cached(os.path.join(DIR_INPUT, "database-px.pkl")) or {}
+                _df_ana = _ana.get(ticker)
+                if isinstance(_df_ana, pd.DataFrame) and "irr" in _df_ana.columns:
+                    _irr = pd.to_numeric(_df_ana["irr"], errors="coerce")
+                    _irr = _irr.where(_irr >= -0.5).dropna()
+                    _irr.index = pd.DatetimeIndex(_irr.index)
+                    _irr = _irr.loc[start:]
+                    if not _irr.empty:
+                        traces.append(go.Scatter(
+                            name="IRR (%)", x=_irr.index, y=_irr.values,
+                            line={"width": 1.5, "color": "#f39c12", "dash": "dot"},
+                            yaxis="y2",
+                        ))
+                _irs_df = _dbpx.get("IRS") if isinstance(_dbpx, dict) else None
+                if isinstance(_irs_df, pd.DataFrame) and "FR007.IR" in _irs_df.columns:
+                    _funding = FuturesConfig.FUNDING_BASIS_BP / 100.0
+                    _repo = pd.to_numeric(_irs_df["FR007.IR"], errors="coerce").dropna()
+                    _repo.index = pd.DatetimeIndex(_repo.index)
+                    _repo = (_repo + _funding).loc[start:]
+                    if not _repo.empty:
+                        traces.append(go.Scatter(
+                            name=f"Repo FR007+{FuturesConfig.FUNDING_BASIS_BP:.0f}bp (%)",
+                            x=_repo.index, y=_repo.values,
+                            line={"width": 1.5, "color": "#2ecc71", "dash": "dot"},
+                            yaxis="y2",
+                        ))
+                _yaxis2 = dict(title="%", overlaying="y", side="right",
+                               showgrid=False, zeroline=False,
+                               tickfont=dict(color="#aaaaaa"), title_font=dict(color="#aaaaaa"))
+            except Exception:
+                pass
+
+        fig = go.Figure(data=traces)
         if mean is not None:
             bands = [(mean, "mean", "solid", "#aaaaaa")]
             if vol:
@@ -605,13 +621,17 @@ def register_callbacks(app) -> None:
         title = (f"<b>{_FUT_TITLE[stype]} — {ticker}</b><br>"
                  f"Latest: {_fmt(float(s.iloc[-1]))}, Mean: {_fmt(mean)}, "
                  f"Vol: {_fmt(vol)}, Max: {_fmt(vmax)}, Min: {_fmt(vmin)}")
-        fig.update_layout(
+        layout_kwargs = dict(
             plot_bgcolor=app_color["graph_bg"], paper_bgcolor=app_color["graph_bg"],
             font=dict(color="#ffffff"), title=title,
             xaxis=dict(range=[start, s.index[-1]]),
             yaxis=dict(title=unit),
-            showlegend=False,
+            showlegend=(_yaxis2 is not None),
+            legend=dict(orientation="h", x=0, y=1.08, font=dict(size=11)),
         )
+        if _yaxis2 is not None:
+            layout_kwargs["yaxis2"] = _yaxis2
+        fig.update_layout(**layout_kwargs)
         return fig
 
     # Realtime data refresh callback
@@ -729,8 +749,8 @@ def register_callbacks(app) -> None:
                             style={
                                 "width": "100%",
                                 "height": "720px",
-                                "border": "1px solid #ddd",
-                                "border-radius": "4px",
+                                "border": "1px solid #1a3a7a",
+                                "borderRadius": "4px",
                                 "overflow": "hidden",
                             },
                         )

@@ -57,7 +57,7 @@ def retrieveTick(date, futures):
     tick = tick.dropna()
     return tick
 
-def retrieveFuturesTick():
+def retrieveFuturesTick(cfg=None):
     day_list = pd.bdate_range(_date_strs['d1m'], _date_strs['dp'])
     day_list = [ d.date() for d in day_list ]
     # for f in FuturesConfig.get_ticker_list():
@@ -83,7 +83,10 @@ def get_contract_no():
     tlist = [ f+".CFE" for f in FuturesConfig.CONTRACT_TYPES ]
     flist =  FuturesConfig.SYMBOLS
     clist = _wss(flist, "trade_hiscode,", "tradeDate="+_date_strs["d"])
-    clist_ = clist.squeeze().tolist()
+    if clist.empty or len(clist.columns) == 0:
+        print(f"Warning: _wss returned empty DataFrame. clist shape: {clist.shape}, columns: {clist.columns.tolist()}")
+        return []
+    clist_ = clist.iloc[:, 0].tolist()
     return clist_
 
 def futuresDailyK(cfg=None):

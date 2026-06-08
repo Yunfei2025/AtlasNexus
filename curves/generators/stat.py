@@ -454,11 +454,27 @@ class StatGenerator:
             irr   = pd.to_numeric(df['irr'],  errors='coerce')
             fytm  = pd.to_numeric(df['fytm'], errors='coerce')
 
+            # Null out bad-CTD artifact days: deeply negative IRR (< -0.5 %) is
+            # a clear data error for CNY treasury futures (genuine negative carry is
+            # at most a few bp).  Also null fytm on those same days since it
+            # reflects the same bad CTD pricing.
+            _irr_bad = irr < -0.5
+            irr  = irr.where(~_irr_bad)
+            fytm = fytm.where(~_irr_bad)
+
             # ── Term Basis: front − next-season close (price points) ──────────
-            term = (
-                pd.to_numeric(df['futures_close'], errors='coerce')
-                - pd.to_numeric(df['next_close'],  errors='coerce')
-            )
+            _fc = pd.to_numeric(df['futures_close'], errors='coerce')
+            _nc = pd.to_numeric(df['next_close'],   errors='coerce')
+            # Null out rows where either price is frozen for >= 3 consecutive days
+            # (stale close artifact after contract roll).
+            _STALE_W = 3
+            _fc_stale = _fc.rolling(_STALE_W).apply(
+                lambda x: (x.max() - x.min()) < 1e-8, raw=True
+            ).fillna(0).astype(bool)
+            _nc_stale = _nc.rolling(_STALE_W).apply(
+                lambda x: (x.max() - x.min()) < 1e-8, raw=True
+            ).fillna(0).astype(bool)
+            term = (_fc - _nc).where(~(_fc_stale | _nc_stale))
             if term.notna().sum() > 20:
                 tb_cols[ctype] = term
 
