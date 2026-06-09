@@ -530,16 +530,24 @@ def register_backtest_hist_callbacks(app):
             
             df_history = pd.DataFrame(history_data)
             df_pnl = pd.DataFrame(daily_pnl_records)
-            
+
+            # Round time series to integers (million CNY)
+            for col in df_history.columns:
+                if col != 'Date':
+                    df_history[col] = df_history[col].round().astype('Int64')
+            for col in df_pnl.columns:
+                if col != 'Date':
+                    df_pnl[col] = df_pnl[col].round().astype('Int64')
+
             # --- Create Allocation Chart ---
             fig_alloc = go.Figure()
             for asset_name in sorted(all_assets_ever):
                 if asset_name in df_history.columns:
                     fig_alloc.add_trace(go.Scatter(
-                        x=df_history['Date'], 
+                        x=df_history['Date'],
                         y=df_history[asset_name].fillna(0),
-                        mode='lines+markers', 
-                        name=asset_name, 
+                        mode='lines+markers',
+                        name=asset_name,
                         stackgroup='one'
                     ))
             
