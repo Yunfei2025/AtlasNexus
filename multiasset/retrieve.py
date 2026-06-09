@@ -5,11 +5,25 @@ Created on Tue Nov 25 20:22:40 2025
 @author: CMBC
 """
 import os
+import sys
 import pandas as pd
 import datetime
 import pathlib
+import importlib.util
+from pathlib import Path
 
-from data.providers.retrieve import _is_trading_hours
+# Add project root to Python path FIRST
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# Import _is_trading_hours from root-level data.providers.retrieve
+# Use importlib to avoid shadowing by local multiasset/data.py
+data_providers_retrieve_path = project_root / 'data' / 'providers' / 'retrieve.py'
+spec = importlib.util.spec_from_file_location('data_providers_retrieve', data_providers_retrieve_path)
+data_providers_retrieve = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(data_providers_retrieve)
+_is_trading_hours = data_providers_retrieve._is_trading_hours
 
 
 CURVE_ARTIFACT_NAMES = ("curve_ts.pkl", "fxcurve_ts.pkl")
