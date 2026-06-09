@@ -566,29 +566,42 @@ def register_backtest_hist_callbacks(app):
                 yaxis=dict(gridcolor=THEME['table_header'])
             )
             
-            # --- Create PnL Chart ---
+            # --- Create PnL Chart with Asset Breakdown ---
             fig_pnl = go.Figure()
             if not df_pnl.empty:
-                # Add total line prominently
+                # Add individual asset PnL traces
+                for asset_name in sorted(all_assets_ever):
+                    if asset_name in df_pnl.columns:
+                        fig_pnl.add_trace(go.Scatter(
+                            x=df_pnl['Date'],
+                            y=df_pnl[asset_name].fillna(0),
+                            mode='lines',
+                            name=asset_name,
+                            opacity=0.7,
+                            line=dict(width=2)
+                        ))
+
+                # Add total line last so it's on top
                 fig_pnl.add_trace(go.Scatter(
-                    x=df_pnl['Date'], 
+                    x=df_pnl['Date'],
                     y=df_pnl['Total'],
-                    mode='lines', 
+                    mode='lines',
                     name='Total Portfolio',
-                    line=dict(color='#00cc96', width=3)
+                    line=dict(color='#00cc96', width=3),
+                    hovertemplate='<b>Total Portfolio</b><br>Date: %{x|%Y-%m-%d}<br>PnL: %{y} Million CNY<extra></extra>'
                 ))
-            
+
             fig_pnl.update_layout(
-                title=f"Cumulative PnL ({display_start.strftime('%Y-%m-%d')} to {display_end.strftime('%Y-%m-%d')})",
-                xaxis_title="Date", 
+                title=f"Cumulative PnL by Asset ({display_start.strftime('%Y-%m-%d')} to {display_end.strftime('%Y-%m-%d')})",
+                xaxis_title="Date",
                 yaxis_title="Cumulative PnL (Million CNY)",
-                hovermode='x unified', 
-                template=THEME['chart_template'], 
-                height=350,
-                paper_bgcolor=THEME['bg_main'], 
-                plot_bgcolor=THEME['bg_main'], 
+                hovermode='x unified',
+                template=THEME['chart_template'],
+                height=500,
+                paper_bgcolor=THEME['bg_main'],
+                plot_bgcolor=THEME['bg_main'],
                 font={'color': THEME['text_main']},
-                legend=dict(orientation="h", y=1.02, x=1, xanchor="right", font={'color': THEME['text_main']}),
+                legend=dict(orientation="v", yanchor="top", y=0.99, xanchor="right", x=0.99, font={'color': THEME['text_main'], 'size': 9}),
                 xaxis=dict(gridcolor=THEME['table_header']),
                 yaxis=dict(gridcolor=THEME['table_header'])
             )
