@@ -566,29 +566,31 @@ def register_backtest_hist_callbacks(app):
                 yaxis=dict(gridcolor=THEME['table_header'])
             )
             
-            # --- Create PnL Chart with Asset Breakdown ---
+            # --- Create Stacked Area PnL Chart ---
             fig_pnl = go.Figure()
             if not df_pnl.empty:
-                # Add individual asset PnL traces
+                # Add stacked area traces for each asset
                 for asset_name in sorted(all_assets_ever):
                     if asset_name in df_pnl.columns:
                         fig_pnl.add_trace(go.Scatter(
                             x=df_pnl['Date'],
                             y=df_pnl[asset_name].fillna(0),
-                            mode='lines',
+                            mode='none',
                             name=asset_name,
-                            opacity=0.7,
-                            line=dict(width=2)
+                            stackgroup='pnl',
+                            fillcolor=None,
+                            hovertemplate=f'<b>{asset_name}</b><br>Date: %{{x|%Y-%m-%d}}<br>PnL: %{{y}} Million CNY<extra></extra>'
                         ))
 
-                # Add total line last so it's on top
+                # Add a line trace at the top to show total boundary
                 fig_pnl.add_trace(go.Scatter(
                     x=df_pnl['Date'],
                     y=df_pnl['Total'],
                     mode='lines',
-                    name='Total Portfolio',
-                    line=dict(color='#00cc96', width=3),
-                    hovertemplate='<b>Total Portfolio</b><br>Date: %{x|%Y-%m-%d}<br>PnL: %{y} Million CNY<extra></extra>'
+                    name='Total',
+                    showlegend=False,
+                    line=dict(color='rgba(255,255,255,0.3)', width=2),
+                    hovertemplate='<b>Total PnL</b><br>Date: %{x|%Y-%m-%d}<br>PnL: %{y} Million CNY<extra></extra>'
                 ))
 
             fig_pnl.update_layout(
@@ -597,11 +599,11 @@ def register_backtest_hist_callbacks(app):
                 yaxis_title="Cumulative PnL (Million CNY)",
                 hovermode='x unified',
                 template=THEME['chart_template'],
-                height=500,
+                height=450,
                 paper_bgcolor=THEME['bg_main'],
                 plot_bgcolor=THEME['bg_main'],
                 font={'color': THEME['text_main']},
-                legend=dict(orientation="v", yanchor="top", y=0.99, xanchor="right", x=0.99, font={'color': THEME['text_main'], 'size': 9}),
+                showlegend=False,
                 xaxis=dict(gridcolor=THEME['table_header']),
                 yaxis=dict(gridcolor=THEME['table_header'])
             )
