@@ -316,11 +316,23 @@ def register_portfolio_run_callbacks(app):
 
         # ── Tier-weighted Risk Parity: inverse-vol weights scaled by tier importance ─
         # Step 1: Calculate base RP weights (inverse volatility)
+        # If a factor's vol is missing (e.g., commodities without loaded data),
+        # use estimated vol: commodities typically ~12-18%, use 15% as default
         _inv_vols = {}
+        _missing_vols = []
         for _f in sorted_factors:
             _v = _vol_map.get(_f)
             if _v is not None and pd.notna(_v) and _v > 0:
                 _inv_vols[_f] = 1.0 / _v
+            else:
+                _missing_vols.append(_f)
+                # Use estimated commodity vol (15%) for missing data
+                estimated_commodity_vol = 15.0
+                _inv_vols[_f] = 1.0 / estimated_commodity_vol
+
+        if _missing_vols:
+            print(f"⚠️  Missing volatility data for {len(_missing_vols)} factors: {_missing_vols}")
+            print(f"   Using estimated vol = 15% for these factors")
 
         # Step 2: Apply tier weights (adj) to RP weights post-hoc
         _tier_weighted_inv_vols = {}
