@@ -225,9 +225,17 @@ def build_multiasset_backtest_layout():
                     style={'color': THEME['accent'], 'marginBottom': '15px'}),
             html.P(
                 "Strategy: At each month start, run correlation analysis to select diversified "
-                "assets, then apply factor risk parity allocation.",
+                "assets, then apply tier-weighted risk parity allocation.",
                 style={'color': THEME['text_sub'], 'fontSize': '12px',
-                       'marginBottom': '12px', 'fontStyle': 'italic'}
+                       'marginBottom': '6px', 'fontStyle': 'italic'}
+            ),
+            html.P(
+                "Risk Parity with Tier Weighting: Factor importance tiers (Level 1.0 × Slope 0.6 × Curvature 0.3) "
+                "scale volatilities before risk parity to balance economic significance with volatility estimation. "
+                "Allocations are then rebalanced monthly.",
+                style={'color': THEME['text_sub'], 'fontSize': '11px',
+                       'marginBottom': '12px', 'fontStyle': 'italic', 'paddingLeft': '12px',
+                       'borderLeft': f'3px solid {THEME["accent"]}'}
             ),
 
             # Factor Pool Info Banner

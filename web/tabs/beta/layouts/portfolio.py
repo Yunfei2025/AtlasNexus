@@ -215,9 +215,9 @@ def build_multiasset_portfolio_layout():
                 # ── Right main: Risk Budgets (primary) ───────────────────────────────
                 html.Div([
                     html.Div([
-                        html.H6("Risk Budgets", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '0', 'fontSize': '13px', 'fontWeight': 'bold'}),
-                        html.Span("Vol from 1Y EWMA  ·  RP Max = inv-vol weights (or user value)  ·  Exposure = RP Max × Coeff",
-                                  style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '12px'}),
+                        html.H6("Risk Budgets (Tier-Weighted Risk Parity)", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '0', 'fontSize': '13px', 'fontWeight': 'bold'}),
+                        html.Span("Vol from 1Y EWMA  ·  RP Max = tier-weighted inv-vol  ·  Exposure = RP Max × Coeff  ·  Tiers: Level 1.0 × Slope 0.6 × Curvature 0.3",
+                                  style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '12px'}),
                     ], style={'display': 'flex', 'alignItems': 'baseline', 'marginBottom': '8px'}),
                     html.Div([
                         dcc.RadioItems(
@@ -238,7 +238,7 @@ def build_multiasset_portfolio_layout():
                         html.Span("Factor",          style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0'}),
                         html.Span("Vol %ann",        style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '62px', 'textAlign': 'right', 'flexShrink': '0'}),
                         html.Span("×adj",            style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '48px', 'textAlign': 'center', 'flexShrink': '0'},
-                                  title='Vol multiplier: effective vol = measured vol × adj. Set >1 to reduce RP Max (e.g. discount IRCV over-allocation).'),
+                                  title='Tier weight (default: IRDL=1.0, IRSL=0.6, IRCV=0.3). Scales measured vol before risk parity. Edit to customize tier importance.'),
                         html.Span("RP Max (MM CNY)", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '105px', 'textAlign': 'right', 'flexShrink': '0'},
                                   title='Risk Parity Max allocation in millions CNY'),
                         html.Span("DV01 (MM/bp)",    style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '85px', 'textAlign': 'right', 'flexShrink': '0'},

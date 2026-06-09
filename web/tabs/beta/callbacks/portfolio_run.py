@@ -289,18 +289,19 @@ def register_portfolio_run_callbacks(app):
         # ── Factor vol lookup (live 1Y EWMA) ─────────────────────────────────
         _vol_map = compute_factor_vol_map(sorted_factors)
 
-        # ── Per-factor vol multiplier (adj) — user can inflate IRCV/low-vol factor vols
-        #    to prevent over-allocation under pure risk parity.
-        # Default adjustments based on empirical vol ratios: IRDL:IRSL:IRCV ≈ 5:3:2
-        # Applying 1.0:1.5:2.5 gives roughly equal allocations across levels
+        # ── Per-factor tier weight (adj) — tier-weighted risk parity
+        #    Scales factor weights AFTER risk parity based on factor importance.
+        # Tier weighting: IRDL (Level) 1.0 × IRSL (Slope) 0.6 × IRCV (Curvature) 0.3
+        # Rationale: Level shifts are primary risk; Slope is secondary; Curvature is tertiary.
+        # These weights are applied post-RP to balance allocations with economic significance.
         def get_default_vol_adj(factor):
             prefix = factor.split('.')[0]
             if prefix == 'IRDL':
-                return 1.0
+                return 1.0      # Level: primary risk driver
             elif prefix == 'IRSL':
-                return 1.5
+                return 0.6      # Slope: secondary importance
             elif prefix == 'IRCV':
-                return 2.5
+                return 0.3      # Curvature: tertiary importance
             else:
                 return 1.0
 
@@ -313,17 +314,24 @@ def register_portfolio_run_callbacks(app):
                 # Use default based on factor type
                 _vol_adj[_f] = get_default_vol_adj(_f)
 
-        # ── Inverse-vol proportional RP Max (stable base for risk_parity / factor_scaling) ─
+        # ── Tier-weighted Risk Parity: inverse-vol weights scaled by tier importance ─
+        # Step 1: Calculate base RP weights (inverse volatility)
         _inv_vols = {}
         for _f in sorted_factors:
             _v = _vol_map.get(_f)
-            _a = float(_vol_adj.get(_f, 1.0) or 1.0)
             if _v is not None and pd.notna(_v) and _v > 0:
-                _inv_vols[_f] = 1.0 / (_v * _a)
-        _total_inv_vol = sum(_inv_vols.values())
+                _inv_vols[_f] = 1.0 / _v
+
+        # Step 2: Apply tier weights (adj) to RP weights post-hoc
+        _tier_weighted_inv_vols = {}
+        for _f in sorted_factors:
+            _tier_weight = float(_vol_adj.get(_f, 1.0) or 1.0)
+            _tier_weighted_inv_vols[_f] = _inv_vols.get(_f, 0.0) * _tier_weight
+
+        _total_inv_vol = sum(_tier_weighted_inv_vols.values())
         if _total_inv_vol > 0:
             _inv_vol_budgets = {
-                _f: round(total_capital_m * _inv_vols.get(_f, 0.0) / _total_inv_vol, 2)
+                _f: round(total_capital_m * _tier_weighted_inv_vols.get(_f, 0.0) / _total_inv_vol, 2)
                 for _f in sorted_factors
             }
         else:
@@ -349,8 +357,9 @@ def register_portfolio_run_callbacks(app):
             vol_val = _vol_map.get(factor)
             vol_str = f"{vol_val:.2f}%" if vol_val is not None and pd.notna(vol_val) else "–"
             adj_val = float(_vol_adj.get(factor, 1.0))
-            # Highlight the adj input when it deviates from 1.0 (user override active)
-            _adj_border = f'1px solid {THEME["accent"]}' if adj_val != 1.0 else f'1px solid {THEME["table_header"]}'
+            # Tier weight (adj) applied post-RP: default 1.0 (IRDL), 0.6 (IRSL), 0.3 (IRCV)
+            # Highlight when user has customized the tier weight
+            _adj_border = f'1px solid {THEME["accent"]}' if adj_val != get_default_vol_adj(factor) else f'1px solid {THEME["table_header"]}'
 
             # Compute DV01 for IR factors (IRDL, IRSL, IRCV, SPDL, SPSL)
             dv01_str = ""
@@ -385,8 +394,8 @@ def register_portfolio_run_callbacks(app):
                                 'borderRadius': '2px', 'textAlign': 'right',
                             }
                         ),
-                        title='Vol adj multiplier: effective vol = measured vol × adj. '
-                              'Set >1 to discount allocation (e.g. IRCV over-allocation).'
+                        title='Tier weight (applied post-RP): default 1.0=IRDL(Level), 0.6=IRSL(Slope), 0.3=IRCV(Curvature). '
+                              'Scales RP weights to balance economic significance: Level is primary risk, Slope secondary, Curvature tertiary.'
                     ),
                     html.Span(f"{round(rp_max)}", style={
                         'color': THEME['text_sub'], 'fontSize': '12px',
