@@ -291,25 +291,14 @@ def register_backtest_hist_callbacks(app):
             
             # Calculate earliest valid rebalance date based on selected factor data
             earliest_valid_date = factor_data_start + corr_lookback_delta
-            
-            # Check if user's selected start date is before minimum supported date
+
+            # Auto-adjust start date if it's before the minimum supported date
             if start_date < earliest_valid_date:
-                limiting_factor_info = f" (limited by {limiting_factors[0][0]})" if limiting_factors else ""
-                err_fig = go.Figure().update_layout(
-                    title=f"⚠️ Selected start date {start_date.strftime('%Y-%m-%d')} is before minimum supported date {earliest_valid_date.strftime('%Y-%m-%d')}{limiting_factor_info}",
-                    template=THEME['chart_template'],
-                    paper_bgcolor=THEME['bg_main'],
-                    plot_bgcolor=THEME['bg_main'],
-                    font={'color': THEME['text_main']}
-                )
-                return err_fig, err_fig, None, html.Div(
-                    f"Please select a start date on or after {earliest_valid_date.strftime('%Y-%m-%d')}. "
-                    f"The minimum date is determined by factor data availability (starts {factor_data_start.strftime('%Y-%m-%d')}) "
-                    f"plus the correlation lookback period ({corr_lookback}).",
-                    style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}
-                )
-            
-            # Generate rebalance dates (beginning of each month) - now starting from user's selected date
+                print(f"⚠️  Start date {start_date.date()} is before earliest valid date {earliest_valid_date.date()}")
+                print(f"   Using earliest valid date: {earliest_valid_date.date()}")
+                start_date = earliest_valid_date
+
+            # Generate rebalance dates (beginning of each month) - starting from earliest valid date
             rebalance_dates = []
             current_date = start_date.replace(day=1)
             while current_date <= end_date:
