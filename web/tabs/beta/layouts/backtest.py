@@ -251,7 +251,24 @@ def build_multiasset_backtest_layout():
         html.Div([
             html.H6("Backtest Settings", style={'color': THEME['accent'], 'marginBottom': '15px'}),
             html.Div([
-                # Backtest Period
+                # Backtest Lookback (Preset Options)
+                html.Div([
+                    html.Label("Backtest Lookback:", style={**_lbl}),
+                    dcc.Dropdown(
+                        id='backtest-lookback-preset',
+                        options=[
+                            {'label': '1 Year', 'value': '1Y'},
+                            {'label': '2 Years', 'value': '2Y'},
+                            {'label': '5 Years', 'value': '5Y'},
+                            {'label': '10 Years', 'value': '10Y'},
+                        ],
+                        value='2Y',
+                        clearable=False,
+                        style={'width': '150px', 'fontSize': '13px'}
+                    ),
+                ], style={'marginRight': '25px'}),
+
+                # Backtest Period (Custom Date Range)
                 html.Div([
                     html.Label("Backtest Period:", style={**_lbl}),
                     html.Div([
@@ -263,9 +280,10 @@ def build_multiasset_backtest_layout():
                             end_date=datetime.now().date(),
                             display_format='YYYY-MM-DD',
                             style={'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
-                            updatemode='bothdates'
+                            updatemode='bothdates',
+                            with_portal=False,
                         )
-                    ], style={'display': 'inline-block', 'position': 'relative', 'zIndex': 1000}),
+                    ], style={'display': 'flex', 'gap': '10px', 'position': 'relative', 'zIndex': 999}),
                 ], style={'marginRight': '25px'}),
 
                 # Total Capital (dedicated for backtest)

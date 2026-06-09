@@ -26,6 +26,32 @@ from ..data import THEME, SELECTED_FACTOR_POOL, get_assets_from_factors, FACTOR_
 def register_backtest_hist_callbacks(app):
     """Register historical-allocation backtest callbacks."""
 
+    # 4.4 Update date range based on lookback preset dropdown
+    @app.callback(
+        [Output('history-date-range', 'start_date'),
+         Output('history-date-range', 'end_date')],
+        [Input('backtest-lookback-preset', 'value')],
+        prevent_initial_call=True
+    )
+    def update_date_range_from_lookback(lookback_preset):
+        """Update the date range based on the selected lookback period."""
+        from datetime import datetime, timedelta
+
+        end_date = datetime.now().date()
+
+        if lookback_preset == '1Y':
+            start_date = end_date - relativedelta(years=1)
+        elif lookback_preset == '2Y':
+            start_date = end_date - relativedelta(years=2)
+        elif lookback_preset == '5Y':
+            start_date = end_date - relativedelta(years=5)
+        elif lookback_preset == '10Y':
+            start_date = end_date - relativedelta(years=10)
+        else:
+            start_date = end_date - relativedelta(years=2)  # default to 2Y
+
+        return start_date, end_date
+
     # 4.5 Backtest Factor Pool Display and Min Date Info
     @app.callback(
         [Output('backtest-factor-pool-display', 'children'),

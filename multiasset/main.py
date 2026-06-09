@@ -326,7 +326,7 @@ def create_custom_portfolio(selected_asset_names: List[str], use_cache: bool = T
 def run_risk_parity_allocation(total_capital: float = 10_000_000_000,
                                 use_cache: bool = True,
                                 selected_assets: List[str] = None,
-                                risk_budgets: Dict[str, float] | None = None,
+                                risk_budgets: Optional[Dict[str, float]] = None,
                                 use_deterministic: bool = True,
                                 hedge_asset_names: List[str] = None) -> tuple:
     """
