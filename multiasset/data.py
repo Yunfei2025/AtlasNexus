@@ -267,21 +267,20 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
     result['Date'] = result.index
     
     if is_bond:
-        # Bond returns
-        # Carry: daily accrual based on that day's yield
-        # Carry_t = Yield_t / 365
+        # Bond returns: carry + yield-change capital gain
+        # (No roll-down: we track key tenor yields, not aging bonds)
+
+        # Carry: daily coupon accrual based on key tenor yield
         result['carry'] = series / 100.0 / 365
 
-        # Capital gain: -ModifiedDuration * (Yield_t - Yield_{t-1})
-        # Modified duration for a par bond: (1 - (1+y)^-n) / (y * (1+y))
-        # Computed daily so it adjusts with the yield level.
-        # `duration` here is the tenor (n); y is the daily yield as a decimal.
+        # Capital gain from yield changes: -ModifiedDuration * ΔYield
+        # Using proper modified duration (not tenor), which adjusts with yield level
         n = duration
         y = (series / 100.0).clip(lower=0.001)  # avoid division by zero
         modified_duration = (1 - (1 + y) ** (-n)) / (y * (1 + y))
         yield_change = series.diff() / 100.0  # Convert from % to decimal
         result['capital'] = -modified_duration * yield_change
-        
+
         # FX return (for foreign bonds)
         if country and country != 'CN':
             fx_series = get_fx_series(country, market_data)
@@ -300,9 +299,9 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
                 result['fx'] = 0.0
         else:
             result['fx'] = 0.0
-        
+
         # Total return (local + FX)
-        # R_total ≈ carry + capital + fx (for small returns)
+        # R_total = carry + capital + fx
         result['total'] = result['carry'] + result['capital'] + result['fx']
         
     else:
