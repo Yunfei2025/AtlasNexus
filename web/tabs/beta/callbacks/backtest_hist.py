@@ -279,15 +279,19 @@ def register_backtest_hist_callbacks(app):
             if not start_date:
                 start_date = end_date - relativedelta(years=1)
             
-            # Determine correlation lookback period
+            # Determine correlation lookback period and factor vol lookback
             if corr_lookback == '3M':
                 corr_lookback_delta = relativedelta(months=3)
+                vol_lookback_months = 3
             elif corr_lookback == '6M':
                 corr_lookback_delta = relativedelta(months=6)
+                vol_lookback_months = 6
             elif corr_lookback == '1Y':
                 corr_lookback_delta = relativedelta(years=1)
+                vol_lookback_months = 12
             else:
                 corr_lookback_delta = relativedelta(months=3)
+                vol_lookback_months = 3
             
             # Calculate earliest valid rebalance date based on selected factor data
             earliest_valid_date = factor_data_start + corr_lookback_delta
@@ -385,12 +389,13 @@ def register_backtest_hist_callbacks(app):
                     continue
                 
                 # Use shared factor risk parity optimizer with deterministic factors
+                # vol_lookback_months is set based on user's Correlation Lookback selection
                 try:
                     optimizer = FactorRiskParityOptimizer(
-                        portfolio=portfolio, 
+                        portfolio=portfolio,
                         input_dir=str(DIR_INPUT),
                         factor_model_lookback_years=1.0,
-                        vol_lookback_months=RiskModelConfig.FACTOR_VOL_LOOKBACK_MONTHS,
+                        vol_lookback_months=vol_lookback_months,
                         ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA,
                     )
                     weights_series, _ = optimizer.fit_and_calculate(pd.Timestamp(rebalance_date))
