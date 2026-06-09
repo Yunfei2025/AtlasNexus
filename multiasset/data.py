@@ -271,10 +271,16 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
         # Carry: daily accrual based on that day's yield
         # Carry_t = Yield_t / 365
         result['carry'] = series / 100.0 / 365
-        
-        # Capital gain: -Duration * (Yield_t - Yield_{t-1})
+
+        # Capital gain: -ModifiedDuration * (Yield_t - Yield_{t-1})
+        # Modified duration for a par bond: (1 - (1+y)^-n) / (y * (1+y))
+        # Computed daily so it adjusts with the yield level.
+        # `duration` here is the tenor (n); y is the daily yield as a decimal.
+        n = duration
+        y = (series / 100.0).clip(lower=0.001)  # avoid division by zero
+        modified_duration = (1 - (1 + y) ** (-n)) / (y * (1 + y))
         yield_change = series.diff() / 100.0  # Convert from % to decimal
-        result['capital'] = -duration * yield_change
+        result['capital'] = -modified_duration * yield_change
         
         # FX return (for foreign bonds)
         if country and country != 'CN':
