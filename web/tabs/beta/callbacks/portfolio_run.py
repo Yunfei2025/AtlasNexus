@@ -367,7 +367,14 @@ def register_portfolio_run_callbacks(app):
             is_default_coeff = factor not in snapshot_by_rf
 
             vol_val = _vol_map.get(factor)
-            vol_str = f"{vol_val:.2f}%" if vol_val is not None and pd.notna(vol_val) else "–"
+            has_missing_vol = vol_val is None or pd.isna(vol_val) or vol_val <= 0
+            if has_missing_vol:
+                vol_str = f"– (est. 15%)"  # Show that we're using estimate
+                vol_color = THEME.get('warning', '#f39c12')
+            else:
+                vol_str = f"{vol_val:.2f}%"
+                vol_color = THEME['text_main']
+
             adj_val = float(_vol_adj.get(factor, 1.0))
             # Tier weight (adj) applied post-RP: default 1.0 (IRDL), 0.6 (IRSL), 0.3 (IRCV)
             # Highlight when user has customized the tier weight
@@ -389,10 +396,11 @@ def register_portfolio_run_callbacks(app):
                         'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0',
                     }),
                     html.Span(vol_str, style={
-                        'color': THEME.get('text_sub', '#aaa'), 'fontSize': '12px',
+                        'color': vol_color, 'fontSize': '12px',
                         'width': '62px', 'textAlign': 'right', 'flexShrink': '0',
                         'fontFamily': 'monospace',
-                    }),
+                        'fontWeight': 'bold' if has_missing_vol else 'normal',
+                    }, title='Volatility: if missing data, estimated at 15% (typical commodity vol)'),
                     html.Span(
                         dcc.Input(
                             id={'type': 'vol-adj-input', 'index': factor},
