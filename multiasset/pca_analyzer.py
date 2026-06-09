@@ -14,20 +14,15 @@ from .config import CURVE_CONFIG, SPREAD_CONFIG
 
 
 def _load_fx_curve_artifact(input_dir: str) -> dict:
-    for file_name in ("fxcurve_ts.pkl", "curve_ts.pkl"):
-        file_path = os.path.join(input_dir, file_name)
-        if os.path.exists(file_path):
-            try:
-                return pd.read_pickle(file_path)
-            except Exception as exc:
-                try:
-                    with open(file_path, 'rb') as file:
-                        return pickle.load(file)
-                except Exception:
-                    # Quietly treat legacy artifacts as cache misses; callers can
-                    # regenerate the file from upstream market data.
-                    pass
-    raise FileNotFoundError("Neither fxcurve_ts.pkl nor curve_ts.pkl exists in the input directory")
+    file_path = os.path.join(input_dir, "fxcurve_ts.pkl")
+    try:
+        return pd.read_pickle(file_path)
+    except Exception:
+        try:
+            with open(file_path, 'rb') as file:
+                return pickle.load(file)
+        except Exception:
+            raise FileNotFoundError(f"Cannot load fxcurve_ts.pkl from {input_dir}")
 
 
 # Deterministic factor weights for yield curve analysis

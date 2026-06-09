@@ -23,7 +23,7 @@ if 'data' in sys.modules:
 from data.providers.retrieve import _is_trading_hours
 
 
-CURVE_ARTIFACT_NAMES = ("curve_ts.pkl", "fxcurve_ts.pkl")
+CURVE_ARTIFACT_NAME = "fxcurve_ts.pkl"
 
 def get_mtime_date(path_obj: pathlib.Path):
     """Get modification date of a file, return None if file doesn't exist."""
@@ -35,17 +35,15 @@ def get_mtime_date(path_obj: pathlib.Path):
 
 def retrieveFXIRCurves():
     from settings.paths import DIR_INPUT
-    file_paths = [os.path.join(DIR_INPUT, name) for name in CURVE_ARTIFACT_NAMES]
+    file_path = os.path.join(DIR_INPUT, CURVE_ARTIFACT_NAME)
     t = datetime.datetime.today()
-    mtimes = [get_mtime_date(pathlib.Path(path)) for path in file_paths]
-    valid_mtimes = [mtime for mtime in mtimes if mtime is not None]
-    latest_mtime = max(valid_mtimes) if valid_mtimes else None
-    if latest_mtime != t.date() or any(not os.path.exists(path) for path in file_paths):
+    mtime = get_mtime_date(pathlib.Path(file_path))
+    if mtime != t.date() or not os.path.exists(file_path):
         if not _is_trading_hours():
             return
         from settings.general import DateConfig
         from multiasset.config import ticker_dict, tenorlist
-        from multiasset.utils import updatePKL 
+        from multiasset.utils import updatePKL
         from WindPy import w
         w.start()
         _dates_strs = DateConfig.get_date_mappings()
@@ -59,7 +57,5 @@ def retrieveFXIRCurves():
             df = pd.DataFrame(data, columns=codes)
             curves_ts[country] = df
             curves_ts[country].columns = [ country+t for t in tenorlist ]
-        for file_path in file_paths:
-            # These artifacts are regenerated as a full snapshot, so overwrite them
-            # directly instead of merging into any legacy pickle layout.
-            updatePKL(curves_ts, file_path, rewrite=True)
+        # Write single artifact with regenerated data
+        updatePKL(curves_ts, file_path, rewrite=True)

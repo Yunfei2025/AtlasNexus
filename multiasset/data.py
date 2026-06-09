@@ -12,20 +12,15 @@ from settings.paths import DIR_INPUT
 
 
 def _load_fx_curve_artifact():
-    for file_name in ("fxcurve_ts.pkl", "curve_ts.pkl"):
-        file_path = os.path.join(DIR_INPUT, file_name)
-        if os.path.exists(file_path):
-            try:
-                return pd.read_pickle(file_path)
-            except Exception as exc:
-                try:
-                    with open(file_path, 'rb') as file:
-                        return pickle.load(file)
-                except Exception:
-                    # Keep startup quiet for legacy artifacts; the caller can
-                    # still regenerate from upstream data if needed.
-                    pass
-    raise FileNotFoundError("Neither fxcurve_ts.pkl nor curve_ts.pkl exists in DIR_INPUT")
+    file_path = os.path.join(DIR_INPUT, "fxcurve_ts.pkl")
+    try:
+        return pd.read_pickle(file_path)
+    except Exception:
+        try:
+            with open(file_path, 'rb') as file:
+                return pickle.load(file)
+        except Exception:
+            raise FileNotFoundError(f"Cannot load fxcurve_ts.pkl from {DIR_INPUT}")
 
 
 def _load_macro_artifact():
