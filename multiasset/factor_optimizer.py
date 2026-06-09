@@ -278,19 +278,34 @@ class FactorRiskParityOptimizer:
         # CN bonds all sharing the same 3 factors → degenerate ERC landscape).
         _MAX_HEDGE_WT = 0.30
         _hedge_set = set(hedge_asset_names) if hedge_asset_names else set()
-        # Minimum weight: each selected asset gets at least 10 % of equal share.
+        # Commodity assets get a small minimum floor (1%) to maintain diversification
+        # while allowing them to vary freely with volatility (inverse risk parity).
+        # Detect commodities by checking the asset object type.
+        from multiasset.assets import CommodityAsset
+        _commodity_set = {name for name in asset_names if isinstance(self.portfolio.assets.get(name), CommodityAsset)}
+        _commodity_min_wt = 0.01  # 1% minimum for commodities
+        # Minimum weight: non-commodity assets get at least 10 % of equal share.
         # E.g. 6 assets → floor = 1/(6×10) ≈ 1.7 %; 20 assets → 0.5 %.
-        _min_wt = 1.0 / (n_assets * 10)
+        non_commodity_count = n_assets - len(_commodity_set)
+        _min_wt = 1.0 / (non_commodity_count * 10) if non_commodity_count > 0 else 0.0
         bounds = [
-            (-_MAX_HEDGE_WT, _MAX_HEDGE_WT) if name in _hedge_set else (_min_wt, 1.0)
+            (-_MAX_HEDGE_WT, _MAX_HEDGE_WT) if name in _hedge_set
+            else (_commodity_min_wt, 1.0) if name in _commodity_set
+            else (_min_wt, 1.0)
             for name in asset_names
         ]
 
-        # Start from the minimum-weight floor so the initial guess is feasible.
-        w0 = np.full(n_assets, _min_wt)
-        remaining = 1.0 - n_assets * _min_wt
+        # Start from the minimum-weight floors: _min_wt for bonds, _commodity_min_wt for commodities
+        w0 = np.array([
+            _commodity_min_wt if name in _commodity_set else _min_wt
+            for name in asset_names
+        ])
+        remaining = 1.0 - w0.sum()
         if remaining > 0:
-            w0 += remaining / n_assets
+            # Distribute remaining weight equally among non-commodity assets.
+            non_commodity_indices = [i for i, name in enumerate(asset_names) if name not in _commodity_set]
+            if non_commodity_indices:
+                w0[non_commodity_indices] += remaining / len(non_commodity_indices)
 
         result = minimize(
             objective, w0,
@@ -303,7 +318,10 @@ class FactorRiskParityOptimizer:
         # ── If the primary solve did not converge, retry without hedge shorts ─
         # This mirrors portfolio/portfolio.py's two-stage fallback logic.
         if not result.success and _hedge_set:
-            fallback_bounds = [(_min_wt, 1.0)] * n_assets
+            fallback_bounds = [
+                (_commodity_min_wt, 1.0) if name in _commodity_set else (_min_wt, 1.0)
+                for name in asset_names
+            ]
             result_fb = minimize(
                 objective, w0,
                 method='SLSQP',

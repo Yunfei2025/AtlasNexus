@@ -58,4 +58,4 @@ def retrieveFXIRCurves():
             curves_ts[country] = df
             curves_ts[country].columns = [ country+t for t in tenorlist ]
         # Write single artifact with regenerated data
-        updatePKL(curves_ts, file_path, rewrite=True)
+        curves_ts = updatePKL(curves_ts, file_path)

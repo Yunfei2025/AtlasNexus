@@ -246,6 +246,13 @@ def register_portfolio_run_callbacks(app):
                  if code:
                      active_factors.add(f"CMDL.{code}")
 
+            elif a_type == 'FX':
+                 asset_name = asset.get('name', '')
+                 # Map asset names to FX factors: USDCNY → FXDL.USDCNY
+                 fx_map = {'USDCNY': 'USDCNY', 'EURCNY': 'EURCNY', 'JPYCNY': 'JPYCNY', 'GBPCNY': 'GBPCNY'}
+                 if asset_name in fx_map:
+                     active_factors.add(f"FXDL.{fx_map[asset_name]}")
+
         if not active_factors:
              return [html.Div("No risk factors identified.", style={'color': THEME['text_sub'], 'fontSize': '12px'})]
 

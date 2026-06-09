@@ -21,7 +21,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from multiasset.retrieve import retrieveFXIRCurves
-from multiasset.assets import BondAsset, CommodityAsset, MultiFactorBondAsset, SlopeSensitiveBondAsset, Asset
+from multiasset.assets import BondAsset, CommodityAsset, FXAsset, MultiFactorBondAsset, SlopeSensitiveBondAsset, Asset
 from multiasset.portfolio import Portfolio
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
@@ -221,7 +221,7 @@ def create_hedge_instruments(hedge_names: List[str], analyzer=None) -> List[Asse
 def create_commodity_universe() -> List[CommodityAsset]:
     """
     Create commodity universe.
-    
+
     Returns:
         List of CommodityAsset objects
     """
@@ -231,8 +231,27 @@ def create_commodity_universe() -> List[CommodityAsset]:
         CommodityAsset(name='Copper', factor='CMDL.CU'),
         CommodityAsset(name='Crude_Oil', factor='CMDL.SC'),
     ]
-    
+
     return commodities
+
+
+def create_fx_universe() -> List[FXAsset]:
+    """
+    Create FX spot rate universe.
+
+    Returns:
+        List of FXAsset objects
+    """
+    from multiasset.assets import FXAsset
+
+    fx_pairs: List[FXAsset] = [
+        FXAsset(name='USDCNY', factor='FXDL.USDCNY'),
+        FXAsset(name='EURCNY', factor='FXDL.EURCNY'),
+        FXAsset(name='JPYCNY', factor='FXDL.JPYCNY'),
+        FXAsset(name='GBPCNY', factor='FXDL.GBPCNY'),
+    ]
+
+    return fx_pairs
 
 
 def create_default_portfolio(use_cache: bool = True, use_deterministic: bool = True) -> Portfolio:
@@ -300,7 +319,8 @@ def create_custom_portfolio(selected_asset_names: List[str], use_cache: bool = T
     all_bonds = create_bond_universe(analyzer=analyzer)
     all_spreads = create_spread_universe(analyzer=analyzer)
     all_commodities = create_commodity_universe()
-    all_possible_assets = all_bonds + all_spreads + all_commodities  # type: ignore
+    all_fx = create_fx_universe()
+    all_possible_assets = all_bonds + all_spreads + all_commodities + all_fx  # type: ignore
 
     selected_assets = [
         asset for asset in all_possible_assets

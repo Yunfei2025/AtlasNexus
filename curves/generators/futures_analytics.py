@@ -159,10 +159,51 @@ class FuturesAnalyticsGenerator:
 
     # ── incremental (daily EOD) ────────────────────────────────────────────────
     def update(self) -> None:
-        """Fetch a short Wind window and append new rows to the analytics file."""
+        """Fetch a short Wind window and append new rows to the analytics file.
+
+        Skips Wind fetch if:
+        - Analytics already current for today, OR
+        - futures-px.pkl is missing/stale (no data fetched during EOD --update-data)
+        """
+        existing = loadPKL(ANALYTICS_FILE) or {}
+
+        # Find last date in existing analytics
+        last_analytics_date = None
+        for ctype in self.CTYPES:
+            df = existing.get(ctype)
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                ctype_max = df.index.max()
+                last_analytics_date = ctype_max if last_analytics_date is None else max(last_analytics_date, ctype_max)
+
+        # If analytics are current for today, skip fetch
+        if last_analytics_date is not None and last_analytics_date.date() == self.asof.date():
+            print(f'FuturesAnalyticsGenerator: analytics already current for {self.asof.date()} — skipping fetch')
+            return
+
+        # Check if futures-px.pkl has been updated (indicates data retrieval was run)
+        futures_db = loadPKL(os.path.join(DIR_INPUT, 'futures-px.pkl')) or {}
+        if not futures_db:
+            print(f'FuturesAnalyticsGenerator: futures-px.pkl missing/empty — skipping fetch (run with --update-data to retrieve)')
+            return
+
+        # Find latest date in futures-px.pkl
+        futures_max_date = None
+        for key, df in futures_db.items():
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                df_max = df.index.max()
+                futures_max_date = df_max if futures_max_date is None else max(futures_max_date, df_max)
+
+        if futures_max_date is None:
+            print(f'FuturesAnalyticsGenerator: futures-px.pkl has no data — skipping fetch')
+            return
+
+        # If futures data is older than last analytics, no new data to process
+        if last_analytics_date is not None and futures_max_date <= last_analytics_date:
+            print(f'FuturesAnalyticsGenerator: no new data in futures-px.pkl (latest: {futures_max_date.date()}, analytics: {last_analytics_date.date()}) — skipping fetch')
+            return
+
         from curves.utils.retrieve import fetchFuturesDatabaseWindow
 
-        existing = loadPKL(ANALYTICS_FILE) or {}
         prange = self._incremental_range(existing)
         print(f'FuturesAnalyticsGenerator: incremental window '
               f'{prange[0].date()} → {prange[-1].date()}')

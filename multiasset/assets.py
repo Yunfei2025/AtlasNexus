@@ -182,6 +182,38 @@ class CommodityAsset(Asset):
         return returns
 
 
+class FXAsset(Asset):
+    """FX spot rate asset with direct exchange rate exposure."""
+
+    def __init__(self, name: str, factor: str):
+        """
+        Initialize an FX asset.
+
+        Args:
+            name: FX pair name (e.g., 'USDCNY')
+            factor: FX delta level risk factor (e.g., 'FXDL.USDCNY')
+        """
+        super().__init__(name, factor, sensitivity=1.0)
+
+    def calculate_returns(self, risk_factors: pd.DataFrame) -> pd.Series:
+        """
+        Calculate FX returns from exchange rate changes.
+
+        Args:
+            risk_factors: DataFrame with FX spot levels
+
+        Returns:
+            Series of FX returns in %
+        """
+        if self.factor not in risk_factors.columns:
+            raise ValueError(f"Risk factor '{self.factor}' not found in data")
+
+        # Direct percentage returns
+        returns = risk_factors[self.factor].pct_change() * 100
+
+        return returns
+
+
 class SlopeSensitiveBondAsset(BondAsset):
     """
     Bond asset with sensitivity to both level and slope.

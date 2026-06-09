@@ -67,6 +67,8 @@ def get_asset_type(asset_name):
         return 'Hedge'
     if asset_name in ['Gold', 'Aluminium', 'Copper', 'Crude_Oil']:
         return 'Commodities'
+    elif asset_name in ['USDCNY', 'EURCNY', 'JPYCNY', 'GBPCNY']:
+        return 'FX'
     elif any(x in asset_name for x in ['IRS', 'CDB', 'ICP']):
         return 'Spread'
     elif any(x in asset_name for x in ['US', 'EU', 'UK', 'JP', 'CN']):
@@ -210,7 +212,22 @@ def get_asset_yield_series(asset_name, market_data):
             if key in fx_curves[spread].columns:
                 return fx_curves[spread][key], duration, spread, True
             return None, duration, spread, True
-        
+
+    elif asset_type == 'FX':
+        # FX spot rates from macro data
+        fx_map = {
+            'USDCNY': 'USDCNY.IB',
+            'EURCNY': 'EURCNY.IB',
+            'JPYCNY': 'JPYCNY.IB',
+            'GBPCNY': 'GBPCNY.IB'
+        }
+        fx_ticker = fx_map.get(asset_name)
+        if fx_ticker:
+            fx_data = _get_macro_frame(market_data[2], "fx")
+            if fx_ticker in fx_data.columns:
+                return fx_data[fx_ticker], 0, None, False  # FX is not a bond, duration=0
+        return None, 0, None, False
+
     return None, 0, None, False
 
 
@@ -265,7 +282,9 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
     
     result = pd.DataFrame(index=series.index)
     result['Date'] = result.index
-    
+
+    asset_type = get_asset_type(asset_name)
+
     if is_bond:
         # Bond returns: carry + yield-change capital gain
         # (No roll-down: we track key tenor yields, not aging bonds)
@@ -303,7 +322,14 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
         # Total return (local + FX)
         # R_total = carry + capital + fx
         result['total'] = result['carry'] + result['capital'] + result['fx']
-        
+
+    elif asset_type == 'FX':
+        # FX returns - simple price return (percentage change of spot rate)
+        result['carry'] = 0.0
+        result['capital'] = 0.0
+        result['fx'] = 0.0
+        result['total'] = series.pct_change()
+
     else:
         # Commodity returns - simple price return
         result['carry'] = 0.0

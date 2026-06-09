@@ -653,6 +653,73 @@ def discrete_target_level(
     return round(level, 10)
 
 
+def bucket_position(position: Union[float, pd.Series], num_levels: int = 5) -> Union[int, float, pd.Series]:
+    """Bucket continuous position into discrete levels to avoid overfitting.
+
+    Adapts bucketing to position range:
+    - Long-only [0, 1]:    maps to levels 0, 0.5, 1, 1.5, 2 (spread across [0, 1])
+    - Long-short [-1, 1]:  maps to levels -2, -1, 0, 1, 2 (symmetric around zero)
+
+    For long-only assets, levels represent quintiles of [0, 1]:
+      Level 0:    position ∈ [0.0, 0.2)
+      Level 0.5:  position ∈ [0.2, 0.4)
+      Level 1:    position ∈ [0.4, 0.6)
+      Level 1.5:  position ∈ [0.6, 0.8)
+      Level 2:    position ∈ [0.8, 1.0]
+
+    For long-short assets, levels are:
+      Level -2 (strong short): position ≤ -0.6
+      Level -1 (weak short):   -0.6 < position ≤ -0.2
+      Level  0 (neutral):      -0.2 < position ≤ 0.2
+      Level +1 (weak long):     0.2 < position ≤ 0.6
+      Level +2 (strong long):   position > 0.6
+
+    Args:
+        position: Continuous position value or Series
+        num_levels: Number of discrete levels (currently only 5 supported)
+
+    Returns:
+        Bucketed level(s) as int/float or Series
+    """
+    if isinstance(position, pd.Series):
+        return position.apply(lambda x: bucket_position(x, num_levels) if pd.notna(x) else np.nan)
+
+    if num_levels != 5:
+        raise ValueError(f"Only 5-level bucketing is currently supported")
+
+    if pd.isna(position):
+        return np.nan
+
+    # Detect if long-only (position in [0, 1]) or long-short (position in [-1, 1])
+    is_long_only = position >= 0
+
+    if is_long_only:
+        # Long-only: spread 5 levels across [0, 1]
+        # Map to levels 0, 0.5, 1, 1.5, 2
+        if position >= 0.8:
+            return 2
+        elif position >= 0.6:
+            return 1.5
+        elif position >= 0.4:
+            return 1
+        elif position >= 0.2:
+            return 0.5
+        else:
+            return 0
+    else:
+        # Long-short: symmetric levels around 0
+        if position > 0.6:
+            return 2
+        elif position > 0.2:
+            return 1
+        elif position > -0.2:
+            return 0
+        elif position > -0.6:
+            return -1
+        else:
+            return -2
+
+
 def build_position_series(
     predicted_return: pd.Series,
     daily_returns: pd.Series,
@@ -1027,11 +1094,12 @@ def run_factor_model_backtest(
         )
 
     result['signal'] = pos['signal']
-    result['position'] = pos['position']
+    result['position'] = bucket_position(pos['position'])  # Bucket into 5 levels for display
     result['turnover'] = pos['turnover']
 
     # Gross PnL, then net of transaction costs (doc §5.1, DV01-aware)
-    result['strategy_returns_gross'] = result['position'].shift(1) * result['returns']
+    # Use continuous position for returns calculation before bucketing
+    result['strategy_returns_gross'] = pos['position'].shift(1) * result['returns']
     cost_per_unit = factor_tx_cost_per_unit(factor_code, cfg)
     tx_cost = result['turnover'].abs() * cost_per_unit
     result['strategy_returns'] = result['strategy_returns_gross'] - tx_cost

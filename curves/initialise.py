@@ -56,10 +56,19 @@ def _daily_inputs_ready(asof: datetime.date) -> tuple[bool, list[str]]:
     pending: list[str] = []
     for label, path in _REQUIRED_DAILY_INPUTS.items():
         mtime = get_mtime_date(path)
-        # Accept if file is dated same day or later (allows pre-downloaded data)
-        if mtime is None or mtime < asof:
-            state = "missing" if mtime is None else f"dated {mtime.isoformat()}"
-            pending.append(f"{label} ({path.name}: {state})")
+        if mtime is None:
+            pending.append(f"{label} ({path.name}: missing)")
+            continue
+
+        # Instrument definitions update every 7 days, other inputs are daily
+        if label == "instrument_definitions":
+            days_old = (asof - mtime).days
+            if days_old > 7:
+                pending.append(f"{label} ({path.name}: dated {mtime.isoformat()}, {days_old} days old)")
+        else:
+            # Daily inputs (bond_database, futures_database) must be from today
+            if mtime < asof:
+                pending.append(f"{label} ({path.name}: dated {mtime.isoformat()})")
     return (len(pending) == 0, pending)
 
 
