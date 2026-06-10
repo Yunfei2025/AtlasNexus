@@ -419,10 +419,17 @@ def register_backtest_hist_callbacks(app):
                     continue
 
                 # ── Factor Model Scaling: tilt each asset's risk-parity weight by
-                #    the FactorModel signal of the factor(s) it maps from. The
-                #    resulting weights are directional (can be negative = short)
-                #    and intentionally NOT renormalised — when signals are weak the
-                #    book is smaller, when strong it is fuller.
+                #    the FactorModel signal of the factor(s) it maps from, then
+                #    renormalise so total capital is always fully deployed.
+                #    Signals adjust relative proportions, not absolute allocation.
+                #
+                #    Signal levels (bucketed):
+                #      Long-only [0,1]:    0, 0.5, 1, 1.5, 2
+                #      Long-short [-1,1]: -2, -1, 0, 1, 2
+                #
+                #    Scaling: w_scaled = w_rp * signal_level
+                #    Renorm:  w_final  = w_scaled / sum(w_scaled)  → always sums to 1
+                #    Fallback: if all signals are 0 or missing, keep pure RP weights.
                 if alloc_mode == 'factor_scaling':
                     asset_to_factors = {}
                     for f in low_corr_factors_list:
@@ -434,16 +441,20 @@ def register_backtest_hist_callbacks(app):
                         sigs = [_factor_signal_asof(f, pd.Timestamp(rebalance_date))
                                 for f in asset_to_factors.get(name, ())]
                         sigs = [s for s in sigs if s is not None]
-                        # Default to neutral long (1.0) when no model signal exists,
-                        # so un-modelled sleeves keep their risk-parity exposure.
+                        # Default to neutral (1.0) when no model signal — keeps RP weight
                         coeff = float(np.mean(sigs)) if sigs else 1.0
                         scaled[name] = weight * coeff
 
-                    # Drop assets the model flattened to ~0 exposure
-                    weights = {k: v for k, v in scaled.items() if abs(v) >= 1e-6}
-                    if not weights:
-                        print(f"  {rebalance_date.date()}: Skipped (all factor signals flat)")
-                        continue
+                    # Renormalise using only long (positive) weights so capital is
+                    # always fully deployed. Negative-signal assets are excluded from
+                    # the long book (set to 0) rather than going short.
+                    long_total = sum(v for v in scaled.values() if v > 0)
+                    if long_total > 1e-9:
+                        weights = {k: v / long_total for k, v in scaled.items() if v > 0}
+                    else:
+                        # All signals were 0 or negative — fall back to pure RP weights
+                        print(f"  {rebalance_date.date()}: All signals flat/negative, using RP weights")
+                        # weights already set from RP optimizer above, leave unchanged
 
                 # Store only assets with non-negligible weights in asset pool tracking
                 filtered_assets = [a for a in selected_assets if a['name'] in weights]

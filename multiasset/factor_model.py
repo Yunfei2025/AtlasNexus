@@ -79,30 +79,27 @@ class FactorModelConfig:
     train_months: int = 12
     test_months: int = 1
     # Signal smoothing
-    signal_smooth_days: int = 5              # smooth predicted returns before sign()
+    signal_smooth_days: int = 1              # no pre-smoothing: keep signal path-independent
     # Target horizon
     target_horizon: int = 1                  # predict N-day forward return
-    # ── Position sizing (doc §3.1) ──────────────────────────────────────────
-    sizing_mode: str = 'continuous'          # 'binary' (legacy) | 'continuous' | 'discrete'
-    target_vol: float = 0.10                 # annualised vol target for vol-scaling
-    vol_scale_window: int = 60               # realised-vol lookback (days)
-    icir_window: int = 60                    # rolling OOS-IC window for ICIR weight
-    icir_saturation: float = 0.25            # tanh saturation constant (doc §3.1)
-    max_leverage: float = 2.0                # cap |position|
-    # ── Discrete sizing (Beta book) ─────────────────────────────────────────
-    # 'discrete' mode: map the z-scored prediction to a target position in
-    # [-1, 1] (or [0, 1] when long_only), quantised to a fixed tick (the
-    # "signal"), then take an N-day moving average of that target to obtain a
-    # feasible, gradually-ramping position.  The SMA is a stateless filter (no
-    # path dependence on the held position) whose daily move is bounded by
-    # (range) / position_smooth_window.  With ±1 mapped to ±10B capital
-    # (1 tick of 0.2 = 2B), the [-1,1] span = 20B ⇒ N=10 gives ≤2B/day.
-    position_smooth_window: int = 10         # SMA window: target → position ramp
+    # ── Position sizing ──────────────────────────────────────────────────────
+    # 'discrete' mode: z-score → 5 discrete levels via ICIR-scaled z.
+    # ICIR acts as a confidence multiplier on the z-score (not a gate) so
+    # the warm-up transition is smooth rather than abrupt.
+    # No SMA smoothing and no turnover filter → fully path-independent.
+    sizing_mode: str = 'discrete'            # 'binary' (legacy) | 'continuous' | 'discrete'
+    target_vol: float = 0.10                 # annualised vol target (continuous mode only)
+    vol_scale_window: int = 60               # realised-vol lookback (continuous mode only)
+    icir_window: int = 60                    # rolling OOS-IC window for ICIR confidence
+    icir_saturation: float = 0.25            # tanh saturation: ICIR at which confidence=0.76
+    max_leverage: float = 2.0                # cap |position| (continuous mode only)
+    # ── Discrete sizing ─────────────────────────────────────────────────────
+    position_smooth_window: int = 1          # no SMA smoothing → path-independent
     discrete_tick: float = 0.2               # quantisation step of the target
     discrete_max_z: float = 1.5              # |z| at which the target saturates to ±1
     discrete_deadzone_z: float = 0.5         # |z| below which target is exactly 0
     # ── Turnover & costs (doc §3.3 / §5.1) ──────────────────────────────────
-    turnover_threshold: float = 0.10         # min |Δposition| to trade
+    turnover_threshold: float = 0.10         # used only in continuous mode
     # tx cost is read from settings.fixed_income.FACTOR_TX_COST_BP (flat notional bp)
     # ── Walk-forward purge / embargo (doc §4.2) ─────────────────────────────
     purge_days: int = 5                      # purge around train/test boundary
@@ -756,14 +753,24 @@ def build_position_series(
     if cfg.sizing_mode == 'discrete':
         # 1. Standardise so the level is regime-relative (causal rolling z).
         pred_z = _rolling_zscore(smoothed, cfg.icir_window).fillna(0.0)
-        # 2. Quantised target in [-1,1] on a 0.2 tick — the "signal" (path-independent).
-        target = pred_z.map(lambda v: discrete_target_level(
+
+        # 2. ICIR confidence scaler — multiplies the z-score so warm-up is
+        #    gradual rather than abrupt.  During the first icir_window days
+        #    the ICIR ≈ 0 → confidence ≈ 0 → z_scaled ≈ 0 → neutral levels.
+        #    As the rolling IC history builds, confidence smoothly ramps to 1
+        #    and z_scaled converges to pred_z.  This is NOT path-dependent:
+        #    ICIR depends only on market data (pred vs actual), not positions.
+        icir = rolling_icir(smoothed, daily_returns, cfg.icir_window).shift(1)
+        icir_confidence = np.tanh(icir.clip(lower=0) / cfg.icir_saturation).fillna(0.0)
+        pred_z_scaled = pred_z * icir_confidence
+
+        # 3. Map scaled z directly to 5 discrete levels — no SMA, no turnover
+        #    filter, fully path-independent.
+        target = pred_z_scaled.map(lambda v: discrete_target_level(
             v, cfg.discrete_tick, cfg.discrete_max_z, cfg.discrete_deadzone_z, long_only,
         )).astype(float)
-        # 3. N-day SMA of the target → feasible, gradually-ramping position.
-        win = max(int(cfg.position_smooth_window), 1)
-        position = target.rolling(win, min_periods=1).mean()
-        out = pd.DataFrame({'signal': target, 'position': position})
+
+        out = pd.DataFrame({'signal': target, 'position': target})
         out['turnover'] = out['position'].diff().abs().fillna(out['position'].abs())
         return out[['signal', 'position', 'turnover']]
 
