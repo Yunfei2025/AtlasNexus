@@ -1,16 +1,23 @@
 # Production requirements for FIEngine (AtlasNexus)
-# Derived from actual codebase imports — 2026-06-05
-# Python >=3.9
+# Derived from actual codebase imports — 2026-06-10
+# Python >=3.11  (scipy 1.15+ requires 3.11; tested on 3.13)
+#
+# Install:
+#   pip install -r requirements/production.txt
+#
+# hmmlearn note: no Windows cp313 wheel exists (limited-maintenance package).
+#   Option A — conda:  conda install -c conda-forge hmmlearn
+#   Option B — source: install MSVC Build Tools, then pip install hmmlearn==0.3.3
 
 # ── Core data science ──
-numpy==2.0.2
-pandas==2.3.3
-scipy==1.13.1
+numpy==2.2.0
+pandas==2.3.1
+scipy==1.15.3                # 1.14.1+ first with Python 3.13 wheels
 python-dateutil==2.9.0.post0
-pyarrow>=13.0                # pd.read_parquet / to_parquet (web/tabs/beta)
+pyarrow>=18.0                # 18.0+ first with Python 3.13 wheels; used for parquet I/O
 
 # ── Visualisation ──
-matplotlib==3.9.4
+matplotlib>=3.10.0           # 3.10+ first with reliable cp313 Windows wheels
 plotly==6.7.0
 
 # ── Web / dashboard ──
@@ -18,12 +25,13 @@ dash==4.1.0
 dash-bootstrap-components==2.0.4
 dash-daq==0.6.0              # futures/intraday console (knobs/sliders)
 Flask==3.1.3
+flask-cors>=4.0              # CORS for Flask API endpoints
 
 # ── Machine learning / statistics ──
 scikit-learn==1.6.1
-hmmlearn==0.3.3              # futures regime detection (GaussianHMM)
+hmmlearn==0.3.3              # futures regime detection (GaussianHMM) — see install note above
 statsmodels==0.14.6          # pairs cointegration, ADF test
-nlopt==2.9.1                 # portfolio optimizer (C binding)
+nlopt==2.10.0                # portfolio optimizer (C binding); 2.10.0+ has cp313 wheels
 sympy==1.14.0                # affine curve symbolic pricing
 
 # ── Serialisation / I/O ──

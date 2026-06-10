@@ -20,27 +20,38 @@ class LegacyPickleCompatibilityError(RuntimeError):
 
 
 def _read_pickle_compat(file_path, label=None):
-    try:
-        return pd.read_pickle(file_path)
-    except Exception as e:
-        msg = str(e)
-        legacy_layout = (
-            "Number of manager items must equal union of block items" in msg
-            or "manager items" in msg
-            or "block items" in msg
-            or "BlockManager" in msg
-        )
-        if not legacy_layout:
-            display = label or file_path
-            print(f"Warning: Error loading {display} with pd.read_pickle: {e}")
-            print("Falling back to pickle.load...")
+    import warnings as _warnings
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore")
         try:
-            with open(file_path, 'rb') as f:
-                return pickle.load(f)
-        except Exception:
-            if legacy_layout:
-                raise LegacyPickleCompatibilityError(label or file_path) from e
-            raise
+            return pd.read_pickle(file_path)
+        except Exception as e:
+            first_err = str(e)
+
+    legacy_layout = any(
+        m in first_err
+        for m in ("Number of manager items must equal union of block items",
+                  "manager items", "block items", "BlockManager")
+    )
+
+    # Try compat unpickler (handles pandas 2.3 NDArrayBacked tuple-state issue).
+    try:
+        from curves.utils.file import _DatetimeCompatUnpickler
+        with open(file_path, 'rb') as f:
+            return _DatetimeCompatUnpickler(f).load()
+    except Exception:
+        pass
+
+    if not legacy_layout:
+        display = label or file_path
+        print(f"Warning: Error loading {display} with pd.read_pickle: {first_err}")
+    try:
+        with open(file_path, 'rb') as f:
+            return pickle.load(f)
+    except Exception:
+        if legacy_layout:
+            raise LegacyPickleCompatibilityError(label or file_path)
+        raise
 
 def is_pickle_corrupted(file_path):
     """Check if a pickle file is corrupted by attempting to load it"""

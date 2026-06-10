@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d/ProgramData/miniconda3/shell/condabin/**)",
+      "PowerShell(Get-Content \"$env:LOCALAPPDATA\\\\spyder-6\\\\envs\\\\spyder-updater\" -ErrorAction SilentlyContinue; Test-Path \"$env:LOCALAPPDATA\\\\spyder-6\\\\envs\\\\spyder-updater\"; Get-ChildItem \"$env:LOCALAPPDATA\\\\spyder-6\" -ErrorAction SilentlyContinue | Select-Object Name)",
+      "PowerShell($dbPath = \"$env:APPDATA\\\\Code\\\\User\\\\workspaceStorage\\\\5c21984ab6e46a49eb3ab67e67d3a8a7\\\\state.vscdb\"; $sqliteExe = \\(Get-Command sqlite3 -ErrorAction SilentlyContinue\\)?.Source; if \\($sqliteExe\\) { & $sqliteExe $dbPath \"SELECT key, value FROM ItemTable;\" } else { Write-Output \"sqlite3 not found, trying Python\"; & \"D:\\\\ProgramData\\\\miniconda3\\\\envs\\\\prod\\\\python.exe\" -c \"import sqlite3; conn = sqlite3.connect\\(r'$dbPath'\\); cur = conn.cursor\\(\\); rows = cur.execute\\('SELECT key, value FROM ItemTable'\\).fetchall\\(\\); [print\\(f'{k}: {v[:200]}'\\) for k,v in rows if any\\(x in \\(k+str\\(v\\)\\).lower\\(\\) for x in ['python','conda','interpreter','terminal','spyder']\\)]\" })",
+      "PowerShell($dbPath = \"$env:APPDATA\\\\Code\\\\User\\\\workspaceStorage\\\\5c21984ab6e46a49eb3ab67e67d3a8a7\\\\state.vscdb\"; & \"D:\\\\ProgramData\\\\miniconda3\\\\python.exe\" -c \"import sqlite3; conn = sqlite3.connect\\(r'$dbPath'\\); cur = conn.cursor\\(\\); rows = cur.execute\\('SELECT key, value FROM ItemTable'\\).fetchall\\(\\); [print\\(f'{k}: {str\\(v\\)[:300]}'\\) for k,v in rows if any\\(x in \\(k+str\\(v\\)\\).lower\\(\\) for x in ['python','conda','interpreter','terminal','spyder']\\)]\")",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

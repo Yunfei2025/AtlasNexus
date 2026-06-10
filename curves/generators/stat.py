@@ -70,8 +70,24 @@ class StatGenerator:
         self.start1y: datetime.date = (self.d - relativedelta(years=1))
         self.da: datetime.date = self.d  # upper bound for all historical slices
 
-        # Global env time series
+        # Global env time series — re-fetch from Wind if the IRS data is stale.
+        # retrieveCNBDTS may have run before Wind published the day-end fixings;
+        # all-NaN rows are dropped by updatePKL, leaving database-px.pkl stale.
         self.env_ts: dict = loadCNBDTS()
+        if asof is None:
+            swap_ts = self.env_ts.get('SwapTS')
+            swap_last = pd.Timestamp(swap_ts.index[-1]).date() if (swap_ts is not None and not swap_ts.empty) else None
+            if swap_last is not None and swap_last < self.dp:
+                print(f"INFO: database-px.pkl IRS data ends {swap_last}, expected {self.dp} — re-fetching from Wind...")
+                try:
+                    from curves.utils.retrieve import retrieveCNBDTS
+                    retrieveCNBDTS()
+                    self.env_ts = loadCNBDTS()
+                    swap_ts2 = self.env_ts.get('SwapTS')
+                    new_last = pd.Timestamp(swap_ts2.index[-1]).date() if (swap_ts2 is not None and not swap_ts2.empty) else swap_last
+                    print(f"INFO: after re-fetch, IRS data ends {new_last}")
+                except Exception as exc:
+                    print(f"WARN: Could not re-fetch IRS data from Wind: {exc}")
 
         # In-memory state
         self.spot_ts: dict = {}

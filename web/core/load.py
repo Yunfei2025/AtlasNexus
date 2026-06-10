@@ -7,6 +7,7 @@ import pathlib
 import pickle
 import re
 import sys
+import warnings
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -17,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 # Enable timing logs for heavy loads when set: WEB_LOG_TIMINGS=1
 WEB_LOG_TIMINGS = os.environ.get("WEB_LOG_TIMINGS", "0") == "1"
+
+# NumPy 2.x backward-compat: ensure old pickle files that reference numpy._core
+# can still be loaded (mirrors the shim in curves/utils/loader.py)
+sys.modules.setdefault('numpy._core', np.core)
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent.parent
@@ -96,29 +101,108 @@ def _normalize_legacy_repo_obj(obj: object) -> object:
     return obj
 
 
+# Use the pure-Python unpickler so load_build can be overridden via dispatch.
+# The C-extension _pickle.Unpickler does not route opcodes through Python MRO.
+_PureUnpickler = pickle._Unpickler
+
+
+class _DatetimeCompatUnpickler(_PureUnpickler):
+    """Fallback unpickler for cross-version datetime64 pickle failures.
+
+    Handles two incompatibilities:
+    1. NumPy >=2.3: datetime64 scalar stored as (dtype, ndarray) args to
+       numpy.core.multiarray.scalar which NumPy 2.3 cannot reconstruct.
+    2. Pandas 2.3+: NDArrayBacked (DatetimeArray etc.) stored with old
+       tuple-based __setstate__ format (dtype, array) which pandas 2.3
+       NDArrayBacked.__setstate__ raises NotImplementedError for.
+    """
+
+    def find_class(self, module, name):
+        cls = super().find_class(module, name)
+        if name == 'scalar' and module in (
+            'numpy', 'numpy.core.multiarray', 'numpy._core.multiarray'
+        ):
+            return _DatetimeCompatUnpickler._compat_scalar(cls)
+        return cls
+
+    def load_build(self):
+        # Intercept BUILD opcode before __setstate__ is called.
+        # Handles old-format (dtype, ndarray) state for NDArrayBacked subclasses
+        # (DatetimeArray, TimedeltaArray) that pandas 2.3 can no longer deserialise.
+        stack = self.stack
+        state = stack[-1]
+        inst = stack[-2] if len(stack) >= 2 else None
+        if inst is not None and isinstance(state, tuple) and len(state) == 2:
+            try:
+                from pandas._libs.arrays import NDArrayBacked
+                if isinstance(inst, NDArrayBacked):
+                    np_dtype, data = state
+                    if hasattr(np_dtype, 'kind') and np_dtype.kind in ('M', 'm'):
+                        target = 'datetime64[ns]' if np_dtype.kind == 'M' else 'timedelta64[ns]'
+                        arr = np.asarray(data).astype(target)
+                        stack.pop()   # remove state
+                        stack.pop()   # remove inst
+                        NDArrayBacked.__init__(inst, arr, arr.dtype)
+                        stack.append(inst)
+                        return
+            except Exception:
+                pass
+        super().load_build()
+
+    dispatch = dict(_PureUnpickler.dispatch)
+    dispatch[ord('b')] = load_build
+
+    @staticmethod
+    def _compat_scalar(orig):
+        def _call(dtype, val):
+            try:
+                return orig(dtype, val)
+            except (TypeError, ValueError):
+                if hasattr(dtype, 'kind') and dtype.kind == 'M' and isinstance(val, np.ndarray):
+                    try:
+                        return val.flat[0].astype('datetime64[ns]')
+                    except Exception:
+                        return np.datetime64(str(val.flat[0]))
+            raise
+        return _call
+
+
 def _load_pickle(path: pathlib.Path):
     """Load pickle while being tolerant to legacy formats and corruption."""
     start = time.time()
     try:
-        return _normalize_legacy_repo_obj(pd.read_pickle(path))
-    except Exception as e:
-        print(f"Warning: Error loading {path} with pd.read_pickle: {e}")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return _normalize_legacy_repo_obj(pd.read_pickle(path))
+    except Exception:
+        pass
+    try:
+        with open(path, "rb") as f:
+            data = _normalize_legacy_repo_obj(_DatetimeCompatUnpickler(f).load())
+        # Re-save in current-version format so future loads succeed without the fallback.
         try:
-            with open(path, "rb") as f:
-                return _normalize_legacy_repo_obj(pickle.load(f))
-        except Exception as pickle_error:
-            error_str = str(pickle_error).lower()
-            corruption_indicators = ["invalid load key", "\x00", "unexpected end of file"]
-            if any(indicator in error_str for indicator in corruption_indicators):
-                print(f"Error: Pickle file {path} appears to be corrupted: {pickle_error}")
-                print("You may need to regenerate this data file.")
-                backup_path = str(path) + ".corrupted.bak"
-                if not os.path.exists(backup_path):
-                    import shutil
-
-                    shutil.copy2(path, backup_path)
-                    print(f"Corrupted file backed up to: {backup_path}")
-            raise pickle_error
+            import shutil
+            backup = pathlib.Path(str(path) + ".bak")
+            shutil.copy2(path, backup)
+            with open(path, "wb") as f:
+                pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+            backup.unlink(missing_ok=True)
+            logger.info("Re-saved %s in current pickle format", path.name)
+        except Exception as resave_err:
+            logger.debug("Could not re-save %s: %s", path.name, resave_err)
+        return data
+    except Exception as pickle_error:
+        error_str = str(pickle_error).lower()
+        corruption_indicators = ["invalid load key", "\x00", "unexpected end of file"]
+        if any(indicator in error_str for indicator in corruption_indicators):
+            print(f"Error: Pickle file {path} appears to be corrupted: {pickle_error}")
+            print("You may need to regenerate this data file.")
+            backup_path = str(path) + ".corrupted.bak"
+            if not os.path.exists(backup_path):
+                import shutil
+                shutil.copy2(path, backup_path)
+                print(f"Corrupted file backed up to: {backup_path}")
+        raise pickle_error
     finally:
         if WEB_LOG_TIMINGS:
             elapsed = time.time() - start
@@ -139,6 +223,11 @@ def _load_pickle_optional(path: pathlib.Path):
         try:
             with open(path, "rb") as f:
                 return _normalize_legacy_repo_obj(pickle.load(f))
+        except Exception:
+            pass
+        try:
+            with open(path, "rb") as f:
+                return _normalize_legacy_repo_obj(_DatetimeCompatUnpickler(f).load())
         except Exception:
             return None
 

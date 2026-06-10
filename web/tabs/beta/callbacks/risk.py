@@ -12,6 +12,7 @@ import numpy as np
 import os
 import traceback
 import pathlib
+import warnings
 from datetime import datetime
 
 from multiasset.layout import prepare_portfolio_table
@@ -982,21 +983,27 @@ def register_risk_callbacks(app):
 
         for key, fname in [('ref_cgb', 'TBond-cvref.pkl'), ('ref_cdb', 'CBond-cvref.pkl')]:
             try:
-                cv = pd.read_pickle(str(DIR_INPUT / fname))
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    cv = pd.read_pickle(str(DIR_INPUT / fname))
                 rb = cv.get('RefBond', pd.DataFrame()) if isinstance(cv, dict) else pd.DataFrame()
                 ld[key] = rb.iloc[-1] if not rb.empty else pd.Series(dtype=object)
             except Exception:
                 pass
 
         try:
-            fspds = pd.read_pickle(str(DIR_INPUT / 'futures-spds.pkl'))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                fspds = pd.read_pickle(str(DIR_INPUT / 'futures-spds.pkl'))
             ld['nb']      = fspds.get('NetBasis', {})
             ld['tb_stat'] = fspds.get('TermBasis', {}).get('StatInfo')
         except Exception:
             pass
 
         try:
-            fi = pd.read_pickle(str(DIR_INPUT / 'futures-InstrumentInfo.pkl'))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                fi = pd.read_pickle(str(DIR_INPUT / 'futures-InstrumentInfo.pkl'))
             ld['futs_def'] = fi.get('Def', pd.DataFrame())
         except Exception:
             pass

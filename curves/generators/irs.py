@@ -69,7 +69,21 @@ class IRSGenerator:
     def load_environment(self) -> None:
         """Load instrument definition and time series"""
         self.environment = loadInstrumentDefinition(self.btype)
-        self.environment_ts = _normalize_legacy_repo_frame(loadCNBDTS()['SwapTS'])
+        swap_ts = _normalize_legacy_repo_frame(loadCNBDTS()['SwapTS'])
+        # If the cached data doesn't reach pricing_date, re-fetch from Wind so
+        # evaluate_contracts can do a .loc[pricing_date] lookup without a KeyError.
+        swap_last = pd.Timestamp(swap_ts.index[-1]).date() if (swap_ts is not None and not swap_ts.empty) else None
+        if swap_last is not None and swap_last < self.pricing_date:
+            print(f"INFO: database-px.pkl IRS data ends {swap_last}, need {self.pricing_date} — re-fetching from Wind...")
+            try:
+                from curves.utils.retrieve import retrieveCNBDTS
+                retrieveCNBDTS()
+                swap_ts = _normalize_legacy_repo_frame(loadCNBDTS()['SwapTS'])
+                new_last = pd.Timestamp(swap_ts.index[-1]).date() if not swap_ts.empty else swap_last
+                print(f"INFO: after re-fetch, IRS data ends {new_last}")
+            except Exception as exc:
+                print(f"WARN: Could not re-fetch IRS data from Wind: {exc}")
+        self.environment_ts = swap_ts
        
     def generate_close_curves(self) -> None:
         """Generate IRS close curves"""
@@ -170,9 +184,18 @@ class IRSGenerator:
         instance.run()
 
 
-def main() -> None:
-    IRSGenerator.main()
+def main(date:  Optional[str] = None) -> int:
+    print("Starting IRS curve generation.")
+    try:
+        IRSGenerator.main(date=date)
+        print("IRS curve generation completed successfully.")
+        return 0
+    except Exception as e:
+        print(f"IRS curve generation failed: {e}")
+        return 1
 
 
 if __name__ == '__main__':
-    main()
+    import sys as _sys
+    _date = "20260609"#_sys.argv[1] if len(_sys.argv) > 1 else None
+    _sys.exit(main(date=_date))

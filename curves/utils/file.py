@@ -1,29 +1,105 @@
 
 import os
+import numpy as np
 import pandas as pd
 import pickle
+import warnings
+
+# Pure-Python unpickler — needed so load_build can be overridden via dispatch.
+# The C-extension _pickle.Unpickler does not route opcodes through Python MRO.
+_PureUnpickler = pickle._Unpickler
+
+
+class _DatetimeCompatUnpickler(_PureUnpickler):
+    """Fallback unpickler for cross-version datetime64 pickle failures.
+
+    Handles pandas 2.3+ NDArrayBacked (DatetimeArray etc.) stored with an old
+    tuple-based __setstate__ format (dtype, array) that raises NotImplementedError.
+    """
+
+    def load_build(self):
+        stack = self.stack
+        state = stack[-1]
+        inst = stack[-2] if len(stack) >= 2 else None
+        if inst is not None and isinstance(state, tuple) and len(state) == 2:
+            try:
+                from pandas._libs.arrays import NDArrayBacked
+                if isinstance(inst, NDArrayBacked):
+                    np_dtype, data = state
+                    if hasattr(np_dtype, 'kind') and np_dtype.kind in ('M', 'm'):
+                        target = 'datetime64[ns]' if np_dtype.kind == 'M' else 'timedelta64[ns]'
+                        arr = np.asarray(data).astype(target)
+                        stack.pop()
+                        stack.pop()
+                        NDArrayBacked.__init__(inst, arr, arr.dtype)
+                        stack.append(inst)
+                        return
+            except Exception:
+                pass
+        super().load_build()
+
+    dispatch = dict(_PureUnpickler.dispatch)
+    dispatch[ord('b')] = load_build
+
+
+_INCOMPATIBLE_MSGS = ("manager items", "block items", "BlockManager", "NotImplementedError")
+_CORRUPT_MSGS = ("truncated", "invalid load key", "unexpected end of file")
 
 
 def _safe_read_pickle(file_path: str):
-    """Load a pickle, handling pandas version incompatibility gracefully.
+    """Load a pickle with fallbacks for version incompatibility and corruption.
 
-    Falls back to renaming the broken file and returning None so callers
-    can treat it as missing and rebuild from fresh data.
+    Attempt order:
+      1. pd.read_pickle (fast path)
+      2. _DatetimeCompatUnpickler (handles pandas 2.3 NDArrayBacked tuple state)
+      3. Give up — rename the file so callers treat it as missing and rebuild.
     """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            return pd.read_pickle(file_path)
+        except Exception as e:
+            first_err = str(e)
+
+    # Try compat unpickler for datetime64 incompatibilities.
     try:
-        return pd.read_pickle(file_path)
-    except Exception as e:
-        msg = str(e)
-        if "manager items" in msg or "block items" in msg or "BlockManager" in msg:
-            broken = file_path + ".incompatible"
-            os.rename(file_path, broken)
-            print(
-                f"WARNING: {os.path.basename(file_path)} was saved with an incompatible "
-                f"pandas version and has been renamed to {os.path.basename(broken)}. "
-                f"It will be rebuilt on the next data retrieval run."
-            )
-            return None
-        raise
+        with open(file_path, 'rb') as f:
+            data = _DatetimeCompatUnpickler(f).load()
+        # Re-save in current format so future loads use the fast path.
+        try:
+            import shutil
+            bak = file_path + ".bak"
+            shutil.copy2(file_path, bak)
+            with open(file_path, 'wb') as f:
+                pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+            os.remove(bak)
+            print(f"INFO: {os.path.basename(file_path)} re-saved in current pickle format.")
+        except Exception:
+            pass
+        return data
+    except Exception as e2:
+        second_err = str(e2)
+
+    # Unrecoverable — rename so the caller can start fresh.
+    broken_suffix = ".incompatible"
+    if any(m in first_err for m in _INCOMPATIBLE_MSGS):
+        pass  # already the right label
+    elif any(m in first_err.lower() for m in _CORRUPT_MSGS) or any(
+        m in second_err.lower() for m in _CORRUPT_MSGS
+    ):
+        broken_suffix = ".corrupted"
+
+    broken = file_path + broken_suffix
+    try:
+        os.rename(file_path, broken)
+        print(
+            f"WARNING: {os.path.basename(file_path)} could not be loaded "
+            f"({first_err[:120]}) and has been renamed to "
+            f"{os.path.basename(broken)}. It will be rebuilt on the next run."
+        )
+    except OSError:
+        pass
+    return None
 
 
 def loadPKL(file_path: str) -> dict:

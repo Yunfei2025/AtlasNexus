@@ -24,21 +24,31 @@ class LegacyPickleCompatibilityError(RuntimeError):
 
 
 def _read_pickle_compat(file_path, label=None, *, allow_pickle_fallback=False):
+    import warnings as _warnings
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore")
+        try:
+            return pd.read_pickle(file_path)
+        except Exception as e:
+            first_err = str(e)
+
+    legacy_layout = any(
+        m in first_err
+        for m in ("Number of manager items must equal union of block items",
+                  "manager items", "block items", "BlockManager")
+    )
+
+    # Try compat unpickler (handles pandas 2.3 NDArrayBacked tuple-state issue).
     try:
-        return pd.read_pickle(file_path)
-    except Exception as e:
-        msg = str(e)
-        legacy_layout = (
-            "Number of manager items must equal union of block items" in msg
-            or "manager items" in msg
-            or "block items" in msg
-            or "BlockManager" in msg
-        )
-        if not legacy_layout:
-            display = label or file_path
-            print(f"Warning: Error loading {display} with pd.read_pickle: {e}")
-            raise LegacyPickleCompatibilityError(label or file_path) from e
-        raise LegacyPickleCompatibilityError(label or file_path) from e
+        from curves.utils.file import _DatetimeCompatUnpickler
+        with open(file_path, 'rb') as f:
+            return _DatetimeCompatUnpickler(f).load()
+    except Exception:
+        pass
+
+    display = label or file_path
+    print(f"Warning: Error loading {display} with pd.read_pickle: {first_err}")
+    raise LegacyPickleCompatibilityError(label or file_path)
 
 def loadWorkday(start,end,update=False):
     date_range = pd.date_range(start=start, end=end, freq='D')
