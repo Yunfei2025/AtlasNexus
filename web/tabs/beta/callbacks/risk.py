@@ -667,6 +667,62 @@ def register_risk_callbacks(app):
                     for c in _editable_cols
                 ]
 
+                # ── Exit reminders ────────────────────────────────────────────
+                _today = pd.Timestamp.today().normalize()
+                _alert_rows = []   # list of (trade_id, reason_str, severity)
+                _alert_ids  = {'stop': set(), 'target': set(), 'hold': set()}
+
+                for r in display_rows:
+                    if r.get('ID') == 'TOTAL':
+                        continue
+                    _tid  = r.get('ID', '')
+                    _dir  = str(r.get('Direction', '')).strip().upper()
+                    _op_s = str(r.get('Open price (bp)', '') or '').strip()
+                    _cp_s = str(r.get('Close Price (bp)', '') or '').strip()
+                    _sl_s = str(r.get('Stop (bp)', '') or '').strip()
+                    _tp_s = str(r.get('Target (bp)', '') or '').strip()
+                    _od_s = str(r.get('Open date', '') or '').strip()
+
+                    try:
+                        _op = float(_op_s) if _op_s else None
+                        _cp = float(_cp_s) if _cp_s else None
+                        _sl = float(_sl_s) if _sl_s else None
+                        _tp = float(_tp_s) if _tp_s else None
+                    except (ValueError, TypeError):
+                        _op = _cp = _sl = _tp = None
+
+                    _days = None
+                    if _od_s:
+                        try:
+                            _od = pd.to_datetime(_od_s, errors='coerce')
+                            if pd.notna(_od):
+                                _days = (_today - _od.normalize()).days
+                        except Exception:
+                            pass
+
+                    if _op is not None and _cp is not None:
+                        _spd_chg = _cp - _op
+                        _pnl_dir = _spd_chg if _dir == 'BUY' else -_spd_chg
+
+                        if _sl is not None and _pnl_dir <= -abs(_sl):
+                            _alert_rows.append((_tid, f"Stop loss hit  (Δ={_pnl_dir:+.1f} bp, stop=−{abs(_sl):.1f} bp)", 'stop'))
+                            _alert_ids['stop'].add(_tid)
+                        elif _tp is not None and _pnl_dir >= abs(_tp):
+                            _alert_rows.append((_tid, f"Target reached (Δ={_pnl_dir:+.1f} bp, target=+{abs(_tp):.1f} bp)", 'target'))
+                            _alert_ids['target'].add(_tid)
+
+                    if _days is not None and _days >= 21 and _tid not in _alert_ids['stop'] and _tid not in _alert_ids['target']:
+                        _alert_rows.append((_tid, f"Long hold: {_days}d — review if signal or carry has changed", 'hold'))
+                        _alert_ids['hold'].add(_tid)
+
+                for _tid in _alert_ids['stop']:
+                    dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(239,85,59,0.22)'})
+                for _tid in _alert_ids['target']:
+                    dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(0,204,150,0.22)'})
+                for _tid in _alert_ids['hold']:
+                    dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(255,165,0,0.14)'})
+                # ── end exit reminders ────────────────────────────────────────
+
                 table = dash_table.DataTable(
                     id='summary-alpha-table',
                     data=display_rows,
@@ -704,6 +760,38 @@ def register_risk_callbacks(app):
                     tooltip_delay=0,
                     tooltip_duration=None,
                 )
+                # Build reminder banner from alerts computed before table construction
+                _reminder_banner = None
+                if _alert_rows:
+                    _sev_style = {
+                        'stop':   {'color': THEME['danger'],  'icon': '🛑'},
+                        'target': {'color': THEME['success'], 'icon': '✅'},
+                        'hold':   {'color': THEME['warning'], 'icon': '⏰'},
+                    }
+                    _items = []
+                    for _tid, _msg, _sev in _alert_rows:
+                        _st = _sev_style[_sev]
+                        _items.append(html.Div([
+                            html.Span(f"{_st['icon']} ", style={'fontSize': '13px'}),
+                            html.Span(_tid, style={'fontWeight': 'bold', 'color': _st['color'], 'marginRight': '6px'}),
+                            html.Span(_msg, style={'color': THEME['text_main']}),
+                        ], style={'marginBottom': '4px', 'fontSize': '12px'}))
+                    _reminder_banner = html.Div([
+                        html.Div("Exit Reminders", style={
+                            'fontWeight': 'bold', 'color': THEME['text_main'],
+                            'fontSize': '13px', 'marginBottom': '6px',
+                            'borderBottom': f"1px solid {THEME['table_header']}",
+                            'paddingBottom': '4px',
+                        }),
+                        *_items,
+                    ], style={
+                        'backgroundColor': 'rgba(239,85,59,0.08)',
+                        'border': f"1px solid {THEME['danger']}",
+                        'borderRadius': '5px',
+                        'padding': '10px 14px',
+                        'marginBottom': '12px',
+                    })
+
                 content = html.Div([
                     html.Div([
                         html.Span(
@@ -737,6 +825,7 @@ def register_risk_callbacks(app):
                         'position': 'relative',
                         'zIndex': '1001',
                     }),
+                    *([_reminder_banner] if _reminder_banner else []),
                     table,
                 ])
                 status = (

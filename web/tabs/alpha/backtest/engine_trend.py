@@ -48,7 +48,6 @@ def run_trend_backtest_dc(
     vol_window: int = 60,
     trailing_mult: float = 1.5,
     carry_buffer: float = 0.0,
-    max_hold: int = 60,
     allow_short: bool = True,
     carry_roll_ts: Optional[pd.Series] = None,
     carry_roll_bp: float = 0.0,
@@ -139,9 +138,8 @@ def run_trend_backtest_dc(
                 carry_bad = px > -carry_buffer
 
             flip = (position == 1 and st < 0) or (position == -1 and st > 0)
-            time_stop = days_held >= max_hold
 
-            if trailing_stop or carry_bad or flip or time_stop:
+            if trailing_stop or carry_bad or flip:
                 price_pnl = (px - entry_price) * position * duration_mult
                 carry_income = _carry_accrual(
                     position, entry_date, date, days_held,
@@ -165,7 +163,7 @@ def run_trend_backtest_dc(
                     'cr_acc': carry_income * 100.0,
                     'duration': duration_mult,
                     'days_held': days_held,
-                    'exit_reason': 'trailing' if trailing_stop else ('carry' if carry_bad else ('flip' if flip else 'max_hold')),
+                    'exit_reason': 'trailing' if trailing_stop else ('carry' if carry_bad else 'flip'),
                 })
                 position = 0
                 entry_date = None

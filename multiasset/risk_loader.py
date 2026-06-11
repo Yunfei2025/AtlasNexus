@@ -229,7 +229,7 @@ class RiskFactorLoader:
             print("Warning: commodity macro data unavailable; skipping commodity factors")
             return risk_factors
 
-        for commodity in ["AU.SHF", "AL.SHF", "CU.SHF", "SC.INE"]:
+        for commodity in ["AU.SHF", "AG.SHF", "AL.SHF", "CU.SHF", "ZN.SHF", "SC.INE"]:
             ticker = commodity.split(".")[0]
             if commodity in commodity_data.columns:
                 risk_factors[f"CMDL.{ticker}"] = commodity_data[commodity]

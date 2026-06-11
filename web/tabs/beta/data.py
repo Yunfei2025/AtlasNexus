@@ -316,11 +316,17 @@ FACTOR_TO_ASSET_MAP = {
     'CMDL.AU': [
         {'name': 'Gold', 'type': 'Commodities', 'universe': 'Gold', 'sector': 'N/A'},
     ],
+    'CMDL.AG': [
+        {'name': 'Silver', 'type': 'Commodities', 'universe': 'Silver', 'sector': 'N/A'},
+    ],
     'CMDL.AL': [
         {'name': 'Aluminium', 'type': 'Commodities', 'universe': 'Aluminium', 'sector': 'N/A'},
     ],
     'CMDL.CU': [
         {'name': 'Copper', 'type': 'Commodities', 'universe': 'Copper', 'sector': 'N/A'},
+    ],
+    'CMDL.ZN': [
+        {'name': 'Zinc', 'type': 'Commodities', 'universe': 'Zinc', 'sector': 'N/A'},
     ],
     'CMDL.SC': [
         {'name': 'Crude_Oil', 'type': 'Commodities', 'universe': 'Crude Oil', 'sector': 'N/A'},

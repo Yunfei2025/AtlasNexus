@@ -265,6 +265,7 @@ def register_backtest_callbacks(app) -> None:
         [Output('bt-entry-z', 'value'),
          Output('bt-exit-z', 'value'),
          Output('bt-stop-z', 'value'),
+         Output('bt-min-hold', 'value'),
          Output('bt-theta', 'value'),
          Output('bt-mom-window', 'value'),
          Output('bt-vol-window', 'value'),
@@ -273,12 +274,9 @@ def register_backtest_callbacks(app) -> None:
     )
     def preset_backtest_params(spread_type):
         if spread_type == 'TenorSpread':
-            # Longer-hold preset for curve steepeners / butterflies:
-            # fewer marginal entries, slower exits, and less stop-out noise.
-            return 2.5, 0.25, 5.0, 0.03, 30, 90, 2.0
+            return 2.5, 0.25, 5.0, 10, 0.03, 30, 90, 2.0
 
-        # Default presets for other spread families.
-        return 2.0, 0.5, 4.0, 0.02, 20, 60, 1.5
+        return 2.0, 0.5, 4.0, 7, 0.02, 20, 60, 1.5
 
     # -------------------------------------------------------------------------
     # BACKTEST: Run Individual Backtest
@@ -292,7 +290,6 @@ def register_backtest_callbacks(app) -> None:
          State('bt-entry-z', 'value'),
          State('bt-exit-z', 'value'),
          State('bt-stop-z', 'value'),
-         State('bt-max-hold', 'value'),
          State('bt-period', 'value'),
          State('bt-trade-style', 'value'),
          State('bt-theta', 'value'),
@@ -300,12 +297,13 @@ def register_backtest_callbacks(app) -> None:
          State('bt-vol-window', 'value'),
          State('bt-trailing-mult', 'value'),
          State('bt-carry-buffer', 'value'),
-         State('bt-allow-short', 'value')],
+         State('bt-allow-short', 'value'),
+         State('bt-min-hold', 'value')],
         prevent_initial_call=True
     )
     def run_individual_backtest(
-        n_clicks, spread_type, instrument, entry_z, exit_z, stop_z, max_hold, period, style,
-        theta, mom_window, vol_window, trailing_mult, carry_buffer, allow_short
+        n_clicks, spread_type, instrument, entry_z, exit_z, stop_z, period, style,
+        theta, mom_window, vol_window, trailing_mult, carry_buffer, allow_short, min_hold
     ):
         if not n_clicks:
             return html.Div(), ""
@@ -436,7 +434,6 @@ def register_backtest_callbacks(app) -> None:
                     vol_window=int(vol_window) if vol_window is not None else 60,
                     trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
                     carry_buffer=float(carry_buffer) if carry_buffer is not None else 0.0,
-                    max_hold=int(max_hold) if max_hold is not None else 60,
                     allow_short=bool(allow_short and 'allow' in allow_short),
                     carry_roll_ts=carry_roll_ts_instrument,
                     carry_roll_bp=carry_roll_bp,
@@ -453,7 +450,7 @@ def register_backtest_callbacks(app) -> None:
                     entry_z=entry_z or 2.0,
                     exit_z=exit_z or 0.5,
                     stop_z=stop_z or 4.0,
-                    max_hold=max_hold or 60,
+                    min_hold=int(min_hold) if min_hold is not None else 7,
                     trade_style=style,
                     carry_roll_ts=carry_roll_ts_instrument,
                     carry_roll_bp=carry_roll_bp,
@@ -566,10 +563,15 @@ def register_backtest_callbacks(app) -> None:
         [State('alpha-optimized-weights', 'data'),
          State('bt-initial-capital', 'value'),
          State('bt-txn-cost', 'value'),
-         State('bt-port-period', 'value')],
+         State('bt-port-period', 'value'),
+         State('bt-entry-z', 'value'),
+         State('bt-exit-z', 'value'),
+         State('bt-stop-z', 'value'),
+         State('bt-min-hold', 'value')],
         prevent_initial_call=True
     )
-    def run_portfolio_backtest(n_clicks, optimized_data, capital, txn_cost, period):
+    def run_portfolio_backtest(n_clicks, optimized_data, capital, txn_cost, period,
+                               entry_z, exit_z, stop_z, min_hold):
         if not n_clicks:
             return html.Div(), ""
 
@@ -667,6 +669,11 @@ def register_backtest_callbacks(app) -> None:
                 dur = _get_duration_mult(asset, spread_type)
                 _bc_long, _bc_short = _get_borrow_cost_annual_bp(spread_type, asset)
 
+                _entry_z  = float(entry_z)  if entry_z  is not None else 2.0
+                _exit_z   = float(exit_z)   if exit_z   is not None else 0.5
+                _stop_z   = float(stop_z)   if stop_z   is not None else 4.0
+                _min_hold = int(min_hold) if min_hold is not None else 7
+
                 try:
                     if run_trend:
                         res = run_trend_backtest_dc(
@@ -681,6 +688,10 @@ def register_backtest_callbacks(app) -> None:
                             borrow_cost_long_bp=_bc_long,
                             borrow_cost_short_bp=_bc_short,
                             spread_type=spread_type,
+                            entry_z=_entry_z,
+                            exit_z=_exit_z,
+                            stop_z=_stop_z,
+                            min_hold=_min_hold,
                         )
                 except Exception:
                     continue

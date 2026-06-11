@@ -61,7 +61,8 @@ class FactorRiskParityOptimizer:
     def fit_and_calculate(self, rebalance_date: pd.Timestamp,
                           risk_budgets: Optional[Dict[str, float]] = None,
                           total_capital: float = 1.0,
-                          hedge_asset_names: Optional[list] = None) -> Tuple[pd.Series, pd.Series]:
+                          hedge_asset_names: Optional[list] = None,
+                          neutral_asset_names: Optional[list] = None) -> Tuple[pd.Series, pd.Series]:
         """
         Calculate optimal weights for a given rebalance date.
         
@@ -99,6 +100,7 @@ class FactorRiskParityOptimizer:
             factor_vols, factor_cov=factor_cov,
             risk_budgets=risk_budgets, total_capital=total_capital,
             hedge_asset_names=hedge_asset_names,
+            neutral_asset_names=neutral_asset_names,
         )
         self._weights = weights
 
@@ -137,7 +139,8 @@ class FactorRiskParityOptimizer:
                           factor_cov: Optional[pd.DataFrame] = None,
                           risk_budgets: Optional[Dict[str, float]] = None,
                           total_capital: float = 1.0,
-                          hedge_asset_names: Optional[list] = None) -> pd.Series:
+                          hedge_asset_names: Optional[list] = None,
+                          neutral_asset_names: Optional[list] = None) -> pd.Series:
         """
         Optimize portfolio weights using factor risk parity or risk budgeting.
 
@@ -277,21 +280,45 @@ class FactorRiskParityOptimizer:
         # from zeroing out assets when the B matrix is rank-deficient (e.g. 6
         # CN bonds all sharing the same 3 factors → degenerate ERC landscape).
         _MAX_HEDGE_WT = 0.30
-        _hedge_set = set(hedge_asset_names) if hedge_asset_names else set()
-        # Commodity assets get a small minimum floor (1%) to maintain diversification
-        # while allowing them to vary freely with volatility (inverse risk parity).
-        # Detect commodities by checking the asset object type.
-        from multiasset.assets import CommodityAsset
+        _hedge_set   = set(hedge_asset_names)   if hedge_asset_names   else set()
+        _neutral_set = set(neutral_asset_names) if neutral_asset_names else set()
+
+        # Auto-detect neutral assets from risk_budgets: an asset is neutral when
+        # its total weighted budget exposure across all factors it loads on is ~0.
+        # Scalar levels are {0, ±0.25, ±0.5, ±0.75, ±1.0}; scalar=0 means flat.
+        if risk_budgets and not _neutral_set:
+            _budget_arr = np.array([
+                float(risk_budgets.get(f, 0.0)) if risk_budgets.get(f) is not None else 0.0
+                for f in valid_factors
+            ])
+            _asset_budget_exposure = np.abs(B) @ np.abs(_budget_arr)
+            _total_budget = np.abs(_budget_arr).sum()
+            if _total_budget > 1e-9:
+                for _ai, _aname in enumerate(asset_names):
+                    if _asset_budget_exposure[_ai] < 1e-9 * _total_budget:
+                        _neutral_set.add(_aname)
+
+        from multiasset.assets import CommodityAsset, FXAsset
         _commodity_set = {name for name in asset_names if isinstance(self.portfolio.assets.get(name), CommodityAsset)}
-        _commodity_min_wt = 0.01  # 1% minimum for commodities
-        # Minimum weight: non-commodity assets get at least 10 % of equal share.
-        # E.g. 6 assets → floor = 1/(6×10) ≈ 1.7 %; 20 assets → 0.5 %.
+        _fx_set = {name for name in asset_names if isinstance(self.portfolio.assets.get(name), FXAsset)}
+        _commodity_min_wt = 0.01
         non_commodity_count = n_assets - len(_commodity_set)
         _min_wt = 1.0 / (non_commodity_count * 10) if non_commodity_count > 0 else 0.0
+        _CAP_COMM = max(1.0 / n_assets, 0.15)
+        _CAP_FX   = max(1.0 / n_assets, 0.20)
+        # Cap bonds at 2× equal share so no single bond dominates when the
+        # B matrix is nearly rank-deficient (e.g. 6 CN bonds on one factor).
+        _CAP_BOND = max(2.0 / n_assets, 0.15)
+        # Neutral cap = 0.25 × equal-share weight (minimum scalar tick applied to RP base).
+        # Long-only scalars are {0.25, 0.5, 0.75, 1.0}; scalar=0 maps to this floor
+        # so the optimizer produces a practically-flat position without being excluded.
+        _CAP_NEUTRAL = max(0.25 / n_assets, _min_wt)
         bounds = [
             (-_MAX_HEDGE_WT, _MAX_HEDGE_WT) if name in _hedge_set
-            else (_commodity_min_wt, 1.0) if name in _commodity_set
-            else (_min_wt, 1.0)
+            else (0.0, _CAP_NEUTRAL)            if name in _neutral_set
+            else (_commodity_min_wt, _CAP_COMM) if name in _commodity_set
+            else (_min_wt, _CAP_FX)             if name in _fx_set
+            else (_min_wt, _CAP_BOND)
             for name in asset_names
         ]
 
@@ -319,7 +346,9 @@ class FactorRiskParityOptimizer:
         # This mirrors portfolio/portfolio.py's two-stage fallback logic.
         if not result.success and _hedge_set:
             fallback_bounds = [
-                (_commodity_min_wt, 1.0) if name in _commodity_set else (_min_wt, 1.0)
+                (_commodity_min_wt, _CAP_COMM) if name in _commodity_set
+                else (_min_wt, _CAP_FX) if name in _fx_set
+                else (_min_wt, _CAP_BOND)
                 for name in asset_names
             ]
             result_fb = minimize(
@@ -355,7 +384,10 @@ class FactorRiskParityOptimizer:
         if exposure_matrix.empty:
             return pd.DataFrame()
 
-        w = weights.reindex(exposure_matrix.index).fillna(0.0).values
+        _exp_idx = exposure_matrix.index
+        if not _exp_idx.is_unique:
+            _exp_idx = _exp_idx[~_exp_idx.duplicated(keep='first')]
+        w = weights.reindex(_exp_idx).fillna(0.0).values
         B = exposure_matrix.values                                   # (n_assets, n_factors)
         sigma_f = np.array([factor_vols.get(f, 0.0) for f in factor_names])
 
@@ -473,7 +505,8 @@ class FactorRiskParityOptimizer:
 
     def optimize(self, total_capital: float, use_cache: bool = True,
                  risk_budgets: Dict[str, float] = None,
-                 hedge_asset_names: list = None):
+                 hedge_asset_names: list = None,
+                 neutral_asset_names: list = None):
         """
         Run the optimization and return detailed results.
         
@@ -492,7 +525,12 @@ class FactorRiskParityOptimizer:
         if self.portfolio.risk_factor_loader._risk_factors_cache is None:
              self.portfolio.risk_factor_loader.load_risk_factors(use_cache=False)
              
-        rebalance_date = pd.Timestamp(self.portfolio.risk_factor_loader._risk_factors_cache.index.max())
+        # Snap to the 1st of the current month so the portfolio tab uses the same
+        # cut-off as the monthly backtest rebalance dates (avoids look-ahead bias).
+        _today = pd.Timestamp.today().normalize()
+        _first_of_month = _today.replace(day=1)
+        _data_max = pd.Timestamp(self.portfolio.risk_factor_loader._risk_factors_cache.index.max())
+        rebalance_date = min(_first_of_month, _data_max)
         
         # Fit and Calculate
         weights, factor_vols = self.fit_and_calculate(
@@ -500,6 +538,7 @@ class FactorRiskParityOptimizer:
             risk_budgets=risk_budgets,
             total_capital=total_capital,
             hedge_asset_names=hedge_asset_names,
+            neutral_asset_names=neutral_asset_names,
         )
         
         # Construct summary

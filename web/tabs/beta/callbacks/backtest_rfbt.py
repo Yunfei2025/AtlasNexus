@@ -474,7 +474,6 @@ def register_backtest_rfbt_callbacks(app):
             'train_months': int(fm_train or 12),
             'ic_threshold': float(fm_ic or 0.05),
             'top_n': int(fm_topn or 8),
-            'signal_smooth_days': 5,
             'sizing_mode': 'discrete',
             'position_smooth_window': 10,
         }
@@ -508,7 +507,7 @@ def register_backtest_rfbt_callbacks(app):
                         "⚠️ Saved model does not match current parameters",
                         dash.no_update,
                     )
-                smooth_days = int(saved_cfg.get('signal_smooth_days', current_cfg['signal_smooth_days']))
+                smooth_days = int(saved_cfg.get('signal_smooth_days', 1))
 
                 # ── Split: factors already in artifact vs newly selected ──
                 artifact_factors = {k for k in latest_artifact if k != 'metadata'}

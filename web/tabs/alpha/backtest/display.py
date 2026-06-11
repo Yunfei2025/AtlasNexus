@@ -138,7 +138,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         short_entries = trades_df[trades_df['direction'] == 'SHORT'].copy() if trades_df is not None and len(trades_df) > 0 else pd.DataFrame(columns=['entry_date', 'entry_price'])
         open_long_entries = pd.DataFrame(columns=['entry_date', 'entry_price'])
         open_short_entries = pd.DataFrame(columns=['entry_date', 'entry_price'])
-        # Color exits by actual P&L sign so trend exits (flip/max_hold/trailing)
+        # Color exits by actual P&L sign so trend exits (flip/trailing/carry)
         # are not all shown as losses when they may be profitable.
         if open_trade:
             open_entry_df = pd.DataFrame([{

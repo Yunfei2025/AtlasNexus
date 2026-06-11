@@ -149,7 +149,12 @@ def prepare_portfolio_table(summary_df, factor_exposures_df, portfolio=None):
 
     cols = ['Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument',
             'Duration', 'Capital (CNY)', 'DV01 (MM CNY)', 'Weight (%)'] + risk_factors
-    portfolio_df = filtered[cols].sort_values(['Asset Type', 'Universe', 'Sector'])
+    filtered = filtered[cols]
+
+    # Custom sort: Asset Type → Universe → Sector (with tenor ordering for Gov Bonds)
+    tenor_order = {'1Y': 0, '2Y': 1, '5Y': 2, '10Y': 3, '20Y': 4, '30Y': 5}
+    filtered['_sector_sort_key'] = filtered['Sector'].map(lambda s: tenor_order.get(str(s), 999))
+    portfolio_df = filtered.sort_values(['Asset Type', 'Universe', '_sector_sort_key', 'Sector']).drop('_sector_sort_key', axis=1)
     portfolio_df = portfolio_df.reset_index(drop=True)
 
     return portfolio_df

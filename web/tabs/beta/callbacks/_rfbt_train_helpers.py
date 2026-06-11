@@ -24,15 +24,20 @@ from ..data import THEME
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _config_matches(saved_cfg, current_cfg) -> bool:
-    """Return True if *saved_cfg* covers the same settings as *current_cfg*."""
+    """Return True if *saved_cfg* covers the same user-exposed settings as *current_cfg*.
+
+    Only compares the three parameters that appear in the UI (train_months,
+    ic_threshold, top_n).  Internal params like signal_smooth_days are not
+    surfaced in the UI and are not passed during training, so comparing them
+    would produce false mismatches.
+    """
     if not saved_cfg:
         return False
     try:
         return (
             int(saved_cfg.get('train_months', -1)) == int(current_cfg['train_months']) and
             float(saved_cfg.get('ic_threshold', -1)) == float(current_cfg['ic_threshold']) and
-            int(saved_cfg.get('top_n', -1)) == int(current_cfg['top_n']) and
-            int(saved_cfg.get('signal_smooth_days', current_cfg['signal_smooth_days'])) == int(current_cfg['signal_smooth_days'])
+            int(saved_cfg.get('top_n', -1)) == int(current_cfg['top_n'])
         )
     except Exception:
         return False

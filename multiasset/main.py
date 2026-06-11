@@ -227,8 +227,10 @@ def create_commodity_universe() -> List[CommodityAsset]:
     """
     commodities: List[CommodityAsset] = [
         CommodityAsset(name='Gold', factor='CMDL.AU'),
+        CommodityAsset(name='Silver', factor='CMDL.AG'),
         CommodityAsset(name='Aluminium', factor='CMDL.AL'),
         CommodityAsset(name='Copper', factor='CMDL.CU'),
+        CommodityAsset(name='Zinc', factor='CMDL.ZN'),
         CommodityAsset(name='Crude_Oil', factor='CMDL.SC'),
     ]
 
@@ -322,10 +324,12 @@ def create_custom_portfolio(selected_asset_names: List[str], use_cache: bool = T
     all_fx = create_fx_universe()
     all_possible_assets = all_bonds + all_spreads + all_commodities + all_fx  # type: ignore
 
-    selected_assets = [
-        asset for asset in all_possible_assets
-        if asset.name in selected_asset_names
-    ]
+    _seen: set = set()
+    selected_assets = []
+    for asset in all_possible_assets:
+        if asset.name in selected_asset_names and asset.name not in _seen:
+            selected_assets.append(asset)
+            _seen.add(asset.name)
 
     if not selected_assets:
         print("Warning: No valid assets found matching the selection. Using default portfolio.")
@@ -348,7 +352,8 @@ def run_risk_parity_allocation(total_capital: float = 10_000_000_000,
                                 selected_assets: List[str] = None,
                                 risk_budgets: Optional[Dict[str, float]] = None,
                                 use_deterministic: bool = True,
-                                hedge_asset_names: List[str] = None) -> tuple:
+                                hedge_asset_names: List[str] = None,
+                                neutral_asset_names: List[str] = None) -> tuple:
     """
     Run factor-level risk parity allocation using OOP interface.
     
@@ -379,6 +384,7 @@ def run_risk_parity_allocation(total_capital: float = 10_000_000_000,
     summary, asset_returns, volatilities, factor_exposures, factor_risk_contributions = optimizer.optimize(
         total_capital, use_cache=use_cache, risk_budgets=risk_budgets,
         hedge_asset_names=hedge_asset_names,
+        neutral_asset_names=neutral_asset_names,
     )
 
     optimizer.print_summary(summary, total_capital, factor_exposures, factor_risk_contributions)

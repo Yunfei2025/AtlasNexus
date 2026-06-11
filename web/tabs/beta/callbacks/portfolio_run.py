@@ -139,53 +139,23 @@ def _prepare_summary_table_data(portfolio_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _merge_with_existing_positions(new_portfolio_df: pd.DataFrame) -> pd.DataFrame:
-    """Merge optimized portfolio with existing positions, updating bond codes.
+    """Update Rates bond codes to the latest on-the-run instruments.
 
-    For Rates assets with old bonds, replaces them with the latest on-the-run codes.
-    For non-Rates assets, keeps the instrument unchanged.
+    Only substitutes OTR bond codes for Rates assets in the new portfolio.
+    Does not carry over positions from previous runs — allocation is fully
+    determined by today's signals each time.
     """
     if new_portfolio_df.empty:
         return new_portfolio_df
 
-    # Load existing positions
-    existing_df = None
-    if os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
-        try:
-            existing_df = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
-            # Filter out TOTAL row
-            existing_df = existing_df[existing_df.get('Asset Type', '') != 'TOTAL'].copy()
-        except Exception:
-            existing_df = None
-
     result_df = new_portfolio_df.copy()
-
-    # Get latest on-the-run bonds for Rates assets
     otr_map = get_cgb_otr_map()
 
-    # For each Rates asset in new portfolio, ensure we use the latest on-the-run bond
     for idx, row in result_df.iterrows():
         if row.get('Asset Type') == 'Rates':
-            # Get the sector (tenor) from the Sector column
             sector = row.get('Sector', '')
             if sector and sector in otr_map:
-                # Update Instrument to the latest on-the-run bond for this tenor
                 result_df.at[idx, 'Instrument'] = otr_map[sector]
-
-    # Merge with existing positions: preserve non-TOTAL rows that don't overlap with new portfolio
-    if existing_df is not None and not existing_df.empty:
-        # Get Asset Names from both DataFrames
-        new_assets = set(result_df.get('Asset Name', []))
-        existing_non_overlap = existing_df[~existing_df.get('Asset Name', '').isin(new_assets)].copy()
-
-        if not existing_non_overlap.empty:
-            # For Rates assets in existing positions, also update to latest on-the-run bonds
-            for idx, row in existing_non_overlap.iterrows():
-                if row.get('Asset Type') == 'Rates':
-                    sector = row.get('Sector', '')
-                    if sector and sector in otr_map:
-                        existing_non_overlap.at[idx, 'Instrument'] = otr_map[sector]
-
-            result_df = pd.concat([result_df, existing_non_overlap], ignore_index=True)
 
     return result_df
 
@@ -368,8 +338,8 @@ def register_portfolio_run_callbacks(app):
         for factor in sorted_factors:
             rp_max = get_rp_max(factor)
             coeff  = get_coeff(factor)
-            # factor_scaling: scale exposure by signal coeff; other modes: exposure = RP Max
-            suggested = round(rp_max * coeff, 2) if allocation_mode == 'factor_scaling' else rp_max
+            # Exposure = RP Max in all modes; coeff is shown for reference only
+            suggested = rp_max
             label, color = _scalar_meta(coeff)
             is_default_coeff = factor not in snapshot_by_rf
 

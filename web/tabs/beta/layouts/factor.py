@@ -150,8 +150,10 @@ def build_multiasset_factor_layout():
                     id='factor-selection-cmd',
                     options=[
                         {'label': ' CMDL.AU (Gold)', 'value': 'CMDL.AU'},
+                        {'label': ' CMDL.AG (Silver)', 'value': 'CMDL.AG'},
                         {'label': ' CMDL.AL (Aluminium)', 'value': 'CMDL.AL'},
                         {'label': ' CMDL.CU (Copper)', 'value': 'CMDL.CU'},
+                        {'label': ' CMDL.ZN (Zinc)', 'value': 'CMDL.ZN'},
                         {'label': ' CMDL.SC (Crude Oil)', 'value': 'CMDL.SC'},
                     ],
                     value=SELECTED_FACTOR_POOL['cmd_factors'],

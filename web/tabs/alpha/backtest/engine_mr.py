@@ -16,7 +16,7 @@ def run_spread_backtest(
     entry_z: float = 2.0,
     exit_z: float = 0.5,
     stop_z: float = 4.0,
-    max_hold: int = 60,
+    min_hold: int = 7,
     trade_style: str = 'mr',
     carry_roll_ts: Optional[pd.Series] = None,
     carry_roll_bp: float = 0.0,
@@ -109,13 +109,16 @@ def run_spread_backtest(
             exit_signal = False
             exit_reason = None
 
-            if position == 1 and cs >= -exit_z:
-                exit_signal = True
-                exit_reason = 'target'
-            elif position == -1 and cs <= exit_z:
-                exit_signal = True
-                exit_reason = 'target'
+            # Only allow signal-based exits after the minimum holding period.
+            if days_held >= min_hold:
+                if position == 1 and cs >= -exit_z:
+                    exit_signal = True
+                    exit_reason = 'target'
+                elif position == -1 and cs <= exit_z:
+                    exit_signal = True
+                    exit_reason = 'target'
 
+            # Stop-loss always fires regardless of min_hold.
             if not exit_signal:
                 if position == 1 and z < -stop_z:
                     exit_signal = True
@@ -123,11 +126,6 @@ def run_spread_backtest(
                 elif position == -1 and z > stop_z:
                     exit_signal = True
                     exit_reason = 'stop_loss'
-
-            if days_held >= max_hold:
-                exit_signal = True
-                if exit_reason is None:
-                    exit_reason = 'max_hold'
 
             if exit_signal:
                 price_pnl = (price - entry_price) * position * duration_mult

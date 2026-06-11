@@ -183,8 +183,10 @@ def build_multiasset_portfolio_layout():
                                     id='commodities-selector',
                                     options=[
                                         {'label': ' Gold', 'value': 'Gold'},
+                                        {'label': ' Silver', 'value': 'Silver'},
                                         {'label': ' Alum', 'value': 'Aluminium'},
                                         {'label': ' Copper', 'value': 'Copper'},
+                                        {'label': ' Zinc', 'value': 'Zinc'},
                                         {'label': ' Oil', 'value': 'Crude_Oil'},
                                     ],
                                     value=[], inline=True,

@@ -12,7 +12,7 @@ import numpy as np
 import traceback
 from dateutil.relativedelta import relativedelta
 
-from multiasset.data import load_raw_market_data, calculate_daily_returns_series
+from multiasset.data import load_raw_market_data, calculate_daily_returns_series, get_asset_type
 from multiasset.main import create_custom_portfolio
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
@@ -431,6 +431,11 @@ def register_backtest_hist_callbacks(app):
                 #    Renorm:  w_final  = w_scaled / sum(w_scaled)  → always sums to 1
                 #    Fallback: if all signals are 0 or missing, keep pure RP weights.
                 if alloc_mode == 'factor_scaling':
+                    # Per-class hard caps on final weight (after signal tilt + renorm).
+                    # Commodity vol is much higher than bonds/FX, so tighter cap.
+                    _CLASS_CAPS = {'Commodities': 0.15, 'FX': 0.20, 'Rates': 0.40, 'Spread': 0.40}
+                    _SIGNAL_FLOOR = 0.2  # floor so zero-signal assets aren't fully excluded
+
                     asset_to_factors = {}
                     for f in low_corr_factors_list:
                         for a in FACTOR_TO_ASSET_MAP.get(f, []):
@@ -441,19 +446,26 @@ def register_backtest_hist_callbacks(app):
                         sigs = [_factor_signal_asof(f, pd.Timestamp(rebalance_date))
                                 for f in asset_to_factors.get(name, ())]
                         sigs = [s for s in sigs if s is not None]
-                        # Default to neutral (1.0) when no model signal — keeps RP weight
-                        coeff = float(np.mean(sigs)) if sigs else 1.0
+                        raw_coeff = float(np.mean(sigs)) if sigs else 1.0
+                        # Floor: keep a minimum 20% of RP weight even for flat/negative
+                        # signals so the pool stays diversified and no single asset can
+                        # absorb 100% simply because it is the only positive signal.
+                        coeff = max(raw_coeff, _SIGNAL_FLOOR)
                         scaled[name] = weight * coeff
 
-                    # Renormalise using only long (positive) weights so capital is
-                    # always fully deployed. Negative-signal assets are excluded from
-                    # the long book (set to 0) rather than going short.
-                    long_total = sum(v for v in scaled.values() if v > 0)
-                    if long_total > 1e-9:
-                        weights = {k: v / long_total for k, v in scaled.items() if v > 0}
+                    total_scaled = sum(scaled.values())
+                    if total_scaled > 1e-9:
+                        weights = {k: v / total_scaled for k, v in scaled.items()}
+                        # Apply per-class caps then renormalise (iterate once to spread
+                        # any excess evenly across uncapped assets).
+                        for _ in range(3):
+                            capped = {k: min(v, _CLASS_CAPS.get(get_asset_type(k), 0.30))
+                                      for k, v in weights.items()}
+                            cap_total = sum(capped.values())
+                            if cap_total > 1e-9:
+                                weights = {k: v / cap_total for k, v in capped.items()}
                     else:
-                        # All signals were 0 or negative — fall back to pure RP weights
-                        print(f"  {rebalance_date.date()}: All signals flat/negative, using RP weights")
+                        print(f"  {rebalance_date.date()}: All signals zero, using RP weights")
                         # weights already set from RP optimizer above, leave unchanged
 
                 # Store only assets with non-negligible weights in asset pool tracking
@@ -613,11 +625,32 @@ def register_backtest_hist_callbacks(app):
                 yaxis=dict(gridcolor=THEME['table_header'])
             )
             
-            # --- Calculate Performance Metrics ---
+            # --- NAV index (base 1000) and Performance Metrics ---
             metrics_table = None
             if not df_pnl.empty and len(df_pnl) > 1:
                 initial_capital = total_capital_cny / 1_000_000
                 portfolio_values = initial_capital + df_pnl['Total']
+                nav_series = (portfolio_values / portfolio_values.iloc[0]) * 1000
+                fig_pnl.add_trace(go.Scatter(
+                    x=df_pnl['Date'],
+                    y=nav_series.round(2),
+                    mode='lines',
+                    name='NAV (base 1000)',
+                    yaxis='y2',
+                    line=dict(color='#FFD700', width=2.5, dash='solid'),
+                    hovertemplate='<b>NAV</b>: %{y:.1f}<extra></extra>',
+                ))
+                fig_pnl.update_layout(
+                    yaxis2=dict(
+                        title='NAV (base 1000)',
+                        overlaying='y',
+                        side='right',
+                        showgrid=False,
+                        tickfont=dict(color='#FFD700'),
+                        title_font=dict(color='#FFD700'),
+                    ),
+                    showlegend=True,
+                )
                 daily_returns = portfolio_values.pct_change().dropna()
                 
                 total_days = (df_pnl['Date'].iloc[-1] - df_pnl['Date'].iloc[0]).days
