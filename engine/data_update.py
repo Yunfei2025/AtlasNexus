@@ -33,6 +33,9 @@ DAILY_REQUIRED_RETRIEVERS: dict[str, str] = {
     "factors.utils.retrieve:retrieveMarcoPx": "macro-px.pkl",
     "futures.intraday.retrieve:retrieveFuturesDailyK": "futures-dailyK_con.pkl",
     "derivatives.vol.retrieve:retrieveFuturesVol": "futures-volpx.pkl",
+    # Required by curves/initialise.py _daily_inputs_ready before curve generation can run
+    "curves.utils.retrieve:retrieveCNBDTS": "database-px.pkl",
+    "curves.utils.retrieve:retrieveFuturesTS": "futures-px.pkl",
 }
 
 

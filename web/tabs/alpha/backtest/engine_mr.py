@@ -263,9 +263,9 @@ def run_spread_backtest(
 
     n_trades = len(trades)
     total_pnl = pnls.sum()
-    win_rate = (pnls > 0).sum() / n_trades * 100
-    avg_pnl = pnls.mean()
-    avg_hold = trades_df['days_held'].mean()
+    win_rate = (pnls > 0).sum() / n_trades * 100 if n_trades > 0 else 0
+    avg_pnl = pnls.mean() if n_trades > 0 else 0
+    avg_hold = trades_df['days_held'].mean() if not trades_df.empty else 0
 
     if pnls.std() > 0:
         sharpe = (pnls.mean() / pnls.std()) * np.sqrt(min(n_trades, 20))

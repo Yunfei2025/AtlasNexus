@@ -443,6 +443,7 @@ def register_backtest_callbacks(app) -> None:
                     spread_type=spread_type,
                     tenor_ratio=0.5 if spread_type == 'TenorSpread' else 1.0,
                     carry_roll_sell_ts=_cr_sell_for_backtest,
+                    min_hold=int(min_hold) if min_hold is not None else 7,
                 )
             else:
                 results = run_spread_backtest(
@@ -680,6 +681,7 @@ def register_backtest_callbacks(app) -> None:
                             spread_ts=ts_bt, carry_roll_ts=_cr_ts,
                             carry_roll_bp=_cr_bp, duration_mult=dur,
                             allow_short=True,
+                            min_hold=_min_hold,
                         )
                     else:
                         res = run_spread_backtest(

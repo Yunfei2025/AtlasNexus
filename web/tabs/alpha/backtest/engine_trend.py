@@ -57,6 +57,7 @@ def run_trend_backtest_dc(
     spread_type: Optional[str] = None,
     tenor_ratio: float = 1.0,
     carry_roll_sell_ts: Optional[pd.Series] = None,
+    min_hold: int = 7,
 ) -> Dict[str, Any]:
     """Trend/carry backtest using directional-change trend confirmation."""
     if spread_ts is None or len(spread_ts) < 60:
@@ -139,7 +140,9 @@ def run_trend_backtest_dc(
 
             flip = (position == 1 and st < 0) or (position == -1 and st > 0)
 
-            if trailing_stop or carry_bad or flip:
+            # Trailing stop always fires; signal-based exits (carry / flip) respect min_hold.
+            signal_exit = days_held >= min_hold and (carry_bad or flip)
+            if trailing_stop or signal_exit:
                 price_pnl = (px - entry_price) * position * duration_mult
                 carry_income = _carry_accrual(
                     position, entry_date, date, days_held,

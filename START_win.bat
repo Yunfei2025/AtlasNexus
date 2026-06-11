@@ -52,11 +52,11 @@ echo.
 REM Start the Dash app via the canonical main.py entry point
 python main.py daily-web
 
-REM If the script exits, pause to show any error messages
+REM Always pause so any error output is visible before the window closes
+echo.
 if errorlevel 1 (
-    echo.
     echo ============================================================
     echo ERROR: Application exited with error code %errorlevel%
     echo ============================================================
-    pause
 )
+pause
