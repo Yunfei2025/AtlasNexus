@@ -14,6 +14,33 @@ class RiskModelConfig:
     # EWMA lambda (decay) for daily data (commonly 0.94)
     FACTOR_VOL_EWMA_LAMBDA: float = 0.94
 
+    # ── Optimizer bounds ──────────────────────────────────────────────────────
+    # Minimum weight per bond asset (prevents degenerate ERC solutions)
+    MIN_WEIGHT_BOND: float = 0.03
+    # Per-class weight caps
+    CAP_BOND: float = 0.25
+    CAP_COMM: float = 0.25
+    CAP_FX:   float = 0.25
+    # Minimum weight for commodity assets (allowed to be 0 in FX/no-short mode)
+    MIN_WEIGHT_COMM: float = 0.01
+
+    # ── Vol^0.5 budget fallback ───────────────────────────────────────────────
+    # Estimated annual volatility (%) for assets with missing factor-vol data
+    # (e.g. commodity factors before sufficient data is available)
+    ESTIMATED_FALLBACK_VOL: float = 15.0
+
+    # ── Backtest / signal floors ──────────────────────────────────────────────
+    # Minimum non-zero signal level for factor-scaling mode (prevents near-zero allocations)
+    SIGNAL_FLOOR: float = 0.2
+    # Risk-free rate used in backtest Sharpe calculation
+    RISK_FREE_RATE: float = 0.02
+
+    # ── Portfolio construction ────────────────────────────────────────────────
+    # Standard lot size for bond positions (CNY)
+    LOT_SIZE_BOND_CNY: int = 10_000_000
+    # Standard lot size for FX/commodity positions
+    LOT_SIZE_OTHER_CNY: int = 1_000_000
+
 
 # Configuration: country -> (pickle_file, pickle_key or None, list of columns or None)
 # If columns is None, use all columns in the DataFrame.

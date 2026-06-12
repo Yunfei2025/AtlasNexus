@@ -27,6 +27,20 @@ from ..scoring import (
 
 _ALPHA_BOOK_POSITIONS_PARQUET = _get_input_dir() / 'alpha_book_positions.parquet'
 _REGIME_LOOKUP_CACHE: dict[str, dict[str, str]] = {}
+_REGIME_CACHE_MTIME: float = 0.0   # mtime of Alpha-spreadsrt.pkl when cache was last built
+
+
+def _invalidate_regime_cache_if_stale() -> None:
+    """Clear _REGIME_LOOKUP_CACHE if the snapshot pickle has been updated since last build."""
+    global _REGIME_CACHE_MTIME
+    snap_path = _get_input_dir() / 'Alpha-spreadsrt.pkl'
+    try:
+        current_mtime = snap_path.stat().st_mtime
+    except FileNotFoundError:
+        return
+    if current_mtime != _REGIME_CACHE_MTIME:
+        _REGIME_LOOKUP_CACHE.clear()
+        _REGIME_CACHE_MTIME = current_mtime
 
 
 def _style_to_regime(style: object) -> str:
@@ -44,6 +58,7 @@ def _get_upstream_regime(spread_type: str, instrument: str) -> str:
     if not spread_type or not instrument:
         return 'uncertain'
 
+    _invalidate_regime_cache_if_stale()
     cache = _REGIME_LOOKUP_CACHE.get(spread_type)
     if cache is None:
         cache = {}
@@ -260,7 +275,18 @@ def register_candidate_callbacks(app) -> None:
             df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) > 0 else 'SELL')
 
         if 'score' not in df_all.columns:
-            df_all = compute_scan_score(df_all)
+            # Load seasonal-spds.pkl to add the current-month seasonal edge term.
+            _seasonal_data = None
+            try:
+                import pickle as _pkl
+                _seas_path = _get_input_dir() / 'seasonal-spds.pkl'
+                if _seas_path.exists():
+                    with open(_seas_path, 'rb') as _f:
+                        _seasonal_data = _pkl.load(_f)
+            except Exception:
+                _seasonal_data = None
+
+            df_all = compute_scan_score(df_all, seasonal_data=_seasonal_data)
             if 'composite_score_preview' in df_all.columns:
                 df_all = df_all.copy()
                 df_all['score'] = pd.to_numeric(df_all['composite_score_preview'], errors='coerce')
@@ -378,8 +404,8 @@ def register_candidate_callbacks(app) -> None:
                         f"Filtered at {scanned_time}", [], {},
                     )
 
-        _mr_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'halflife', 'carry_roll', 'breakeven_3m', 'score', 'stop_loss', 'profit_target']
-        _trend_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'breakeven_3m', 'score', 'trend_state', 'stop_loss', 'profit_target']
+        _mr_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'halflife', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'score', 'stop_loss', 'profit_target']
+        _trend_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'score', 'trend_state', 'stop_loss', 'profit_target']
 
         _all_display_cols = list(dict.fromkeys(_mr_display_cols + _trend_display_cols + ['style']))
         df_display = df_all.copy()
@@ -413,7 +439,7 @@ def register_candidate_callbacks(app) -> None:
                 pd.to_numeric(df_display.loc[_sell_mask, 'carry_roll'], errors='coerce').multiply(-1)
             )
 
-        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score', 'stop_loss', 'profit_target', 'trend_state', 'regime_confidence', 'efficiency_ratio', 'hurst', 'ttm_display', 'breakeven_3m']:
+        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score', 'stop_loss', 'profit_target', 'trend_state', 'regime_confidence', 'efficiency_ratio', 'hurst', 'ttm_display', 'breakeven_3m', 'seasonal_edge_bps']:
             if col in df_display.columns:
                 df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(1)
 
@@ -466,6 +492,7 @@ def register_candidate_callbacks(app) -> None:
             'stop_loss': 'stop(bp)', 'profit_target': 'target(bp)',
             'spread': 'spread(bp)', 'mean': 'mean(bp)', 'vol': 'vol(bp)',
             'regime': 'regime', 'trend_state': 'trend', 'regime_confidence': 'reg.conf',
+            'seasonal_edge_bps': 'seas.edge(bp)',
         }
 
         def _col_defs(df):
@@ -541,13 +568,17 @@ def register_candidate_callbacks(app) -> None:
         if all_candidates and len(all_candidates) > 0:
             df_candidates = pd.DataFrame(all_candidates)
             if 'ID' in df_candidates.columns and 'spread_type' in df_candidates.columns:
+                # Load each spread type's timeseries once, then index by instrument.
+                _ts_cache: dict[str, pd.DataFrame | None] = {}
                 all_spreads = {}
                 for _, row in df_candidates.iterrows():
                     trade_id = row.get('ID', '')
                     spread_type = row.get('spread_type', '')
                     if not trade_id or not spread_type:
                         continue
-                    ts = load_spread_timeseries(spread_type)
+                    if spread_type not in _ts_cache:
+                        _ts_cache[spread_type] = load_spread_timeseries(spread_type)
+                    ts = _ts_cache[spread_type]
                     if ts is not None and isinstance(ts, pd.DataFrame) and trade_id in ts.columns:
                         all_spreads[trade_id] = ts[trade_id]
 
@@ -1055,3 +1086,126 @@ def register_candidate_callbacks(app) -> None:
             )
 
         return table_div, corr_div
+
+    # -------------------------------------------------------------------------
+    # SEASONAL SCREENER: cross-instrument monthly consistency table
+    # -------------------------------------------------------------------------
+    @app.callback(
+        Output('seasonal-screener-results', 'children'),
+        Input('seasonal-screener-stype',      'value'),
+        Input('seasonal-screener-month',       'value'),
+        Input('seasonal-screener-min-years',   'value'),
+        Input('seasonal-screener-p-thresh',    'value'),
+    )
+    def update_seasonal_screener(stype, month, min_years, p_thresh):
+        """Render the cross-instrument seasonal consistency table."""
+        import pickle as _pkl
+        import datetime as _dt
+
+        if not stype or not month:
+            return html.Div()
+
+        month     = int(month)
+        min_years = int(min_years or 3)
+        p_thresh  = float(p_thresh or 0.10)
+        month_key = f'm{month}'
+        _MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+        month_name = _MONTH_ABBR[month - 1]
+
+        # Load seasonal-spds.pkl (with mtime cache reusing the module-level dict pattern)
+        seas_path = _get_input_dir() / 'seasonal-spds.pkl'
+        seasonal_data = None
+        try:
+            if seas_path.exists():
+                with open(seas_path, 'rb') as _f:
+                    seasonal_data = _pkl.load(_f)
+        except Exception as exc:
+            return html.Div(f"Error loading seasonal-spds.pkl: {exc}", style={'color': THEME['warning']})
+
+        if seasonal_data is None:
+            return html.Div(
+                "seasonal-spds.pkl not found. Run the EOD StatGenerator to generate it.",
+                style={'color': THEME['text_sub'], 'fontSize': '12px'},
+            )
+
+        sdf = seasonal_data.get(stype)
+        if not isinstance(sdf, pd.DataFrame) or sdf.empty:
+            return html.Div(
+                f"No seasonal data for {stype}. Run EOD StatGenerator.",
+                style={'color': THEME['text_sub'], 'fontSize': '12px'},
+            )
+
+        if month_key not in sdf.columns:
+            return html.Div(
+                f"Month {month_name} not found in seasonal data for {stype}.",
+                style={'color': THEME['text_sub'], 'fontSize': '12px'},
+            )
+
+        # Build display rows — filter by min_years and p_thresh
+        _arrow   = {'up': '↑', 'down': '↓', 'neutral': '—'}
+        _dir_col = {'up': THEME['success'], 'down': THEME['danger'], 'neutral': THEME['text_sub']}
+        rows = []
+        for inst in sdf.index:
+            cell = sdf.at[inst, month_key]
+            if not isinstance(cell, dict):
+                continue
+            n_yrs   = int(cell.get('n_years', 0))
+            p_val   = float(cell.get('p_value', 1.0))
+            cons    = float(cell.get('consistency', 0.5))
+            avg_chg = float(cell.get('avg_chg_bp', 0.0))
+            direction = str(cell.get('direction', 'neutral'))
+            if n_yrs < min_years:
+                continue
+            if p_val >= p_thresh:
+                continue
+            rows.append({
+                'instrument': inst,
+                'direction':  direction,
+                'cons_pct':   cons * 100.0,
+                'avg_chg':    avg_chg,
+                'n_years':    n_yrs,
+                'p_value':    p_val,
+            })
+
+        if not rows:
+            return html.Div(
+                f"No instruments pass filters for {stype} / {month_name} "
+                f"(min {min_years}yr, p < {p_thresh}).",
+                style={'color': THEME['text_sub'], 'fontSize': '12px'},
+            )
+
+        rows.sort(key=lambda r: (-r['cons_pct'], r['p_value']))
+
+        header = html.Div([
+            html.Span("Instrument",  style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'130px'}),
+            html.Span("Dir",         style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'28px'}),
+            html.Span("Cons%",       style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'46px'}),
+            html.Span("AvgΔbp",      style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'52px'}),
+            html.Span("Obs",         style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'30px'}),
+            html.Span("p-val",       style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'42px'}),
+        ], style={'display':'flex','gap':'8px','padding':'3px 8px',
+                  'borderBottom':'1px solid #1a3a7a','marginBottom':'2px'})
+
+        data_rows = []
+        for r in rows:
+            sig = '**' if r['p_value'] < 0.05 else ('*' if r['p_value'] < 0.10 else '')
+            dc  = _dir_col[r['direction']]
+            data_rows.append(html.Div([
+                html.Span(r['instrument'],                  style={'fontSize':'11px','color':THEME['text_main'],'minWidth':'130px','overflow':'hidden','textOverflow':'ellipsis'}),
+                html.Span(_arrow[r['direction']],           style={'fontSize':'11px','color':dc,'minWidth':'28px','fontWeight':'bold'}),
+                html.Span(f"{r['cons_pct']:.0f}%{sig}",   style={'fontSize':'11px','color':THEME['text_main'],'minWidth':'46px'}),
+                html.Span(f"{r['avg_chg']:+.1f}",          style={'fontSize':'11px','color': THEME['success'] if r['avg_chg'] > 0 else THEME['danger'],'minWidth':'52px'}),
+                html.Span(f"n={r['n_years']}",             style={'fontSize':'11px','color':THEME['text_sub'],'minWidth':'30px'}),
+                html.Span(f"{r['p_value']:.3f}",           style={'fontSize':'11px','color':THEME['text_sub'],'minWidth':'42px'}),
+            ], style={'display':'flex','gap':'8px','padding':'2px 8px',
+                      'borderRadius':'3px','backgroundColor':'transparent'}))
+
+        note = html.Div(
+            f"Showing {len(rows)} of {len(sdf)} instruments for {stype} / {month_name}. "
+            "* p<0.10  ** p<0.05 (one-sided binomial; no FDR correction).",
+            style={'fontSize':'9px','color':THEME['text_sub'],'marginTop':'6px','padding':'0 8px'},
+        )
+
+        return html.Div([header] + data_rows + [note],
+                        style={'background': THEME['bg_main'], 'borderRadius': '4px',
+                               'padding': '6px 0', 'maxHeight': '340px', 'overflowY': 'auto'})

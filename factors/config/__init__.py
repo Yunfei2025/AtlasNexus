@@ -496,21 +496,12 @@ class ConfigManager:
 # MACRO symbols list (only keys)
 MACRO_SYMBOLS = {
     'commodity': [
-        'IF.CFE',
-        'IC.CFE',
-        'IH.CFE',
-        'IM.CFE',
-        'AU.SHF',
-        'AG.SHF',
-        'CU.SHF',
-        'AL.SHF',
-        'ZN.SHF',
-        'RB.SHF',
-        'LC.GFE',  # 碳酸锂 广期所
+        'IF.CFE','IC.CFE','IH.CFE','IM.CFE',
+        'AU.SHF','AG.SHF','CU.SHF','AL.SHF',
+        'ZN.SHF','RB.SHF','LC.GFE', # 碳酸锂 广期所
         'SA.CZC',  # 纯碱 郑商所
         'SC.INE',  # 原油 上期能源
-        'JM.DCE',
-        'EC.INE',  # 集运指数 上期能源
+        'JM.DCE','EC.INE',  # 集运指数 上期能源
     ],
     'fx': [
         'USDCNY.IB',  # 美元兑人民币汇率
@@ -525,6 +516,7 @@ MACRO_SYMBOLS = {
     'currency': [
         'SHIBOR3M.IR',  # SHIBOR利率
         'FR007.IR',  # 回购利率
+        'SOFR.IR','ESTR.IR','SONIA.IR','TONAR.IR','DR001.IB'
     ],
 }
 

@@ -164,9 +164,6 @@ def register_portfolio_run_callbacks(app):
     """Register Run Analysis & IRDL Hedge callbacks for the Portfolio tab."""
 
     # 3.6 Risk Factor Budget Input Generator
-    # NOTE: vol-adj-store is State (not Input) to avoid circular dependency in Dash 4.x:
-    #   vol-adj-store → update_risk_budget_inputs → renders vol-adj-input components
-    #   → save_vol_adj → vol-adj-store
     @app.callback(
         Output('risk-budget-container', 'children'),
         [Input('asset-pool-store', 'data'),
@@ -174,10 +171,9 @@ def register_portfolio_run_callbacks(app):
          Input('factor-signals-snapshot-store', 'data'),
          Input('allocation-mode', 'value')],
         [State('capital-input', 'value'),
-         State('capital-unit', 'value'),
-         State('vol-adj-store', 'data')],
+         State('capital-unit', 'value')],
     )
-    def update_risk_budget_inputs(asset_pool, rp_budgets, snapshot_data, allocation_mode, capital, capital_unit, vol_adj_store):
+    def update_risk_budget_inputs(asset_pool, rp_budgets, snapshot_data, allocation_mode, capital, capital_unit):
         if not asset_pool:
              return [html.Div("Add assets to see risk factors", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px', 'textAlign': 'center'})]
 
@@ -257,81 +253,53 @@ def register_portfolio_run_callbacks(app):
                 if rf:
                     snapshot_by_rf[rf] = rec
 
+        _missing_signals = [f for f in sorted_factors if f not in snapshot_by_rf]
+
         def get_coeff(factor):
             rec = snapshot_by_rf.get(factor)
             if rec is not None:
                 return float(rec.get('scalar', 1.0))
-            return 1.0  # default: full long — placeholder until factor model is run
+            return 0.0  # neutral — no signal yet; run Predict first
 
         # ── Factor vol lookup (live 1Y EWMA) ─────────────────────────────────
         _vol_map = compute_factor_vol_map(sorted_factors)
 
-        # ── Per-factor tier weight (adj) — tier-weighted risk parity
-        #    Scales factor weights AFTER risk parity based on factor importance.
-        # Tier weighting: IRDL (Level) 1.0 × IRSL (Slope) 0.6 × IRCV (Curvature) 0.3
-        # Rationale: Level shifts are primary risk; Slope is secondary; Curvature is tertiary.
-        # These weights are applied post-RP to balance allocations with economic significance.
-        def get_default_vol_adj(factor):
-            prefix = factor.split('.')[0]
-            if prefix == 'IRDL':
-                return 1.0      # Level: primary risk driver
-            elif prefix == 'IRSL':
-                return 0.6      # Slope: secondary importance
-            elif prefix == 'IRCV':
-                return 0.3      # Curvature: tertiary importance
-            else:
-                return 1.0
-
-        _vol_adj = {}
-        for _f in sorted_factors:
-            if _f in (vol_adj_store or {}):
-                # User has manually set this value, preserve it
-                _vol_adj[_f] = vol_adj_store[_f]
-            else:
-                # Use default based on factor type
-                _vol_adj[_f] = get_default_vol_adj(_f)
-
-        # ── Tier-weighted Risk Parity: inverse-vol weights scaled by tier importance ─
-        # Step 1: Calculate base RP weights (inverse volatility)
+        # ── Vol^0.5 Risk Parity: weights based on vol^0.5 to balance significance and noise ──
+        # Rationale: Level (80% var explained) gets highest weight, Slope (15%) middle,
+        # Curvature (5%) lowest. vol^0.5 achieves this more naturally than post-hoc tiers.
         # If a factor's vol is missing (e.g., commodities without loaded data),
         # use estimated vol: commodities typically ~12-18%, use 15% as default
-        _inv_vols = {}
+        _vol_sqrt_budgets = {}
         _missing_vols = []
         for _f in sorted_factors:
             _v = _vol_map.get(_f)
             if _v is not None and pd.notna(_v) and _v > 0:
-                _inv_vols[_f] = 1.0 / _v
+                _vol_sqrt_budgets[_f] = np.sqrt(_v)
             else:
                 _missing_vols.append(_f)
                 # Use estimated commodity vol (15%) for missing data
                 estimated_commodity_vol = 15.0
-                _inv_vols[_f] = 1.0 / estimated_commodity_vol
+                _vol_sqrt_budgets[_f] = np.sqrt(estimated_commodity_vol)
 
         if _missing_vols:
             print(f"⚠️  Missing volatility data for {len(_missing_vols)} factors: {_missing_vols}")
             print(f"   Using estimated vol = 15% for these factors")
 
-        # Step 2: Apply tier weights (adj) to RP weights post-hoc
-        _tier_weighted_inv_vols = {}
-        for _f in sorted_factors:
-            _tier_weight = float(_vol_adj.get(_f, 1.0) or 1.0)
-            _tier_weighted_inv_vols[_f] = _inv_vols.get(_f, 0.0) * _tier_weight
-
-        _total_inv_vol = sum(_tier_weighted_inv_vols.values())
-        if _total_inv_vol > 0:
-            _inv_vol_budgets = {
-                _f: round(total_capital_m * _tier_weighted_inv_vols.get(_f, 0.0) / _total_inv_vol, 2)
+        _total_vol_sqrt = sum(_vol_sqrt_budgets.values())
+        if _total_vol_sqrt > 0:
+            _vol_sqrt_allocations = {
+                _f: round(total_capital_m * _vol_sqrt_budgets.get(_f, 0.0) / _total_vol_sqrt, 2)
                 for _f in sorted_factors
             }
         else:
-            _inv_vol_budgets = {_f: equal_share for _f in sorted_factors}
+            _vol_sqrt_allocations = {_f: equal_share for _f in sorted_factors}
 
         def get_rp_max(factor):
             if allocation_mode == 'user_defined':
                 # User Defined: preserve what the user last stored (or equal share on first load)
                 return float(rp_budgets[factor]) if (rp_budgets and factor in rp_budgets) else equal_share
-            # risk_parity and factor_scaling: always deterministic inverse-vol proportional
-            return _inv_vol_budgets.get(factor, equal_share)
+            # risk_parity and factor_scaling: vol^0.5 weighted allocation
+            return _vol_sqrt_allocations.get(factor, equal_share)
 
         # ── Build rows ─────────────────────────────────────────────────────────
         rows = []
@@ -351,11 +319,6 @@ def register_portfolio_run_callbacks(app):
             else:
                 vol_str = f"{vol_val:.2f}%"
                 vol_color = THEME['text_main']
-
-            adj_val = float(_vol_adj.get(factor, 1.0))
-            # Tier weight (adj) applied post-RP: default 1.0 (IRDL), 0.6 (IRSL), 0.3 (IRCV)
-            # Highlight when user has customized the tier weight
-            _adj_border = f'1px solid {THEME["accent"]}' if adj_val != get_default_vol_adj(factor) else f'1px solid {THEME["table_header"]}'
 
             # Compute DV01 for IR factors (IRDL, IRSL, IRCV, SPDL, SPSL)
             dv01_str = ""
@@ -378,27 +341,11 @@ def register_portfolio_run_callbacks(app):
                         'fontFamily': 'monospace',
                         'fontWeight': 'bold' if has_missing_vol else 'normal',
                     }, title='Volatility: if missing data, estimated at 15% (typical commodity vol)'),
-                    html.Span(
-                        dcc.Input(
-                            id={'type': 'vol-adj-input', 'index': factor},
-                            type='number',
-                            value=adj_val,
-                            min=0.1, max=10.0, step=0.1,
-                            style={
-                                'width': '48px', 'fontSize': '12px', 'padding': '2px 4px',
-                                'backgroundColor': '#fff', 'color': '#000',
-                                'border': _adj_border,
-                                'borderRadius': '2px', 'textAlign': 'right',
-                            }
-                        ),
-                        title='Tier weight (applied post-RP): default 1.0=IRDL(Level), 0.6=IRSL(Slope), 0.3=IRCV(Curvature). '
-                              'Scales RP weights to balance economic significance: Level is primary risk, Slope secondary, Curvature tertiary.'
-                    ),
                     html.Span(f"{round(rp_max)}", style={
                         'color': THEME['text_sub'], 'fontSize': '12px',
                         'width': '105px', 'textAlign': 'right', 'flexShrink': '0',
                         'fontFamily': 'monospace',
-                    }),
+                    }, title='Vol√ allocation: from factor volatility weighted by sqrt(vol)'),
                     html.Span(dv01_str, style={
                         'color': THEME['text_sub'], 'fontSize': '12px',
                         'width': '85px', 'textAlign': 'right', 'flexShrink': '0',
@@ -420,11 +367,12 @@ def register_portfolio_run_callbacks(app):
                         value=round(suggested),
                         step=1,
                         style={
-                            'flex': '1', 'minWidth': '100px', 'fontSize': '12px', 'padding': '2px 4px',
-                            'backgroundColor': '#fff', 'color': '#000',
+                            'flex': '1', 'minWidth': '100px', 'fontSize': '12px', 'padding': '4px 6px',
+                            'backgroundColor': '#ffffff', 'color': '#000000',
                             'border': f'1px solid {THEME["table_header"]}',
-                            'borderRadius': '2px', 'textAlign': 'right',
-                            'fontFamily': 'monospace',
+                            'borderRadius': '3px', 'textAlign': 'right',
+                            'fontFamily': 'monospace', 'fontWeight': 'normal',
+                            'appearance': 'textfield',  # Remove spinner arrows on number input
                         }
                     ),
                 ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px', 'gap': '4px'})
@@ -432,20 +380,6 @@ def register_portfolio_run_callbacks(app):
 
         return rows
 
-    # ── 3.7b  Vol-adj store: persist user edits to per-factor vol multipliers ──
-    @app.callback(
-        Output('vol-adj-store', 'data'),
-        Input({'type': 'vol-adj-input', 'index': ALL}, 'value'),
-        State({'type': 'vol-adj-input', 'index': ALL}, 'id'),
-        prevent_initial_call=True,
-    )
-    def save_vol_adj(values, ids):
-        if not ids:
-            raise dash.exceptions.PreventUpdate
-        return {
-            id_dict['index']: float(v) if (v is not None and v > 0) else 1.0
-            for v, id_dict in zip(values, ids)
-        }
 
     # ── 3.8  Mode status hint ─────────────────────────────────────────
     @app.callback(
@@ -496,12 +430,11 @@ def register_portfolio_run_callbacks(app):
          State({'type': 'risk-budget-input', 'index': ALL}, 'id'),
          State('allocation-mode', 'value'),
          State('factor-signals-snapshot-store', 'data'),
-         State('vol-adj-store', 'data'),
          State('max-duration-input', 'value')]
     )
     def run_analysis(n_clicks, total_capital, capital_unit, asset_pool,
                      budget_values, budget_ids, allocation_mode, signal_snapshot,
-                     vol_adj_store, max_duration):
+                     max_duration):
         if n_clicks == 0:
             return (html.Div("No data available. Click 'Run Analysis' to start.", style={'color': THEME['text_sub']}),
                     "", "", {}, {})
@@ -533,10 +466,9 @@ def register_portfolio_run_callbacks(app):
                 risk_budgets = None
 
             elif allocation_mode == 'factor_scaling':
-                # Factor Model Scaling: inverse-vol base budgets (with vol-adj), scaled by signal scalar.
+                # Factor Model Scaling: vol^0.5 base budgets, scaled by signal scalar.
                 _vm = compute_factor_vol_map(factor_names_in_pool) if factor_names_in_pool else {}
-                _va = vol_adj_store or {}
-                _iv = {f: 1.0 / (_vm[f] * float(_va.get(f, 1.0) or 1.0)) for f in factor_names_in_pool
+                _iv = {f: np.sqrt(_vm[f]) for f in factor_names_in_pool
                        if _vm.get(f) and pd.notna(_vm[f]) and _vm[f] > 0}
                 _tot = sum(_iv.values())
                 n_pool = len(factor_names_in_pool) or 1
@@ -574,12 +506,17 @@ def register_portfolio_run_callbacks(app):
                             pass
                 rp_budgets_out = dict(risk_budgets) if risk_budgets else {}
 
-            # Run optimization
-            summary, returns, vols, factor_exp, factor_risk, portfolio = run_risk_parity_allocation(
-                total_capital=total_capital_cny, use_cache=True, selected_assets=selected_asset_names,
-                risk_budgets=risk_budgets, use_deterministic=True
-            )
-            
+            # Run optimization (capture convergence warnings to surface in UI)
+            import warnings as _warnings
+            _opt_warnings: list[str] = []
+            with _warnings.catch_warnings(record=True) as _caught:
+                _warnings.simplefilter("always", RuntimeWarning)
+                summary, returns, vols, factor_exp, factor_risk, portfolio = run_risk_parity_allocation(
+                    total_capital=total_capital_cny, use_cache=True, selected_assets=selected_asset_names,
+                    risk_budgets=risk_budgets, use_deterministic=True
+                )
+                _opt_warnings = [str(w.message) for w in _caught if issubclass(w.category, RuntimeWarning)]
+
             if summary.empty:
                 error_msg = html.Span("⚠ No matching assets found in optimization results", 
                                     style={'color': THEME['warning'], 'fontWeight': 'bold'})
@@ -652,19 +589,8 @@ def register_portfolio_run_callbacks(app):
                 }
                 portfolio_table_df = pd.concat([portfolio_table_df, pd.DataFrame([totals])], ignore_index=True)
 
-            # Save to Beta Book Summary format (for Summary tab display)
-            try:
-                _summary_df = _prepare_summary_table_data(portfolio_table_df.copy())
-                for _c in _summary_df.columns:
-                    if _summary_df[_c].dtype == object:
-                        _summary_df[_c] = _summary_df[_c].fillna('').astype(str)
-                pathlib.Path(_SUMMARY_BETA_PARQUET).parent.mkdir(parents=True, exist_ok=True)
-                _summary_df.to_parquet(_SUMMARY_BETA_PARQUET, index=False)
-                print(f"✓ Beta Book Summary updated ({len(_summary_df)} rows) → {_SUMMARY_BETA_PARQUET}")
-            except Exception as _se:
-                print(f"Warning: Could not save Beta book summary: {_se}")
-
-            # Also save positions parquet for reference (coerce object columns so pyarrow doesn't choke)
+            # Save positions parquet for reference (coerce object columns so pyarrow doesn't choke)
+            # The Beta Book Summary parquet is written once below via _upsert_snapshot.
             try:
                 _save_df = portfolio_table_df.copy()
                 for _c in _save_df.columns:
@@ -713,7 +639,19 @@ def register_portfolio_run_callbacks(app):
             )
             
             _dv01_info = f"  ·  DV01 {total_dv01:.2f} MM / max {total_capital_cny * float(max_duration or 5) / 1e10:.2f} MM{dv01_cap_msg}"
-            status_msg = html.Span(f"✓ Analysis completed!{_dv01_info}", style={'color': THEME['success'], 'fontWeight': 'bold'})
+            _status_children = [html.Span(f"✓ Analysis completed!{_dv01_info}", style={'color': THEME['success'], 'fontWeight': 'bold'})]
+            if _missing_signals:
+                _status_children.append(html.Span(
+                    f"  ⚠ {len(_missing_signals)} factor(s) have no signal — held at neutral (0): "
+                    + ", ".join(_missing_signals),
+                    style={'color': THEME.get('warning', '#f39c12'), 'fontSize': '12px', 'marginLeft': '12px'},
+                ))
+            for _ow in _opt_warnings:
+                _status_children.append(html.Span(
+                    f"  ⚠ Optimizer: {_ow[:120]}",
+                    style={'color': THEME.get('danger', '#ef553b'), 'fontSize': '11px', 'marginLeft': '12px'},
+                ))
+            status_msg = html.Div(_status_children, style={'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '4px'})
             timestamp_msg = f"Last updated: {ALLOCATION_RESULTS['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"
 
             # For Pure Risk Parity: derive RP Max from actual factor risk contributions

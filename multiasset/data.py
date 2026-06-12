@@ -65,7 +65,7 @@ def get_asset_type(asset_name):
     """Categorize asset by type."""
     if asset_name.startswith('HEDGE_'):
         return 'Hedge'
-    if asset_name in ['Gold', 'Aluminium', 'Copper', 'Crude_Oil']:
+    if asset_name in ['Gold', 'Silver', 'Aluminium', 'Copper', 'Crude_Oil']:
         return 'Commodities'
     elif asset_name in ['USDCNY', 'EURCNY', 'JPYCNY', 'GBPCNY']:
         return 'FX'
@@ -81,6 +81,13 @@ def get_universe(asset_name):
     """Get the universe/country for the asset."""
     if asset_name.startswith('HEDGE_'):
         return 'IRS Swap' if 'IRS' in asset_name else 'CGB Treasury'
+    # Spread assets — must check before 'CN' substring to avoid misclassification
+    if 'IRS' in asset_name:
+        return 'Interest Rate Swap'
+    if 'CDB' in asset_name:
+        return 'China Development Bond'
+    if 'ICP' in asset_name:
+        return 'Interbank Commercial Paper'
     if 'US' in asset_name:
         return 'US Gov Bond'
     elif 'EU' in asset_name:
@@ -93,12 +100,22 @@ def get_universe(asset_name):
         return 'China Gov Bond'
     elif asset_name == 'Gold':
         return 'AU'
+    elif asset_name == 'Silver':
+        return 'AG'
     elif asset_name == 'Aluminium':
         return 'AL'
     elif asset_name == 'Copper':
         return 'CU'
     elif asset_name == 'Crude_Oil':
         return 'SC'
+    elif asset_name == 'USDCNY':
+        return 'USD'
+    elif asset_name == 'EURCNY':
+        return 'EUR'
+    elif asset_name == 'GBPCNY':
+        return 'GBP'
+    elif asset_name == 'JPYCNY':
+        return 'JPY'
     else:
         return 'N/A'
 
@@ -179,7 +196,7 @@ def get_asset_yield_series(asset_name, market_data):
             
         duration = float(sector.replace('Y', ''))
         
-        if spread_type == 'CDB':
+        if spread == 'CDB':
             tenor_map = {
                 '1Y': '中债国开债到期收益率:1年',
                 '2Y': '中债国开债到期收益率:2年',
@@ -189,22 +206,28 @@ def get_asset_yield_series(asset_name, market_data):
                 '30Y': '中债国开债到期收益率:30年'
             }
             col = tenor_map.get(sector)
+            if col is None:
+                return None, duration, spread, True
             spread_ts = cn_data["CDB"][col] - cn_data["CGB"][col]
             return spread_ts, duration, spread, True
-        elif spread_type == 'IRS':
+        elif spread == 'IRS':
             tenor_map = {
                 '1Y': 'FR007S1Y.IR',
                 '2Y': 'FR007S2Y.IR',
                 '5Y': 'FR007S5Y.IR',
             }
             col = tenor_map.get(sector)
+            if col is None:
+                return None, duration, spread, True
             spread_ts = cn_data["IRS"][col] - cn_data["CGB"][col]
             return spread_ts, duration, spread, True
-        elif spread_type == 'ICP':
+        elif spread == 'ICP':
             tenor_map = {
                 '1Y': '中债商业银行同业存单到期收益率(AAA):1年',
             }
             col = tenor_map.get(sector)
+            if col is None:
+                return None, duration, spread, True
             spread_ts = cn_data["ICP"][col] - cn_data["CGB"][col]
             return spread_ts, duration, spread, True
         else:
@@ -324,11 +347,33 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
         result['total'] = result['carry'] + result['capital'] + result['fx']
 
     elif asset_type == 'FX':
-        # FX returns - simple price return (percentage change of spot rate)
-        result['carry'] = 0.0
+        # FX returns: spot pct_change + interest rate differential carry
+        # carry = (foreign_overnight - DR001) / 365, expressed as daily fraction
+        _fx_to_rate = {
+            'USDCNY': 'SOFR.IR',
+            'EURCNY': 'ESTR.IR',
+            'GBPCNY': 'SONIA.IR',
+            'JPYCNY': 'TONAR.IR',
+        }
+        foreign_rate_col = _fx_to_rate.get(asset_name)
+        currency_df = _get_macro_frame(market_data[2], "currency")
+        if foreign_rate_col and not currency_df.empty and \
+                foreign_rate_col in currency_df.columns and 'DR001.IB' in currency_df.columns:
+            currency_df = currency_df.copy()
+            if not isinstance(currency_df.index, pd.DatetimeIndex):
+                currency_df.index = pd.to_datetime(currency_df.index)
+            cur_mask = (currency_df.index >= start_ts) & (currency_df.index <= end_ts)
+            cur_slice = currency_df.loc[cur_mask, [foreign_rate_col, 'DR001.IB']].ffill()
+            # rate differential in decimal per day (rates stored as %, divide by 100)
+            # Floor foreign rate at 0: negative deposit rates are avoidable in practice
+            floored = cur_slice[foreign_rate_col].clip(lower=0)
+            daily_carry = (floored - cur_slice['DR001.IB']) / 100.0 / 365
+            result['carry'] = daily_carry.reindex(result.index).fillna(0)
+        else:
+            result['carry'] = 0.0
         result['capital'] = 0.0
         result['fx'] = 0.0
-        result['total'] = series.pct_change()
+        result['total'] = series.pct_change() + result['carry']
 
     else:
         # Commodity returns - simple price return
@@ -414,14 +459,16 @@ def calculate_asset_monthly_return(asset_name, start_date, end_date, market_data
                     '30Y': '中债国债到期收益率:30年'
                 }
                 col = tenor_map.get(sector)
-                if not col or col not in cn_data.columns:
+                # cn_data is a dict of DataFrames; index into the 'CGB' frame
+                _cgb = cn_data["CGB"]
+                if not col or col not in _cgb.columns:
                     # Fallback or skip
                     if sector == '2Y': col = '中债国债到期收益率:1年'  # Approx
                     elif sector == '20Y': col = '中债国债到期收益率:10年'  # Approx
                     elif sector == '30Y': col = '中债国债到期收益率:10年'  # Approx
                     else: return 0.0, 0.0, 0.0, 0.0
-                
-                yield_series = cn_data[col]
+
+                yield_series = _cgb[col]
             else:
                 # Foreign curves
                 key = f"{country}{sector}"

@@ -230,9 +230,9 @@ def build_multiasset_backtest_layout():
                        'marginBottom': '6px', 'fontStyle': 'italic'}
             ),
             html.P(
-                "Risk Parity with Tier Weighting: Factor importance tiers (Level 1.0 × Slope 0.6 × Curvature 0.3) "
-                "scale volatilities before risk parity to balance economic significance with volatility estimation. "
-                "Allocations are then rebalanced monthly.",
+                "Risk Parity with Vol√ Scaling: Factor allocations are weighted by vol^0.5 "
+                "(Level > Slope > Curvature) before risk parity to balance economic significance with noise reduction. "
+                "Floor 3%, cap 25% per asset. Rebalances monthly.",
                 style={'color': THEME['text_sub'], 'fontSize': '11px',
                        'marginBottom': '12px', 'fontStyle': 'italic', 'paddingLeft': '12px',
                        'borderLeft': f'3px solid {THEME["accent"]}'}

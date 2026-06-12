@@ -65,7 +65,6 @@ def build_multiasset_portfolio_layout():
         dcc.Store(id='portfolio-data-store'),
         dcc.Store(id='asset-pool-store', data=initial_pool),
         dcc.Store(id='rp-budget-store', data={}),
-        dcc.Store(id='vol-adj-store', data={}),
 
         html.Div([
             # Section 1: Configuration Header & Capital
@@ -217,8 +216,8 @@ def build_multiasset_portfolio_layout():
                 # ── Right main: Risk Budgets (primary) ───────────────────────────────
                 html.Div([
                     html.Div([
-                        html.H6("Risk Budgets (Tier-Weighted Risk Parity)", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '0', 'fontSize': '13px', 'fontWeight': 'bold'}),
-                        html.Span("Vol from 1Y EWMA  ·  RP Max = tier-weighted inv-vol  ·  Exposure = RP Max × Coeff  ·  Tiers: Level 1.0 × Slope 0.6 × Curvature 0.3",
+                        html.H6("Risk Budgets (Vol√ Risk Parity)", style={'color': THEME['text_main'], 'marginTop': '0', 'marginBottom': '0', 'fontSize': '13px', 'fontWeight': 'bold'}),
+                        html.Span("Vol from 1Y EWMA  ·  Budget = vol^0.5  ·  Level > Slope > Curvature  ·  Floor 3%, Cap 25%",
                                   style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '12px'}),
                     ], style={'display': 'flex', 'alignItems': 'baseline', 'marginBottom': '8px'}),
                     html.Div([

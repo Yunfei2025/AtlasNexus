@@ -303,12 +303,14 @@ class FactorRiskParityOptimizer:
         _fx_set = {name for name in asset_names if isinstance(self.portfolio.assets.get(name), FXAsset)}
         _commodity_min_wt = 0.01
         non_commodity_count = n_assets - len(_commodity_set)
-        _min_wt = 1.0 / (non_commodity_count * 10) if non_commodity_count > 0 else 0.0
-        _CAP_COMM = max(1.0 / n_assets, 0.15)
-        _CAP_FX   = max(1.0 / n_assets, 0.20)
-        # Cap bonds at 2× equal share so no single bond dominates when the
-        # B matrix is nearly rank-deficient (e.g. 6 CN bonds on one factor).
-        _CAP_BOND = max(2.0 / n_assets, 0.15)
+        # Floor: each non-commodity asset must hold at least 3% so no asset is
+        # effectively excluded by the optimizer (e.g. low-vol CN1Y vs high-vol Gold).
+        _min_wt = max(0.03, 1.0 / (non_commodity_count * 10)) if non_commodity_count > 0 else 0.0
+        # Cap: no single asset absorbs more than 25% regardless of asset count, so
+        # high-Sharpe low-vol assets (CN1Y) cannot crowd out the rest of the portfolio.
+        _CAP_COMM = min(max(1.0 / n_assets, 0.15), 0.25)
+        _CAP_FX   = min(max(1.0 / n_assets, 0.20), 0.25)
+        _CAP_BOND = min(max(2.0 / n_assets, 0.15), 0.25)
         # Neutral cap = 0.25 × equal-share weight (minimum scalar tick applied to RP base).
         # Long-only scalars are {0.25, 0.5, 0.75, 1.0}; scalar=0 maps to this floor
         # so the optimizer produces a practically-flat position without being excluded.
@@ -343,7 +345,6 @@ class FactorRiskParityOptimizer:
         )
 
         # ── If the primary solve did not converge, retry without hedge shorts ─
-        # This mirrors portfolio/portfolio.py's two-stage fallback logic.
         if not result.success and _hedge_set:
             fallback_bounds = [
                 (_commodity_min_wt, _CAP_COMM) if name in _commodity_set
@@ -360,6 +361,16 @@ class FactorRiskParityOptimizer:
             )
             if result_fb.success or result_fb.fun < result.fun:
                 result = result_fb
+
+        if not result.success:
+            import warnings
+            warnings.warn(
+                f"FactorRiskParityOptimizer: SLSQP did not converge "
+                f"(status={result.status}, message='{result.message}'). "
+                "Returning best-effort weights — risk contributions may not match targets.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
 
         return pd.Series(result.x, index=asset_names)
 

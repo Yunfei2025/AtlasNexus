@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -286,8 +286,24 @@ def register_portfolio_callbacks(app) -> None:
             df_scored['notional_mm'] = df_scored['notional_mm'] * _direction_sign
 
             # Step D: duration and DV01
+            # Pre-load snapshots once per spread type so _get_duration_mult never
+            # triggers a pickle read inside the per-row apply loop.
+            _BOND_SNAP_TYPES = ('TBondCurve', 'TBondSwap', 'CBondCurve', 'CBondSwap')
+            _snap_cache: dict[str, Optional[pd.DataFrame]] = {}
+            if 'spread_type' in df_scored.columns:
+                for _stype in df_scored['spread_type'].unique():
+                    if _stype in _BOND_SNAP_TYPES and _stype not in _snap_cache:
+                        try:
+                            _snap_cache[_stype] = load_spread_data(_stype)
+                        except Exception:
+                            _snap_cache[_stype] = None
+
             df_scored['_duration'] = df_scored.apply(
-                lambda r: _get_duration_mult(str(r.get('ID', '')), str(r.get('spread_type', ''))),
+                lambda r: _get_duration_mult(
+                    str(r.get('ID', '')),
+                    str(r.get('spread_type', '')),
+                    snap=_snap_cache.get(str(r.get('spread_type', ''))),
+                ),
                 axis=1,
             )
             df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)

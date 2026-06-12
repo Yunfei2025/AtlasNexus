@@ -151,47 +151,81 @@ def _get_input_dir() -> Path:
         return Path(__file__).parent.parent.parent / 'input'
 
 
-def _load_pickle_safe(filepath: Path) -> Optional[Any]:
-    def _normalize_repo_label(value: Any) -> Any:
-        if isinstance(value, str):
-            return re.sub(r'^Repo-', 'Repo7d-', value, flags=re.IGNORECASE)
-        return value
+# ---------------------------------------------------------------------------
+# Repo-label normalizer (applied once per file load, not per call site)
+# ---------------------------------------------------------------------------
 
-    def _normalize_repo_obj(obj: Any) -> Any:
-        if isinstance(obj, pd.DataFrame):
-            out = obj.copy()
-            if out.index.dtype == object:
-                out.index = out.index.map(_normalize_repo_label)
-            if out.columns.dtype == object:
-                out.columns = out.columns.map(_normalize_repo_label)
-            return out
-        if isinstance(obj, pd.Series):
-            out = obj.copy()
-            if out.index.dtype == object:
-                out.index = out.index.map(_normalize_repo_label)
-            out.name = _normalize_repo_label(out.name)
-            return out
-        if isinstance(obj, dict):
-            return {_normalize_repo_label(k): _normalize_repo_obj(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_normalize_repo_obj(v) for v in obj]
-        if isinstance(obj, tuple):
-            return tuple(_normalize_repo_obj(v) for v in obj)
-        return obj
+def _normalize_repo_label(value: Any) -> Any:
+    if isinstance(value, str):
+        return re.sub(r'^Repo-', 'Repo7d-', value, flags=re.IGNORECASE)
+    return value
 
-    if not filepath.exists():
-        print(f"Warning: {filepath} not found")
+
+def _normalize_repo_obj(obj: Any) -> Any:
+    if isinstance(obj, pd.DataFrame):
+        out = obj.copy()
+        if out.index.dtype == object:
+            out.index = out.index.map(_normalize_repo_label)
+        if out.columns.dtype == object:
+            out.columns = out.columns.map(_normalize_repo_label)
+        return out
+    if isinstance(obj, pd.Series):
+        out = obj.copy()
+        if out.index.dtype == object:
+            out.index = out.index.map(_normalize_repo_label)
+        out.name = _normalize_repo_label(out.name)
+        return out
+    if isinstance(obj, dict):
+        return {_normalize_repo_label(k): _normalize_repo_obj(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_normalize_repo_obj(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_normalize_repo_obj(v) for v in obj)
+    return obj
+
+
+# ---------------------------------------------------------------------------
+# mtime-keyed pickle cache  (module-level, shared across all callers)
+# ---------------------------------------------------------------------------
+
+_PICKLE_CACHE: dict[str, tuple[float, Any]] = {}
+
+
+def _load_pickle_cached(filepath: Path) -> Optional[Any]:
+    """Load a pickle file, caching the result keyed by file mtime.
+
+    The Repo-label normalization is applied once per file load and the
+    normalized object is stored in the cache, so callers never pay for it.
+    """
+    path_str = str(filepath)
+    try:
+        mtime = filepath.stat().st_mtime
+    except FileNotFoundError:
         return None
+
+    cached = _PICKLE_CACHE.get(path_str)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
     try:
         with open(filepath, 'rb') as f:
-            return _normalize_repo_obj(pickle.load(f))
+            obj = pickle.load(f)
     except Exception as e:
         print(f"Error loading {filepath}: {e}")
         try:
-            return _normalize_repo_obj(pd.read_pickle(filepath))
+            obj = pd.read_pickle(filepath)
         except Exception as e2:
-            print(f"Fallback also failed: {e2}")
+            print(f"Fallback also failed for {filepath}: {e2}")
             return None
+
+    obj = _normalize_repo_obj(obj)
+    _PICKLE_CACHE[path_str] = (mtime, obj)
+    return obj
+
+
+def _load_pickle_safe(filepath: Path) -> Optional[Any]:
+    """Thin wrapper kept for call-site compatibility; delegates to the mtime cache."""
+    return _load_pickle_cached(filepath)
 
 
 def _normalize_repo_frame(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
@@ -341,7 +375,11 @@ def _tenor_to_duration(tenor: str) -> float:
     return round(alpha * v * (1.0 - v ** n) / (1.0 - v), 4)
 
 
-def _get_duration_mult(instrument: str, spread_type: str) -> float:
+def _get_duration_mult(
+    instrument: str,
+    spread_type: str,
+    snap: Optional[pd.DataFrame] = None,
+) -> float:
     """Return the duration multiplier for a spread instrument.
 
     SwapSpread (Repo7d-*, Shi3M-*, Basis-*, FR007S*.IR, etc.)
@@ -351,12 +389,15 @@ def _get_duration_mult(instrument: str, spread_type: str) -> float:
 
     TBondCurve / TBondSwap / CBondCurve / CBondSwap
         Bond IDs. Look up ttm from snapshot; duration ≈ ttm × 0.92.
+        Pass *snap* (pre-loaded via ``load_spread_data``) to avoid a pickle
+        read per row when called inside a DataFrame.apply loop.
 
     All other types: 1.0.
     """
     if spread_type in ('TBondCurve', 'TBondSwap', 'CBondCurve', 'CBondSwap'):
         try:
-            snap = load_spread_data(spread_type)
+            if snap is None:
+                snap = load_spread_data(spread_type)
             if isinstance(snap, pd.DataFrame) and instrument in snap.index and 'ttm' in snap.columns:
                 ttm = float(snap.loc[instrument, 'ttm'])
                 if ttm > 0:

@@ -230,8 +230,35 @@ def compute_candidate_scores(
     return df
 
 
-def compute_scan_score(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute lightweight scan-time score for ranking and filtering."""
+def compute_scan_score(
+    df: pd.DataFrame,
+    *,
+    seasonal_data: "dict | None" = None,
+    seasonal_month: "int | None" = None,
+    seasonal_p_threshold: float = 0.10,
+) -> pd.DataFrame:
+    """Compute lightweight scan-time score for ranking and filtering.
+
+    Parameters
+    ----------
+    df :
+        Candidates DataFrame (requires columns: style, spread, mean, halflife,
+        carry_roll, vol, direction; spread_type and ID for seasonal lookup).
+    seasonal_data :
+        Pre-loaded ``seasonal-spds.pkl`` dict
+        ``{spread_type: DataFrame[instrument × month_key]}``.
+        When provided together with *seasonal_month*, a
+        ``seasonal_edge_bps`` column is added and included in the composite score.
+    seasonal_month :
+        Calendar month (1-12) for the seasonal edge lookup.
+        Defaults to ``datetime.date.today().month`` when *seasonal_data* is given
+        but *seasonal_month* is not supplied.
+    seasonal_p_threshold :
+        Only include the seasonal edge for cells whose binomial p-value is below
+        this threshold (one-sided, no FDR correction). Default 0.10.
+    """
+    import datetime as _dt
+
     df = df.copy()
 
     style = (
@@ -296,8 +323,45 @@ def compute_scan_score(df: pd.DataFrame) -> pd.DataFrame:
     expected_move = expected_tc.where(~is_mr, expected_mr)
     edge = expected_move.fillna(0.0)
 
-    df['edge_preview'] = edge
-    df['composite_score_preview'] = (edge / risk).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)
+    # ── Seasonal edge term ─────────────────────────────────────────────────────
+    seasonal_edge = pd.Series(0.0, index=df.index, dtype=float)
+    if seasonal_data and isinstance(seasonal_data, dict):
+        month = int(seasonal_month or _dt.date.today().month)
+        month_key = f'm{month}'
+        has_stype = 'spread_type' in df.columns
+        has_id    = 'ID' in df.columns
+        if has_stype and has_id:
+            for idx in df.index:
+                stype = str(df.at[idx, 'spread_type'])
+                inst  = str(df.at[idx, 'ID'])
+                sdf   = seasonal_data.get(stype)
+                if not isinstance(sdf, pd.DataFrame) or inst not in sdf.index:
+                    continue
+                if month_key not in sdf.columns:
+                    continue
+                cell = sdf.at[inst, month_key]
+                if not isinstance(cell, dict):
+                    continue
+                p_val = float(cell.get('p_value', 1.0))
+                if p_val >= seasonal_p_threshold:
+                    continue
+                avg_chg = float(cell.get('avg_chg_bp', 0.0))
+                seas_dir = str(cell.get('direction', 'neutral'))
+                # Sign the edge by trade direction vs seasonal direction.
+                # BUY profits when spread widens (up); SELL profits when spread narrows (down).
+                trade_dir = direction.at[idx]
+                dir_match = (
+                    (trade_dir == 'BUY'  and seas_dir == 'up')
+                    or (trade_dir == 'SELL' and seas_dir == 'down')
+                )
+                signed_edge = abs(avg_chg) if dir_match else -abs(avg_chg)
+                seasonal_edge.at[idx] = signed_edge
+
+    df['seasonal_edge_bps'] = seasonal_edge
+
+    total_edge = edge + seasonal_edge / 100.0  # seasonal edge is in bp; edge is in price units
+    df['edge_preview'] = total_edge
+    df['composite_score_preview'] = (total_edge / risk).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)
 
     return df
 

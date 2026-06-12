@@ -61,4 +61,4 @@ def retrieveMarcoPx(cfg=None):
     macro_ts = {}
     for macro_name, symbol in MACRO_SYMBOLS.items():
         macro_ts[macro_name] = _wsd(symbol, "close", starts, dps)
-    updatePKL(macro_ts, file_path)
+    macro_ts = updatePKL(macro_ts, file_path)

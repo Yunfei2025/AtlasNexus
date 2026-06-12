@@ -129,6 +129,34 @@ def build_spreads_layout():
                             clearable=False,
                             style=_DD_STYLE,
                         ),
+                        _field_label("Seasonal Highlight Month"),
+                        dcc.Dropdown(
+                            options=[
+                                {"label": m, "value": i + 1}
+                                for i, m in enumerate([
+                                    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+                                ])
+                            ],
+                            value=__import__("datetime").date.today().month,
+                            id="seasonal-highlight-month",
+                            clearable=True,
+                            placeholder="None",
+                            style=_DD_STYLE,
+                        ),
+                        _field_label("Seasonal Years"),
+                        dcc.Dropdown(
+                            options=[
+                                {"label": "3 years", "value": 3},
+                                {"label": "5 years", "value": 5},
+                                {"label": "8 years", "value": 8},
+                                {"label": "All", "value": 20},
+                            ],
+                            value=5,
+                            id="seasonal-years",
+                            clearable=False,
+                            style=_DD_STYLE,
+                        ),
                     ],
                     style={
                         "background": "#0a2850",
@@ -161,6 +189,17 @@ def build_spreads_layout():
                         )),
                         config={"displayModeBar": False},
                     ),
+                    _chart_label("Seasonal Pattern"),
+                    dcc.Graph(
+                        id="graph-spread-seasonal",
+                        figure=dict(layout=dict(
+                            plot_bgcolor=app_color["graph_bg"],
+                            paper_bgcolor=app_color["graph_bg"],
+                        )),
+                        config={"displayModeBar": False},
+                        style={"height": "320px"},
+                    ),
+                    html.Div(id="spread-seasonal-stats", style={"marginTop": "6px"}),
                 ],
                 className="three-fourths column futures__price__container",
             ),
@@ -933,6 +972,141 @@ def register_callbacks(app) -> None:
                 title=f"Error: {str(e)[:100]}"
             ))
             return empty_figure
+
+    # Seasonal overlay callback
+    @app.callback(
+        [
+            Output("graph-spread-seasonal", "figure"),
+            Output("spread-seasonal-stats", "children"),
+        ],
+        Input("spread-type", "value"),
+        Input("ticker", "children"),
+        Input("seasonal-highlight-month", "value"),
+        Input("seasonal-years", "value"),
+    )
+    def _update_seasonal(stype, ticker, highlight_month, n_years):
+        from dash.exceptions import PreventUpdate
+        from web.tabs.alpha.seasonal import (
+            seasonal_pivot,
+            monthly_seasonal_stats,
+            build_seasonal_overlay_figure,
+        )
+
+        _empty_fig = go.Figure(layout=dict(
+            plot_bgcolor=app_color["graph_bg"],
+            paper_bgcolor=app_color["graph_bg"],
+            font=dict(color="#ffffff"),
+        ))
+
+        if not ticker or not stype:
+            return _empty_fig, html.Div()
+
+        n_years = int(n_years or 5)
+
+        # --- Acquire the spread series ---
+        series: pd.Series | None = None
+        try:
+            if stype in _FUT_SPREADS:
+                bucket = _fut_stat_bucket(stype)
+                if ticker in bucket:
+                    series = bucket[ticker][0]  # (series, mean, vol, max, min)
+                elif bucket:
+                    series = next(iter(bucket.values()))[0]
+            else:
+                from web.tabs.alpha.data import load_spread_timeseries
+                spd_df = load_spread_timeseries(stype)
+                if isinstance(spd_df, pd.DataFrame) and not spd_df.empty:
+                    if ticker in spd_df.columns:
+                        series = spd_df[ticker]
+                    elif spd_df.columns.size:
+                        series = spd_df.iloc[:, 0]
+        except Exception as e:
+            print(f"[seasonal] series load error for {stype}/{ticker}: {e}")
+
+        if series is None or series.dropna().empty:
+            return _empty_fig, html.Div(
+                f"No data for {ticker or stype}",
+                style={"color": "#8fb3d9", "fontSize": "11px", "padding": "4px"},
+            )
+
+        # --- Compute seasonal statistics ---
+        try:
+            pivot = seasonal_pivot(series, years=n_years)
+            stats = monthly_seasonal_stats(series, min_years=3)
+        except Exception as e:
+            print(f"[seasonal] compute error: {e}")
+            return _empty_fig, html.Div()
+
+        # --- Build overlay figure ---
+        try:
+            fig = build_seasonal_overlay_figure(
+                pivot,
+                highlight_month=int(highlight_month) if highlight_month else None,
+                stats=stats,
+                title=f"{ticker} — seasonal year overlay",
+            )
+        except Exception as e:
+            print(f"[seasonal] figure error: {e}")
+            fig = _empty_fig
+
+        # --- Build stats mini-table ---
+        stats_children = html.Div()
+        if stats is not None and not stats.empty:
+            try:
+                _arrow = {"up": "↑", "down": "↓", "neutral": "—"}
+                _dir_color = {
+                    "up":      "#00cc96",
+                    "down":    "#ef553b",
+                    "neutral": "#aab0c0",
+                }
+                rows = []
+                for month, row in stats.iterrows():
+                    p = row["p_value"]
+                    sig = "**" if p < 0.05 else ("*" if p < 0.10 else "")
+                    is_hl = (highlight_month and int(month) == int(highlight_month))
+                    row_style = {
+                        "background": "#1a3a7a" if is_hl else "transparent",
+                        "display": "flex",
+                        "gap": "12px",
+                        "padding": "2px 6px",
+                        "borderRadius": "3px",
+                    }
+                    cell_style = {"fontSize": "11px", "color": "#ffffff", "minWidth": "34px"}
+                    sub_style  = {"fontSize": "11px", "color": "#aab0c0", "minWidth": "34px"}
+                    dir_c = _dir_color[row["direction"]]
+                    rows.append(html.Div([
+                        html.Span(row["month_name"], style={**cell_style, "minWidth": "28px"}),
+                        html.Span(
+                            f"{_arrow[row['direction']]}",
+                            style={**cell_style, "color": dir_c, "minWidth": "16px"}
+                        ),
+                        html.Span(f"{row['consistency']*100:.0f}%{sig}", style={**cell_style, "minWidth": "44px"}),
+                        html.Span(f"{row['avg_chg_bp']:+.1f}", style={**cell_style, "minWidth": "44px"}),
+                        html.Span(f"n={row['n_years']}", style={**sub_style}),
+                        html.Span(f"p={p:.2f}", style={**sub_style}),
+                    ], style=row_style))
+
+                header = html.Div([
+                    html.Span("Month", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "28px"}),
+                    html.Span("Dir",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "16px"}),
+                    html.Span("Cons%", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
+                    html.Span("AvgΔ",  style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
+                    html.Span("Obs",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
+                    html.Span("p-val", style={"fontSize": "10px", "color": "#8fb3d9"}),
+                ], style={"display": "flex", "gap": "12px", "padding": "2px 6px",
+                           "borderBottom": "1px solid #1a3a7a", "marginBottom": "2px"})
+
+                note = html.Div(
+                    "* p<0.10  ** p<0.05  (one-sided binomial; no FDR correction applied)",
+                    style={"fontSize": "9px", "color": "#8fb3d9", "marginTop": "4px", "padding": "0 6px"},
+                )
+                stats_children = html.Div([header] + rows + [note],
+                                          style={"background": "#082255", "borderRadius": "4px",
+                                                 "padding": "6px 0", "marginBottom": "8px"})
+            except Exception as e:
+                print(f"[seasonal] stats table error: {e}")
+
+        return fig, stats_children
 
     # Curves callbacks
     @app.callback(

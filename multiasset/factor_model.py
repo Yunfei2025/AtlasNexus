@@ -650,12 +650,19 @@ def discrete_target_level(
     return round(level, 10)
 
 
-def bucket_position(position: Union[float, pd.Series], num_levels: int = 5) -> Union[int, float, pd.Series]:
+def bucket_position(
+    position: Union[float, pd.Series],
+    num_levels: int = 5,
+    long_only: bool = False,
+) -> Union[int, float, pd.Series]:
     """Bucket continuous position into discrete levels to avoid overfitting.
 
-    Adapts bucketing to position range:
-    - Long-only [0, 1]:    maps to levels 0, 0.5, 1, 1.5, 2 (spread across [0, 1])
-    - Long-short [-1, 1]:  maps to levels -2, -1, 0, 1, 2 (symmetric around zero)
+    Pass ``long_only=True`` for factors that are restricted to [0, 1] (e.g. IRDL).
+    The regime is determined by the *caller* — never inferred from the sign of the
+    value — so a small positive position on a long-short factor is not misclassified.
+
+    Long-only [0, 1]:    maps to levels 0, 0.5, 1, 1.5, 2 (spread across [0, 1])
+    Long-short [-1, 1]:  maps to levels -2, -1, 0, 1, 2 (symmetric around zero)
 
     For long-only assets, levels represent quintiles of [0, 1]:
       Level 0:    position ∈ [0.0, 0.2)
@@ -674,12 +681,15 @@ def bucket_position(position: Union[float, pd.Series], num_levels: int = 5) -> U
     Args:
         position: Continuous position value or Series
         num_levels: Number of discrete levels (currently only 5 supported)
+        long_only: Whether the factor is restricted to non-negative positions
 
     Returns:
         Bucketed level(s) as int/float or Series
     """
     if isinstance(position, pd.Series):
-        return position.apply(lambda x: bucket_position(x, num_levels) if pd.notna(x) else np.nan)
+        return position.apply(
+            lambda x: bucket_position(x, num_levels, long_only) if pd.notna(x) else np.nan
+        )
 
     if num_levels != 5:
         raise ValueError(f"Only 5-level bucketing is currently supported")
@@ -687,19 +697,16 @@ def bucket_position(position: Union[float, pd.Series], num_levels: int = 5) -> U
     if pd.isna(position):
         return np.nan
 
-    # Detect if long-only (position in [0, 1]) or long-short (position in [-1, 1])
-    is_long_only = position >= 0
-
-    if is_long_only:
+    if long_only:
         # Long-only: spread 5 levels across [0, 1]
-        # Map to levels 0, 0.5, 1, 1.5, 2
-        if position >= 0.8:
+        p = max(0.0, min(1.0, float(position)))
+        if p >= 0.8:
             return 2
-        elif position >= 0.6:
+        elif p >= 0.6:
             return 1.5
-        elif position >= 0.4:
+        elif p >= 0.4:
             return 1
-        elif position >= 0.2:
+        elif p >= 0.2:
             return 0.5
         else:
             return 0
@@ -1101,7 +1108,7 @@ def run_factor_model_backtest(
         )
 
     result['signal'] = pos['signal']
-    result['position'] = bucket_position(pos['position'])  # Bucket into 5 levels for display
+    result['position'] = bucket_position(pos['position'], long_only=_long_only)
     result['turnover'] = pos['turnover']
 
     # Gross PnL, then net of transaction costs (doc §5.1, DV01-aware)

@@ -398,7 +398,19 @@ def register_backtest_hist_callbacks(app):
                         vol_lookback_months=vol_lookback_months,
                         ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA,
                     )
-                    weights_series, _ = optimizer.fit_and_calculate(pd.Timestamp(rebalance_date))
+                    # First pass: get factor vols, then build vol^0.5 risk budgets.
+                    # This tilts allocation toward higher-vol factors (IRDL > IRSL > IRCV)
+                    # rather than equal-budgeting, which would over-allocate to noisy
+                    # low-vol curvature moves.
+                    _, factor_vols_raw = optimizer.fit_and_calculate(pd.Timestamp(rebalance_date))
+                    vol_budgets = {
+                        f: float(np.sqrt(v)) for f, v in factor_vols_raw.items()
+                        if pd.notna(v) and v > 0
+                    }
+                    weights_series, _ = optimizer.fit_and_calculate(
+                        pd.Timestamp(rebalance_date),
+                        risk_budgets=vol_budgets if vol_budgets else None,
+                    )
                     weights = weights_series.to_dict()
                 except Exception as e:
                     print(f"  {rebalance_date.date()}: Factor risk optimization failed: {e}")

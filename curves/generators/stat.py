@@ -637,6 +637,132 @@ class StatGenerator:
         out_path = os.path.join(DIR_INPUT, 'Tenor-spds.pkl')
         updatePKL(tenor_spds, out_path, rewrite=True)
         
+    def compute_seasonal_screener(self) -> None:
+        """Precompute per-instrument monthly seasonality stats for the screener.
+
+        Reads the same *-spds.pkl files that the web Spread subtab consumes and runs
+        :func:`monthly_seasonal_stats` for every instrument in each spread type.
+        Writes ``seasonal-spds.pkl`` with structure::
+
+            {
+              spread_type: pd.DataFrame   # index=instrument, columns=month_1..month_12
+                                          # each cell = dict(avg_chg_bp, consistency,
+                                          #                  direction, p_value, n_years)
+            }
+
+        The screener callback reads this file directly (mtime-cached) so it never
+        recomputes across hundreds of instruments on every click.
+        """
+        try:
+            from web.tabs.alpha.seasonal import monthly_seasonal_stats
+        except ImportError as exc:
+            print(f'compute_seasonal_screener: cannot import seasonal module — {exc}')
+            return
+
+        _SPREAD_TYPE_SOURCES: list[tuple[str, str, str | None]] = [
+            # (spread_type, pkl_file, inner_key_or_None)
+            # inner_key=None means the pkl is directly {spread_type: {'Spread': df}}
+            ('TenorSpread',  'Tenor-spds.pkl',    'TenorSpread'),
+            ('TBondSwap',    'TBond-spds.pkl',     'BondSwap'),
+            ('CBondSwap',    'CBond-spds.pkl',     'BondSwap'),
+            ('TBondCurve',   'TBond-spds.pkl',     'BondCurve'),
+            ('CBondCurve',   'CBond-spds.pkl',     'BondCurve'),
+            ('SwapSpread',   'IRS-pxspds.pkl',     'SwapSpread'),
+            ('NetBasis',     'futures-spds.pkl',   None),
+            ('TermBasis',    'futures-spds.pkl',   None),
+            ('FuturesSwap',  'futures-spds.pkl',   None),
+        ]
+
+        result: dict[str, pd.DataFrame] = {}
+
+        for stype, pkl_name, inner_key in _SPREAD_TYPE_SOURCES:
+            pkl_path = os.path.join(DIR_INPUT, pkl_name)
+            try:
+                data = pd.read_pickle(pkl_path)
+            except Exception:
+                continue
+
+            # Navigate to the Spread DataFrame
+            spread_df: pd.DataFrame | None = None
+            try:
+                if inner_key is None:
+                    # futures-spds.pkl: {stype: {ticker: {'Spread': df, ...}}}
+                    bucket = data.get(stype, {})
+                    if isinstance(bucket, dict):
+                        frames = {}
+                        for tk, d in bucket.items():
+                            if isinstance(d, dict):
+                                sp = d.get('Spread')
+                            elif isinstance(d, pd.DataFrame):
+                                sp = d
+                            else:
+                                continue
+                            if isinstance(sp, pd.DataFrame) and not sp.empty:
+                                col = sp.iloc[:, 0]
+                                frames[tk] = pd.to_numeric(col, errors='coerce')
+                        if frames:
+                            spread_df = pd.DataFrame(frames)
+                    # TermBasis has a flat structure: {'Spread': wide_df, 'StatInfo': ...}
+                    if spread_df is None and stype == 'TermBasis':
+                        tb = data.get('TermBasis', {})
+                        sp = tb.get('Spread') if isinstance(tb, dict) else None
+                        if isinstance(sp, pd.DataFrame) and not sp.empty:
+                            spread_df = sp.apply(pd.to_numeric, errors='coerce')
+                else:
+                    nested = data.get(inner_key, {})
+                    if isinstance(nested, dict):
+                        sp = nested.get('Spread')
+                    elif isinstance(nested, pd.DataFrame):
+                        sp = nested
+                    else:
+                        sp = None
+                    if isinstance(sp, pd.DataFrame) and not sp.empty:
+                        spread_df = sp.apply(pd.to_numeric, errors='coerce')
+            except Exception as exc:
+                print(f'compute_seasonal_screener: error loading {stype}: {exc}')
+                continue
+
+            if spread_df is None or spread_df.empty:
+                continue
+
+            # Compute monthly stats per instrument
+            stat_rows: dict[str, dict] = {}
+            for inst in spread_df.columns:
+                s = spread_df[inst].dropna()
+                if len(s) < 180:  # need at least ~3 years of trading days
+                    continue
+                try:
+                    stats = monthly_seasonal_stats(s, min_years=3)
+                except Exception:
+                    continue
+                if stats.empty:
+                    continue
+                stat_rows[inst] = {
+                    f'm{m}': {
+                        'avg_chg_bp':  float(row['avg_chg_bp']),
+                        'consistency': float(row['consistency']),
+                        'direction':   str(row['direction']),
+                        'p_value':     float(row['p_value']),
+                        'n_years':     int(row['n_years']),
+                    }
+                    for m, row in stats.iterrows()
+                }
+
+            if not stat_rows:
+                continue
+
+            # Flatten to a DataFrame: index=instrument, columns=m1..m12
+            # Each cell stores the dict; the screener callback unpacks what it needs.
+            result[stype] = pd.DataFrame.from_dict(stat_rows, orient='index')
+
+        if not result:
+            print('compute_seasonal_screener: no data produced — skipping write.')
+            return
+
+        out_path = os.path.join(DIR_INPUT, 'seasonal-spds.pkl')
+        updatePKL(result, out_path, rewrite=True)
+        print(f'compute_seasonal_screener: wrote {len(result)} spread types → {out_path}')
+
     # ---------------------- Orchestration ----------------------
     def run_all(self) -> None:
         self.compute_bond_and_swap_spreads()
@@ -646,6 +772,7 @@ class StatGenerator:
         self.compute_pca_spreads()
         self.compute_tenor_spreads()
         self.compute_futures_stats()
+        self.compute_seasonal_screener()
         print('\nFinish initialising statistics at：', datetime.datetime.now().strftime('%H:%M:%S'))
 
     @classmethod
