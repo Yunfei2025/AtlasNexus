@@ -27,10 +27,13 @@ from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
 from multiasset.utils import get_default_sensitivities
 
-try:
-    retrieveFXIRCurves()
-except Exception as e:
-    print(f"Warning: Could not retrieve FX/IR curves: {e}")
+def ensure_data() -> None:
+    """Fetch FX/IR curves on demand; safe to call multiple times."""
+    try:
+        retrieveFXIRCurves()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Could not retrieve FX/IR curves: %s", e)
 
 from settings.paths import DIR_INPUT
 

@@ -211,12 +211,20 @@ def register_candidate_callbacks(app) -> None:
         Input('alpha-scan-btn', 'n_clicks'),
         [State('alpha-spread-categories', 'value'),
          State('alpha-zscore-threshold', 'value'),
-         State('alpha-direction-filter', 'value')],
+         State('alpha-direction-filter', 'value'),
+         State('seasonal-prefilter-toggle', 'value'),
+         State('seasonal-prefilter-min-consistency', 'value'),
+         State('seasonal-prefilter-p-thresh', 'value')],
         prevent_initial_call=True
     )
-    def scan_candidates(n_clicks, categories, zscore_thd, direction):
+    def scan_candidates(n_clicks, categories, zscore_thd, direction,
+                        seasonal_prefilter, seasonal_min_consistency, seasonal_p_thresh):
         if not n_clicks or not categories:
             return html.Div("Select spread categories and click Scan.", style={'color': THEME['text_sub']}), "", [], {}
+
+        use_seasonal_gate = bool(seasonal_prefilter and 'on' in (seasonal_prefilter or []))
+        min_consistency = float(seasonal_min_consistency or 75) / 100.0
+        seas_p_thresh = float(seasonal_p_thresh or 0.10)
 
         try:
             z_thd = float(zscore_thd) if zscore_thd is not None else float(ZSCORE_ENTRY_THRESHOLD)
@@ -275,7 +283,7 @@ def register_candidate_callbacks(app) -> None:
             df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) > 0 else 'SELL')
 
         if 'score' not in df_all.columns:
-            # Load seasonal-spds.pkl to add the current-month seasonal edge term.
+            # Load seasonal-spds.pkl (for edge term + optional pre-filter gate).
             _seasonal_data = None
             try:
                 import pickle as _pkl
@@ -285,6 +293,50 @@ def register_candidate_callbacks(app) -> None:
                         _seasonal_data = _pkl.load(_f)
             except Exception:
                 _seasonal_data = None
+
+            # ── Seasonal pre-filter gate ───────────────────────────────────────
+            # Exclude instruments whose current-month seasonality is too weak
+            # (p_value >= threshold or consistency < min_consistency).
+            # Only applied when the toggle is ON and seasonal-spds.pkl is available.
+            if use_seasonal_gate and _seasonal_data and isinstance(_seasonal_data, dict):
+                import datetime as _dt
+                _cur_month = _dt.date.today().month
+                _month_key = f'm{_cur_month}'
+                _has_stype = 'spread_type' in df_all.columns
+                _has_id    = 'ID' in df_all.columns
+                if _has_stype and _has_id:
+                    _keep_mask = pd.Series(True, index=df_all.index)
+                    _excluded_count = 0
+                    for _idx in df_all.index:
+                        _stype = str(df_all.at[_idx, 'spread_type'])
+                        _inst  = str(df_all.at[_idx, 'ID'])
+                        _sdf   = _seasonal_data.get(_stype)
+                        if not isinstance(_sdf, pd.DataFrame) or _inst not in _sdf.index:
+                            continue  # no data → don't exclude (benefit of the doubt)
+                        if _month_key not in _sdf.columns:
+                            continue
+                        _cell = _sdf.at[_inst, _month_key]
+                        if not isinstance(_cell, dict):
+                            continue
+                        _p    = float(_cell.get('p_value', 1.0))
+                        _cons = float(_cell.get('consistency', 0.0))
+                        if _p >= seas_p_thresh or _cons < min_consistency:
+                            _keep_mask.at[_idx] = False
+                            _excluded_count += 1
+                    df_all = df_all.loc[_keep_mask].copy()
+                    if _excluded_count:
+                        scanned_time += f' · seasonal gate excluded {_excluded_count}'
+
+            if df_all.empty:
+                return (
+                    html.Div(
+                        f"No candidates passed the seasonal gate "
+                        f"(consistency≥{min_consistency:.0%}, p<{seas_p_thresh}). "
+                        "Relax the filter or turn it off.",
+                        style={'color': THEME['warning']},
+                    ),
+                    f"Scanned at {scanned_time}", [], {},
+                )
 
             df_all = compute_scan_score(df_all, seasonal_data=_seasonal_data)
             if 'composite_score_preview' in df_all.columns:

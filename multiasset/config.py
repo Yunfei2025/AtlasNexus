@@ -32,8 +32,19 @@ class RiskModelConfig:
     # ── Backtest / signal floors ──────────────────────────────────────────────
     # Minimum non-zero signal level for factor-scaling mode (prevents near-zero allocations)
     SIGNAL_FLOOR: float = 0.2
-    # Risk-free rate used in backtest Sharpe calculation
+    # Risk-free rate used in backtest Sharpe calculation (annualised, decimal)
     RISK_FREE_RATE: float = 0.02
+
+    # ── Per-asset-class weight caps used in factor-scaling backtest ───────────
+    # Live path uses the optimizer bounds; backtest caps must match.
+    CLASS_CAPS: dict = {
+        'Commodities': 0.15,
+        'FX':          0.20,
+        'Rates':       0.40,
+        'Spread':      0.40,
+    }
+    # Default cap for any asset class not listed above
+    CLASS_CAP_DEFAULT: float = 0.30
 
     # ── Portfolio construction ────────────────────────────────────────────────
     # Standard lot size for bond positions (CNY)

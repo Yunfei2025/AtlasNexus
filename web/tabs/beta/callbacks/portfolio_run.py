@@ -33,6 +33,7 @@ from multiasset.main import run_risk_parity_allocation, create_custom_portfolio,
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
 from multiasset.factor_backtest import compute_ewma_factor_vols, get_factor_weighted_duration
+from multiasset.budget import derive_vol_sqrt_budgets
 from multiasset.config import RiskModelConfig
 from settings.paths import DIR_INPUT
 
@@ -264,35 +265,16 @@ def register_portfolio_run_callbacks(app):
         # ── Factor vol lookup (live 1Y EWMA) ─────────────────────────────────
         _vol_map = compute_factor_vol_map(sorted_factors)
 
-        # ── Vol^0.5 Risk Parity: weights based on vol^0.5 to balance significance and noise ──
-        # Rationale: Level (80% var explained) gets highest weight, Slope (15%) middle,
-        # Curvature (5%) lowest. vol^0.5 achieves this more naturally than post-hoc tiers.
-        # If a factor's vol is missing (e.g., commodities without loaded data),
-        # use estimated vol: commodities typically ~12-18%, use 15% as default
-        _vol_sqrt_budgets = {}
-        _missing_vols = []
-        for _f in sorted_factors:
-            _v = _vol_map.get(_f)
-            if _v is not None and pd.notna(_v) and _v > 0:
-                _vol_sqrt_budgets[_f] = np.sqrt(_v)
-            else:
-                _missing_vols.append(_f)
-                # Use estimated commodity vol (15%) for missing data
-                estimated_commodity_vol = 15.0
-                _vol_sqrt_budgets[_f] = np.sqrt(estimated_commodity_vol)
-
+        # ── Vol^0.5 Risk Parity budgets ───────────────────────────────────────
+        _vol_sqrt_allocations, _missing_vols = derive_vol_sqrt_budgets(
+            sorted_factors, _vol_map, total_capital_m=total_capital_m
+        )
         if _missing_vols:
-            print(f"⚠️  Missing volatility data for {len(_missing_vols)} factors: {_missing_vols}")
-            print(f"   Using estimated vol = 15% for these factors")
-
-        _total_vol_sqrt = sum(_vol_sqrt_budgets.values())
-        if _total_vol_sqrt > 0:
-            _vol_sqrt_allocations = {
-                _f: round(total_capital_m * _vol_sqrt_budgets.get(_f, 0.0) / _total_vol_sqrt, 2)
-                for _f in sorted_factors
-            }
-        else:
-            _vol_sqrt_allocations = {_f: equal_share for _f in sorted_factors}
+            import logging
+            logging.getLogger(__name__).warning(
+                "Missing vol data for %d factor(s): %s — using fallback vol",
+                len(_missing_vols), _missing_vols,
+            )
 
         def get_rp_max(factor):
             if allocation_mode == 'user_defined':
@@ -523,11 +505,12 @@ def register_portfolio_run_callbacks(app):
                 return (html.Div("No matching assets found.", style={'color': THEME['warning']}),
                         error_msg, "", {}, {})
             
-            # Update global state
+            _run_timestamp = datetime.now()
+            # Update global state (kept for legacy consumers; new code should use the store)
             ALLOCATION_RESULTS.update({
                 'summary': summary, 'factor_exposures': factor_exp,
                 'factor_risk': factor_risk, 'portfolio': portfolio,
-                'timestamp': datetime.now()
+                'timestamp': _run_timestamp,
             })
             
             # Prepare portfolio table
@@ -652,12 +635,11 @@ def register_portfolio_run_callbacks(app):
                     style={'color': THEME.get('danger', '#ef553b'), 'fontSize': '11px', 'marginLeft': '12px'},
                 ))
             status_msg = html.Div(_status_children, style={'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '4px'})
-            timestamp_msg = f"Last updated: {ALLOCATION_RESULTS['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}"
+            timestamp_msg = f"Last updated: {_run_timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
 
             # For Pure Risk Parity: derive RP Max from actual factor risk contributions
             # returned by the full-covariance optimizer (proper ERC attribution).
             if allocation_mode == 'risk_parity':
-                factor_risk = ALLOCATION_RESULTS.get('factor_risk', pd.DataFrame())
                 if (not factor_risk.empty
                         and 'Risk Factor' in factor_risk.columns
                         and 'Risk Contribution (%)' in factor_risk.columns):
@@ -704,7 +686,14 @@ def register_portfolio_run_callbacks(app):
                 print(f"Warning: Could not save Beta snapshot: {_se}")
                 traceback.print_exc()
 
-            return (portfolio_table, status_msg, timestamp_msg, {'status': 'success'}, rp_budgets_out)
+            _store_factor_risk = (
+                factor_risk.to_dict('records')
+                if isinstance(factor_risk, pd.DataFrame) and not factor_risk.empty
+                else []
+            )
+            return (portfolio_table, status_msg, timestamp_msg,
+                    {'status': 'success', 'factor_risk': _store_factor_risk},
+                    rp_budgets_out)
             
         except Exception as e:
             # Print full traceback for debugging
@@ -740,8 +729,9 @@ def register_portfolio_run_callbacks(app):
         store_data, hedge_ratio_pct, instrument, irs_maturity,
         dv01_values, dv01_ids, capital_value, capital_unit,
     ):
-        factor_risk = ALLOCATION_RESULTS.get('factor_risk')
-        if factor_risk is None or factor_risk.empty:
+        _fr_records = (store_data or {}).get('factor_risk', [])
+        factor_risk = pd.DataFrame(_fr_records) if _fr_records else pd.DataFrame()
+        if factor_risk.empty:
             return html.Div(
                 "Run Analysis first to compute portfolio exposures.",
                 style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px'},

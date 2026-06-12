@@ -554,23 +554,42 @@ def load_factor_backtest(
     return {}
 
 
-def compute_metrics(result_df: pd.DataFrame) -> Dict[str, float]:
-    """Compute performance metrics from a single factor backtest result."""
-    rets = result_df['strategy_returns'].dropna()
+def compute_metrics(
+    result_df: pd.DataFrame,
+    returns_col: str = 'strategy_returns',
+    risk_free_rate: float = 0.0,
+    geometric_annualisation: bool = False,
+) -> Dict[str, float]:
+    """Compute performance metrics from a return series.
+
+    Args:
+        result_df: DataFrame containing daily returns.
+        returns_col: Column name for the daily return series.
+        risk_free_rate: Annualised risk-free rate for Sharpe calculation (decimal).
+        geometric_annualisation: If True, use compound (geometric) annualisation
+            ``(1+r_total)^(252/N) - 1``; otherwise arithmetic ``mean * 252``.
+            The geometric form is preferred for multi-year series.
+    """
+    rets = result_df[returns_col].dropna()
     if rets.empty:
         return {}
 
+    n = len(rets)
     total_return = float((1 + rets).prod() - 1)
-    ann_return = float(rets.mean() * 252)
+    if geometric_annualisation and n > 0:
+        ann_return = float((1 + total_return) ** (252.0 / n) - 1)
+    else:
+        ann_return = float(rets.mean() * 252)
     ann_vol = float(rets.std() * np.sqrt(252))
-    sharpe = ann_return / ann_vol if ann_vol > 0 else np.nan
+    excess = ann_return - risk_free_rate
+    sharpe = excess / ann_vol if ann_vol > 0 else np.nan
 
     cum = (1 + rets).cumprod()
     running_max = cum.cummax()
     dd = (cum / running_max - 1)
     max_dd = float(dd.min())
 
-    win_rate = float((rets > 0).sum() / len(rets)) if len(rets) > 0 else 0.0
+    win_rate = float((rets > 0).sum() / n) if n > 0 else 0.0
 
     return {
         'Total Return': total_return,
@@ -579,5 +598,27 @@ def compute_metrics(result_df: pd.DataFrame) -> Dict[str, float]:
         'Sharpe': sharpe,
         'Max Drawdown': max_dd,
         'Win Rate': win_rate,
-        'Days': len(rets),
+        'Days': n,
     }
+
+
+def compute_portfolio_metrics(
+    portfolio_values: pd.Series,
+    risk_free_rate: float = 0.0,
+) -> Dict[str, float]:
+    """Compute performance metrics from a portfolio NAV/value series.
+
+    Args:
+        portfolio_values: Series of portfolio values (not returns) indexed by date.
+        risk_free_rate: Annualised risk-free rate for Sharpe (decimal).
+    """
+    daily_rets = portfolio_values.pct_change().dropna()
+    if daily_rets.empty:
+        return {}
+    df = daily_rets.rename('strategy_returns').to_frame()
+    return compute_metrics(
+        df,
+        returns_col='strategy_returns',
+        risk_free_rate=risk_free_rate,
+        geometric_annualisation=True,
+    )

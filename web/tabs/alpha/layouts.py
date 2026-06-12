@@ -155,6 +155,61 @@ def build_candidates_layout() -> html.Div:
             ], style={'flex': '1'}),
         ], style={'display': 'flex', 'alignItems': 'center', 'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
 
+        # ── Seasonal Pre-Filter ────────────────────────────────────────────────
+        html.Div([
+            html.Div([
+                dcc.Checklist(
+                    id='seasonal-prefilter-toggle',
+                    options=[{'label': ' Apply seasonal gate before scan (exclude noise months)', 'value': 'on'}],
+                    value=[],
+                    inputStyle={'marginRight': '6px'},
+                    labelStyle={'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': 'bold'},
+                ),
+                html.Span(
+                    "When ON: instruments whose current-month seasonality is statistically weak "
+                    "(low consistency or high p-value) are excluded from scan results.",
+                    style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '26px', 'display': 'block'},
+                ),
+            ], style={'marginBottom': '10px'}),
+            html.Div([
+                html.Div([
+                    html.Label(
+                        "Min consistency (%)",
+                        style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '3px', 'display': 'block'},
+                    ),
+                    dcc.Slider(
+                        id='seasonal-prefilter-min-consistency',
+                        min=50, max=100, step=5, value=75,
+                        marks={v: f'{v}%' for v in [50, 60, 70, 80, 90, 100]},
+                        tooltip={'placement': 'bottom', 'always_visible': False},
+                    ),
+                ], style={'flex': '2', 'marginRight': '30px'}),
+                html.Div([
+                    html.Label(
+                        "p-value threshold",
+                        style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '3px', 'display': 'block'},
+                    ),
+                    dcc.Dropdown(
+                        id='seasonal-prefilter-p-thresh',
+                        options=[
+                            {'label': '0.05 (strict)', 'value': 0.05},
+                            {'label': '0.10',           'value': 0.10},
+                            {'label': '0.20 (loose)',   'value': 0.20},
+                        ],
+                        value=0.10,
+                        clearable=False,
+                        style={'width': '150px', 'fontSize': '12px'},
+                    ),
+                ], style={'flex': '1'}),
+            ], style={'display': 'flex', 'alignItems': 'flex-end'}),
+        ], style={
+            'backgroundColor': THEME['bg_card'],
+            'padding': '12px 15px',
+            'borderRadius': '5px',
+            'marginBottom': '15px',
+            'borderLeft': f"3px solid {THEME['accent']}",
+        }),
+
         html.Div([
             html.Button(
                 "🔍 Scan Candidates",

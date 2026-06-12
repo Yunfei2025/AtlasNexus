@@ -16,7 +16,7 @@ from multiasset.data import load_raw_market_data, calculate_daily_returns_series
 from multiasset.main import create_custom_portfolio
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
-from multiasset.factor_backtest import load_factor_backtest
+from multiasset.factor_backtest import load_factor_backtest, compute_portfolio_metrics
 from multiasset.config import RiskModelConfig
 from settings.paths import DIR_INPUT
 
@@ -398,18 +398,11 @@ def register_backtest_hist_callbacks(app):
                         vol_lookback_months=vol_lookback_months,
                         ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA,
                     )
-                    # First pass: get factor vols, then build vol^0.5 risk budgets.
-                    # This tilts allocation toward higher-vol factors (IRDL > IRSL > IRCV)
-                    # rather than equal-budgeting, which would over-allocate to noisy
-                    # low-vol curvature moves.
-                    _, factor_vols_raw = optimizer.fit_and_calculate(pd.Timestamp(rebalance_date))
-                    vol_budgets = {
-                        f: float(np.sqrt(v)) for f, v in factor_vols_raw.items()
-                        if pd.notna(v) and v > 0
-                    }
+                    # Single pass: derive vol^0.5 budgets from the computed factor
+                    # vols and optimise in one solve (use_vol_sqrt_budgets=True).
                     weights_series, _ = optimizer.fit_and_calculate(
                         pd.Timestamp(rebalance_date),
-                        risk_budgets=vol_budgets if vol_budgets else None,
+                        use_vol_sqrt_budgets=True,
                     )
                     weights = weights_series.to_dict()
                 except Exception as e:
@@ -445,8 +438,8 @@ def register_backtest_hist_callbacks(app):
                 if alloc_mode == 'factor_scaling':
                     # Per-class hard caps on final weight (after signal tilt + renorm).
                     # Commodity vol is much higher than bonds/FX, so tighter cap.
-                    _CLASS_CAPS = {'Commodities': 0.15, 'FX': 0.20, 'Rates': 0.40, 'Spread': 0.40}
-                    _SIGNAL_FLOOR = 0.2  # floor so zero-signal assets aren't fully excluded
+                    _CLASS_CAPS = RiskModelConfig.CLASS_CAPS
+                    _SIGNAL_FLOOR = RiskModelConfig.SIGNAL_FLOOR
 
                     asset_to_factors = {}
                     for f in low_corr_factors_list:
@@ -471,7 +464,7 @@ def register_backtest_hist_callbacks(app):
                         # Apply per-class caps then renormalise (iterate once to spread
                         # any excess evenly across uncapped assets).
                         for _ in range(3):
-                            capped = {k: min(v, _CLASS_CAPS.get(get_asset_type(k), 0.30))
+                            capped = {k: min(v, _CLASS_CAPS.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT))
                                       for k, v in weights.items()}
                             cap_total = sum(capped.values())
                             if cap_total > 1e-9:
@@ -509,56 +502,48 @@ def register_backtest_hist_callbacks(app):
             all_dates = sorted(risk_factors.loc[(risk_factors.index >= start_date) & (risk_factors.index <= end_date)].index)
             sorted_rebalance_dates = sorted(allocations_by_date.keys())
             
-            # Pre-compute daily returns for all assets ever held
-            asset_daily_returns = {}
+            # --- Vectorised daily PnL ---
+            # Step 1: build returns matrix (index=date, columns=assets)
+            _daily_idx = pd.DatetimeIndex(all_dates)
+            _ret_series: dict[str, pd.Series] = {}
             for name in all_assets_ever:
                 try:
                     ret_df = calculate_daily_returns_series(name, market_data, start_date, end_date)
                     if not ret_df.empty:
-                        ret_df = ret_df.set_index('Date')
-                        asset_daily_returns[name] = ret_df
+                        s = ret_df.set_index('Date')['total']
+                        if not isinstance(s.index, pd.DatetimeIndex):
+                            s.index = pd.to_datetime(s.index)
+                        _ret_series[name] = s
                 except Exception as e:
-                    print(f"  Warning: Could not load returns for {name}: {e}")
-            
-            daily_pnl_records = []
-            cumulative_pnl = {name: 0.0 for name in all_assets_ever}
-            cumulative_pnl['Total'] = 0.0
-            
-            for trading_day in all_dates:
-                # Find applicable allocation (most recent rebalance before this day)
-                applicable_alloc = None
-                for rb_date in sorted_rebalance_dates:
-                    if rb_date <= trading_day:
-                        applicable_alloc = allocations_by_date[rb_date]
-                    else:
-                        break
-                
-                if applicable_alloc is None:
-                    continue
-                
-                daily_record = {'Date': trading_day}
-                total_daily_pnl = 0.0
-                
-                for name in all_assets_ever:
-                    if name in applicable_alloc and name in asset_daily_returns:
-                        allocation = applicable_alloc[name]
-                        ret_df = asset_daily_returns[name]
-                        
-                        if trading_day in ret_df.index:
-                            daily_ret = ret_df.loc[trading_day, 'total']
-                            if pd.notna(daily_ret):
-                                daily_pnl = allocation * daily_ret
-                                cumulative_pnl[name] += daily_pnl
-                                total_daily_pnl += daily_pnl
-                    
-                    daily_record[name] = cumulative_pnl[name] / 1_000_000
-                
-                cumulative_pnl['Total'] += total_daily_pnl
-                daily_record['Total'] = cumulative_pnl['Total'] / 1_000_000
-                daily_pnl_records.append(daily_record)
-            
+                    import logging
+                    logging.getLogger(__name__).warning("Could not load returns for %s: %s", name, e)
+
+            rets_matrix = pd.DataFrame(_ret_series, index=_daily_idx)
+
+            # Step 2: allocation matrix — one row per rebalance date, forward-filled daily
+            _alloc_rows = {
+                pd.Timestamp(rd): alloc
+                for rd, alloc in allocations_by_date.items()
+            }
+            alloc_raw = pd.DataFrame(_alloc_rows).T  # shape: (n_rebalances, n_assets)
+            alloc_raw.index = pd.DatetimeIndex(alloc_raw.index)
+            alloc_daily = (
+                alloc_raw
+                .reindex(alloc_raw.index.union(_daily_idx))
+                .ffill()
+                .reindex(_daily_idx)
+                .reindex(columns=rets_matrix.columns)
+                .fillna(0.0)
+            )
+
+            # Step 3: daily PnL in millions CNY, then cumulative sum
+            daily_pnl_m = (alloc_daily * rets_matrix).fillna(0.0) / 1_000_000
+            cumulative_m = daily_pnl_m.cumsum()
+            cumulative_m.insert(0, 'Date', _daily_idx)
+            cumulative_m['Total'] = daily_pnl_m.sum(axis=1).cumsum()
+
             df_history = pd.DataFrame(history_data)
-            df_pnl = pd.DataFrame(daily_pnl_records)
+            df_pnl = cumulative_m.reset_index(drop=True)
 
             # Round time series to integers (million CNY)
             for col in df_history.columns:
@@ -663,26 +648,13 @@ def register_backtest_hist_callbacks(app):
                     ),
                     showlegend=True,
                 )
-                daily_returns = portfolio_values.pct_change().dropna()
-                
-                total_days = (df_pnl['Date'].iloc[-1] - df_pnl['Date'].iloc[0]).days
-                if total_days > 0:
-                    total_return = (portfolio_values.iloc[-1] / portfolio_values.iloc[0]) - 1
-                    annualized_return = (1 + total_return) ** (365 / total_days) - 1
-                else:
-                    annualized_return = 0
-                
-                risk_free_rate = 0.02
-                if len(daily_returns) > 0 and daily_returns.std() > 0:
-                    excess_return = annualized_return - risk_free_rate
-                    annualized_vol = daily_returns.std() * np.sqrt(252)
-                    sharpe_ratio = excess_return / annualized_vol
-                else:
-                    sharpe_ratio = 0
-                
-                rolling_max = portfolio_values.expanding().max()
-                drawdowns = (portfolio_values - rolling_max) / rolling_max
-                max_drawdown = drawdowns.min()
+                _perf = compute_portfolio_metrics(
+                    portfolio_values,
+                    risk_free_rate=RiskModelConfig.RISK_FREE_RATE,
+                )
+                annualized_return = _perf.get('Ann. Return', 0.0)
+                sharpe_ratio      = _perf.get('Sharpe', 0.0) or 0.0
+                max_drawdown      = _perf.get('Max Drawdown', 0.0)
                 
                 metrics_table = html.Table([
                     html.Tr([

@@ -1,6 +1,5 @@
-﻿
-echo Starting Cloudflare Tunnel...
-echo Using the website below
-cloudflared tunnel --url http://127.0.0.1:8080
+﻿echo Starting permanent Cloudflare Tunnel...
+echo Tunnel: atlasnexus
+cloudflared tunnel --config C:\Users\CMBC\.cloudflared\config.yml run atlasnexus
 
 pause

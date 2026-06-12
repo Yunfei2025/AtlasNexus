@@ -62,17 +62,22 @@ class FactorRiskParityOptimizer:
                           risk_budgets: Optional[Dict[str, float]] = None,
                           total_capital: float = 1.0,
                           hedge_asset_names: Optional[list] = None,
-                          neutral_asset_names: Optional[list] = None) -> Tuple[pd.Series, pd.Series]:
+                          neutral_asset_names: Optional[list] = None,
+                          use_vol_sqrt_budgets: bool = False) -> Tuple[pd.Series, pd.Series]:
         """
         Calculate optimal weights for a given rebalance date.
-        
+
         Args:
             rebalance_date: Date at which to rebalance
-            risk_budgets: Optional dictionary mapping factor names to risk budgets
+            risk_budgets: Optional dictionary mapping factor names to risk budgets.
+                Ignored when ``use_vol_sqrt_budgets=True``.
             total_capital: Total capital for absolute risk budget calculation
             hedge_asset_names: Optional list of asset names that are allowed to
                 take short positions (bounds [-0.3, 0.3] instead of [0, 1]).
-            
+            use_vol_sqrt_budgets: When True, derive vol^0.5 budgets from the
+                computed factor vols and pass them as risk budgets.  This avoids
+                the two-call pattern (first call to get vols, second to optimise).
+
         Returns:
             Tuple of (weights Series, factor volatilities Series)
         """
@@ -95,6 +100,12 @@ class FactorRiskParityOptimizer:
 
         factor_cov = compute_ewma_factor_covariance(factor_window, ewma_lambda=self.ewma_lambda)
         self._factor_cov = factor_cov
+
+        if use_vol_sqrt_budgets:
+            from multiasset.budget import derive_vol_sqrt_budgets
+            risk_budgets, _ = derive_vol_sqrt_budgets(
+                list(factor_vols.index), factor_vols.to_dict()
+            )
 
         weights = self._optimize_weights(
             factor_vols, factor_cov=factor_cov,

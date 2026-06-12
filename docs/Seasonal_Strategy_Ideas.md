@@ -116,81 +116,161 @@ Spread subtab and alpha loaders — `{'Spread': DataFrame(date × instrument),
 
 Not worth adopting: static HTML generation, hand-rolled SVG, %-of-level drawdowns.
 
-## 5. Integration Plan — Spread Subtab Seasonal Panel (future PR)
+## 5. Integration Plan — Seasonal Filter in Candidates Scan
 
-The Spread subtab today: z-score bar chart (`graph-spread-bar`) → click a ticker →
-spread time series with mean/±σ bands (`graph-spread`), driven by `spread-type`,
-`select-season`, `ticker` components, callbacks registered in
-`atlas_fi_tabs.register_callbacks` (`web/tabs/atlas_fi_tabs.py:785-935`), series built
-via `build_spread_series` (`web/core/graphs.py`) and, for futures types,
-`_fut_stat_bucket` (`atlas_fi_tabs.py:476`).
+### Overview
+Seasonality should be **pre-filtered before entering the Candidates scan**, not a post-hoc Phase 2.
+This prevents wasting compute on spreads with no statistical edge and makes the Candidates table
+more trustworthy. The workflow:
 
-### 5.1 New module `web/tabs/alpha/seasonal.py` (pure functions, unit-testable)
+1. **Spread subtab (Phase 1)**: year-overlay chart + monthly stats table — visualization & discovery
+2. **Candidates subtab (Phase 1)**: add seasonal direction filter + gating in `compute_scan_score`
+3. **Phase 2**: cross-instrument seasonal screener (separate report tool)
+
+### 5.1 Core module `web/tabs/alpha/seasonal.py` (pure, testable functions)
+
 ```python
 def seasonal_pivot(s: pd.Series, years: int = 8) -> pd.DataFrame:
-    """index = day-of-year (1..366), columns = year, values = spread level.
-    Reindex each year onto day-of-year; do NOT interpolate across holidays."""
+    """Reindex series onto day-of-year (1..366), one column per year.
+    Do NOT interpolate across holidays. Return shape: (n_doy, n_years)."""
 
-def monthly_seasonal_stats(s: pd.Series, min_years: int = 3) -> pd.DataFrame:
-    """One row per calendar month: n_years, avg Δbps, consistency %, direction,
-    binomial p-value, bp drawdown of the majority-direction position.
-    Month change = last close in month − last close of prior month."""
+def monthly_seasonal_stats(
+    s: pd.Series, 
+    min_years: int = 3,
+    fdr_alpha: float = 0.05
+) -> tuple[pd.DataFrame, dict]:
+    """
+    Compute seasonal statistics: one row per calendar month.
+    Columns: month, n_years, direction (±1 for majority), consistency (%),
+    avg_spread_change_bps, binomial_pvalue, fdr_adjusted_pvalue.
+    
+    Returns: (stats_df, current_month_stats_dict)
+    where current_month_stats_dict = {
+        'direction': ±1,
+        'consistency': 0..1,
+        'expected_move_bps': float,
+        'pvalue_fdr': float,
+        'passes_significance': bool (pvalue_fdr < fdr_alpha)
+    }
+    """
 
-def build_seasonal_overlay_figure(pivot, highlight_month, stats, theme) -> go.Figure:
-    """Year-overlay chart: one trace per year (older years faded, current year
-    THEME['accent'] width 2.5), optional cross-year mean ±1σ band,
-    add_vrect shading for highlight_month, x-axis ticks at month starts."""
+def build_seasonal_overlay_figure(
+    pivot: pd.DataFrame,
+    stats: pd.DataFrame,
+    highlight_month: int,
+    theme: dict
+) -> go.Figure:
+    """Year-overlay chart: one trace per year (older years faded, current thick & bright),
+    cross-year mean ±1σ band, vrect shading for highlight_month, x-axis month ticks."""
+
+def apply_fdr_correction(
+    all_stats: pd.DataFrame,
+    alpha: float = 0.05
+) -> pd.Series:
+    """Benjamini-Hochberg FDR correction across all (spread, month) cells.
+    Return adjusted p-values; caller filters on adjusted_pvalue < alpha."""
 ```
-Conventions to reuse: THEME from `web/tabs/alpha/data.py:17`; plotly layout pattern
-from `web/tabs/alpha/backtest/display.py` (`plot_bgcolor=THEME['bg_main']`, horizontal
-legend, `add_vrect` for the month band); tz-naive index coercion via the
-`_coerce_datetime_series` pattern (`display.py:16`).
 
-### 5.2 Layout change (`build_spreads_layout`, atlas_fi_tabs.py:95-167)
-Under the existing "Spread Time Series" graph add:
-- `_chart_label("Seasonal Pattern")`,
-- `dcc.Graph(id='graph-spread-seasonal')`,
-- `html.Div(id='spread-seasonal-stats')` (the 12-month mini table),
-- sidebar controls: `dcc.Dropdown(id='seasonal-highlight-month', options=Jan..Dec,
-  value=<current month>)` and `dcc.Dropdown(id='seasonal-years', options=[3,5,8,'All'],
-  value=5)`.
+Conventions: THEME from `web/tabs/alpha/data.py:17`; plotly layout from `display.py`;
+tz-naive index via `_coerce_datetime_series`.
 
-### 5.3 Callback (registered in `atlas_fi_tabs.register_callbacks`)
+### 5.2 Phase 1a: Spread Subtab — Seasonal Visualization
+
+Layout change (`build_spreads_layout`, `atlas_fi_tabs.py:95-167`):
+- Under the existing "Spread Time Series" graph (`graph-spread`), add:
+  - `_chart_label("Seasonal Pattern")`
+  - `dcc.Graph(id='graph-spread-seasonal')`
+  - `html.Div(id='spread-seasonal-stats')` (12-month mini table)
+  - Sidebar dropdowns: `seasonal-highlight-month` (Jan…Dec, default=current), `seasonal-years` (3/5/8/All, default=5)
+
+Callback (`atlas_fi_tabs.register_callbacks`):
 ```
-Output: graph-spread-seasonal.figure, spread-seasonal-stats.children
 Inputs: spread-type, ticker, seasonal-highlight-month, seasonal-years
+Outputs: graph-spread-seasonal.figure, spread-seasonal-stats.children
 ```
-Series acquisition mirrors the existing `_update_spread_ts` split: futures types from
-`_fut_stat_bucket(stype)[ticker]`; all other types from the same data
-`build_spread_series` uses (or, simpler and already proven, the alpha loader
-`load_spread_timeseries(stype)[ticker]` — keep whichever returns the longer history).
-Then `seasonal_pivot` → `build_seasonal_overlay_figure`, and `monthly_seasonal_stats`
-→ a small `dash_table.DataTable` with direction arrows and the consistency column
-color-coded, p-value shown so 3-year "100%" cells look as weak as they are. Wrap pickle
-loads with the existing mtime cache `_load_pickle_cached` (atlas_fi_tabs.py:432).
+Logic:
+1. Load series (futures via `_fut_stat_bucket`, others via `build_spread_series`)
+2. Call `monthly_seasonal_stats(series, min_years=3)` → stats_df + current_month_dict
+3. Build overlay chart via `build_seasonal_overlay_figure`
+4. Build mini DataTable with direction arrows, consistency %, p-value column color-coded:
+   - p < 0.05 (FDR-corrected, pending cross-spread data): green ✓
+   - 0.05 < p < 0.20: yellow ⚠ (weak/watch)
+   - p ≥ 0.20: gray ✗ (noise)
 
-Net-carry column (optional, alpha types only): join `load_carry_roll_timeseries` to
-show avg Δbps **and** Δbps + month carry, addressing §2.2.
+Optional net-carry: join `load_carry_roll_timeseries` to show Δbps + carry + borrow costs
+(addresses §2.2 "no costs").
 
-### 5.4 Phase 2 (separate, later)
-- **Seasonal screener**: precompute `monthly_seasonal_stats` for every instrument of a
-  spread type in the EOD job (`seasonal-spds.pkl`), render the report's month-ranked
-  table across instruments with FDR-adjusted significance, min-years filter, and a
-  "send to Candidates" button (also closes the Spread→Candidates workflow gap noted in
-  `Alpha_Book_Review.md` §7.18).
-- **Seasonal term in the Candidates scan score**: add `seasonal_edge_bps` for the
-  current month (signed by direction match) as an additive term in
-  `compute_scan_score` — only for cells passing the significance gate.
+### 5.2b Spread Subtab Unit Tests
+- `seasonal_pivot`: leap years, missing months, <1y history, all-NaN input
+- `monthly_seasonal_stats`: synthetic 100% seasonal signal recovers correct month + direction + consistency;
+  binomial p matches `scipy.stats.binomtest`; FDR p-values rank-ordered by raw p
+- `build_seasonal_overlay_figure`: renders without errors, has traces for each year, vrect for month
 
-### 5.5 Verification for the implementation PR
-- Unit tests for `seasonal_pivot` (leap years, missing months, <1y history) and
-  `monthly_seasonal_stats` (known synthetic seasonality recovers the right month,
-  direction and consistency; binomial p matches `scipy.stats.binomtest`).
-- Run the app (`web/apps/atlasnexus_daily.py`), Alpha Book → Spread: select
-  TenorSpread / CGB-10s30s, confirm the overlay chart renders one line per year, the
-  month band moves with the dropdown, and futures types (NetBasis) also render.
-- Cross-check one cell against the HTML report (e.g. 互换-国债5年, January: 87.5%
-  consistency, +4.85 bps over 8 years) to validate the stat definitions.
+### 5.3 Phase 1b: Candidates Subtab — Seasonal Pre-Filter in Scan Score
+
+Modify `compute_scan_score` in `web/tabs/alpha/callbacks/candidates.py`:
+
+**New input parameter:**
+```python
+def compute_scan_score(
+    ...
+    use_seasonal_filter: bool = False,
+    seasonal_min_consistency: float = 0.75,  # only use signals with ≥75% hit rate
+    seasonal_fdr_alpha: float = 0.05,
+) -> pd.Series:
+```
+
+**Logic:**
+1. For each spread in the scan, call `monthly_seasonal_stats(series)` to get current month's stats
+2. If `use_seasonal_filter=True`:
+   - If `passes_significance=False` (FDR p ≥ alpha), **exclude from scan** (mask out)
+   - If `consistency < seasonal_min_consistency`, **exclude from scan**
+3. If the spread *passes* the gate, add a seasonal term to the scan score:
+   ```
+   score += 10 * sign(direction) * (consistency - 0.5)
+   ```
+   (e.g., a 80% consistent downward month adds -3 bps tilt to the RV signal)
+
+**UI (Candidates layout):**
+- New collapsible section "Seasonal Filter":
+  - Toggle: "Apply seasonality gate" (default: OFF for backward compatibility)
+  - Slider: "Min consistency (%)" [50…100, default 75]
+  - Checkbox: "Show seasonal edge in score" (if ON, adds the consistency tilt)
+- New column in results table (if seasonal filter is ON):
+  - "Seasonal" = direction arrow + consistency % + FDR p-value indicator
+  - Tooltip: "Month seasonality: ↑87% (p=0.02, FDR OK)"
+
+**Callback change** (`_update_candidates_table`):
+- Read `use_seasonal_filter`, `seasonal_min_consistency` from the UI
+- Apply pre-filter before ranking
+- Compute `seasonal_score_term` for each spread in the result
+- Pass to table renderer
+
+### 5.4 Candidates Callback Unit Tests
+- Compute scan with/without seasonal filter; filtered set ⊂ unfiltered
+- Spreads with low p-value (noise) are excluded when filter is ON
+- Seasonal score term signed correctly (↑ direction = +, ↓ direction = −)
+
+### 5.5 Phase 2 (later)
+**Seasonal Screener (cross-instrument):**
+- Precompute `monthly_seasonal_stats` for all spreads of each type in the EOD job
+- Save as `seasonal-spds.pkl` following `{'Stats': DataFrame[spread × month × stat]}` convention
+- Build a "Seasonal Calendar" report in a new subtab or modal:
+  - Filter: month, min-years, FDR p-value threshold, spread-type
+  - Table: rank spreads by (consistency, |expected_move|) with FDR-adjusted p-values
+  - "Send to Candidates" button for selected spreads
+
+---
+
+## 6. Summary
+
+Phase 1 integrates seasonality into the *live workflow*:
+- **Spread subtab**: year-overlay chart makes seasonal patterns visible; stats table shows FDR-corrected significance
+- **Candidates subtab**: seasonality gates out noisy spreads, optionally tilts RV score by consistency
+
+This avoids wasting compute on non-seasonal instruments (esp. swaps where edge may be noise)
+and keeps the signal honest via FDR correction (no false-positive epidemic from 528 tested cells).
+Phase 2 builds the cross-spread screener for strategy review & portfolio construction.
 
 ---
 
