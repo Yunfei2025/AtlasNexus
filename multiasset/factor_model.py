@@ -333,10 +333,17 @@ def build_features(
     input_dir: Union[str, Path] = DIR_INPUT,
     include_macro: bool = True,
     include_cross: bool = True,
+    feature_subset: Optional[List[str]] = None,
 ) -> pd.DataFrame:
-    """Build all predictive features for a single risk factor.
+    """Build predictive features for a single risk factor.
 
-    Returns a DataFrame (index = date) of named features.
+    Parameters
+    ----------
+    feature_subset:
+        When provided (predict-only path), only compute feature groups that
+        could contain any of the listed names.  Skips expensive cross-factor
+        and macro groups when those names are absent, making live prediction
+        much faster than a full retrain.
     """
     if factor_code not in factor_levels.columns:
         raise ValueError(f"{factor_code} not in factor_levels")
@@ -344,23 +351,33 @@ def build_features(
     level = factor_levels[factor_code].dropna()
     feats: Dict[str, pd.Series] = {}
 
-    # Self-based features
+    # Determine which feature groups are actually needed
+    _need_cross = include_cross
+    _need_macro = include_macro
+    if feature_subset is not None:
+        _need_cross = any('_vs_' in f for f in feature_subset)
+        _need_macro = any(f.startswith('MACRO_') for f in feature_subset)
+
+    # Self-based features (always cheap — always compute)
     feats.update(_momentum_features(level, factor_code))
     feats.update(_value_features(level, factor_code))
     feats.update(_volatility_features(level, factor_code))
 
     # Carry features from raw curve data
     is_yield = _is_yield_factor(factor_code)
-    if is_yield:
+    _need_carry = feature_subset is None or any(
+        k in f for f in feature_subset for k in ('_Slope', '_Curv', '_Carry_', '_SlopeMom')
+    )
+    if is_yield and _need_carry:
         curve_data = _load_curve_data(factor_code, str(input_dir))
         feats.update(_carry_features(factor_code, curve_data))
 
     # Cross-factor features
-    if include_cross:
+    if _need_cross:
         feats.update(_cross_factor_features(factor_code, factor_levels))
 
     # Macro features (shared across all factors)
-    if include_macro:
+    if _need_macro:
         macro_df = _load_macro_features()
         if not macro_df.empty:
             for col in macro_df.columns:
@@ -368,9 +385,10 @@ def build_features(
 
     # Assemble and clean
     result = pd.DataFrame(feats)
-    # Drop columns with >50% NaN
-    nan_pct = result.isnull().sum() / len(result)
-    result = result.loc[:, nan_pct < 0.5]
+    # Drop columns with >50% NaN (skip when feature_subset given — model already handles gaps)
+    if feature_subset is None:
+        nan_pct = result.isnull().sum() / len(result)
+        result = result.loc[:, nan_pct < 0.5]
 
     return result
 
@@ -1022,9 +1040,16 @@ def run_factor_model_backtest(
             if 'error' in trained_H:
                 continue
 
-            # Persist artifact keyed to the first (shortest) horizon
+            # Persist artifact keyed to the first (shortest) horizon.
+            # Key by the last calendar day of the TEST window's month, not
+            # train_end's month. train_end is purge-adjusted and falls in the
+            # month *before* the test window, so using test_start gives the
+            # correct month-end label even when the June cursor is skipped due
+            # to data lag (e.g. May test window → key 20260531).
             if H == horizons[0] and models_by_month is not None:
-                month_key = train_end.strftime('%Y%m%d')
+                import calendar as _cal
+                _last_day = _cal.monthrange(test_start.year, test_start.month)[1]
+                month_key = test_start.replace(day=_last_day).strftime('%Y%m%d')
                 if month_key not in models_by_month:
                     models_by_month[month_key] = {}
                 models_by_month[month_key][factor_code] = {
@@ -1277,12 +1302,55 @@ def run_factor_model_batch(
 #  6. Prediction from saved model (for PORTFOLIO subtab integration)
 # ═══════════════════════════════════════════════════════════════════════════
 
+def current_month_model_key() -> str:
+    """Return the model key for the current month's training cutoff.
+
+    The convention is YYYYMMDD = last calendar day of the previous month.
+    The training loop keys each period by the last day of its TEST window's
+    month (test_start month-end). When end_date is the first of the current
+    month, the last surviving test window starts on the first of the previous
+    month, so its month-end equals last day of previous month — matching here.
+    """
+    from datetime import date, timedelta
+    first_of_month = date.today().replace(day=1)
+    last_of_prev_month = first_of_month - timedelta(days=1)
+    return last_of_prev_month.strftime('%Y%m%d')
+
+
+def current_month_model_path(models_dir: Union[str, Path] = DIR_MODELS) -> str:
+    """Return the expected .joblib path for this month's model."""
+    return os.path.join(str(models_dir), f'factor_model_{current_month_model_key()}.joblib')
+
+
+def load_current_month_model(
+    models_dir: Union[str, Path] = DIR_MODELS,
+) -> Tuple[Optional[Dict], Optional[str]]:
+    """Load the model file expected for the current month.
+
+    Returns (artifact_dict, month_key) if the file exists, or (None, month_key)
+    if the file is missing (caller should prompt the user to Train Model).
+    Unlike ``load_latest_factor_model`` this never silently falls back to a
+    stale prior-month file.
+    """
+    month_key = current_month_model_key()
+    path = os.path.join(str(models_dir), f'factor_model_{month_key}.joblib')
+    if not os.path.exists(path):
+        return None, month_key
+    try:
+        return joblib.load(path), month_key
+    except Exception as e:
+        print(f"Warning: could not load {path}: {e}")
+        return None, month_key
+
+
 def load_latest_factor_model(
     models_dir: Union[str, Path] = DIR_MODELS,
 ) -> Tuple[Optional[Dict], Optional[str]]:
     """Load the most recent ``factor_model_*.joblib`` from ``input/models/``.
 
     Returns (artifact_dict, month_key) or (None, None) if no files found.
+    Prefer ``load_current_month_model`` when you want to enforce that the model
+    is fresh for the current month rather than silently using a stale file.
     """
     pattern = os.path.join(str(models_dir), 'factor_model_*.joblib')
     files = sorted(glob.glob(pattern))

@@ -280,12 +280,18 @@ def build_multiasset_portfolio_layout():
                  ], style={'marginLeft': '20px'})
             ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between'}),
 
-            html.Div([
-                html.Div(id='status-message', style={'fontSize': '12px', 'color': THEME['text_main'], 'marginRight': '20px'}),
-                html.Div(id='timestamp-display', style={'color': THEME['text_sub'], 'fontSize': '11px'})
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px', 'justifyContent': 'flex-end'}),
-
-            html.Div(id='portfolio-table-container')
+            dcc.Loading(
+                type='circle',
+                color=THEME['accent'],
+                style={'minHeight': '80px'},
+                children=html.Div([
+                    html.Div([
+                        html.Div(id='status-message', style={'fontSize': '12px', 'color': THEME['text_main'], 'marginRight': '20px'}),
+                        html.Div(id='timestamp-display', style={'color': THEME['text_sub'], 'fontSize': '11px'})
+                    ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px', 'justifyContent': 'flex-end'}),
+                    html.Div(id='portfolio-table-container'),
+                ]),
+            ),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'marginBottom': '20px', 'borderRadius': '5px'}),
 
         # ── IRDL Hedge Overlay (collapsible) ─────────────────────────────────
@@ -384,7 +390,9 @@ def build_multiasset_portfolio_layout():
                 }),
                 # Ticket output
                 dcc.Loading(
-                    type='default',
+                    type='circle',
+                    color=THEME['accent'],
+                    style={'minHeight': '60px'},
                     children=html.Div(id='irdl-hedge-ticket-container',
                                       style={'minHeight': '60px'}),
                 ),

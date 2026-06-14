@@ -1,16 +1,15 @@
 @echo off
-REM AtlasNexus Daily Console Launcher
-REM This script activates the conda environment and starts the Dash app
+REM AtlasNexus — Windows Launcher
+REM Starts the Dash server and Cloudflare tunnel in one window.
 
 echo ============================================================
-echo AtlasNexus Daily Console Launcher
+echo   AtlasNexus Daily Console
 echo ============================================================
 echo.
 
-REM Activate conda environment
+REM ── 1. Conda environment ────────────────────────────────────────
 echo [1/3] Activating conda environment 'prod'...
 
-REM Try standard conda locations in order
 set CONDA_BAT=
 if exist "%USERPROFILE%\anaconda3\condabin\conda.bat"   set CONDA_BAT=%USERPROFILE%\anaconda3\condabin\conda.bat
 if exist "%USERPROFILE%\miniconda3\condabin\conda.bat"  set CONDA_BAT=%USERPROFILE%\miniconda3\condabin\conda.bat
@@ -19,44 +18,46 @@ if exist "C:\ProgramData\miniconda3\condabin\conda.bat" set CONDA_BAT=C:\Program
 if exist "D:\ProgramData\miniconda3\condabin\conda.bat" set CONDA_BAT=D:\ProgramData\miniconda3\condabin\conda.bat
 
 if "%CONDA_BAT%"=="" (
-    echo ERROR: Could not find conda.bat. Please check your Anaconda/Miniconda installation.
-    pause
-    exit /b 1
+    echo ERROR: Could not find conda. Check your Anaconda/Miniconda installation.
+    pause & exit /b 1
 )
 
 call "%CONDA_BAT%" activate prod
 if errorlevel 1 (
-    echo ERROR: Failed to activate conda environment 'dev'
-    echo Please ensure the 'dev' environment exists: conda create -n dev python=3.13
-    pause
-    exit /b 1
+    echo ERROR: Could not activate conda env 'prod'.
+    echo        Run: conda create -n prod python=3.13
+    pause & exit /b 1
 )
-
-echo [2/3] Environment activated successfully
+echo       OK
 echo.
 
-REM Keep logging in this console only; avoid spawning a second Tk log window.
+REM ── 2. Dash server (separate window, auto-closes on exit) ────────
+echo [2/3] Starting Dash server on port 8080...
 set FI_SHOW_LOG_WINDOW=0
-
-REM Change to correct directory
 cd /d "%~dp0"
-
-echo [3/3] Starting AtlasNexus Daily Console...
-echo Server will start at: http://127.0.0.1:8080
-echo Browser window will open automatically
+start "AtlasNexus Server" /min cmd /c "python main.py daily-web & pause"
+echo       Started in background window.
 echo.
-echo Press Ctrl+C to stop the server
+
+REM Give the server a moment to bind the port
+timeout /t 4 /nobreak >nul
+
+REM ── 3. Cloudflare tunnel (this window) ──────────────────────────
+echo [3/3] Starting Cloudflare tunnel (atlasnexus ^> mayunfei.org)...
+echo.
+echo   Local:   http://127.0.0.1:8080
+echo   Public:  https://mayunfei.org
+echo.
+echo Share https://mayunfei.org with your friends.
+echo Close this window to stop the tunnel (server window closes separately).
 echo ============================================================
 echo.
 
-REM Start the Dash app via the canonical main.py entry point
-python main.py daily-web
+cloudflared tunnel --config "%USERPROFILE%\.cloudflared\config.yml" run atlasnexus
 
-REM Always pause so any error output is visible before the window closes
-echo.
 if errorlevel 1 (
-    echo ============================================================
-    echo ERROR: Application exited with error code %errorlevel%
-    echo ============================================================
+    echo.
+    echo ERROR: Tunnel failed. Is cloudflared installed and the tunnel authenticated?
+    echo        Run: cloudflared tunnel login
 )
 pause

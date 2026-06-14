@@ -441,6 +441,8 @@ def register_portfolio_run_callbacks(app):
             rp_budgets_out = {}
             factor_names_in_pool = [id_dict['index'] for id_dict in (budget_ids or [])]
             total_capital_m = total_capital_cny / 1e6
+            _missing_signals: list[str] = []
+            _opt_warnings: list[str] = []
 
             if allocation_mode == 'risk_parity':
                 # Pure Risk Parity: optimizer runs unconstrained ERC — always deterministic.
@@ -463,16 +465,30 @@ def register_portfolio_run_callbacks(app):
                     _snap = {rec['risk_factor']: rec for rec in signal_snapshot if rec.get('risk_factor')}
                     risk_budgets = {}
                     scaled_count = 0
+                    _IR_PREFIXES = ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL')
                     for f, base_val in _base.items():
                         rec = _snap.get(f)
                         if rec is not None:
-                            risk_budgets[f] = round(base_val * float(rec.get('scalar', 1.0)), 2)
+                            scalar = float(rec.get('scalar', 1.0))
+                            # Carry floor for bond factors: a neutral signal does NOT mean
+                            # zero position — bond PMs always hold a carry position.
+                            # Mirror the backtest's _CAP_NEUTRAL floor: scalar=0 maps to
+                            # 25% of the RP base budget (same as the weakest long signal tick).
+                            is_bond = f.split('.')[0] in _IR_PREFIXES
+                            if scalar == 0.0 and is_bond:
+                                effective_budget = round(base_val * 0.25, 2)
+                            else:
+                                effective_budget = round(base_val * abs(scalar), 2)
+                            risk_budgets[f] = effective_budget
                             scaled_count += 1
                         else:
                             risk_budgets[f] = base_val
                     print(f"📡 Factor model scaling applied to {scaled_count} risk budgets")
+                    _snap_keys = {rec['risk_factor'] for rec in signal_snapshot if rec.get('risk_factor')}
+                    _missing_signals = [f for f in factor_names_in_pool if f not in _snap_keys]
                 else:
                     risk_budgets = _base
+                    _missing_signals = factor_names_in_pool  # no snapshot at all
                 # Store unscaled base budgets — same signals → same result → idempotent
                 rp_budgets_out = _base
 

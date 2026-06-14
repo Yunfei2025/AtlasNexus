@@ -52,7 +52,6 @@ from web.tabs.atlas_fi_tabs import (
 from web.tabs.atlas_alpha_tabs import (
     build_candidates_layout,
     build_portfolio_layout,
-    build_basket_layout,
     build_backtest_layout,
     register_alpha_callbacks,
 )
@@ -96,7 +95,10 @@ from web.tabs.atlas_pricer_tab import (
 )
 
 
-GRAPH_INTERVAL = int(os.environ.get("GRAPH_INTERVAL", 30 * 60_000))
+# Refresh interval constants (milliseconds) — tune these in one place
+GRAPH_INTERVAL        = int(os.environ.get("GRAPH_INTERVAL", 30 * 60_000))  # data graphs: 30 min
+_INTERVAL_HEADER_MS   = 5_000   # header clock + job pill strip
+_INTERVAL_RUN_CTR_MS  = 5_000   # run center log tail / job status
 
 # ---------------------------------------------------------------------------
 # Module-level style constants (shared across all layout builders)
@@ -345,7 +347,7 @@ def build_tabs_panel():
                 html.Div(id="an-run-center-content"),
             ], style=_card_style),
 
-            dcc.Interval(id="an-run-center-interval", interval=5_000, n_intervals=0),
+            dcc.Interval(id="an-run-center-interval", interval=_INTERVAL_RUN_CTR_MS, n_intervals=0),
         ]
     )
     
@@ -353,25 +355,25 @@ def build_tabs_panel():
         [
             dcc.Tabs(
                 id="an-beta-subtabs",
-                value="factor",
+                value="candidates",
                 children=[
-                    dcc.Tab(label="Candidates", value="factor",           style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Portfolio",  value="portfolio",        style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Backtest",   value="factor-model-bt",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Factor",     value="factor-history",   style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Bond",       value="bond",             style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Futures",    value="backtest-factor",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Candidates", value="candidates", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Portfolio",  value="portfolio",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Backtest",   value="backtest",   style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Factor",     value="factor",     style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Bond",       value="bond",       style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Futures",    value="futures",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
                 ],
                 style={**summary_subtabs_style, "marginTop": "8px"},
                 colors=summary_subtabs_colors,
             ),
             html.Div([
-                html.Div(id="beta-factor-div",          children=build_multiasset_factor_layout(),       style={"display": "block"}),
-                html.Div(id="beta-portfolio-div",       children=build_multiasset_portfolio_layout(),    style={"display": "none"}),
-                html.Div(id="beta-bond-div",            children=build_multiasset_bond_layout(),         style={"display": "none"}),
-                html.Div(id="beta-factor-model-bt-div", children=build_beta_backtest_combined_layout(),  style={"display": "none"}),
-                html.Div(id="beta-factor-history-div",  children=build_factor_history_layout(),          style={"display": "none"}),
-                html.Div(id="beta-backtest-factor-div", children=build_factor_backtest_layout(),         style={"display": "none"}),
+                html.Div(id="beta-candidates-div", children=build_multiasset_factor_layout(),       style={"display": "block"}),
+                html.Div(id="beta-portfolio-div",  children=build_multiasset_portfolio_layout(),    style={"display": "none"}),
+                html.Div(id="beta-backtest-div",   children=build_beta_backtest_combined_layout(),  style={"display": "none"}),
+                html.Div(id="beta-factor-div",     children=build_factor_history_layout(),          style={"display": "none"}),
+                html.Div(id="beta-bond-div",       children=build_multiasset_bond_layout(),         style={"display": "none"}),
+                html.Div(id="beta-futures-div",    children=build_factor_backtest_layout(),         style={"display": "none"}),
             ], style={"position": "relative"}),
         ],
         style={"padding": "20px", "margin": "10px", "boxSizing": "border-box"},
@@ -383,15 +385,15 @@ def build_tabs_panel():
                 id="an-alpha-subtabs",
                 value="candidates",
                 children=[
-                    dcc.Tab(label="Candidates", value="candidates", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#ef553b")),
-                    dcc.Tab(label="Portfolio",  value="portfolio",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#ef553b")),
-                    dcc.Tab(label="Backtest",   value="backtest",   style=summary_subtab_style, selected_style=summary_subtab_selected_style("#ef553b")),
-                    dcc.Tab(label="Spread",     value="spreads",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#ef553b")),
-                    dcc.Tab(label="Pairs",      value="pairs",      style=summary_subtab_style, selected_style=summary_subtab_selected_style("#ef553b")),
-                    dcc.Tab(label="Volatility", value="volatility", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#ef553b")),
+                    dcc.Tab(label="Candidates", value="candidates", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
+                    dcc.Tab(label="Portfolio",  value="portfolio",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
+                    dcc.Tab(label="Backtest",   value="backtest",   style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
+                    dcc.Tab(label="Spread",     value="spreads",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
+                    dcc.Tab(label="Pairs",      value="pairs",      style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
+                    dcc.Tab(label="Volatility", value="volatility", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
                 ],
                 style={**summary_subtabs_style, "marginTop": "8px"},
-                colors={**summary_subtabs_colors, "primary": "#ef553b"},
+                colors={**summary_subtabs_colors, "primary": "#f39c12"},
             ),
             html.Div([
                 html.Div(id="alpha-candidates-div", children=build_candidates_layout(), style={"display": "block"}),
@@ -400,17 +402,32 @@ def build_tabs_panel():
                 html.Div(id="alpha-spreads-div",    children=build_spreads_layout(),    style={"display": "none"}),
                 html.Div(id="alpha-pairs-div",      children=build_pairs_layout(),      style={"display": "none"}),
                 html.Div(id="alpha-volatility-div", children=build_volatility_layout(), style={"display": "none"}),
-                # alpha-basket-div intentionally removed
             ], style={"position": "relative"}),
         ],
         style={"padding": "20px", "margin": "10px", "boxSizing": "border-box"},
     )
 
-    risk_content = dcc.Loading(
-        id="an-risk-loading",
-        type="circle",
-        color="#2e86c1",
-        children=build_multiasset_risk_layout(),
+    _risk_inner = build_multiasset_risk_layout()
+    risk_content = html.Div(
+        [
+            dcc.Tabs(
+                id="an-summary-subtabs",
+                value="books",
+                children=[
+                    dcc.Tab(label="Books",   value="books",   style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Risk",    value="risk",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
+                    dcc.Tab(label="Tickets", value="tickets", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#27ae60")),
+                ],
+                style={**summary_subtabs_style, "marginTop": "8px"},
+                colors=summary_subtabs_colors,
+            ),
+            html.Div([
+                html.Div(id="summary-books-div",   children=_risk_inner.children[0], style={"display": "block"}),
+                html.Div(id="summary-risk-div",    children=_risk_inner.children[1], style={"display": "none"}),
+                html.Div(id="summary-tickets-div", children=_risk_inner.children[2], style={"display": "none"}),
+            ], style={"position": "relative"}),
+        ],
+        style={"padding": "20px", "margin": "10px", "boxSizing": "border-box"},
     )
 
     market_content = html.Div(
@@ -473,7 +490,7 @@ def build_tabs_panel():
                         html.Div(id="risk-div",       children=risk_content,       style={"position": "relative", "display": "none"}),
                         html.Div(id="run-center-div", children=run_center_content, style={"position": "relative", "display": "none"}),
                     ], style={"width": "100%"}),
-                    dcc.Interval(id="an-interval", interval=5_000, n_intervals=0),
+                    dcc.Interval(id="an-interval", interval=_INTERVAL_HEADER_MS, n_intervals=0),
                 ],
                 className="tab__title",
             ),
@@ -700,15 +717,20 @@ _make_tab_switcher(
 )
 _make_tab_switcher(
     "an-beta-subtabs",
-    ["beta-factor-div", "beta-portfolio-div", "beta-bond-div",
-     "beta-factor-model-bt-div", "beta-factor-history-div", "beta-backtest-factor-div"],
-    ["factor",          "portfolio",          "bond",
-     "factor-model-bt", "factor-history",      "backtest-factor"],
+    ["beta-candidates-div", "beta-portfolio-div", "beta-backtest-div",
+     "beta-factor-div",     "beta-bond-div",      "beta-futures-div"],
+    ["candidates",          "portfolio",          "backtest",
+     "factor",              "bond",               "futures"],
 )
 _make_tab_switcher(
     "beta-backtest-inner-tabs",
     ["beta-backtest-indiv-div", "beta-backtest-port-div"],
     ["individual-factors",      "portfolio"],
+)
+_make_tab_switcher(
+    "an-summary-subtabs",
+    ["summary-books-div", "summary-risk-div", "summary-tickets-div"],
+    ["books",             "risk",             "tickets"],
 )
 _make_tab_switcher(
     "an-market-subtabs",
@@ -873,6 +895,45 @@ def _update_run_center(n, job_id):
 
 
 # (tab-switcher callbacks registered above via _make_tab_switcher)
+
+
+# ---------------------------------------------------------------------------
+# Run Center: hide/disable Futures-irrelevant fields when Futures Analytics
+# is selected as instrument type.
+# ---------------------------------------------------------------------------
+@app.callback(
+    Output("an-bt-update-list", "style"),
+    Output("an-bt-update-list", "options"),
+    Output("an-bt-update-list", "value"),
+    Output("an-bt-processes",   "disabled"),
+    Output("an-bt-processes",   "style"),
+    Input("an-bt-btype", "value"),
+    prevent_initial_call=False,
+)
+def _adapt_backfill_form(btype: str):
+    _dd = _DD_STYLE
+    _inp_active   = _INPUT_STYLE
+    _inp_disabled = {**_INPUT_STYLE, "opacity": "0.4", "cursor": "not-allowed"}
+
+    if btype == "Futures":
+        return (
+            {**_dd, "display": "none"},           # hide Update Steps
+            [],                                    # clear options (avoid stale state)
+            ["rewrite"],                           # default
+            True,                                  # Workers disabled
+            _inp_disabled,
+        )
+    return (
+        {**_dd, "display": "block"},
+        [
+            {"label": "pool",  "value": "pool"},
+            {"label": "bonds", "value": "bonds"},
+            {"label": "cbts",  "value": "cbts"},
+        ],
+        ["pool"],
+        False,
+        _inp_active,
+    )
 
 
 

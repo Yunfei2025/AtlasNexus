@@ -297,7 +297,9 @@ def build_candidates_layout() -> html.Div:
             ], style={'display': 'flex', 'gap': '12px', 'alignItems': 'flex-end', 'marginBottom': '12px'}),
 
             dcc.Loading(
-                id='loading-seasonal-screener', type='default',
+                id='loading-seasonal-screener', type='circle',
+                color=THEME['accent'],
+                style={'minHeight': '60px'},
                 children=html.Div(id='seasonal-screener-results'),
             ),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '20px'}),
@@ -305,7 +307,9 @@ def build_candidates_layout() -> html.Div:
         html.Div([
             html.H6("Candidates", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
             dcc.Loading(
-                id='loading-candidates', type='default',
+                id='loading-candidates', type='circle',
+                color=THEME['accent'],
+                style={'minHeight': '60px'},
                 children=html.Div(id='alpha-candidates-table-container'),
             ),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '20px'}),
@@ -348,7 +352,9 @@ def build_candidates_layout() -> html.Div:
             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px'}),
 
             dcc.Loading(
-                id='loading-corr', type='default',
+                id='loading-corr', type='circle',
+                color=THEME['accent'],
+                style={'minHeight': '60px'},
                 children=html.Div(id='alpha-corr-results'),
             ),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'}),
@@ -469,7 +475,9 @@ def build_portfolio_layout() -> html.Div:
             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px', 'justifyContent': 'flex-end'}),
 
             dcc.Loading(
-                id='loading-portfolio', type='default',
+                id='loading-portfolio', type='circle',
+                color=THEME['accent'],
+                style={'minHeight': '80px'},
                 children=[
                     html.Div(id='alpha-scored-table-container'),
                     html.Div(id='alpha-risk-chart-container', style={'marginTop': '20px'}),
@@ -612,10 +620,12 @@ def build_individual_backtest_panel() -> html.Div:
         html.Div([
             html.Button("▶️ Run Individual Backtest", id='bt-run-individual-btn', n_clicks=0,
                         style={'backgroundColor': THEME['success'], 'color': 'white', 'padding': '12px 25px', 'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontWeight': 'bold', 'fontSize': '14px'}),
-            html.Span(id='bt-individual-status', style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginLeft': '15px'}),
         ], style={'marginBottom': '20px'}),
 
-        dcc.Loading(id='loading-bt-individual', type='default', children=html.Div(id='bt-individual-results')),
+        dcc.Loading(id='loading-bt-individual', type='circle', color=THEME['accent'], style={'minHeight': '60px'}, children=html.Div([
+            html.Span(id='bt-individual-status', style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '8px', 'display': 'block'}),
+            html.Div(id='bt-individual-results'),
+        ])),
     ])
 
 
@@ -642,8 +652,10 @@ def build_portfolio_backtest_panel() -> html.Div:
         html.Div([
             html.Button("▶️ Run Portfolio Backtest", id='bt-run-portfolio-btn', n_clicks=0,
                         style={'backgroundColor': THEME['success'], 'color': 'white', 'padding': '12px 25px', 'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontWeight': 'bold', 'fontSize': '14px'}),
-            html.Span(id='bt-portfolio-status', style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginLeft': '15px'}),
         ], style={'marginBottom': '20px'}),
 
-        dcc.Loading(id='loading-bt-portfolio', type='default', children=html.Div(id='bt-portfolio-results')),
+        dcc.Loading(id='loading-bt-portfolio', type='circle', color=THEME['accent'], style={'minHeight': '60px'}, children=html.Div([
+            html.Span(id='bt-portfolio-status', style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '8px', 'display': 'block'}),
+            html.Div(id='bt-portfolio-results'),
+        ])),
     ])

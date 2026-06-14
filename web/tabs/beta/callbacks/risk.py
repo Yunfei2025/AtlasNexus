@@ -129,38 +129,19 @@ def _persist_alpha_summary_rows(rows: list[dict]) -> None:
 def register_risk_callbacks(app):
     """Register Risk / Summary tab callbacks."""
 
-    # ── Summary tab: show/hide Books / Risk / Tickets subtabs ────────────────
-    @app.callback(
-        [Output('summary-tab-books',   'style'),
-         Output('summary-tab-risk',    'style'),
-         Output('summary-tab-tickets', 'style')],
-        Input('summary-main-tabs', 'value'),
-    )
-    def _show_summary_subtab(tab: str):
-        show = {'display': 'block'}
-        hide = {'display': 'none'}
-        return (
-            show if tab == 'books'   else hide,
-            show if tab == 'risk'    else hide,
-            show if tab == 'tickets' else hide,
-        )
+    # ── Summary Books: Beta and Alpha tables rendered independently ───────────
+    # Each column gets its own callback so they can be refreshed independently.
+    # The show/hide of Books/Risk/Tickets is handled by the app-level
+    # _make_tab_switcher (an-summary-subtabs → summary-{books,risk,tickets}-div).
 
-    # ── Summary tab: Beta / Alpha portfolio table callback ────────────────────
-    # NOTE: The State on 'summary-alpha-table' was removed because that component
-    # is *created* by this callback — referencing it as State caused Dash to fail
-    # to register the callback in some browser sessions, leaving the Alpha tab blank.
-    # User edits are persisted by `_autosave_alpha_table` below, not by this callback.
     @app.callback(
-        [Output('summary-book-table-container', 'children'),
+        [Output('summary-beta-table-container', 'children'),
          Output('summary-refresh-status', 'children')],
-        [Input('summary-book-tabs', 'value'),
-         Input('summary-refresh-btn', 'n_clicks')],
+        [Input('summary-refresh-btn', 'n_clicks')],
         prevent_initial_call=False,
     )
-    def update_summary_book_table(tab_value, _n_clicks):
-        """Load the saved parquet snapshot and render a styled table with
-        Close Price and Market Value columns.  Alpha table includes editable
-        fields (Open price, Volume, Open date) persisted to a separate parquet."""
+    def update_summary_book_table(_n_clicks):
+        """Render Beta Book allocation table."""
         import os as _os
         from dash import ctx as _ctx
 
@@ -228,616 +209,569 @@ def register_risk_callbacks(app):
             except Exception:
                 return None
 
-        # ── Beta tab ──────────────────────────────────────────────────────────
-        if tab_value == 'beta':
-            if not _os.path.exists(_SUMMARY_BETA_PARQUET) and not _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
-                return _no_data(
-                    "No Beta snapshot found. Click RUN ANALYSIS in the Beta Book → Portfolio tab first."
-                )
-            try:
-                if _os.path.exists(_SUMMARY_BETA_PARQUET):
-                    df = pd.read_parquet(_SUMMARY_BETA_PARQUET)
-                else:
-                    df = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
+        if not _os.path.exists(_SUMMARY_BETA_PARQUET) and not _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
+            return _no_data(
+                "No Beta snapshot found. Click RUN ANALYSIS in the Beta Book → Portfolio tab first."
+            )
+        try:
+            if _os.path.exists(_SUMMARY_BETA_PARQUET):
+                df = pd.read_parquet(_SUMMARY_BETA_PARQUET)
+            else:
+                df = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
 
-                if df.empty:
-                    return _no_data("Beta snapshot is empty.")
+            if df.empty:
+                return _no_data("Beta snapshot is empty.")
 
-                ts = "unknown"
-                if _os.path.exists(_SUMMARY_BETA_PARQUET):
+            ts = "unknown"
+            if _os.path.exists(_SUMMARY_BETA_PARQUET):
+                try:
+                    snap = pd.read_parquet(_SUMMARY_BETA_PARQUET)
+                    ts = snap['_timestamp'].iloc[0] if '_timestamp' in snap.columns else "unknown"
+                except Exception:
+                    ts = "unknown"
+
+            user_data: dict = {}
+            if _os.path.exists(_BETA_BOOK_USER_PARQUET):
+                try:
+                    udf = pd.read_parquet(_BETA_BOOK_USER_PARQUET)
+                    for _, r in udf.iterrows():
+                        key = (str(r.get('asset_name', '')), str(r.get('instrument', '')))
+                        user_data[key] = {
+                            'open_price': str(r.get('open_price', r.get('open_yld', ''))),
+                            'open_date':  str(r.get('open_date', '')),
+                            'volume':     str(r.get('volume', '')),
+                        }
+                except Exception:
+                    pass
+
+            close_prices = _get_beta_close_prices()
+            _RATES_TYPE = 'Rates'
+            display_rows = []
+            for _, row in df.iterrows():
+                asset_type = str(row.get('Asset Type', ''))
+                if asset_type == 'TOTAL':
+                    continue
+                is_rates   = (asset_type == _RATES_TYPE)
+                asset_name = str(row.get('Asset Name', ''))
+                instrument = str(row.get('Instrument', ''))
+                key = (asset_name, instrument)
+                saved = user_data.get(key, {})
+
+                open_price_str = str(saved.get('open_price', ''))
+                open_date_str  = str(saved.get('open_date', ''))
+                volume_str     = str(saved.get('volume', ''))
+
+                _dur = None
+                if is_rates:
+                    _dur_raw = row.get('Duration', None)
                     try:
-                        snap = pd.read_parquet(_SUMMARY_BETA_PARQUET)
-                        ts = snap['_timestamp'].iloc[0] if '_timestamp' in snap.columns else "unknown"
-                    except Exception:
-                        ts = "unknown"
-
-                # Load user-editable fields (open_price, open_date, volume) keyed by asset_name+instrument
-                user_data: dict = {}
-                if _os.path.exists(_BETA_BOOK_USER_PARQUET):
-                    try:
-                        udf = pd.read_parquet(_BETA_BOOK_USER_PARQUET)
-                        for _, r in udf.iterrows():
-                            key = (str(r.get('asset_name', '')), str(r.get('instrument', '')))
-                            user_data[key] = {
-                                'open_price': str(r.get('open_price', r.get('open_yld', ''))),
-                                'open_date':  str(r.get('open_date', '')),
-                                'volume':     str(r.get('volume', '')),
-                            }
-                    except Exception:
-                        pass
-
-                # Get latest close yields from factor levels (Rates only)
-                close_prices = _get_beta_close_prices()  # {prefix: yield_pct}
-
-                _RATES_TYPE = 'Rates'
-
-                display_rows = []
-                for _, row in df.iterrows():
-                    asset_type = str(row.get('Asset Type', ''))
-                    if asset_type == 'TOTAL':
-                        continue
-                    is_rates   = (asset_type == _RATES_TYPE)
-                    asset_name = str(row.get('Asset Name', ''))
-                    instrument = str(row.get('Instrument', ''))
-                    key = (asset_name, instrument)
-                    saved = user_data.get(key, {})
-
-                    open_price_str = str(saved.get('open_price', ''))
-                    open_date_str  = str(saved.get('open_date', ''))
-                    volume_str     = str(saved.get('volume', ''))
-
-                    # Duration: only meaningful for Rates
-                    _dur = None
-                    if is_rates:
-                        _dur_raw = row.get('Duration', None)
-                        try:
-                            _dur = float(str(_dur_raw).replace(',', '')) if _dur_raw not in (None, '', 'N/A') else None
-                            duration_str = f"{_dur:.2f}" if _dur is not None else ''
-                        except (ValueError, TypeError):
-                            duration_str = ''
-                    else:
+                        _dur = float(str(_dur_raw).replace(',', '')) if _dur_raw not in (None, '', 'N/A') else None
+                        duration_str = f"{_dur:.2f}" if _dur is not None else ''
+                    except (ValueError, TypeError):
                         duration_str = ''
+                else:
+                    duration_str = ''
 
-                    # Capital in MM CNY (parquet stores raw CNY)
+                try:
+                    _cap_raw = float(str(row.get('Capital (CNY)', 0) or 0).replace(',', ''))
+                    cap_mm_str = f"{_cap_raw / 1e6:,.2f}" if _cap_raw else ''
+                except (ValueError, TypeError):
+                    cap_mm_str = ''
+
+                try:
+                    _wt_raw = str(row.get('Weight (%)', '') or '').replace('%', '').replace(',', '').strip()
+                    weight_str = f"{float(_wt_raw):.2f}%" if _wt_raw else ''
+                except (ValueError, TypeError):
+                    weight_str = ''
+
+                prefix = asset_name[:2]
+                close_yld = close_prices.get(prefix) if is_rates else None
+                close_price_str = f"{close_yld:.4f}%" if close_yld is not None else ''
+
+                mtm_str = ''
+                if is_rates:
                     try:
-                        _cap_raw = float(str(row.get('Capital (CNY)', 0) or 0).replace(',', ''))
-                        cap_mm_str = f"{_cap_raw / 1e6:,.2f}" if _cap_raw else ''
+                        _vol  = float(volume_str) if volume_str else None
+                        _open = float(open_price_str) if open_price_str else None
+                        if _dur and _vol and _open and close_yld is not None:
+                            mtm = round(_vol * _dur * (close_yld - _open) / 10000.0, 4)
+                            mtm_str = f"{mtm:+.4f}"
                     except (ValueError, TypeError):
-                        cap_mm_str = ''
+                        pass
 
-                    # Weight rounded to 2 decimal digits
-                    try:
-                        _wt_raw = str(row.get('Weight (%)', '') or '').replace('%', '').replace(',', '').strip()
-                        weight_str = f"{float(_wt_raw):.2f}%" if _wt_raw else ''
-                    except (ValueError, TypeError):
-                        weight_str = ''
+                display_rows.append({
+                    'Asset Type':       asset_type,
+                    'Universe':         str(row.get('Universe', '')),
+                    'Asset Name':       asset_name,
+                    'Instrument':       instrument,
+                    'Duration':         duration_str,
+                    'Capital (MM CNY)': cap_mm_str,
+                    'Weight (%)':       weight_str,
+                    'Open Price':       open_price_str,
+                    'Open Date':        open_date_str,
+                    'Volume (MM)':      volume_str,
+                    'Close Price':      close_price_str,
+                    'MtM (MM CNY)':     mtm_str,
+                })
 
-                    # Close Price: yield for Rates, empty for others
-                    prefix = asset_name[:2]
-                    close_yld = close_prices.get(prefix) if is_rates else None
-                    close_price_str = f"{close_yld:.4f}%" if close_yld is not None else ''
+            if not display_rows:
+                return _no_data("Beta snapshot is empty.")
 
-                    # MtM P&L: Rates only — Volume × Duration × (Close − Open) / 10000
-                    mtm_str = ''
-                    if is_rates:
+            def _sum_num(col):
+                t, any_ = 0.0, False
+                for r in display_rows:
+                    v = str(r.get(col, '')).replace(',', '').replace('%', '').replace('+', '').strip()
+                    if v:
                         try:
-                            _vol   = float(volume_str) if volume_str else None
-                            _open  = float(open_price_str) if open_price_str else None
-                            if _dur and _vol and _open and close_yld is not None:
-                                mtm = round(_vol * _dur * (close_yld - _open) / 10000.0, 4)
-                                mtm_str = f"{mtm:+.4f}"
+                            t += float(v); any_ = True
                         except (ValueError, TypeError):
                             pass
+                return t if any_ else None
 
-                    display_rows.append({
-                        'Asset Type':       asset_type,
-                        'Universe':         str(row.get('Universe', '')),
-                        'Asset Name':       asset_name,   # kept in data for autosave key, not shown as column
-                        'Instrument':       instrument,
-                        'Duration':         duration_str,
-                        'Capital (MM CNY)': cap_mm_str,
-                        'Weight (%)':       weight_str,
-                        'Open Price':       open_price_str,
-                        'Open Date':        open_date_str,
-                        'Volume (MM)':      volume_str,
-                        'Close Price':      close_price_str,
-                        'MtM (MM CNY)':     mtm_str,
-                    })
+            total_row = {c: '' for c in display_rows[0].keys()}
+            total_row['Asset Type'] = 'TOTAL'
+            _s_cap = _sum_num('Capital (MM CNY)')
+            _s_vol = _sum_num('Volume (MM)')
+            _s_mtm = _sum_num('MtM (MM CNY)')
+            if _s_cap is not None:
+                total_row['Capital (MM CNY)'] = f"{_s_cap:,.2f}"
+            if _s_vol is not None:
+                total_row['Volume (MM)'] = f"{_s_vol:,.1f}"
+            if _s_mtm is not None:
+                total_row['MtM (MM CNY)'] = f"{_s_mtm:+.4f}"
+            display_rows.append(total_row)
 
-                if not display_rows:
-                    return _no_data("Beta snapshot is empty.")
-
-                # TOTAL row
-                def _sum_num(col):
-                    t, any_ = 0.0, False
-                    for r in display_rows:
-                        v = str(r.get(col, '')).replace(',', '').replace('%', '').replace('+', '').strip()
-                        if v:
-                            try:
-                                t += float(v); any_ = True
-                            except (ValueError, TypeError):
-                                pass
-                    return t if any_ else None
-
-                total_row = {c: '' for c in display_rows[0].keys()}
-                total_row['Asset Type'] = 'TOTAL'
-                _s_cap = _sum_num('Capital (MM CNY)')
-                _s_vol = _sum_num('Volume (MM)')
-                _s_mtm = _sum_num('MtM (MM CNY)')
-                if _s_cap is not None:
-                    total_row['Capital (MM CNY)'] = f"{_s_cap:,.2f}"
-                if _s_vol is not None:
-                    total_row['Volume (MM)'] = f"{_s_vol:,.1f}"
-                if _s_mtm is not None:
-                    total_row['MtM (MM CNY)'] = f"{_s_mtm:+.4f}"
-                display_rows.append(total_row)
-
-                _editable_cols = {'Open Price', 'Open Date', 'Volume (MM)'}
-                # Columns shown in table — Asset Name kept in data dict but not defined here
-                _display_col_ids = [c for c in display_rows[0].keys() if c != 'Asset Name']
-                columns = [
-                    {
-                        'name': c,
-                        'id': c,
-                        'editable': c in _editable_cols,
-                        **({'type': 'datetime'} if c == 'Open Date' else {}),
-                    }
-                    for c in _display_col_ids
-                ]
-
-                _editable_style = [
-                    {'if': {'column_id': c},
-                     'border': f'1px solid {THEME["accent"]}',
-                     'backgroundColor': 'rgba(99,179,237,0.08)'}
-                    for c in _editable_cols
-                ]
-                _mtm_styles = [
-                    {'if': {'filter_query': '{MtM (MM CNY)} contains "+"', 'column_id': 'MtM (MM CNY)'},
-                     'color': THEME.get('success', '#27ae60')},
-                    {'if': {'filter_query': '{MtM (MM CNY)} contains "-"', 'column_id': 'MtM (MM CNY)'},
-                     'color': THEME.get('danger', '#e74c3c')},
-                ]
-
-                table = dash_table.DataTable(
-                    id='summary-beta-table',
-                    data=display_rows,
-                    columns=columns,
-                    editable=True,
-                    style_cell={
-                        'textAlign': 'center', 'padding': '6px 8px',
-                        'backgroundColor': THEME['table_row_odd'],
-                        'color': THEME['text_main'], 'border': 'none',
-                        'fontSize': '12px',
-                    },
-                    style_header={
-                        'backgroundColor': THEME['table_header'],
-                        'color': THEME['text_main'],
-                        'fontWeight': 'bold', 'border': 'none',
-                        'whiteSpace': 'normal', 'height': 'auto',
-                    },
-                    style_data_conditional=[
-                        {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
-                        {'if': {'filter_query': '{Asset Type} = "TOTAL"'},
-                         'backgroundColor': THEME['table_header'], 'fontWeight': 'bold',
-                         'borderTop': f"1px solid {THEME['accent']}"},
-                        *_editable_style,
-                        *_mtm_styles,
-                    ],
-                    style_table={'overflowX': 'auto'},
-                    sort_action='native',
-                    page_size=30,
-                    tooltip_header={
-                        'Open Price':    'User-editable: entry yield (%) for Rates, price for others',
-                        'Open Date':     'User-editable: trade open date (YYYY-MM-DD)',
-                        'Volume (MM)':   'User-editable: position size in MM CNY',
-                        'Close Price':   'Latest yield (%) from factor levels — Rates only',
-                        'MtM (MM CNY)':  'Rates only: Volume × Duration × (Close − Open) / 10000',
-                    },
-                    tooltip_delay=0,
-                    tooltip_duration=None,
-                )
-
-                content = html.Div([
-                    html.Div([
-                        html.Span(
-                            'Open Date calendar:',
-                            style={'color': THEME['text_sub'], 'fontSize': '11px'},
-                        ),
-                        dcc.DatePickerSingle(
-                            id='summary-beta-open-date-picker',
-                            date=None,
-                            display_format='YYYY-MM-DD',
-                            clearable=True,
-                            disabled=True,
-                            placeholder='Select an Open Date cell',
-                            style={'backgroundColor': THEME['bg_input']},
-                        ),
-                        html.Span(
-                            id='summary-beta-open-date-target',
-                            children='Click an Open Date cell to edit with the calendar.',
-                            style={'color': THEME['text_sub'], 'fontSize': '11px',
-                                   'fontStyle': 'italic'},
-                        ),
-                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
-                              'marginBottom': '10px', 'flexWrap': 'wrap', 'position': 'relative', 'zIndex': '1001'}),
-                    table,
-                ])
-                status = f"Beta snapshot from {ts[:19]}"
-                return content, status
-
-            except Exception as exc:
-                return _no_data(f"Error loading Beta snapshot: {exc}")
-
-        # ── Alpha tab ─────────────────────────────────────────────────────────
-        elif tab_value == 'alpha':
-            if not _os.path.exists(_SUMMARY_ALPHA_PARQUET):
-                return _no_data(
-                    "No Alpha snapshot found. Click RUN OPTIMIZATION in the Alpha Book → Portfolio tab first."
-                )
-            try:
-                # Edits are auto-persisted by `_autosave_alpha_table` below.
-                is_refresh = (_ctx.triggered_id == 'summary-refresh-btn' and _n_clicks)
-                df  = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
-                ts  = df['_timestamp'].iloc[0] if '_timestamp' in df.columns else "unknown"
-                pos = _load_positions()  # persisted user-editable fields
-
-                def _fmt1(v):
-                    try:
-                        f = float(v)
-                        return f"{f:.1f}" if pd.notna(f) else ''
-                    except (TypeError, ValueError):
-                        return ''
-
-                display_rows = []
-                for _, row in df.iterrows():
-                    trade_id = str(row.get('ID', ''))
-                    if trade_id in ('TOTAL', ''):
-                        continue
-
-                    spread_type = str(row.get('spread_type', ''))
-                    key         = (spread_type, trade_id)
-
-                    # Saved user-editable fields (default empty)
-                    saved          = pos.get(key, {})
-                    open_price_str = str(saved.get('open_price_bp', ''))
-                    volume_str     = str(saved.get('volume_mm', ''))
-                    open_date_str  = str(saved.get('open_date', ''))
-
-                    spread_val = row.get('spread', None)
-                    # spread is already stored in bp in the Alpha portfolio snapshot
-                    cp_bp      = round(float(spread_val), 4) if pd.notna(spread_val) else None
-                    notional   = float(row.get('notional_mm', 0) or 0)
-                    dv01_k     = float(row.get('DV01_k', 0) or 0)
-                    # Use saved _duration if available, else reconstruct from DV01_k and notional
-                    # DV01_k = notional_mm * duration / 10  →  duration = DV01_k * 10 / notional
-                    _dur_raw   = row.get('_duration', None)
-                    if _dur_raw is not None and pd.notna(_dur_raw):
-                        duration = float(_dur_raw)
-                    elif notional > 0:
-                        duration = round(dv01_k * 10.0 / notional, 2)
-                    else:
-                        duration = 0.0
-
-                    # MTM calculation when user has filled in open_price and volume
-                    mtm_price_mm = None
-                    mtm_spd_bp = None
-                    mtm_carry_mm = None
-                    mtm_total_mm = None
-                    try:
-                        open_price_bp = float(open_price_str) if open_price_str else None
-                        volume_mm     = float(volume_str)     if volume_str     else None
-                        direction     = row.get('direction', '').upper()
-
-                        if open_price_bp is not None and cp_bp is not None:
-                            # MTM SPD profit conventions by spread type:
-                            # - TBondCurve/TBondSpread (BUY): profit when yield drops (open > close)
-                            # - SwapSpread (SELL): profit when spread tightens (open > close)
-                            # - SwapSpread/TenorSpread (BUY): profit when spread widens (close > open)
-                            if spread_type in ['TBondCurve', 'TBondSpread']:
-                                mtm_spd_bp = open_price_bp - cp_bp
-                            elif spread_type == 'TenorSpread':
-                                mtm_spd_bp = cp_bp - open_price_bp
-                            else:  # SwapSpread and others
-                                mtm_spd_bp = (open_price_bp - cp_bp) if direction == 'SELL' else (cp_bp - open_price_bp)
-
-                        if mtm_spd_bp is not None and volume_mm is not None:
-                            # Price P&L: MTM SPD (bp) × Duration × Volume / 10000  (MM CNY)
-                            mtm_price_mm = round(
-                                mtm_spd_bp * duration * volume_mm / 10000.0, 4
-                            )
-                        if volume_mm is not None:
-                            mtm_carry_mm = _compute_carry_mtm(
-                                spread_type, trade_id, open_date_str, volume_mm
-                            )
-                        if mtm_price_mm is not None or mtm_carry_mm is not None:
-                            mtm_total_mm = round(
-                                (mtm_price_mm or 0.0) + (mtm_carry_mm or 0.0), 4
-                            )
-                    except (ValueError, TypeError):
-                        pass
-
-                    display_rows.append({
-                        'ID':                       trade_id,
-                        'Spread Type':              spread_type,
-                        'Style':                    row.get('style', ''),
-                        'Direction':                row.get('direction', ''),
-                        'Duration':                 f"{duration:.2f}" if duration else 'N/A',
-                        'Open price (bp)':          open_price_str,
-                        'Volume (mm)':              volume_str,
-                        'Open date':                open_date_str,
-                        'Z-Score':                  f"{float(row.get('Zscore', 0) or 0):.2f}",
-                        'Close Price (bp)':         f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
-                        'Target Volume (MM CNY)':   f"{notional:,.1f}",
-                        'DV01 (k CNY/bp)':          f"{dv01_k:.1f}",
-                        'Carry+Roll (3m,bp)':       _fmt1(-float(row.get('carry_roll', 0) or 0) if str(row.get('direction', '')).strip().upper() == 'SELL' else row.get('carry_roll')),
-                        'Breakeven (3m,bp)':        _fmt1(row.get('breakeven_3m')),
-                        'Stop (bp)':                _fmt1(row.get('stop_loss')),
-                        'Target (bp)':              _fmt1(row.get('profit_target')),
-                        'MTM spd (bp)':             f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else '',
-                        'MtM Carry (MM CNY)':       f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
-                        'MtM Value (MM CNY)':       f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
-                        'Target Weight (%)':        f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
-                        'Weight (%)':               '',  # filled below after summing volumes
-                    })
-
-                # Compute actual Weight (%) = Volume (mm) / sum(Volume (mm))
-                total_vol = 0.0
-                for r in display_rows:
-                    try:
-                        total_vol += float(r['Volume (mm)']) if r['Volume (mm)'] else 0.0
-                    except (ValueError, TypeError):
-                        pass
-                for r in display_rows:
-                    try:
-                        v = float(r['Volume (mm)']) if r['Volume (mm)'] else None
-                        r['Weight (%)'] = f"{v / total_vol * 100:.2f}%" if (v is not None and total_vol > 0) else ''
-                    except (ValueError, TypeError):
-                        r['Weight (%)'] = ''
-
-                if not display_rows:
-                    return _no_data("Alpha snapshot is empty.")
-
-                # ── TOTAL row ────────────────────────────────────────────────
-                # Volume and Target Volume only sum for outright bond types
-                # (BondCurve / BondSwap); spread trades are DV01-neutral.
-                _BOND_OUTRIGHT_TYPES = {
-                    'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap',
+            _editable_cols = {'Open Price', 'Open Date', 'Volume (MM)'}
+            _display_col_ids = [c for c in display_rows[0].keys() if c != 'Asset Name']
+            columns = [
+                {
+                    'name': c,
+                    'id': c,
+                    'editable': c in _editable_cols,
+                    **({'type': 'datetime'} if c == 'Open Date' else {}),
                 }
+                for c in _display_col_ids
+            ]
 
-                def _sum_col(col, filter_types=None):
-                    """Return numeric sum of col, or None if no non-empty values."""
-                    total, has_any = 0.0, False
-                    for r in display_rows:
-                        if filter_types and r.get('Spread Type', '') not in filter_types:
-                            continue
-                        v = str(r.get(col, '')).replace(',', '').replace('%', '').strip()
-                        if v:
-                            try:
-                                total += float(v)
-                                has_any = True
-                            except (ValueError, TypeError):
-                                pass
-                    return total if has_any else None
+            _editable_style = [
+                {'if': {'column_id': c},
+                 'border': f'1px solid {THEME["accent"]}',
+                 'backgroundColor': 'rgba(99,179,237,0.08)'}
+                for c in _editable_cols
+            ]
+            _mtm_styles = [
+                {'if': {'filter_query': '{MtM (MM CNY)} contains "+"', 'column_id': 'MtM (MM CNY)'},
+                 'color': THEME.get('success', '#27ae60')},
+                {'if': {'filter_query': '{MtM (MM CNY)} contains "-"', 'column_id': 'MtM (MM CNY)'},
+                 'color': THEME.get('danger', '#e74c3c')},
+            ]
 
-                _s_vol     = _sum_col('Volume (mm)',            _BOND_OUTRIGHT_TYPES)
-                _s_tvol    = _sum_col('Target Volume (MM CNY)', _BOND_OUTRIGHT_TYPES)
-                _s_dv01    = _sum_col('DV01 (k CNY/bp)')
-                _s_carry   = _sum_col('MtM Carry (MM CNY)')
-                _s_mtm     = _sum_col('MtM Value (MM CNY)')
-                _s_tgt_wt  = _sum_col('Target Weight (%)')
-                _s_wt      = _sum_col('Weight (%)')
-
-                total_row = {c: '' for c in display_rows[0].keys()}
-                total_row['ID']                     = 'TOTAL'
-                total_row['Volume (mm)']            = f"{_s_vol:,.1f}"    if _s_vol    is not None else ''
-                total_row['Target Volume (MM CNY)'] = f"{_s_tvol:,.1f}"   if _s_tvol   is not None else ''
-                total_row['DV01 (k CNY/bp)']        = f"{_s_dv01:.1f}"    if _s_dv01   is not None else ''
-                total_row['MtM Carry (MM CNY)']     = f"{_s_carry:,.4f}"  if _s_carry  is not None else ''
-                total_row['MtM Value (MM CNY)']     = f"{_s_mtm:,.4f}"    if _s_mtm    is not None else ''
-                total_row['Target Weight (%)']      = f"{_s_tgt_wt:.2f}%" if _s_tgt_wt is not None else ''
-                total_row['Weight (%)']             = f"{_s_wt:.2f}%"     if _s_wt     is not None else ''
-                display_rows.append(total_row)
-                # ── end TOTAL row ─────────────────────────────────────────────
-
-                _editable_cols = {'Open price (bp)', 'Volume (mm)', 'Open date'}
-                columns = [
-                    {
-                        'name': c,
-                        'id': c,
-                        'editable': c in _editable_cols,
-                        **({'type': 'datetime'} if c == 'Open date' else {}),
-                    }
-                    for c in display_rows[0].keys()
-                ]
-
-                dir_styles = [
-                    {'if': {'filter_query': '{Direction} = "BUY"'},
-                     'backgroundColor': 'rgba(0, 204, 150, 0.12)'},
-                    {'if': {'filter_query': '{Direction} = "SELL"'},
-                     'backgroundColor': 'rgba(239, 85, 59, 0.12)'},
-                    {'if': {'filter_query': '{ID} = "TOTAL"'},
-                     'backgroundColor': THEME['table_header'],
-                     'fontWeight': 'bold',
+            table = dash_table.DataTable(
+                id='summary-beta-table',
+                data=display_rows,
+                columns=columns,
+                editable=True,
+                style_cell={
+                    'textAlign': 'center', 'padding': '6px 8px',
+                    'backgroundColor': THEME['table_row_odd'],
+                    'color': THEME['text_main'], 'border': 'none',
+                    'fontSize': '12px',
+                },
+                style_header={
+                    'backgroundColor': THEME['table_header'],
+                    'color': THEME['text_main'],
+                    'fontWeight': 'bold', 'border': 'none',
+                    'whiteSpace': 'normal', 'height': 'auto',
+                },
+                style_data_conditional=[
+                    {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                    {'if': {'filter_query': '{Asset Type} = "TOTAL"'},
+                     'backgroundColor': THEME['table_header'], 'fontWeight': 'bold',
                      'borderTop': f"1px solid {THEME['accent']}"},
-                ]
-                editable_style = [
-                    {'if': {'column_id': c},
-                     'border': f'1px solid {THEME["accent"]}',
-                     'backgroundColor': 'rgba(99,179,237,0.08)'}
-                    for c in _editable_cols
-                ]
+                    *_editable_style,
+                    *_mtm_styles,
+                ],
+                style_table={'overflowX': 'auto'},
+                sort_action='native',
+                page_size=30,
+                tooltip_header={
+                    'Open Price':   'User-editable: entry yield (%) for Rates, price for others',
+                    'Open Date':    'User-editable: trade open date (YYYY-MM-DD)',
+                    'Volume (MM)':  'User-editable: position size in MM CNY',
+                    'Close Price':  'Latest yield (%) from factor levels — Rates only',
+                    'MtM (MM CNY)': 'Rates only: Volume × Duration × (Close − Open) / 10000',
+                },
+                tooltip_delay=0,
+                tooltip_duration=None,
+            )
 
-                # ── Exit reminders ────────────────────────────────────────────
-                _today = pd.Timestamp.today().normalize()
-                _alert_rows = []   # list of (trade_id, reason_str, severity)
-                _alert_ids  = {'stop': set(), 'target': set(), 'hold': set()}
+            content = html.Div([
+                html.Div([
+                    html.Span('Open Date calendar:',
+                              style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                    dcc.DatePickerSingle(
+                        id='summary-beta-open-date-picker',
+                        date=None,
+                        display_format='YYYY-MM-DD',
+                        clearable=True,
+                        disabled=True,
+                        placeholder='Select an Open Date cell',
+                        style={'backgroundColor': THEME['bg_input']},
+                    ),
+                    html.Span(
+                        id='summary-beta-open-date-target',
+                        children='Click an Open Date cell to edit with the calendar.',
+                        style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'},
+                    ),
+                ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
+                          'marginBottom': '10px', 'flexWrap': 'wrap',
+                          'position': 'relative', 'zIndex': '1001'}),
+                table,
+            ])
+            status = f"Beta snapshot from {ts[:19]}"
+            return content, status
 
+        except Exception as exc:
+            return _no_data(f"Error loading Beta snapshot: {exc}")
+
+    # ── Alpha Book table ──────────────────────────────────────────────────────
+    @app.callback(
+        [Output('summary-alpha-table-container', 'children'),
+         Output('summary-refresh-status', 'children', allow_duplicate=True)],
+        [Input('summary-refresh-btn', 'n_clicks')],
+        prevent_initial_call='initial_duplicate',
+    )
+    def update_summary_alpha_table(_n_clicks):
+        """Render Alpha Book allocation table."""
+        import os as _os
+        from dash import ctx as _ctx
+
+        def _no_data(msg: str):
+            return (
+                html.Div(msg, style={
+                    'color': THEME['text_sub'], 'fontStyle': 'italic',
+                    'padding': '30px', 'textAlign': 'center', 'fontSize': '13px',
+                }),
+                "",
+            )
+
+        def _load_positions() -> dict:
+            if _os.path.exists(_ALPHA_POSITIONS_PARQUET):
+                try:
+                    pos = pd.read_parquet(_ALPHA_POSITIONS_PARQUET)
+                    result = {}
+                    for _, r in pos.iterrows():
+                        key = (str(r.get('spread_type', '')), str(r.get('ID', '')))
+                        result[key] = {
+                            'open_price_bp': r.get('open_price_bp', ''),
+                            'volume_mm':     r.get('volume_mm', ''),
+                            'open_date':     str(r.get('open_date', '')),
+                        }
+                    return result
+                except Exception:
+                    pass
+            return {}
+
+        def _compute_carry_mtm(spread_type: str, instrument_id: str,
+                               open_date_str: str, volume_mm: float) -> float | None:
+            if _load_cr_ts is None or not open_date_str or not volume_mm:
+                return None
+            try:
+                cr_ts = _load_cr_ts(spread_type)
+                if cr_ts is None or instrument_id not in cr_ts.columns:
+                    return None
+                series = cr_ts[instrument_id].dropna()
+                open_dt = pd.to_datetime(open_date_str)
+                today   = pd.Timestamp.today().normalize()
+                mask = (series.index >= open_dt) & (series.index <= today)
+                carry_cum_pct = float(series[mask].sum()) / 90.0
+                return round(volume_mm * carry_cum_pct / 100.0, 4)
+            except Exception:
+                return None
+
+        if not _os.path.exists(_SUMMARY_ALPHA_PARQUET):
+            return _no_data(
+                "No Alpha snapshot found. Click RUN OPTIMIZATION in the Alpha Book → Portfolio tab first."
+            )
+        try:
+            is_refresh = bool(_n_clicks and _ctx.triggered_id == 'summary-refresh-btn')
+            df  = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
+            ts  = df['_timestamp'].iloc[0] if '_timestamp' in df.columns else "unknown"
+            pos = _load_positions()
+
+            def _fmt1(v):
+                try:
+                    f = float(v)
+                    return f"{f:.1f}" if pd.notna(f) else ''
+                except (TypeError, ValueError):
+                    return ''
+
+            display_rows = []
+            for _, row in df.iterrows():
+                trade_id = str(row.get('ID', ''))
+                if trade_id in ('TOTAL', ''):
+                    continue
+                spread_type    = str(row.get('spread_type', ''))
+                key            = (spread_type, trade_id)
+                saved          = pos.get(key, {})
+                open_price_str = str(saved.get('open_price_bp', ''))
+                volume_str     = str(saved.get('volume_mm', ''))
+                open_date_str  = str(saved.get('open_date', ''))
+
+                spread_val = row.get('spread', None)
+                cp_bp      = round(float(spread_val), 4) if pd.notna(spread_val) else None
+                notional   = float(row.get('notional_mm', 0) or 0)
+                dv01_k     = float(row.get('DV01_k', 0) or 0)
+                _dur_raw   = row.get('_duration', None)
+                if _dur_raw is not None and pd.notna(_dur_raw):
+                    duration = float(_dur_raw)
+                elif notional > 0:
+                    duration = round(dv01_k * 10.0 / notional, 2)
+                else:
+                    duration = 0.0
+
+                mtm_price_mm = mtm_spd_bp = mtm_carry_mm = mtm_total_mm = None
+                try:
+                    open_price_bp = float(open_price_str) if open_price_str else None
+                    volume_mm_f   = float(volume_str)     if volume_str     else None
+                    direction     = row.get('direction', '').upper()
+                    if open_price_bp is not None and cp_bp is not None:
+                        if spread_type in ['TBondCurve', 'TBondSpread']:
+                            mtm_spd_bp = open_price_bp - cp_bp
+                        elif spread_type == 'TenorSpread':
+                            mtm_spd_bp = cp_bp - open_price_bp
+                        else:
+                            mtm_spd_bp = (open_price_bp - cp_bp) if direction == 'SELL' else (cp_bp - open_price_bp)
+                    if mtm_spd_bp is not None and volume_mm_f is not None:
+                        mtm_price_mm = round(mtm_spd_bp * duration * volume_mm_f / 10000.0, 4)
+                    if volume_mm_f is not None:
+                        mtm_carry_mm = _compute_carry_mtm(spread_type, trade_id, open_date_str, volume_mm_f)
+                    if mtm_price_mm is not None or mtm_carry_mm is not None:
+                        mtm_total_mm = round((mtm_price_mm or 0.0) + (mtm_carry_mm or 0.0), 4)
+                except (ValueError, TypeError):
+                    pass
+
+                display_rows.append({
+                    'ID':                     trade_id,
+                    'Spread Type':            spread_type,
+                    'Style':                  row.get('style', ''),
+                    'Direction':              row.get('direction', ''),
+                    'Duration':               f"{duration:.2f}" if duration else 'N/A',
+                    'Open price (bp)':        open_price_str,
+                    'Volume (mm)':            volume_str,
+                    'Open date':              open_date_str,
+                    'Z-Score':                f"{float(row.get('Zscore', 0) or 0):.2f}",
+                    'Close Price (bp)':       f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
+                    'Target Volume (MM CNY)': f"{notional:,.1f}",
+                    'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",
+                    'Carry+Roll (3m,bp)':     _fmt1(-float(row.get('carry_roll', 0) or 0) if str(row.get('direction', '')).strip().upper() == 'SELL' else row.get('carry_roll')),
+                    'Breakeven (3m,bp)':      _fmt1(row.get('breakeven_3m')),
+                    'Stop (bp)':              _fmt1(row.get('stop_loss')),
+                    'Target (bp)':            _fmt1(row.get('profit_target')),
+                    'MTM spd (bp)':           f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else '',
+                    'MtM Carry (MM CNY)':     f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
+                    'MtM Value (MM CNY)':     f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
+                    'Target Weight (%)':      f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
+                    'Weight (%)':             '',
+                })
+
+            total_vol = 0.0
+            for r in display_rows:
+                try:
+                    total_vol += float(r['Volume (mm)']) if r['Volume (mm)'] else 0.0
+                except (ValueError, TypeError):
+                    pass
+            for r in display_rows:
+                try:
+                    v = float(r['Volume (mm)']) if r['Volume (mm)'] else None
+                    r['Weight (%)'] = f"{v / total_vol * 100:.2f}%" if (v is not None and total_vol > 0) else ''
+                except (ValueError, TypeError):
+                    r['Weight (%)'] = ''
+
+            if not display_rows:
+                return _no_data("Alpha snapshot is empty.")
+
+            _BOND_OUTRIGHT_TYPES = {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'}
+
+            def _sum_col(col, filter_types=None):
+                total, has_any = 0.0, False
                 for r in display_rows:
-                    if r.get('ID') == 'TOTAL':
+                    if filter_types and r.get('Spread Type', '') not in filter_types:
                         continue
-                    _tid  = r.get('ID', '')
-                    _dir  = str(r.get('Direction', '')).strip().upper()
-                    _op_s = str(r.get('Open price (bp)', '') or '').strip()
-                    _cp_s = str(r.get('Close Price (bp)', '') or '').strip()
-                    _sl_s = str(r.get('Stop (bp)', '') or '').strip()
-                    _tp_s = str(r.get('Target (bp)', '') or '').strip()
-                    _od_s = str(r.get('Open date', '') or '').strip()
-
-                    try:
-                        _op = float(_op_s) if _op_s else None
-                        _cp = float(_cp_s) if _cp_s else None
-                        _sl = float(_sl_s) if _sl_s else None
-                        _tp = float(_tp_s) if _tp_s else None
-                    except (ValueError, TypeError):
-                        _op = _cp = _sl = _tp = None
-
-                    _days = None
-                    if _od_s:
+                    v = str(r.get(col, '')).replace(',', '').replace('%', '').strip()
+                    if v:
                         try:
-                            _od = pd.to_datetime(_od_s, errors='coerce')
-                            if pd.notna(_od):
-                                _days = (_today - _od.normalize()).days
-                        except Exception:
+                            total += float(v); has_any = True
+                        except (ValueError, TypeError):
                             pass
+                return total if has_any else None
 
-                    if _op is not None and _cp is not None:
-                        _spd_chg = _cp - _op
-                        _pnl_dir = _spd_chg if _dir == 'BUY' else -_spd_chg
+            _s_vol    = _sum_col('Volume (mm)',            _BOND_OUTRIGHT_TYPES)
+            _s_tvol   = _sum_col('Target Volume (MM CNY)', _BOND_OUTRIGHT_TYPES)
+            _s_dv01   = _sum_col('DV01 (k CNY/bp)')
+            _s_carry  = _sum_col('MtM Carry (MM CNY)')
+            _s_mtm    = _sum_col('MtM Value (MM CNY)')
+            _s_tgt_wt = _sum_col('Target Weight (%)')
+            _s_wt     = _sum_col('Weight (%)')
 
-                        if _sl is not None and _pnl_dir <= -abs(_sl):
-                            _alert_rows.append((_tid, f"Stop loss hit  (Δ={_pnl_dir:+.1f} bp, stop=−{abs(_sl):.1f} bp)", 'stop'))
-                            _alert_ids['stop'].add(_tid)
-                        elif _tp is not None and _pnl_dir >= abs(_tp):
-                            _alert_rows.append((_tid, f"Target reached (Δ={_pnl_dir:+.1f} bp, target=+{abs(_tp):.1f} bp)", 'target'))
-                            _alert_ids['target'].add(_tid)
+            total_row = {c: '' for c in display_rows[0].keys()}
+            total_row['ID']                     = 'TOTAL'
+            total_row['Volume (mm)']            = f"{_s_vol:,.1f}"    if _s_vol    is not None else ''
+            total_row['Target Volume (MM CNY)'] = f"{_s_tvol:,.1f}"   if _s_tvol   is not None else ''
+            total_row['DV01 (k CNY/bp)']        = f"{_s_dv01:.1f}"    if _s_dv01   is not None else ''
+            total_row['MtM Carry (MM CNY)']     = f"{_s_carry:,.4f}"  if _s_carry  is not None else ''
+            total_row['MtM Value (MM CNY)']     = f"{_s_mtm:,.4f}"    if _s_mtm    is not None else ''
+            total_row['Target Weight (%)']      = f"{_s_tgt_wt:.2f}%" if _s_tgt_wt is not None else ''
+            total_row['Weight (%)']             = f"{_s_wt:.2f}%"     if _s_wt     is not None else ''
+            display_rows.append(total_row)
 
-                    if _days is not None and _days >= 21 and _tid not in _alert_ids['stop'] and _tid not in _alert_ids['target']:
-                        _alert_rows.append((_tid, f"Long hold: {_days}d — review if signal or carry has changed", 'hold'))
-                        _alert_ids['hold'].add(_tid)
+            _editable_cols = {'Open price (bp)', 'Volume (mm)', 'Open date'}
+            columns = [
+                {'name': c, 'id': c, 'editable': c in _editable_cols,
+                 **({'type': 'datetime'} if c == 'Open date' else {})}
+                for c in display_rows[0].keys()
+            ]
 
-                for _tid in _alert_ids['stop']:
-                    dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(239,85,59,0.22)'})
-                for _tid in _alert_ids['target']:
-                    dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(0,204,150,0.22)'})
-                for _tid in _alert_ids['hold']:
-                    dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(255,165,0,0.14)'})
-                # ── end exit reminders ────────────────────────────────────────
+            dir_styles = [
+                {'if': {'filter_query': '{Direction} = "BUY"'},  'backgroundColor': 'rgba(0, 204, 150, 0.12)'},
+                {'if': {'filter_query': '{Direction} = "SELL"'}, 'backgroundColor': 'rgba(239, 85, 59, 0.12)'},
+                {'if': {'filter_query': '{ID} = "TOTAL"'},
+                 'backgroundColor': THEME['table_header'], 'fontWeight': 'bold',
+                 'borderTop': f"1px solid {THEME['accent']}"},
+            ]
+            editable_style = [
+                {'if': {'column_id': c}, 'border': f'1px solid {THEME["accent"]}',
+                 'backgroundColor': 'rgba(99,179,237,0.08)'}
+                for c in _editable_cols
+            ]
 
-                table = dash_table.DataTable(
-                    id='summary-alpha-table',
-                    data=display_rows,
-                    columns=columns,
-                    editable=True,
-                    row_deletable=True,
-                    style_cell={
-                        'textAlign': 'center', 'padding': '6px 8px',
-                        'backgroundColor': THEME['table_row_odd'],
-                        'color': THEME['text_main'], 'border': 'none',
-                        'fontSize': '12px',
-                    },
-                    style_header={
-                        'backgroundColor': THEME['table_header'],
-                        'color': THEME['text_main'],
-                        'fontWeight': 'bold', 'border': 'none',
-                        'whiteSpace': 'normal', 'height': 'auto',
-                    },
-                    style_data_conditional=[
-                        {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
-                        *dir_styles,
-                        *editable_style,
-                    ],
-                    style_table={'overflowX': 'auto'},
-                    sort_action='native',
-                    page_size=30,
-                    tooltip_header={
-                        'Open price (bp)':   'User-editable: entry spread in bp',
-                        'Volume (mm)':       'User-editable: position size in MM CNY',
-                        'Open date':         'User-editable: trade open date (YYYY-MM-DD)',
-                        'MTM spd (bp)':      'User-entered open spread shown in bp',
-                        'MtM Carry (MM CNY)':'Volume × cumulative carry+roll since open date',
-                        'MtM Value (MM CNY)':'MtM Price + MtM Carry',
-                    },
-                    tooltip_delay=0,
-                    tooltip_duration=None,
-                )
-                # Build reminder banner from alerts computed before table construction
-                _reminder_banner = None
-                if _alert_rows:
-                    _sev_style = {
-                        'stop':   {'color': THEME['danger'],  'icon': '🛑'},
-                        'target': {'color': THEME['success'], 'icon': '✅'},
-                        'hold':   {'color': THEME['warning'], 'icon': '⏰'},
-                    }
-                    _items = []
-                    for _tid, _msg, _sev in _alert_rows:
-                        _st = _sev_style[_sev]
-                        _items.append(html.Div([
-                            html.Span(f"{_st['icon']} ", style={'fontSize': '13px'}),
-                            html.Span(_tid, style={'fontWeight': 'bold', 'color': _st['color'], 'marginRight': '6px'}),
-                            html.Span(_msg, style={'color': THEME['text_main']}),
-                        ], style={'marginBottom': '4px', 'fontSize': '12px'}))
-                    _reminder_banner = html.Div([
-                        html.Div("Exit Reminders", style={
-                            'fontWeight': 'bold', 'color': THEME['text_main'],
-                            'fontSize': '13px', 'marginBottom': '6px',
-                            'borderBottom': f"1px solid {THEME['table_header']}",
-                            'paddingBottom': '4px',
-                        }),
-                        *_items,
-                    ], style={
-                        'backgroundColor': 'rgba(239,85,59,0.08)',
-                        'border': f"1px solid {THEME['danger']}",
-                        'borderRadius': '5px',
-                        'padding': '10px 14px',
-                        'marginBottom': '12px',
-                    })
+            _today = pd.Timestamp.today().normalize()
+            _alert_rows: list = []
+            _alert_ids: dict = {'stop': set(), 'target': set(), 'hold': set()}
+            for r in display_rows:
+                if r.get('ID') == 'TOTAL':
+                    continue
+                _tid  = r.get('ID', '')
+                _dir  = str(r.get('Direction', '')).strip().upper()
+                _op_s = str(r.get('Open price (bp)', '') or '').strip()
+                _cp_s = str(r.get('Close Price (bp)', '') or '').strip()
+                _sl_s = str(r.get('Stop (bp)', '') or '').strip()
+                _tp_s = str(r.get('Target (bp)', '') or '').strip()
+                _od_s = str(r.get('Open date', '') or '').strip()
+                try:
+                    _op = float(_op_s) if _op_s else None
+                    _cp = float(_cp_s) if _cp_s else None
+                    _sl = float(_sl_s) if _sl_s else None
+                    _tp = float(_tp_s) if _tp_s else None
+                except (ValueError, TypeError):
+                    _op = _cp = _sl = _tp = None
+                _days = None
+                if _od_s:
+                    try:
+                        _od = pd.to_datetime(_od_s, errors='coerce')
+                        if pd.notna(_od):
+                            _days = (_today - _od.normalize()).days
+                    except Exception:
+                        pass
+                if _op is not None and _cp is not None:
+                    _spd_chg = _cp - _op
+                    _pnl_dir = _spd_chg if _dir == 'BUY' else -_spd_chg
+                    if _sl is not None and _pnl_dir <= -abs(_sl):
+                        _alert_rows.append((_tid, f"Stop loss hit  (Δ={_pnl_dir:+.1f} bp, stop=−{abs(_sl):.1f} bp)", 'stop'))
+                        _alert_ids['stop'].add(_tid)
+                    elif _tp is not None and _pnl_dir >= abs(_tp):
+                        _alert_rows.append((_tid, f"Target reached (Δ={_pnl_dir:+.1f} bp, target=+{abs(_tp):.1f} bp)", 'target'))
+                        _alert_ids['target'].add(_tid)
+                if _days is not None and _days >= 21 and _tid not in _alert_ids['stop'] and _tid not in _alert_ids['target']:
+                    _alert_rows.append((_tid, f"Long hold: {_days}d — review if signal or carry has changed", 'hold'))
+                    _alert_ids['hold'].add(_tid)
 
-                content = html.Div([
-                    html.Div([
-                        html.Span(
-                            'Open date calendar:',
-                            style={'color': THEME['text_sub'], 'fontSize': '11px'}
-                        ),
-                        dcc.DatePickerSingle(
-                            id='summary-alpha-open-date-picker',
-                            date=None,
-                            display_format='YYYY-MM-DD',
-                            clearable=True,
-                            disabled=True,
-                            placeholder='Select an Open date cell',
-                            style={'backgroundColor': THEME['bg_input']},
-                        ),
-                        html.Span(
-                            id='summary-alpha-open-date-target',
-                            children='Click an Open date cell to edit with the calendar.',
-                            style={
-                                'color': THEME['text_sub'],
-                                'fontSize': '11px',
-                                'fontStyle': 'italic',
-                            },
-                        ),
-                    ], style={
-                        'display': 'flex',
-                        'alignItems': 'center',
-                        'gap': '10px',
-                        'marginBottom': '10px',
-                        'flexWrap': 'wrap',
-                        'position': 'relative',
-                        'zIndex': '1001',
+            for _tid in _alert_ids['stop']:
+                dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(239,85,59,0.22)'})
+            for _tid in _alert_ids['target']:
+                dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(0,204,150,0.22)'})
+            for _tid in _alert_ids['hold']:
+                dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(255,165,0,0.14)'})
+
+            table = dash_table.DataTable(
+                id='summary-alpha-table',
+                data=display_rows,
+                columns=columns,
+                editable=True,
+                row_deletable=True,
+                style_cell={'textAlign': 'center', 'padding': '6px 8px',
+                            'backgroundColor': THEME['table_row_odd'],
+                            'color': THEME['text_main'], 'border': 'none', 'fontSize': '12px'},
+                style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'],
+                              'fontWeight': 'bold', 'border': 'none', 'whiteSpace': 'normal', 'height': 'auto'},
+                style_data_conditional=[
+                    {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                    *dir_styles, *editable_style,
+                ],
+                style_table={'overflowX': 'auto'},
+                sort_action='native',
+                page_size=30,
+                tooltip_header={
+                    'Open price (bp)':    'User-editable: entry spread in bp',
+                    'Volume (mm)':        'User-editable: position size in MM CNY',
+                    'Open date':          'User-editable: trade open date (YYYY-MM-DD)',
+                    'MTM spd (bp)':       'User-entered open spread shown in bp',
+                    'MtM Carry (MM CNY)': 'Volume × cumulative carry+roll since open date',
+                    'MtM Value (MM CNY)': 'MtM Price + MtM Carry',
+                },
+                tooltip_delay=0,
+                tooltip_duration=None,
+            )
+
+            _reminder_banner = None
+            if _alert_rows:
+                _sev_style = {
+                    'stop':   {'color': THEME['danger'],  'icon': '🛑'},
+                    'target': {'color': THEME['success'], 'icon': '✅'},
+                    'hold':   {'color': THEME['warning'], 'icon': '⏰'},
+                }
+                _items = []
+                for _tid, _msg, _sev in _alert_rows:
+                    _st = _sev_style[_sev]
+                    _items.append(html.Div([
+                        html.Span(f"{_st['icon']} ", style={'fontSize': '13px'}),
+                        html.Span(_tid, style={'fontWeight': 'bold', 'color': _st['color'], 'marginRight': '6px'}),
+                        html.Span(_msg, style={'color': THEME['text_main']}),
+                    ], style={'marginBottom': '4px', 'fontSize': '12px'}))
+                _reminder_banner = html.Div([
+                    html.Div("Exit Reminders", style={
+                        'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '13px',
+                        'marginBottom': '6px', 'borderBottom': f"1px solid {THEME['table_header']}",
+                        'paddingBottom': '4px',
                     }),
-                    *([_reminder_banner] if _reminder_banner else []),
-                    table,
-                ])
-                status = (
-                    f"Alpha snapshot from {ts[:19]}"
-                    + (" — saved" if is_refresh else "")
-                )
-                return content, status
+                    *_items,
+                ], style={'backgroundColor': 'rgba(239,85,59,0.08)', 'border': f"1px solid {THEME['danger']}",
+                          'borderRadius': '5px', 'padding': '10px 14px', 'marginBottom': '12px'})
 
-            except Exception as exc:
-                return _no_data(f"Error loading Alpha snapshot: {exc}")
+            content = html.Div([
+                html.Div([
+                    html.Span('Open date calendar:', style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                    dcc.DatePickerSingle(
+                        id='summary-alpha-open-date-picker',
+                        date=None, display_format='YYYY-MM-DD', clearable=True, disabled=True,
+                        placeholder='Select an Open date cell',
+                        style={'backgroundColor': THEME['bg_input']},
+                    ),
+                    html.Span(
+                        id='summary-alpha-open-date-target',
+                        children='Click an Open date cell to edit with the calendar.',
+                        style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'},
+                    ),
+                ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
+                          'marginBottom': '10px', 'flexWrap': 'wrap', 'position': 'relative', 'zIndex': '1001'}),
+                *([_reminder_banner] if _reminder_banner else []),
+                table,
+            ])
+            status = f"Alpha snapshot from {ts[:19]}" + (" — saved" if is_refresh else "")
+            return content, status
 
-        return _no_data("Select a tab above.")
+        except Exception as exc:
+            return _no_data(f"Error loading Alpha snapshot: {exc}")
 
     # ── Auto-save edits on the Alpha positions table ──────────────────────────
     # Fires whenever the user edits a cell in the summary-alpha-table.
@@ -1198,7 +1132,7 @@ def register_risk_callbacks(app):
         [Output('risk-inventory-container', 'children'),
          Output('risk-exposure-container', 'children'),
          Output('risk-refresh-status', 'children')],
-        [Input('summary-main-tabs', 'value'),
+        [Input('an-summary-subtabs', 'value'),
          Input('risk-refresh-btn', 'n_clicks')],
         prevent_initial_call=False,
     )

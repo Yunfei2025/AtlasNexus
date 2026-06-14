@@ -385,11 +385,13 @@ def build_volatility_layout() -> html.Div:
         # Loading indicator
         dcc.Loading(
             id='vol-loading',
-            type='default',
+            type='circle',
+            color=THEME['accent'],
+            style={'minHeight': '80px'},
             children=[
                 # Results container
                 html.Div(id='vol-results-container', children=[
-                    html.Div("Click \"Run Analysis\" to start...", 
+                    html.Div("Click \"Run Analysis\" to start...",
                              style={'color': THEME['text_sub'], 'textAlign': 'center', 'padding': '50px'})
                 ]),
             ],

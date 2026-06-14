@@ -383,7 +383,8 @@ def build_multiasset_backtest_layout():
         # ── Results ─────────────────────────────────────────────────────
         dcc.Loading(
             id="loading-history",
-            type="default",
+            type="circle",
+            color=THEME['accent'],
             children=[
                 dcc.Graph(id='historical-allocation-chart'),
                 html.Div(style={'height': '20px'}),
@@ -591,15 +592,19 @@ def build_risk_factor_backtest_layout():
                        'cursor': 'pointer', 'fontWeight': 'bold', 'fontSize': '14px',
                        'marginRight': '12px'},
             ),
-            html.Span(id='rfbt-status',
-                      style={'color': THEME['text_sub'], 'fontSize': '12px',
-                             'marginLeft': '10px'}),
         ], style={'marginBottom': '20px'}),
 
         # ── Results ─────────────────────────────────────────────────────
         dcc.Loading(
-            type='default',
-            children=html.Div(id='rfbt-results-container', style={'minHeight': '200px'}),
+            type='circle',
+            color=THEME['accent'],
+            style={'minHeight': '200px'},
+            children=html.Div([
+                html.Div(id='rfbt-status',
+                         style={'color': THEME['text_sub'], 'fontSize': '12px',
+                                'marginBottom': '8px'}),
+                html.Div(id='rfbt-results-container', style={'minHeight': '200px'}),
+            ]),
         ),
 
     ], style={'padding': '10px'})
@@ -912,7 +917,8 @@ def build_factor_backtest_layout():
     content = html.Div([
         dcc.Loading(
             id="bf-loading-results",
-            type="default",
+            type="circle",
+            color=THEME['accent'],
             children=html.Div(id='bf-results-container', style={'minHeight': '400px'})
         )
     ], style={'flex': '1', 'padding': '1.5rem 2rem', 'fontFamily': '"Open Sans", sans-serif', 'minWidth': '0'})

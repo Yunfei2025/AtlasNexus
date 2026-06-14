@@ -225,7 +225,11 @@ def _build_results_from_saved_artifact(
         if not trained_model:
             continue
         try:
-            features = build_features(factor, factor_levels, DIR_INPUT)
+            needed_features = list(fa.get('selected_factors') or trained_model.get('feature_names') or [])
+            features = build_features(
+                factor, factor_levels, DIR_INPUT,
+                feature_subset=needed_features or None,
+            )
             features = features.ffill().fillna(0)
             preds = _predict_ic_model(features, trained_model)
             if preds.empty:

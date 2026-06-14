@@ -76,7 +76,9 @@ def build_multiasset_bond_layout():
         }),
         dcc.Loading(
             id='beta-bond-loading',
-            type='default',
+            type='circle',
+            color=THEME['accent'],
+            style={'minHeight': '420px'},
             children=html.Div(id='beta-bond-signals-container', style={'minHeight': '420px'}),
         ),
     ], style={

@@ -7,6 +7,12 @@ from dash import dcc, html, dash_table
 import plotly.graph_objects as go
 
 from ..data import THEME, ALLOCATION_RESULTS
+from web.tabs.atlas_styles import (
+    summary_subtab_style,
+    summary_subtab_selected_style,
+    summary_subtabs_style,
+    summary_subtabs_colors,
+)
 
 
 def build_multiasset_risk_layout():
@@ -136,44 +142,10 @@ def build_multiasset_risk_layout():
             heatmap_fig.update_layout(title=f"Error: {e}")
             vol_table = html.Div(f"Error generating table: {str(e)}", style={'color': THEME['danger'], 'padding': '10px'})
 
-    _tab_style = {
-        'backgroundColor': THEME['bg_input'],
-        'color': THEME['text_sub'],
-        'fontSize': '12px',
-        'padding': '6px 20px',
-        'border': 'none',
-    }
-    _tab_sel = lambda col: {
-        'backgroundColor': THEME['bg_card'],
-        'color': col,
-        'fontSize': '12px',
-        'padding': '6px 20px',
-        'borderTop': f'2px solid {col}',
-        'borderBottom': 'none',
-    }
-
     # --- Assemble Layout ---
+    # The Books/Risk/Tickets subtab bar is rendered by the app-level
+    # _make_tab_switcher; we only build the content divs here.
     return html.Div([
-
-        dcc.Tabs(
-            id='summary-main-tabs',
-            value='books',
-            children=[
-                dcc.Tab(label='Books', value='books',
-                        style=_tab_style,
-                        selected_style=_tab_sel(THEME['accent'])),
-                dcc.Tab(label='Risk', value='risk',
-                        style=_tab_style,
-                        selected_style=_tab_sel(THEME['warning'])),
-                dcc.Tab(label='Tickets', value='tickets',
-                        style=_tab_style,
-                        selected_style=_tab_sel(THEME['success'])),
-            ],
-            colors={'border': THEME['table_header'],
-                    'primary': THEME['accent'],
-                    'background': THEME['bg_input']},
-            style={'marginBottom': '16px'},
-        ),
 
         # ── Books subtab ─────────────────────────────────────────────────────
         html.Div(id='summary-tab-books', children=[
@@ -230,7 +202,7 @@ def build_multiasset_risk_layout():
 
             html.Hr(style={'borderColor': THEME['table_header'], 'margin': '18px 0 12px 0'}),
 
-            # Portfolio Allocation Snapshot tabs
+            # Portfolio Allocation Snapshot — two-column side-by-side (Beta | Alpha)
             html.Div([
                 html.Div([
                     html.Span("Portfolio Allocation Snapshot",
@@ -247,45 +219,35 @@ def build_multiasset_risk_layout():
                                          'fontStyle': 'italic'}),
                     ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
                 ], style={'display': 'flex', 'justifyContent': 'space-between',
-                          'alignItems': 'center', 'marginBottom': '8px'}),
+                          'alignItems': 'center', 'marginBottom': '12px'}),
 
-                dcc.Tabs(
-                    id='summary-book-tabs',
-                    value='beta',
-                    children=[
-                        dcc.Tab(label='Beta Book', value='beta',
-                                style={'backgroundColor': THEME['bg_input'],
-                                       'color': THEME['text_sub'], 'fontSize': '12px',
-                                       'padding': '6px 16px', 'border': 'none'},
-                                selected_style={'backgroundColor': THEME['bg_card'],
-                                                'color': THEME['accent'], 'fontSize': '12px',
-                                                'padding': '6px 16px',
-                                                'borderTop': f'2px solid {THEME["accent"]}',
-                                                'borderBottom': 'none'}),
-                        dcc.Tab(label='Alpha Book', value='alpha',
-                                style={'backgroundColor': THEME['bg_input'],
-                                       'color': THEME['text_sub'], 'fontSize': '12px',
-                                       'padding': '6px 16px', 'border': 'none'},
-                                selected_style={'backgroundColor': THEME['bg_card'],
-                                                'color': THEME['danger'], 'fontSize': '12px',
-                                                'padding': '6px 16px',
-                                                'borderTop': f'2px solid {THEME["danger"]}',
-                                                'borderBottom': 'none'}),
-                    ],
-                    colors={'border': THEME['table_header'],
-                            'primary': THEME['accent'],
-                            'background': THEME['bg_input']},
-                    style={'marginBottom': '0'},
-                ),
+                # Two-column layout: Beta Book left, Alpha Book right
+                html.Div([
+                    html.Div([
+                        html.Div("Beta Book", style={
+                            'color': THEME['accent'], 'fontWeight': 'bold', 'fontSize': '12px',
+                            'borderBottom': f'2px solid {THEME["accent"]}',
+                            'paddingBottom': '6px', 'marginBottom': '10px',
+                        }),
+                        html.Div(id='summary-beta-table-container',
+                                 style={'minHeight': '60px'}),
+                    ], style={'flex': '1', 'minWidth': '0', 'marginRight': '12px'}),
 
-                html.Div(id='summary-book-table-container',
-                         style={'minHeight': '60px', 'paddingTop': '10px'}),
+                    html.Div([
+                        html.Div("Alpha Book", style={
+                            'color': THEME.get('warning', '#f39c12'), 'fontWeight': 'bold', 'fontSize': '12px',
+                            'borderBottom': f'2px solid {THEME.get("warning", "#f39c12")}',
+                            'paddingBottom': '6px', 'marginBottom': '10px',
+                        }),
+                        html.Div(id='summary-alpha-table-container',
+                                 style={'minHeight': '60px'}),
+                    ], style={'flex': '1', 'minWidth': '0'}),
+                ], style={'display': 'flex', 'gap': '0', 'alignItems': 'flex-start'}),
 
             ], style={'backgroundColor': THEME['bg_main'], 'padding': '12px',
                       'borderRadius': '4px', 'marginTop': '4px'}),
 
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px', 'marginBottom': '20px'}),
-
         ]),  # end summary-tab-books
 
         # ── Risk subtab ──────────────────────────────────────────────────────
@@ -310,7 +272,7 @@ def build_multiasset_risk_layout():
         ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center',
                   'marginBottom': '16px'}),
 
-        dcc.Loading(type='default', children=[
+        dcc.Loading(type='circle', color=THEME['accent'], children=[
             # ── Inventory table ───────────────────────────────────────────────
             html.Div([
                 html.H6("Position Inventory  (Beta + Alpha)", style={

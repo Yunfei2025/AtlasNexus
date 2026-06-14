@@ -215,13 +215,18 @@ def build_multiasset_factor_layout():
                            'padding': '7px 14px', 'border': 'none', 'borderRadius': '5px',
                            'cursor': 'pointer', 'fontSize': '12px', 'fontWeight': 'bold',
                            'marginRight': '10px'}),
-                html.Span(id='factor-train-status',
-                          style={'color': THEME['text_sub'], 'fontSize': '12px'}),
             ], style={'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap',
                       'gap': '4px', 'marginBottom': '12px'}),
             dcc.Loading(
-                type='default',
-                children=html.Div(id='factor-signal-container', style={'minHeight': '80px'}),
+                type='circle',
+                color=THEME['accent'],
+                style={'minHeight': '80px'},
+                children=html.Div([
+                    html.Div(id='factor-train-status',
+                             style={'color': THEME['text_sub'], 'fontSize': '12px',
+                                    'marginBottom': '8px'}),
+                    html.Div(id='factor-signal-container', style={'minHeight': '80px'}),
+                ]),
             ),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px',
                   'border': f'1px solid {THEME["table_header"]}', 'marginBottom': '20px'}),
@@ -268,8 +273,10 @@ def build_multiasset_factor_layout():
 
              dcc.Loading(
                  id="loading-correlations",
-                 type="default",
-                 children=html.Div(id='correlation-results-container')
+                 type="circle",
+                 color=THEME['accent'],
+                 style={'minHeight': '60px'},
+                 children=html.Div(id='correlation-results-container'),
              )
         ], style={'maxWidth': '800px', 'margin': '0 auto 20px auto', 'padding': '15px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '5px', 'border': f'1px solid {THEME["table_header"]}'}),
 

@@ -653,8 +653,9 @@ def build_factor_model_backtest_layout() -> html.Div:
             # ── Status & results ────────────────────────────────────────
             html.Div(id="factor-status-container", children=_status_block(None)),
             dcc.Loading(
-                type="default",
+                type="circle",
                 color=THEME["accent"],
+                style={"minHeight": "80px"},
                 children=html.Div(
                     id="factor-results-container",
                     children=html.Div(

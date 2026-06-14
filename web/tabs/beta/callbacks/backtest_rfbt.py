@@ -480,21 +480,31 @@ def register_backtest_rfbt_callbacks(app):
 
         try:
             from multiasset.factor_backtest import run_factor_backtest, compute_metrics
-            from multiasset.factor_model import load_latest_factor_model
+            from multiasset.factor_model import (
+                load_current_month_model, current_month_model_key,
+            )
 
             results = {}
             latest_artifact = None
             persist_note = None
 
             if action == 'predict':
-                latest_artifact, latest_month_key = load_latest_factor_model()
+                latest_artifact, latest_month_key = load_current_month_model()
                 if not latest_artifact:
+                    expected_key = current_month_model_key()
                     return (
-                        html.Div(
-                            "No saved model found. Click Train Model first to create the latest .joblib snapshot.",
-                            style={'color': THEME['warning'], 'padding': '20px'}
-                        ),
-                        "⚠️ No saved model found",
+                        html.Div([
+                            html.Div(
+                                f"No model found for the current month (expected: "
+                                f"factor_model_{expected_key}.joblib).",
+                                style={'marginBottom': '8px'},
+                            ),
+                            html.Div(
+                                "Click Train Model to calibrate the model on data "
+                                f"through {expected_key[:4]}-{expected_key[4:6]}-{expected_key[6:]}.",
+                            ),
+                        ], style={'color': THEME['warning'], 'padding': '20px'}),
+                        f"⚠️ No model for {expected_key[:6]} — click Train Model",
                         dash.no_update,
                     )
                 saved_cfg = latest_artifact.get('metadata', {}).get('config', {})
