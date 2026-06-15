@@ -53,7 +53,7 @@ echo Close this window to stop the tunnel (server window closes separately).
 echo ============================================================
 echo.
 
-cloudflared tunnel --config "%USERPROFILE%\.cloudflared\config.yml" run atlasnexus
+cloudflared tunnel --config "%USERPROFILE%\.cloudflared\config.yml" run atlasnexus-win
 
 if errorlevel 1 (
     echo.
