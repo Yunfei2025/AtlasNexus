@@ -325,10 +325,11 @@ def register_portfolio_callbacks(app) -> None:
             optimized_results = df_nonzero.to_dict('records')
 
             display_cols = [
-                'ID', 'spread_type', 'category', 'style', 'direction',
-                'Zscore', 'spread', 'carry_roll', 'vol',
-                'reg_slope_per_day', 'ttm_used', 'expected_return_H', 'risk',
-                'score', 'weight', 'risk_contribution', 'notional_mm', 'DV01_k',
+                'ID', 'spread_type', 'style', 'direction',
+                'Zscore', 'spread', 'mean', 'vol', 'halflife',
+                'carry_roll', 'breakeven_3m', 'stop_loss', 'profit_target',
+                'seasonal_edge_bps', 'score',
+                'weight', 'risk_contribution', 'notional_mm', 'DV01_k',
             ]
             available_cols = [c for c in display_cols if c in df_scored.columns]
             df_display = df_scored[available_cols].copy()
@@ -374,16 +375,28 @@ def register_portfolio_callbacks(app) -> None:
             conditional_style = []
             if 'direction' in df_display.columns:
                 conditional_style = [
-                    {'if': {'filter_query': '{direction} = "BUY"'},  'backgroundColor': 'rgba(0, 204, 150, 0.15)'},
-                    {'if': {'filter_query': '{direction} = "SELL"'}, 'backgroundColor': 'rgba(239, 85, 59, 0.15)'},
+                    {'if': {'filter_query': '{direction} = "BUY"'},  'backgroundColor': 'rgba(0, 204, 150, 0.10)'},
+                    {'if': {'filter_query': '{direction} = "SELL"'}, 'backgroundColor': 'rgba(239, 85, 59, 0.10)'},
+                    {'if': {'filter_query': '{direction} = "BUY"',  'column_id': 'direction'}, 'backgroundColor': THEME['success'], 'color': '#000', 'fontWeight': 'bold'},
+                    {'if': {'filter_query': '{direction} = "SELL"', 'column_id': 'direction'}, 'backgroundColor': THEME['danger'],  'color': '#fff', 'fontWeight': 'bold'},
                 ]
 
             last_row_idx = len(df_display) - 1
             conditional_style += [{'if': {'row_index': last_row_idx}, 'fontWeight': 'bold', 'borderTop': f'1px solid {THEME["accent"]}'}]
 
+            _port_col_labels = {
+                'spread_type': 'type', 'style': 'regime',
+                'Zscore': 'z-score', 'spread': 'spread(bp)', 'mean': 'mean(bp)',
+                'vol': 'vol(bp)', 'halflife': 'hl(d)',
+                'carry_roll': 'carry+roll(3m)', 'breakeven_3m': 'b/e(3m)',
+                'stop_loss': 'stop(bp)', 'profit_target': 'target(bp)',
+                'seasonal_edge_bps': 'seas.edge', 'score': 'score',
+                'weight': 'weight', 'risk_contribution': 'risk%',
+                'notional_mm': 'notional(MM)', 'DV01_k': 'DV01(k)',
+            }
             table = dash_table.DataTable(
                 id='alpha-scored-table',
-                columns=[{'name': c, 'id': c} for c in df_display.columns],
+                columns=[{'name': _port_col_labels.get(c, c), 'id': c} for c in df_display.columns],
                 data=df_display.to_dict('records'),
                 style_table={'overflowX': 'auto', 'maxHeight': '350px', 'overflowY': 'auto'},
                 style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'], 'fontWeight': 'bold', 'textAlign': 'left'},

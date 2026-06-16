@@ -48,7 +48,10 @@ DARK_CARD_STYLE = {
 DARK_INPUT_STYLE = {
     "background-color": "#061E44",
     "color": "white",
-    "border": "1px solid #007ACE"
+    "border": "1px solid #007ACE",
+    "MozAppearance": "textfield",
+    "WebkitAppearance": "none",
+    "appearance": "textfield",
 }
 
 
@@ -78,28 +81,32 @@ def create_sidebar():
             dbc.Card([
                 dbc.CardHeader("Data Settings", className="fw-bold", style={'padding': '5px 10px', 'background-color': '#007ACE', 'color': 'white'}),
                 dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col([
-                            html.Label("Source", style={'font-size': '0.9rem'}),
-                            dcc.RadioItems(
-                                id='data-source',
-                                options=[{'label': ' Local', 'value': 'local'}, {'label': ' Wind', 'value': 'wind'}],
-                                value='local',
-                                labelStyle={'display': 'block', 'font-size': '0.9rem'},
-                                inputStyle={"margin-right": "5px"}
-                            )
-                        ], width=6),
-                        dbc.Col([
-                            html.Label("Mode", style={'font-size': '0.9rem'}),
-                            dcc.RadioItems(
-                                id='trading-mode',
-                                options=[{'label': ' Daily', 'value': 'daily'}, {'label': ' Intraday', 'value': 'intraday'}],
-                                value='daily',
-                                labelStyle={'display': 'block', 'font-size': '0.9rem'},
-                                inputStyle={"margin-right": "5px"}
-                            )
-                        ], width=6),
-                    ], className="mb-2"),
+                    html.Div([
+                        html.Label("Source", style={'font-size': '0.9rem', 'color': '#A0AEC0',
+                                                    'font-weight': '600', 'margin-right': '10px',
+                                                    'white-space': 'nowrap', 'flex-shrink': '0'}),
+                        dcc.RadioItems(
+                            id='data-source',
+                            options=[{'label': ' Local', 'value': 'local'}, {'label': ' Wind', 'value': 'wind'}],
+                            value='local',
+                            labelStyle={'display': 'inline-block', 'margin-right': '12px', 'font-size': '0.9rem', 'color': '#CBD5E0', 'cursor': 'pointer'},
+                            inputStyle={"margin-right": "4px", "cursor": "pointer"},
+                            style={'display': 'flex', 'flex-direction': 'row'},
+                        ),
+                    ], style={'display': 'flex', 'flex-direction': 'row', 'align-items': 'center', 'margin-bottom': '8px'}),
+                    html.Div([
+                        html.Label("Mode", style={'font-size': '0.9rem', 'color': '#A0AEC0',
+                                                  'font-weight': '600', 'margin-right': '10px',
+                                                  'white-space': 'nowrap', 'flex-shrink': '0'}),
+                        dcc.RadioItems(
+                            id='trading-mode',
+                            options=[{'label': ' Daily', 'value': 'daily'}, {'label': ' Intraday', 'value': 'intraday'}],
+                            value='daily',
+                            labelStyle={'display': 'inline-block', 'margin-right': '12px', 'font-size': '0.9rem', 'color': '#CBD5E0', 'cursor': 'pointer'},
+                            inputStyle={"margin-right": "4px", "cursor": "pointer"},
+                            style={'display': 'flex', 'flex-direction': 'row'},
+                        ),
+                    ], style={'display': 'flex', 'flex-direction': 'row', 'align-items': 'center', 'margin-bottom': '8px'}),
 
                     # Inputs container
                     html.Div(id='wind-inputs', children=[
@@ -175,18 +182,20 @@ def create_sidebar():
                     dcc.Checklist(
                         id='strategy-selector',
                         options=[
-                            {'label': ' MA', 'value': 'MA'},
-                            {'label': ' SAR', 'value': 'SAR'},
-                            {'label': ' DeMark', 'value': 'DeMark'},
-                            {'label': ' Bollinger', 'value': 'Boll'},
-                            {'label': ' ATR', 'value': 'ATR'},
-                            {'label': ' VWAP', 'value': 'VWAP'},
-                            {'label': ' Momentum', 'value': 'Momentum'},
-                            {'label': ' Market Regime Based', 'value': 'MarketRegime'},
+                            {'label': ' MA',         'value': 'MA'},
+                            {'label': ' SAR',        'value': 'SAR'},
+                            {'label': ' DeMark',     'value': 'DeMark'},
+                            {'label': ' Bollinger',  'value': 'Boll'},
+                            {'label': ' ATR',        'value': 'ATR'},
+                            {'label': ' VWAP',       'value': 'VWAP'},
+                            {'label': ' Momentum',   'value': 'Momentum'},
+                            {'label': ' Mkt Regime', 'value': 'MarketRegime'},
                         ],
                         value=['MA', 'Boll', 'SAR', 'MarketRegime'],
-                        labelStyle={'display': 'inline-block', 'margin-right': '10px', 'font-size': '0.9rem'},
-                        inputStyle={"margin-right": "3px"}
+                        labelStyle={'font-size': '0.9rem', 'color': '#E2E8F0', 'cursor': 'pointer',
+                                    'display': 'flex', 'align-items': 'center'},
+                        inputStyle={"margin-right": "5px", "cursor": "pointer", "flex-shrink": "0"},
+                        style={'display': 'grid', 'grid-template-columns': 'repeat(3, 1fr)', 'gap': '4px 2px'}
                     )
                 ], style={'padding': '10px'})
             ], className="mb-3", style=DARK_CARD_STYLE),
@@ -227,22 +236,22 @@ def create_sidebar():
             dbc.Accordion([
                 dbc.AccordionItem([
                     dbc.Row([
-                        dbc.Col([html.Label("Short", style={'font-size': '0.9rem'}), dcc.Input(id='ma-short', type='number', value=5, min=2, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                        dbc.Col([html.Label("Long", style={'font-size': '0.9rem'}), dcc.Input(id='ma-long', type='number', value=20, min=5, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                        dbc.Col([html.Label("Short", style={'font-size': '0.9rem'}), dcc.Input(id='ma-short', type='number', value=5, min=2, style=DARK_INPUT_STYLE)]),
+                        dbc.Col([html.Label("Long", style={'font-size': '0.9rem'}), dcc.Input(id='ma-long', type='number', value=20, min=5, style=DARK_INPUT_STYLE)])
                     ])
                 ], title="MA Params", style=DARK_CARD_STYLE),
 
                 dbc.AccordionItem([
                     dbc.Row([
-                        dbc.Col([html.Label("AF", style={'font-size': '0.9rem'}), dcc.Input(id='sar-af', type='number', value=0.02, step=0.01, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                        dbc.Col([html.Label("Max AF", style={'font-size': '0.9rem'}), dcc.Input(id='sar-max-af', type='number', value=0.2, step=0.01, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                        dbc.Col([html.Label("AF", style={'font-size': '0.9rem'}), dcc.Input(id='sar-af', type='number', value=0.02, step=0.01, style=DARK_INPUT_STYLE)]),
+                        dbc.Col([html.Label("Max AF", style={'font-size': '0.9rem'}), dcc.Input(id='sar-max-af', type='number', value=0.2, step=0.01, style=DARK_INPUT_STYLE)])
                     ])
                 ], title="SAR Params", style=DARK_CARD_STYLE),
                 
                 dbc.AccordionItem([
                     dbc.Row([
-                        dbc.Col([html.Label("Period", style={'font-size': '0.9rem'}), dcc.Input(id='boll-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                        dbc.Col([html.Label("Std Dev", style={'font-size': '0.9rem'}), dcc.Input(id='boll-std', type='number', value=1.0, step=0.1, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                        dbc.Col([html.Label("Period", style={'font-size': '0.9rem'}), dcc.Input(id='boll-window', type='number', value=20, style=DARK_INPUT_STYLE)]),
+                        dbc.Col([html.Label("Std Dev", style={'font-size': '0.9rem'}), dcc.Input(id='boll-std', type='number', value=1.0, step=0.1, style=DARK_INPUT_STYLE)])
                     ]),
                     html.Div(style={'height': '5px'}),
                     dcc.Checklist(id='boll-exit', options=[{'label': ' Exit at MA', 'value': 'exit'}], value=[], labelStyle={'font-size': '0.9rem'})
@@ -250,19 +259,19 @@ def create_sidebar():
 
                 dbc.AccordionItem([
                     html.Label("Window", style={'font-size': '0.9rem'}),
-                    dcc.Input(id='vwap-window', type='number', value=20, className="form-control form-control-sm", style=DARK_INPUT_STYLE)
+                    dcc.Input(id='vwap-window', type='number', value=20, style=DARK_INPUT_STYLE)
                 ], title="VWAP Params", style=DARK_CARD_STYLE),
 
                 dbc.AccordionItem([
                     html.Label("Lookback", style={'font-size': '0.9rem'}),
-                    dcc.Input(id='mom-window', type='number', value=14, className="form-control form-control-sm", style=DARK_INPUT_STYLE)
+                    dcc.Input(id='mom-window', type='number', value=14, style=DARK_INPUT_STYLE)
                 ], title="Momentum Params", style=DARK_CARD_STYLE),
 
                 dbc.AccordionItem([
                     dbc.Row([
-                        dbc.Col([html.Label("EMA", style={'font-size': '0.9rem'}), dcc.Input(id='atr-ema-window', type='number', value=11, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                        dbc.Col([html.Label("ATR", style={'font-size': '0.9rem'}), dcc.Input(id='atr-window', type='number', value=14, className="form-control form-control-sm", style=DARK_INPUT_STYLE)]),
-                        dbc.Col([html.Label("Mult", style={'font-size': '0.9rem'}), dcc.Input(id='atr-mult', type='number', value=2.0, step=0.1, className="form-control form-control-sm", style=DARK_INPUT_STYLE)])
+                        dbc.Col([html.Label("EMA", style={'font-size': '0.9rem'}), dcc.Input(id='atr-ema-window', type='number', value=11, style=DARK_INPUT_STYLE)]),
+                        dbc.Col([html.Label("ATR", style={'font-size': '0.9rem'}), dcc.Input(id='atr-window', type='number', value=14, style=DARK_INPUT_STYLE)]),
+                        dbc.Col([html.Label("Mult", style={'font-size': '0.9rem'}), dcc.Input(id='atr-mult', type='number', value=2.0, step=0.1, style=DARK_INPUT_STYLE)])
                     ])
                 ], title="ATR Params", style=DARK_CARD_STYLE),
             ], start_collapsed=True, className="mb-3", flush=True, style={"background-color": "#082255"}), # Accordion container bg

@@ -168,7 +168,13 @@ def compute_candidate_correlation(
 	if len(series_map) < 2:
 		return None, None
 
-	df = pd.DataFrame(series_map).sort_index()
+	# Normalise all series indices to pd.Timestamp so mixed datetime.date /
+	# Timestamp indices (e.g. Bond-Curve vs Bond-Futures) don't crash sort_index.
+	normalised = {k: s.copy() for k, s in series_map.items()}
+	for k, s in normalised.items():
+		if not isinstance(s.index, pd.DatetimeIndex):
+			normalised[k] = s.set_axis(pd.to_datetime(s.index))
+	df = pd.DataFrame(normalised).sort_index()
 	# use differences for bp spreads
 	df_chg = df.diff().dropna(how="all")
 	if df_chg.shape[0] < min_obs:

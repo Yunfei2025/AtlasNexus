@@ -89,7 +89,7 @@ def register_backtest_rfbt_callbacks(app):
         return (hide, hide, hide, hide, flex)
 
     @app.callback(
-        Output('rfbt-status', 'children', allow_duplicate=True),
+        Output('rfbt-generate-status', 'children'),
         Input('rfbt-generate-btn', 'n_clicks'),
         prevent_initial_call=True,
     )
@@ -464,6 +464,7 @@ def register_backtest_rfbt_callbacks(app):
         factors = list(dict.fromkeys(
             store_data.get('ir', []) +
             store_data.get('fx', []) +
+            store_data.get('eq', []) +
             store_data.get('cmd', [])
         ))
         if not factors:
@@ -530,13 +531,42 @@ def register_backtest_rfbt_callbacks(app):
                 covered_factors = [f for f in factors if f in artifact_factors]
                 missing_factors = [f for f in factors if f not in artifact_factors]
 
+                # Warn if any selected factors are absent from the saved model
+                if missing_factors:
+                    missing_list = ', '.join(missing_factors)
+                    return (
+                        html.Div([
+                            html.Div("⚠️  Selected factors not found in the saved model:",
+                                     style={'fontWeight': 'bold', 'marginBottom': '6px',
+                                            'fontSize': '14px'}),
+                            html.Div(missing_list,
+                                     style={'fontFamily': 'monospace', 'marginBottom': '10px',
+                                            'color': '#f0c040', 'fontSize': '13px'}),
+                            html.Div(
+                                "These factors have not been trained yet. "
+                                "Please click Train Model to retrain and include them "
+                                "before running predictions.",
+                                style={'lineHeight': '1.5'},
+                            ),
+                        ], style={
+                            'color': THEME['warning'],
+                            'backgroundColor': 'rgba(240, 120, 40, 0.12)',
+                            'border': '1px solid rgba(240, 120, 40, 0.5)',
+                            'borderRadius': '6px',
+                            'padding': '16px',
+                            'margin': '12px 0',
+                        }),
+                        f"⚠️ {len(missing_factors)} factor(s) not in saved model — retrain required",
+                        dash.no_update,
+                    )
+
                 # Predict covered factors from saved artifact (fast, no retrain)
                 results = _build_results_from_saved_artifact(
                     latest_artifact, smooth_days, factors, factor_subset=covered_factors
                 )
                 active_artifact = latest_artifact  # passed to _build_top_drivers
 
-                # Train-and-merge any newly selected factors
+                # (branch kept for legacy compatibility — missing_factors is always empty here now)
                 if missing_factors:
                     results_new, merged_artifact = run_factor_backtest(
                         factors=missing_factors,

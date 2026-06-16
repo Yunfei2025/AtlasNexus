@@ -72,6 +72,9 @@ class RiskFactorLoader:
         
         # Commodity factors
         risk_factors = self._load_commodity_factors(risk_factors, macro_data)
+
+        # Equity index futures factors
+        risk_factors = self._load_equity_factors(risk_factors, macro_data)
         
         # Drop NaN values
         # risk_factors = risk_factors.dropna()
@@ -238,7 +241,8 @@ class RiskFactorLoader:
             print("Warning: commodity macro data unavailable; skipping commodity factors")
             return risk_factors
 
-        for commodity in ["AU.SHF", "AG.SHF", "AL.SHF", "CU.SHF", "ZN.SHF", "SC.INE"]:
+        for commodity in ["AU.SHF", "AG.SHF", "AL.SHF", "CU.SHF", "ZN.SHF", "SC.INE",
+                          "RB.SHF", "LC.GFE", "SA.CZC", "JM.DCE", "EC.INE"]:
             ticker = commodity.split(".")[0]
             if commodity in commodity_data.columns:
                 risk_factors[f"CMDL.{ticker}"] = commodity_data[commodity]
@@ -247,6 +251,23 @@ class RiskFactorLoader:
         
         return risk_factors
     
+    def _load_equity_factors(self, risk_factors: pd.DataFrame,
+                              macro_data: Dict) -> pd.DataFrame:
+        """Load equity index futures factors (EQDL.*) from macro commodity data."""
+        commodity_data = macro_data.get("commodity") if isinstance(macro_data, dict) else None
+        if not isinstance(commodity_data, pd.DataFrame) or commodity_data.empty:
+            print("Warning: commodity macro data unavailable; skipping equity factors")
+            return risk_factors
+
+        for equity in ["IF.CFE", "IC.CFE", "IH.CFE", "IM.CFE"]:
+            ticker = equity.split(".")[0]
+            if equity in commodity_data.columns:
+                risk_factors[f"EQDL.{ticker}"] = commodity_data[equity]
+            else:
+                print(f"Warning: equity column {equity} missing; skipping EQDL.{ticker}")
+
+        return risk_factors
+
     def clear_cache(self):
         """Clear cached risk factors."""
         self._risk_factors_cache = None

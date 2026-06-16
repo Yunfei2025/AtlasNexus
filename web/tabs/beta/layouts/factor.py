@@ -16,7 +16,8 @@ def build_multiasset_factor_layout():
         dcc.Store(id='factor-selection-store', storage_type='session', data={
             'ir': SELECTED_FACTOR_POOL['ir_factors'],
             'fx': SELECTED_FACTOR_POOL['fx_factors'],
-            'cmd': SELECTED_FACTOR_POOL['cmd_factors']
+            'cmd': SELECTED_FACTOR_POOL['cmd_factors'],
+            'eq': SELECTED_FACTOR_POOL['eq_factors'],
         }),
 
         # Factor Selection Panel at the top
@@ -126,7 +127,7 @@ def build_multiasset_factor_layout():
 
             # FX Factors
             html.Div([
-                html.H6("💱 FX", style={'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '14px'}),
+                html.H6("💱 Foreign Exchange (FX)", style={'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '14px'}),
                 dcc.Checklist(
                     id='factor-selection-fx',
                     options=[
@@ -143,24 +144,55 @@ def build_multiasset_factor_layout():
                 ),
             ], style={'marginBottom': '15px'}),
 
-            # Commodity Factors
+            # Equity Factors
             html.Div([
-                html.H6("🪙 Commodities (CMD)", style={'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '14px'}),
+                html.H6("📈 Equities (EQ)", style={'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '14px'}),
+                html.P("CSI equity index futures — price return factors",
+                       style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px', 'fontStyle': 'italic'}),
                 dcc.Checklist(
-                    id='factor-selection-cmd',
+                    id='factor-selection-eq',
                     options=[
-                        {'label': ' CMDL.AU (Gold)', 'value': 'CMDL.AU'},
-                        {'label': ' CMDL.AG (Silver)', 'value': 'CMDL.AG'},
-                        {'label': ' CMDL.AL (Aluminium)', 'value': 'CMDL.AL'},
-                        {'label': ' CMDL.CU (Copper)', 'value': 'CMDL.CU'},
-                        {'label': ' CMDL.ZN (Zinc)', 'value': 'CMDL.ZN'},
-                        {'label': ' CMDL.SC (Crude Oil)', 'value': 'CMDL.SC'},
+                        {'label': ' EQDL.IF (CSI 300)', 'value': 'EQDL.IF'},
+                        {'label': ' EQDL.IC (CSI 500)', 'value': 'EQDL.IC'},
+                        {'label': ' EQDL.IH (SSE 50)',  'value': 'EQDL.IH'},
+                        {'label': ' EQDL.IM (CSI 1000)', 'value': 'EQDL.IM'},
                     ],
-                    value=SELECTED_FACTOR_POOL['cmd_factors'],
+                    value=SELECTED_FACTOR_POOL['eq_factors'],
                     inline=True,
                     labelStyle={'color': THEME['text_main'], 'marginRight': '15px', 'fontSize': '12px'},
                     inputStyle={'marginRight': '5px'},
                     style={'marginBottom': '12px'}
+                ),
+            ], style={'marginBottom': '15px'}),
+
+            # Commodity Factors
+            html.Div([
+                html.H6("🪙 Commodities (CM)", style={'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '14px'}),
+                dcc.Checklist(
+                    id='factor-selection-cmd',
+                    options=[
+                        {'label': ' CMDL.AU (Gold)',        'value': 'CMDL.AU'},
+                        {'label': ' CMDL.AG (Silver)',      'value': 'CMDL.AG'},
+                        {'label': ' CMDL.AL (Aluminium)',   'value': 'CMDL.AL'},
+                        {'label': ' CMDL.CU (Copper)',      'value': 'CMDL.CU'},
+                        {'label': ' CMDL.ZN (Zinc)',        'value': 'CMDL.ZN'},
+                        {'label': ' CMDL.SC (Crude Oil)',   'value': 'CMDL.SC'},
+                        {'label': ' CMDL.RB (Rebar)',       'value': 'CMDL.RB'},
+                        {'label': ' CMDL.LC (Live Hog)',    'value': 'CMDL.LC'},
+                        {'label': ' CMDL.SA (Soda Ash)',    'value': 'CMDL.SA'},
+                        {'label': ' CMDL.JM (Coking Coal)', 'value': 'CMDL.JM'},
+                        {'label': ' CMDL.EC (Euro Gas)',    'value': 'CMDL.EC'},
+                    ],
+                    value=SELECTED_FACTOR_POOL['cmd_factors'],
+                    labelStyle={'color': THEME['text_main'], 'fontSize': '12px',
+                                'display': 'flex', 'alignItems': 'center'},
+                    inputStyle={'marginRight': '5px'},
+                    style={
+                        'display': 'grid',
+                        'gridTemplateColumns': 'repeat(4, 1fr)',
+                        'gap': '6px 0',
+                        'marginBottom': '12px',
+                    }
                 ),
             ], style={'marginBottom': '10px'}),
 
@@ -169,6 +201,30 @@ def build_multiasset_factor_layout():
             ]),
 
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px', 'border': f'1px solid {THEME["table_header"]}', 'marginBottom': '20px'}),
+
+        # ── Generate factor-rates.pkl ──────────────────────────────────────
+        html.Div([
+            html.H5("📊 Generate Factor Rates", style={'color': THEME['text_main'], 'marginBottom': '6px'}),
+            html.P(
+                "Build or refresh factor-rates.pkl from raw market data. "
+                "Run this first whenever new market data is available.",
+                style={'color': THEME['text_sub'], 'fontSize': '12px',
+                       'marginBottom': '12px', 'fontStyle': 'italic'},
+            ),
+            html.Div([
+                html.Button(
+                    "Generate factor-rates.pkl",
+                    id='rfbt-generate-btn', n_clicks=0,
+                    style={'backgroundColor': THEME['accent'], 'color': 'white',
+                           'padding': '7px 14px', 'border': 'none', 'borderRadius': '5px',
+                           'cursor': 'pointer', 'fontSize': '12px', 'fontWeight': 'bold',
+                           'marginRight': '8px'},
+                ),
+                html.Span(id='rfbt-generate-status',
+                          style={'color': THEME['text_sub'], 'fontSize': '12px'}),
+            ], style={'display': 'flex', 'alignItems': 'center'}),
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px',
+                  'border': f'1px solid {THEME["table_header"]}', 'marginBottom': '20px'}),
 
         # ── Train Model & Predict ─────────────────────────────────────────
         html.Div([
@@ -186,19 +242,22 @@ def build_multiasset_factor_layout():
                 dcc.Input(id='factor-fm-train', type='number', value=12, min=3,
                           style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
                                  'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
+                                 'backgroundColor': '#fff', 'color': '#000',
+                                 'MozAppearance': 'textfield', 'appearance': 'textfield'}),
                 html.Label("IC thr:", style={'fontWeight': 'bold', 'marginRight': '4px',
                                              'color': THEME['text_main'], 'fontSize': '12px'}),
                 dcc.Input(id='factor-fm-ic', type='number', value=0.05, step=0.01, min=0.01,
                           style={'width': '60px', 'marginRight': '10px', 'padding': '4px',
                                  'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
+                                 'backgroundColor': '#fff', 'color': '#000',
+                                 'MozAppearance': 'textfield', 'appearance': 'textfield'}),
                 html.Label("Top N:", style={'fontWeight': 'bold', 'marginRight': '4px',
                                             'color': THEME['text_main'], 'fontSize': '12px'}),
                 dcc.Input(id='factor-fm-topn', type='number', value=8, min=1,
                           style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
                                  'borderRadius': '4px', 'border': '1px solid #444',
-                                 'backgroundColor': '#fff', 'color': '#000'}),
+                                 'backgroundColor': '#fff', 'color': '#000',
+                                 'MozAppearance': 'textfield', 'appearance': 'textfield'}),
                     html.Button(
                       "Train Model", id='factor-train-btn', n_clicks=0,
                       title="Train model using data up to the first day of the current month. "

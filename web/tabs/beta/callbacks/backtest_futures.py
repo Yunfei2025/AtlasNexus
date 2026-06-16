@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dash import html
+from dash import html, dcc
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -87,11 +87,11 @@ def register_backtest_futures_callbacks(app):
 
     @app.callback(
         Output('bf-results-container', 'children'),
-        [Input('bf-run-button', 'n_clicks')],
+        [Input('bf-run-button', 'n_clicks'),
+         Input('bf-local-symbol', 'value')],
         [State('bf-data-source', 'value'),
          State('bf-trading-mode', 'value'),
          State('bf-wind-code', 'value'),
-         State('bf-local-symbol', 'value'),
          State('bf-date-range', 'start_date'),
          State('bf-date-range', 'end_date'),
          State('bf-timeframe', 'value'),
@@ -108,23 +108,24 @@ def register_backtest_futures_callbacks(app):
          State('bf-sar-af', 'value'),
          State('bf-sar-max-af', 'value')]
     )
-    def bf_update_dashboard(n_clicks, source, trading_mode, wind_code, local_symbol, start_date, end_date, tf, 
-                         selected_strategies,
-                         ma_s, ma_l, boll_w, boll_std, boll_exit, vwap_w, mom_w, atr_ema_w, atr_w,
-                         sar_af, sar_max_af):
-        if n_clicks == 0:
-            return html.Div('Please configure parameters and click "Start Backtest"', style={'text-align': 'center', 'marginTop': '50px', 'color': THEME['text_sub']})
+    def bf_update_dashboard(n_clicks, local_symbol, source, trading_mode, wind_code, start_date, end_date, tf,
+                            selected_strategies,
+                            ma_s, ma_l, boll_w, boll_std, boll_exit, vwap_w, mom_w, atr_ema_w, atr_w,
+                            sar_af, sar_max_af):
+        is_default_load = not n_clicks
+        # On default load: show price chart only; on button click: run strategies
+        run_strategies = not is_default_load
         
         if not FUTURES_AVAILABLE:
             return html.Div("Modules not loaded.", style={'color': THEME['danger']})
 
         selected_strategies = selected_strategies or []
         effective_tf = '1D' if trading_mode == 'daily' else tf
-        
+
         # Load Data
         df = None
         err_msg = None
-        
+
         try:
             if source == 'wind':
                 if not wind_code: return html.Div("Please enter Wind symbol", style={'color': THEME['danger']})
@@ -132,7 +133,7 @@ def register_backtest_futures_callbacks(app):
                 e_str = f"{end_date} 23:59:59"
                 df, err_msg = load_wind_data(wind_code, s_str, e_str)
             else:
-                if not local_symbol: return html.Div("Please enter symbol", style={'color': THEME['danger']})
+                if not local_symbol: return html.Div("Please select a symbol", style={'color': THEME['text_sub'], 'textAlign': 'center', 'marginTop': '50px'})
                 file_path = get_local_file_path(local_symbol, effective_tf)
                 if not file_path:
                     return html.Div("Unable to construct file path", style={'color': THEME['danger']})
@@ -161,27 +162,31 @@ def register_backtest_futures_callbacks(app):
             if df_resampled.empty:
                 return html.Div("Data is empty after resampling", style={'color': THEME['danger']})
                 
-            # Run strategies
+            # Run strategies (only on explicit button click, not on default load)
             results = {}
-            if 'MA' in selected_strategies:
-                results['MA'] = run_ma_strategy(df_resampled, ma_s, ma_l)
-            if 'DeMark' in selected_strategies:
-                results['DeMark'] = run_demark_strategy(df_resampled)
-            if 'Boll' in selected_strategies:
-                exit_at_ma = 'exit' in (boll_exit or [])
-                results['Boll'] = run_bollinger_strategy(df_resampled, boll_w, boll_std, exit_at_ma)
-            if 'VWAP' in selected_strategies:
-                results['VWAP'] = run_vwap_strategy(df_resampled, vwap_w)
-            if 'Mom' in selected_strategies:
-                results['Mom'] = run_intraday_momentum_strategy(df_resampled, mom_w)
-            if 'ATR' in selected_strategies:
-                results['ATR'] = run_atr_band_strategy(df_resampled, atr_ema_w, atr_w)
-            if 'SAR' in selected_strategies:
-                results['SAR'] = run_sar_strategy(df_resampled, sar_af, sar_max_af)
+            if run_strategies:
+                if 'MA' in selected_strategies:
+                    results['MA'] = run_ma_strategy(df_resampled, ma_s, ma_l)
+                if 'DeMark' in selected_strategies:
+                    results['DeMark'] = run_demark_strategy(df_resampled)
+                if 'Boll' in selected_strategies:
+                    exit_at_ma = 'exit' in (boll_exit or [])
+                    results['Boll'] = run_bollinger_strategy(df_resampled, boll_w, boll_std, exit_at_ma)
+                if 'VWAP' in selected_strategies:
+                    results['VWAP'] = run_vwap_strategy(df_resampled, vwap_w)
+                if 'Mom' in selected_strategies:
+                    results['Mom'] = run_intraday_momentum_strategy(df_resampled, mom_w)
+                if 'ATR' in selected_strategies:
+                    results['ATR'] = run_atr_band_strategy(df_resampled, atr_ema_w, atr_w)
+                if 'SAR' in selected_strategies:
+                    results['SAR'] = run_sar_strategy(df_resampled, sar_af, sar_max_af)
 
-            # Create Plotly Chart
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                                vertical_spacing=0.03, row_heights=[0.7, 0.3])
+            # Create Plotly Chart — 2 rows when strategies present, 1 row for default price view
+            if results:
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                    vertical_spacing=0.03, row_heights=[0.7, 0.3])
+            else:
+                fig = make_subplots(rows=1, cols=1)
 
             # Candlestick
             fig.add_trace(go.Candlestick(
@@ -223,17 +228,18 @@ def register_backtest_futures_callbacks(app):
                             marker=dict(symbol=symbol, color=color, size=10)
                         ), row=1, col=1)
             
-            # Strategy Equity Curves
+            # Strategy Equity Curves (only when strategies were run)
             for name, res in results.items():
                 fig.add_trace(go.Scatter(
-                    x=res.index, 
+                    x=res.index,
                     y=res['cumulative_returns'],
                     mode='lines', name=f'{name} Equity'
                 ), row=2, col=1)
 
+            chart_title = f"{local_symbol or wind_code} — Price" if is_default_load else "Backtest Results"
             fig.update_layout(
-                height=600, 
-                title="Backtest Results",
+                height=600,
+                title=chart_title,
                 template=THEME['chart_template'],
                 paper_bgcolor=THEME['bg_card'],
                 plot_bgcolor=THEME['bg_card'],

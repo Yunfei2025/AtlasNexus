@@ -43,17 +43,17 @@ echo.
 timeout /t 4 /nobreak >nul
 
 @REM -- 3. Cloudflare tunnel (this window) ------------------------
-@echo [3/3] Starting Cloudflare tunnel (atlasnexus ^> mayunfei.org)...
+@echo [3/3] Starting Cloudflare tunnel (anwin ^> anwin.mayunfei.org)...
 echo.
 echo   Local:   http://127.0.0.1:8080
-echo   Public:  https://mayunfei.org
+echo   Public:  https://anwin.mayunfei.org
 echo.
-echo Share https://mayunfei.org with your friends.
+echo Share https://anwin.mayunfei.org with your friends.
 echo Close this window to stop the tunnel (server window closes separately).
 echo ============================================================
 echo.
 
-cloudflared tunnel --config "%USERPROFILE%\.cloudflared\config.yml" run atlasnexus
+cloudflared tunnel --config "%USERPROFILE%\.cloudflared\config.yml" run anwin
 
 if errorlevel 1 (
     echo.

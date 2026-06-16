@@ -1440,6 +1440,68 @@ def register_risk_callbacks(app):
             else _no_data_div("No rate positions found for Key Term Exposure.")
         )
 
+        # ── Factor Risk Attribution table (from last Beta run, non-zero rows) ──
+        _fr_attr_div = html.Div()
+        _fr_attr_df = ALLOCATION_RESULTS.get('factor_risk')
+        if _fr_attr_df is not None and not _fr_attr_df.empty:
+            try:
+                _ra = _fr_attr_df.copy()
+                # Filter rows where Net Exposure is effectively zero
+                if 'Net Exposure' in _ra.columns:
+                    _ra = _ra[_ra['Net Exposure'].abs() >= 1e-8]
+                if not _ra.empty:
+                    n_rc = len(_ra)
+                    _ra['Target RC (%)'] = round(100.0 / n_rc, 1) if n_rc else 0.0
+                    _ra['Δ RC (%)'] = (_ra['Risk Contribution (%)'] - _ra['Target RC (%)']).round(1)
+                    _ra['Risk Contribution (%)'] = _ra['Risk Contribution (%)'].round(1)
+                    _ra['Volatility (% ann.)'] = (_ra['Volatility (% ann.)'] * 100).round(2)
+                    _ra['Net Exposure'] = _ra['Net Exposure'].round(4)
+                    _fr_attr_div = html.Div([
+                        html.H6("Factor Risk Attribution",
+                                style={'color': THEME['warning'], 'fontSize': '12px',
+                                       'marginBottom': '6px', 'marginTop': '0'}),
+                        html.Div("Beta book only  ·  Rows with zero net exposure hidden",
+                                 style={'color': THEME['text_sub'], 'fontSize': '10px',
+                                        'marginBottom': '6px', 'fontStyle': 'italic'}),
+                        dash_table.DataTable(
+                            data=_ra[[
+                                'Risk Factor', 'Volatility (% ann.)', 'Net Exposure',
+                                'Risk Contribution (%)', 'Target RC (%)', 'Δ RC (%)',
+                            ]].to_dict('records'),
+                            columns=[
+                                {'name': 'Factor',        'id': 'Risk Factor'},
+                                {'name': 'Vol % (ann.)',  'id': 'Volatility (% ann.)'},
+                                {'name': 'Net Exp.',      'id': 'Net Exposure'},
+                                {'name': 'RC %',          'id': 'Risk Contribution (%)'},
+                                {'name': 'Target RC %',   'id': 'Target RC (%)'},
+                                {'name': 'Δ RC %',        'id': 'Δ RC (%)'},
+                            ],
+                            style_cell={
+                                'textAlign': 'center', 'padding': '5px 8px',
+                                'fontFamily': 'monospace', 'fontSize': '11px',
+                                'backgroundColor': THEME['table_row_odd'],
+                                'color': THEME['text_main'], 'border': 'none',
+                            },
+                            style_header={
+                                'backgroundColor': THEME['table_header'],
+                                'color': THEME['text_main'], 'fontWeight': 'bold',
+                                'textAlign': 'center', 'border': 'none', 'fontSize': '11px',
+                            },
+                            style_data_conditional=[
+                                {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                                {'if': {'filter_query': '{Δ RC %} > 5',  'column_id': 'Δ RC %'},
+                                 'color': THEME.get('warning', '#f39c12')},
+                                {'if': {'filter_query': '{Δ RC %} < -5', 'column_id': 'Δ RC %'},
+                                 'color': THEME.get('warning', '#f39c12')},
+                            ],
+                            style_table={'overflowX': 'auto', 'maxWidth': '600px'},
+                        ),
+                    ], style={'backgroundColor': THEME['bg_card'], 'padding': '12px 14px',
+                              'borderRadius': '5px', 'border': f'1px solid {THEME["table_header"]}',
+                              'marginTop': '16px'})
+            except Exception:
+                pass
+
         # ── Assemble second panel: Factor Exposure + Key Term side-by-side ────
         exposure_panel = html.Div([
             html.Div([
@@ -1462,6 +1524,7 @@ def register_risk_callbacks(app):
                 ),
                 kt_table,
             ], style={'flex': '1', 'minWidth': '340px'}),
+            html.Div(_fr_attr_div, style={'flex': '1 1 100%'}),
         ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '16px', 'alignItems': 'flex-start'})
 
         n_beta  = len(beta_rows)

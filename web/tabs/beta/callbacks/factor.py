@@ -60,14 +60,28 @@ def register_factor_callbacks(app):
             ]
         elif asset_class == 'Commodities':
             options = [
-                {'label': 'Gold', 'value': 'AU'},
-                {'label': 'Aluminium', 'value': 'AL'},
-                {'label': 'Copper', 'value': 'CU'},
-                {'label': 'Crude Oil', 'value': 'SC'},
+                {'label': 'Gold',        'value': 'AU'},
+                {'label': 'Silver',      'value': 'AG'},
+                {'label': 'Aluminium',   'value': 'AL'},
+                {'label': 'Copper',      'value': 'CU'},
+                {'label': 'Zinc',        'value': 'ZN'},
+                {'label': 'Crude Oil',   'value': 'SC'},
+                {'label': 'Rebar',       'value': 'RB'},
+                {'label': 'Live Hog',    'value': 'LC'},
+                {'label': 'Soda Ash',    'value': 'SA'},
+                {'label': 'Coking Coal', 'value': 'JM'},
+                {'label': 'Containerized Freight Index',    'value': 'EC'},
+            ]
+        elif asset_class == 'Equities':
+            options = [
+                {'label': 'CSI 300 (IF)',  'value': 'IF'},
+                {'label': 'CSI 500 (IC)',  'value': 'IC'},
+                {'label': 'SSE 50 (IH)',   'value': 'IH'},
+                {'label': 'CSI 1000 (IM)', 'value': 'IM'},
             ]
         else:
             options = []
-        
+
         return options, None
 
     @app.callback(
@@ -98,6 +112,8 @@ def register_factor_callbacks(app):
             options = [{'label': f'Level (FXDL) - {region}', 'value': f'FXDL.{region}'}]
         elif asset_class == 'Commodities':
             options = [{'label': f'Level (CMDL) - {region}', 'value': f'CMDL.{region}'}]
+        elif asset_class == 'Equities':
+            options = [{'label': f'Level (EQDL) - {region}', 'value': f'EQDL.{region}'}]
         else:
             options = []
         
@@ -263,33 +279,37 @@ def register_factor_callbacks(app):
          Input('factor-selection-ir-jp', 'value'),
          Input('factor-selection-ir-uk', 'value'),
          Input('factor-selection-fx', 'value'),
+         Input('factor-selection-eq', 'value'),
          Input('factor-selection-cmd', 'value')],
         prevent_initial_call=True
     )
-    def update_factor_pool_count(ir_cn, ir_us, ir_eu, ir_jp, ir_uk, fx_factors, cmd_factors):
+    def update_factor_pool_count(ir_cn, ir_us, ir_eu, ir_jp, ir_uk, fx_factors, eq_factors, cmd_factors):
         # Merge all domicile IR selections into one list
         ir_factors = (ir_cn or []) + (ir_us or []) + (ir_eu or []) + (ir_jp or []) + (ir_uk or [])
         # Store selected factors in global state for cross-tab access
         SELECTED_FACTOR_POOL['ir_factors'] = ir_factors
         SELECTED_FACTOR_POOL['fx_factors'] = fx_factors or []
+        SELECTED_FACTOR_POOL['eq_factors'] = eq_factors or []
         SELECTED_FACTOR_POOL['cmd_factors'] = cmd_factors or []
         SELECTED_FACTOR_POOL['timestamp'] = datetime.now()
-        
+
         # Prepare data for store
         store_data = {
             'ir': ir_factors,
             'fx': fx_factors or [],
-            'cmd': cmd_factors or []
+            'eq': eq_factors or [],
+            'cmd': cmd_factors or [],
         }
-        
-        total = len(ir_factors) + len(fx_factors or []) + len(cmd_factors or [])
+
+        total = (len(ir_factors) + len(fx_factors or [])
+                 + len(eq_factors or []) + len(cmd_factors or []))
         if total == 0:
             message = "⚠️ No factors selected. Please select at least 2 factors for correlation analysis."
         elif total == 1:
             message = f"ℹ️ {total} factor selected. Need at least 2 for correlation analysis."
         else:
             message = f"✅ {total} factors selected in pool (shared with Backtest tab)"
-        
+
         return message, store_data
     
     # 3.6 Correlation Rank Callback
@@ -305,22 +325,25 @@ def register_factor_callbacks(app):
          State('factor-selection-ir-jp', 'value'),
          State('factor-selection-ir-uk', 'value'),
          State('factor-selection-fx', 'value'),
+         State('factor-selection-eq', 'value'),
          State('factor-selection-cmd', 'value')],
         prevent_initial_call=True
     )
     def update_correlation_ranks(n_clicks, period, top_pairs,
                                  ir_cn, ir_us, ir_eu, ir_jp, ir_uk,
-                                 fx_factors, cmd_factors):
+                                 fx_factors, eq_factors, cmd_factors):
         if not n_clicks:
             return html.Div(), []
-        
-        # Merge domicile IR selections and combine with FX/CMD
+
+        # Merge domicile IR selections and combine with FX/EQ/CMD
         ir_factors = (ir_cn or []) + (ir_us or []) + (ir_eu or []) + (ir_jp or []) + (ir_uk or [])
         selected_factors = []
         if ir_factors:
             selected_factors.extend(ir_factors)
         if fx_factors:
             selected_factors.extend(fx_factors)
+        if eq_factors:
+            selected_factors.extend(eq_factors)
         if cmd_factors:
             selected_factors.extend(cmd_factors)
         
@@ -453,7 +476,8 @@ def register_factor_callbacks(app):
                     'Rates': '#2c5e40',
                     'Spread': '#2c5e40',
                     'Commodities': '#b48b32',
-                    'FX': '#6b4b8a'
+                    'FX': '#6b4b8a',
+                    'Equities': '#1a5276',
                 }
                 
                 for a_type, assets_list in assets_by_type.items():

@@ -61,26 +61,54 @@ def load_raw_market_data():
     return fx_curves, cn_data, macro_data
 
 
+_COMMODITY_ASSETS = {
+    'Gold', 'Silver', 'Aluminium', 'Copper', 'Crude_Oil', 'Zinc',
+    'Rebar', 'Live_Hog', 'Soda_Ash', 'Coking_Coal', 'Containerized_Freight'
+}
+_EQUITY_ASSETS = {'IF', 'IC', 'IH', 'IM'}
+_COMMODITY_UNIVERSE = {
+    'Gold': 'Precious Metals', 'Silver': 'Precious Metals',
+    'Aluminium': 'Base Metals', 'Copper': 'Base Metals', 'Zinc': 'Base Metals',
+    'Crude_Oil': 'Energy', 'Containerized_Freight': 'Energy',
+    'Rebar': 'Ferrous Metals', 'Coking_Coal': 'Ferrous Metals',
+    'Live_Hog': 'Livestock',
+    'Soda_Ash': 'Chemicals',
+}
+_EQUITY_UNIVERSE = {
+    'IF': 'CSI 300', 'IC': 'CSI 500', 'IH': 'SSE 50', 'IM': 'CSI 1000',
+}
+
+
 def get_asset_type(asset_name):
     """Categorize asset by type."""
     if asset_name.startswith('HEDGE_'):
         return 'Hedge'
-    if asset_name in ['Gold', 'Silver', 'Aluminium', 'Copper', 'Crude_Oil']:
+    if asset_name in _COMMODITY_ASSETS:
         return 'Commodities'
-    elif asset_name in ['USDCNY', 'EURCNY', 'JPYCNY', 'GBPCNY']:
-        return 'FX'
-    elif any(x in asset_name for x in ['IRS', 'CDB', 'ICP']):
-        return 'Spread'
-    elif any(x in asset_name for x in ['US', 'EU', 'UK', 'JP', 'CN']):
-        return 'Rates'
-    else:
+    if asset_name in _EQUITY_ASSETS:
         return 'Equities'
+    if asset_name in ['USDCNY', 'EURCNY', 'JPYCNY', 'GBPCNY']:
+        return 'FX'
+    if any(x in asset_name for x in ['IRS', 'CDB', 'ICP']):
+        return 'Spread'
+    if any(x in asset_name for x in ['US', 'EU', 'UK', 'JP', 'CN']):
+        return 'Rates'
+    return 'Unknown'
 
 
 def get_universe(asset_name):
     """Get the universe/country for the asset."""
     if asset_name.startswith('HEDGE_'):
         return 'IRS Swap' if 'IRS' in asset_name else 'CGB Treasury'
+    # Equities — exact match before any substring checks
+    if asset_name in _EQUITY_UNIVERSE:
+        return _EQUITY_UNIVERSE[asset_name]
+    # Commodities — exact match before substring checks
+    if asset_name in _COMMODITY_UNIVERSE:
+        return _COMMODITY_UNIVERSE[asset_name]
+    # FX assets — exact match before substring checks
+    if asset_name in ('USDCNY', 'EURCNY', 'GBPCNY', 'JPYCNY'):
+        return 'FX Universe'
     # Spread assets — must check before 'CN' substring to avoid misclassification
     if 'IRS' in asset_name:
         return 'Interest Rate Swap'
@@ -98,30 +126,14 @@ def get_universe(asset_name):
         return 'Japan Gov Bond'
     elif 'CN' in asset_name:
         return 'China Gov Bond'
-    elif asset_name == 'Gold':
-        return 'AU'
-    elif asset_name == 'Silver':
-        return 'AG'
-    elif asset_name == 'Aluminium':
-        return 'AL'
-    elif asset_name == 'Copper':
-        return 'CU'
-    elif asset_name == 'Crude_Oil':
-        return 'SC'
-    elif asset_name == 'USDCNY':
-        return 'USD'
-    elif asset_name == 'EURCNY':
-        return 'EUR'
-    elif asset_name == 'GBPCNY':
-        return 'GBP'
-    elif asset_name == 'JPYCNY':
-        return 'JPY'
     else:
         return 'N/A'
 
 
 def get_sector(asset_name):
     """Get the sector/tenor for the asset."""
+    if asset_name in _COMMODITY_ASSETS or asset_name in _EQUITY_ASSETS:
+        return 'N/A'
     for tenor in ['30Y', '20Y', '10Y', '5Y', '2Y', '1Y']:  # longest first to avoid partial matches
         if tenor in asset_name:
             return tenor
@@ -142,11 +154,31 @@ def get_asset_yield_series(asset_name, market_data):
     if asset_type == 'Commodities':
         ticker_map = {
             'Gold': 'AU.SHF',
+            'Silver': 'AG.SHF',
             'Aluminium': 'AL.SHF',
             'Copper': 'CU.SHF',
-            'Crude_Oil': 'SC.INE'
+            'Zinc': 'ZN.SHF',
+            'Crude_Oil': 'SC.INE',
+            'Rebar': 'RB.SHF',
+            'Live_Hog': 'LC.GFE',
+            'Soda_Ash': 'SA.CZC',
+            'Coking_Coal': 'JM.DCE',
+            'Containerized_Freight': 'EC.INE',
         }
         ticker = ticker_map.get(asset_name)
+        commodity_data = _get_macro_frame(macro_data, "commodity")
+        if ticker and ticker in commodity_data.columns:
+            return commodity_data[ticker], 0, None, False
+        return None, 0, None, False
+
+    elif asset_type == 'Equities':
+        eq_ticker_map = {
+            'IF': 'IF.CFE',
+            'IC': 'IC.CFE',
+            'IH': 'IH.CFE',
+            'IM': 'IM.CFE',
+        }
+        ticker = eq_ticker_map.get(asset_name)
         commodity_data = _get_macro_frame(macro_data, "commodity")
         if ticker and ticker in commodity_data.columns:
             return commodity_data[ticker], 0, None, False

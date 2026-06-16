@@ -44,13 +44,14 @@ def build_multiasset_portfolio_layout():
                            style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px', 'textAlign': 'center', 'padding': '15px'})]
         pool_count_text = "(0)"
     else:
+        _POOL_COLORS = {
+            'Commodities': '#b48b32',
+            'Equities': '#1a5276',
+            'FX': '#6b4b8a',
+        }
         pool_display = []
         for asset in initial_pool:
-            # Using simple styles for pool items, relying on container for bg
-            if asset['type'] == 'Commodities':
-                bg_col = '#b48b32' # Darker gold
-            else:
-                bg_col = '#2c5e40' # Darker green
+            bg_col = _POOL_COLORS.get(asset['type'], '#2c5e40')
 
             pool_display.append(
                 html.Div([
@@ -79,7 +80,8 @@ def build_multiasset_portfolio_layout():
                         id='capital-input',
                         type='number',
                         value=initial_capital,
-                        style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
+                        style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000',
+                               'MozAppearance': 'textfield', 'appearance': 'textfield'}
                     ),
                     dcc.Dropdown(
                         id='capital-unit',
@@ -99,7 +101,8 @@ def build_multiasset_portfolio_layout():
                         type='number',
                         value=5,
                         min=0.1, max=50, step=0.1,
-                        style={'width': '60px', 'marginRight': '4px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000'}
+                        style={'width': '60px', 'marginRight': '4px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000',
+                               'MozAppearance': 'textfield', 'appearance': 'textfield'}
                     ),
                     html.Span(
                         id='max-dv01-display',
@@ -378,7 +381,8 @@ def build_multiasset_portfolio_layout():
                                 style={'width': '72px', 'padding': '4px 6px',
                                        'background': THEME['bg_input'], 'color': THEME['text_main'],
                                        'border': f'1px solid {THEME["table_header"]}',
-                                       'borderRadius': '4px', 'fontSize': '12px'},
+                                       'borderRadius': '4px', 'fontSize': '12px',
+                                       'MozAppearance': 'textfield', 'appearance': 'textfield'},
                             ),
                         ], style={'textAlign': 'center'})
                         for cty, default in [('CN', 800), ('US', 640), ('DE', 750),

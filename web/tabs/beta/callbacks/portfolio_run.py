@@ -170,9 +170,9 @@ def register_portfolio_run_callbacks(app):
         [Input('asset-pool-store', 'data'),
          Input('rp-budget-store', 'data'),
          Input('factor-signals-snapshot-store', 'data'),
-         Input('allocation-mode', 'value')],
-        [State('capital-input', 'value'),
-         State('capital-unit', 'value')],
+         Input('allocation-mode', 'value'),
+         Input('capital-input', 'value'),
+         Input('capital-unit', 'value')],
     )
     def update_risk_budget_inputs(asset_pool, rp_budgets, snapshot_data, allocation_mode, capital, capital_unit):
         if not asset_pool:
@@ -182,7 +182,10 @@ def register_portfolio_run_callbacks(app):
         
         # Mappings based on MultiAsset logic
         rates_map = {'CN': 'CN', 'US': 'US', 'EU': 'DE', 'UK': 'UK', 'JP': 'JP'}
-        comm_map = {'Gold': 'AU', 'Aluminium': 'AL', 'Copper': 'CU', 'Crude Oil': 'SC', 'Crude_Oil': 'SC'}
+        comm_map = {
+            'Gold': 'AU', 'Silver': 'AG', 'Aluminium': 'AL',
+            'Copper': 'CU', 'Zinc': 'ZN', 'Crude_Oil': 'SC', 'Crude Oil': 'SC',
+        }
 
         for asset in asset_pool:
             a_type = asset.get('type')
@@ -215,10 +218,15 @@ def register_portfolio_run_callbacks(app):
 
             elif a_type == 'FX':
                  asset_name = asset.get('name', '')
-                 # Map asset names to FX factors: USDCNY → FXDL.USDCNY
                  fx_map = {'USDCNY': 'USDCNY', 'EURCNY': 'EURCNY', 'JPYCNY': 'JPYCNY', 'GBPCNY': 'GBPCNY'}
                  if asset_name in fx_map:
                      active_factors.add(f"FXDL.{fx_map[asset_name]}")
+
+            elif a_type == 'Equities':
+                 asset_name = asset.get('name', '')
+                 eq_map = {'IF': 'IF', 'IC': 'IC', 'IH': 'IH', 'IM': 'IM'}
+                 if asset_name in eq_map:
+                     active_factors.add(f"EQDL.{eq_map[asset_name]}")
 
         if not active_factors:
              return [html.Div("No risk factors identified.", style={'color': THEME['text_sub'], 'fontSize': '12px'})]
@@ -673,58 +681,7 @@ def register_portfolio_run_callbacks(app):
                 style_table={'overflowX': 'auto'}
             )
 
-            # ── RC attribution panel (Item 21): realised RC vs equal-target ──────
-            # Build a compact factor risk-contribution table so the user can verify
-            # that the optimizer actually achieved the intended risk budget.
-            _rc_panel = html.Div()
-            if isinstance(factor_risk, pd.DataFrame) and not factor_risk.empty:
-                _rc_display = factor_risk.copy()
-                # Equal-risk target for comparison (ERC = 1/n per factor)
-                n_factors_rc = len(_rc_display)
-                _rc_display['Target RC (%)'] = round(100.0 / n_factors_rc, 1) if n_factors_rc else 0.0
-                _rc_display['Δ RC (%)'] = (_rc_display['Risk Contribution (%)'] - _rc_display['Target RC (%)']).round(1)
-                _rc_display['Risk Contribution (%)'] = _rc_display['Risk Contribution (%)'].round(1)
-                _rc_display['Volatility (% ann.)'] = (_rc_display['Volatility (% ann.)'] * 100).round(2)
-                _rc_display['Net Exposure'] = _rc_display['Net Exposure'].round(4)
-                _rc_panel = html.Div([
-                    html.Div("Factor Risk Attribution", style={
-                        'color': THEME['text_sub'], 'fontSize': '12px',
-                        'fontWeight': 'bold', 'marginTop': '18px', 'marginBottom': '6px',
-                    }),
-                    dash_table.DataTable(
-                        data=_rc_display[[
-                            'Risk Factor', 'Volatility (% ann.)', 'Net Exposure',
-                            'Risk Contribution (%)', 'Target RC (%)', 'Δ RC (%)',
-                        ]].to_dict('records'),
-                        columns=[
-                            {'name': 'Factor',       'id': 'Risk Factor'},
-                            {'name': 'Vol % (ann.)', 'id': 'Volatility (% ann.)'},
-                            {'name': 'Net Exp.',     'id': 'Net Exposure'},
-                            {'name': 'RC %',         'id': 'Risk Contribution (%)'},
-                            {'name': 'Target RC %',  'id': 'Target RC (%)'},
-                            {'name': 'Δ RC %',       'id': 'Δ RC (%)'},
-                        ],
-                        style_cell={
-                            'textAlign': 'center', 'padding': '5px 8px',
-                            'fontFamily': 'monospace', 'fontSize': '11px',
-                            'backgroundColor': THEME['table_row_odd'],
-                            'color': THEME['text_main'], 'border': 'none',
-                        },
-                        style_header={
-                            'backgroundColor': THEME['table_header'],
-                            'color': THEME['text_main'], 'fontWeight': 'bold',
-                            'textAlign': 'center', 'border': 'none', 'fontSize': '11px',
-                        },
-                        style_data_conditional=[
-                            {'if': {'filter_query': '{Δ RC %} > 5',  'column_id': 'Δ RC %'}, 'color': THEME.get('warning', '#f39c12')},
-                            {'if': {'filter_query': '{Δ RC %} < -5', 'column_id': 'Δ RC %'}, 'color': THEME.get('warning', '#f39c12')},
-                            {'if': {'row_index': 'even'}, 'backgroundColor': THEME['table_row_even']},
-                        ],
-                        style_table={'overflowX': 'auto'},
-                    ),
-                ], style={'backgroundColor': THEME.get('bg_card', THEME['bg_input']), 'padding': '10px', 'borderRadius': '4px'})
-
-            portfolio_table = html.Div([positions_table, _rc_panel])
+            portfolio_table = html.Div([positions_table])
             
             _dv01_info = f"  ·  DV01 {total_dv01:.2f} MM / max {total_capital_cny * float(max_duration or 5) / 1e10:.2f} MM{dv01_cap_msg}"
             _status_children = [html.Span(f"✓ Analysis completed!{_dv01_info}", style={'color': THEME['success'], 'fontWeight': 'bold'})]
@@ -791,6 +748,7 @@ def register_portfolio_run_callbacks(app):
                 SELECTED_FACTOR_POOL.get('ir_factors', [])
                 + SELECTED_FACTOR_POOL.get('sp_factors', [])
                 + SELECTED_FACTOR_POOL.get('fx_factors', [])
+                + SELECTED_FACTOR_POOL.get('eq_factors', [])
                 + SELECTED_FACTOR_POOL.get('cmd_factors', [])
             )
             _run_meta = {

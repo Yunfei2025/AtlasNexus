@@ -144,13 +144,14 @@ def register_portfolio_pool_callbacks(app):
             display = [html.Div("No assets selected.", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'padding': '10px'})]
             count_text = "(0)"
         else:
+            _POOL_COLORS = {
+                'Commodities': '#b48b32',
+                'Equities': '#1a5276',
+                'FX': '#6b4b8a',
+            }
             display = []
             for asset in current_pool:
-                if asset['type'] == 'Commodities':
-                   bg_col = '#b48b32'
-                else:
-                   bg_col = '#2c5e40'
-                
+                bg_col = _POOL_COLORS.get(asset['type'], '#2c5e40')
                 display.append(html.Div([
                     html.Span(f"• {asset['name']}", style={'fontWeight': 'bold', 'color': 'white'}),
                     html.Span(f" ({asset.get('universe','')} - {asset.get('sector','')})", style={'color': '#ddd', 'fontSize': '12px'}),
@@ -203,9 +204,14 @@ def register_portfolio_pool_callbacks(app):
             return (f"✗ Error saving: {str(e)}",) + no_change
 
         # Build display items (same style as manage_asset_pool)
+        _POOL_COLORS = {
+            'Commodities': '#b48b32',
+            'Equities': '#1a5276',
+            'FX': '#6b4b8a',
+        }
         display = []
         for asset in new_pool:
-            bg_col = '#b48b32' if asset.get('type') == 'Commodities' else '#2c5e40'
+            bg_col = _POOL_COLORS.get(asset.get('type'), '#2c5e40')
             display.append(html.Div([
                 html.Span(f"• {asset['name']}", style={'fontWeight': 'bold', 'color': 'white'}),
                 html.Span(

@@ -520,65 +520,195 @@ def register_candidate_callbacks(app) -> None:
         style_trend = (no_regime | uncertain_mask) & style_s.isin({'carry', 'trend', 'trendfollowing'})
         uncertain_unmapped = uncertain_mask & ~style_mr & ~style_trend
 
-        df_mr    = df_display[mr_by_regime | style_mr | uncertain_unmapped][_mr_avail   ].copy()
-        df_trend = df_display[trend_by_regime | style_trend][_trend_avail].copy()
+        df_mr         = df_display[mr_by_regime | style_mr][_mr_avail].copy()
+        df_trend      = df_display[trend_by_regime | style_trend][_trend_avail].copy()
+        df_uncertain  = df_display[uncertain_unmapped][_mr_avail].copy()
 
         regime_counts  = regime_s.value_counts(dropna=False)
         regime_summary = ', '.join([f"{k}: {int(v)}" for k, v in regime_counts.items()])
         style_summary_div = html.Div(f"Regime: {regime_summary}", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'})
 
-        _table_style_table  = {'overflowX': 'auto', 'maxHeight': '300px', 'overflowY': 'auto'}
-        _table_style_header = {'backgroundColor': THEME['table_header'], 'color': THEME['text_main'], 'fontWeight': 'bold', 'textAlign': 'left'}
-        _table_style_cell   = {'backgroundColor': THEME['bg_card'], 'color': THEME['text_main'], 'textAlign': 'left', 'padding': '8px', 'fontSize': '12px'}
-        _table_style_data_conditional = [
-            {'if': {'filter_query': '{direction} = "BUY"'},  'backgroundColor': 'rgba(0, 204, 150, 0.15)'},
-            {'if': {'filter_query': '{direction} = "SELL"'}, 'backgroundColor': 'rgba(239, 85, 59, 0.15)'},
-            {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['table_row_odd']},
-            {'if': {'filter_query': '{regime} = "trending"',      'column_id': 'regime'}, 'color': '#FF9800', 'fontWeight': 'bold'},
-            {'if': {'filter_query': '{regime} = "mean_reverting"', 'column_id': 'regime'}, 'color': '#4CAF50', 'fontWeight': 'bold'},
-            {'if': {'filter_query': '{regime} = "uncertain"',      'column_id': 'regime'}, 'color': '#9E9E9E'},
-        ]
-        _col_labels = {
-            'spread_type': 'type', 'ttm_display': 'ttm',
-            'carry_roll': 'carry+roll(3m,bp)', 'breakeven_3m': 'breakeven(3m,bp)',
-            'stop_loss': 'stop(bp)', 'profit_target': 'target(bp)',
-            'spread': 'spread(bp)', 'mean': 'mean(bp)', 'vol': 'vol(bp)',
-            'regime': 'regime', 'trend_state': 'trend', 'regime_confidence': 'reg.conf',
-            'seasonal_edge_bps': 'seas.edge(bp)',
-        }
+        def _signal_cards(df_rows, max_z=4.0):
+            """Render a compact signal-card list for one regime bucket."""
+            cards = []
+            for row in df_rows:
+                inst      = str(row.get('ID', '') or '')
+                stype     = str(row.get('spread_type', '') or '')
+                direction = str(row.get('direction', '') or '').upper()
+                z_raw     = row.get('Zscore', None)
+                try:
+                    z = float(z_raw)
+                except (TypeError, ValueError):
+                    z = 0.0
 
-        def _col_defs(df):
-            return [{'name': _col_labels.get(c, c), 'id': c} for c in df.columns]
+                # Direction pill
+                if direction == 'BUY':
+                    pill = html.Span('BUY', style={
+                        'backgroundColor': THEME['success'], 'color': '#000',
+                        'fontWeight': 'bold', 'fontSize': '10px', 'padding': '2px 8px',
+                        'borderRadius': '3px', 'minWidth': '36px', 'textAlign': 'center',
+                        'display': 'inline-block',
+                    })
+                elif direction == 'SELL':
+                    pill = html.Span('SELL', style={
+                        'backgroundColor': THEME['danger'], 'color': '#fff',
+                        'fontWeight': 'bold', 'fontSize': '10px', 'padding': '2px 8px',
+                        'borderRadius': '3px', 'minWidth': '36px', 'textAlign': 'center',
+                        'display': 'inline-block',
+                    })
+                else:
+                    pill = html.Span('—', style={'color': THEME['text_sub'], 'fontSize': '10px', 'minWidth': '36px', 'display': 'inline-block'})
 
-        mr_body = html.Div("No mean-reversion candidates under current filters.", style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '8px'})
-        if not df_mr.empty:
-            mr_body = dash_table.DataTable(
-                id='alpha-candidates-table-mr',
-                columns=_col_defs(df_mr),
-                data=df_mr.head(20).to_dict('records'),
-                row_selectable='multi', selected_rows=[],
-                style_table=_table_style_table, style_header=_table_style_header,
-                style_cell=_table_style_cell, style_data_conditional=_table_style_data_conditional,
-                page_size=20, sort_action='native',
-            )
+                # Spread type badge
+                type_badge = html.Span(stype, style={
+                    'backgroundColor': THEME['table_header'], 'color': THEME['text_sub'],
+                    'fontSize': '9px', 'padding': '1px 5px', 'borderRadius': '2px',
+                    'marginLeft': '6px', 'verticalAlign': 'middle',
+                })
 
-        table_mr = html.Div([html.H6(f"Mean-Reversion Candidates (max 20) - {len(df_mr)} found", style={'color': THEME['text_main'], 'marginBottom': '8px'}), style_summary_div, mr_body], style={'marginBottom': '20px'})
+                # Z-score bar: red = negative (spread below mean), green = positive (above mean)
+                z_clamped = max(-max_z, min(max_z, z))
+                bar_pct   = abs(z_clamped) / max_z * 50.0   # 0–50% of half-bar
+                bar_color = THEME['danger'] if z < 0 else THEME['success']
+                if z < 0:
+                    bar_style = {
+                        'position': 'absolute', 'right': '50%',
+                        'width': f'{bar_pct:.1f}%', 'height': '100%',
+                        'backgroundColor': bar_color, 'opacity': '0.7',
+                        'borderRadius': '2px 0 0 2px',
+                    }
+                else:
+                    bar_style = {
+                        'position': 'absolute', 'left': '50%',
+                        'width': f'{bar_pct:.1f}%', 'height': '100%',
+                        'backgroundColor': bar_color, 'opacity': '0.7',
+                        'borderRadius': '0 2px 2px 0',
+                    }
 
-        trend_body = html.Div("No momentum candidates under current filters.", style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '8px'})
-        if not df_trend.empty:
-            trend_body = dash_table.DataTable(
-                id='alpha-candidates-table-trend',
-                columns=_col_defs(df_trend),
-                data=df_trend.head(20).to_dict('records'),
-                row_selectable='multi', selected_rows=[],
-                style_table=_table_style_table, style_header=_table_style_header,
-                style_cell=_table_style_cell, style_data_conditional=_table_style_data_conditional,
-                page_size=20, sort_action='native',
-            )
+                z_bar = html.Div(style={'position': 'relative', 'height': '6px',
+                                        'backgroundColor': THEME['bg_main'],
+                                        'borderRadius': '3px', 'overflow': 'hidden',
+                                        'width': '72px', 'display': 'inline-block',
+                                        'verticalAlign': 'middle', 'marginLeft': '6px'},
+                                 children=[html.Div(style=bar_style)])
+                z_label = html.Span(f'{z:+.1f}σ', style={
+                    'fontSize': '10px', 'color': bar_color,
+                    'fontWeight': 'bold', 'marginLeft': '4px', 'verticalAlign': 'middle',
+                })
 
-        table_trend = html.Div([html.H6(f"Momentum Candidates (max 20) - {len(df_trend)} found", style={'color': THEME['text_main'], 'marginBottom': '8px'}), style_summary_div, trend_body], style={'marginBottom': '20px'})
+                # Seasonal indicator: shown when edge is statistically meaningful.
+                # seasonal_edge_bps > 0  → seasonal tailwind (matches trade direction)
+                # seasonal_edge_bps < 0  → seasonal headwind (opposes trade direction)
+                # Threshold: |edge| > 0 means p_value < 0.10 already filtered in scoring;
+                # we further distinguish strong (|edge| ≥ 5bp) vs weak (< 5bp).
+                seas_tag = None
+                seas_raw = row.get('seasonal_edge_bps', None)
+                try:
+                    seas_bp = float(seas_raw) if seas_raw is not None else 0.0
+                except (TypeError, ValueError):
+                    seas_bp = 0.0
+                if abs(seas_bp) >= 1.0:  # only show if seasonal data exists for this instrument
+                    if seas_bp >= 5.0:
+                        seas_icon, seas_color, seas_tip = '▲S', THEME['success'], f'seasonal tailwind +{seas_bp:.0f}bp'
+                    elif seas_bp > 0:
+                        seas_icon, seas_color, seas_tip = '△S', THEME['success'], f'seasonal tailwind +{seas_bp:.0f}bp'
+                    elif seas_bp <= -5.0:
+                        seas_icon, seas_color, seas_tip = '▼S', THEME['danger'], f'seasonal headwind {seas_bp:.0f}bp'
+                    else:
+                        seas_icon, seas_color, seas_tip = '▽S', THEME['danger'], f'seasonal headwind {seas_bp:.0f}bp'
+                    seas_tag = html.Span(seas_icon, title=seas_tip, style={
+                        'fontSize': '9px', 'color': seas_color, 'fontWeight': 'bold',
+                        'marginLeft': '6px', 'verticalAlign': 'middle',
+                        'cursor': 'default', 'letterSpacing': '-0.5px',
+                    })
 
-        table_out = html.Div([table_mr, table_trend])
+                right_cluster = [z_bar, z_label]
+                if seas_tag is not None:
+                    right_cluster.append(seas_tag)
+
+                card = html.Div([
+                    # Left: pill + ID + type badge, all fixed together
+                    html.Div([
+                        pill,
+                        html.Span(inst, style={
+                            'color': THEME['text_main'], 'fontSize': '12px',
+                            'fontWeight': '500', 'marginLeft': '10px',
+                        }),
+                        type_badge,
+                    ], style={
+                        'display': 'flex', 'alignItems': 'center',
+                        'flex': '1', 'minWidth': '0', 'overflow': 'hidden',
+                    }),
+                    # Right: z-bar + label + seasonal tag, pinned to right edge
+                    html.Div(right_cluster, style={
+                        'display': 'flex', 'alignItems': 'center',
+                        'flexShrink': '0', 'marginLeft': '8px',
+                    }),
+                ], style={
+                    'display': 'flex', 'alignItems': 'center',
+                    'padding': '5px 10px', 'borderRadius': '4px',
+                    'backgroundColor': THEME['bg_card'],
+                    'borderLeft': f'3px solid {THEME["success"] if direction == "BUY" else (THEME["danger"] if direction == "SELL" else THEME["table_header"])}',
+                    'marginBottom': '4px',
+                })
+                cards.append(card)
+            return cards
+
+        def _three_col_grid(cards):
+            return html.Div(cards, style={
+                'display': 'grid',
+                'gridTemplateColumns': 'repeat(3, 1fr)',
+                'gap': '4px',
+            })
+
+        _empty_style = {'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '6px 8px', 'fontStyle': 'italic'}
+
+        def _section_header(label, count, accent):
+            return html.Div([
+                html.Span('▌', style={'color': accent, 'fontSize': '14px', 'marginRight': '6px', 'verticalAlign': 'middle'}),
+                html.Span(label, style={'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': '700', 'verticalAlign': 'middle'}),
+                html.Span(f'  {count} signals', style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '6px', 'verticalAlign': 'middle'}),
+            ], style={'marginBottom': '8px', 'marginTop': '0', 'paddingBottom': '5px',
+                      'borderBottom': f'1px solid {accent}33'})
+
+        mr_rows        = df_mr.head(20).to_dict('records')        if not df_mr.empty        else []
+        trend_rows     = df_trend.head(20).to_dict('records')     if not df_trend.empty     else []
+        uncertain_rows = df_uncertain.head(20).to_dict('records') if not df_uncertain.empty else []
+
+        mr_cards        = _signal_cards(mr_rows)
+        trend_cards     = _signal_cards(trend_rows)
+        uncertain_cards = _signal_cards(uncertain_rows)
+
+        sections = []
+        if mr_cards:
+            sections.append(html.Div([
+                _section_header('Mean-Reversion', len(mr_rows), THEME['success']),
+                _three_col_grid(mr_cards),
+            ], style={'marginBottom': '18px'}))
+
+        if trend_cards:
+            sections.append(html.Div([
+                _section_header('Momentum / Carry', len(trend_rows), '#FF9800'),
+                _three_col_grid(trend_cards),
+            ], style={'marginBottom': '18px'} if uncertain_cards else {}))
+
+        if uncertain_cards:
+            sections.append(html.Div([
+                _section_header('Uncertain', len(uncertain_rows), THEME['text_sub']),
+                html.Div(
+                    "Regime unresolved — check spread chart before trading.",
+                    style={**_empty_style, 'marginBottom': '6px', 'fontStyle': 'italic'},
+                ),
+                _three_col_grid(uncertain_cards),
+            ]))
+
+        if not sections:
+            sections = [html.Div("No candidates found.", style=_empty_style)]
+
+        table_out = html.Div([
+            style_summary_div,
+            html.Div(sections, style={'maxHeight': '500px', 'overflowY': 'auto', 'paddingRight': '4px'}),
+        ])
         status = f"Found {len(df_all)} candidates at {scanned_time}"
         # candidate_data was already captured above (before carry_roll display flip)
 
@@ -1138,126 +1268,3 @@ def register_candidate_callbacks(app) -> None:
             )
 
         return table_div, corr_div
-
-    # -------------------------------------------------------------------------
-    # SEASONAL SCREENER: cross-instrument monthly consistency table
-    # -------------------------------------------------------------------------
-    @app.callback(
-        Output('seasonal-screener-results', 'children'),
-        Input('seasonal-screener-stype',      'value'),
-        Input('seasonal-screener-month',       'value'),
-        Input('seasonal-screener-min-years',   'value'),
-        Input('seasonal-screener-p-thresh',    'value'),
-    )
-    def update_seasonal_screener(stype, month, min_years, p_thresh):
-        """Render the cross-instrument seasonal consistency table."""
-        import pickle as _pkl
-        import datetime as _dt
-
-        if not stype or not month:
-            return html.Div()
-
-        month     = int(month)
-        min_years = int(min_years or 3)
-        p_thresh  = float(p_thresh or 0.10)
-        month_key = f'm{month}'
-        _MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-        month_name = _MONTH_ABBR[month - 1]
-
-        # Load seasonal-spds.pkl (with mtime cache reusing the module-level dict pattern)
-        seas_path = _get_input_dir() / 'seasonal-spds.pkl'
-        seasonal_data = None
-        try:
-            if seas_path.exists():
-                with open(seas_path, 'rb') as _f:
-                    seasonal_data = _pkl.load(_f)
-        except Exception as exc:
-            return html.Div(f"Error loading seasonal-spds.pkl: {exc}", style={'color': THEME['warning']})
-
-        if seasonal_data is None:
-            return html.Div(
-                "seasonal-spds.pkl not found. Run the EOD StatGenerator to generate it.",
-                style={'color': THEME['text_sub'], 'fontSize': '12px'},
-            )
-
-        sdf = seasonal_data.get(stype)
-        if not isinstance(sdf, pd.DataFrame) or sdf.empty:
-            return html.Div(
-                f"No seasonal data for {stype}. Run EOD StatGenerator.",
-                style={'color': THEME['text_sub'], 'fontSize': '12px'},
-            )
-
-        if month_key not in sdf.columns:
-            return html.Div(
-                f"Month {month_name} not found in seasonal data for {stype}.",
-                style={'color': THEME['text_sub'], 'fontSize': '12px'},
-            )
-
-        # Build display rows — filter by min_years and p_thresh
-        _arrow   = {'up': '↑', 'down': '↓', 'neutral': '—'}
-        _dir_col = {'up': THEME['success'], 'down': THEME['danger'], 'neutral': THEME['text_sub']}
-        rows = []
-        for inst in sdf.index:
-            cell = sdf.at[inst, month_key]
-            if not isinstance(cell, dict):
-                continue
-            n_yrs   = int(cell.get('n_years', 0))
-            p_val   = float(cell.get('p_value', 1.0))
-            cons    = float(cell.get('consistency', 0.5))
-            avg_chg = float(cell.get('avg_chg_bp', 0.0))
-            direction = str(cell.get('direction', 'neutral'))
-            if n_yrs < min_years:
-                continue
-            if p_val >= p_thresh:
-                continue
-            rows.append({
-                'instrument': inst,
-                'direction':  direction,
-                'cons_pct':   cons * 100.0,
-                'avg_chg':    avg_chg,
-                'n_years':    n_yrs,
-                'p_value':    p_val,
-            })
-
-        if not rows:
-            return html.Div(
-                f"No instruments pass filters for {stype} / {month_name} "
-                f"(min {min_years}yr, p < {p_thresh}).",
-                style={'color': THEME['text_sub'], 'fontSize': '12px'},
-            )
-
-        rows.sort(key=lambda r: (-r['cons_pct'], r['p_value']))
-
-        header = html.Div([
-            html.Span("Instrument",  style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'130px'}),
-            html.Span("Dir",         style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'28px'}),
-            html.Span("Cons%",       style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'46px'}),
-            html.Span("AvgΔbp",      style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'52px'}),
-            html.Span("Obs",         style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'30px'}),
-            html.Span("p-val",       style={'fontSize':'10px','color':THEME['text_sub'],'minWidth':'42px'}),
-        ], style={'display':'flex','gap':'8px','padding':'3px 8px',
-                  'borderBottom':'1px solid #1a3a7a','marginBottom':'2px'})
-
-        data_rows = []
-        for r in rows:
-            sig = '**' if r['p_value'] < 0.05 else ('*' if r['p_value'] < 0.10 else '')
-            dc  = _dir_col[r['direction']]
-            data_rows.append(html.Div([
-                html.Span(r['instrument'],                  style={'fontSize':'11px','color':THEME['text_main'],'minWidth':'130px','overflow':'hidden','textOverflow':'ellipsis'}),
-                html.Span(_arrow[r['direction']],           style={'fontSize':'11px','color':dc,'minWidth':'28px','fontWeight':'bold'}),
-                html.Span(f"{r['cons_pct']:.0f}%{sig}",   style={'fontSize':'11px','color':THEME['text_main'],'minWidth':'46px'}),
-                html.Span(f"{r['avg_chg']:+.1f}",          style={'fontSize':'11px','color': THEME['success'] if r['avg_chg'] > 0 else THEME['danger'],'minWidth':'52px'}),
-                html.Span(f"n={r['n_years']}",             style={'fontSize':'11px','color':THEME['text_sub'],'minWidth':'30px'}),
-                html.Span(f"{r['p_value']:.3f}",           style={'fontSize':'11px','color':THEME['text_sub'],'minWidth':'42px'}),
-            ], style={'display':'flex','gap':'8px','padding':'2px 8px',
-                      'borderRadius':'3px','backgroundColor':'transparent'}))
-
-        note = html.Div(
-            f"Showing {len(rows)} of {len(sdf)} instruments for {stype} / {month_name}. "
-            "* p<0.10  ** p<0.05 (one-sided binomial; no FDR correction).",
-            style={'fontSize':'9px','color':THEME['text_sub'],'marginTop':'6px','padding':'0 8px'},
-        )
-
-        return html.Div([header] + data_rows + [note],
-                        style={'background': THEME['bg_main'], 'borderRadius': '4px',
-                               'padding': '6px 0', 'maxHeight': '340px', 'overflowY': 'auto'})

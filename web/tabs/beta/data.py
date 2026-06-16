@@ -120,6 +120,7 @@ SELECTED_FACTOR_POOL = {
     'sp_factors': [],
     'fx_factors': ['FXDL.USDCNY'],
     'cmd_factors': ['CMDL.AU', 'CMDL.AL'],  # Gold + Aluminium
+    'eq_factors': [],
     'timestamp': None
 }
 
@@ -312,24 +313,53 @@ FACTOR_TO_ASSET_MAP = {
         {'name': 'GBPCNY', 'type': 'FX', 'universe': 'GBP/CNY', 'sector': 'Spot'},
     ],
 
-    # ==================== Commodities ====================
+    # ==================== Commodities (CM) ====================
     'CMDL.AU': [
-        {'name': 'Gold', 'type': 'Commodities', 'universe': 'Gold', 'sector': 'N/A'},
+        {'name': 'Gold', 'type': 'Commodities', 'universe': 'Precious Metals', 'sector': 'N/A'},
     ],
     'CMDL.AG': [
-        {'name': 'Silver', 'type': 'Commodities', 'universe': 'Silver', 'sector': 'N/A'},
+        {'name': 'Silver', 'type': 'Commodities', 'universe': 'Precious Metals', 'sector': 'N/A'},
     ],
     'CMDL.AL': [
-        {'name': 'Aluminium', 'type': 'Commodities', 'universe': 'Aluminium', 'sector': 'N/A'},
+        {'name': 'Aluminium', 'type': 'Commodities', 'universe': 'Base Metals', 'sector': 'N/A'},
     ],
     'CMDL.CU': [
-        {'name': 'Copper', 'type': 'Commodities', 'universe': 'Copper', 'sector': 'N/A'},
+        {'name': 'Copper', 'type': 'Commodities', 'universe': 'Base Metals', 'sector': 'N/A'},
     ],
     'CMDL.ZN': [
-        {'name': 'Zinc', 'type': 'Commodities', 'universe': 'Zinc', 'sector': 'N/A'},
+        {'name': 'Zinc', 'type': 'Commodities', 'universe': 'Base Metals', 'sector': 'N/A'},
     ],
     'CMDL.SC': [
-        {'name': 'Crude_Oil', 'type': 'Commodities', 'universe': 'Crude Oil', 'sector': 'N/A'},
+        {'name': 'Crude_Oil', 'type': 'Commodities', 'universe': 'Energy', 'sector': 'N/A'},
+    ],
+    'CMDL.RB': [
+        {'name': 'Rebar', 'type': 'Commodities', 'universe': 'Ferrous Metals', 'sector': 'N/A'},
+    ],
+    'CMDL.LC': [
+        {'name': 'Live_Hog', 'type': 'Commodities', 'universe': 'Livestock', 'sector': 'N/A'},
+    ],
+    'CMDL.SA': [
+        {'name': 'Soda_Ash', 'type': 'Commodities', 'universe': 'Chemicals', 'sector': 'N/A'},
+    ],
+    'CMDL.JM': [
+        {'name': 'Coking_Coal', 'type': 'Commodities', 'universe': 'Ferrous Metals', 'sector': 'N/A'},
+    ],
+    'CMDL.EC': [
+        {'name': 'European_Gas', 'type': 'Commodities', 'universe': 'Energy', 'sector': 'N/A'},
+    ],
+
+    # ==================== Equities (EQ) ====================
+    'EQDL.IF': [
+        {'name': 'IF', 'type': 'Equities', 'universe': 'CSI 300', 'sector': 'N/A'},
+    ],
+    'EQDL.IC': [
+        {'name': 'IC', 'type': 'Equities', 'universe': 'CSI 500', 'sector': 'N/A'},
+    ],
+    'EQDL.IH': [
+        {'name': 'IH', 'type': 'Equities', 'universe': 'SSE 50', 'sector': 'N/A'},
+    ],
+    'EQDL.IM': [
+        {'name': 'IM', 'type': 'Equities', 'universe': 'CSI 1000', 'sector': 'N/A'},
     ],
 }
 
