@@ -162,7 +162,7 @@ def main(asof: datetime.date | None = None) -> str:
     if asof is None:
         asof = datetime.datetime.today().date()
     
-    force = os.environ.get("FI_FORCE_RERUN", "0").strip().lower() in {"1", "true", "yes"}
+    force = True #os.environ.get("FI_FORCE_RERUN", "0").strip().lower() in {"1", "true", "yes"}
     try:
         if not force and _generation_completed_today(asof):
             print(

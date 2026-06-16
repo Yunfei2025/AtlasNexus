@@ -7,9 +7,13 @@ import pathlib
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 from typing import Optional
+import time
+import traceback
 
 # local libraries
 PATH = pathlib.Path(__file__).parent.parent.parent
+if str(PATH) not in sys.path:
+    sys.path.insert(0, str(PATH))
 
 from settings.paths import DIR_INPUT, DIR_DATA
 from settings.fixed_income import InstitutionConfig
@@ -92,12 +96,27 @@ class TrendGenerator:
     def build_positions(self):
         positions = self._empty_positions()
         pos_dir = self.dir_data.joinpath('positions')
+        print(f"INFO: TrendGenerator: positions directory: {pos_dir}", flush=True)
         if not pos_dir.exists():
+            print("INFO: TrendGenerator: positions directory does not exist, returning empty positions", flush=True)
             return positions
-
-        for fname in os.listdir(pos_dir):
+        try:
+            files = os.listdir(pos_dir)
+        except Exception as e:
+            print(f"ERROR: listing positions directory {pos_dir}: {e}", flush=True)
+            print(traceback.format_exc(), flush=True)
+            return positions
+        print(f"INFO: TrendGenerator: found {len(files)} files in positions dir", flush=True)
+        for fname in files:
+            # Skip files matching the legacy "现券成交分机构统计" series
+            if fname.startswith('现券成交分机构统计'):
+                print(f"INFO: TrendGenerator: skipping legacy positions file: {fname}", flush=True)
+                continue
+            print(f"INFO: TrendGenerator: processing positions file: {fname}", flush=True)
+            file_start = time.perf_counter()
             as_of = self._parse_date_from_filename(fname)
             if not as_of:
+                print(f"INFO: TrendGenerator: skipping file (date parse failed): {fname}", flush=True)
                 continue
             try:
                 positions_df = pd.read_excel(
@@ -106,7 +125,9 @@ class TrendGenerator:
                     skiprows=3,
                     index_col=(0, 1),
                 )
-            except Exception:
+            except Exception as e:
+                print(f"ERROR: TrendGenerator: failed to read Excel {fname}: {e}", flush=True)
+                print(traceback.format_exc(), flush=True)
                 continue
             for inst in InstitutionConfig.INSTITUTION_TYPES:
                 for b in InstitutionConfig.BOND_TYPES:
@@ -116,7 +137,11 @@ class TrendGenerator:
                         pos_.columns = [f"{b}:{t}" for t in InstitutionConfig.TERM_BUCKETS]
                         positions[inst].loc[as_of, pos_.columns] = pos_.values
                     except Exception:
+                        print(f"WARNING: TrendGenerator: failed to process inst={inst} bond={b} in file {fname}", flush=True)
+                        print(traceback.format_exc(), flush=True)
                         continue
+            file_elapsed = time.perf_counter() - file_start
+            print(f"INFO: TrendGenerator: finished {fname} in {file_elapsed:.3f}s", flush=True)
 
         for inst in positions:
             positions[inst].sort_index(inplace=True)
@@ -146,11 +171,16 @@ class TrendGenerator:
     
     def generate_and_save_trends(self):
         """Generate and save trend analysis."""
+        print('INFO: TrendGenerator: building trend figures...', flush=True)
         figures = self.generate_trend_figures()
+        print(f'INFO: TrendGenerator: trend figures built ({len(figures)})', flush=True)
+
+        print('INFO: TrendGenerator: saving trend figures...', flush=True)
         self.save_trend_figures(figures)
-        positions = self.build_positions()
-        self.save_positions(positions)
-        print('\nFinish analysing trends at：', datetime.datetime.now().strftime("%H:%M:%S"))
+
+        # positions = self.build_positions()
+        #self.save_positions(positions)
+        print('\nFinish analysing trends at:', datetime.datetime.now().strftime("%H:%M:%S"), flush=True)
 
 
 if __name__ == '__main__':

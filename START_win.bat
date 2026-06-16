@@ -1,14 +1,14 @@
-@echo off
-REM AtlasNexus — Windows Launcher
-REM Starts the Dash server and Cloudflare tunnel in one window.
+﻿@echo off
+@REM AtlasNexus - Windows Launcher
+@REM Starts the Dash server and Cloudflare tunnel in one window.
 
-echo ============================================================
-echo   AtlasNexus Daily Console
-echo ============================================================
-echo.
+@echo ============================================================
+@echo   AtlasNexus Daily Console
+@echo ============================================================
+@echo.
 
-REM ── 1. Conda environment ────────────────────────────────────────
-echo [1/3] Activating conda environment 'prod'...
+@REM -- 1. Conda environment -------------------------------------
+@echo [1/3] Activating conda environment 'prod'...
 
 set CONDA_BAT=
 if exist "%USERPROFILE%\anaconda3\condabin\conda.bat"   set CONDA_BAT=%USERPROFILE%\anaconda3\condabin\conda.bat
@@ -31,19 +31,19 @@ if errorlevel 1 (
 echo       OK
 echo.
 
-REM ── 2. Dash server (separate window, auto-closes on exit) ────────
-echo [2/3] Starting Dash server on port 8080...
+@REM -- 2. Dash server (separate window, auto-closes on exit) ------
+@echo [2/3] Starting Dash server on port 8080...
 set FI_SHOW_LOG_WINDOW=0
 cd /d "%~dp0"
 start "AtlasNexus Server" /min cmd /c "python main.py daily-web & pause"
 echo       Started in background window.
 echo.
 
-REM Give the server a moment to bind the port
+@REM Give the server a moment to bind the port
 timeout /t 4 /nobreak >nul
 
-REM ── 3. Cloudflare tunnel (this window) ──────────────────────────
-echo [3/3] Starting Cloudflare tunnel (atlasnexus ^> mayunfei.org)...
+@REM -- 3. Cloudflare tunnel (this window) ------------------------
+@echo [3/3] Starting Cloudflare tunnel (atlasnexus ^> mayunfei.org)...
 echo.
 echo   Local:   http://127.0.0.1:8080
 echo   Public:  https://mayunfei.org
@@ -53,7 +53,7 @@ echo Close this window to stop the tunnel (server window closes separately).
 echo ============================================================
 echo.
 
-cloudflared tunnel --config "%USERPROFILE%\.cloudflared\config.yml" run atlasnexus-win
+cloudflared tunnel --config "%USERPROFILE%\.cloudflared\config.yml" run atlasnexus
 
 if errorlevel 1 (
     echo.
