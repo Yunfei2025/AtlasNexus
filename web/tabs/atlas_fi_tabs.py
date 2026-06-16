@@ -1045,6 +1045,7 @@ def register_callbacks(app) -> None:
                 stats=stats,
                 title=f"{ticker} — seasonal year overlay",
                 raw_series=series,
+                spread_type=stype,
             )
         except Exception as e:
             print(f"[seasonal] figure error: {e}")

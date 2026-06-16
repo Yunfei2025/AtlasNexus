@@ -242,6 +242,7 @@ def build_seasonal_overlay_figure(
     stats: Optional[pd.DataFrame],
     title: str = "",
     raw_series: Optional[pd.Series] = None,
+    spread_type: Optional[str] = None,
 ) -> "go.Figure":
     """Build a Plotly year-overlay spread chart.
 
@@ -260,6 +261,10 @@ def build_seasonal_overlay_figure(
         computed as the smoothed average of all *completed* years so it reflects
         a true historical seasonal tendency rather than a day-by-day cross-section
         of whichever years happen to share a given trading day.
+    spread_type :
+        Spread type identifier (e.g. "TBondCurve", "FuturesSwap"). When the
+        type is a China fixed-income product, known macro seasonal windows
+        (CNY liquidity injection and quarter-end repo squeezes) are annotated.
 
     Returns
     -------
@@ -380,6 +385,40 @@ def build_seasonal_overlay_figure(
     )
 
     fig = go.Figure(data=traces, layout=layout)
+
+    # China macro seasonal windows
+    # Applied for all China bond / swap / futures spread types.
+    # Two well-documented patterns:
+    #   CNY window  (Jan–Feb): PBOC injects liquidity heavily before/after
+    #       Chinese New Year → rates fall, spreads typically tighten → green.
+    #   Quarter-end squeezes (Jun, Sep, Dec): banks hoard reserves for MPA
+    #       reporting → short-rate spike, spreads typically widen → red.
+    _CHINA_STYPES = {
+        "TBondCurve", "TBondSwap",
+        "CBondCurve", "CBondSwap",
+        "SwapSpread",
+        "FuturesSwap", "NetBasis", "TermBasis",
+    }
+    if spread_type in _CHINA_STYPES:
+        _MACRO_BANDS = [
+            # (month_start_1based, month_end_1based_inclusive, fill_color, label, label_color)
+            (1, 2,  "rgba(0,204,150,0.07)",  "CNY liquidity",     "#00cc96"),
+            (6, 6,  "rgba(239,85,59,0.07)",  "Q2-end squeeze",    "#ef553b"),
+            (9, 9,  "rgba(239,85,59,0.07)",  "Q3-end squeeze",    "#ef553b"),
+            (12, 12, "rgba(239,85,59,0.07)", "Y-end squeeze",     "#ef553b"),
+        ]
+        for m_start, m_end, fill, label, lcolor in _MACRO_BANDS:
+            x0 = _MONTH_START_DOY[m_start - 1]
+            x1 = _MONTH_START_DOY[m_end] if m_end < 12 else 367
+            fig.add_vrect(
+                x0=x0, x1=x1,
+                fillcolor=fill,
+                line_width=0,
+                annotation_text=label,
+                annotation_position="top left",
+                annotation=dict(font=dict(size=9, color=lcolor)),
+                layer="below",
+            )
 
     # Highlight the selected calendar month with a vertical band
     if highlight_month and 1 <= highlight_month <= 12:
