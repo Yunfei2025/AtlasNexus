@@ -64,6 +64,16 @@ def _upsert_snapshot(new_df: pd.DataFrame, parquet_path: str, id_cols: list[str]
         kept = existing.copy()
 
     merged = pd.concat([kept, new_df], ignore_index=True)
+
+    # After concat, numeric columns may become object dtype due to type
+    # mismatches between the existing parquet and the new batch (e.g. Duration
+    # stored as string in an old file vs float in the new run).  Cast them back
+    # so pyarrow can serialise without ArrowTypeError.
+    _NUMERIC_COLS = ('Duration', 'Capital (CNY)', 'DV01 (MM CNY)', 'Weight (%)')
+    for _c in _NUMERIC_COLS:
+        if _c in merged.columns:
+            merged[_c] = pd.to_numeric(merged[_c], errors='coerce')
+
     merged.to_parquet(parquet_path, index=False)
     return merged
 

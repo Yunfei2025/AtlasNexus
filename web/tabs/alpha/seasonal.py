@@ -180,11 +180,68 @@ def monthly_seasonal_stats(
     return df
 
 
+def _yearly_seasonal_mean(s: pd.Series) -> pd.Series:
+    """Compute a smooth historical-mean seasonal path using completed years only.
+
+    For each day-of-year (1..366) we take the average *re-based* level across all
+    completed calendar years in *s*.  A year is "completed" if it is strictly
+    before the current calendar year.  Within each completed year the series is
+    re-based to its own first available observation (matching seasonal_pivot logic),
+    then we average across years at each day-of-year.
+
+    The result is smoothed with a 7-day centred rolling window so the mean line
+    reflects a broad seasonal tendency rather than individual-day noise.
+    """
+    s = _coerce_series(s).dropna()
+    if s.empty:
+        return pd.Series(dtype=float)
+
+    current_year = datetime.date.today().year
+    yearly_rebased: dict[int, pd.Series] = {}
+    for yr in s.index.year.unique():
+        if yr >= current_year:
+            continue
+        yr_data = s[s.index.year == yr]
+        if yr_data.empty:
+            continue
+        base = yr_data.iloc[0]
+        yr_data = yr_data - base
+        doy = yr_data.index.day_of_year
+        yearly_rebased[yr] = yr_data.groupby(doy).last()
+
+    if not yearly_rebased:
+        return pd.Series(dtype=float)
+
+    frame = pd.DataFrame(yearly_rebased)
+    mean_raw = frame.mean(axis=1)
+    # 7-day centred rolling average to smooth out noise
+    mean_smooth = mean_raw.rolling(window=7, center=True, min_periods=3).mean()
+    mean_smooth.index = mean_smooth.index.astype(int)
+    return mean_smooth.sort_index()
+
+
+# Colorful palette for year lines (avoids grey).
+# Cycles if more years than colours.
+_YEAR_COLORS = [
+    "#4e9de3",  # blue
+    "#e06c3a",  # orange
+    "#3aad6e",  # green
+    "#c45cb5",  # purple
+    "#d4b84a",  # gold
+    "#e05c5c",  # red
+    "#40bcd4",  # cyan
+    "#9b7fe8",  # lavender
+    "#6abf69",  # light green
+    "#e87fad",  # pink
+]
+
+
 def build_seasonal_overlay_figure(
     pivot: pd.DataFrame,
     highlight_month: Optional[int],
     stats: Optional[pd.DataFrame],
     title: str = "",
+    raw_series: Optional[pd.Series] = None,
 ) -> "go.Figure":
     """Build a Plotly year-overlay spread chart.
 
@@ -198,6 +255,11 @@ def build_seasonal_overlay_figure(
         Output of :func:`monthly_seasonal_stats` (used for shading direction colour).
     title :
         Figure title string.
+    raw_series :
+        Original (un-pivoted) spread series. When provided the "Mean" line is
+        computed as the smoothed average of all *completed* years so it reflects
+        a true historical seasonal tendency rather than a day-by-day cross-section
+        of whichever years happen to share a given trading day.
 
     Returns
     -------
@@ -220,14 +282,12 @@ def build_seasonal_overlay_figure(
 
     traces = []
 
-    # Older years: faded grey, progressively lighter
     for i, yr in enumerate(years):
         col = pivot[yr].dropna()
         if col.empty:
             continue
 
         is_current = (yr == current_year)
-        age_frac = i / max(n_years - 1, 1)  # 0 = oldest, 1 = newest
 
         if is_current:
             color = THEME["accent"]
@@ -235,11 +295,13 @@ def build_seasonal_overlay_figure(
             opacity = 1.0
             dash = "solid"
         else:
-            # Fade from dark grey (oldest) to lighter grey (most recent past year)
-            grey_val = int(80 + age_frac * 80)  # 80 → 160
-            color = f"rgb({grey_val},{grey_val},{grey_val})"
-            width = 1.0
-            opacity = 0.55 + age_frac * 0.3
+            # Assign a distinct colour from the palette; vary opacity slightly
+            # so older years are subtler without becoming invisible.
+            palette_idx = i % len(_YEAR_COLORS)
+            color = _YEAR_COLORS[palette_idx]
+            age_frac = i / max(n_years - 1, 1)  # 0=oldest, 1=newest-past
+            width = 1.2
+            opacity = 0.45 + age_frac * 0.45  # 0.45 → 0.90
             dash = "solid"
 
         traces.append(go.Scatter(
@@ -252,19 +314,25 @@ def build_seasonal_overlay_figure(
             hovertemplate=f"<b>{yr}</b><br>Day-of-year: %{{x}}<br>Δ: %{{y:.2f}}<extra></extra>",
         ))
 
-    # Cross-year mean ± 1σ band
-    common_doys = pivot.dropna(how="all").index
-    if len(years) >= 3 and not common_doys.empty:
-        mean_s = pivot.loc[common_doys].mean(axis=1)
-        std_s  = pivot.loc[common_doys].std(axis=1)
-        upper  = mean_s + std_s
-        lower  = mean_s - std_s
-        band_x = (
-            common_doys.tolist() + common_doys[::-1].tolist()
-        )
-        band_y = (
-            upper.values.tolist() + lower.values[::-1].tolist()
-        )
+    # Historical mean (smoothed over completed years) ± 1σ band
+    past_years = [yr for yr in years if yr < current_year]
+    if len(past_years) >= 2:
+        if raw_series is not None and not raw_series.dropna().empty:
+            mean_s = _yearly_seasonal_mean(raw_series)
+        else:
+            past_pivot = pivot[[yr for yr in pivot.columns if yr < current_year]]
+            mean_raw = past_pivot.mean(axis=1)
+            mean_s = mean_raw.rolling(window=7, center=True, min_periods=3).mean()
+            mean_s.index = mean_s.index.astype(int)
+
+        # ±1σ band from the past-year pivot (day-by-day std, unsmoothed)
+        past_pivot_std = pivot[[yr for yr in pivot.columns if yr < current_year]]
+        std_s = past_pivot_std.std(axis=1)
+        upper = mean_s + std_s
+        lower = mean_s - std_s
+        common_doys = mean_s.dropna().index
+        band_x = common_doys.tolist() + common_doys[::-1].tolist()
+        band_y = upper.reindex(common_doys).values.tolist() + lower.reindex(common_doys).iloc[::-1].values.tolist()
         traces.append(go.Scatter(
             x=band_x, y=band_y,
             fill="toself",
@@ -276,11 +344,11 @@ def build_seasonal_overlay_figure(
         ))
         traces.append(go.Scatter(
             x=common_doys.tolist(),
-            y=mean_s.values.tolist(),
+            y=mean_s.reindex(common_doys).values.tolist(),
             mode="lines",
-            name="Mean",
-            line=dict(color="rgba(52,152,219,0.45)", width=1.5, dash="dot"),
-            hovertemplate="Mean<br>Day-of-year: %{x}<br>Δ: %{y:.2f}<extra></extra>",
+            name="Hist. Mean",
+            line=dict(color="rgba(52,152,219,0.80)", width=2.0, dash="dash"),
+            hovertemplate="Hist. Mean<br>Day-of-year: %{x}<br>Δ: %{y:.2f}<extra></extra>",
         ))
 
     layout = go.Layout(

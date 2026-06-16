@@ -63,7 +63,8 @@ class FactorRiskParityOptimizer:
                           total_capital: float = 1.0,
                           hedge_asset_names: Optional[list] = None,
                           neutral_asset_names: Optional[list] = None,
-                          use_vol_sqrt_budgets: bool = False) -> Tuple[pd.Series, pd.Series]:
+                          use_vol_sqrt_budgets: bool = False,
+                          use_dv01_shape: bool = True) -> Tuple[pd.Series, pd.Series]:
         """
         Calculate optimal weights for a given rebalance date.
 
@@ -74,9 +75,14 @@ class FactorRiskParityOptimizer:
             total_capital: Total capital for absolute risk budget calculation
             hedge_asset_names: Optional list of asset names that are allowed to
                 take short positions (bounds [-0.3, 0.3] instead of [0, 1]).
-            use_vol_sqrt_budgets: When True, derive vol^0.5 budgets from the
-                computed factor vols and pass them as risk budgets.  This avoids
-                the two-call pattern (first call to get vols, second to optimise).
+            use_vol_sqrt_budgets: Kept for API compatibility. IR √vol ratio
+                constraints are now always applied when risk_budgets is None,
+                so this flag has no additional effect.
+            use_dv01_shape: When True (default), intra-group bond weights are
+                fixed to inverse-duration ratios via equality constraints so
+                every bond contributes equal DV01.  Set False in backtest mode
+                so that time-varying EWMA covariance drives bond allocation
+                within each country group, producing visible monthly rebalancing.
 
         Returns:
             Tuple of (weights Series, factor volatilities Series)
@@ -101,21 +107,202 @@ class FactorRiskParityOptimizer:
         factor_cov = compute_ewma_factor_covariance(factor_window, ewma_lambda=self.ewma_lambda)
         self._factor_cov = factor_cov
 
-        if use_vol_sqrt_budgets:
-            from multiasset.budget import derive_vol_sqrt_budgets
-            risk_budgets, _ = derive_vol_sqrt_budgets(
-                list(factor_vols.index), factor_vols.to_dict()
-            )
+        # use_vol_sqrt_budgets: IR √vol ratio constraints are now injected inside
+        # _optimize_weights whenever risk_budgets is None, so no pre-derivation needed.
+        # The flag is kept for API compatibility but no longer overrides risk_budgets.
 
-        weights = self._optimize_weights(
-            factor_vols, factor_cov=factor_cov,
-            risk_budgets=risk_budgets, total_capital=total_capital,
-            hedge_asset_names=hedge_asset_names,
-            neutral_asset_names=neutral_asset_names,
-        )
+        if use_dv01_shape and risk_budgets is None:
+            weights = self._two_stage_weights(
+                factor_vols, factor_cov=factor_cov,
+                total_capital=total_capital,
+                hedge_asset_names=hedge_asset_names,
+            )
+        else:
+            weights = self._optimize_weights(
+                factor_vols, factor_cov=factor_cov,
+                risk_budgets=risk_budgets, total_capital=total_capital,
+                hedge_asset_names=hedge_asset_names,
+                neutral_asset_names=neutral_asset_names,
+                use_dv01_shape=use_dv01_shape,
+            )
         self._weights = weights
 
         return weights, factor_vols
+
+    def _two_stage_weights(self,
+                           factor_vols: pd.Series,
+                           factor_cov: Optional[pd.DataFrame] = None,
+                           total_capital: float = 1.0,
+                           hedge_asset_names: Optional[list] = None) -> pd.Series:
+        """
+        True two-stage allocation:
+
+        Stage 1 — Factor-level risk parity (ERC) across all factors using
+                   rolling EWMA factor covariance.  Produces a capital budget
+                   per factor (e.g. IRDL.CN gets X%, CMDL.AU gets Y%).
+
+        Stage 2 — Within each IR factor group (IRDL.XX, IRSL.XX, IRCV.XX),
+                   distribute the factor's capital across the tenors it drives
+                   proportional to 1/duration (= equal DV01 per tenor).
+                   Non-IR assets (commodities, FX, single-tenor bonds) receive
+                   their stage-1 budget directly.
+        """
+        exposure_matrix, asset_names, factor_names = self._build_exposure_matrix(factor_vols)
+        if exposure_matrix.empty:
+            n = len(self.portfolio.assets)
+            return pd.Series(1.0 / n, index=list(self.portfolio.assets.keys()))
+
+        B = exposure_matrix.values          # (n_assets, n_factors)
+        n_assets = len(asset_names)
+        n_factors = len(factor_names)
+
+        # ── Stage 1: ERC at factor level ─────────────────────────────────────
+        # Factor covariance C_f (n_factors × n_factors)
+        use_full_cov = factor_cov is not None and not factor_cov.empty
+        sigma_f = np.array([factor_vols.get(f, 0.0) for f in factor_names])
+        if use_full_cov:
+            C_f = np.array([
+                [factor_cov.loc[fi, fj]
+                 if fi in factor_cov.index and fj in factor_cov.columns
+                 else (sigma_f[ki] ** 2 if ki == kj else 0.0)
+                 for kj, fj in enumerate(factor_names)]
+                for ki, fi in enumerate(factor_names)
+            ], dtype=float)
+        else:
+            C_f = np.diag(sigma_f ** 2)
+
+        C_f = (C_f + C_f.T) / 2 + 1e-10 * np.eye(n_factors)
+
+        # ERC in factor space: minimize sum_k (e_k (C_f e)_k - 1/n)^2
+        # where e = factor weight vector (fraction of total risk budget per factor)
+        def _factor_port_var(e):
+            return float(e @ C_f @ e)
+
+        def _factor_rc(e):
+            return e * (C_f @ e) / max(np.sqrt(_factor_port_var(e)), 1e-12)
+
+        def _erc_objective(e):
+            rc = _factor_rc(e)
+            return float(np.sum((rc - rc.mean()) ** 2))
+
+        e0 = np.ones(n_factors) / n_factors
+        res = minimize(
+            _erc_objective, e0,
+            method='SLSQP',
+            bounds=[(0.0, 1.0)] * n_factors,
+            constraints=[{'type': 'eq', 'fun': lambda e: e.sum() - 1.0}],
+            options={'maxiter': 500, 'ftol': 1e-10},
+        )
+        if not res.success:
+            import warnings
+            warnings.warn(
+                f"_two_stage_weights: Stage-1 ERC did not converge "
+                f"(status={res.status}, msg='{res.message}'). "
+                "Falling back to equal factor budgets.",
+                RuntimeWarning, stacklevel=3,
+            )
+        e_star = res.x if res.success else e0
+        e_star = np.maximum(e_star, 0.0)
+        e_star /= e_star.sum()
+
+        # factor_budget[k] = fraction of total capital allocated to factor k
+        factor_budget = {factor_names[k]: float(e_star[k]) for k in range(n_factors)}
+
+        # ── Stage 2: distribute factor budgets to tenors via DV01 equalisation ──
+        # For each factor, find the assets that load on it (|B[i,k]| > 0).
+        # Within an IR factor group, split the budget ∝ 1/|B[i,k]| (= 1/duration).
+        # Aggregate across factors: each asset may appear in multiple factor groups
+        # (e.g. CN10Y loads on IRDL.CN, IRSL.CN, IRCV.CN); sum contributions.
+        asset_weight = np.zeros(n_assets)
+
+        for k, fname in enumerate(factor_names):
+            col = B[:, k]
+            active = np.abs(col) > 1e-6
+            if not active.any():
+                continue
+            idxs = np.where(active)[0]
+            budget_k = factor_budget[fname]
+
+            if fname.startswith(('IRDL.', 'IRSL.', 'IRCV.')):
+                # DV01 equalisation: w_i ∝ 1/|col_i|
+                inv_dur = 1.0 / np.abs(col[idxs])
+                shares = inv_dur / inv_dur.sum()
+            else:
+                # Commodities/FX/spread: equal split among assets in group
+                shares = np.ones(len(idxs)) / len(idxs)
+
+            for j, ix in enumerate(idxs):
+                asset_weight[ix] += budget_k * shares[j]
+
+        # Normalise
+        total = asset_weight.sum()
+        if total > 1e-9:
+            asset_weight /= total
+        else:
+            asset_weight = np.ones(n_assets) / n_assets
+
+        # ── Apply per-asset-class floors and caps scaled to pool size ─────────
+        # Floors/caps are proportional to equal share (1/n_assets) so they
+        # remain sensible whether the pool has 3 or 15+ assets.
+        from multiasset.assets import CommodityAsset, FXAsset
+        _comm_set = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), CommodityAsset)}
+        _fx_set   = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), FXAsset)}
+        _b = RiskModelConfig.scaled_bounds(n_assets)
+
+        def _clip(i, name):
+            if name in _comm_set:
+                return np.clip(w[i], _b['floor_comm'], _b['cap_comm'])
+            if name in _fx_set:
+                return np.clip(w[i], _b['floor_fx'], _b['cap_fx'])
+            return np.clip(w[i], _b['floor_bond'], _b['cap_bond'])
+
+        # ── Feasibility guard: check floors don't exceed 1 before clipping ──
+        _floor_sum = sum(
+            _b['floor_comm'] if name in _comm_set
+            else _b['floor_fx'] if name in _fx_set
+            else _b['floor_bond']
+            for name in asset_names
+        )
+        if _floor_sum > 1.0:
+            import warnings
+            warnings.warn(
+                f"_two_stage_weights: sum of asset floors ({_floor_sum:.3f}) > 1.0 "
+                f"for pool of {n_assets} assets — bounds are jointly infeasible. "
+                "Weights may violate floors. Consider reducing FLOOR_RATIO constants "
+                "in RiskModelConfig.",
+                RuntimeWarning, stacklevel=3,
+            )
+
+        w = asset_weight.copy()
+        # Iterate clip → renorm until convergence (floors/caps satisfied simultaneously)
+        for _ in range(10):
+            for i, name in enumerate(asset_names):
+                w[i] = _clip(i, name)
+            s = w.sum()
+            if s > 1e-9:
+                w /= s
+
+        # ── Post-solve bounds assertion (soft — warn, don't raise) ────────────
+        _TOL = 1e-4
+        violations = []
+        for i, name in enumerate(asset_names):
+            lo = (_b['floor_comm'] if name in _comm_set
+                  else _b['floor_fx'] if name in _fx_set
+                  else _b['floor_bond'])
+            hi = (_b['cap_comm'] if name in _comm_set
+                  else _b['cap_fx'] if name in _fx_set
+                  else _b['cap_bond'])
+            if w[i] < lo - _TOL or w[i] > hi + _TOL:
+                violations.append(f"{name}: w={w[i]:.4f} ∉ [{lo:.4f}, {hi:.4f}]")
+        if violations:
+            import warnings
+            warnings.warn(
+                "_two_stage_weights: bounds violated after clip→renorm:\n  "
+                + "\n  ".join(violations),
+                RuntimeWarning, stacklevel=3,
+            )
+
+        return pd.Series(w, index=asset_names)
     
     def _calculate_ewma_volatilities(self, factor_returns: pd.DataFrame) -> pd.Series:
         """
@@ -151,7 +338,8 @@ class FactorRiskParityOptimizer:
                           risk_budgets: Optional[Dict[str, float]] = None,
                           total_capital: float = 1.0,
                           hedge_asset_names: Optional[list] = None,
-                          neutral_asset_names: Optional[list] = None) -> pd.Series:
+                          neutral_asset_names: Optional[list] = None,
+                          use_dv01_shape: bool = True) -> pd.Series:
         """
         Optimize portfolio weights using factor risk parity or risk budgeting.
 
@@ -167,6 +355,8 @@ class FactorRiskParityOptimizer:
             hedge_asset_names: Optional list of asset names allowed to take short
                 positions; they receive bounds (-0.3, 0.3) while regular assets
                 stay long-only (0.0, 1.0).
+            use_dv01_shape: When True, add intra-group DV01 equality constraints.
+                Set False in backtest to let rolling covariance drive bond allocation.
 
         Returns:
             Series of optimal weights
@@ -230,60 +420,104 @@ class FactorRiskParityOptimizer:
                 return np.ones(len(valid_factors)) / len(valid_factors)
             return rc_var / total_var
 
-        # ── Objective ─────────────────────────────────────────────────────────
+        # ── Constraints & objective ───────────────────────────────────────────
         constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
+        # Asset indices whose weight is pinned by an intra-group DV01 shape constraint
+        # (populated only in the min-vol branch); their bounds are relaxed to [0, 1].
+        _shape_locked_bonds: set = set()
+        # Per-group anchor → shape mapping, used to build a feasible initial point.
+        _shape_groups: list = []   # list of (idxs ndarray, shape ndarray)
 
         if risk_budgets:
+            # User-defined / factor-scaling: steer factor RC fractions to explicit budgets.
+            # Budget values are treated as proportional fractions of total risk regardless
+            # of whether factor_cov is available — single unit system, no silent switching.
+            # Negative budgets allow signed RC matching (e.g. short slope expression).
             has_negative = any(
                 v is not None and float(v) < 0.0 for v in risk_budgets.values()
             )
-            if use_full_cov:
-                # Proportional budget mode: match factor-RC fractions to budget fractions
-                raw_budgets = np.array([
-                    float(risk_budgets.get(f, 0.0)) if risk_budgets.get(f) is not None else 0.0
-                    for f in valid_factors
-                ])
-                total_rb = raw_budgets.sum()
-                budget_fracs = raw_budgets / total_rb if total_rb > 0 else np.ones(len(valid_factors)) / len(valid_factors)
+            raw_budgets = np.array([
+                float(risk_budgets.get(f, 0.0)) if risk_budgets.get(f) is not None else 0.0
+                for f in valid_factors
+            ])
+            total_rb = np.abs(raw_budgets).sum()
+            budget_fracs = (raw_budgets / total_rb
+                            if total_rb > 1e-12
+                            else np.ones(len(valid_factors)) / len(valid_factors))
 
-                if has_negative:
-                    # Signed RC matching (e.g. short slope exposure)
-                    def objective(w: np.ndarray) -> float:
-                        e = BT @ w
-                        Cfe = C_f @ e
-                        signed_rc = e * Cfe / max(_port_vol(w), 1e-12)  # signed vol contributions
-                        total_sv = np.abs(signed_rc).sum()
-                        target = budget_fracs * (total_sv if total_sv > 1e-12 else 1.0)
-                        return float(np.sum((signed_rc - target) ** 2))
-                else:
-                    def objective(w: np.ndarray) -> float:
-                        return float(np.sum((_factor_rc_fractions(w) - budget_fracs) ** 2))
+            if has_negative:
+                # Signed RC matching: direction of signed exposure matters
+                def objective(w: np.ndarray) -> float:
+                    e = BT @ w
+                    Cfe = C_f @ e
+                    signed_rc = e * Cfe / max(_port_vol(w), 1e-12)
+                    total_sv = np.abs(signed_rc).sum()
+                    target = budget_fracs * (total_sv if total_sv > 1e-12 else 1.0)
+                    return float(np.sum((signed_rc - target) ** 2))
             else:
-                # Legacy diagonal mode: match |e_k σ_k| targets
-                budget_targets = np.array([
-                    (float(risk_budgets.get(f, 0.0)) * 1_000_000.0) / total_capital
-                    if total_capital > 1e-6 else 0.0
-                    for f in valid_factors
-                ])
-                if has_negative:
-                    def objective(w: np.ndarray) -> float:
-                        signed = BT @ w * sigma_f_valid
-                        return float(np.sum((signed - budget_targets) ** 2))
-                else:
-                    def objective(w: np.ndarray) -> float:
-                        factor_risks = np.abs(BT @ w * sigma_f_valid)
-                        return float(np.sum((factor_risks - budget_targets) ** 2))
-
-                    def max_budget_constraint(w: np.ndarray) -> np.ndarray:
-                        return budget_targets - np.abs(BT @ w * sigma_f_valid)
-
-                    constraints.append({'type': 'ineq', 'fun': max_budget_constraint})
+                # Unsigned RC fraction matching
+                def objective(w: np.ndarray) -> float:
+                    return float(np.sum((_factor_rc_fractions(w) - budget_fracs) ** 2))
         else:
-            # Pure ERC: equal asset-level risk contributions (respects correlations via Σ)
+            # Min-vol + analytic intra-group DV01 equalisation (two-stage).
+            #
+            # Problem: with N bonds all loading on the same 3 CN factors (IRDL/IRSL/IRCV),
+            # the covariance Σ = B·C_f·Bᵀ has rank 3, leaving a (N-3)-dimensional null
+            # space where pure min-vol picks an arbitrary corner.
+            #
+            # Fix (two-stage): within each country group (bonds sharing the same IRDL.XX
+            # factor), FIX the relative bond shape analytically to inverse-duration
+            # (w_i ∝ 1/|IRDL_i|, the modified durations from get_default_sensitivities),
+            # so every bond in the group contributes equal DV01.  Then let the optimizer
+            # choose only the SCALAR capital per group (plus commodity/FX), minimising
+            # portfolio variance.  The fixed shape is imposed as equality constraints that
+            # lock each bond's weight to the group's first bond via its duration ratio —
+            # these are always mutually consistent, so SLSQP stays feasible.
+            #
+            # Result: bond degrees of freedom collapse from N to (#country groups),
+            # eliminating the null space; bond weights are economically meaningful
+            # (shorter tenors get more capital → equal DV01), and the cross-group +
+            # cross-asset-class split still minimises portfolio vol.
             def objective(w: np.ndarray) -> float:
-                RC = _risk_contributions(w)
-                target = _port_vol(w) / n_assets
-                return float(np.sum((RC - target) ** 2))
+                return float(w @ Sigma @ w)
+
+            # Build country groups keyed by IRDL.XX factor; compute inverse-duration shape.
+            # _shape_locked_bonds collects asset indices whose weight is pinned by a shape
+            # constraint (everything except the group anchor); their bounds are relaxed to
+            # [0, 1] below since the equality constraints — not the floor — govern them.
+            # When use_dv01_shape=False (backtest mode) this block is skipped entirely:
+            # bonds are free within their bounds so rolling covariance drives rebalancing.
+            irdl_factors = [f for f in valid_factors if f.startswith('IRDL.')] if use_dv01_shape else []
+            for irdl_f in irdl_factors:
+                fi = valid_factors.index(irdl_f)
+                col = B[:, fi]                                   # IRDL exposure (∝ duration)
+                bond_mask = np.abs(col) > 1e-6
+                if bond_mask.sum() < 2:
+                    continue                                     # single-bond group: no constraint needed
+                idxs = np.where(bond_mask)[0]
+                inv_dur = 1.0 / np.abs(col[idxs])                # 1/|IRDL| ∝ inverse duration
+                shape = inv_dur / inv_dur.sum()                  # normalised within group
+                _shape_groups.append((idxs, shape))
+                # Anchor on the LONGEST-duration bond (smallest shape weight) so the
+                # anchor never hits the per-asset cap and distorts the group ratios.
+                _anchor_pos = int(np.argmax(np.abs(col[idxs])))   # max |IRDL| = longest duration
+                i0 = idxs[_anchor_pos]
+                s0 = shape[_anchor_pos]
+                # Lock each other bond to the anchor via the shape ratio:
+                #   w[idx_k] * shape[anchor] == w[anchor] * shape[k]
+                for k in range(len(idxs)):
+                    if k == _anchor_pos:
+                        continue
+                    ik = idxs[k]
+                    sk = shape[k]
+                    def _make_shape_con(_i0, _ik, _s0, _sk):
+                        return lambda w: w[_ik] * _s0 - w[_i0] * _sk
+                    constraints.append({'type': 'eq',
+                                        'fun': _make_shape_con(i0, ik, s0, sk)})
+                    _shape_locked_bonds.add(int(ik))
+                # The anchor itself is also exempt from the per-asset bond cap: the
+                # DV01 shape already controls concentration within the group.
+                _shape_locked_bonds.add(int(i0))
 
         # ── Per-asset bounds ─────────────────────────────────────────────────
         # Hedge instruments are allowed to take short positions.  Regular assets
@@ -312,40 +546,68 @@ class FactorRiskParityOptimizer:
         from multiasset.assets import CommodityAsset, FXAsset
         _commodity_set = {name for name in asset_names if isinstance(self.portfolio.assets.get(name), CommodityAsset)}
         _fx_set = {name for name in asset_names if isinstance(self.portfolio.assets.get(name), FXAsset)}
-        _commodity_min_wt = 0.01
-        non_commodity_count = n_assets - len(_commodity_set)
-        # Floor: each non-commodity asset must hold at least 3% so no asset is
-        # effectively excluded by the optimizer (e.g. low-vol CN1Y vs high-vol Gold).
-        _min_wt = max(0.03, 1.0 / (non_commodity_count * 10)) if non_commodity_count > 0 else 0.0
-        # Cap: no single asset absorbs more than 25% regardless of asset count, so
-        # high-Sharpe low-vol assets (CN1Y) cannot crowd out the rest of the portfolio.
-        _CAP_COMM = min(max(1.0 / n_assets, 0.15), 0.25)
-        _CAP_FX   = min(max(1.0 / n_assets, 0.20), 0.25)
-        _CAP_BOND = min(max(2.0 / n_assets, 0.15), 0.25)
-        # Neutral cap = 0.25 × equal-share weight (minimum scalar tick applied to RP base).
-        # Long-only scalars are {0.25, 0.5, 0.75, 1.0}; scalar=0 maps to this floor
-        # so the optimizer produces a practically-flat position without being excluded.
-        _CAP_NEUTRAL = max(0.25 / n_assets, _min_wt)
+
+        # Floors and caps scale with pool size: floor = eq_share × ratio, cap = eq_share × ratio
+        _sb = RiskModelConfig.scaled_bounds(n_assets)
+        _commodity_min_wt = _sb['floor_comm']
+        _fx_min_wt        = _sb['floor_fx']
+        _min_wt           = _sb['floor_bond']
+        _CAP_COMM         = _sb['cap_comm']
+        _CAP_FX           = _sb['cap_fx']
+        _CAP_BOND         = _sb['cap_bond']
+        _CAP_NEUTRAL      = max(0.25 / n_assets, _min_wt)
+
+        # When no explicit budgets are given (min-vol / two-stage path): fix commodity
+        # and FX at their class floor so the bond sub-problem stays well-conditioned.
+        _pin_non_ir = (risk_budgets is None)
+        # Bonds inside a multi-bond group have their relative weight fixed by the DV01
+        # shape equality constraints, so their per-asset floor/cap must be relaxed to
+        # [0, 1] — otherwise a long-duration bond's tiny shape weight (e.g. 1/17 for
+        # CN30Y) would conflict with the floor and make the problem infeasible.
         bounds = [
             (-_MAX_HEDGE_WT, _MAX_HEDGE_WT) if name in _hedge_set
             else (0.0, _CAP_NEUTRAL)            if name in _neutral_set
-            else (_commodity_min_wt, _CAP_COMM) if name in _commodity_set
-            else (_min_wt, _CAP_FX)             if name in _fx_set
+            else (_commodity_min_wt, _commodity_min_wt if _pin_non_ir else _CAP_COMM) if name in _commodity_set
+            else (_fx_min_wt,        _fx_min_wt        if _pin_non_ir else _CAP_FX)   if name in _fx_set
+            else (0.0, 1.0)                     if i in _shape_locked_bonds
             else (_min_wt, _CAP_BOND)
-            for name in asset_names
+            for i, name in enumerate(asset_names)
         ]
 
-        # Start from the minimum-weight floors: _min_wt for bonds, _commodity_min_wt for commodities
+        # Initial point: commodity/FX at floor; bond groups laid out on their fixed
+        # inverse-duration shape so SLSQP starts feasible w.r.t. the shape equalities.
         w0 = np.array([
-            _commodity_min_wt if name in _commodity_set else _min_wt
+            _commodity_min_wt if name in _commodity_set
+            else _fx_min_wt   if name in _fx_set
+            else _min_wt
             for name in asset_names
         ])
-        remaining = 1.0 - w0.sum()
-        if remaining > 0:
-            # Distribute remaining weight equally among non-commodity assets.
-            non_commodity_indices = [i for i, name in enumerate(asset_names) if name not in _commodity_set]
-            if non_commodity_indices:
-                w0[non_commodity_indices] += remaining / len(non_commodity_indices)
+        if _shape_groups:
+            # Distribute the remaining (non-commodity/FX) capital across groups equally,
+            # then within each group along its inverse-duration shape.
+            _fixed = sum(w0[i] for i, name in enumerate(asset_names)
+                         if name in _commodity_set or name in _fx_set)
+            _grouped_idx = set()
+            for idxs, _ in _shape_groups:
+                _grouped_idx.update(int(x) for x in idxs)
+            _ungrouped_bonds = [i for i, name in enumerate(asset_names)
+                                if name not in _commodity_set and name not in _fx_set
+                                and i not in _grouped_idx]
+            _n_units = len(_shape_groups) + len(_ungrouped_bonds)
+            _avail = max(1.0 - _fixed, 0.0)
+            _per_unit = _avail / _n_units if _n_units > 0 else 0.0
+            for idxs, shape in _shape_groups:
+                for j, ix in enumerate(idxs):
+                    w0[ix] = _per_unit * shape[j]
+            for ix in _ungrouped_bonds:
+                w0[ix] = _per_unit
+        else:
+            remaining = 1.0 - w0.sum()
+            if remaining > 0:
+                bond_indices = [i for i, name in enumerate(asset_names)
+                                if name not in _commodity_set and name not in _fx_set]
+                if bond_indices:
+                    w0[bond_indices] += remaining / len(bond_indices)
 
         result = minimize(
             objective, w0,
@@ -359,9 +621,10 @@ class FactorRiskParityOptimizer:
         if not result.success and _hedge_set:
             fallback_bounds = [
                 (_commodity_min_wt, _CAP_COMM) if name in _commodity_set
-                else (_min_wt, _CAP_FX) if name in _fx_set
+                else (_fx_min_wt, _CAP_FX)     if name in _fx_set
+                else (0.0, 1.0)                if i in _shape_locked_bonds
                 else (_min_wt, _CAP_BOND)
-                for name in asset_names
+                for i, name in enumerate(asset_names)
             ]
             result_fb = minimize(
                 objective, w0,
@@ -525,6 +788,36 @@ class FactorRiskParityOptimizer:
         self._pca_factor_vols = None
         self.factor_analyzer.clear_cache()
 
+    @staticmethod
+    def assert_weights_match(
+        w1: 'pd.Series',
+        w2: 'pd.Series',
+        tol: float = 1e-6,
+        label: str = '',
+    ) -> None:
+        """Assert that two weight series are identical within tolerance.
+
+        Use this in regression tests to verify that the live path (via
+        ``optimize()``) and the backtest path (direct ``fit_and_calculate()``)
+        return the same weights for the same inputs — preventing §7.6 drift.
+
+        Raises:
+            AssertionError: if any weight differs by more than *tol*, with a
+                summary of the largest divergences.
+        """
+        common = w1.index.union(w2.index)
+        a = w1.reindex(common, fill_value=0.0)
+        b = w2.reindex(common, fill_value=0.0)
+        diff = (a - b).abs()
+        max_diff = float(diff.max())
+        if max_diff > tol:
+            worst = diff.nlargest(5)
+            tag = f" [{label}]" if label else ""
+            raise AssertionError(
+                f"Weight mismatch{tag}: max |Δw| = {max_diff:.2e} > tol={tol:.2e}\n"
+                + worst.to_string()
+            )
+
     def optimize(self, total_capital: float, use_cache: bool = True,
                  risk_budgets: Dict[str, float] = None,
                  hedge_asset_names: list = None,
@@ -541,17 +834,13 @@ class FactorRiskParityOptimizer:
         Returns:
             Tuple of (summary, asset_returns, volatilities, factor_exposures, factor_risk_contributions)
         """
-        # Load data to find latest date
-        self.portfolio.risk_factor_loader.load_risk_factors(use_cache=use_cache)
-        # Need to ensure PCA is initialized/data loaded
-        if self.portfolio.risk_factor_loader._risk_factors_cache is None:
-             self.portfolio.risk_factor_loader.load_risk_factors(use_cache=False)
-             
         # Snap to the 1st of the current month so the portfolio tab uses the same
         # cut-off as the monthly backtest rebalance dates (avoids look-ahead bias).
         _today = pd.Timestamp.today().normalize()
         _first_of_month = _today.replace(day=1)
-        _data_max = pd.Timestamp(self.portfolio.risk_factor_loader._risk_factors_cache.index.max())
+        _data_max = self.portfolio.risk_factor_loader.last_date()
+        if _data_max is None:
+            raise RuntimeError("RiskFactorLoader: no data loaded — call load_risk_factors() first.")
         rebalance_date = min(_first_of_month, _data_max)
         
         # Fit and Calculate

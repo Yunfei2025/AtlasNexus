@@ -220,11 +220,17 @@ def register_backtest_rfbt_callbacks(app):
                 }
 
             # ── Section 2: Performance + IC statistics table ────────────
+            from multiasset.config import RiskModelConfig as _RMC
             metric_rows = []
             for factor, df in results.items():
-                m   = compute_metrics(df)
+                m = compute_metrics(df, risk_free_rate=_RMC.RISK_FREE_RATE,
+                                    geometric_annualisation=True)
                 if 'strategy_returns_gross' in df.columns:
-                    m_gross = compute_metrics(df.assign(strategy_returns=df['strategy_returns_gross']))
+                    m_gross = compute_metrics(
+                        df.assign(strategy_returns=df['strategy_returns_gross']),
+                        risk_free_rate=_RMC.RISK_FREE_RATE,
+                        geometric_annualisation=True,
+                    )
                 else:
                     m_gross = m
                 avg_turnover = float(df['turnover'].abs().mean()) if 'turnover' in df.columns else 0.0

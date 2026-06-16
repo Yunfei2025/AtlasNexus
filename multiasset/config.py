@@ -15,14 +15,48 @@ class RiskModelConfig:
     FACTOR_VOL_EWMA_LAMBDA: float = 0.94
 
     # ── Optimizer bounds ──────────────────────────────────────────────────────
-    # Minimum weight per bond asset (prevents degenerate ERC solutions)
+    # Floors and caps scale with pool size so they remain sensible whether
+    # the user selects 3 assets or 15+.
+    #
+    #   floor = max(abs_floor, equal_share × FLOOR_RATIO)
+    #   cap   = min(abs_cap,   equal_share × CAP_RATIO)
+    #
+    # Ratios are class-specific; absolute limits are hard safety rails.
+    FLOOR_RATIO_BOND: float = 0.30   # bond floor = 30% of equal share
+    FLOOR_RATIO_COMM: float = 0.20   # commodity/FX floor = 20% of equal share
+    FLOOR_RATIO_FX:   float = 0.20
+    CAP_RATIO_BOND:   float = 3.0    # bond cap = 3× equal share
+    CAP_RATIO_COMM:   float = 2.0    # commodity cap = 2× equal share
+    CAP_RATIO_FX:     float = 2.0
+
+    # Hard absolute limits (override ratios when pool is very small/large)
+    ABS_FLOOR_BOND: float = 0.01
+    ABS_FLOOR_COMM: float = 0.02
+    ABS_FLOOR_FX:   float = 0.02
+    ABS_CAP_BOND:   float = 0.40
+    ABS_CAP_COMM:   float = 0.30
+    ABS_CAP_FX:     float = 0.30
+
+    @classmethod
+    def scaled_bounds(cls, n_assets: int) -> dict:
+        """Return floor/cap per asset class scaled to pool size."""
+        eq = 1.0 / max(n_assets, 1)
+        return {
+            'floor_bond': max(cls.ABS_FLOOR_BOND, eq * cls.FLOOR_RATIO_BOND),
+            'floor_comm': max(cls.ABS_FLOOR_COMM, eq * cls.FLOOR_RATIO_COMM),
+            'floor_fx':   max(cls.ABS_FLOOR_FX,   eq * cls.FLOOR_RATIO_FX),
+            'cap_bond':   min(cls.ABS_CAP_BOND,   eq * cls.CAP_RATIO_BOND),
+            'cap_comm':   min(cls.ABS_CAP_COMM,   eq * cls.CAP_RATIO_COMM),
+            'cap_fx':     min(cls.ABS_CAP_FX,     eq * cls.CAP_RATIO_FX),
+        }
+
+    # Legacy flat constants kept for back-compat with any direct references
     MIN_WEIGHT_BOND: float = 0.03
-    # Per-class weight caps
-    CAP_BOND: float = 0.25
-    CAP_COMM: float = 0.25
-    CAP_FX:   float = 0.25
-    # Minimum weight for commodity assets (allowed to be 0 in FX/no-short mode)
-    MIN_WEIGHT_COMM: float = 0.01
+    CAP_BOND: float = 0.40
+    CAP_COMM: float = 0.30
+    CAP_FX:   float = 0.30
+    MIN_WEIGHT_COMM: float = 0.02
+    MIN_WEIGHT_FX:   float = 0.02
 
     # ── Vol^0.5 budget fallback ───────────────────────────────────────────────
     # Estimated annual volatility (%) for assets with missing factor-vol data

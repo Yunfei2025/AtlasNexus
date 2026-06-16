@@ -332,77 +332,77 @@ def register_backtest_hist_callbacks(app):
             print(f"Last rebalance: {rebalance_dates[-1].date() if rebalance_dates else 'N/A'}")
             print(f"{'='*60}")
             
+            # Cache of portfolio+optimizer keyed by frozenset of asset names.
+            # Re-using objects avoids redundant construction for recurring asset sets
+            # while still allowing the asset set to change month-to-month.
+            _optimizer_cache: dict = {}
+
             for rebalance_date in rebalance_dates:
-                # --- Step 1: Run Correlation Analysis on Selected Factor Pool ---
+                # --- Step 1: Rolling correlation screen on the lookback window ---
                 corr_end = rebalance_date
                 corr_start = rebalance_date - corr_lookback_delta
-                
-                df_subset = risk_factors.loc[corr_start:corr_end]
+
+                df_subset = risk_factors.loc[corr_start:corr_end,
+                                             [f for f in available_factors if f in risk_factors.columns]]
                 if df_subset.empty or len(df_subset) < 20:
                     print(f"  {rebalance_date.date()}: Skipped (insufficient data)")
                     continue
-                
-                # Filter to only selected factors from the Factor tab
-                available_factors = [f for f in selected_factors if f in df_subset.columns]
-                if len(available_factors) < 2:
-                    print(f"  {rebalance_date.date()}: Skipped (not enough factors in data)")
-                    continue
-                df_subset = df_subset[available_factors]
-                
-                # Calculate daily changes for correlation
+
                 df_changes = df_subset.diff().dropna()
                 if df_changes.empty:
                     continue
-                
+
                 corr_matrix = df_changes.corr()
-                
-                # Find lowest correlation pairs
+
+                # Find the `top_pairs` lowest-correlation factor pairs in this window
                 mask = np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
                 corr_stacked = corr_matrix.where(mask).stack().reset_index()
                 corr_stacked.columns = ['Factor A', 'Factor B', 'Correlation']
                 corr_stacked['AbsCorrelation'] = corr_stacked['Correlation'].abs()
-                bottom_pairs = corr_stacked.sort_values('AbsCorrelation', ascending=True).head(top_pairs)
-                
-                # Get unique factors from lowest correlation pairs
-                low_corr_factors = set(bottom_pairs['Factor A']).union(set(bottom_pairs['Factor B']))
-                low_corr_factors_list = sorted(list(low_corr_factors))
-                
-                # --- Step 2: Map Factors to Assets ---
+                bottom_pairs = corr_stacked.sort_values('AbsCorrelation').head(top_pairs)
+
+                low_corr_factors = (
+                    set(bottom_pairs['Factor A']) | set(bottom_pairs['Factor B'])
+                )
+                low_corr_factors_list = sorted(low_corr_factors)
+
+                # --- Step 2: Map screened factors → assets ---
                 selected_assets = get_assets_from_factors(low_corr_factors_list)
-                
+
                 if not selected_assets:
                     print(f"  {rebalance_date.date()}: Skipped (no mappable assets)")
                     continue
-                
+
                 selected_asset_names = [a['name'] for a in selected_assets]
                 all_assets_ever.update(selected_asset_names)
-                
-                # --- Step 3: Run factor risk parity allocation ---
-                # Create portfolio for these assets
+
+                # --- Step 3: Optimise with time-varying EWMA covariance ---
+                # Re-use a cached portfolio/optimizer when the asset set is the same
+                # as a previous month; the rolling vol window still changes because
+                # fit_and_calculate() slices by rebalance_date.
+                _key = frozenset(selected_asset_names)
+                if _key not in _optimizer_cache:
+                    try:
+                        _port = create_custom_portfolio(selected_asset_names, use_deterministic=True)
+                        _opt  = FactorRiskParityOptimizer(
+                            portfolio=_port,
+                            input_dir=str(DIR_INPUT),
+                            factor_model_lookback_years=1.0,
+                            vol_lookback_months=vol_lookback_months,
+                            ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA,
+                        )
+                        _optimizer_cache[_key] = _opt
+                    except Exception as e:
+                        print(f"  {rebalance_date.date()}: Portfolio creation failed: {e}")
+                        continue
+
                 try:
-                    portfolio = create_custom_portfolio(
-                        selected_asset_names,
-                        use_deterministic=True,
-                    )
-                except Exception as e:
-                    print(f"  {rebalance_date.date()}: Portfolio creation failed: {e}")
-                    continue
-                
-                # Use shared factor risk parity optimizer with deterministic factors
-                # vol_lookback_months is set based on user's Correlation Lookback selection
-                try:
-                    optimizer = FactorRiskParityOptimizer(
-                        portfolio=portfolio,
-                        input_dir=str(DIR_INPUT),
-                        factor_model_lookback_years=1.0,
-                        vol_lookback_months=vol_lookback_months,
-                        ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA,
-                    )
-                    # Single pass: derive vol^0.5 budgets from the computed factor
-                    # vols and optimise in one solve (use_vol_sqrt_budgets=True).
-                    weights_series, _ = optimizer.fit_and_calculate(
+                    weights_series, _ = _optimizer_cache[_key].fit_and_calculate(
                         pd.Timestamp(rebalance_date),
                         use_vol_sqrt_budgets=True,
+                        # use_dv01_shape=True (default): two-stage — ERC across factors
+                        # (stage 1, rolling covariance) then DV01 split within each
+                        # factor group (stage 2, analytic inverse-duration).
                     )
                     weights = weights_series.to_dict()
                 except Exception as e:
@@ -488,7 +488,7 @@ def register_backtest_hist_callbacks(app):
                 history_data.append(row)
                 allocations_by_date[rebalance_date] = current_allocations
                 
-                print(f"  {rebalance_date.date()}: {len(selected_asset_names)} assets, {len(low_corr_factors_list)} factors")
+                print(f"  {rebalance_date.date()}: {len(selected_asset_names)} assets, {len(low_corr_factors_list)} screened factors (of {len(available_factors)} total)")
             
             if not history_data:
                 err_fig = go.Figure().update_layout(title="No valid rebalance periods found", template=THEME['chart_template'])
@@ -538,9 +538,44 @@ def register_backtest_hist_callbacks(app):
 
             # Step 3: daily PnL in millions CNY, then cumulative sum
             daily_pnl_m = (alloc_daily * rets_matrix).fillna(0.0) / 1_000_000
+
+            # ── Turnover & transaction costs (Item 21b) ───────────────────────
+            # Turnover at each rebalance = Σ|Δweight| (one-way, so round-trip = 2×).
+            # Tx cost: 0.5 bp notional per unit of one-way turnover (conservative
+            # estimate for bond futures / IRS; apply symmetrically to round-trips).
+            _TX_COST_BP: float = 0.5          # basis points per unit one-way turnover
+            _tx_cost_rate = _TX_COST_BP / 1e4
+
+            weight_rows = {}
+            for rd, alloc in allocations_by_date.items():
+                _tot = sum(abs(v) for v in alloc.values()) or 1.0
+                weight_rows[pd.Timestamp(rd)] = {k: v / _tot for k, v in alloc.items()}
+
+            _wt_df = pd.DataFrame(weight_rows).T.sort_index().reindex(
+                columns=list(rets_matrix.columns), fill_value=0.0
+            )
+            _wt_df_prev = _wt_df.shift(1).fillna(0.0)
+            turnover_by_date = (_wt_df - _wt_df_prev).abs().sum(axis=1)  # one-way per rebalance
+
+            # Deduct tx cost from portfolio PnL on each rebalance day
+            # cost_m = turnover × tx_cost_rate × total_capital (in millions)
+            _cap_m = total_capital_cny / 1_000_000
+            tx_cost_m = pd.Series(0.0, index=_daily_idx)
+            for rd, to in turnover_by_date.items():
+                _match = _daily_idx[_daily_idx >= rd]
+                if len(_match):
+                    tx_cost_m[_match[0]] += float(to) * _tx_cost_rate * _cap_m
+
+            # Total annualised turnover (sum of monthly one-way turnovers / years)
+            _n_years = max((end_date - start_date).days / 365.25, 1e-3)
+            _ann_turnover = float(turnover_by_date.sum()) / _n_years
+            _total_tx_cost_m = float(tx_cost_m.sum())
+
+            _gross_daily = daily_pnl_m.sum(axis=1)
             cumulative_m = daily_pnl_m.cumsum()
             cumulative_m.insert(0, 'Date', _daily_idx)
-            cumulative_m['Total'] = daily_pnl_m.sum(axis=1).cumsum()
+            cumulative_m['Total'] = _gross_daily.cumsum()
+            cumulative_m['Total (net)'] = (_gross_daily - tx_cost_m.values).cumsum()
 
             df_history = pd.DataFrame(history_data)
             df_pnl = cumulative_m.reset_index(drop=True)
@@ -627,15 +662,26 @@ def register_backtest_hist_callbacks(app):
             if not df_pnl.empty and len(df_pnl) > 1:
                 initial_capital = total_capital_cny / 1_000_000
                 portfolio_values = initial_capital + df_pnl['Total']
+                net_portfolio_values = initial_capital + df_pnl['Total (net)']
                 nav_series = (portfolio_values / portfolio_values.iloc[0]) * 1000
+                nav_net_series = (net_portfolio_values / net_portfolio_values.iloc[0]) * 1000
                 fig_pnl.add_trace(go.Scatter(
                     x=df_pnl['Date'],
                     y=nav_series.round(2),
                     mode='lines',
-                    name='NAV (base 1000)',
+                    name='NAV gross (base 1000)',
                     yaxis='y2',
                     line=dict(color='#FFD700', width=2.5, dash='solid'),
-                    hovertemplate='<b>NAV</b>: %{y:.1f}<extra></extra>',
+                    hovertemplate='<b>NAV (gross)</b>: %{y:.1f}<extra></extra>',
+                ))
+                fig_pnl.add_trace(go.Scatter(
+                    x=df_pnl['Date'],
+                    y=nav_net_series.round(2),
+                    mode='lines',
+                    name='NAV net of tx costs (base 1000)',
+                    yaxis='y2',
+                    line=dict(color='#FFD700', width=1.5, dash='dot'),
+                    hovertemplate='<b>NAV (net)</b>: %{y:.1f}<extra></extra>',
                 ))
                 fig_pnl.update_layout(
                     yaxis2=dict(
@@ -652,24 +698,35 @@ def register_backtest_hist_callbacks(app):
                     portfolio_values,
                     risk_free_rate=RiskModelConfig.RISK_FREE_RATE,
                 )
+                _perf_net = compute_portfolio_metrics(
+                    net_portfolio_values,
+                    risk_free_rate=RiskModelConfig.RISK_FREE_RATE,
+                )
                 annualized_return = _perf.get('Ann. Return', 0.0)
                 sharpe_ratio      = _perf.get('Sharpe', 0.0) or 0.0
                 max_drawdown      = _perf.get('Max Drawdown', 0.0)
-                
+                sharpe_net        = _perf_net.get('Sharpe', 0.0) or 0.0
+
+                _th = {'padding': '8px 12px', 'backgroundColor': THEME['table_header'], 'color': 'white', 'fontSize': '12px'}
+                _td_base = {'padding': '8px 12px', 'textAlign': 'center', 'fontWeight': 'bold', 'backgroundColor': THEME['bg_input'], 'fontSize': '12px'}
                 metrics_table = html.Table([
                     html.Tr([
-                        html.Th("Annualized Return", style={'padding': '8px 15px', 'backgroundColor': THEME['table_header'], 'color': 'white'}),
-                        html.Th("Sharpe Ratio", style={'padding': '8px 15px', 'backgroundColor': THEME['table_header'], 'color': 'white'}),
-                        html.Th("Max Drawdown", style={'padding': '8px 15px', 'backgroundColor': THEME['table_header'], 'color': 'white'}),
-                        html.Th("# Rebalances", style={'padding': '8px 15px', 'backgroundColor': THEME['table_header'], 'color': 'white'}),
+                        html.Th("Ann. Return", style=_th),
+                        html.Th("Sharpe (gross)", style=_th),
+                        html.Th("Sharpe (net tx)", style=_th),
+                        html.Th("Max Drawdown", style=_th),
+                        html.Th("# Rebalances", style=_th),
+                        html.Th("Ann. Turnover", style=_th),
+                        html.Th("Total Tx Cost (MM)", style=_th),
                     ]),
                     html.Tr([
-                        html.Td(f"{annualized_return:.2%}", style={'padding': '8px 15px', 'textAlign': 'center', 'fontWeight': 'bold',
-                                                                'color': THEME['success'] if annualized_return >= 0 else THEME['danger'], 'backgroundColor': THEME['bg_input']}),
-                        html.Td(f"{sharpe_ratio:.2f}", style={'padding': '8px 15px', 'textAlign': 'center', 'fontWeight': 'bold',
-                                                            'color': THEME['success'] if sharpe_ratio >= 1 else THEME['warning'] if sharpe_ratio >= 0 else THEME['danger'], 'backgroundColor': THEME['bg_input']}),
-                        html.Td(f"{max_drawdown:.2%}", style={'padding': '8px 15px', 'textAlign': 'center', 'fontWeight': 'bold', 'color': THEME['danger'], 'backgroundColor': THEME['bg_input']}),
-                        html.Td(f"{len(allocations_by_date)}", style={'padding': '8px 15px', 'textAlign': 'center', 'fontWeight': 'bold', 'color': THEME['text_main'], 'backgroundColor': THEME['bg_input']}),
+                        html.Td(f"{annualized_return:.2%}", style={**_td_base, 'color': THEME['success'] if annualized_return >= 0 else THEME['danger']}),
+                        html.Td(f"{sharpe_ratio:.2f}", style={**_td_base, 'color': THEME['success'] if sharpe_ratio >= 1 else THEME['warning'] if sharpe_ratio >= 0 else THEME['danger']}),
+                        html.Td(f"{sharpe_net:.2f}", style={**_td_base, 'color': THEME['success'] if sharpe_net >= 1 else THEME['warning'] if sharpe_net >= 0 else THEME['danger']}),
+                        html.Td(f"{max_drawdown:.2%}", style={**_td_base, 'color': THEME['danger']}),
+                        html.Td(f"{len(allocations_by_date)}", style={**_td_base, 'color': THEME['text_main']}),
+                        html.Td(f"{_ann_turnover:.0%}", style={**_td_base, 'color': THEME['text_main']}),
+                        html.Td(f"{_total_tx_cost_m:.2f}", style={**_td_base, 'color': THEME['text_sub']}),
                     ]),
                 ], style={'borderCollapse': 'collapse', 'fontSize': '14px'})
             

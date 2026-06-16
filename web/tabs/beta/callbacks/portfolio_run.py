@@ -265,31 +265,50 @@ def register_portfolio_run_callbacks(app):
         # ── Factor vol lookup (live 1Y EWMA) ─────────────────────────────────
         _vol_map = compute_factor_vol_map(sorted_factors)
 
-        # ── Vol^0.5 Risk Parity budgets ───────────────────────────────────────
-        _vol_sqrt_allocations, _missing_vols = derive_vol_sqrt_budgets(
-            sorted_factors, _vol_map, total_capital_m=total_capital_m
+        # ── Vol^0.5 budgets — IR factors only ────────────────────────────────
+        # IRDL/IRSL/IRCV capital is constrained to be ∝ √vol.
+        # CMDL/FXDL/SPDL are free in the min-vol optimizer — display equal share.
+        _IR_PREFIXES = ('IRDL', 'IRSL', 'IRCV')
+        ir_factors = [f for f in sorted_factors if f.split('.')[0] in _IR_PREFIXES]
+        non_ir_factors = [f for f in sorted_factors if f.split('.')[0] not in _IR_PREFIXES]
+
+        n_ir = len(ir_factors)
+        n_non_ir = len(non_ir_factors)
+        # Split capital: IR and non-IR each get an equal-per-factor share of total
+        ir_capital = total_capital_m * n_ir / n_factors if n_factors else 0.0
+        non_ir_capital = total_capital_m * n_non_ir / n_factors if n_factors else 0.0
+
+        _ir_sqrt_allocations, _missing_vols = derive_vol_sqrt_budgets(
+            ir_factors, _vol_map, total_capital_m=ir_capital
         )
         if _missing_vols:
             import logging
             logging.getLogger(__name__).warning(
-                "Missing vol data for %d factor(s): %s — using fallback vol",
+                "Missing vol data for %d IR factor(s): %s — using fallback vol",
                 len(_missing_vols), _missing_vols,
             )
 
+        _non_ir_equal = round(non_ir_capital / n_non_ir, 2) if n_non_ir else 0.0
+
         def get_rp_max(factor):
             if allocation_mode == 'user_defined':
-                # User Defined: preserve what the user last stored (or equal share on first load)
                 return float(rp_budgets[factor]) if (rp_budgets and factor in rp_budgets) else equal_share
-            # risk_parity and factor_scaling: vol^0.5 weighted allocation
-            return _vol_sqrt_allocations.get(factor, equal_share)
+            if factor.split('.')[0] in _IR_PREFIXES:
+                return _ir_sqrt_allocations.get(factor, equal_share)
+            # CMDL/FXDL/SPDL: equal share within non-IR capital envelope
+            return _non_ir_equal if n_non_ir else equal_share
 
         # ── Build rows ─────────────────────────────────────────────────────────
         rows = []
         for factor in sorted_factors:
             rp_max = get_rp_max(factor)
             coeff  = get_coeff(factor)
-            # Exposure = RP Max in all modes; coeff is shown for reference only
-            suggested = rp_max
+            # In factor_scaling mode, exposure = RP Max × signal coefficient
+            # In risk_parity & user_defined modes, exposure = RP Max (coeff is display-only)
+            if allocation_mode == 'factor_scaling' and coeff != 0:
+                suggested = rp_max * coeff
+            else:
+                suggested = rp_max
             label, color = _scalar_meta(coeff)
             is_default_coeff = factor not in snapshot_by_rf
 
@@ -450,47 +469,11 @@ def register_portfolio_run_callbacks(app):
                 risk_budgets = None
 
             elif allocation_mode == 'factor_scaling':
-                # Factor Model Scaling: vol^0.5 base budgets, scaled by signal scalar.
-                _vm = compute_factor_vol_map(factor_names_in_pool) if factor_names_in_pool else {}
-                _iv = {f: np.sqrt(_vm[f]) for f in factor_names_in_pool
-                       if _vm.get(f) and pd.notna(_vm[f]) and _vm[f] > 0}
-                _tot = sum(_iv.values())
-                n_pool = len(factor_names_in_pool) or 1
-                _base = (
-                    {f: round(total_capital_m * _iv.get(f, 0.0) / _tot, 2) for f in factor_names_in_pool}
-                    if _tot > 0
-                    else {f: round(total_capital_m / n_pool, 2) for f in factor_names_in_pool}
-                )
-                if signal_snapshot:
-                    _snap = {rec['risk_factor']: rec for rec in signal_snapshot if rec.get('risk_factor')}
-                    risk_budgets = {}
-                    scaled_count = 0
-                    _IR_PREFIXES = ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL')
-                    for f, base_val in _base.items():
-                        rec = _snap.get(f)
-                        if rec is not None:
-                            scalar = float(rec.get('scalar', 1.0))
-                            # Carry floor for bond factors: a neutral signal does NOT mean
-                            # zero position — bond PMs always hold a carry position.
-                            # Mirror the backtest's _CAP_NEUTRAL floor: scalar=0 maps to
-                            # 25% of the RP base budget (same as the weakest long signal tick).
-                            is_bond = f.split('.')[0] in _IR_PREFIXES
-                            if scalar == 0.0 and is_bond:
-                                effective_budget = round(base_val * 0.25, 2)
-                            else:
-                                effective_budget = round(base_val * abs(scalar), 2)
-                            risk_budgets[f] = effective_budget
-                            scaled_count += 1
-                        else:
-                            risk_budgets[f] = base_val
-                    print(f"📡 Factor model scaling applied to {scaled_count} risk budgets")
-                    _snap_keys = {rec['risk_factor'] for rec in signal_snapshot if rec.get('risk_factor')}
-                    _missing_signals = [f for f in factor_names_in_pool if f not in _snap_keys]
-                else:
-                    risk_budgets = _base
-                    _missing_signals = factor_names_in_pool  # no snapshot at all
-                # Store unscaled base budgets — same signals → same result → idempotent
-                rp_budgets_out = _base
+                # Factor Model Scaling: same as backtest.
+                # Step 1 — run the same min-vol + DV01 optimizer as risk_parity (risk_budgets=None).
+                # Step 2 — tilt asset weights by their factor signal, renorm, apply class caps.
+                # This matches the backtest path in backtest_hist.py exactly.
+                risk_budgets = None   # optimizer runs RP/min-vol; signals applied post-hoc below
 
             else:  # user_defined
                 # User Defined: use input-box values exactly; write them back unchanged.
@@ -516,11 +499,55 @@ def register_portfolio_run_callbacks(app):
                 _opt_warnings = [str(w.message) for w in _caught if issubclass(w.category, RuntimeWarning)]
 
             if summary.empty:
-                error_msg = html.Span("⚠ No matching assets found in optimization results", 
+                error_msg = html.Span("⚠ No matching assets found in optimization results",
                                     style={'color': THEME['warning'], 'fontWeight': 'bold'})
                 return (html.Div("No matching assets found.", style={'color': THEME['warning']}),
                         error_msg, "", {}, {})
-            
+
+            # ── Factor Scaling: post-hoc signal tilt + class caps (mirrors backtest) ──
+            if allocation_mode == 'factor_scaling':
+                _snap_by_rf = ({rec['risk_factor']: rec for rec in signal_snapshot
+                                if rec.get('risk_factor')} if signal_snapshot else {})
+                _missing_signals = [a for a in summary['Asset'].tolist()
+                                    if a not in {n for rec in _snap_by_rf.values()
+                                                 for n in [rec.get('risk_factor', '')]}]
+
+                # Build asset→factors map from pool
+                _asset_to_factors: dict = {}
+                for f in factor_names_in_pool:
+                    for a in FACTOR_TO_ASSET_MAP.get(f, []):
+                        _asset_to_factors.setdefault(a['name'], set()).add(f)
+
+                _CLASS_CAPS = RiskModelConfig.CLASS_CAPS
+                _SIGNAL_FLOOR = RiskModelConfig.SIGNAL_FLOOR
+                _scaled: dict = {}
+                for _, row in summary.iterrows():
+                    name = row['Asset']
+                    wt = float(row['Weight (%)']) / 100.0
+                    sigs = [float(_snap_by_rf[f].get('scalar', 1.0))
+                            for f in _asset_to_factors.get(name, ())
+                            if f in _snap_by_rf]
+                    raw_coeff = float(np.mean(sigs)) if sigs else 1.0
+                    coeff = max(raw_coeff, _SIGNAL_FLOOR)
+                    _scaled[name] = wt * coeff
+
+                _total_scaled = sum(_scaled.values())
+                if _total_scaled > 1e-9:
+                    _weights = {k: v / _total_scaled for k, v in _scaled.items()}
+                    for _ in range(3):
+                        _capped = {k: min(v, _CLASS_CAPS.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT))
+                                   for k, v in _weights.items()}
+                        _cap_tot = sum(_capped.values())
+                        if _cap_tot > 1e-9:
+                            _weights = {k: v / _cap_tot for k, v in _capped.items()}
+                    # Write scaled weights back into summary
+                    summary['Weight (%)'] = summary['Asset'].map(lambda a: _weights.get(a, 0.0) * 100.0)
+                    summary['Allocation (CNY)'] = summary['Weight (%)'] / 100.0 * total_capital_cny
+                    scaled_count = sum(1 for a in summary['Asset'] if a in _asset_to_factors)
+                    print(f"📡 Factor model scaling applied to {scaled_count} assets")
+                else:
+                    print("📡 All signals zero — keeping pure RP weights")
+
             _run_timestamp = datetime.now()
             # Update global state (kept for legacy consumers; new code should use the store)
             ALLOCATION_RESULTS.update({
@@ -528,7 +555,7 @@ def register_portfolio_run_callbacks(app):
                 'factor_risk': factor_risk, 'portfolio': portfolio,
                 'timestamp': _run_timestamp,
             })
-            
+
             # Prepare portfolio table
             portfolio_df = prepare_portfolio_table(summary, factor_exp, portfolio)
 
@@ -551,13 +578,22 @@ def register_portfolio_run_callbacks(app):
                 _rounded = np.floor(portfolio_df['Capital (CNY)'].values / _units) * _units
 
                 # ── DV01 cap: scale down if portfolio DV01 exceeds max_duration limit ──
+                # Only duration-bearing assets (bonds/spreads) carry DV01, so the
+                # scale-down must apply to THOSE assets only.  Zero-duration assets
+                # (commodities, FX) contribute nothing to DV01 and must keep their
+                # allocation untouched — otherwise they get wrongly zeroed out.
                 _durations = portfolio_df['Duration'].values
                 _raw_dv01_mm = float(sum(v * d / 1e10 for v, d in zip(_rounded, _durations)))
                 _max_dur = float(max_duration or 5)
                 _max_dv01_mm = total_capital_cny * _max_dur / 1e10
                 if _raw_dv01_mm > _max_dv01_mm and _raw_dv01_mm > 0:
                     _scale = _max_dv01_mm / _raw_dv01_mm
-                    _rounded = np.floor(_rounded * _scale / _units) * _units
+                    _dv01_bearing = _durations > 0
+                    _rounded = np.where(
+                        _dv01_bearing,
+                        np.floor(_rounded * _scale / _units) * _units,
+                        _rounded,
+                    )
                     dv01_cap_msg = (f"  ·  DV01 capped: {_raw_dv01_mm:.2f}→{_max_dv01_mm:.2f} MM "
                                     f"(scale {_scale:.2%})")
 
@@ -602,7 +638,7 @@ def register_portfolio_run_callbacks(app):
                 print(f"Warning: Could not save Beta book positions: {_se}")
             
             # Create table
-            portfolio_table = dash_table.DataTable(
+            positions_table = dash_table.DataTable(
                 data=portfolio_table_df.to_dict('records'),
                 columns=[
                     {'name': 'Asset Type',           'id': 'Asset Type'},
@@ -616,17 +652,17 @@ def register_portfolio_run_callbacks(app):
                     {'name': 'Weight',                'id': 'Weight (%)'},
                 ],
                 style_cell={
-                    'textAlign': 'center', 
-                    'padding': '10px', 
+                    'textAlign': 'center',
+                    'padding': '10px',
                     'fontFamily': 'Arial, sans-serif',
                     'backgroundColor': THEME['table_row_odd'],
                     'color': THEME['text_main'],
                     'border': 'none'
                 },
                 style_header={
-                    'backgroundColor': THEME['table_header'], 
-                    'color': THEME['text_main'], 
-                    'fontWeight': 'bold', 
+                    'backgroundColor': THEME['table_header'],
+                    'color': THEME['text_main'],
+                    'fontWeight': 'bold',
                     'textAlign': 'center',
                     'border': 'none'
                 },
@@ -636,6 +672,59 @@ def register_portfolio_run_callbacks(app):
                 ],
                 style_table={'overflowX': 'auto'}
             )
+
+            # ── RC attribution panel (Item 21): realised RC vs equal-target ──────
+            # Build a compact factor risk-contribution table so the user can verify
+            # that the optimizer actually achieved the intended risk budget.
+            _rc_panel = html.Div()
+            if isinstance(factor_risk, pd.DataFrame) and not factor_risk.empty:
+                _rc_display = factor_risk.copy()
+                # Equal-risk target for comparison (ERC = 1/n per factor)
+                n_factors_rc = len(_rc_display)
+                _rc_display['Target RC (%)'] = round(100.0 / n_factors_rc, 1) if n_factors_rc else 0.0
+                _rc_display['Δ RC (%)'] = (_rc_display['Risk Contribution (%)'] - _rc_display['Target RC (%)']).round(1)
+                _rc_display['Risk Contribution (%)'] = _rc_display['Risk Contribution (%)'].round(1)
+                _rc_display['Volatility (% ann.)'] = (_rc_display['Volatility (% ann.)'] * 100).round(2)
+                _rc_display['Net Exposure'] = _rc_display['Net Exposure'].round(4)
+                _rc_panel = html.Div([
+                    html.Div("Factor Risk Attribution", style={
+                        'color': THEME['text_sub'], 'fontSize': '12px',
+                        'fontWeight': 'bold', 'marginTop': '18px', 'marginBottom': '6px',
+                    }),
+                    dash_table.DataTable(
+                        data=_rc_display[[
+                            'Risk Factor', 'Volatility (% ann.)', 'Net Exposure',
+                            'Risk Contribution (%)', 'Target RC (%)', 'Δ RC (%)',
+                        ]].to_dict('records'),
+                        columns=[
+                            {'name': 'Factor',       'id': 'Risk Factor'},
+                            {'name': 'Vol % (ann.)', 'id': 'Volatility (% ann.)'},
+                            {'name': 'Net Exp.',     'id': 'Net Exposure'},
+                            {'name': 'RC %',         'id': 'Risk Contribution (%)'},
+                            {'name': 'Target RC %',  'id': 'Target RC (%)'},
+                            {'name': 'Δ RC %',       'id': 'Δ RC (%)'},
+                        ],
+                        style_cell={
+                            'textAlign': 'center', 'padding': '5px 8px',
+                            'fontFamily': 'monospace', 'fontSize': '11px',
+                            'backgroundColor': THEME['table_row_odd'],
+                            'color': THEME['text_main'], 'border': 'none',
+                        },
+                        style_header={
+                            'backgroundColor': THEME['table_header'],
+                            'color': THEME['text_main'], 'fontWeight': 'bold',
+                            'textAlign': 'center', 'border': 'none', 'fontSize': '11px',
+                        },
+                        style_data_conditional=[
+                            {'if': {'filter_query': '{Δ RC %} > 5',  'column_id': 'Δ RC %'}, 'color': THEME.get('warning', '#f39c12')},
+                            {'if': {'filter_query': '{Δ RC %} < -5', 'column_id': 'Δ RC %'}, 'color': THEME.get('warning', '#f39c12')},
+                            {'if': {'row_index': 'even'}, 'backgroundColor': THEME['table_row_even']},
+                        ],
+                        style_table={'overflowX': 'auto'},
+                    ),
+                ], style={'backgroundColor': THEME.get('bg_card', THEME['bg_input']), 'padding': '10px', 'borderRadius': '4px'})
+
+            portfolio_table = html.Div([positions_table, _rc_panel])
             
             _dv01_info = f"  ·  DV01 {total_dv01:.2f} MM / max {total_capital_cny * float(max_duration or 5) / 1e10:.2f} MM{dv01_cap_msg}"
             _status_children = [html.Span(f"✓ Analysis completed!{_dv01_info}", style={'color': THEME['success'], 'fontWeight': 'bold'})]
@@ -655,6 +744,22 @@ def register_portfolio_run_callbacks(app):
 
             # For Pure Risk Parity: derive RP Max from actual factor risk contributions
             # returned by the full-covariance optimizer (proper ERC attribution).
+            # IR factors (IRDL/IRSL/IRCV): √vol-proportional within their capital envelope.
+            # Non-IR factors (CMDL/FXDL/SPDL): equal share within their envelope.
+            def _fallback_rp_budgets(factor_names_list, vol_series, cap_m):
+                _IR = ('IRDL', 'IRSL', 'IRCV')
+                _ir = [f for f in factor_names_list if f.split('.')[0] in _IR]
+                _non = [f for f in factor_names_list if f.split('.')[0] not in _IR]
+                n_all = len(factor_names_list) or 1
+                ir_cap = cap_m * len(_ir) / n_all
+                non_cap = cap_m * len(_non) / n_all
+                _vol_m = {f: float(vol_series[f]) for f in factor_names_list
+                          if f in vol_series and pd.notna(vol_series.get(f)) and float(vol_series[f]) > 0}
+                ir_allocs, _ = derive_vol_sqrt_budgets(_ir, _vol_m, total_capital_m=ir_cap)
+                non_eq = round(non_cap / len(_non), 2) if _non else 0.0
+                out = {**ir_allocs, **{f: non_eq for f in _non}}
+                return out
+
             if allocation_mode == 'risk_parity':
                 if (not factor_risk.empty
                         and 'Risk Factor' in factor_risk.columns
@@ -668,22 +773,34 @@ def register_portfolio_run_callbacks(app):
                             for f, v in rc_map.items() if v > 0
                         }
                     else:
-                        # Fallback: inv-vol proportional
                         _fnames_erc = list(vols.index) if hasattr(vols, 'index') else []
-                        _iv = {f: 1.0/float(vols[f]) for f in _fnames_erc
-                               if pd.notna(vols.get(f)) and float(vols[f]) > 0}
-                        _tot = sum(_iv.values()) or 1.0
-                        rp_budgets_out = {f: round(total_capital_m * v / _tot, 2) for f, v in _iv.items()}
+                        rp_budgets_out = _fallback_rp_budgets(_fnames_erc, vols, total_capital_m)
                 else:
-                    # Fallback: inv-vol proportional
                     _fnames_erc = list(vols.index) if hasattr(vols, 'index') else []
-                    _iv = {f: 1.0/float(vols[f]) for f in _fnames_erc
-                           if pd.notna(vols.get(f)) and float(vols[f]) > 0}
-                    _tot = sum(_iv.values()) or 1.0
-                    rp_budgets_out = {f: round(total_capital_m * v / _tot, 2) for f, v in _iv.items()}
-            # factor_scaling and user_defined already have rp_budgets_out set above
+                    rp_budgets_out = _fallback_rp_budgets(_fnames_erc, vols, total_capital_m)
+            # factor_scaling: derive rp_budgets_out from post-scaled asset weights
+            if allocation_mode == 'factor_scaling' and not rp_budgets_out:
+                _fnames_erc = list(vols.index) if hasattr(vols, 'index') else []
+                rp_budgets_out = _fallback_rp_budgets(_fnames_erc, vols, total_capital_m)
+            # user_defined already has rp_budgets_out set above
 
             # ── Save Beta snapshot for Summary tab ────────────────────────────
+            # Metadata fields (Item 24): every saved row carries the full run
+            # configuration so the Summary tab is reproducible and auditable.
+            _factor_pool_all = (
+                SELECTED_FACTOR_POOL.get('ir_factors', [])
+                + SELECTED_FACTOR_POOL.get('sp_factors', [])
+                + SELECTED_FACTOR_POOL.get('fx_factors', [])
+                + SELECTED_FACTOR_POOL.get('cmd_factors', [])
+            )
+            _run_meta = {
+                '_timestamp':       _run_timestamp.isoformat(),
+                '_run_mode':        allocation_mode,
+                '_capital_cny':     float(total_capital_cny),
+                '_model_month_key': _run_timestamp.strftime('%Y-%m'),
+                '_factor_pool':     ','.join(sorted(_factor_pool_all)),
+                '_max_duration':    float(max_duration or 5),
+            }
             try:
                 pathlib.Path(_SUMMARY_BETA_PARQUET).parent.mkdir(parents=True, exist_ok=True)
                 _keep_cols = [c for c in [
@@ -691,7 +808,8 @@ def register_portfolio_run_callbacks(app):
                     'Duration', 'Capital (CNY)', 'DV01 (MM CNY)', 'Weight (%)',
                 ] if c in portfolio_df.columns]
                 _snap = portfolio_df[_keep_cols].copy()
-                _snap['_timestamp'] = datetime.now().isoformat()
+                for _mk, _mv in _run_meta.items():
+                    _snap[_mk] = _mv
                 for _c in ('Duration', 'Capital (CNY)', 'DV01 (MM CNY)'):
                     if _c in _snap.columns:
                         _snap[_c] = pd.to_numeric(_snap[_c], errors='coerce')

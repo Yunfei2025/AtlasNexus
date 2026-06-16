@@ -465,11 +465,33 @@ def _trend_regime_flag(
     return ((ema_downtrend | ema_uptrend) & strong_mom.fillna(False))
 
 
+def _newey_west_ic_pvalue(ic: float, n: int, horizon: int) -> float:
+    """Newey-West adjusted p-value for IC significance under overlapping returns.
+
+    For H-day overlapping forward returns the effective number of independent
+    observations is roughly n/H, so the standard t-stat overstates significance
+    by ~sqrt(H).  The Newey-West variance estimator with lag = H-1 corrects for
+    this autocorrelation.  We approximate the NW-adjusted t-stat as:
+
+        t_NW = IC * sqrt(n_eff)   where  n_eff = n / H
+
+    For H=1 this reduces to the standard t-stat.  Returns a two-tailed p-value.
+    """
+    from scipy.stats import t as t_dist
+    if n <= 2 or horizon < 1:
+        return 1.0
+    n_eff = max(n / horizon, 2)
+    ic_safe = float(np.clip(ic, -0.9999, 0.9999))
+    t_stat = ic_safe * np.sqrt(n_eff - 2) / np.sqrt(max(1 - ic_safe ** 2, 1e-9))
+    return float(2 * t_dist.sf(abs(t_stat), df=max(n_eff - 2, 1)))
+
+
 def _compute_ic_metrics(
     features: pd.DataFrame,
     forward_returns: pd.Series,
     min_obs: int = 60,
     ewma_halflife: int = 0,
+    horizon: int = 1,
 ) -> pd.DataFrame:
     """Compute Spearman IC of each feature vs already-aligned forward returns.
 
@@ -479,8 +501,9 @@ def _compute_ic_metrics(
     Fix 3: when ``ewma_halflife > 0`` the IC is computed as a weighted
     Spearman correlation where each observation is weighted by
     ``exp(-log(2)/halflife × (T-t))`` so that recent training data dominates.
-    The regular (unweighted) ``spearmanr`` p-value is still used as a
-    conservative significance gate.
+
+    §6.1 fix: for H > 1 the p-value is now Newey-West adjusted (effective
+    n = n/H) so the significance gate is not inflated by overlapping returns.
     """
     common = features.index.intersection(forward_returns.dropna().index)
     if len(common) < min_obs:
@@ -500,7 +523,8 @@ def _compute_ic_metrics(
     rows = []
     for col in feat.columns:
         valid = feat[col].notna() & ret.notna()
-        if valid.sum() < min_obs:
+        n_valid = int(valid.sum())
+        if n_valid < min_obs:
             continue
         x_col = feat[col].loc[valid]
         y_col = ret.loc[valid]
@@ -509,19 +533,20 @@ def _compute_ic_metrics(
             w_col = sample_weights.reindex(x_col.index).fillna(0)
             w_col = w_col / w_col.sum() if w_col.sum() > 1e-12 else w_col
             ic = _weighted_spearman_ic(x_col, y_col, w_col)
-            # conservative p-value: use unweighted Spearman
-            _, p = spearmanr(x_col, y_col)
         else:
-            ic, p = spearmanr(x_col, y_col)
+            ic, _ = spearmanr(x_col, y_col)
 
         if np.isnan(ic):
             continue
+
+        # Newey-West adjusted p-value: corrects for overlapping returns at H>1
+        p = _newey_west_ic_pvalue(ic, n_valid, horizon)
         rows.append({
             'factor': col,
             'IC': ic,
             'IC_abs': abs(ic),
             'IR': 0.0,          # rolling IR not needed for selection
-            'count': int(valid.sum()),
+            'count': n_valid,
             'p_value': p,
             'is_significant': p < 0.05,
         })
@@ -847,6 +872,16 @@ def build_position_series(
 #  4. Walk-forward factor model engine
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Factor metadata: factors whose prefix appears here are long-only.
+# Extend this dict (not the code) when new long-only factor families are added.
+_LONG_ONLY_PREFIXES: frozenset = frozenset({'IRDL'})
+
+
+def _is_long_only(factor_code: str) -> bool:
+    """Return True if this factor family only allows long (non-negative) positions."""
+    return factor_code.split('.')[0] in _LONG_ONLY_PREFIXES
+
+
 def _compute_target_returns(
     factor_code: str,
     factor_levels: pd.DataFrame,
@@ -1011,10 +1046,11 @@ def run_factor_model_backtest(
             tf_H = train_feat.loc[common_H]
             fr_H = train_fwd_H.loc[common_H]
 
-            # Fix 3: IC metrics with EWMA weighting
+            # Fix 3: IC metrics with EWMA weighting; pass horizon for NW correction
             metrics_H = _compute_ic_metrics(
                 tf_H, fr_H, cfg.min_observations,
                 ewma_halflife=cfg.ewma_obs_halflife,
+                horizon=H,
             )
             if metrics_H.empty:
                 continue
@@ -1110,12 +1146,12 @@ def run_factor_model_backtest(
     # Actual daily returns (for PnL, always use 1-day returns)
     result['returns'] = daily_returns.reindex(result.index)
 
-    # IRDL (rate level) factors represent core long-only duration exposure.
-    _long_only = factor_code.split('.')[0] == 'IRDL'
+    # Long-only flag comes from factor metadata, not string inspection.
+    _long_only = _is_long_only(factor_code)
     pos = build_position_series(result['predicted_return'], result['returns'], cfg,
                                 long_only=_long_only)
 
-    # Fix 4: Position floor during confirmed bond-bull trend (IRDL only).
+    # Fix 4: Position floor during confirmed bond-bull trend (long-only factors only).
     # When both short-term (60d) and medium-term (cfg.long_floor_confirm_window)
     # yield momentum are negative — i.e. yields are falling on both horizons —
     # the model must hold at least cfg.long_floor units of duration exposure.
@@ -1133,7 +1169,9 @@ def run_factor_model_backtest(
         )
 
     result['signal'] = pos['signal']
-    result['position'] = bucket_position(pos['position'], long_only=_long_only)
+    # Position stays in [-1, 1] (the canonical scale shared with portfolio snapshot).
+    # bucket_position {0…2}/{-2…2} display levels are applied only at the UI layer.
+    result['position'] = pos['position']
     result['turnover'] = pos['turnover']
 
     # Gross PnL, then net of transaction costs (doc §5.1, DV01-aware)

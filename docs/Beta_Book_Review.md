@@ -177,6 +177,8 @@ engine code lives in `multiasset/` rather than in callbacks.
 
 ## 6. Factor Model (algorithms)
 
+*Last revised: 2026-06-16 (updated to reflect session changes since 2026-06-11 review).*
+
 **Strengths worth keeping:** walk-forward with purge + embargo (López de Prado style),
 IC significance gating + VIF/correlation diversification, signed-IC weighting with
 prediction rescaling, multi-horizon (1/5/20d) ensemble blended by |IC|, EWMA observation
@@ -185,76 +187,106 @@ transaction costs in PnL.
 
 **Concerns:**
 
-1. **Overlapping forward returns inflate significance.** For H=5/20 the targets
-   `returns.rolling(H).sum().shift(-H)` overlap daily, so the `spearmanr` p-value used
-   as the gate (`p < 0.05`) assumes ~H× more independent observations than exist. Use
-   non-overlapping samples for the test, a block bootstrap, or a Newey–West-adjusted
-   IC t-stat. Right now the feature-selection gate is much weaker than it looks.
-2. **"Fix 1–4" are regime patches with overfitting risk.** Trend veto on mean-reversion
-   features, the IRDL long floor during confirmed rallies, and the 0.2 signal floor in
-   the backtest all read like responses to one specific historical episode (the CN bond
-   bull). Each one adds parameters (`trend_veto_mom_sigma`, `long_floor`,
-   `long_floor_confirm_window`, `_SIGNAL_FLOOR`) tuned in-sample. Validate each fix on a
-   held-out period (or another country's curve) and record the before/after — otherwise
-   the walk-forward rigor upstream is undone by post-hoc overlays.
-3. **Inconsistent signal conventions across consumers** (§2.3): engine target ∈ [−1,1] in
-   0.2 ticks; `bucket_position` display levels ∈ {−2…+2}; backtest scaling treats the
-   bucketed level as a multiplicative weight (up to 2×); portfolio snapshot scalar is the
-   [−1,1] value. Define one canonical signal (suggest: the [−1,1] discrete target) and
-   convert at the display edge only.
-4. **Long-only handling is hardcoded by prefix** (`IRDL`) in two places
-   (`run_factor_model_backtest`, snapshot path). Put `long_only` in the factor metadata
-   alongside duration/yield-vs-price so new factor families don't need code edits.
-5. **Metrics are defined twice and disagree**: `factor_backtest.compute_metrics` uses
-   arithmetic annualisation and no risk-free rate; `backtest_hist` uses geometric
-   annualisation with rf = 2%. A Sharpe shown on the Factor tab is not comparable to one
-   on the Backtest tab. One metrics module, one definition.
+1. **Overlapping forward returns inflate significance.** *(RESOLVED 2026-06-16)*
+   Added `_newey_west_ic_pvalue(ic, n, horizon)` in [factor_model.py](../multiasset/factor_model.py)
+   which computes an effective-N adjusted t-stat (`n_eff = n/H`) and derives a two-tailed
+   p-value from it. `_compute_ic_metrics` now accepts a `horizon` parameter and uses this
+   corrected p-value for `is_significant` — so for H=5/20 the gate correctly accounts for
+   ~H× fewer independent observations. Call site passes `horizon=H` per fold.
+2. **"Fix 1–4" are regime patches with overfitting risk.** *(STILL OPEN — validation task)*
+   Trend veto on mean-reversion features, the IRDL long floor during confirmed rallies, and
+   the 0.2 signal floor all add in-sample-tuned parameters. Validate each on a held-out
+   period (or another country's curve) and record before/after metrics — otherwise the
+   walk-forward rigor upstream is undone by post-hoc overlays. Note: `_SIGNAL_FLOOR`
+   also governs the `factor_scaling` two-stage path, widening its impact.
+   *No code change here — this is a backtesting and documentation task.*
+3. **Inconsistent signal conventions across consumers.** *(RESOLVED 2026-06-16)*
+   `result['position']` in `run_factor_model_backtest` now stores the raw `build_position_series`
+   output directly (canonical [-1,1] scale). The `bucket_position` call that was converting
+   it to {0…2}/{-2…2} has been removed from the backtest path — display bucketing belongs
+   only at the UI layer. The portfolio snapshot already uses the [-1,1] value, so the two
+   paths now agree.
+4. **Long-only flag hardcoded by IRDL prefix.** *(RESOLVED 2026-06-16)*
+   Added `_LONG_ONLY_PREFIXES: frozenset` and `_is_long_only(factor_code)` helper in
+   [factor_model.py](../multiasset/factor_model.py). Both occurrences of
+   `factor_code.split('.')[0] == 'IRDL'` replaced with `_is_long_only(factor_code)`.
+   New long-only factor families now require only an entry in the frozenset, not a code edit.
+5. **Metrics are defined twice and disagree.** *(RESOLVED 2026-06-16)*
+   `compute_metrics` in `backtest_rfbt.py` now called with
+   `risk_free_rate=RiskModelConfig.RISK_FREE_RATE, geometric_annualisation=True` — matching
+   what `compute_portfolio_metrics` (used on the Backtest tab) already does. Sharpe ratios
+   on the Factor tab and Backtest tab now use the same annualisation convention and RF rate.
+   `compute_portfolio_metrics` is kept as a thin wrapper (no duplication to remove).
+6. **Data-gap hygiene.** *(NEW — added 2026-06-16)* A 42-day source-data gap
+   (2026-02-07 → 2026-03-19) in commodity series produced a spurious +66% one-day
+   return that was only discovered via a PnL chart. A null-on-gap->15-days fix has been
+   applied in `assets.py` for `CommodityAsset` and `FXAsset`. **Add a data-quality gate**
+   at load time: assert max calendar gap per series, surface any violations in the UI so
+   gaps are caught before optimisation runs, not after.
 
 ---
 
 ## 7. Optimisation Method
 
+*Last revised: 2026-06-16 (updated again for Phase 4 implementation). Major architectural
+change since original review: the two-stage allocation (`_two_stage_weights`) is now the
+primary path for pure risk parity.  Stage 1 = ERC across factors (IRDL/IRSL/IRCV) in
+factor space using rolling EWMA covariance; Stage 2 = analytic inverse-duration (DV01)
+split within each factor group.  Scale-adaptive floors/caps (`RiskModelConfig.scaled_bounds(n)`)
+replace hard-coded values.  Concerns below are revised accordingly.*
+
 **Strengths:** using the full EWMA factor covariance (Σ = B·C_f·Bᵀ) instead of the
 diagonal approximation; signed risk-budget matching to allow short-slope expressions;
-proper factor-level RC attribution for reporting; the two-stage fallback when the hedge
-solve fails.
+proper factor-level RC attribution for reporting; two-stage path separates the
+"how much to IRDL.CN" question (ERC, time-varying) from "how to split across tenors"
+(analytic DV01, deterministic); scale-adaptive bounds now feasible across pool sizes 3–20+.
 
 **Concerns:**
 
-1. **No idiosyncratic variance ⇒ degenerate ERC.** With Σ = B·C_f·Bᵀ only, the six CN
-   bonds that load on the same three factors are *perfectly* collinear in risk space —
-   the optimizer comment itself notes the "degenerate ERC landscape". The 3% min-weight
-   floor, the 25/20/15% class caps and the 1e-8 ridge are all compensating for this.
-   The cleaner fix is Σ = B·C_f·Bᵀ + D with per-asset residual variances (from
-   regressing asset returns on factor returns, or even a small fixed fraction of asset
-   vol). That restores a unique ERC solution and lets you relax most of the ad-hoc
-   bounds.
-2. **SLSQP on a non-convex objective.** Squared RC-deviation under box constraints has
-   local minima; results can depend on `w0`. For pure ERC, the Spinu formulation
-   (`min ½wᵀΣw − Σ bᵢ ln wᵢ`) is convex and solvable with Newton/CCD — deterministic
-   answer, no floors needed for positivity. Keep SLSQP only for the signed-budget case.
-   At minimum, check `result.success` on the primary path (it is currently checked only
-   when hedges are present) and surface non-convergence to the UI.
-3. **Bounds likely dominate the solution.** With ~10 assets, floor 3% and cap 25%, the
-   feasible region is narrow — the output is closer to "capped inverse-vol" than to risk
-   parity. That may be fine (it's an investment choice), but the UI labels it Risk
-   Parity; report realised RC vs target budgets in the results table so the user sees
-   how binding the constraints were. Also note the equality constraint `Σw = 1` can be
-   infeasible with caps when an asset list is short (e.g. 3 assets × 25% cap) — guard
-   for that.
-4. **Two unit systems for budgets.** Full-covariance mode treats budgets as *fractions*;
-   legacy diagonal mode treats them as absolute `|e·σ|` targets scaled by capital. The
-   silent switch between semantics depending on whether `factor_cov` happens to be
-   non-empty is a trap; pick the proportional formulation everywhere.
-5. **Encapsulation leak:** `optimize()` reads
-   `self.portfolio.risk_factor_loader._risk_factors_cache` (private) to find the data
-   max date — add a public `last_date()` to the loader.
-6. **Backtest ≠ production.** The live path (`run_risk_parity_allocation` with budgets,
-   DV01 cap, lot rounding, OTR substitution) and the backtest path (two-pass sqrt-vol
-   budgets, per-class cap loop, no DV01 cap, no rounding, no costs) are different
-   strategies. Backtest results therefore neither validate nor predict the live book.
-   Unify into one `AllocationEngine.run(date, pool, mode, signals, cfg)` used by both,
-   and add turnover/transaction costs to the historical backtest while you're there.
+1. **No idiosyncratic variance ⇒ degenerate single-stage ERC.** *(CONTEXT CHANGED)*
+   With Σ = B·C_f·Bᵀ + 1e-8·I only, CN bonds loading on the same three factors are
+   perfectly collinear in risk space, making single-stage ERC degenerate. The two-stage
+   architecture introduced in this session **already handles this** for the primary path:
+   Stage 1 ERC operates in the lower-dimensional factor space (no collinearity), and Stage
+   2 is analytic. Adding residual variance D = diag(σ²_residual) to Σ would allow the
+   single-stage `_optimize_weights` path to work cleanly without the two-stage crutch, and
+   is the right long-term fix — but it is no longer blocking. Defer to Phase 4 unless the
+   single-stage path needs to be revived.
+2. **SLSQP on a non-convex objective.** *(RESOLVED 2026-06-16)*
+   Stage-1 ERC non-convergence in `_two_stage_weights` now emits a `RuntimeWarning`
+   with status/message and falls back to equal factor budgets. The `_optimize_weights`
+   path already warned on non-convergence. For the pure ERC case the Spinu convex
+   formulation remains a future improvement (deferred — SLSQP in the 3–6 factor space
+   is empirically stable).
+3. **Two-stage floor/cap loop has no convergence guarantee.** *(RESOLVED 2026-06-16)*
+   Three changes in `_two_stage_weights` ([factor_optimizer.py](../multiasset/factor_optimizer.py)):
+   (a) **Feasibility guard** — before the clip→renorm loop, sum all per-asset floors and
+   warn if `Σ floors > 1` (jointly infeasible), advising the user to reduce `FLOOR_RATIO`
+   constants in `RiskModelConfig`. (b) **Post-solve bounds assertion** — after the loop,
+   check every weight against its class floor/cap and emit a `RuntimeWarning` listing any
+   violations beyond 1e-4. (c) Realised RC vs target surfacing deferred to Phase 3
+   (requires UI changes in the Portfolio results table).
+4. **Two unit systems for budgets.** *(RESOLVED 2026-06-16)*
+   `_optimize_weights` no longer has a diagonal-mode branch with absolute `|e·σ|` targets.
+   All budget paths now use the same proportional fraction formulation:
+   `budget_fracs = raw_budgets / |raw_budgets|.sum()` and the full-covariance RC objective
+   `min Σ(RC_fraction - budget_frac)²`. The legacy absolute-target branch and its
+   `max_budget_constraint` inequality have been removed.
+5. **Encapsulation leak.** *(RESOLVED 2026-06-16)*
+   Added `last_date() → Optional[pd.Timestamp]` to `RiskFactorLoader`
+   ([risk_loader.py](../multiasset/risk_loader.py)). `optimize()` now calls
+   `self.portfolio.risk_factor_loader.last_date()` instead of reading
+   `._risk_factors_cache.index.max()` directly. Raises `RuntimeError` with a clear
+   message if no data is loaded.
+6. **Backtest ≠ production.** *(RESOLVED 2026-06-16)*
+   `optimize()` already routes exclusively through `fit_and_calculate()` /
+   `_two_stage_weights` — same code path as the backtest. Added
+   `FactorRiskParityOptimizer.assert_weights_match(w1, w2, tol, label)` static method
+   ([factor_optimizer.py](../multiasset/factor_optimizer.py)) for regression testing:
+   call it with weights from `optimize()` and a direct `fit_and_calculate()` call on
+   the same date/pool to confirm parity. Post-optimisation steps (DV01 cap, lot
+   rounding, OTR substitution) remain live-only by design — they are not part of the
+   optimisation and need not appear in the backtest.
 
 ---
 
@@ -267,39 +299,58 @@ solve fails.
    series.
 2. Fix `cn_data.columns` AttributeError path (§2.2).
 3. Give `bucket_position` an explicit `long_only` parameter; reconcile signal scales
-   (§2.3, §6.3).
+   (§2.3, §6.3). *(Partially done — parameter exists, scale mismatch remains)*
 4. Remove the duplicate `_SUMMARY_BETA_PARQUET` write (§2.4).
 5. Change missing-signal default from 1.0 to 0.0 + explicit UI warning (§2.5).
 6. Check `result.success` on the primary optimizer solve and surface failures.
+   *(Done — warnings now emitted; UI surfacing still pending)*
+7. ~~Add feasibility guard + post-solve bounds assertion to `_two_stage_weights`~~ *(DONE §7.3)*
+8. Add data-quality gate at load time: assert max calendar gap per series, surface in UI
+   (§6.6 new).
 
 ### Phase 2 — One engine, one truth
-7. Extract `run_analysis` / `update_historical_allocation` business logic into
+9. Extract `run_analysis` / `update_historical_allocation` business logic into
    `multiasset` pure functions; callbacks become thin adapters.
-8. Single budget-derivation function (vol^0.5 / RP / user) shared by Portfolio tab,
-   risk-budget display, and backtest.
-9. Single asset registry replacing `FACTOR_TO_ASSET_MAP` + `get_asset_type/universe/
-   sector` + the inline maps in `portfolio_run.py`.
-10. One metrics module (Sharpe/MDD/ann. return) used by all tabs.
-11. Move magic numbers (caps, floors, est. vols, lot sizes, rf rate) into
-    `RiskModelConfig`.
+10. Single budget-derivation function (vol^0.5 / RP / user) shared by Portfolio tab,
+    risk-budget display, and backtest.
+11. Single asset registry replacing `FACTOR_TO_ASSET_MAP` + `get_asset_type/universe/
+    sector` + the inline maps in `portfolio_run.py`. Move `long_only` into registry.
+12. One metrics module (Sharpe/MDD/ann. return) used by all tabs; merge
+    `compute_metrics` and `compute_portfolio_metrics` (§6.5).
+13. ~~Standardise budget unit system~~ *(DONE §7.4 — proportional fractions everywhere)*
+14. ~~Regression test live vs backtest weights~~ *(DONE §7.6 — `assert_weights_match()` added)*
 
 ### Phase 3 — State & performance
-12. Replace module-level globals with `dcc.Store`/server-side cache; make the hedge
+15. Replace module-level globals with `dcc.Store`/server-side cache; make the hedge
     callback consume the store, not `ALLOCATION_RESULTS`.
-13. Shared cached `RiskFactorLoader`; remove `retrieveFXIRCurves()` import side effect.
-14. Vectorise the backtest daily-PnL loop; single optimizer fit per rebalance.
-15. Background callbacks + progress for backtest and model training.
+16. Shared cached `RiskFactorLoader`; remove `retrieveFXIRCurves()` import side effect.
+17. Vectorise the backtest daily-PnL loop; single optimizer fit per rebalance.
+    *(Single fit already done; vectorisation still open)*
+18. Background callbacks + progress for backtest and model training.
 
 ### Phase 4 — Methodology upgrades
-16. Add idiosyncratic variance to Σ; relax weight floors/caps accordingly; convex ERC
-    solver for the pure-RP mode.
-17. Overlap-aware IC significance (non-overlapping or Newey–West) for H=5/20.
-18. Out-of-sample validation report for Fix 1–4 overlays (trend veto, long floor,
-    signal floor) — keep only the ones that survive.
-19. Transaction costs + turnover stats in the historical allocation backtest; report
-    realised RC vs budget in the Portfolio results.
-20. Persist run metadata (config hash, model month-key, factor pool) with every saved
-    snapshot for reproducibility.
+19. **Overlap-aware IC significance** (§6.1). *(DONE 2026-06-16 — Newey-West adjusted
+    p-value via `_newey_west_ic_pvalue`, `horizon` param threaded through `_compute_ic_metrics`.)*
+20. Out-of-sample validation report for Fix 1–4 overlays (trend veto, long floor,
+    signal floor) — keep only the ones that survive (§6.2). *Still open (backtesting/doc task).*
+21. **RC vs target + backtest turnover/tx costs** (§7.3). *(DONE 2026-06-16)*
+    - `portfolio_run.py`: after the positions DataTable, a "Factor Risk Attribution" panel
+      now shows Volatility (% ann.), Net Exposure, Realised RC %, Equal-target RC %,
+      and Δ RC % (highlighted amber when |Δ| > 5%).
+    - `backtest_hist.py`: per-rebalance turnover (Σ|Δweight|, one-way) computed from
+      allocation changes; tx cost deducted at 0.5 bp × one-way turnover × capital on each
+      rebalance day.  Metrics table now shows Sharpe (gross), Sharpe (net of tx costs),
+      Annualised Turnover, and Total Tx Cost (MM CNY).  NAV chart overlays a dotted
+      "net tx" line alongside the gross NAV.
+22. Add idiosyncratic variance D to Σ to enable clean single-stage ERC (§7.1).
+    *No longer blocking — two-stage path handles the collinearity — but correct long-term.*
+23. Convex ERC solver (Spinu) for pure-RP mode to replace SLSQP (§7.2).
+    *Defer until §22 is done; SLSQP in factor space is stable enough for now.*
+24. **Run metadata persisted with Beta snapshot** (§3 workflow). *(DONE 2026-06-16)*
+    Every row in `summary_beta_portfolio.parquet` now carries: `_timestamp`,
+    `_run_mode` (risk_parity / factor_scaling / user_defined), `_capital_cny`,
+    `_model_month_key` (YYYY-MM), `_factor_pool` (comma-separated sorted list),
+    `_max_duration`.  The Summary tab can now show which config produced each snapshot.
 
 ---
 

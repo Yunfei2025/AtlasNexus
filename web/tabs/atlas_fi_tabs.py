@@ -1044,6 +1044,7 @@ def register_callbacks(app) -> None:
                 highlight_month=int(highlight_month) if highlight_month else None,
                 stats=stats,
                 title=f"{ticker} — seasonal year overlay",
+                raw_series=series,
             )
         except Exception as e:
             print(f"[seasonal] figure error: {e}")

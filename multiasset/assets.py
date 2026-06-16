@@ -176,8 +176,15 @@ class CommodityAsset(Asset):
         if self.factor not in risk_factors.columns:
             raise ValueError(f"Risk factor '{self.factor}' not found in data")
 
-        # Direct percentage returns
-        returns = risk_factors[self.factor].pct_change() * 100
+        prices = risk_factors[self.factor]
+        returns = prices.pct_change() * 100
+
+        # Null out returns that span data gaps > 15 calendar days (e.g. missing
+        # data blocks).  Normal holiday gaps (CNY ~10 days) are kept; gaps of 15+
+        # days indicate missing source data and would produce spurious jumps.
+        if isinstance(prices.index, pd.DatetimeIndex):
+            day_gaps = prices.index.to_series().diff().dt.days
+            returns[day_gaps > 15] = float('nan')
 
         return returns
 
@@ -208,8 +215,13 @@ class FXAsset(Asset):
         if self.factor not in risk_factors.columns:
             raise ValueError(f"Risk factor '{self.factor}' not found in data")
 
-        # Direct percentage returns
-        returns = risk_factors[self.factor].pct_change() * 100
+        prices = risk_factors[self.factor]
+        returns = prices.pct_change() * 100
+
+        # Null out returns spanning data gaps > 15 calendar days
+        if isinstance(prices.index, pd.DatetimeIndex):
+            day_gaps = prices.index.to_series().diff().dt.days
+            returns[day_gaps > 15] = float('nan')
 
         return returns
 

@@ -82,7 +82,16 @@ class RiskFactorLoader:
 
         self._risk_factors_cache = risk_factors
         return risk_factors
-    
+
+    def last_date(self) -> Optional[pd.Timestamp]:
+        """Return the last date present in the loaded risk-factor data, or None."""
+        rf = self._risk_factors_cache
+        if rf is None or rf.empty:
+            rf = self.load_risk_factors(use_cache=True)
+        if rf is None or rf.empty:
+            return None
+        return pd.Timestamp(rf.index.max())
+
     def _load_ir_factors(self, risk_factors: pd.DataFrame) -> pd.DataFrame:
         """
         Load interest rate level, slope, and curvature factors.
