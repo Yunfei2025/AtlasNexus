@@ -89,22 +89,6 @@ def register_backtest_rfbt_callbacks(app):
         return (hide, hide, hide, hide, flex)
 
     @app.callback(
-        Output('rfbt-generate-status', 'children'),
-        Input('rfbt-generate-btn', 'n_clicks'),
-        prevent_initial_call=True,
-    )
-    def generate_factor_rates_click(n_clicks):
-        """Generate (or regenerate) factor-rates.pkl."""
-        if not n_clicks:
-            raise dash.exceptions.PreventUpdate
-        try:
-            from multiasset.factor_backtest import generate_factor_rates
-            df = generate_factor_rates(DIR_INPUT, save=True)
-            return f"✅ factor-rates.pkl saved ({df.shape[1]} factors, {len(df)} days)"
-        except Exception as e:
-            return f"❌ Error: {e}"
-
-    @app.callback(
         [Output('rfbt-results-container', 'children'),
          Output('rfbt-status', 'children')],
         Input('rfbt-run-btn', 'n_clicks'),
@@ -460,6 +444,16 @@ def register_backtest_rfbt_callbacks(app):
         trigger_id = getattr(dash.callback_context, 'triggered_id', None)
         action = 'predict' if trigger_id == 'factor-predict-btn' else 'train'
 
+        # Always refresh factor-rates.pkl before predicting/training so that
+        # today's market data is included without requiring a manual button press.
+        try:
+            from multiasset.factor_backtest import update_factor_rates
+            _, n_new = update_factor_rates(DIR_INPUT)
+            if n_new:
+                print(f"factor-rates.pkl: +{n_new} new day(s) appended before predict/train")
+        except Exception as _ufr_exc:
+            print(f"Warning: factor-rates incremental update failed: {_ufr_exc}")
+
         store_data = store_data or {}
         factors = list(dict.fromkeys(
             store_data.get('ir', []) +
@@ -614,24 +608,70 @@ def register_backtest_rfbt_callbacks(app):
                     )
                 latest_artifact = active_artifact
             else:
-                results, latest_artifact = run_factor_backtest(
-                    factors=factors,
-                    strategy='FactorModel',
-                    start_date=None,
-                    end_date=end_date,
-                    input_dir=DIR_INPUT,
-                    save=True,
-                    save_latest_only=True,
-                    **current_cfg,
-                )
-                if latest_artifact and latest_artifact.get('metadata'):
-                    persist_note = f"saved model: {latest_artifact['metadata'].get('train_end_date', '?')}"
+                from multiasset.factor_model import load_current_month_model
+                existing_artifact, existing_month_key = load_current_month_model()
+                if existing_artifact and _config_matches(
+                    existing_artifact.get('metadata', {}).get('config', {}), current_cfg
+                ):
+                    artifact_factors = {k for k in existing_artifact if k != 'metadata'}
+                    factors_to_train = [f for f in factors if f not in artifact_factors]
+                    cached_factors   = [f for f in factors if f in artifact_factors]
                 else:
-                    persist_note = "model save not found"
-                header_note = (
-                    f"⚡ Model trained on data through {end_date} (month-start cutoff — "
-                    "no recent daily data used to avoid overfitting)."
-                )
+                    factors_to_train = factors
+                    cached_factors   = []
+                    existing_artifact = None
+
+                if factors_to_train:
+                    results_new, latest_artifact = run_factor_backtest(
+                        factors=factors_to_train,
+                        strategy='FactorModel',
+                        start_date=None,
+                        end_date=end_date,
+                        input_dir=DIR_INPUT,
+                        save=True,
+                        save_latest_only=True,
+                        **current_cfg,
+                    )
+                else:
+                    results_new, latest_artifact = {}, existing_artifact
+
+                # Pull cached factor results from the saved artifact for display
+                results = results_new.copy()
+                if cached_factors and (latest_artifact or existing_artifact):
+                    art = latest_artifact or existing_artifact
+                    smooth_days = int(
+                        (art.get('metadata') or {}).get('config', {}).get('signal_smooth_days', 1)
+                    )
+                    cached_results = _build_results_from_saved_artifact(
+                        art, smooth_days, factors, factor_subset=cached_factors
+                    )
+                    results.update(cached_results)
+
+                mkey = (latest_artifact or {}).get('metadata', {}).get('train_end_date', '?')
+                n_new    = len(factors_to_train)
+                n_cached = len(cached_factors)
+                if n_cached and n_new:
+                    persist_note = (
+                        f"saved model: {mkey} · "
+                        f"{n_new} newly trained + {n_cached} from cache"
+                    )
+                    header_note = (
+                        f"⚡ {n_new} factor(s) trained through {end_date} · "
+                        f"🔮 {n_cached} factor(s) loaded from saved model "
+                        f"({', '.join(cached_factors)})"
+                    )
+                elif n_cached:
+                    persist_note = f"saved model: {mkey} · all {n_cached} factor(s) already trained (no retrain needed)"
+                    header_note  = (
+                        f"🔮 All {n_cached} selected factor(s) already exist in the saved model "
+                        f"({mkey}) — no retraining required."
+                    )
+                else:
+                    persist_note = f"saved model: {mkey}" if mkey != '?' else "model save not found"
+                    header_note  = (
+                        f"⚡ Model trained on data through {end_date} (month-start cutoff — "
+                        "no recent daily data used to avoid overfitting)."
+                    )
 
             if not results:
                 return (

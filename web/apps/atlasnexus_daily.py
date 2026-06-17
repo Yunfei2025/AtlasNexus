@@ -337,6 +337,22 @@ def build_tabs_panel():
                     'display': 'flex', 'flexDirection': 'row', 'gap': '12px',
                     'alignItems': 'flex-end', 'flexWrap': 'wrap',
                 }),
+
+                # ── Factor Series row ────────────────────────────────────────
+                html.Div([
+                    html.Button(
+                        "Generate Factor Series",
+                        id="an-btn-gen-factor-series",
+                        n_clicks=0,
+                        title="Full rebuild of factor-rates.pkl from raw market data. "
+                              "Use on-demand when source data changes.",
+                        style={**_btn_style, 'background': '#1b4332', 'borderColor': '#2ecc71'},
+                    ),
+                    html.Span(
+                        id="an-gen-factor-series-status",
+                        style={'color': '#aab0c0', 'fontSize': '12px', 'marginLeft': '12px'},
+                    ),
+                ], style={'marginTop': '12px', 'display': 'flex', 'alignItems': 'center'}),
             ], style=_card_style),
 
             # ── Status & Logs card ───────────────────────────────────────────
@@ -705,6 +721,24 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt, n_refresh_instruments,
         return job.job_id, f"Started job {job.job_id}: curve-backtest ({btype}, {start}→{end})"
 
     raise __import__("dash").exceptions.PreventUpdate
+
+
+@app.callback(
+    Output("an-gen-factor-series-status", "children"),
+    Input("an-btn-gen-factor-series", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _gen_factor_series(n_clicks):
+    """Full rebuild of factor-rates.pkl on demand."""
+    if not n_clicks:
+        raise __import__("dash").exceptions.PreventUpdate
+    try:
+        from multiasset.factor_backtest import generate_factor_rates
+        from settings.paths import DIR_INPUT
+        df = generate_factor_rates(DIR_INPUT, save=True)
+        return f"✅ Saved ({df.shape[1]} factors, {len(df)} days)"
+    except Exception as exc:
+        return f"❌ {exc}"
 
 
 # ---------------------------------------------------------------------------

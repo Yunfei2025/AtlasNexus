@@ -1,0 +1,54 @@
+# Production requirements for FIEngine (AtlasNexus)
+# Pinned to actual versions in production (macOS/Windows)
+# Last verified: 2026-06-17 — Python 3.13, conda
+#
+# Install:
+#   pip install -r requirements/production.txt
+#
+# hmmlearn is USED in futures/backtest/regime.py (regime detection via GaussianHMM)
+#   Note: no Windows cp313 wheel exists (limited-maintenance package).
+#   On Windows: conda install -c conda-forge hmmlearn
+
+# ── Core data science ──
+numpy==2.3.1                 # Vector & array operations
+pandas==3.0.2                # DataFrames; latest stable
+scipy==1.17.1                # Scientific computing (optimize, special functions)
+python-dateutil==2.9.0.post0 # Date utilities for pandas
+pyarrow==19.0.0              # Parquet I/O, Arrow columnar format
+
+# ── Visualisation ──
+matplotlib==3.10.8           # Plotting; 3.10+ for Python 3.13
+plotly==6.7.0                # Interactive charts
+
+# ── Web / dashboard ──
+dash==4.1.0                  # Plotly-based web framework
+dash-bootstrap-components==2.0.4  # Bootstrap styling for Dash
+dash-daq==0.6.0              # Dash controls (knobs, sliders) for futures/intraday console
+Flask==3.1.3                 # WSGI web app framework
+flask-cors==6.0.2            # CORS middleware for Flask API endpoints
+
+# ── Machine learning / statistics ──
+scikit-learn==1.8.0          # ML algorithms (ensemble, clustering)
+hmmlearn==0.3.3              # Hidden Markov Model (regime detection in futures backtest)
+statsmodels==0.14.6          # Statistical models (cointegration, ADF test for pairs)
+nlopt==2.9.1                 # Portfolio optimizer; C binding
+sympy==1.14.0                # Symbolic math (affine curve pricing)
+
+# ── Serialisation / I/O ──
+joblib==1.5.3                # Parallel job execution; used with sklearn
+openpyxl==3.1.5              # Excel .xlsx read/write
+xlsxwriter==3.2.9            # Excel .xlsx write (alt to openpyxl for specific formats)
+
+# ── Domain ──
+chinese-calendar==1.11.0     # China market holidays
+
+# ── HTTP ──
+requests==2.33.1             # HTTP client library
+
+# ── Excel automation (pairs module) ──
+xlwings==0.35.1              # Excel macro automation
+
+# ── Optional — install separately ──
+# WindPy     Wind terminal SDK; not on PyPI — install from the Wind financial client
+# TA-Lib     C extension; `pip install TA-Lib` after installing the C library
+#            Used with try/except in futures/backtest/strategies.py (gracefully skipped)

@@ -18,7 +18,7 @@ from settings.paths import DIR_INPUT as _DIR_INPUT
 
 from ..data import (
     THEME, SPREAD_CATEGORIES,
-    load_spread_data, load_spread_timeseries,
+    load_spread_data, load_spread_timeseries, display_key,
     _get_duration_mult,
 )
 from ..scoring import _compute_risk_parity_weights
@@ -84,14 +84,17 @@ def register_portfolio_callbacks(app) -> None:
         for entry in all_entries:
             inst = entry.get('instrument', '')
             spread_type = entry.get('spread_type', '')
-            if not inst or not spread_type or inst in seen:
+            if not inst or not spread_type:
                 continue
-            seen.add(inst)
+            col_key = display_key(spread_type, inst)
+            if col_key in seen:
+                continue
+            seen.add(col_key)
             ts = load_spread_timeseries(spread_type)
             if ts is not None and isinstance(ts, pd.DataFrame) and inst in ts.columns:
-                s = ts[inst]
+                s = ts[inst].copy()
                 s.index = s.index.astype(str)
-                all_spreads[inst] = s
+                all_spreads[col_key] = s
 
         if len(all_spreads) < 2:
             return no_update, "⚠ Need ≥ 2 instruments with time-series data."

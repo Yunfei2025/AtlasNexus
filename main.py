@@ -186,7 +186,7 @@ def run_atlasnexus_daily_app():
 
     except ImportError as e:
         logger.error(f"❌ Failed to import AtlasNexus Daily app: {e}")
-        logger.info("Make sure all dependencies are installed: pip install -r requirements/development.txt")
+        logger.info("Make sure all dependencies are installed: pip install -r requirements/production.txt")
     except Exception as e:
         logger.error(f"❌ Failed to start AtlasNexus Daily Console: {e}")
 
@@ -209,7 +209,7 @@ def run_atlasnexus_intraday_app():
 
     except ImportError as e:
         logger.error(f"❌ Failed to import AtlasNexus Intraday app: {e}")
-        logger.info("Make sure all dependencies are installed: pip install -r requirements/development.txt")
+        logger.info("Make sure all dependencies are installed: pip install -r requirements/production.txt")
     except Exception as e:
         logger.error(f"❌ Failed to start AtlasNexus Intraday Console: {e}")
 

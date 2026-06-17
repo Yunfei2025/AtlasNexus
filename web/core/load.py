@@ -318,7 +318,7 @@ def _build_spread_ts() -> dict:
         out[f"{btype}Spread"] = ltbspds[f"{btype}Spread"]
 
     miscspds = _load_pickle(os.path.join(DIR_INPUT,"Misc-spds.pkl"))
-    portspds = _load_pickle(os.path.join(DIR_INPUT,"Portfolio-spds.pkl"))
+    portspds = _load_pickle_optional(pathlib.Path(DIR_INPUT) / "Portfolio-spds.pkl")
     out["SectorPCASpread"] = miscspds["PCASpread"]
     out["BinarySpread"] = miscspds["BinarySpread"]
     out["AssetPCASpread"] = portspds

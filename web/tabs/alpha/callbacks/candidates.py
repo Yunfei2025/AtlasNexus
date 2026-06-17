@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 from ..data import (
     THEME, SPREAD_CATEGORIES, ZSCORE_ENTRY_THRESHOLD,
     _get_input_dir, _load_pickle_safe,
-    load_spread_data, load_spread_timeseries,
+    load_spread_data, load_spread_timeseries, display_key,
     _get_borrow_cost_annual_bp, _get_ttm_display, _get_current_fr007_bp,
 )
 from ..scoring import (
@@ -456,8 +456,8 @@ def register_candidate_callbacks(app) -> None:
                         f"Filtered at {scanned_time}", [], {},
                     )
 
-        _mr_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'halflife', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'score', 'stop_loss', 'profit_target']
-        _trend_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'score', 'trend_state', 'stop_loss', 'profit_target']
+        _mr_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'halflife', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'seasonal_label', 'score', 'stop_loss', 'profit_target']
+        _trend_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'seasonal_label', 'score', 'trend_state', 'stop_loss', 'profit_target']
 
         _all_display_cols = list(dict.fromkeys(_mr_display_cols + _trend_display_cols + ['style']))
         df_display = df_all.copy()
@@ -596,30 +596,29 @@ def register_candidate_callbacks(app) -> None:
                     'fontWeight': 'bold', 'marginLeft': '4px', 'verticalAlign': 'middle',
                 })
 
-                # Seasonal indicator: shown when edge is statistically meaningful.
-                # seasonal_edge_bps > 0  → seasonal tailwind (matches trade direction)
-                # seasonal_edge_bps < 0  → seasonal headwind (opposes trade direction)
-                # Threshold: |edge| > 0 means p_value < 0.10 already filtered in scoring;
-                # we further distinguish strong (|edge| ≥ 5bp) vs weak (< 5bp).
+                # Seasonal chip — driven by seasonal_label (consistency-based, no p-value gate)
+                seas_label = str(row.get('seasonal_label', '') or '').strip().lower()
                 seas_tag = None
-                seas_raw = row.get('seasonal_edge_bps', None)
-                try:
-                    seas_bp = float(seas_raw) if seas_raw is not None else 0.0
-                except (TypeError, ValueError):
-                    seas_bp = 0.0
-                if abs(seas_bp) >= 1.0:  # only show if seasonal data exists for this instrument
-                    if seas_bp >= 5.0:
-                        seas_icon, seas_color, seas_tip = '▲S', THEME['success'], f'seasonal tailwind +{seas_bp:.0f}bp'
-                    elif seas_bp > 0:
-                        seas_icon, seas_color, seas_tip = '△S', THEME['success'], f'seasonal tailwind +{seas_bp:.0f}bp'
-                    elif seas_bp <= -5.0:
-                        seas_icon, seas_color, seas_tip = '▼S', THEME['danger'], f'seasonal headwind {seas_bp:.0f}bp'
-                    else:
-                        seas_icon, seas_color, seas_tip = '▽S', THEME['danger'], f'seasonal headwind {seas_bp:.0f}bp'
-                    seas_tag = html.Span(seas_icon, title=seas_tip, style={
-                        'fontSize': '9px', 'color': seas_color, 'fontWeight': 'bold',
-                        'marginLeft': '6px', 'verticalAlign': 'middle',
-                        'cursor': 'default', 'letterSpacing': '-0.5px',
+                if seas_label == 'strong':
+                    seas_tag = html.Span('S↑↑', title='Strong seasonal tailwind (consistency ≥75%)', style={
+                        'backgroundColor': '#0d5c0d', 'color': '#7fff7f',
+                        'fontSize': '9px', 'fontWeight': 'bold', 'padding': '1px 4px',
+                        'borderRadius': '3px', 'marginLeft': '5px',
+                        'verticalAlign': 'middle', 'cursor': 'default',
+                    })
+                elif seas_label == 'weak':
+                    seas_tag = html.Span('S↑', title='Weak seasonal tailwind (consistency ≥60%)', style={
+                        'backgroundColor': '#2a4a2a', 'color': '#a0d0a0',
+                        'fontSize': '9px', 'fontWeight': 'bold', 'padding': '1px 4px',
+                        'borderRadius': '3px', 'marginLeft': '5px',
+                        'verticalAlign': 'middle', 'cursor': 'default',
+                    })
+                elif seas_label == 'against':
+                    seas_tag = html.Span('S↓', title='Seasonal headwind (consistency ≥60% in opposite direction)', style={
+                        'backgroundColor': '#4a1a1a', 'color': '#d09090',
+                        'fontSize': '9px', 'fontWeight': 'bold', 'padding': '1px 4px',
+                        'borderRadius': '3px', 'marginLeft': '5px',
+                        'verticalAlign': 'middle', 'cursor': 'default',
                     })
 
                 right_cluster = [z_bar, z_label]
@@ -751,6 +750,9 @@ def register_candidate_callbacks(app) -> None:
             df_candidates = pd.DataFrame(all_candidates)
             if 'ID' in df_candidates.columns and 'spread_type' in df_candidates.columns:
                 # Load each spread type's timeseries once, then index by instrument.
+                # Key is "spread_type/ID" to avoid collisions when multiple spread types
+                # share the same short instrument ID (e.g. NetBasis, TermBasis, FuturesSwap
+                # all use T/TL/TF/TS).
                 _ts_cache: dict[str, pd.DataFrame | None] = {}
                 all_spreads = {}
                 for _, row in df_candidates.iterrows():
@@ -762,7 +764,8 @@ def register_candidate_callbacks(app) -> None:
                         _ts_cache[spread_type] = load_spread_timeseries(spread_type)
                     ts = _ts_cache[spread_type]
                     if ts is not None and isinstance(ts, pd.DataFrame) and trade_id in ts.columns:
-                        all_spreads[trade_id] = ts[trade_id]
+                        col_key = display_key(spread_type, trade_id)
+                        all_spreads[col_key] = ts[trade_id]
 
                 if len(all_spreads) >= 2:
                     for key in all_spreads:
@@ -828,19 +831,6 @@ def register_candidate_callbacks(app) -> None:
         else:
             heatmap_div = html.Div("Not enough assets for heatmap.", style={'color': THEME['text_sub']})
 
-        low_corr_pairs['Correlation'] = low_corr_pairs['Correlation'].round(4)
-        low_corr_pairs['AbsCorr'] = low_corr_pairs['AbsCorr'].round(4)
-
-        pairs_table = dash_table.DataTable(
-            columns=[{'name': c, 'id': c} for c in ['Asset A', 'Asset B', 'Correlation', 'AbsCorr']],
-            data=low_corr_pairs[['Asset A', 'Asset B', 'Correlation', 'AbsCorr']].to_dict('records'),
-            style_table={'overflowX': 'auto', 'maxHeight': '200px'},
-            style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'], 'fontWeight': 'bold'},
-            style_cell={'backgroundColor': THEME['bg_card'], 'color': THEME['text_main'], 'fontSize': '11px', 'padding': '5px'},
-            style_data_conditional=[{'if': {'filter_query': f'{{AbsCorr}} > {max_corr}'}, 'backgroundColor': 'rgba(239, 85, 59, 0.2)'}],
-            page_size=10,
-        )
-
         warning_div = html.Div()
         if len(high_corr) > 0:
             warning_div = html.Div([
@@ -849,23 +839,27 @@ def register_candidate_callbacks(app) -> None:
                        style={'color': THEME['warning'], 'fontSize': '12px', 'marginTop': '10px'})
             ])
 
-        pairs_data = low_corr_pairs.to_dict('records') if isinstance(low_corr_pairs, pd.DataFrame) else []
-
-        id_to_type: dict = {}
+        # corr_matrix columns are display_key() values; build reverse lookup.
+        col_key_to_stype: dict = {}
+        col_key_to_id: dict = {}
         if all_candidates:
             for c in all_candidates:
                 if 'ID' in c and 'spread_type' in c:
-                    id_to_type[c['ID']] = c['spread_type']
+                    ck = display_key(c['spread_type'], c['ID'])
+                    col_key_to_stype[ck] = c['spread_type']
+                    col_key_to_id[ck]    = c['ID']
 
         seen_insts: set = set()
         curated_instruments: list = []
         for _, pair_row in low_corr_pairs.iterrows():
             for col in ['Asset A', 'Asset B']:
-                inst = pair_row[col]
-                if inst not in seen_insts and inst in corr_matrix.columns:
-                    seen_insts.add(inst)
+                col_key = pair_row[col]
+                if col_key not in seen_insts and col_key in corr_matrix.columns:
+                    seen_insts.add(col_key)
+                    stype = col_key_to_stype.get(col_key, 'Unknown')
+                    inst  = col_key_to_id.get(col_key, col_key)
                     row_meta = {
-                        'spread_type': id_to_type.get(inst, 'Unknown'),
+                        'spread_type': stype,
                         'instrument': inst,
                         'manual': False,
                         'regime': 'uncertain',
@@ -873,16 +867,21 @@ def register_candidate_callbacks(app) -> None:
                     }
                     if all_candidates:
                         for c in all_candidates:
-                            if c.get('ID') == inst and c.get('spread_type') == row_meta['spread_type']:
-                                # 'style' is already normalized to 'mean-reverting'/'momentum' by scan;
-                                # fall back to 'regime' for older store entries.
+                            if c.get('ID') == inst and c.get('spread_type') == stype:
                                 _cand_style = str(c.get('style', '') or '').strip()
                                 _cand_regime = str(c.get('regime', '') or '').strip()
                                 row_meta['regime'] = _style_to_regime(_cand_style or _cand_regime)
                                 row_meta['direction'] = c.get('direction', '')
+                                try:
+                                    row_meta['Zscore'] = float(c.get('Zscore', 0) or 0)
+                                except (TypeError, ValueError):
+                                    pass
+                                sl = str(c.get('seasonal_label', '') or '').strip()
+                                if sl:
+                                    row_meta['seasonal_label'] = sl
                                 break
                     if row_meta['regime'] == 'uncertain':
-                        row_meta['regime'] = _get_upstream_regime(row_meta['spread_type'], inst) or 'uncertain'
+                        row_meta['regime'] = _get_upstream_regime(stype, inst) or 'uncertain'
                     curated_instruments.append(row_meta)
                     if len(curated_instruments) >= 10:
                         break
@@ -893,10 +892,8 @@ def register_candidate_callbacks(app) -> None:
 
         return html.Div([
             heatmap_div,
-            html.H6("Lowest Correlation Pairs", style={'color': THEME['text_main'], 'marginTop': '15px', 'marginBottom': '10px'}),
-            pairs_table,
             warning_div,
-        ]), pairs_data, corr_matrix.to_dict(), curated_instruments
+        ]), [], corr_matrix.to_dict(), curated_instruments
 
     # -------------------------------------------------------------------------
     # CANDIDATES: Cascade instrument dropdown from spread type
@@ -968,13 +965,23 @@ def register_candidate_callbacks(app) -> None:
                 pass
             if _regime == 'uncertain':
                 _regime = _get_upstream_regime(spread_type, instrument)
-            return _merge_curated_entries(current, [{
+            _zscore = None
+            try:
+                snap = load_spread_data(spread_type)
+                if snap is not None and instrument in snap.index and 'Zscore' in snap.columns:
+                    _zscore = float(snap.loc[instrument, 'Zscore'])
+            except Exception:
+                pass
+            _entry: dict = {
                 'spread_type': spread_type,
                 'instrument': instrument,
                 'regime': _regime,
                 'direction': _direction,
                 'manual': True,
-            }])
+            }
+            if _zscore is not None:
+                _entry['Zscore'] = _zscore
+            return _merge_curated_entries(current, [_entry])
 
         if trig_dict and trig_dict.get('type') == 'curated-del':
             if not any(nc for nc in del_clicks if nc):
@@ -1049,9 +1056,6 @@ def register_candidate_callbacks(app) -> None:
             raise PreventUpdate
 
         _sub  = {'color': THEME['text_sub'], 'fontSize': '12px', 'fontStyle': 'italic'}
-        _cell = {'padding': '6px 10px', 'fontSize': '12px', 'color': THEME['text_main']}
-        _hdr  = {**_cell, 'color': THEME['text_sub'], 'fontWeight': '600', 'fontSize': '11px',
-                 'borderBottom': f"1px solid {THEME['table_header']}"}
 
         instruments = instruments or []
         positions   = positions   or []
@@ -1069,26 +1073,119 @@ def register_candidate_callbacks(app) -> None:
             {'label': 'BUY',  'value': 'BUY'},
             {'label': 'SELL', 'value': 'SELL'},
         ]
-        _dd_style = {'fontSize': '12px', 'minWidth': '130px'}
-        _dd_warn  = {'fontSize': '12px', 'minWidth': '130px',
+        _dd_style = {'fontSize': '11px', 'minWidth': '110px'}
+        _dd_warn  = {'fontSize': '11px', 'minWidth': '110px',
                      'border': f"1px solid {THEME['warning']}", 'borderRadius': '4px'}
 
-        def _in_matrix_cell(inst):
-            return (html.Span("✓", style={'color': THEME['success']})
-                    if inst in matrix_cols
-                    else html.Span("—", style={'color': THEME['text_sub']}))
+        def _dir_border(direction):
+            if direction == 'BUY':
+                return THEME['success']
+            if direction == 'SELL':
+                return THEME['danger']
+            return THEME['table_header']
 
-        shared_header = html.Tr([
-            html.Th("Spread Type", style=_hdr),
-            html.Th("Instrument",  style=_hdr),
-            html.Th("Regime",      style=_hdr),
-            html.Th("Direction",   style=_hdr),
-            html.Th("In Matrix",   style={**_hdr, 'textAlign': 'center'}),
-            html.Th("",            style=_hdr),
-        ])
+        def _dir_pill(direction):
+            if direction == 'BUY':
+                return html.Span('BUY', style={
+                    'backgroundColor': THEME['success'], 'color': '#000',
+                    'fontWeight': 'bold', 'fontSize': '10px', 'padding': '1px 6px',
+                    'borderRadius': '3px', 'display': 'inline-block',
+                })
+            if direction == 'SELL':
+                return html.Span('SELL', style={
+                    'backgroundColor': THEME['danger'], 'color': '#fff',
+                    'fontWeight': 'bold', 'fontSize': '10px', 'padding': '1px 6px',
+                    'borderRadius': '3px', 'display': 'inline-block',
+                })
+            return html.Span('—', style={'color': THEME['text_sub'], 'fontSize': '10px'})
 
-        # ── Table A: candidate instruments (from correlation check + user-added) ──
-        curated_rows = []
+        def _regime_chip(regime):
+            """Visually distinct colored chip for regime — teal for MR, amber for momentum."""
+            if regime == 'mean-reverting':
+                return html.Span('MR', style={
+                    'backgroundColor': '#0d6e6e', 'color': '#7fffd4',
+                    'fontWeight': 'bold', 'fontSize': '9px', 'padding': '1px 5px',
+                    'borderRadius': '3px', 'display': 'inline-block',
+                    'letterSpacing': '0.5px',
+                })
+            if regime == 'momentum':
+                return html.Span('MOM', style={
+                    'backgroundColor': '#7a4500', 'color': '#ffd580',
+                    'fontWeight': 'bold', 'fontSize': '9px', 'padding': '1px 5px',
+                    'borderRadius': '3px', 'display': 'inline-block',
+                    'letterSpacing': '0.5px',
+                })
+            return html.Span('?', style={
+                'backgroundColor': THEME['table_header'], 'color': THEME['text_sub'],
+                'fontWeight': 'bold', 'fontSize': '9px', 'padding': '1px 5px',
+                'borderRadius': '3px', 'display': 'inline-block',
+            })
+
+        def _matrix_dot(inst, stype=''):
+            col_key = display_key(stype, inst) if stype else inst
+            in_matrix = col_key in matrix_cols or inst in matrix_cols
+            return (html.Span("●", title="in correlation matrix",
+                              style={'color': THEME['success'], 'fontSize': '9px'})
+                    if in_matrix
+                    else html.Span("○", title="not in matrix",
+                                   style={'color': THEME['text_sub'], 'fontSize': '9px'}))
+
+        def _z_bar(z, max_z=4.0):
+            """Mini z-score bar — same style as Candidates signal cards."""
+            try:
+                z = float(z)
+            except (TypeError, ValueError):
+                z = 0.0
+            z_clamped = max(-max_z, min(max_z, z))
+            bar_pct   = abs(z_clamped) / max_z * 50.0
+            bar_color = THEME['danger'] if z < 0 else THEME['success']
+            if z < 0:
+                bar_style = {'position': 'absolute', 'right': '50%',
+                             'width': f'{bar_pct:.1f}%', 'height': '100%',
+                             'backgroundColor': bar_color, 'opacity': '0.7',
+                             'borderRadius': '2px 0 0 2px'}
+            else:
+                bar_style = {'position': 'absolute', 'left': '50%',
+                             'width': f'{bar_pct:.1f}%', 'height': '100%',
+                             'backgroundColor': bar_color, 'opacity': '0.7',
+                             'borderRadius': '0 2px 2px 0'}
+            return html.Div([
+                html.Div(style={'position': 'relative', 'height': '5px',
+                                'backgroundColor': THEME['bg_main'],
+                                'borderRadius': '3px', 'overflow': 'hidden',
+                                'width': '50px', 'display': 'inline-block',
+                                'verticalAlign': 'middle'},
+                         children=[html.Div(style=bar_style)]),
+                html.Span(f'{z:+.1f}σ', style={
+                    'fontSize': '10px', 'color': bar_color,
+                    'fontWeight': 'bold', 'marginLeft': '3px', 'verticalAlign': 'middle',
+                }),
+            ], style={'display': 'inline-flex', 'alignItems': 'center'})
+
+        def _seas_chip(label):
+            label = str(label or '').strip().lower()
+            if label == 'strong':
+                return html.Span('S↑↑', title='Strong seasonal tailwind (consistency ≥75%)', style={
+                    'backgroundColor': '#0d5c0d', 'color': '#7fff7f',
+                    'fontSize': '9px', 'fontWeight': 'bold', 'padding': '1px 4px',
+                    'borderRadius': '3px', 'cursor': 'default',
+                })
+            if label == 'weak':
+                return html.Span('S↑', title='Weak seasonal tailwind (consistency ≥60%)', style={
+                    'backgroundColor': '#2a4a2a', 'color': '#a0d0a0',
+                    'fontSize': '9px', 'fontWeight': 'bold', 'padding': '1px 4px',
+                    'borderRadius': '3px', 'cursor': 'default',
+                })
+            if label == 'against':
+                return html.Span('S↓', title='Seasonal headwind (consistency ≥60% against)', style={
+                    'backgroundColor': '#4a1a1a', 'color': '#d09090',
+                    'fontSize': '9px', 'fontWeight': 'bold', 'padding': '1px 4px',
+                    'borderRadius': '3px', 'cursor': 'default',
+                })
+            return None
+
+        # ── Card grid: candidate instruments (from correlation check + user-added) ──
+        curated_cards = []
         for i, entry in enumerate(instruments):
             stype = entry.get('spread_type', '')
             inst  = entry.get('instrument', '')
@@ -1097,112 +1194,165 @@ def register_candidate_callbacks(app) -> None:
                          if stored_regime == 'uncertain' else stored_regime)
             direction = entry.get('direction', '') or ''
             manual    = bool(entry.get('manual', False))
+            z_val     = entry.get('Zscore', None)
+            seas_label = entry.get('seasonal_label', '')
 
             regime_known = regime in {'mean-reverting', 'momentum'}
             dir_known    = direction in {'BUY', 'SELL'}
             regime_editable    = manual or not regime_known
             direction_editable = manual or not dir_known
 
-            regime_cell = (
+            regime_widget = (
                 dcc.Dropdown(
                     id={'type': 'curated-regime', 'index': i},
                     options=_REGIME_OPTIONS,
                     value=regime if regime_known else None,
-                    placeholder='Assign regime…', clearable=False,
+                    placeholder='regime…', clearable=False,
                     style=_dd_style if regime_known else _dd_warn,
                 ) if regime_editable
-                else html.Div(regime, style={'padding': '6px 2px', 'fontSize': '12px', 'color': THEME['text_main']})
+                else _regime_chip(regime)
             )
-            dir_cell = (
+            dir_widget = (
                 dcc.Dropdown(
                     id={'type': 'curated-direction', 'index': i},
                     options=_DIR_OPTIONS,
                     value=direction if dir_known else None,
-                    placeholder='Assign…', clearable=False,
+                    placeholder='dir…', clearable=False,
                     style=_dd_style if dir_known else _dd_warn,
                 ) if direction_editable
-                else html.Div(direction, style={'padding': '6px 2px', 'fontSize': '12px', 'color': THEME['text_main']})
+                else _dir_pill(direction)
             )
-            curated_rows.append(html.Tr([
-                html.Td(stype, style=_cell),
-                html.Td(inst,  style={**_cell, 'fontWeight': '500'}),
-                html.Td(regime_cell, style={**_cell, 'padding': '2px 6px'}),
-                html.Td(dir_cell,    style={**_cell, 'padding': '2px 6px'}),
-                html.Td(_in_matrix_cell(inst), style={**_cell, 'textAlign': 'center'}),
-                html.Td(
+
+            curated_cards.append(html.Div([
+                # Row 1: instrument name + matrix dot + delete button
+                html.Div([
+                    html.Span(inst, style={
+                        'color': THEME['text_main'], 'fontSize': '11px', 'fontWeight': '600',
+                        'flex': '1', 'overflow': 'hidden', 'textOverflow': 'ellipsis', 'whiteSpace': 'nowrap',
+                    }),
+                    _matrix_dot(inst, stype),
                     html.Button("×", id={'type': 'curated-del', 'index': i}, n_clicks=0,
                                 style={'background': 'none', 'border': f"1px solid {THEME['danger']}",
                                        'color': THEME['danger'], 'borderRadius': '3px',
-                                       'cursor': 'pointer', 'padding': '1px 7px',
-                                       'fontSize': '13px', 'lineHeight': '1.2'}),
-                    style={'textAlign': 'center'},
-                ),
-            ], style={'borderBottom': 'rgba(42,82,152,0.25) solid 1px'}))
+                                       'cursor': 'pointer', 'padding': '0px 4px',
+                                       'fontSize': '11px', 'lineHeight': '1.3',
+                                       'marginLeft': '4px', 'flexShrink': '0'}),
+                ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px'}),
+                # Row 2: type badge + z-score bar + seasonal chip
+                html.Div([
+                    html.Span(stype, style={
+                        'backgroundColor': THEME['table_header'], 'color': THEME['text_sub'],
+                        'fontSize': '9px', 'padding': '1px 4px', 'borderRadius': '2px',
+                        'marginRight': '5px', 'flexShrink': '0',
+                    }),
+                    _z_bar(z_val) if z_val is not None else html.Span('z=—', style={'color': THEME['text_sub'], 'fontSize': '10px'}),
+                    *([html.Div(_seas_chip(seas_label), style={'marginLeft': '5px', 'flexShrink': '0'})] if _seas_chip(seas_label) else []),
+                ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '5px'}),
+                # Row 3: regime chip/dropdown + direction pill/dropdown
+                html.Div([
+                    html.Div(regime_widget, style={'marginRight': '5px', 'flexShrink': '0'}),
+                    html.Div(dir_widget,    style={'flexShrink': '0'}),
+                ], style={'display': 'flex', 'alignItems': 'center'}),
+            ], style={
+                'padding': '7px 8px',
+                'borderRadius': '4px',
+                'backgroundColor': THEME['bg_card'],
+                'borderLeft': f"3px solid {_dir_border(direction)}",
+            }))
 
-        if curated_rows:
-            table_a = html.Div(
-                html.Table([html.Thead(shared_header), html.Tbody(curated_rows)],
-                           style={'width': '100%', 'borderCollapse': 'collapse'}),
-                style={'overflowY': 'auto', 'maxHeight': '220px',
-                       'border': f"1px solid {THEME['table_header']}", 'borderRadius': '4px'},
-            )
+        if curated_cards:
+            grid_a = html.Div(curated_cards, style={
+                'display': 'grid',
+                'gridTemplateColumns': 'repeat(3, 1fr)',
+                'gap': '5px',
+                'maxHeight': '300px',
+                'overflowY': 'auto',
+                'paddingRight': '2px',
+            })
         else:
-            table_a = html.Div(
+            grid_a = html.Div(
                 "Run Check Correlation in the Candidates subtab to populate this list.",
                 style=_sub,
             )
 
-        # ── Table B: saved positions (alpha_book_positions.parquet, read-only) ──
-        pos_rows = []
-        pos_header = html.Tr([
-            html.Th("Spread Type", style=_hdr),
-            html.Th("Instrument",  style=_hdr),
-            html.Th("Regime",      style=_hdr),
-            html.Th("Direction",   style=_hdr),
-            html.Th("In Matrix",   style={**_hdr, 'textAlign': 'center'}),
-            html.Th("",            style=_hdr),  # empty column to match Table A width
-        ])
+        # ── Card grid: saved positions (alpha_book_positions.parquet, read-only) ──
+        pos_cards = []
         for entry in positions:
             stype = entry.get('spread_type', '')
             inst  = entry.get('instrument', '')
             stored_regime = entry.get('regime', 'uncertain')
             regime    = (_get_upstream_regime(stype, inst) or 'uncertain'
                          if stored_regime == 'uncertain' else stored_regime)
-            direction = entry.get('direction', '') or '—'
-            _regime_color = (THEME['text_main'] if regime in {'mean-reverting', 'momentum'}
-                             else THEME['text_sub'])
-            pos_rows.append(html.Tr([
-                html.Td(stype, style=_cell),
-                html.Td(inst,  style={**_cell, 'fontWeight': '500'}),
-                html.Td(regime,    style={**_cell, 'color': _regime_color}),
-                html.Td(direction, style=_cell),
-                html.Td(_in_matrix_cell(inst), style={**_cell, 'textAlign': 'center'}),
-                html.Td("", style=_cell),
-            ], style={'borderBottom': 'rgba(42,82,152,0.25) solid 1px'}))
+            direction  = entry.get('direction', '') or ''
+            z_val      = entry.get('Zscore', None)
+            seas_label = entry.get('seasonal_label', '')
+            pos_cards.append(html.Div([
+                html.Div([
+                    html.Span(inst, style={
+                        'color': THEME['text_main'], 'fontSize': '11px', 'fontWeight': '600',
+                        'flex': '1', 'overflow': 'hidden', 'textOverflow': 'ellipsis', 'whiteSpace': 'nowrap',
+                    }),
+                    _matrix_dot(inst, stype),
+                ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px'}),
+                html.Div([
+                    html.Span(stype, style={
+                        'backgroundColor': THEME['table_header'], 'color': THEME['text_sub'],
+                        'fontSize': '9px', 'padding': '1px 4px', 'borderRadius': '2px',
+                        'marginRight': '5px', 'flexShrink': '0',
+                    }),
+                    _z_bar(z_val) if z_val is not None else html.Span('z=—', style={'color': THEME['text_sub'], 'fontSize': '10px'}),
+                    *([html.Div(_seas_chip(seas_label), style={'marginLeft': '5px', 'flexShrink': '0'})] if _seas_chip(seas_label) else []),
+                ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '5px'}),
+                html.Div([
+                    _regime_chip(regime),
+                    html.Div(style={'flex': '1'}),
+                    _dir_pill(direction),
+                ], style={'display': 'flex', 'alignItems': 'center', 'gap': '5px'}),
+            ], style={
+                'padding': '7px 8px',
+                'borderRadius': '4px',
+                'backgroundColor': THEME['bg_card'],
+                'borderLeft': f"3px solid {_dir_border(direction)}",
+                'opacity': '0.85',
+            }))
 
-        if pos_rows:
-            table_b = html.Div(
-                html.Table([html.Thead(pos_header), html.Tbody(pos_rows)],
-                           style={'width': '100%', 'borderCollapse': 'collapse'}),
-                style={'overflowY': 'auto', 'maxHeight': '220px',
-                       'border': f"1px solid {THEME['table_header']}", 'borderRadius': '4px'},
-            )
+        if pos_cards:
+            grid_b = html.Div(pos_cards, style={
+                'display': 'grid',
+                'gridTemplateColumns': 'repeat(3, 1fr)',
+                'gap': '5px',
+                'maxHeight': '200px',
+                'overflowY': 'auto',
+                'paddingRight': '2px',
+            })
         else:
-            table_b = html.Div("No saved positions found in alpha_book_positions.parquet.", style=_sub)
+            grid_b = html.Div("No saved positions found in alpha_book_positions.parquet.", style=_sub)
 
         table_div = html.Div([
-            html.H6("Candidate Instruments", style={'color': THEME['text_main'],
-                    'fontSize': '13px', 'marginBottom': '6px', 'marginTop': '0'}),
-            table_a,
-            html.H6("Saved Positions", style={'color': THEME['text_main'],
-                    'fontSize': '13px', 'marginBottom': '6px', 'marginTop': '14px'}),
-            table_b,
+            html.Div([
+                html.Span('▌', style={'color': THEME['accent'], 'fontSize': '14px', 'marginRight': '6px', 'verticalAlign': 'middle'}),
+                html.Span("Candidate Instruments", style={'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': '700', 'verticalAlign': 'middle'}),
+                html.Span(f"  {len(instruments)} trades", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '6px', 'verticalAlign': 'middle'}),
+            ], style={'marginBottom': '8px', 'paddingBottom': '5px',
+                      'borderBottom': f"1px solid {THEME['accent']}33"}),
+            grid_a,
+            html.Div([
+                html.Span('▌', style={'color': THEME['warning'], 'fontSize': '14px', 'marginRight': '6px', 'verticalAlign': 'middle'}),
+                html.Span("Saved Positions", style={'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': '700', 'verticalAlign': 'middle'}),
+                html.Span(f"  {len(positions)} trades", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '6px', 'verticalAlign': 'middle'}),
+                html.Span(" · read-only", style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '4px', 'fontStyle': 'italic'}),
+            ], style={'marginBottom': '8px', 'marginTop': '16px', 'paddingBottom': '5px',
+                      'borderBottom': f"1px solid {THEME['warning']}33"}),
+            grid_b,
         ])
 
         # ── Combined correlation matrix (all instruments from both tables) ──
         all_instruments = instruments + [p for p in positions
                                          if p.get('instrument') not in {e.get('instrument') for e in instruments}]
-        valid_ids = [e['instrument'] for e in all_instruments if e['instrument'] in matrix_cols]
+        def _col_key(e):
+            return display_key(e.get('spread_type', ''), e.get('instrument', ''))
+
+        valid_ids = [_col_key(e) for e in all_instruments if _col_key(e) in matrix_cols]
 
         if matrix_data and len(valid_ids) >= 2:
             sub_dict = {
@@ -1229,25 +1379,10 @@ def register_candidate_callbacks(app) -> None:
                 xaxis=dict(tickangle=45),
             )
 
-            curated_pairs = rank_low_correlation_pairs(sub_matrix, top_n=len(valid_ids) * 3)
-            curated_pairs['Correlation'] = curated_pairs['Correlation'].round(4)
-            curated_pairs['AbsCorr']     = curated_pairs['AbsCorr'].round(4)
-
-            pairs_tbl = dash_table.DataTable(
-                columns=[{'name': c, 'id': c} for c in ['Asset A', 'Asset B', 'Correlation', 'AbsCorr']],
-                data=curated_pairs[['Asset A', 'Asset B', 'Correlation', 'AbsCorr']].to_dict('records'),
-                style_table={'overflowX': 'auto', 'maxHeight': '180px'},
-                style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_sub'],
-                              'fontWeight': '600', 'fontSize': '11px', 'padding': '6px 10px'},
-                style_cell={'backgroundColor': THEME['bg_card'], 'color': THEME['text_main'],
-                            'fontSize': '12px', 'padding': '6px 10px'},
-                page_size=15,
-            )
-
             not_in_count = len(all_instruments) - len(valid_ids)
             notice = (
                 html.P(
-                    f"ℹ️ {not_in_count} instrument(s) marked '—' are not yet in the matrix. "
+                    f"ℹ️ {not_in_count} instrument(s) marked '○' are not yet in the matrix. "
                     "Click ↻ Recalculate Correlation below to rebuild the matrix.",
                     style={**_sub, 'marginTop': '6px'},
                 ) if not_in_count > 0 else html.Div()
@@ -1256,9 +1391,6 @@ def register_candidate_callbacks(app) -> None:
             corr_div = html.Div([
                 html.H6("Curated Correlation Matrix", style={'color': THEME['text_main'], 'marginBottom': '8px'}),
                 dcc.Graph(figure=hm),
-                html.H6("Lowest Correlation Pairs", style={'color': THEME['text_main'],
-                        'marginTop': '14px', 'marginBottom': '8px'}),
-                pairs_tbl,
                 notice,
             ])
         else:

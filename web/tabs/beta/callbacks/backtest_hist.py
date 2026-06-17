@@ -150,6 +150,16 @@ def register_backtest_hist_callbacks(app):
         if n_clicks == 0:
             return empty_fig, empty_fig, None, None
 
+        # Refresh factor-rates.pkl incrementally before backtesting so that
+        # any data gap since the last "Predict" run is filled automatically.
+        try:
+            from multiasset.factor_backtest import update_factor_rates
+            _, n_new = update_factor_rates(DIR_INPUT)
+            if n_new:
+                print(f"Portfolio backtest: factor-rates.pkl +{n_new} new day(s) appended")
+        except Exception as _ufr_exc:
+            print(f"Warning: factor-rates incremental update failed: {_ufr_exc}")
+
         alloc_mode = alloc_mode or 'risk_parity'
 
         # ── Factor Model Scaling: load saved per-factor signal series ──────────

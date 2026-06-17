@@ -359,6 +359,39 @@ def compute_scan_score(
 
     df['seasonal_edge_bps'] = seasonal_edge
 
+    # ── Seasonal label (independent of p-value gate) ───────────────────────────
+    # Uses consistency + direction alignment only so the label works even when
+    # n_years is too small for statistical significance.
+    # Labels: 'strong' | 'weak' | 'against' | '' (no data)
+    seasonal_label = pd.Series('', index=df.index, dtype=str)
+    if seasonal_data and isinstance(seasonal_data, dict):
+        month = int(seasonal_month or _dt.date.today().month)
+        month_key = f'm{month}'
+        if 'spread_type' in df.columns and 'ID' in df.columns:
+            for idx in df.index:
+                stype = str(df.at[idx, 'spread_type'])
+                inst  = str(df.at[idx, 'ID'])
+                sdf   = seasonal_data.get(stype)
+                if not isinstance(sdf, pd.DataFrame) or inst not in sdf.index:
+                    continue
+                if month_key not in sdf.columns:
+                    continue
+                cell = sdf.at[inst, month_key]
+                if not isinstance(cell, dict):
+                    continue
+                cons     = float(cell.get('consistency', 0.0))
+                seas_dir = str(cell.get('direction', 'neutral'))
+                trade_dir = direction.at[idx]
+                tailwind = (
+                    (trade_dir == 'BUY'  and seas_dir == 'up')
+                    or (trade_dir == 'SELL' and seas_dir == 'down')
+                )
+                if cons >= 0.75:
+                    seasonal_label.at[idx] = 'strong' if tailwind else 'against'
+                elif cons >= 0.60:
+                    seasonal_label.at[idx] = 'weak' if tailwind else 'against'
+    df['seasonal_label'] = seasonal_label
+
     total_edge = edge + seasonal_edge / 100.0  # seasonal edge is in bp; edge is in price units
     df['edge_preview'] = total_edge
     df['composite_score_preview'] = (total_edge / risk).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)

@@ -202,30 +202,6 @@ def build_multiasset_factor_layout():
 
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px', 'border': f'1px solid {THEME["table_header"]}', 'marginBottom': '20px'}),
 
-        # ── Generate factor-rates.pkl ──────────────────────────────────────
-        html.Div([
-            html.H5("📊 Generate Factor Rates", style={'color': THEME['text_main'], 'marginBottom': '6px'}),
-            html.P(
-                "Build or refresh factor-rates.pkl from raw market data. "
-                "Run this first whenever new market data is available.",
-                style={'color': THEME['text_sub'], 'fontSize': '12px',
-                       'marginBottom': '12px', 'fontStyle': 'italic'},
-            ),
-            html.Div([
-                html.Button(
-                    "Generate factor-rates.pkl",
-                    id='rfbt-generate-btn', n_clicks=0,
-                    style={'backgroundColor': THEME['accent'], 'color': 'white',
-                           'padding': '7px 14px', 'border': 'none', 'borderRadius': '5px',
-                           'cursor': 'pointer', 'fontSize': '12px', 'fontWeight': 'bold',
-                           'marginRight': '8px'},
-                ),
-                html.Span(id='rfbt-generate-status',
-                          style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-            ], style={'display': 'flex', 'alignItems': 'center'}),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px',
-                  'border': f'1px solid {THEME["table_header"]}', 'marginBottom': '20px'}),
-
         # ── Train Model & Predict ─────────────────────────────────────────
         html.Div([
             html.H5("🤖 Train Model & Predict", style={'color': THEME['text_main'], 'marginBottom': '6px'}),

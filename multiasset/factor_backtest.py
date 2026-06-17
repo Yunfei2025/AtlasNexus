@@ -204,6 +204,56 @@ def load_factor_rates(input_dir: Union[str, Path] = DIR_INPUT) -> pd.DataFrame:
     return generate_factor_rates(input_dir, save=True)
 
 
+def update_factor_rates(
+    input_dir: Union[str, Path] = DIR_INPUT,
+) -> Tuple[pd.DataFrame, int]:
+    """Incrementally append new daily rows to factor-rates.pkl.
+
+    Loads the full fresh series from RiskFactorLoader and merges it with any
+    existing pkl, keeping old rows intact and appending only dates that are newer
+    than the last saved date.  Falls back to a full regenerate when the pkl does
+    not exist yet.
+
+    Returns ``(updated_df, n_new_rows)`` so callers can show the user how many
+    days were added.
+    """
+    pkl_path = os.path.join(str(input_dir), 'factor-rates.pkl')
+
+    # Load current fresh series from source data
+    loader = RiskFactorLoader(str(input_dir), use_deterministic=True)
+    fresh = loader.load_risk_factors(use_cache=False)
+    if fresh is None or fresh.empty:
+        raise ValueError("RiskFactorLoader returned empty factor levels")
+
+    if not os.path.exists(pkl_path):
+        fresh.to_pickle(pkl_path)
+        print(f"factor-rates.pkl created ({fresh.shape[1]} factors, {len(fresh)} days)")
+        return fresh, len(fresh)
+
+    existing = pd.read_pickle(pkl_path)
+    if not isinstance(existing.index, pd.DatetimeIndex):
+        existing.index = pd.to_datetime(existing.index)
+    if not isinstance(fresh.index, pd.DatetimeIndex):
+        fresh.index = pd.to_datetime(fresh.index)
+
+    last_saved = existing.index.max()
+    new_rows = fresh[fresh.index > last_saved]
+    n_new = len(new_rows)
+
+    if n_new == 0:
+        print(f"factor-rates.pkl already up to date (last date: {last_saved.date()})")
+        return existing, 0
+
+    # Combine: existing rows + new rows; use fresh values where columns overlap
+    merged = pd.concat([existing, new_rows])
+    # Drop duplicates on index (keep last = fresh data wins on overlapping dates)
+    merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+    merged.to_pickle(pkl_path)
+    print(f"factor-rates.pkl updated: +{n_new} days (now {len(merged)} days total, "
+          f"through {merged.index.max().date()})")
+    return merged, n_new
+
+
 # ── Yield-aware strategy wrappers ───────────────────────────────────────────
 # Each accepts a Series of yield (or price) levels and returns a DataFrame
 # with at least: signal, returns, strategy_returns, cumulative_returns.

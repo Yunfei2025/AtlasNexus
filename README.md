@@ -33,11 +33,8 @@ python main.py intraday-web # AtlasNexus Intraday Console → http://localhost:8
 conda create -n dev python=3.9
 conda activate dev
 
-# Install runtime dependencies
+# Install all dependencies
 pip install -r requirements/production.txt
-
-# Optional: dev tools (pytest, ruff, black, jupyter)
-pip install -r requirements/development.txt
 ```
 
 **Optional packages (install separately):**
@@ -135,9 +132,7 @@ bin-v4.0/
 │       └── factor_signals.json     # Factor signal snapshot
 │
 ├── requirements/
-│   ├── production.txt          # Full runtime (pip install -r this)
-│   ├── base.txt                # Minimal core for CI/scripts
-│   └── development.txt        # production + testing/linting tools
+│   └── production.txt          # Full runtime dependencies
 │
 ├── tests/                      # Test suite (pytest)
 └── docs/                       # Reference documents

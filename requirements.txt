@@ -1,4 +1,0 @@
-# Redirect — canonical deps live in requirements/
-# Full runtime:   pip install -r requirements/production.txt
-# Development:    pip install -r requirements/development.txt
--r requirements/production.txt

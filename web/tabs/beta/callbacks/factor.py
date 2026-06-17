@@ -409,7 +409,49 @@ def register_factor_callbacks(app):
             # Sort by absolute correlation ascending (closest to 0 first)
             corr_stacked['AbsCorrelation'] = corr_stacked['Correlation'].abs()
             top_pairs = int(top_pairs) if top_pairs else 10
-            bottom_pairs = corr_stacked.sort_values('AbsCorrelation', ascending=True).head(top_pairs)
+
+            # Classify each factor into an asset class so we can guarantee
+            # cross-asset coverage in the selected top-N pairs.
+            def _asset_class(f: str) -> str:
+                p = f.split('.')[0]
+                if p in ('IRDL', 'IRSL', 'IRCV'):
+                    return 'Rates'
+                if p in ('SPDL', 'SPSL', 'SPCV'):
+                    return 'Spread'
+                if p.startswith('FX'):
+                    return 'FX'
+                if p.startswith('EQ'):
+                    return 'Equity'
+                if p.startswith('CMD'):
+                    return 'Commodity'
+                return 'Other'
+
+            corr_sorted = corr_stacked.sort_values('AbsCorrelation', ascending=True)
+
+            # Step 1 — one cheapest cross-asset pair per asset class present
+            classes_present = set(
+                _asset_class(f) for f in available_factors
+            )
+            selected_idx: set = set()
+            selected_pairs: list = []
+            for cls in sorted(classes_present):
+                for _, row in corr_sorted.iterrows():
+                    if row.name in selected_idx:
+                        continue
+                    if cls in (_asset_class(row['Factor A']), _asset_class(row['Factor B'])):
+                        selected_idx.add(row.name)
+                        selected_pairs.append(row)
+                        break
+
+            # Step 2 — fill remaining slots with globally lowest-corr pairs
+            for _, row in corr_sorted.iterrows():
+                if len(selected_pairs) >= top_pairs:
+                    break
+                if row.name not in selected_idx:
+                    selected_idx.add(row.name)
+                    selected_pairs.append(row)
+
+            bottom_pairs = pd.DataFrame(selected_pairs).head(top_pairs)
 
             # ── Heatmap: show ALL selected factors (not just low-corr pairs) ────
             all_factors_list = list(corr_matrix.columns)

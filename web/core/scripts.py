@@ -161,6 +161,12 @@ def run_initialise() -> str:
         except Exception as e:
             print(f"WARNING: Daily required data refresh failed: {e}")
 
+        try:
+            from curves.utils.retrieve import updateInstrumentDef
+            updateInstrumentDef(asof=None)
+        except Exception as e:
+            pass
+
         if (t.hour >= TradingHoursConfig.START_HOUR) and (t.hour <= TradingHoursConfig.INIT_END_HOUR) and (t.weekday() <= 4):
             print("Updating database and running generators...")
             try:

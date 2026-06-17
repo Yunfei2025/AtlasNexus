@@ -727,6 +727,30 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
     return None
 
 
+def display_key(spread_type: str, inst: str) -> str:
+    """Return a short, human-readable column key for correlation matrices.
+
+    Bond IDs share the same code across Curve/Swap types, so the suffix
+    disambiguates.  Futures types (NetBasis / TermBasis / FuturesSwap) all use
+    T/TF/TS/TL, so a suffix is mandatory there too.
+    """
+    if spread_type in ('TBondCurve', 'CBondCurve'):
+        base = inst.replace('.IB', '')
+        return f'{base}-OTR'
+    if spread_type in ('TBondSwap', 'CBondSwap'):
+        base = inst.replace('.IB', '')
+        return f'{base}-Swp'
+    if spread_type == 'NetBasis':
+        return f'{inst}-Basis'
+    if spread_type == 'TermBasis':
+        return f'{inst}-Cal'
+    if spread_type == 'FuturesSwap':
+        return f'{inst}-FtSwp'
+    # All other types (SwapSpread, TenorSpread, PCASpread …) have unique IDs —
+    # return as-is so existing behaviour is unchanged.
+    return inst
+
+
 def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
     """Load historical spread time series for correlation analysis."""
     dir_input = _get_input_dir()
@@ -824,6 +848,46 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         except Exception:
             pass
         return None
+
+    elif spread_type == 'NetBasis':
+        data = _load_pickle_safe(dir_input / 'futures-spds.pkl')
+        if data is None:
+            return None
+        nb_data = data.get('NetBasis', {})
+        if not isinstance(nb_data, dict):
+            return None
+        frames = []
+        for ctype, cdata in nb_data.items():
+            if isinstance(cdata, dict) and 'Spread' in cdata:
+                sp = cdata['Spread']
+                if isinstance(sp, pd.DataFrame) and not sp.empty:
+                    frames.append(sp)
+        return pd.concat(frames, axis=1) if frames else None
+
+    elif spread_type == 'TermBasis':
+        data = _load_pickle_safe(dir_input / 'futures-spds.pkl')
+        if data is None:
+            return None
+        tb = data.get('TermBasis', {})
+        if isinstance(tb, dict) and 'Spread' in tb:
+            sp = tb['Spread']
+            return sp if isinstance(sp, pd.DataFrame) and not sp.empty else None
+        return None
+
+    elif spread_type == 'FuturesSwap':
+        data = _load_pickle_safe(dir_input / 'futures-spds.pkl')
+        if data is None:
+            return None
+        fs = data.get('FuturesSwap', {})
+        if not isinstance(fs, dict):
+            return None
+        frames = []
+        for ctype, cdata in fs.items():
+            if isinstance(cdata, dict) and 'Spread' in cdata:
+                sp = cdata['Spread']
+                if isinstance(sp, pd.DataFrame) and not sp.empty:
+                    frames.append(sp)
+        return pd.concat(frames, axis=1) if frames else None
 
     return None
 
