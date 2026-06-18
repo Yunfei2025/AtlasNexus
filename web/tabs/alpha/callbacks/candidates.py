@@ -21,7 +21,8 @@ from ..data import (
     _get_borrow_cost_annual_bp, _get_ttm_display, _get_current_fr007_bp,
 )
 from ..scoring import (
-    compute_spread_correlation, rank_low_correlation_pairs, compute_scan_score,
+    compute_spread_correlation, rank_low_correlation_pairs,
+    select_diverse_instruments, compute_scan_score,
 )
 
 
@@ -534,6 +535,7 @@ def register_candidate_callbacks(app) -> None:
             for row in df_rows:
                 inst      = str(row.get('ID', '') or '')
                 stype     = str(row.get('spread_type', '') or '')
+                label     = display_key(stype, inst)
                 direction = str(row.get('direction', '') or '').upper()
                 z_raw     = row.get('Zscore', None)
                 try:
@@ -558,13 +560,6 @@ def register_candidate_callbacks(app) -> None:
                     })
                 else:
                     pill = html.Span('—', style={'color': THEME['text_sub'], 'fontSize': '10px', 'minWidth': '36px', 'display': 'inline-block'})
-
-                # Spread type badge
-                type_badge = html.Span(stype, style={
-                    'backgroundColor': THEME['table_header'], 'color': THEME['text_sub'],
-                    'fontSize': '9px', 'padding': '1px 5px', 'borderRadius': '2px',
-                    'marginLeft': '6px', 'verticalAlign': 'middle',
-                })
 
                 # Z-score bar: red = negative (spread below mean), green = positive (above mean)
                 z_clamped = max(-max_z, min(max_z, z))
@@ -629,11 +624,10 @@ def register_candidate_callbacks(app) -> None:
                     # Left: pill + ID + type badge, all fixed together
                     html.Div([
                         pill,
-                        html.Span(inst, style={
+                        html.Span(label, style={
                             'color': THEME['text_main'], 'fontSize': '12px',
                             'fontWeight': '500', 'marginLeft': '10px',
                         }),
-                        type_badge,
                     ], style={
                         'display': 'flex', 'alignItems': 'center',
                         'flex': '1', 'minWidth': '0', 'overflow': 'hidden',
@@ -806,11 +800,16 @@ def register_candidate_callbacks(app) -> None:
         low_corr_pairs = rank_low_correlation_pairs(corr_matrix, top_n=10)
         high_corr = low_corr_pairs[low_corr_pairs['AbsCorr'] > max_corr]
 
-        top_assets = set(low_corr_pairs['Asset A'].head(10)).union(set(low_corr_pairs['Asset B'].head(10)))
-        top_assets = sorted(list(top_assets))[:12]
+        # Greedy maximin diversity selection — run first so the heatmap reflects
+        # the same filtered set that goes into the curated list and matrix store.
+        diverse_keys = select_diverse_instruments(
+            corr_matrix, all_candidates or [], n=10,
+            max_abs_corr=float(max_corr) if max_corr is not None else 1.0,
+        )
+        heatmap_assets = [k for k in diverse_keys if k in corr_matrix.columns]
 
-        if len(top_assets) >= 2:
-            sub_corr = corr_matrix.loc[top_assets, top_assets]
+        if len(heatmap_assets) >= 2:
+            sub_corr = corr_matrix.loc[heatmap_assets, heatmap_assets]
             corr_vals = sub_corr.values.copy()
             mask_upper = np.triu(np.ones(corr_vals.shape), k=1).astype(bool)
             corr_vals[mask_upper] = np.nan
@@ -820,16 +819,18 @@ def register_candidate_callbacks(app) -> None:
                 colorscale='RdBu', zmin=-1, zmax=1,
                 hovertemplate='%{y} vs %{x}<br>Corr: %{z:.3f}<extra></extra>',
             ))
+            _hm_height = max(350, 28 * len(heatmap_assets) + 100)
             heatmap.update_layout(
-                title='Spread Correlation Matrix (Lower Triangle)', height=350,
+                title=f'Spread Correlation Matrix — {len(heatmap_assets)} instruments (max |corr| ≤ {max_corr})',
+                height=_hm_height,
                 margin=dict(l=100, r=20, t=40, b=80),
                 plot_bgcolor=THEME['bg_main'], paper_bgcolor=THEME['bg_main'],
                 font=dict(color=THEME['text_main'], size=10),
                 xaxis=dict(tickangle=45),
             )
-            heatmap_div = dcc.Graph(figure=heatmap, style={'height': '350px'})
+            heatmap_div = dcc.Graph(figure=heatmap, style={'height': f'{_hm_height}px'})
         else:
-            heatmap_div = html.Div("Not enough assets for heatmap.", style={'color': THEME['text_sub']})
+            heatmap_div = html.Div("Not enough assets passed the correlation filter.", style={'color': THEME['text_sub']})
 
         warning_div = html.Div()
         if len(high_corr) > 0:
@@ -849,51 +850,50 @@ def register_candidate_callbacks(app) -> None:
                     col_key_to_stype[ck] = c['spread_type']
                     col_key_to_id[ck]    = c['ID']
 
-        seen_insts: set = set()
         curated_instruments: list = []
-        for _, pair_row in low_corr_pairs.iterrows():
-            for col in ['Asset A', 'Asset B']:
-                col_key = pair_row[col]
-                if col_key not in seen_insts and col_key in corr_matrix.columns:
-                    seen_insts.add(col_key)
-                    stype = col_key_to_stype.get(col_key, 'Unknown')
-                    inst  = col_key_to_id.get(col_key, col_key)
-                    row_meta = {
-                        'spread_type': stype,
-                        'instrument': inst,
-                        'manual': False,
-                        'regime': 'uncertain',
-                        'direction': '',
-                    }
-                    if all_candidates:
-                        for c in all_candidates:
-                            if c.get('ID') == inst and c.get('spread_type') == stype:
-                                _cand_style = str(c.get('style', '') or '').strip()
-                                _cand_regime = str(c.get('regime', '') or '').strip()
-                                row_meta['regime'] = _style_to_regime(_cand_style or _cand_regime)
-                                row_meta['direction'] = c.get('direction', '')
-                                try:
-                                    row_meta['Zscore'] = float(c.get('Zscore', 0) or 0)
-                                except (TypeError, ValueError):
-                                    pass
-                                sl = str(c.get('seasonal_label', '') or '').strip()
-                                if sl:
-                                    row_meta['seasonal_label'] = sl
-                                break
-                    if row_meta['regime'] == 'uncertain':
-                        row_meta['regime'] = _get_upstream_regime(stype, inst) or 'uncertain'
-                    curated_instruments.append(row_meta)
-                    if len(curated_instruments) >= 10:
+        for col_key in diverse_keys:
+            stype = col_key_to_stype.get(col_key, 'Unknown')
+            inst  = col_key_to_id.get(col_key, col_key)
+            row_meta = {
+                'spread_type': stype,
+                'instrument': inst,
+                'manual': False,
+                'regime': 'uncertain',
+                'direction': '',
+            }
+            if all_candidates:
+                for c in all_candidates:
+                    if c.get('ID') == inst and c.get('spread_type') == stype:
+                        _cand_style = str(c.get('style', '') or '').strip()
+                        _cand_regime = str(c.get('regime', '') or '').strip()
+                        row_meta['regime'] = _style_to_regime(_cand_style or _cand_regime)
+                        row_meta['direction'] = c.get('direction', '')
+                        try:
+                            row_meta['Zscore'] = float(c.get('Zscore', 0) or 0)
+                        except (TypeError, ValueError):
+                            pass
+                        sl = str(c.get('seasonal_label', '') or '').strip()
+                        if sl:
+                            row_meta['seasonal_label'] = sl
                         break
-            if len(curated_instruments) >= 10:
-                break
+            if row_meta['regime'] == 'uncertain':
+                row_meta['regime'] = _get_upstream_regime(stype, inst) or 'uncertain'
+            curated_instruments.append(row_meta)
 
         curated_instruments = _merge_curated_entries(curated_instruments)
+
+        # Trim the stored corr_matrix to only the instruments that passed the
+        # max_corr gate, so the curated matrix in Portfolio Step 1 stays clean.
+        if diverse_keys:
+            valid_keys = [k for k in diverse_keys if k in corr_matrix.columns]
+            corr_matrix_store = corr_matrix.loc[valid_keys, valid_keys]
+        else:
+            corr_matrix_store = corr_matrix
 
         return html.Div([
             heatmap_div,
             warning_div,
-        ]), [], corr_matrix.to_dict(), curated_instruments
+        ]), [], corr_matrix_store.to_dict(), curated_instruments
 
     # -------------------------------------------------------------------------
     # CANDIDATES: Cascade instrument dropdown from spread type
@@ -1224,9 +1224,9 @@ def register_candidate_callbacks(app) -> None:
             )
 
             curated_cards.append(html.Div([
-                # Row 1: instrument name + matrix dot + delete button
+                # Row 1: instrument label + matrix dot + delete button
                 html.Div([
-                    html.Span(inst, style={
+                    html.Span(display_key(stype, inst), style={
                         'color': THEME['text_main'], 'fontSize': '11px', 'fontWeight': '600',
                         'flex': '1', 'overflow': 'hidden', 'textOverflow': 'ellipsis', 'whiteSpace': 'nowrap',
                     }),
@@ -1288,7 +1288,7 @@ def register_candidate_callbacks(app) -> None:
             seas_label = entry.get('seasonal_label', '')
             pos_cards.append(html.Div([
                 html.Div([
-                    html.Span(inst, style={
+                    html.Span(display_key(stype, inst), style={
                         'color': THEME['text_main'], 'fontSize': '11px', 'fontWeight': '600',
                         'flex': '1', 'overflow': 'hidden', 'textOverflow': 'ellipsis', 'whiteSpace': 'nowrap',
                     }),

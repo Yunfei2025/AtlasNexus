@@ -50,6 +50,111 @@ def rank_low_correlation_pairs(
     return corr_stacked.sort_values('AbsCorr', ascending=True).head(top_n)
 
 
+def select_diverse_instruments(
+    corr_matrix: pd.DataFrame,
+    candidates: list[dict],
+    n: int = 10,
+    max_abs_corr: float = 1.0,
+) -> list[str]:
+    """Select up to *n* instruments using greedy maximin diversity.
+
+    At each step we pick the candidate whose maximum absolute correlation
+    with any already-selected instrument is lowest (i.e. most 'orthogonal'
+    to the current selection).  A candidate is rejected entirely if its
+    max |corr| with any selected instrument exceeds *max_abs_corr*.
+    Ties are broken by preferring spread categories not yet represented,
+    then by z-score.
+
+    Parameters
+    ----------
+    corr_matrix :
+        Full correlation matrix keyed by display_key() strings.
+    candidates :
+        Raw candidate dicts from the scan (fields: ID, spread_type, Zscore).
+    n :
+        Target portfolio size.
+    max_abs_corr :
+        Hard ceiling on pairwise |corr| for acceptance into the curated list.
+        Instruments whose |corr| with any already-selected peer exceeds this
+        are skipped.  Default 1.0 (no filtering).
+
+    Returns
+    -------
+    List of display_key strings in selection order (most diverse first).
+    """
+    from .data import display_key as _display_key
+
+    # Build a lookup from display_key → candidate metadata.
+    cand_meta: dict[str, dict] = {}
+    for c in (candidates or []):
+        inst  = str(c.get('ID', '') or '')
+        stype = str(c.get('spread_type', '') or '')
+        if not inst or not stype:
+            continue
+        dk = _display_key(stype, inst)
+        if dk in corr_matrix.columns and dk not in cand_meta:
+            cand_meta[dk] = c
+
+    available = list(cand_meta.keys())
+    if not available:
+        # No candidates match — fall back to all matrix columns.
+        available = list(corr_matrix.columns)
+
+    abs_corr = corr_matrix.abs()
+
+    selected: list[str] = []
+    selected_stypes: set[str] = set()
+
+    # Seed: pick the instrument with the highest |z-score| among all available.
+    def _zscore(dk: str) -> float:
+        try:
+            return abs(float(cand_meta.get(dk, {}).get('Zscore', 0) or 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    remaining = list(available)
+    seed = max(remaining, key=_zscore)
+    selected.append(seed)
+    selected_stypes.add(str(cand_meta.get(seed, {}).get('spread_type', '')))
+    remaining.remove(seed)
+
+    while remaining and len(selected) < n:
+        best_dk: str | None = None
+        best_score: float = float('inf')   # lower = more diverse
+
+        for dk in remaining:
+            if dk not in abs_corr.index:
+                continue
+            corr_with_selected = abs_corr.loc[dk, selected]
+            max_corr_with_selected = float(corr_with_selected.max())
+
+            # Hard reject: too correlated with an already-selected instrument.
+            if max_corr_with_selected > max_abs_corr:
+                continue
+
+            # Category diversity bonus: if this spread_type is not yet selected,
+            # treat it as slightly more distant (−0.05 nudge).
+            stype = str(cand_meta.get(dk, {}).get('spread_type', ''))
+            effective_score = max_corr_with_selected
+            if stype and stype not in selected_stypes:
+                effective_score -= 0.05
+
+            if effective_score < best_score:
+                best_score = effective_score
+                best_dk = dk
+            elif effective_score == best_score and best_dk is not None:
+                if _zscore(dk) > _zscore(best_dk):
+                    best_dk = dk
+
+        if best_dk is None:
+            break
+        selected.append(best_dk)
+        selected_stypes.add(str(cand_meta.get(best_dk, {}).get('spread_type', '')))
+        remaining.remove(best_dk)
+
+    return selected
+
+
 def risk_parity_weights(
     cov_matrix: pd.DataFrame,
     risk_budget: Optional[Dict[str, float]] = None,
