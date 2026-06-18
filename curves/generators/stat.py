@@ -227,11 +227,15 @@ class StatGenerator:
         self.spot_ts['TBond']['TBond-30.0Y'] = self.env_ts['CGB']['中债国债到期收益率:30年'].loc[date_common]
 
     # ---------------------- IRS ----------------------
-    def compute_irs_spreads(self) -> None:
+    def compute_irs_spreads(self, full_history: bool = False) -> None:
         btype = 'IRS'
         irs_px = updatePKL({}, os.path.join(DIR_INPUT, f'{btype}-cvpx.pkl'))
-        df_act_irs = irs_px['ytm_act'].loc[self.start:self.da, IRSConfig.IRS_LIST].drop_duplicates()
-        df_quo_irs = irs_px['ytm_quo'].loc[self.start:self.da, IRSConfig.IRS_LIST].drop_duplicates()
+        if full_history:
+            df_act_irs = irs_px['ytm_act'].reindex(columns=IRSConfig.IRS_LIST).drop_duplicates()
+            df_quo_irs = irs_px['ytm_quo'].reindex(columns=IRSConfig.IRS_LIST).drop_duplicates()
+        else:
+            df_act_irs = irs_px['ytm_act'].loc[self.start:self.da, IRSConfig.IRS_LIST].drop_duplicates()
+            df_quo_irs = irs_px['ytm_quo'].loc[self.start:self.da, IRSConfig.IRS_LIST].drop_duplicates()
 
         # Clean data to handle byte strings and invalid values
         df_act_irs = df_act_irs.apply(pd.to_numeric, errors='coerce')
@@ -239,12 +243,12 @@ class StatGenerator:
         
         cvpx_stat = st.statAnalysis_IRS(df_act_irs, df_quo_irs)
 
-        cpr = irs_px['carry3m'] + irs_px['roll3m']
+        cpr = irs_px.get('carry3m', pd.DataFrame()) + irs_px.get('roll3m', pd.DataFrame())
         from curves.calibration.irscurves import irsSpreads
         spds_cpr = irsSpreads(cpr)
 
         cvpx_stat['CarryRoll3m'] = spds_cpr
-        updatePKL(cvpx_stat, os.path.join(DIR_INPUT, f'{btype}-pxspds.pkl'))
+        updatePKL(cvpx_stat, os.path.join(DIR_INPUT, f'{btype}-pxspds.pkl'), rewrite=full_history)
 
         # Keep the shared IRS curve-data cache in sync with the daily generator path.
         # This persists IRS-cvdata.pkl for the previous business day used by curve pricing.
@@ -262,6 +266,31 @@ class StatGenerator:
         _irs_terms = IRSConfig.get_irs_terms()
         filtered_terms = [k for k in _irs_terms.keys() if k not in excluded]
         self.spot_ts[btype] = self.env_ts['SwapTS'][filtered_terms]
+
+    def rebuild_irs_spreads_history(self) -> None:
+        """Recompute IRS-pxspds.pkl from the full available IRS curve-price history."""
+        desired_start = pd.Timestamp('2015-01-01').date()
+        cvpx_path = os.path.join(DIR_INPUT, 'IRS-cvpx.pkl')
+        current_start = None
+        try:
+            irs_px = pd.read_pickle(cvpx_path)
+            if isinstance(irs_px, dict):
+                ytm_act = irs_px.get('ytm_act')
+                if isinstance(ytm_act, pd.DataFrame) and not ytm_act.empty:
+                    current_start = pd.Timestamp(ytm_act.index[0]).date()
+        except Exception:
+            current_start = None
+
+        if current_start is None or current_start > desired_start:
+            try:
+                from curves.generators.irs import IRSGenerator
+
+                print(f"INFO: Backfilling IRS-cvpx.pkl from {desired_start} to the latest available raw history...")
+                IRSGenerator(asof=None).backfill_history(start_date=desired_start)
+            except Exception as exc:
+                print(f"WARN: Could not backfill IRS-cvpx.pkl to {desired_start}: {exc}")
+
+        self.compute_irs_spreads(full_history=True)
 
     # ---------------------- Other sectors ----------------------
     def compute_other_bond_spreads(self) -> None:
@@ -776,7 +805,7 @@ class StatGenerator:
         print('\nFinish initialising statistics at：', datetime.datetime.now().strftime('%H:%M:%S'))
 
     @classmethod
-    def main(cls, date: Optional[str] = None):
+    def main(cls, date: Optional[str] = None, *, rebuild_irs_spreads: bool = False):
         """Main entry point for the StatGenerator.
 
         Args:
@@ -789,8 +818,16 @@ class StatGenerator:
             except (ValueError, TypeError):
                 pass
         instance = cls(asof=asof)
-        instance.run_all()
+        if rebuild_irs_spreads:
+            instance.rebuild_irs_spreads_history()
+        else:
+            instance.run_all()
 
 
 if __name__ == '__main__':
-    StatGenerator.main()
+    import argparse
+    parser = argparse.ArgumentParser(description='Generate or rebuild statistics artifacts')
+    parser.add_argument('--date', default=None, help='Target date in YYYYMMDD or YYYY-MM-DD format')
+    parser.add_argument('--rebuild-irs-spreads', action='store_true', help='Rebuild IRS-pxspds.pkl from full history')
+    args = parser.parse_args()
+    StatGenerator.main(date=args.date, rebuild_irs_spreads=args.rebuild_irs_spreads)

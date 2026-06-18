@@ -84,6 +84,59 @@ class IRSGenerator:
             except Exception as exc:
                 print(f"WARN: Could not re-fetch IRS data from Wind: {exc}")
         self.environment_ts = swap_ts
+
+    def _set_asof(self, asof: date) -> None:
+        """Set the trading and pricing dates for a specific historical day."""
+        dates = DateConfig.get_date_mappings(asof=asof)
+        self.trade_date = dates['d'].date()
+        self.pricing_date = dates['dp'].date()
+
+    def backfill_history(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> None:
+        """Rebuild IRS curve-price history across a historical date range.
+
+        This is an opt-in maintenance path for reconstructing IRS-cvpx.pkl from the
+        raw swap history in database-px.pkl.
+        """
+        self.load_environment()
+
+        available_dates = pd.Index(pd.to_datetime(self.environment_ts.index).date).unique().sort_values()
+        if available_dates.empty:
+            raise ValueError('No IRS history available for backfill.')
+
+        start_bound = start_date or available_dates[0]
+        end_bound = end_date or available_dates[-1]
+        target_dates = [d for d in available_dates if start_bound <= d <= end_bound]
+        if not target_dates:
+            raise ValueError(f'No IRS dates found between {start_bound} and {end_bound}.')
+
+        print(f'Backfilling IRS history from {target_dates[0]} to {target_dates[-1]} ({len(target_dates)} days)...')
+        for i, current_date in enumerate(target_dates, start=1):
+            self._set_asof(current_date)
+            self.generate_close_curves()
+            self.persist_curves()
+            self.prepare_forward_data()
+            self.evaluate_contracts()
+            self.update_curve_px_timeseries()
+            if i % 50 == 0 or i == len(target_dates):
+                print(f'Backfilled {i}/{len(target_dates)} IRS days through {current_date}')
+
+    @classmethod
+    def backfill_main(cls, start: Optional[str] = None, end: Optional[str] = None) -> int:
+        """CLI entry point for historical IRS backfill."""
+        def _parse(value: Optional[str]) -> Optional[date]:
+            if not value:
+                return None
+            try:
+                return datetime.strptime(value, '%Y%m%d').date()
+            except (ValueError, TypeError):
+                try:
+                    return datetime.strptime(value, '%Y-%m-%d').date()
+                except Exception:
+                    return None
+
+        instance = cls(asof=_parse(end) or None)
+        instance.backfill_history(start_date=_parse(start), end_date=_parse(end))
+        return 0
        
     def generate_close_curves(self) -> None:
         """Generate IRS close curves"""
@@ -168,26 +221,40 @@ class IRSGenerator:
             pass  # Skip silently if spreads fail
 
     @classmethod
-    def main(cls, date: Optional[str] = None):
+    def main(cls, date: Optional[str] = None, *, backfill: bool = False,
+             start_date: Optional[str] = None, end_date: Optional[str] = None):
         """Main entry point for the IRSGenerator.
 
         Args:
             date: Optional date string in YYYYMMDD format. Defaults to today.
         """
-        asof = None
-        if date:
+        def _parse(value: Optional[str]) -> Optional[date]:
+            if not value:
+                return None
             try:
-                asof = datetime.strptime(date, '%Y%m%d').date()
+                return datetime.strptime(value, '%Y%m%d').date()
             except (ValueError, TypeError):
-                pass
+                try:
+                    return datetime.strptime(value, '%Y-%m-%d').date()
+                except Exception:
+                    return None
+
+        if backfill:
+            instance = cls(asof=_parse(end_date or date) or None)
+            instance.backfill_history(start_date=_parse(start_date), end_date=_parse(end_date or date))
+            return 0
+
+        asof = _parse(date)
         instance = cls(asof=asof)
         instance.run()
+        return 0
 
 
-def main(date:  Optional[str] = None) -> int:
+def main(date:  Optional[str] = None, *, backfill: bool = False,
+         start_date: Optional[str] = None, end_date: Optional[str] = None) -> int:
     print("Starting IRS curve generation.")
     try:
-        IRSGenerator.main(date=date)
+        IRSGenerator.main(date=date, backfill=backfill, start_date=start_date, end_date=end_date)
         print("IRS curve generation completed successfully.")
         return 0
     except Exception as e:
@@ -196,6 +263,12 @@ def main(date:  Optional[str] = None) -> int:
 
 
 if __name__ == '__main__':
-    import sys as _sys
-    _date = "20260609"#_sys.argv[1] if len(_sys.argv) > 1 else None
-    _sys.exit(main(date=_date))
+    import argparse
+    parser = argparse.ArgumentParser(description='Generate or backfill IRS curve history')
+    parser.add_argument('--date', default='20260609', help='Target date in YYYYMMDD or YYYY-MM-DD format')
+    parser.add_argument('--backfill', action='store_true', help='Backfill historical IRS curve-price data')
+    parser.add_argument('--start-date', dest='start_date', default=None, help='Backfill start date in YYYYMMDD or YYYY-MM-DD format')
+    parser.add_argument('--end-date', dest='end_date', default=None, help='Backfill end date in YYYYMMDD or YYYY-MM-DD format')
+    args = parser.parse_args()
+    _sys_exit = main(date=args.date, backfill=args.backfill, start_date=args.start_date, end_date=args.end_date)
+    raise SystemExit(_sys_exit)

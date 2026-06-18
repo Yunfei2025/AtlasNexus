@@ -9,7 +9,7 @@ import os
 import pandas as pd
 import pickle
 from settings.paths import DIR_INPUT, DIR_DATA
-from curves.utils.retrieve import retrieveWindBondTS, retrieveWindCNBDCurveTS, retrieveWindBacktestPool
+from curves.utils.retrieve import retrieveWindBondTS, retrieveWindBacktestPool
 from curves.utils.file import updatePKL
 
 def loadBondDataPKL(btype,prange,update=False):
@@ -36,14 +36,6 @@ def loadBondDataPKL(btype,prange,update=False):
             with open(os.path.join(DIR_DATA,btype+'-px.pkl'), 'rb') as file:
                 database_bond = pickle.load(file)    
     return database_bond
-
-def loadCNBDCurvePKL(update=False):
-    database_cbcv = pd.read_pickle(os.path.join(DIR_DATA,'CNDBCurve-px.pkl'))
-    if update:
-        for ctype in ['CDB','CGB']:
-            database_cbcv[ctype] = retrieveWindCNBDCurveTS(ctype)
-        database_cbcv = updatePKL(database_cbcv,os.path.join(DIR_DATA,'CNDBCurve-px.pkl'))
-    return database_cbcv
 
 def loadIRSPKL():
     # this file has been updated daily
@@ -79,6 +71,5 @@ def loadDB(btype, prange, update):
                 print(f"Warning: could not write bondpool cache: {e}")
 
     database = loadBondDataPKL(btype, prange, update['bonds'])
-    database.update(loadCNBDCurvePKL(update['cbts']))
     database.update(loadIRSPKL())
     return database
