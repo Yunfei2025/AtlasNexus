@@ -124,9 +124,21 @@ app = _Dash(
     suppress_callback_exceptions=True,
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
     assets_folder=assets_folder,
+    url_base_pathname="/dashboard/",
 )
 
 app.title = "AtlasNexus Daily Console"
+
+# Serve the cover page (AtlasNexus landing page)
+@app.server.route("/")
+def _serve_cover():
+    from flask import send_file, abort
+
+    cover_file = project_root / "web" / "assets" / "cover.html"
+    if cover_file.exists():
+        return send_file(str(cover_file))
+    abort(404)
+
 
 # Serve the pairs regression plots HTML as a static-like endpoint so iframes
 # can access it from the Dash app (matches web/core/server.py behavior).

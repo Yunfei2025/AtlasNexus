@@ -52,6 +52,19 @@ def _healthz():  # type: ignore
     return jsonify({"status": "ok"})
 
 
+# Serve the cover page (AtlasNexus landing page)
+@server.route("/")
+def _serve_cover():  # type: ignore
+    try:
+        cover_file = project_root / "web" / "assets" / "cover.html"
+        if cover_file.exists():
+            return send_file(str(cover_file))
+        else:
+            abort(404)
+    except Exception:
+        abort(500)
+
+
 # Serve the pairs regression plots HTML as a static-like endpoint so iframes
 # or direct links can access it from the Dash app. This reads the file from
 # the project 'pairs' folder and returns it with appropriate content-type.

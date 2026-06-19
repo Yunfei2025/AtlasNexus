@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>民生FICC配置指数 · 月度报告</title>
+<style>
+  @page { size: A4 landscape; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --navy:      #0B2447;
+    --navy-2:    #14325C;
+    --steel:     #2E4D7B;
+    --accent:    #2EC4B6;
+    --accent-2:  #E0A458;
+    --red:       #D7595B;
+    --paper:     #F7F8FA;
+    --line:      #DCE3EC;
+    --ink:       #1A2433;
+    --ink-soft:  #5B6B82;
+  }
+
+  html, body {
+    width: 297mm;
+    height: 210mm;
+    font-family: "Source Han Sans SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    width: 297mm;
+    height: 210mm;
+    display: grid;
+    grid-template-rows: 15mm 21mm 1fr 7mm;
+    grid-template-columns: 1fr;
+    padding: 6mm 8mm 4mm 8mm;
+    gap: 2.6mm;
+  }
+
+  /* ---------- 顶部条 ---------- */
+  .masthead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1.4pt solid var(--navy);
+    padding-bottom: 2.4mm;
+  }
+  .masthead .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 3mm;
+  }
+  .brand .name {
+    font-size: 15pt;
+    font-weight: 700;
+    color: var(--navy);
+    letter-spacing: 0.5px;
+  }
+  .brand .sub {
+    font-size: 8.6pt;
+    color: var(--ink-soft);
+    font-weight: 500;
+  }
+  .masthead .meta {
+    text-align: right;
+    font-size: 8.2pt;
+    color: var(--ink-soft);
+    line-height: 1.5;
+  }
+  .masthead .meta b { color: var(--navy); font-weight: 700; }
+
+  /* ---------- KPI 行 ---------- */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 2.6mm;
+  }
+  .kpi {
+    background: white;
+    border: 0.8pt solid var(--line);
+    border-left: 2.6pt solid var(--steel);
+    border-radius: 1.5px;
+    padding: 2.6mm 3.2mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .kpi.accent { border-left-color: var(--accent); }
+  .kpi .label {
+    font-size: 7pt;
+    color: var(--ink-soft);
+    letter-spacing: 0.3px;
+    margin-bottom: 1.2mm;
+  }
+  .kpi .value {
+    font-size: 14.5pt;
+    font-weight: 700;
+    color: var(--navy);
+    line-height: 1;
+  }
+  .kpi .value.pos { color: #1A8F6B; }
+  .kpi .value.neg { color: var(--red); }
+  .kpi .delta {
+    font-size: 7pt;
+    color: var(--ink-soft);
+    margin-top: 1mm;
+  }
+
+  /* ---------- 主体三栏 ---------- */
+  .main {
+    display: grid;
+    grid-template-columns: 1.05fr 1.25fr 1fr;
+    gap: 3mm;
+    min-height: 0;
+    height: 100%;
+  }
+  .panel {
+    background: white;
+    border: 0.8pt solid var(--line);
+    border-radius: 1.5px;
+    padding: 3mm 3.4mm 2.6mm;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+  }
+  .panel h3 {
+    font-size: 8.6pt;
+    color: var(--navy);
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    border-bottom: 0.8pt solid var(--line);
+    padding-bottom: 1.6mm;
+    margin-bottom: 2mm;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .panel h3 span.tag {
+    font-size: 6.6pt;
+    font-weight: 500;
+    color: var(--ink-soft);
+    background: var(--paper);
+    padding: 0.6mm 1.6mm;
+    border-radius: 6px;
+  }
+
+  /* ---- 配置面板（环形图 + 图例） ---- */
+  .alloc-body {
+    display: flex;
+    gap: 3mm;
+    flex: 1;
+    min-height: 0;
+  }
+  .donut-wrap {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .legend {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1.1mm;
+    font-size: 7.1pt;
+  }
+  .legend .row {
+    display: grid;
+    grid-template-columns: 8px 1fr auto auto;
+    align-items: center;
+    gap: 1.6mm;
+  }
+  .legend .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .legend .nm { color: var(--ink); }
+  .legend .pct { font-weight: 700; color: var(--navy); text-align: right; }
+  .legend .chg { color: var(--ink-soft); text-align: right; width: 11mm; font-size: 6.6pt; }
+  .legend .grp-label {
+    font-size: 6.4pt; color: var(--ink-soft); font-weight: 700;
+    margin-top: 1.2mm; letter-spacing: 0.4px; text-transform: uppercase;
+  }
+
+  /* ---- 收益回顾表 ---- */
+  .ret-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 7.5pt;
+    flex: 1;
+  }
+  .ret-table th {
+    text-align: left;
+    font-size: 6.8pt;
+    color: var(--ink-soft);
+    font-weight: 600;
+    padding: 1.4mm 1mm;
+    border-bottom: 0.8pt solid var(--navy);
+  }
+  .ret-table th.num, .ret-table td.num { text-align: right; }
+  .ret-table td {
+    padding: 1.5mm 1mm;
+    border-bottom: 0.5pt solid var(--line);
+    color: var(--ink);
+  }
+  .ret-table tr.grp td {
+    font-weight: 700;
+    color: var(--steel);
+    background: #F0F3F8;
+    font-size: 6.9pt;
+    padding-top: 1.8mm;
+    padding-bottom: 1.1mm;
+  }
+  .ret-table .pos { color: #1A8F6B; font-weight: 600; }
+  .ret-table .neg { color: var(--red); font-weight: 600; }
+  .ret-table .bar-cell { width: 22mm; }
+  .bar-track { background: #EDEFF3; height: 2.6mm; border-radius: 1px; position: relative; overflow: hidden; }
+  .bar-fill { position: absolute; top: 0; bottom: 0; }
+  .bar-fill.pos { background: #1A8F6B; left: 50%; }
+  .bar-fill.neg { background: var(--red); right: 50%; }
+  .bar-mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 0.4pt; background: var(--ink-soft); opacity: 0.4; }
+
+  /* ---- 右栏：净值曲线 + 风险贡献 + 解读 ---- */
+  .right-col { display: flex; flex-direction: column; gap: 3mm; min-height: 0; height: 100%; }
+  .mini-chart {
+    height: 26mm;
+    display: flex;
+    align-items: flex-end;
+  }
+  .commentary {
+    font-size: 7.3pt;
+    line-height: 1.55;
+    color: var(--ink);
+    flex: 1;
+  }
+  .commentary .dot-item { display: flex; gap: 1.4mm; margin-bottom: 1.6mm; }
+  .commentary .dot-item .marker { color: var(--accent); font-weight: 700; flex: 0 0 auto; }
+  .riskbar-row { display: grid; grid-template-columns: 16mm 1fr 9mm; align-items: center; gap: 1.6mm; font-size: 6.8pt; margin-bottom: 1.4mm; }
+  .riskbar-track { background: #EDEFF3; height: 2.8mm; border-radius: 1px; overflow: hidden; }
+  .riskbar-fill { height: 100%; }
+
+  /* ---------- 底部 ---------- */
+  .footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 6.4pt;
+    color: var(--ink-soft);
+    border-top: 0.6pt solid var(--line);
+    padding-top: 1.6mm;
+  }
+  .footer b { color: var(--steel); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- 顶部 masthead -->
+  <div class="masthead">
+    <div class="brand">
+      <span class="name">民生 FICC 配置指数</span>
+      <span class="sub">CMBC FICC Allocation Index &nbsp;|&nbsp; 风险预算驱动的 FICC 系统化配置策略</span>
+    </div>
+    <div class="meta">
+      月度报告 &nbsp;·&nbsp; <b>2026 年 5 月</b>（报告期：2026-05-01 至 2026-05-31）&nbsp;|&nbsp; 发布日期：2026-06-02<br>
+      编制：中国民生银行金融市场部 &nbsp;·&nbsp; 基准指数 FICC-RP &nbsp;/&nbsp; 增强指数 FICC-EF
+    </div>
+  </div>
+
+  <!-- KPI 行 -->
+  <div class="kpi-row">
+    <div class="kpi">
+      <div class="label">FICC-RP 月度收益</div>
+      <div class="value pos">+0.62%</div>
+      <div class="delta">基准指数（纯风险预算）</div>
+    </div>
+    <div class="kpi accent">
+      <div class="label">FICC-EF 月度收益</div>
+      <div class="value pos">+0.74%</div>
+      <div class="delta">增强指数（基准 + 因子超额）</div>
+    </div>
+    <div class="kpi">
+      <div class="label">FICC-EF 净值（基点 1000）</div>
+      <div class="value">1,216.4</div>
+      <div class="delta">较上月末 1,207.5</div>
+    </div>
+    <div class="kpi">
+      <div class="label">月内最大回撤</div>
+      <div class="value neg">-0.38%</div>
+      <div class="delta">发生于 05-14 至 05-19</div>
+    </div>
+    <div class="kpi">
+      <div class="label">滚动 12 月夏普比率</div>
+      <div class="value">1.08</div>
+      <div class="delta">FICC-EF，前值 1.05</div>
+    </div>
+    <div class="kpi">
+      <div class="label">本月再平衡</div>
+      <div class="value" style="font-size:12.5pt;">2026-05-04</div>
+      <div class="delta">常规月度再平衡，无触发式调整</div>
+    </div>
+  </div>
+
+  <!-- 主体三栏 -->
+  <div class="main">
+
+    <!-- 左栏：本期配置 -->
+    <div class="panel">
+      <h3>本期资产配置（风险预算权重）<span class="tag">2026-05-04 生效</span></h3>
+      <div class="alloc-body">
+        <div class="donut-wrap">
+          <svg width="118" height="118" viewBox="0 0 42 42">
+            <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#EDEFF3" stroke-width="6"></circle>
+            <!-- 国债类 53.3% 蓝色系 -->
+            <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#0B2447" stroke-width="6"
+                    stroke-dasharray="20.1 79.8" stroke-dashoffset="25"></circle>
+            <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#2E4D7B" stroke-width="6"
+                    stroke-dasharray="17.0 82.9" stroke-dashoffset="4.9"></circle>
+            <!-- 外汇类 28.6% 青色系 -->
+            <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#2EC4B6" stroke-width="6"
+                    stroke-dasharray="28.6 71.3" stroke-dashoffset="-12.1"></circle>
+            <!-- 商品类 18.1% 橙色系 -->
+            <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#E0A458" stroke-width="6"
+                    stroke-dasharray="11.4 88.5" stroke-dashoffset="-40.7"></circle>
+            <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#C97B3D" stroke-width="6"
+                    stroke-dasharray="6.7 93.2" stroke-dashoffset="-52.1"></circle>
+            <text x="21" y="19.6" text-anchor="middle" font-size="4.6" fill="#0B2447" font-weight="700">100%</text>
+            <text x="21" y="24.4" text-anchor="middle" font-size="2.7" fill="#5B6B82">配置中</text>
+          </svg>
+        </div>
+        <div class="legend">
+          <div class="grp-label">固定收益 · 53.3%</div>
+          <div class="row"><span class="dot" style="background:#0B2447"></span><span class="nm">CN10Y 国债</span><span class="pct">20.1%</span><span class="chg">+1.4pp</span></div>
+          <div class="row"><span class="dot" style="background:#2E4D7B"></span><span class="nm">CN20Y / CN30Y 国债</span><span class="pct">33.2%</span><span class="chg">-0.8pp</span></div>
+          <div class="grp-label">外汇 · 28.6%</div>
+          <div class="row"><span class="dot" style="background:#2EC4B6"></span><span class="nm">USDCNY</span><span class="pct">28.6%</span><span class="chg">+2.1pp</span></div>
+          <div class="grp-label">大宗商品 · 18.1%</div>
+          <div class="row"><span class="dot" style="background:#E0A458"></span><span class="nm">黄金</span><span class="pct">11.4%</span><span class="chg">-1.2pp</span></div>
+          <div class="row"><span class="dot" style="background:#C97B3D"></span><span class="nm">铝</span><span class="pct">6.7%</span><span class="chg">-1.5pp</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 中栏：上月各资产回报 -->
+    <div class="panel">
+      <h3>上月各资产收益回顾<span class="tag">2026-05-01 ~ 2026-05-31</span></h3>
+      <table class="ret-table">
+        <thead>
+          <tr><th>资产</th><th class="num">月收益</th><th>贡献 / 方向</th></tr>
+        </thead>
+        <tbody>
+          <tr class="grp"><td colspan="3">固定收益</td></tr>
+          <tr>
+            <td>CN1Y</td><td class="num pos">+0.08%</td>
+            <td class="bar-cell"><div class="bar-track"><div class="bar-mid"></div><div class="bar-fill pos" style="width:6%"></div></div></td>
+          </tr>
+          <tr>
+            <td>CN5Y</td><td class="num pos">+0.21%</td>
+            <td class="bar-cell"><div class="bar-track"><div class="bar-mid"></div><div class="bar-fill pos" style="width:15%"></div></div></td>
+          </tr>
+          <tr>
+            <td>CN10Y</td><td class="num pos">+0.46%</td>
+            <td class="bar-cell"><div class="bar-track"><div class="bar-mid"></div><div class="bar-fill pos" style="width:32%"></div></div></td>
+          </tr>
+          <tr>
+            <td>CN20Y</td><td class="num neg">-0.12%</td>
+            <td class="bar-cell"><div class="bar-track"><div class="bar-mid"></div><div class="bar-fill neg" style="width:9%"></div></div></td>
+          </tr>
+          <tr>
+            <td>CN30Y</td><td class="num neg">-0.35%</td>
+            <td class="bar-cell"><div class="bar-track"><div class="bar-mid"></div><div class="bar-fill neg" style="width:24%"></div></div></td>
+          </tr>
+          <tr class="grp"><td colspan="3">外汇</td></tr>
+          <tr>
+            <td>USDCNY</td><td class="num pos">+0.54%</td>
+            <td class="bar-cell"><div class="bar-track"><div class="bar-mid"></div><div class="bar-fill pos" style="width:38%"></div></div></td>
+          </tr>
+          <tr class="grp"><td colspan="3">大宗商品</td></tr>
+          <tr>
+            <td>黄金</td><td class="num pos">+1.83%</td>
+            <td class="bar-cell"><div class="bar-track"><div class="bar-mid"></div><div class="bar-fill pos" style="width:90%"></div></div></td>
+          </tr>
+          <tr>
+            <td>铝</td><td class="num neg">-0.64%</td>
+            <td class="bar-cell"><div class="bar-track"><div class="bar-mid"></div><div class="bar-fill neg" style="width:42%"></div></div></td>
+          </tr>
+          <tr class="grp"><td colspan="3">因子超额（FICC-EF 专项）</td></tr>
+          <tr>
+            <td>Carry</td><td class="num pos">+0.06%</td>
+            <td class="bar-cell"><div class="bar-track"><div class="bar-mid"></div><div class="bar-fill pos" style="width:18%"></div></div></td>
+          </tr>
+          <tr>
+            <td>动量</td><td class="num pos">+0.05%</td>
+            <td class="bar-cell"><div class="bar-track"><div class="bar-mid"></div><div class="bar-fill pos" style="width:15%"></div></div></td>
+          </tr>
+          <tr>
+            <td>价值</td><td class="num neg">-0.01%</td>
+            <td class="bar-cell"><div class="bar-track"><div class="bar-mid"></div><div class="bar-fill neg" style="width:4%"></div></div></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 右栏：净值曲线 + 风险贡献 + 月度解读 -->
+    <div class="right-col">
+      <div class="panel" style="flex: 0 0 32mm;">
+        <h3>近 12 个月净值走势<span class="tag">基点 1000</span></h3>
+        <div class="mini-chart" style="height: 100%;">
+          <svg width="100%" height="100%" viewBox="0 0 300 90" preserveAspectRatio="none">
+            <polyline fill="none" stroke="#DCE3EC" stroke-width="1"
+              points="0,75 300,75" />
+            <polyline fill="none" stroke="#2E4D7B" stroke-width="1.6"
+              points="0,72 25,68 50,70 75,60 100,58 125,50 150,46 175,38 200,34 225,30 250,22 275,16 300,10" />
+            <polyline fill="none" stroke="#2EC4B6" stroke-width="1.8"
+              points="0,70 25,65 50,66 75,54 100,52 125,42 150,37 175,28 200,24 225,19 250,12 275,6 300,2" />
+            <circle cx="300" cy="2" r="2.4" fill="#2EC4B6" />
+            <circle cx="300" cy="10" r="2.2" fill="#2E4D7B" />
+          </svg>
+        </div>
+        <div style="display:flex; gap:4mm; font-size:6.8pt; color:var(--ink-soft); margin-top:1mm;">
+          <span><span style="color:#2EC4B6; font-weight:700;">●</span> FICC-EF 增强</span>
+          <span><span style="color:#2E4D7B; font-weight:700;">●</span> FICC-RP 基准</span>
+        </div>
+      </div>
+
+      <div class="panel" style="flex: 0 0 26mm;">
+        <h3>风险贡献分布<span class="tag">本期</span></h3>
+        <div style="flex:1; display:flex; flex-direction:column; justify-content:center;">
+          <div class="riskbar-row"><span>固定收益</span><div class="riskbar-track"><div class="riskbar-fill" style="width:34%; background:#0B2447;"></div></div><span>34%</span></div>
+          <div class="riskbar-row"><span>外汇</span><div class="riskbar-track"><div class="riskbar-fill" style="width:33%; background:#2EC4B6;"></div></div><span>33%</span></div>
+          <div class="riskbar-row"><span>大宗商品</span><div class="riskbar-track"><div class="riskbar-fill" style="width:33%; background:#E0A458;"></div></div><span>33%</span></div>
+        </div>
+      </div>
+
+      <div class="panel" style="flex: 1;">
+        <h3>本月要点</h3>
+        <div class="commentary">
+          <div class="dot-item"><span class="marker">①</span><span>黄金单月上涨 1.83%，是本期最大正贡献资产，推动外汇与商品板块风险贡献占比小幅上升。</span></div>
+          <div class="dot-item"><span class="marker">②</span><span>长端国债（20Y/30Y）月内回调，权重相应下调，10 年期及以下品种权重上调以维持风险预算均衡。</span></div>
+          <div class="dot-item"><span class="marker">③</span><span>FICC-EF 因子超额本月贡献 +0.10%，主要来自 Carry 与动量因子，价值因子小幅拖累。</span></div>
+          <div class="dot-item"><span class="marker">④</span><span>下月展望：美元指数走势与国内长端利率方向为关键观察变量，若跨资产相关性持续走低，风险预算配置有望维持当前结构。</span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 底部 -->
+  <div class="footer">
+    <span>本报告基于<b>民生FICC配置指数</b>规则化编制流程自动生成，数据来源：中债登、CFETS、上期所/INE、LME。历史表现不代表未来收益，不构成投资建议。</span>
+    <span>第 1 页 / 共 1 页 &nbsp;·&nbsp; 中国民生银行金融市场部</span>
+  </div>
+
+</div>
+</body>
+</html>

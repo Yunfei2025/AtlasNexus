@@ -1,0 +1,314 @@
+/* ============================================================
+   AtlasNexus Design System — Dash Integration Stylesheet
+   ============================================================
+   DROP THIS FILE into your  web/assets/  folder.
+   Dash auto-loads every file in assets/ — no Python changes needed.
+
+   Targets real classNames from atlasnexus_daily.py + atlas_styles.py:
+     app shell · dcc.Dropdown · dcc.DatePickerSingle · html.Button
+     dcc.Input · dash_table.DataTable · status pills · scrollbars
+   ============================================================ */
+
+/* ── CSS Variables (mirror atlas_styles.py exactly) ──────────── */
+:root {
+  --an-navy-950:  #020d22;
+  --an-navy-900:  #040f30;
+  --an-navy-800:  #082255;   /* tabs_styles background */
+  --an-navy-700:  #0c2b64;   /* _card_style background */
+  --an-navy-600:  #112e66;   /* _INPUT_STYLE background */
+  --an-navy-500:  #1a3a6e;   /* _BTN_STYLE background */
+  --an-navy-400:  #2a5298;   /* border colour */
+  --an-navy-300:  #425476;   /* inactive tab background */
+
+  --an-blue:    #2e86c1;
+  --an-cyan:    #45b6e6;
+  --an-green:   #27ae60;
+  --an-amber:   #f39c12;
+  --an-red:     #c0392b;
+  --an-purple:  #8e44ad;
+
+  --an-text:    #ffffff;
+  --an-muted:   #aab0c0;
+  --an-faint:   #5a6478;
+
+  --an-border:  #2a5298;
+  --an-border2: #061E44;
+
+  --an-r: 4px;
+  --an-t: 0.15s ease;
+}
+
+/* ── App Shell ────────────────────────────────────────────────── */
+.app__container { background: var(--an-navy-900); min-height: 100vh; }
+
+.app__header {
+  background: var(--an-navy-800);
+  border-bottom: 1px solid var(--an-border2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.app__header__title {
+  color: var(--an-text);
+  font-weight: 300;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+.app__header__title--grey { color: var(--an-muted); }
+
+.app__content { background: var(--an-navy-900); }
+
+.tab__title { background: var(--an-navy-800); }
+
+/* ── Status Pills ─────────────────────────────────────────────── */
+.an-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 2px 9px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: opacity var(--an-t);
+}
+.an-status-pill .dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.an-status-pill.ok     { background: rgba(39,174,96,.12);  color:#27ae60; border-color:rgba(39,174,96,.3);  }
+.an-status-pill.warn   { background: rgba(243,156,18,.12); color:#f39c12; border-color:rgba(243,156,18,.3); }
+.an-status-pill.error  { background: rgba(192,57,43,.12);  color:#e74c3c; border-color:rgba(192,57,43,.3);  }
+.an-status-pill.idle   { background: rgba(90,100,120,.1);  color:var(--an-muted); border-color:rgba(90,100,120,.25); }
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+/* Adds transitions + micro-interactions to all html.Button;
+   does NOT override background (inline styles handle that) */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  transition: filter var(--an-t), transform var(--an-t);
+}
+button:hover  { filter: brightness(1.12); }
+button:active { filter: brightness(0.9); transform: translateY(1px); }
+button:focus-visible {
+  outline: 2px solid var(--an-cyan);
+  outline-offset: 2px;
+}
+button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+
+/* ── dcc.Dropdown (React-Select 2.x) ─────────────────────────── */
+.Select-control {
+  background:    var(--an-navy-600) !important;
+  border:        1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+  min-height:    34px !important;
+  transition:    border-color var(--an-t), box-shadow var(--an-t) !important;
+}
+.Select-control:hover           { border-color: var(--an-blue) !important; box-shadow: none !important; }
+.Select.is-open .Select-control,
+.Select.is-focused .Select-control {
+  border-color: var(--an-cyan) !important;
+  box-shadow:   0 0 0 2px rgba(69,182,230,.18) !important;
+}
+.Select-value-label  { color: var(--an-text) !important; }
+.Select-placeholder  { color: var(--an-muted) !important; }
+.Select-arrow        { border-color: var(--an-muted) transparent transparent !important; }
+.Select.is-open .Select-arrow  { border-color: transparent transparent var(--an-muted) !important; }
+
+.Select-menu-outer {
+  background:    var(--an-navy-700) !important;
+  border:        1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+  box-shadow:    0 8px 24px rgba(0,0,0,.55) !important;
+  z-index:       2000 !important;
+}
+.Select-option {
+  background:  transparent !important;
+  color:       var(--an-muted) !important;
+  font-size:   13px !important;
+  padding:     8px 12px !important;
+  transition:  background var(--an-t), color var(--an-t) !important;
+}
+.Select-option:hover,
+.Select-option.is-focused  { background: rgba(42,82,152,.35) !important; color: var(--an-text) !important; }
+.Select-option.is-selected { background: rgba(46,134,193,.22) !important; color: var(--an-cyan) !important; }
+
+/* Multi-select chips */
+.Select--multi .Select-value {
+  background:    rgba(42,82,152,.45) !important;
+  border:        1px solid var(--an-border) !important;
+  color:         var(--an-text) !important;
+  border-radius: 3px !important;
+}
+.Select--multi .Select-value-icon          { border-right: 1px solid var(--an-border) !important; color: var(--an-muted) !important; }
+.Select--multi .Select-value-icon:hover    { background: rgba(192,57,43,.3) !important; color: #e74c3c !important; }
+.Select-input > input                      { color: var(--an-text) !important; background: transparent !important; }
+
+/* ── dcc.Input / html inputs ──────────────────────────────────── */
+input[type="text"],
+input[type="number"],
+input[type="search"],
+input[type="email"] {
+  background:    var(--an-navy-600);
+  color:         var(--an-text);
+  border:        1px solid var(--an-border);
+  border-radius: var(--an-r);
+  padding:       5px 8px;
+  font-family:   inherit;
+  font-size:     13px;
+  transition:    border-color var(--an-t), box-shadow var(--an-t);
+}
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="search"]:focus {
+  border-color: var(--an-cyan);
+  box-shadow:   0 0 0 2px rgba(69,182,230,.18);
+  outline:      none;
+}
+input::placeholder  { color: var(--an-faint); }
+input:disabled      { opacity: 0.4; cursor: not-allowed; }
+
+/* ── dcc.DatePickerSingle ─────────────────────────────────────── */
+.SingleDatePickerInput {
+  background:    var(--an-navy-600) !important;
+  border:        1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+  transition:    border-color var(--an-t) !important;
+}
+.SingleDatePickerInput:focus-within {
+  border-color:  var(--an-cyan) !important;
+  box-shadow:    0 0 0 2px rgba(69,182,230,.18) !important;
+}
+.DateInput        { background: transparent !important; }
+.DateInput_input  {
+  background:  transparent !important;
+  color:       var(--an-text) !important;
+  border:      none !important;
+  font-size:   13px !important;
+  padding:     5px 8px !important;
+  font-family: inherit !important;
+}
+.DateInput_input__focused { border-bottom: 2px solid var(--an-cyan) !important; }
+.DayPicker {
+  background:    var(--an-navy-700) !important;
+  border:        1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+  box-shadow:    0 8px 24px rgba(0,0,0,.55) !important;
+}
+.CalendarDay__default        { background: transparent !important; color: var(--an-muted) !important; border: 1px solid transparent !important; }
+.CalendarDay__default:hover  { background: rgba(42,82,152,.35) !important; color: var(--an-text) !important; }
+.CalendarDay__selected       { background: var(--an-blue) !important; color: #fff !important; border-color: var(--an-cyan) !important; }
+.CalendarDay__today          { color: var(--an-cyan) !important; font-weight: 600 !important; }
+.CalendarMonth_caption       { color: var(--an-text) !important; }
+.DayPickerNavigation_button  {
+  border:      1px solid var(--an-border) !important;
+  background:  var(--an-navy-600) !important;
+  color:       var(--an-muted) !important;
+  border-radius: var(--an-r) !important;
+  transition:  background var(--an-t) !important;
+}
+.DayPickerNavigation_button:hover { background: var(--an-navy-500) !important; }
+
+/* ── DataTable ────────────────────────────────────────────────── */
+.dash-table-container .dash-spreadsheet-container {
+  border:        1px solid var(--an-border2) !important;
+  border-radius: var(--an-r) !important;
+  overflow:      hidden !important;
+}
+/* Header row */
+.dash-table-container .dash-header {
+  background:      var(--an-navy-700) !important;
+  color:           var(--an-muted) !important;
+  font-size:       11px !important;
+  font-weight:     600 !important;
+  letter-spacing:  0.07em !important;
+  text-transform:  uppercase !important;
+  border-bottom:   1px solid var(--an-border) !important;
+  border-right:    1px solid var(--an-border2) !important;
+  padding:         7px 10px !important;
+}
+/* Data cells */
+.dash-table-container .dash-cell {
+  background:    var(--an-navy-800) !important;
+  color:         var(--an-text) !important;
+  border-bottom: 1px solid var(--an-border2) !important;
+  border-right:  1px solid var(--an-border2) !important;
+  font-size:     12px !important;
+  padding:       5px 10px !important;
+}
+/* Row hover */
+.dash-table-container .dash-spreadsheet-inner tr:hover .dash-cell {
+  background: rgba(42,82,152,.18) !important;
+}
+/* Selected cell */
+.dash-table-container .dash-cell.focused {
+  box-shadow: inset 0 0 0 1px var(--an-cyan) !important;
+}
+/* Sort indicators */
+.dash-table-container .column-header--sort span { color: var(--an-cyan) !important; }
+/* Filter row */
+.dash-table-container .dash-filter input {
+  background:  var(--an-navy-700) !important;
+  color:       var(--an-text) !important;
+  border:      1px solid var(--an-border) !important;
+  font-size:   11px !important;
+}
+/* Pagination */
+.previous-next-container button,
+.current-page-container input,
+.last-page-container button,
+.first-page-container button {
+  background:    var(--an-navy-700) !important;
+  color:         var(--an-muted) !important;
+  border:        1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+}
+.previous-next-container button:hover,
+.last-page-container button:hover,
+.first-page-container button:hover {
+  background: var(--an-navy-500) !important;
+  color:      var(--an-text) !important;
+}
+
+/* ── Plotly modebar ───────────────────────────────────────────── */
+.modebar                 { background: transparent !important; }
+.modebar-btn path        { fill: var(--an-muted) !important; }
+.modebar-btn:hover path  { fill: var(--an-cyan) !important; }
+.modebar-btn.active path { fill: var(--an-blue) !important; }
+
+/* ── Dash loading overlay ─────────────────────────────────────── */
+._dash-loading-callback { background: rgba(4,15,48,.55) !important; }
+[data-dash-is-loading="true"] { opacity: 0.65; transition: opacity 0.2s; }
+
+/* ── Scrollbars (WebKit/Blink) ────────────────────────────────── */
+::-webkit-scrollbar         { width: 6px; height: 6px; }
+::-webkit-scrollbar-track   { background: var(--an-navy-950); }
+::-webkit-scrollbar-thumb   { background: var(--an-navy-400); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--an-blue); }
+/* Firefox */
+* { scrollbar-width: thin; scrollbar-color: var(--an-navy-400) var(--an-navy-950); }
+
+/* ── Log/pre output ───────────────────────────────────────────── */
+pre {
+  background:    var(--an-navy-950);
+  color:         #c8d8f0;
+  border-radius: var(--an-r);
+  font-size:     12px;
+  line-height:   1.6;
+  padding:       10px 12px;
+}
+
+/* ── Tooltip / popover ────────────────────────────────────────── */
+.dash-tooltip {
+  background:    var(--an-navy-700) !important;
+  border:        1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+  color:         var(--an-text) !important;
+  font-size:     12px !important;
+}

@@ -812,14 +812,14 @@ def build_factor_backtest_layout():
             html.Div("Parameters", style=SECTION_TITLE_STYLE),
 
             # MA
-            html.Div(_param_hd | {'children': 'MA'}),
+            html.Div('MA', style=_param_hd),
             html.Div([
                 html.Div([html.Label("Short", style=_param_lbl), dcc.Input(id='bf-ma-short', type='number', value=5,   min=2, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
                 html.Div([html.Label("Long",  style=_param_lbl), dcc.Input(id='bf-ma-long',  type='number', value=20, min=5, style=_inp)], style={'flex': 1, 'marginLeft':  '4px'}),
             ], style={'display': 'flex', 'marginBottom': '8px'}),
 
             # Bollinger
-            html.Div(_param_hd | {'children': 'Bollinger'}),
+            html.Div('Bollinger', style=_param_hd),
             html.Div([
                 html.Div([html.Label("Period", style=_param_lbl), dcc.Input(id='bf-boll-window', type='number', value=20,  style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
                 html.Div([html.Label("StdDev", style=_param_lbl), dcc.Input(id='bf-boll-std',    type='number', value=1.0, step=0.1, style=_inp)], style={'flex': 1, 'marginLeft': '4px'}),
@@ -828,15 +828,15 @@ def build_factor_backtest_layout():
                           labelStyle={'fontSize': '0.8rem', 'color': '#CBD5E0'}, style={'marginBottom': '8px'}),
 
             # VWAP
-            html.Div(_param_hd | {'children': 'VWAP'}),
+            html.Div('VWAP', style=_param_hd),
             html.Div([html.Label("Window", style=_param_lbl), dcc.Input(id='bf-vwap-window', type='number', value=20, style=_inp)], style={'marginBottom': '8px'}),
 
             # Momentum
-            html.Div(_param_hd | {'children': 'Momentum'}),
+            html.Div('Momentum', style=_param_hd),
             html.Div([html.Label("Lookback", style=_param_lbl), dcc.Input(id='bf-mom-window', type='number', value=14, style=_inp)], style={'marginBottom': '8px'}),
 
             # ATR
-            html.Div(_param_hd | {'children': 'ATR'}),
+            html.Div('ATR', style=_param_hd),
             html.Div([
                 html.Div([html.Label("EMA", style=_param_lbl), dcc.Input(id='bf-atr-ema-window', type='number', value=11, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
                 html.Div([html.Label("Win", style=_param_lbl), dcc.Input(id='bf-atr-window',     type='number', value=14, style=_inp)], style={'flex': 1, 'marginLeft': '4px', 'marginRight': '4px'}),
@@ -844,7 +844,7 @@ def build_factor_backtest_layout():
             ], style={'display': 'flex', 'marginBottom': '8px'}),
 
             # SAR
-            html.Div(_param_hd | {'children': 'SAR'}),
+            html.Div('SAR', style=_param_hd),
             html.Div([
                 html.Div([html.Label("AF",  style=_param_lbl), dcc.Input(id='bf-sar-af',     type='number', value=0.02, step=0.01, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
                 html.Div([html.Label("Max", style=_param_lbl), dcc.Input(id='bf-sar-max-af', type='number', value=0.2,  step=0.01, style=_inp)], style={'flex': 1, 'marginLeft':  '4px'}),

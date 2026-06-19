@@ -1,0 +1,290 @@
+<!-- @startingPoint section="AtlasNexus Daily" subtitle="Branded terminal cover / entry screen" viewport="1440x900" -->
+<!-- @dsCard group="AtlasNexus Daily" viewport="1440x720" name="Cover / entry screen" subtitle="Standalone globe with world map, cities & market ticker" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AtlasNexus</title>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;500;600&display=swap');
+  html,body{height:100%;margin:0;overflow:hidden;font-family:'Open Sans',sans-serif}
+  body{display:flex;align-items:center;justify-content:center;padding-bottom:72px;box-sizing:border-box;
+    background:radial-gradient(130% 100% at 50% 0%,#082255 0%,#040f30 40%,#020d22 100%)}
+  #globe{position:fixed;top:calc(50% - 36px);left:50%;transform:translate(-50%,-50%);pointer-events:none;opacity:.88}
+  .grid{position:fixed;inset:0;pointer-events:none;
+    background-image:linear-gradient(#2a5298 1px,transparent 1px),linear-gradient(90deg,#2a5298 1px,transparent 1px);
+    background-size:64px 64px;mask-image:radial-gradient(70% 65% at 50% 44%,#000 0%,transparent 75%);opacity:.45}
+  .vignette{position:fixed;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse 52% 55% at 50% 48%,transparent 16%,rgba(3,10,30,.8) 100%)}
+  .cover{position:relative;z-index:10;text-align:center;padding:36px 40px 16px;max-width:820px;width:100%}
+  .mark{display:inline-flex;align-items:center;gap:14px;margin-bottom:20px}
+  .mono{width:46px;height:46px}
+  .word{font-family:'Open Sans',sans-serif;font-weight:300;font-size:62px;letter-spacing:.05em;color:#ffffff;line-height:1}
+  .word b{font-weight:600}
+  .tag{font-family:'Open Sans',sans-serif;font-size:16px;color:#aab0c0;letter-spacing:.02em;margin:0 auto 26px;max-width:500px;line-height:1.65}
+  .asset-grid{display:flex;gap:11px;justify-content:center;margin-bottom:26px;flex-wrap:wrap}
+  .ac{display:flex;flex-direction:column;align-items:center;gap:7px;padding:14px 14px 12px;
+    background:rgba(10,36,90,.7);border:1px solid rgba(42,82,152,.32);border-radius:8px;width:130px;
+    transition:background .2s,border-color .22s,transform .2s;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .ac:hover{background:rgba(18,56,130,.88);border-color:rgba(69,182,230,.52);transform:translateY(-3px)}
+  .ac-name{font-family:'Courier New',monospace;font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:#ffffff}
+  .ac-sub{font-family:'Courier New',monospace;font-size:10px;color:#aab0c0;letter-spacing:.04em}
+  .cta{display:inline-flex;align-items:center;gap:10px;font-family:'Courier New',monospace;font-weight:600;font-size:14px;
+    letter-spacing:.08em;text-transform:uppercase;color:#fff;background:#2e86c1;border:none;
+    border-radius:4px;padding:13px 28px;cursor:pointer;box-shadow:0 4px 12px rgba(46,134,193,.35);white-space:nowrap;
+    transition:filter .15s ease,transform .15s ease}
+  .cta:hover{filter:brightness(1.12);transform:translateY(-1px)}
+  .meta{margin-top:18px;font-family:'Courier New',monospace;font-size:11px;color:#5a6478}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#27ae60;
+    box-shadow:0 0 6px #27ae60;margin-right:6px;vertical-align:middle}
+  .ticker{position:fixed;bottom:0;left:0;right:0;height:72px;z-index:20;
+    display:flex;align-items:center;justify-content:space-around;padding:0 48px;
+    background:rgba(3,9,30,.92);border-top:1px solid rgba(42,82,152,.28);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .tick{display:flex;align-items:center;gap:10px}
+  .tick-info{display:flex;flex-direction:column;gap:1px}
+  .tick-n{font-family:'Courier New',monospace;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#aab0c0}
+  .tick-v{font-family:'Courier New',monospace;font-size:14px;font-weight:600;color:#ffffff;line-height:1.3}
+  .tick-d{font-family:'Courier New',monospace;font-size:10px;line-height:1.3}
+  .tick-d.up{color:#27ae60}.tick-d.dn{color:#e74c3c}
+</style></head>
+<body>
+<canvas id="globe"></canvas>
+<div class="grid"></div>
+<div class="vignette"></div>
+<div class="cover">
+  <div class="mark">
+    <svg class="mono" viewBox="0 0 48 48" fill="none">
+      <circle cx="24" cy="24" r="22" stroke="#45b6e6" stroke-width="1.4" opacity="0.5"/>
+      <path d="M24 6 L40 38 L8 38 Z" stroke="#45b6e6" stroke-width="1.6" fill="none"/>
+      <circle cx="24" cy="6" r="3" fill="#45b6e6"/>
+      <circle cx="40" cy="38" r="3" fill="#2e86c1"/>
+      <circle cx="8" cy="38" r="3" fill="#f39c12"/>
+      <circle cx="24" cy="27" r="2.4" fill="#ffffff"/>
+    </svg>
+    <div class="word">Atlas<b>Nexus</b></div>
+  </div>
+  <p class="tag">Multi-asset systematic investment platform — fixed income, FX, equities &amp; commodities in one terminal.</p>
+  <div class="asset-grid">
+    <div class="ac">
+      <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style="color:#45b6e6">
+        <line x1="5" y1="35" x2="5" y2="5" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+        <line x1="5" y1="35" x2="37" y2="35" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+        <path d="M7 31 Q11 29 14 25 Q19 18 24 15 Q29 12 35 11" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+        <circle cx="7"  cy="31" r="2" fill="currentColor" opacity="0.85"/>
+        <circle cx="14" cy="25" r="2" fill="currentColor" opacity="0.85"/>
+        <circle cx="24" cy="15" r="2" fill="currentColor" opacity="0.85"/>
+        <circle cx="35" cy="11" r="2" fill="currentColor" opacity="0.85"/>
+      </svg>
+      <span class="ac-name">Fixed Income</span><span class="ac-sub">Rates &amp; Curves</span>
+    </div>
+    <div class="ac">
+      <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style="color:#f39c12">
+        <path d="M6 15 L32 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M27 10 L32 15 L27 20" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M34 26 L8 26" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M13 21 L8 26 L13 31" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="6"  cy="15" r="2.5" fill="currentColor" opacity="0.6"/>
+        <circle cx="34" cy="26" r="2.5" fill="currentColor" opacity="0.6"/>
+      </svg>
+      <span class="ac-name">FX</span><span class="ac-sub">Currencies</span>
+    </div>
+    <div class="ac">
+      <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style="color:#27ae60">
+        <line x1="10" y1="8"  x2="10" y2="34" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+        <rect x="7"  y="20" width="6" height="10" stroke="currentColor" stroke-width="1.4" fill="none" rx="0.5"/>
+        <line x1="20" y1="6"  x2="20" y2="30" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+        <rect x="17" y="13" width="6" height="10" fill="currentColor" opacity="0.75" rx="0.5"/>
+        <line x1="30" y1="4"  x2="30" y2="27" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+        <rect x="27" y="8"  width="6" height="12" fill="currentColor" rx="0.5"/>
+        <path d="M7 26 L20 17 L33 10" stroke="currentColor" stroke-width="1" opacity="0.45" stroke-dasharray="3 2"/>
+      </svg>
+      <span class="ac-name">Equities</span><span class="ac-sub">Stocks &amp; Factors</span>
+    </div>
+    <div class="ac">
+      <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style="color:#e67e22">
+        <polygon points="20,3 33.5,10.5 33.5,26 20,33.5 6.5,26 6.5,10.5" stroke="currentColor" stroke-width="1.5" fill="none"/>
+        <polygon points="20,10.5 26.5,14.3 26.5,22.2 20,26 13.5,22.2 13.5,14.3" stroke="currentColor" stroke-width=".9" fill="none" opacity="0.5"/>
+        <line x1="20"   y1="3"    x2="20"   y2="10.5" stroke="currentColor" stroke-width=".9" opacity="0.5"/>
+        <line x1="33.5" y1="10.5" x2="26.5" y2="14.3" stroke="currentColor" stroke-width=".9" opacity="0.5"/>
+        <line x1="6.5"  y1="10.5" x2="13.5" y2="14.3" stroke="currentColor" stroke-width=".9" opacity="0.5"/>
+        <circle cx="20" cy="18.2" r="2.8" fill="currentColor" opacity="0.75"/>
+      </svg>
+      <span class="ac-name">Commodities</span><span class="ac-sub">Energy &amp; Metals</span>
+    </div>
+  </div>
+  <button class="cta" onclick="location.href='/dashboard'">Enter Terminal &nbsp;→</button>
+  <div class="meta"><span class="dot"></span>Latest EOD: run_id=20260617-eod-210752 · asof=2026-06-17 · status=completed</div>
+</div>
+<div class="ticker" id="ticker"></div>
+<script>
+function mkRng(seed){let s=seed;return()=>{s=(s*16807)%2147483647;return s/2147483647;};}
+const cv=document.getElementById('globe'),gx=cv.getContext('2d');
+const DPR=Math.min(window.devicePixelRatio||1,2);
+const SZ=Math.min(innerWidth*.9,(innerHeight-72)*.92);
+cv.width=SZ*DPR;cv.height=SZ*DPR;
+cv.style.width=SZ+'px';cv.style.height=SZ+'px';
+gx.scale(DPR,DPR);
+const CX=SZ/2,CY=SZ/2,R=SZ*.43;
+let rot=.7;
+const CITIES=[
+  {n:'New York', lat:40.7, lon:-74.0, c:'#2e86c1'},
+  {n:'London',   lat:51.5, lon:-0.1,  c:'#45b6e6'},
+  {n:'Tokyo',    lat:35.7, lon:139.7, c:'#27ae60'},
+  {n:'Shanghai', lat:31.2, lon:121.5, c:'#27ae60'},
+  {n:'Hong Kong',lat:22.3, lon:114.2, c:'#f39c12'},
+  {n:'Singapore',lat:1.3,  lon:103.8, c:'#f39c12'},
+  {n:'Frankfurt',lat:50.1, lon:8.7,   c:'#45b6e6'},
+  {n:'Chicago',  lat:41.9, lon:-87.6, c:'#2e86c1'},
+  {n:'Sydney',   lat:-33.9,lon:151.2, c:'#e67e22'},
+  {n:'Dubai',    lat:25.2, lon:55.3,  c:'#e67e22'},
+  {n:'Zurich',   lat:47.4, lon:8.5,   c:'#8e44ad'},
+  {n:'São Paulo',lat:-23.5,lon:-46.6, c:'#27ae60'},
+];
+const ARCS=[
+  ['New York','London',    [69,182,230,.50]],
+  ['London','Frankfurt',   [69,182,230,.40]],
+  ['London','Zurich',      [142,68,173,.42]],
+  ['London','Dubai',       [230,126,34,.36]],
+  ['Tokyo','Shanghai',     [39,174,96,.52]],
+  ['Shanghai','Hong Kong', [39,174,96,.42]],
+  ['Hong Kong','Singapore',[243,156,18,.52]],
+  ['Singapore','Dubai',    [230,126,34,.42]],
+  ['New York','Chicago',   [46,134,193,.42]],
+  ['New York','São Paulo', [39,174,96,.30]],
+  ['Tokyo','Sydney',       [230,126,34,.36]],
+  ['London','Tokyo',       [69,182,230,.25]],
+];
+let landRings=[];
+fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json')
+  .then(r=>r.json())
+  .then(world=>{
+    if(typeof topojson==='undefined')return;
+    const land=topojson.feature(world,world.objects.land);
+    const geom=land.geometry;
+    const polys=geom.type==='MultiPolygon'?geom.coordinates:geom.type==='Polygon'?[geom.coordinates]:[];
+    landRings=polys.map(p=>p[0]).filter(r=>r.length>10);
+  }).catch(()=>{});
+function proj(lat,lon){
+  const phi=lat*Math.PI/180,lam=lon*Math.PI/180-rot;
+  const x=Math.cos(phi)*Math.sin(lam),y=-Math.sin(phi),z=Math.cos(phi)*Math.cos(lam);
+  return{x:CX+R*x,y:CY+R*y,z};
+}
+function gcPts(la1,lo1,la2,lo2,n){
+  const r=d=>d*Math.PI/180;
+  const A=(p,l)=>[Math.cos(r(p))*Math.cos(r(l)),Math.cos(r(p))*Math.sin(r(l)),Math.sin(r(p))];
+  const [a,b]=[A(la1,lo1),A(la2,lo2)];
+  return Array.from({length:n+1},(_,i)=>{
+    const t=i/n,v=a.map((x,j)=>x+t*(b[j]-x));
+    const len=Math.sqrt(v.reduce((s,x)=>s+x*x,0)),[xv,yv,zv]=v.map(x=>x/len);
+    return{lat:Math.asin(zv)*180/Math.PI,lon:Math.atan2(yv,xv)*180/Math.PI};
+  });
+}
+function hexRgb(h){return[0,2,4].map(i=>parseInt(h.slice(1+i,3+i),16));}
+function drawGlobe(){
+  gx.clearRect(0,0,SZ,SZ);
+  gx.save();
+  gx.beginPath();gx.arc(CX,CY,R,0,Math.PI*2);gx.clip();
+  const bg=gx.createRadialGradient(CX-R*.22,CY-R*.22,0,CX,CY,R);
+  bg.addColorStop(0,'rgba(20,52,122,.96)');
+  bg.addColorStop(.55,'rgba(8,26,72,.93)');
+  bg.addColorStop(1,'rgba(3,10,32,.96)');
+  gx.fillStyle=bg;gx.fillRect(0,0,SZ,SZ);
+  const gs=(f,c)=>{gx.strokeStyle=c;gx.lineWidth=.5;gx.stroke();};
+  for(let lat=-80;lat<=80;lat+=20){
+    gx.beginPath();let f=true;
+    for(let lo=-180;lo<=180;lo+=2){const p=proj(lat,lo);if(p.z<0){f=true;continue;}f?gx.moveTo(p.x,p.y):gx.lineTo(p.x,p.y);f=false;}
+    gs(f,'rgba(69,182,230,.07)');
+  }
+  for(let lo=-180;lo<180;lo+=20){
+    gx.beginPath();let f=true;
+    for(let lat=-90;lat<=90;lat+=2){const p=proj(lat,lo);if(p.z<0){f=true;continue;}f?gx.moveTo(p.x,p.y):gx.lineTo(p.x,p.y);f=false;}
+    gs(f,'rgba(69,182,230,.07)');
+  }
+  if(landRings.length){
+    landRings.forEach(ring=>{
+      gx.beginPath();let f=true;
+      ring.forEach(([lo,la])=>{const p=proj(la,lo);if(p.z<0){f=true;return;}f?gx.moveTo(p.x,p.y):gx.lineTo(p.x,p.y);f=false;});
+      gx.fillStyle='rgba(28,65,138,.17)';gx.fill();
+      gx.strokeStyle='rgba(100,158,235,.26)';gx.lineWidth=.7;gx.stroke();
+    });
+  }
+  ARCS.forEach(([fr,to,[r,g,b,a]])=>{
+    const c1=CITIES.find(c=>c.n===fr),c2=CITIES.find(c=>c.n===to);if(!c1||!c2)return;
+    const pts=gcPts(c1.lat,c1.lon,c2.lat,c2.lon,60);
+    gx.beginPath();let dr=false;
+    pts.forEach(pt=>{const p=proj(pt.lat,pt.lon);if(p.z<0){dr=false;return;}if(!dr){gx.moveTo(p.x,p.y);dr=true;}else gx.lineTo(p.x,p.y);});
+    gx.strokeStyle=`rgba(${r},${g},${b},${a})`;gx.lineWidth=1.3;gx.stroke();
+  });
+  CITIES.forEach(city=>{
+    const p=proj(city.lat,city.lon);if(p.z<.04)return;
+    const [r,g,b]=hexRgb(city.c);
+    const glow=gx.createRadialGradient(p.x,p.y,0,p.x,p.y,11);
+    glow.addColorStop(0,`rgba(${r},${g},${b},.65)`);glow.addColorStop(1,`rgba(${r},${g},${b},0)`);
+    gx.beginPath();gx.arc(p.x,p.y,11,0,Math.PI*2);gx.fillStyle=glow;gx.fill();
+    gx.beginPath();gx.arc(p.x,p.y,2.5,0,Math.PI*2);gx.fillStyle=city.c;gx.fill();
+  });
+  gx.font='9px monospace';gx.textBaseline='middle';
+  CITIES.forEach(city=>{
+    const p=proj(city.lat,city.lon);if(p.z<.18)return;
+    gx.fillStyle=`rgba(255,255,255,${Math.min(.68,p.z*.82)})`;gx.fillText(city.n,p.x+5,p.y);
+  });
+  const limb=gx.createRadialGradient(CX,CY,R*.68,CX,CY,R);
+  limb.addColorStop(.78,'rgba(69,182,230,0)');limb.addColorStop(1,'rgba(69,182,230,.24)');
+  gx.fillStyle=limb;gx.fillRect(0,0,SZ,SZ);
+  gx.restore();
+  const atmo=gx.createRadialGradient(CX,CY,R*.87,CX,CY,R*1.12);
+  atmo.addColorStop(0,'rgba(69,182,230,.16)');atmo.addColorStop(1,'rgba(69,182,230,0)');
+  gx.beginPath();gx.arc(CX,CY,R*1.12,0,Math.PI*2);gx.fillStyle=atmo;gx.fill();
+  rot+=.0018;
+  requestAnimationFrame(drawGlobe);
+}
+drawGlobe();
+const TICKERS=[
+  {n:'10Y UST',v:'4.42%', d:'+2.3bp',up:true, seed:11,tr:.018},
+  {n:'CSI 300',v:'3,892', d:'-0.14%',up:false,seed:22,tr:-.014},
+  {n:'DXY',    v:'104.2', d:'+0.08%',up:true, seed:33,tr:.006},
+  {n:'Gold',   v:'$2,316',d:'+0.22%',up:true, seed:44,tr:.020},
+  {n:'WTI',    v:'$78.4', d:'-0.31%',up:false,seed:55,tr:-.018},
+  {n:'VIX',    v:'13.2',  d:'-4.8%', up:false,seed:66,tr:-.026},
+];
+const tickerEl=document.getElementById('ticker');
+const sparks=[];
+TICKERS.forEach(t=>{
+  const wrap=document.createElement('div');wrap.className='tick';
+  const cnv=document.createElement('canvas');cnv.width=68;cnv.height=34;
+  cnv.style.cssText='width:68px;height:34px;flex-shrink:0';
+  const info=document.createElement('div');info.className='tick-info';
+  info.innerHTML=`<span class="tick-n">${t.n}</span><span class="tick-v">${t.v}</span><span class="tick-d ${t.up?'up':'dn'}">${t.d}</span>`;
+  wrap.appendChild(cnv);wrap.appendChild(info);tickerEl.appendChild(wrap);
+  const rng=mkRng(t.seed);
+  let v=0,data=[];
+  for(let i=0;i<52;i++){v+=(rng()-.5)*.38+t.tr;data.push(v);}
+  sparks.push({cnv,data,up:t.up,rng,tr:t.tr});
+});
+function drawSpark(cnv,data,up){
+  const sx=cnv.getContext('2d'),W=68,H=34,n=data.length;
+  const mn=Math.min(...data),mx=Math.max(...data),rg=mx-mn||.001;
+  const toY=v=>H-((v-mn)/rg)*(H-4)-2;
+  const col=up?[39,174,96]:[231,76,60];
+  sx.clearRect(0,0,W,H);
+  const gr=sx.createLinearGradient(0,0,0,H);
+  gr.addColorStop(0,`rgba(${col},0.28)`);gr.addColorStop(1,`rgba(${col},0)`);
+  sx.beginPath();
+  data.forEach((v,i)=>{const x=i/(n-1)*(W-1);i?sx.lineTo(x,toY(v)):sx.moveTo(x,toY(v));});
+  sx.lineTo(W-1,H);sx.lineTo(0,H);sx.closePath();sx.fillStyle=gr;sx.fill();
+  sx.beginPath();
+  data.forEach((v,i)=>{const x=i/(n-1)*(W-1);i?sx.lineTo(x,toY(v)):sx.moveTo(x,toY(v));});
+  sx.strokeStyle=`rgba(${col},0.85)`;sx.lineWidth=1.5;sx.stroke();
+  sx.beginPath();sx.arc(W-1,toY(data[n-1]),2,0,Math.PI*2);
+  sx.fillStyle=`rgb(${col})`;sx.fill();
+}
+sparks.forEach(s=>drawSpark(s.cnv,s.data,s.up));
+setInterval(()=>{
+  sparks.forEach(s=>{
+    s.data.shift();
+    s.data.push(s.data[s.data.length-1]+(s.rng()-.5)*.38+s.tr);
+    drawSpark(s.cnv,s.data,s.up);
+  });
+},1800);
+</script>
+</body></html>

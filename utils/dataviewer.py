@@ -56,7 +56,7 @@ if __name__ == "__main__":
 
 
     # CBond reference demo
-    file_path = os.path.join(DIR_INPUT, 'IRS-pxspds.pkl')
+    file_path = os.path.join(DIR_INPUT, 'Tenor-spds.pkl')
     data0 = pd.read_pickle(file_path)
     key = 'BondCurve'
     bond_data = data[key]
