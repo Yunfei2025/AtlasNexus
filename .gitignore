@@ -32,3 +32,13 @@ factors/*backtest_results*.html
 futures/techs/*.png
 pairs/regression_plots.html
 derivatives/vol/vol_strategy_analysis.html
+
+# Data files (large, regenerable, or in progress — do not commit)
+*.pkl
+*.pkl.*
+*.joblib
+*.h5
+*.parquet
+input/
+database/
+runs/
