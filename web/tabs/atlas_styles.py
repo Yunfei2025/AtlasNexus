@@ -13,12 +13,10 @@ from typing import Any, Dict
 
 # Mirror the style objects used by web/core/styles.py and fi.py
 
-tabs_styles: Dict[str, Any] = {
-    "zIndex": 99,
-    "background": "#082255",
-    "border": "grey",
-    "border-radius": "4px",
-}
+# Top-level app tabs (Market/Beta Book/Alpha Book/...) are styled via CSS
+# classes now — see .an-tabs / .an-tab / .an-tab--selected in
+# web/assets/atlasnexus-design.css. Use className="an-tabs" / "an-tab" /
+# "an-tab--selected" on dcc.Tabs/dcc.Tab instead of these dicts.
 
 summary_subtabs_style: Dict[str, Any] = {
     "marginBottom": "16px",
@@ -28,32 +26,6 @@ summary_subtabs_colors: Dict[str, Any] = {
     "border": "#061E44",
     "primary": "#3498db",
     "background": "#112e66",
-}
-
-tab_selected_style: Dict[str, Any] = {
-    "background": "#082255",
-    "color": "white",
-    "border": "grey",
-    "font-size": "14px",
-    "font-weight": 600,
-    "align-items": "center",
-    "justify-content": "center",
-    "border-radius": "4px",
-    "padding": "6px",
-    "borderLeft": "3px solid #2e86c1",
-}
-
-tab_style: Dict[str, Any] = {
-    "background": "#425476",
-    "color": "white",
-    "font-size": "14px",
-    "font-weight": 600,
-    "align-items": "center",
-    "justify-content": "center",
-    "border-radius": "4px",
-    "padding": "6px",
-    "border-style": "solid",
-    "border-color": "#061E44",
 }
 
 summary_subtab_style: Dict[str, Any] = {

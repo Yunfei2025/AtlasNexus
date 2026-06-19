@@ -17,7 +17,6 @@ from dash.dependencies import Input, Output, State
 project_root = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(project_root))
 
-from web.tabs.atlas_styles import tab_style, tabs_styles, tab_selected_style
 from web.services.artifacts import find_latest_run, format_run_meta
 from web.services.jobs import start_engine_job, tail_log
 
@@ -70,13 +69,13 @@ def build_tabs_panel():
                     dcc.Tabs(
                         id="ani-tabs",
                         value="session",
+                        className="an-tabs",
                         children=[
-                            dcc.Tab(label="Session", value="session", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Signals", value="signals", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Risk", value="risk", style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Tickets", value="tickets", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Session", value="session", className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Signals", value="signals", className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Risk",    value="risk",    className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Tickets", value="tickets", className="an-tab", selected_className="an-tab--selected"),
                         ],
-                        style=tabs_styles,
                     ),
                     html.Div(id="ani-tabs-content"),
                     dcc.Interval(id="ani-interval", interval=3_000, n_intervals=0),

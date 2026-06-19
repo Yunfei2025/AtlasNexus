@@ -20,7 +20,6 @@ sys.path.insert(0, str(project_root))
 
 # Import lightweight style constants (do not import web.core which triggers data loads).
 from web.tabs.atlas_styles import (
-    tab_style, tabs_styles, tab_selected_style,
     summary_subtab_style, summary_subtabs_style, summary_subtabs_colors,
     summary_subtab_selected_style,
     ATLAS_PLOTLY_TEMPLATE,
@@ -501,14 +500,14 @@ def build_tabs_panel():
                     dcc.Tabs(
                         id="an-tabs",
                         value="market",
+                        className="an-tabs",
                         children=[
-                            dcc.Tab(label="Market",    value="market",     style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Beta Book",  value="beta",       style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Alpha Book", value="alpha",      style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Summary",    value="risk",       style=tab_style, selected_style=tab_selected_style),
-                            dcc.Tab(label="Run Center", value="run-center", style=tab_style, selected_style=tab_selected_style),
+                            dcc.Tab(label="Market",     value="market",     className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Beta Book",  value="beta",       className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Alpha Book", value="alpha",      className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Summary",    value="risk",       className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Run Center", value="run-center", className="an-tab", selected_className="an-tab--selected"),
                         ],
-                        style=tabs_styles,
                     ),
                     # Pre-render all main tabs with absolute positioning to preserve state
                     html.Div([
