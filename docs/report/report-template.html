@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>民生FICC配置指数 · 月度报告</title>
+<style>
+  @page { size: A4 landscape; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --navy:      #0B2447;
+    --navy-2:    #14325C;
+    --steel:     #2E4D7B;
+    --accent:    #2EC4B6;
+    --accent-2:  #E0A458;
+    --red:       #D7595B;
+    --paper:     #F7F8FA;
+    --line:      #DCE3EC;
+    --ink:       #1A2433;
+    --ink-soft:  #5B6B82;
+  }
+
+  html, body {
+    width: 297mm;
+    height: 210mm;
+    font-family: "Source Han Sans SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    width: 297mm;
+    height: 210mm;
+    display: grid;
+    grid-template-rows: 15mm 21mm 1fr 7mm;
+    grid-template-columns: 1fr;
+    padding: 6mm 8mm 4mm 8mm;
+    gap: 2.6mm;
+  }
+
+  /* ---------- 顶部条 ---------- */
+  .masthead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1.4pt solid var(--navy);
+    padding-bottom: 2.4mm;
+  }
+  .masthead .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 3mm;
+  }
+  .brand .name {
+    font-size: 15pt;
+    font-weight: 700;
+    color: var(--navy);
+    letter-spacing: 0.5px;
+  }
+  .brand .sub {
+    font-size: 8.6pt;
+    color: var(--ink-soft);
+    font-weight: 500;
+  }
+  .masthead .meta {
+    text-align: right;
+    font-size: 8.2pt;
+    color: var(--ink-soft);
+    line-height: 1.5;
+  }
+  .masthead .meta b { color: var(--navy); font-weight: 700; }
+
+  /* ---------- KPI 行 ---------- */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 2.6mm;
+  }
+  .kpi {
+    background: white;
+    border: 0.8pt solid var(--line);
+    border-left: 2.6pt solid var(--steel);
+    border-radius: 1.5px;
+    padding: 2.6mm 3.2mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .kpi.accent { border-left-color: var(--accent); }
+  .kpi .label {
+    font-size: 7pt;
+    color: var(--ink-soft);
+    letter-spacing: 0.3px;
+    margin-bottom: 1.2mm;
+  }
+  .kpi .value {
+    font-size: 14.5pt;
+    font-weight: 700;
+    color: var(--navy);
+    line-height: 1;
+  }
+  .kpi .value.pos { color: #1A8F6B; }
+  .kpi .value.neg { color: var(--red); }
+  .kpi .delta {
+    font-size: 7pt;
+    color: var(--ink-soft);
+    margin-top: 1mm;
+  }
+
+  /* ---------- 主体三栏 ---------- */
+  .main {
+    display: grid;
+    grid-template-columns: 1.05fr 1.25fr 1fr;
+    gap: 3mm;
+    min-height: 0;
+    height: 100%;
+  }
+  .panel {
+    background: white;
+    border: 0.8pt solid var(--line);
+    border-radius: 1.5px;
+    padding: 3mm 3.4mm 2.6mm;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+  }
+  .panel h3 {
+    font-size: 8.6pt;
+    color: var(--navy);
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    border-bottom: 0.8pt solid var(--line);
+    padding-bottom: 1.6mm;
+    margin-bottom: 2mm;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .panel h3 span.tag {
+    font-size: 6.6pt;
+    font-weight: 500;
+    color: var(--ink-soft);
+    background: var(--paper);
+    padding: 0.6mm 1.6mm;
+    border-radius: 6px;
+  }
+
+  /* ---- 配置面板（环形图 + 图例） ---- */
+  .alloc-body {
+    display: flex;
+    gap: 3mm;
+    flex: 1;
+    min-height: 0;
+  }
+  .donut-wrap {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .legend {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1.1mm;
+    font-size: 7.1pt;
+  }
+  .legend .row {
+    display: grid;
+    grid-template-columns: 8px 1fr auto auto;
+    align-items: center;
+    gap: 1.6mm;
+  }
+  .legend .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .legend .nm { color: var(--ink); }
+  .legend .pct { font-weight: 700; color: var(--navy); text-align: right; }
+  .legend .chg { color: var(--ink-soft); text-align: right; width: 11mm; font-size: 6.6pt; }
+  .legend .grp-label {
+    font-size: 6.4pt; color: var(--ink-soft); font-weight: 700;
+    margin-top: 1.2mm; letter-spacing: 0.4px; text-transform: uppercase;
+  }
+
+  /* ---- 收益回顾表 ---- */
+  .ret-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 7.5pt;
+    flex: 1;
+  }
+  .ret-table th {
+    text-align: left;
+    font-size: 6.8pt;
+    color: var(--ink-soft);
+    font-weight: 600;
+    padding: 1.4mm 1mm;
+    border-bottom: 0.8pt solid var(--navy);
+  }
+  .ret-table th.num, .ret-table td.num { text-align: right; }
+  .ret-table td {
+    padding: 1.5mm 1mm;
+    border-bottom: 0.5pt solid var(--line);
+    color: var(--ink);
+  }
+  .ret-table tr.grp td {
+    font-weight: 700;
+    color: var(--steel);
+    background: #F0F3F8;
+    font-size: 6.9pt;
+    padding-top: 1.8mm;
+    padding-bottom: 1.1mm;
+  }
+  .ret-table .pos { color: #1A8F6B; font-weight: 600; }
+  .ret-table .neg { color: var(--red); font-weight: 600; }
+  .ret-table .bar-cell { width: 22mm; }
+  .bar-track { background: #EDEFF3; height: 2.6mm; border-radius: 1px; position: relative; overflow: hidden; }
+  .bar-fill { position: absolute; top: 0; bottom: 0; }
+  .bar-fill.pos { background: #1A8F6B; left: 50%; }
+  .bar-fill.neg { background: var(--red); right: 50%; }
+  .bar-mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 0.4pt; background: var(--ink-soft); opacity: 0.4; }
+
+  /* ---- 右栏：净值曲线 + 风险贡献 + 解读 ---- */
+  .right-col { display: flex; flex-direction: column; gap: 3mm; min-height: 0; height: 100%; }
+  .mini-chart {
+    height: 26mm;
+    display: flex;
+    align-items: flex-end;
+  }
+  .commentary {
+    font-size: 7.3pt;
+    line-height: 1.55;
+    color: var(--ink);
+    flex: 1;
+  }
+  .commentary .dot-item { display: flex; gap: 1.4mm; margin-bottom: 1.6mm; }
+  .commentary .dot-item .marker { color: var(--accent); font-weight: 700; flex: 0 0 auto; }
+  .riskbar-row { display: grid; grid-template-columns: 16mm 1fr 9mm; align-items: center; gap: 1.6mm; font-size: 6.8pt; margin-bottom: 1.4mm; }
+  .riskbar-track { background: #EDEFF3; height: 2.8mm; border-radius: 1px; overflow: hidden; }
+  .riskbar-fill { height: 100%; }
+
+  /* ---------- 底部 ---------- */
+  .footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 6.4pt;
+    color: var(--ink-soft);
+    border-top: 0.6pt solid var(--line);
+    padding-top: 1.6mm;
+  }
+  .footer b { color: var(--steel); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- 顶部 masthead -->
+  <div class="masthead">
+    <div class="brand">
+      <span class="name">民生 FICC 配置指数</span>
+      <span class="sub">CMBC FICC Allocation Index &nbsp;|&nbsp; 风险预算驱动的 FICC 系统化配置策略</span>
+    </div>
+    <div class="meta">
+      月度报告 &nbsp;·&nbsp; <b>{{reportMonth}}</b>（报告期：{{reportPeriod}}）&nbsp;|&nbsp; 发布日期：{{publishDate}}<br>
+      编制：中国民生银行金融市场部 &nbsp;·&nbsp; 基准指数 FICC-RP &nbsp;/&nbsp; 增强指数 FICC-EF
+    </div>
+  </div>
+
+  <!-- KPI 行 -->
+  <div class="kpi-row">
+    {{kpiRows}}
+  </div>
+
+  <!-- 主体三栏 -->
+  <div class="main">
+
+    <!-- 左栏：本期配置 -->
+    <div class="panel">
+      <h3>本期资产配置（风险预算权重）<span class="tag">{{allocationEffectiveDate}} 生效</span></h3>
+      <div class="alloc-body">
+        <div class="donut-wrap">
+          <svg width="118" height="118" viewBox="0 0 42 42">
+            {{donutSVG}}
+          </svg>
+        </div>
+        <div class="legend">
+          {{allocationLegend}}
+        </div>
+      </div>
+    </div>
+
+    <!-- 中栏：上月各资产回报 -->
+    <div class="panel">
+      <h3>上月各资产收益回顾<span class="tag">2026-05-01 ~ 2026-05-31</span></h3>
+      <table class="ret-table">
+        {{returnsTable}}
+      </table>
+    </div>
+
+    <!-- 右栏：净值曲线 + 风险贡献 + 月度解读 -->
+    <div class="right-col">
+      <div class="panel" style="flex: 0 0 32mm;">
+        <h3>近 12 个月净值走势<span class="tag">基点 1000</span></h3>
+        <div class="mini-chart" style="height: 100%;">
+          <svg width="100%" height="100%" viewBox="0 0 300 90" preserveAspectRatio="none">
+            <polyline fill="none" stroke="#DCE3EC" stroke-width="1"
+              points="0,75 300,75" />
+            <polyline fill="none" stroke="#2E4D7B" stroke-width="1.6"
+              points="0,72 25,68 50,70 75,60 100,58 125,50 150,46 175,38 200,34 225,30 250,22 275,16 300,10" />
+            <polyline fill="none" stroke="#2EC4B6" stroke-width="1.8"
+              points="0,70 25,65 50,66 75,54 100,52 125,42 150,37 175,28 200,24 225,19 250,12 275,6 300,2" />
+            <circle cx="300" cy="2" r="2.4" fill="#2EC4B6" />
+            <circle cx="300" cy="10" r="2.2" fill="#2E4D7B" />
+          </svg>
+        </div>
+        <div style="display:flex; gap:4mm; font-size:6.8pt; color:var(--ink-soft); margin-top:1mm;">
+          <span><span style="color:#2EC4B6; font-weight:700;">●</span> FICC-EF 增强</span>
+          <span><span style="color:#2E4D7B; font-weight:700;">●</span> FICC-RP 基准</span>
+        </div>
+      </div>
+
+      <div class="panel" style="flex: 0 0 26mm;">
+        <h3>风险贡献分布<span class="tag">本期</span></h3>
+        <div style="flex:1; display:flex; flex-direction:column; justify-content:center;">
+          {{riskContribution}}
+        </div>
+      </div>
+
+      <div class="panel" style="flex: 1;">
+        <h3>本月要点</h3>
+        <div class="commentary">
+          {{commentary}}
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 底部 -->
+  <div class="footer">
+    <span>本报告基于<b>民生FICC配置指数</b>规则化编制流程自动生成，数据来源：中债登、CFETS、上期所/INE、LME。历史表现不代表未来收益，不构成投资建议。</span>
+    <span>第 1 页 / 共 1 页 &nbsp;·&nbsp; 中国民生银行金融市场部</span>
+  </div>
+
+</div>
+</body>
+</html>

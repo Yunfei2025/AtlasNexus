@@ -21,8 +21,10 @@ html {
   font-size: 10px;  /* app.css sets 62.5%; this resets to 1rem = 10px */
 }
 body, .app__container {
-  font-size: 14px;  /* Base body text, Skeleton sets this too */
+  font-size: var(--fs-body) !important;       /* 13px — from token */
+  line-height: var(--lh-body) !important;     /* 1.55 — from token */
   font-family: "Open Sans", sans-serif !important; /* keep in sync with atlas_styles.PLOTLY_LAYOUT_DEFAULTS font.family */
+  color: var(--an-text) !important;
 }
 
 /* ── CSS Variables (single authoritative token block — mirrors atlas_styles.TOKENS) ── */
@@ -65,9 +67,11 @@ body, .app__container {
 }
 
 /* ── App Shell ────────────────────────────────────────────────── */
-.app__container { 
+.app__container {
   background: var(--an-navy-900) !important;
   min-height: 100vh !important;
+  padding: 0 3% !important;        /* ← restores the left/right boundaries from old style.css */
+  box-sizing: border-box !important;
 }
 
 .app__header {
@@ -76,6 +80,10 @@ body, .app__container {
   display: flex !important;
   align-items: center !important;
   justify-content: space-between !important;
+  padding: 10px 0 !important;      /* ← vertical breathing room inside header */
+  margin: 0 -3% !important;        /* ← break out of container padding so header is edge-to-edge */
+  padding-left: 3% !important;     /* ← re-align header content with body content */
+  padding-right: 3% !important;
 }
 
 .app__header__title {
@@ -85,12 +93,13 @@ body, .app__container {
   margin: 0 !important;
 }
 
-.app__header__title--grey { 
+.app__header__title--grey {
   color: var(--an-muted) !important;
 }
 
-.app__content { 
+.app__content {
   background: var(--an-navy-900) !important;
+  margin-top: 12px !important;
 }
 
 .tab__title { 
@@ -474,41 +483,92 @@ pre {
   background: var(--an-navy-300) !important;
   color: var(--an-text) !important;
   border: 1px solid var(--an-border2) !important;
-  font-size: 14px !important;
+  font-size: 13px !important;
   font-weight: 600 !important;
-  padding: 6px !important;
+  padding: 8px 20px !important;
   border-radius: var(--an-r) !important;
+  /* ↓ prevent Dash flex-stretch */
+  flex: 0 0 auto !important;
+  min-width: 110px !important;
+  text-align: center !important;
+  white-space: nowrap !important;
 }
 .an-tab--selected {
   background: var(--an-navy-800) !important;
   color: var(--an-text) !important;
   border: 1px solid var(--an-border2) !important;
-  border-left: 3px solid var(--book-accent, var(--an-blue)) !important;
-  font-size: 14px !important;
+  border-top: 2px solid var(--book-accent, var(--an-blue)) !important;
+  border-left: none !important;
+  font-size: 13px !important;
   font-weight: 600 !important;
-  padding: 6px !important;
+  padding: 8px 20px !important;
   border-radius: var(--an-r) !important;
+  /* ↓ prevent Dash flex-stretch */
+  flex: 0 0 auto !important;
+  min-width: 110px !important;
+  text-align: center !important;
+  white-space: nowrap !important;
+}
+
+/* Tab container: left-align, don't distribute */
+.an-tabs > div[role="tablist"],
+.an-tabs > div {
+  display: flex !important;
+  flex-direction: row !important;
+  justify-content: flex-start !important;   /* ← left-align, don't distribute */
+  align-items: stretch !important;
+  flex-wrap: nowrap !important;
+  border-bottom: 1px solid var(--an-border2) !important;
 }
 
 /* ── Sub-tabs (dcc.Tab via className — replaces summary_subtab_style dicts) ── */
-.an-subtab {
+.tab.an-subtab,
+div.tab.an-subtab {
   background: var(--an-navy-600) !important;
   color: var(--an-muted) !important;
   font-size: 12px !important;
   padding: 6px 20px !important;
   border: none !important;
+  border-bottom: 2px solid transparent !important;
+  flex: 0 0 auto !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  transition: color 0.15s ease, border-color 0.15s ease !important;
 }
-.an-subtab--selected {
+.tab.an-subtab:hover,
+div.tab.an-subtab:hover {
+  color: var(--an-text) !important;
+  border-bottom-color: rgba(170,176,192,0.3) !important;
+}
+.tab.an-subtab--selected,
+div.tab.an-subtab--selected {
   background: var(--an-navy-700) !important;
-  border-top: 2px solid var(--book-accent, var(--an-blue)) !important;
-  color: var(--book-accent, var(--an-blue)) !important;
-  border-bottom: none !important;
+  border-bottom: 2px solid var(--book-accent, var(--an-blue)) !important;
+  border-top: none !important;
+  color: var(--an-text) !important;
+  font-weight: 600 !important;
 }
-/* Accent overrides per book, applied alongside .an-subtab--selected */
-.an-subtab--blue   { border-top-color: var(--an-blue)   !important; color: var(--an-blue)   !important; }
-.an-subtab--amber  { border-top-color: var(--an-amber)  !important; color: var(--an-amber)  !important; }
-.an-subtab--green  { border-top-color: var(--an-green)  !important; color: var(--an-green)  !important; }
-.an-subtab--purple { border-top-color: var(--an-purple) !important; color: var(--an-purple) !important; }
+/* Accent overrides per book */
+.tab.an-subtab--blue   { border-bottom-color: var(--an-blue)   !important; }
+.tab.an-subtab--amber  { border-bottom-color: var(--an-amber)  !important; }
+.tab.an-subtab--green  { border-bottom-color: var(--an-green)  !important; }
+.tab.an-subtab--purple { border-bottom-color: var(--an-purple) !important; }
+
+/* Color the label text to match the accent */
+.tab.an-subtab--blue.an-subtab--selected   { color: var(--an-blue)   !important; }
+.tab.an-subtab--amber.an-subtab--selected  { color: var(--an-amber)  !important; }
+.tab.an-subtab--green.an-subtab--selected  { color: var(--an-green)  !important; }
+.tab.an-subtab--purple.an-subtab--selected { color: var(--an-purple) !important; }
+
+/* Sub-tab container: left-align, border-bottom as the track */
+.tab-container.an-subtab,
+div[role="tablist"]:has(> .tab.an-subtab) {
+  display: flex !important;
+  flex-direction: row !important;
+  justify-content: flex-start !important;
+  border-bottom: 1px solid var(--an-border2) !important;
+  gap: 0 !important;
+}
 
 /* ── Card panels (replaces _card_style / _card_hdr Python dicts) ───────── */
 .an-card {
@@ -531,6 +591,17 @@ pre {
   padding: 20px !important;
   margin: 10px !important;
   box-sizing: border-box !important;
+}
+
+/* Section headings: slightly larger */
+.futures__price__container h5,
+.futures__price__container h6,
+.an-tab-pane h5,
+.an-tab-pane h6 {
+  font-size: var(--fs-section) !important;    /* 15px */
+  font-weight: 600 !important;
+  color: var(--an-text) !important;
+  margin: 0 0 8px 0 !important;
 }
 
 /* ── KPI values — pick up the active book's accent colour ──────────────── */

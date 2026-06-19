@@ -1,0 +1,153 @@
+{
+  "report": {
+    "title": "民生FICC配置指数",
+    "subtitle": "CMBC FICC Allocation Index · 风险预算驱动的 FICC 系统化配置策略",
+    "reportMonth": "2026 年 5 月",
+    "reportPeriod": "2026-05-01 至 2026-05-31",
+    "publishDate": "2026-06-02",
+    "author": "中国民生银行金融市场部",
+    "indexTypes": ["基准指数 FICC-RP", "增强指数 FICC-EF"]
+  },
+  "kpis": [
+    {
+      "label": "FICC-RP 月度收益",
+      "value": "+0.62%",
+      "valueClass": "pos",
+      "delta": "基准指数（纯风险预算）",
+      "accent": false
+    },
+    {
+      "label": "FICC-EF 月度收益",
+      "value": "+0.74%",
+      "valueClass": "pos",
+      "delta": "增强指数（基准 + 因子超额）",
+      "accent": true
+    },
+    {
+      "label": "FICC-EF 净值（基点 1000）",
+      "value": "1,216.4",
+      "valueClass": "",
+      "delta": "较上月末 1,207.5"
+    },
+    {
+      "label": "月内最大回撤",
+      "value": "-0.38%",
+      "valueClass": "neg",
+      "delta": "发生于 05-14 至 05-19"
+    },
+    {
+      "label": "滚动 12 月夏普比率",
+      "value": "1.08",
+      "valueClass": "",
+      "delta": "FICC-EF，前值 1.05"
+    },
+    {
+      "label": "本月再平衡",
+      "value": "2026-05-04",
+      "valueClass": "",
+      "delta": "常规月度再平衡，无触发式调整"
+    }
+  ],
+  "allocation": {
+    "effectiveDate": "2026-05-04",
+    "donut": {
+      "width": "118",
+      "height": "118",
+      "viewBox": "0 0 42 42"
+    },
+    "segments": [
+      {
+        "name": "CN10Y 国债",
+        "value": 20.1,
+        "color": "#0B2447",
+        "group": "固定收益",
+        "change": "+1.4pp"
+      },
+      {
+        "name": "CN20Y / CN30Y 国债",
+        "value": 33.2,
+        "color": "#2E4D7B",
+        "group": "固定收益",
+        "change": "-0.8pp"
+      },
+      {
+        "name": "USDCNY",
+        "value": 28.6,
+        "color": "#2EC4B6",
+        "group": "外汇",
+        "change": "+2.1pp"
+      },
+      {
+        "name": "黄金",
+        "value": 11.4,
+        "color": "#E0A458",
+        "group": "大宗商品",
+        "change": "-1.2pp"
+      },
+      {
+        "name": "铝",
+        "value": 6.7,
+        "color": "#C97B3D",
+        "group": "大宗商品",
+        "change": "-1.5pp"
+      }
+    ]
+  },
+  "returns": [
+    {
+      "group": "固定收益",
+      "items": [
+        { "asset": "CN1Y", "return": "+0.08%", "barWidth": 6, "returnClass": "pos" },
+        { "asset": "CN5Y", "return": "+0.21%", "barWidth": 15, "returnClass": "pos" },
+        { "asset": "CN10Y", "return": "+0.46%", "barWidth": 32, "returnClass": "pos" },
+        { "asset": "CN20Y", "return": "-0.12%", "barWidth": 9, "returnClass": "neg" },
+        { "asset": "CN30Y", "return": "-0.35%", "barWidth": 24, "returnClass": "neg" }
+      ]
+    },
+    {
+      "group": "外汇",
+      "items": [
+        { "asset": "USDCNY", "return": "+0.54%", "barWidth": 38, "returnClass": "pos" }
+      ]
+    },
+    {
+      "group": "大宗商品",
+      "items": [
+        { "asset": "黄金", "return": "+1.83%", "barWidth": 90, "returnClass": "pos" },
+        { "asset": "铝", "return": "-0.64%", "barWidth": 42, "returnClass": "neg" }
+      ]
+    },
+    {
+      "group": "因子超额（FICC-EF 专项）",
+      "items": [
+        { "asset": "Carry", "return": "+0.06%", "barWidth": 18, "returnClass": "pos" },
+        { "asset": "动量", "return": "+0.05%", "barWidth": 15, "returnClass": "pos" },
+        { "asset": "价值", "return": "-0.01%", "barWidth": 4, "returnClass": "neg" }
+      ]
+    }
+  ],
+  "riskContribution": [
+    { "name": "固定收益", "percentage": 34, "color": "#0B2447" },
+    { "name": "外汇", "percentage": 33, "color": "#2EC4B6" },
+    { "name": "大宗商品", "percentage": 33, "color": "#E0A458" }
+  ],
+  "commentary": [
+    {
+      "marker": "①",
+      "text": "黄金单月上涨 1.83%，是本期最大正贡献资产，推动外汇与商品板块风险贡献占比小幅上升。"
+    },
+    {
+      "marker": "②",
+      "text": "长端国债（20Y/30Y）月内回调，权重相应下调，10 年期及以下品种权重上调以维持风险预算均衡。"
+    },
+    {
+      "marker": "③",
+      "text": "FICC-EF 因子超额本月贡献 +0.10%，主要来自 Carry 与动量因子，价值因子小幅拖累。"
+    },
+    {
+      "marker": "④",
+      "text": "下月展望：美元指数走势与国内长端利率方向为关键观察变量，若跨资产相关性持续走低，风险预算配置有望维持当前结构。"
+    }
+  ],
+  "footer": "本报告基于民生FICC配置指数规则化编制流程自动生成，数据来源：中债登、CFETS、上期所/INE、LME。历史表现不代表未来收益，不构成投资建议。"
+}

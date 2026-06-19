@@ -537,7 +537,7 @@ app.layout = create_layout()
 # ---------------------------------------------------------------------------
 def _make_tab_switcher(input_id: str, div_ids: list[str], keys: list[str]):
     """Register a show/hide callback that maps *input_id* tab value to div visibility."""
-    base = {"paddingLeft": "16px", "boxSizing": "border-box"}
+    base = {"boxSizing": "border-box"}   # removed paddingLeft — .an-tab-pane handles all padding
 
     @app.callback(
         [Output(did, "style") for did in div_ids],

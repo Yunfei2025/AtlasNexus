@@ -1,0 +1,13 @@
+{
+  "name": "ficc-report-generator",
+  "version": "1.0.0",
+  "description": "Generate FICC monthly reports from structured data",
+  "scripts": {
+    "generate": "node generate-report.js",
+    "pdf": "npm run generate && node generate-pdf.js",
+    "all": "npm run pdf"
+  },
+  "dependencies": {
+    "puppeteer": "^21.0.0"
+  }
+}
