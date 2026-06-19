@@ -160,21 +160,8 @@ def _dt_style(
             {"selector": ".dash-spreadsheet-menu", "rule": "display: none;"},
         ],
         style_table={"overflowX": "auto", "borderRadius": "4px"},
-        style_header={
-            "backgroundColor": THEME["table_header"],
-            "color": THEME["text_main"],
-            "fontWeight": "bold",
-            "fontSize": "12px",
-            "border": "1px solid #1a3a7a",
-            "textAlign": "center",
-            "padding": "6px 8px",
-        },
+        # style_header removed — CSS .dash-header rule in z_atlasnexus-design.css owns this
         style_cell={
-            "backgroundColor": THEME["bg_card"],
-            "color": THEME["text_main"],
-            "fontSize": "12px",
-            "border": "1px solid #142c5e",
-            "padding": "5px 8px",
             "textAlign": "center",
             "whiteSpace": "normal",
             "minWidth": "60px",

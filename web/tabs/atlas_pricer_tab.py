@@ -371,24 +371,11 @@ def _make_table(
         page_size=50,
         style_table={"overflowX": "auto", "borderRadius": "4px"},
         css=[{"selector": ".show-hide", "rule": "display: none;"}],
-        style_header={
-            "backgroundColor": THEME["table_header"],
-            "color":           THEME["text_main"],
-            "fontWeight":      "bold",
-            "fontSize":        "11px",
-            "border":          "1px solid #1a3a7a",
-            "textAlign":       "center",
-            "padding":         "5px 7px",
-        },
+        # style_header removed — CSS .dash-header rule in z_atlasnexus-design.css owns this
         style_cell={
-            "backgroundColor": THEME["bg_card"],
-            "color":           THEME["text_main"],
-            "fontSize":        "11px",
-            "border":          "1px solid #142c5e",
-            "padding":         "4px 7px",
-            "textAlign":       "center",
-            "whiteSpace":      "normal",
-            "minWidth":        "55px",
+            "textAlign":  "center",
+            "whiteSpace": "normal",
+            "minWidth":   "55px",
         },
         style_data_conditional=cond,
     )

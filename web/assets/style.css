@@ -1,28 +1,10 @@
-body {
-    font-family: "Open Sans", sans-serif;
-    background-color: #061E44;
-}
+/* body, button, .app__container, .app__content, .app__header, .Select-*
+   base rules removed here (AtlasNexus Design System — Improvement Plan,
+   step 10) — now owned exclusively by z_atlasnexus-design.css, which
+   loads last and would have overridden these anyway. */
 
 h6 {
     margin-top: 0;
-}
-
-.app__container {
-    margin: 3% 5%;
-}
-
-.app__header {
-    display: flex;
-    justify-content: space-between;
-    color: #fff;
-}
-
-.app__header__title {
-    letter-spacing: 0.23rem;
-}
-
-.app__header__title--grey {
-    color: #C4CDD5;
 }
 
 .cRfgdB .needle {
@@ -30,42 +12,9 @@ h6 {
     stroke-width: 3;
 }
 
-div.Select-value, .Select-control,div.period, .Select-input{
-  justify-content: space-between;
-  align-items: right;
-}
-
-.Select-control{
-  background-color: inherit;
-  color:#fff;
-  border-color: rgba(180, 180, 180, 0.4);
-}
-
-.Select-value-label{
-  position: relative;
-}
-
-.has-value.Select--single>.Select-control .Select-value .Select-value-label, .has-value.is-pseudo-focused.Select--single>.Select-control .Select-value .Select-value-label{
-  color:#fff;
-}
-
-.Select.is-open> .Select-control{
-  background-color: inherit;
-}
-
-.Select-menu-outer {
-  margin-top: 5px;
-  background-color: #082255;
-}
-
 .app__menu__img {
     height: 50px;
     width: auto;
-}
-
-.app__content {
-    display: flex;
-    margin-top: 20px;
 }
 
 .futures__price__container {
@@ -163,15 +112,6 @@ div.Select-value, .Select-control,div.period, .Select-input{
         padding-top: 15px;
     }
 }
-.button, button, 
-input[type="submit"], 
-input[type="reset"], 
-input[type="button"] {
-    display: inline-block;
-    color:#fff;
-    align-items:right;
-}
-    
 #spread-type label:nth-child(1) {
   flex: 5;
 }
@@ -261,85 +201,5 @@ input[type="button"] {
     color: #aab0c0;
 }
 
-/* DatePicker dark theme — Dash 4.x (new custom component, replaces react-dates) */
-/* Override the Dash Design System CSS variables scoped to the datepicker. */
-.dash-datepicker,
-.dash-datepicker-content {
-    --Dash-Fill-Inverse-Strong:    #0c2b64;
-    --Dash-Fill-Interactive-Strong: #2e86c1;
-    --Dash-Fill-Interactive-Weak:  rgba(46, 134, 193, 0.20);
-    --Dash-Text-Strong:            #e8eaf6;
-    --Dash-Text-Weak:              #aab0c0;
-    --Dash-Text-Disabled:          #5a6278;
-    --Dash-Stroke-Strong:          #1a3a6e;
-    --Dash-Shading-Strong:         rgba(0, 0, 0, 0.60);
-    --Dash-Shading-Weak:           rgba(0, 0, 0, 0.30);
-    --Dash-Spacing:                4px;
-    color: #e8eaf6;
-}
-
-/* Ensure calendar popup is fully visible and not clipped */
-.dash-datepicker {
-    overflow: visible !important;
-}
-
-.dash-datepicker-content {
-    position: absolute;
-    overflow: visible !important;
-    z-index: 1000;
-}
-
-/* Month header and weekday row */
-.dash-datepicker-calendar-month-header,
-.dash-datepicker-controls,
-.dash-datepicker-month-nav {
-    background: #0c2b64 !important;
-    color: #e8eaf6 !important;
-}
-
-/* Nav buttons */
-.dash-datepicker-month-nav button {
-    background: transparent !important;
-    color: #e8eaf6 !important;
-    border: none;
-}
-.dash-datepicker-month-nav button:hover {
-    color: #2e86c1 !important;
-}
-
-/* Calendar grid cells */
-.dash-datepicker-calendar td,
-.dash-datepicker-calendar th {
-    background: #112e66 !important;
-    color: #e8eaf6 !important;
-}
-
-.dash-datepicker-calendar td:hover {
-    background: #1a3a6e !important;
-    color: #ffffff !important;
-}
-
-/* Selected date */
-.dash-datepicker-calendar td.dash-datepicker-calendar-date-selected {
-    background: #2e86c1 !important;
-    color: #ffffff !important;
-    border-radius: 4px;
-}
-
-/* Highlighted range */
-.dash-datepicker-calendar td.dash-datepicker-calendar-date-highlighted {
-    background: rgba(46, 134, 193, 0.25) !important;
-    color: #e8eaf6 !important;
-}
-
-/* Outside-month days */
-.dash-datepicker-calendar td.dash-datepicker-calendar-date-outside {
-    color: #5a6278 !important;
-    background: #0c2440 !important;
-}
-
-/* Disabled days */
-.dash-datepicker-calendar td.dash-datepicker-calendar-date-disabled {
-    color: #5a6278 !important;
-    background: #0c2440 !important;
-}
+/* .dash-datepicker* dark theme rules removed here — duplicated in, and now
+   owned by, z_atlasnexus-design.css (which loads last). */

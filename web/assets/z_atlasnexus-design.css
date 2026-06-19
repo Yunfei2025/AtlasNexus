@@ -20,11 +20,12 @@
 html {
   font-size: 10px;  /* app.css sets 62.5%; this resets to 1rem = 10px */
 }
-body {
+body, .app__container {
   font-size: 14px;  /* Base body text, Skeleton sets this too */
+  font-family: "Open Sans", sans-serif !important; /* keep in sync with atlas_styles.PLOTLY_LAYOUT_DEFAULTS font.family */
 }
 
-/* ── CSS Variables (mirror atlas_styles.py exactly) ─────────────── */
+/* ── CSS Variables (single authoritative token block — mirrors atlas_styles.TOKENS) ── */
 :root {
   --an-navy-950:  #020d22;
   --an-navy-900:  #040f30;
@@ -51,6 +52,16 @@ body {
 
   --an-r: 4px;
   --an-t: 0.15s ease;
+
+  /* Per-book accent — overridden per active tab via inline style on #an-main-content */
+  --book-accent: var(--an-blue);
+
+  /* Typography scale (merged from atlasnexus_tabs.css) */
+  --fs-caption: 11px;
+  --fs-body:    13px;
+  --fs-section: 15px;
+  --lh-body:    1.55;
+  --ls-caps:    0.06em;
 }
 
 /* ── App Shell ────────────────────────────────────────────────── */
@@ -472,9 +483,288 @@ pre {
   background: var(--an-navy-800) !important;
   color: var(--an-text) !important;
   border: 1px solid var(--an-border2) !important;
-  border-left: 3px solid var(--an-blue) !important;
+  border-left: 3px solid var(--book-accent, var(--an-blue)) !important;
   font-size: 14px !important;
   font-weight: 600 !important;
   padding: 6px !important;
   border-radius: var(--an-r) !important;
+}
+
+/* ── Sub-tabs (dcc.Tab via className — replaces summary_subtab_style dicts) ── */
+.an-subtab {
+  background: var(--an-navy-600) !important;
+  color: var(--an-muted) !important;
+  font-size: 12px !important;
+  padding: 6px 20px !important;
+  border: none !important;
+}
+.an-subtab--selected {
+  background: var(--an-navy-700) !important;
+  border-top: 2px solid var(--book-accent, var(--an-blue)) !important;
+  color: var(--book-accent, var(--an-blue)) !important;
+  border-bottom: none !important;
+}
+/* Accent overrides per book, applied alongside .an-subtab--selected */
+.an-subtab--blue   { border-top-color: var(--an-blue)   !important; color: var(--an-blue)   !important; }
+.an-subtab--amber  { border-top-color: var(--an-amber)  !important; color: var(--an-amber)  !important; }
+.an-subtab--green  { border-top-color: var(--an-green)  !important; color: var(--an-green)  !important; }
+.an-subtab--purple { border-top-color: var(--an-purple) !important; color: var(--an-purple) !important; }
+
+/* ── Card panels (replaces _card_style / _card_hdr Python dicts) ───────── */
+.an-card {
+  background: var(--an-navy-700) !important;
+  border-left: 3px solid var(--book-accent, var(--an-blue)) !important;
+  padding: 14px 15px !important;
+  margin: 10px 12px !important;
+  border-radius: 6px !important;
+}
+.an-card-hdr {
+  color: var(--an-muted) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.08em !important;
+  margin-bottom: 10px !important;
+}
+
+/* ── Tab pane wrapper (replaces alpha_content/beta_content/market_content style) ── */
+.an-tab-pane {
+  padding: 20px !important;
+  margin: 10px !important;
+  box-sizing: border-box !important;
+}
+
+/* ── KPI values — pick up the active book's accent colour ──────────────── */
+.an-kpi-value {
+  color: var(--book-accent, var(--an-blue)) !important;
+}
+
+/* ============================================================
+   Merged from atlasnexus_tabs.css (file consolidation, step 9)
+   ============================================================ */
+
+/* ── Typography helpers ──────────────────────────────────────── */
+.an-section-title {
+  color: var(--an-muted) !important;
+  font-size: var(--fs-caption) !important;
+  font-weight: 600 !important;
+  letter-spacing: var(--ls-caps) !important;
+  text-transform: uppercase !important;
+  margin-bottom: 10px !important;
+}
+.an-label {
+  color: var(--an-muted) !important;
+  font-size: var(--fs-caption) !important;
+  margin-bottom: 4px !important;
+  display: block !important;
+}
+.an-value {
+  font-size: var(--fs-section) !important;
+  font-weight: 600 !important;
+  color: var(--an-text) !important;
+  line-height: 1.3 !important;
+}
+
+/* ── Status / severity badges ────────────────────────────────── */
+.an-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 2px 8px !important;
+  border-radius: 3px !important;
+  font-size: var(--fs-caption) !important;
+  font-weight: 600 !important;
+  border: 1px solid currentColor !important;
+  line-height: 1.6 !important;
+}
+.an-badge--ok      { color: var(--an-green) !important; background: rgba(39,174,96,.12)  !important; }
+.an-badge--warn    { color: var(--an-amber) !important; background: rgba(243,156,18,.12)  !important; }
+.an-badge--error   { color: var(--an-red)   !important; background: rgba(192,57,43,.12)   !important; }
+.an-badge--neutral { color: var(--an-muted) !important; background: rgba(170,176,192,.10) !important; }
+.an-badge--accent  { color: var(--an-cyan)  !important; background: rgba(46,134,193,.15)  !important; }
+
+/* ── Plain HTML table styling (scoped to .app__container) ──────── */
+.app__container table {
+  border-collapse: collapse !important;
+  width: 100% !important;
+}
+.app__container th {
+  background: var(--an-navy-500) !important;
+  color: var(--an-muted) !important;
+  font-size: var(--fs-caption) !important;
+  font-weight: 600 !important;
+  letter-spacing: var(--ls-caps) !important;
+  text-transform: uppercase !important;
+  padding: 8px 10px !important;
+  border-bottom: 1px solid var(--an-navy-500) !important;
+}
+.app__container td {
+  padding: 6px 10px !important;
+  border-bottom: 1px solid rgba(26,58,110,.5) !important;
+  font-size: var(--fs-body) !important;
+  color: var(--an-text) !important;
+}
+.app__container tr:hover td {
+  background: rgba(26,58,110,.4) !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Dash 4 dcc.Dropdown dark-mode overrides                                    */
+/* Class names sourced from dash/dcc/async-dropdown.js bundle (Dash 4.1.0)    */
+/* -------------------------------------------------------------------------- */
+.dash-dropdown {
+  background: var(--an-navy-600) !important;
+  color: var(--an-text) !important;
+  border-color: rgba(180,180,180,.4) !important;
+}
+.dash-dropdown-value,
+.dash-dropdown-value-item {
+  color: var(--an-text) !important;
+}
+.dash-dropdown-placeholder {
+  color: var(--an-muted) !important;
+}
+.dash-dropdown-trigger-icon,
+.dash-dropdown-value-count {
+  color: var(--an-muted) !important;
+  fill: var(--an-muted) !important;
+}
+.dash-dropdown-content {
+  background: var(--an-navy-700) !important;
+  border-color: var(--an-blue) !important;
+  color: var(--an-text) !important;
+}
+.dash-dropdown-options {
+  background: var(--an-navy-700) !important;
+}
+.dash-dropdown-option {
+  background: var(--an-navy-700) !important;
+  color: var(--an-text) !important;
+}
+.dash-dropdown-option:hover,
+.dash-dropdown-option:focus-within {
+  background: #1a3a7a !important;
+  color: var(--an-text) !important;
+}
+.dash-dropdown-search-container {
+  background: var(--an-navy-600) !important;
+  border-color: rgba(180,180,180,.4) !important;
+}
+.dash-dropdown-search {
+  color: var(--an-text) !important;
+}
+.dash-dropdown-action-button {
+  color: var(--an-muted) !important;
+}
+.dash-dropdown-action-button:hover {
+  color: var(--an-blue) !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* dcc.Input dark-mode fix (Dash 4.x)                                         */
+/*                                                                             */
+/* In Dash 4.x, dcc.Input renders as:                                         */
+/*   <div class="dash-input-container" style="[Python style props]">         */
+/*     <input class="dash-input-element" />                                  */
+/*   </div>                                                                   */
+/* The Python `style` prop lands on the wrapper div. Without !important the   */
+/* inherited color from .app__container can win over the container's inline   */
+/* color value, producing white-on-white text. Force inheritance instead.     */
+/* -------------------------------------------------------------------------- */
+.dash-input-element {
+  color: inherit !important;
+  background: inherit !important;
+  background-color: inherit !important;
+}
+input[type="email"],
+input[type="number"],
+input[type="password"],
+input[type="search"],
+input[type="tel"],
+input[type="text"],
+input[type="url"],
+textarea {
+  background-color: inherit;
+  color: inherit;
+}
+
+/* -------------------------------------------------------------------------- */
+/* DatePicker dark theme — Dash 4.x (new custom component, replaces react-dates) */
+/* Override the Dash Design System CSS variables scoped to the datepicker.      */
+/* -------------------------------------------------------------------------- */
+.dash-datepicker,
+.dash-datepicker-content {
+  --Dash-Fill-Inverse-Strong:     var(--an-navy-700);
+  --Dash-Fill-Interactive-Strong: var(--an-blue);
+  --Dash-Fill-Interactive-Weak:   rgba(46,134,193,.20);
+  --Dash-Text-Strong:             #e8eaf6;
+  --Dash-Text-Weak:               var(--an-muted);
+  --Dash-Text-Disabled:           var(--an-faint);
+  --Dash-Stroke-Strong:           var(--an-navy-500);
+  --Dash-Shading-Strong:          rgba(0,0,0,.60);
+  --Dash-Shading-Weak:            rgba(0,0,0,.30);
+  --Dash-Spacing:                 4px;
+  color: #e8eaf6 !important;
+}
+.dash-datepicker {
+  overflow: visible !important;
+}
+.dash-datepicker-content {
+  position: absolute !important;
+  overflow: visible !important;
+  z-index: 1000 !important;
+}
+.dash-datepicker-calendar-month-header,
+.dash-datepicker-controls,
+.dash-datepicker-month-nav {
+  background: var(--an-navy-700) !important;
+  color: #e8eaf6 !important;
+}
+.dash-datepicker-month-nav button {
+  background: transparent !important;
+  color: #e8eaf6 !important;
+  border: none !important;
+}
+.dash-datepicker-month-nav button:hover {
+  color: var(--an-blue) !important;
+}
+.dash-datepicker-calendar td,
+.dash-datepicker-calendar th {
+  background: var(--an-navy-600) !important;
+  color: #e8eaf6 !important;
+}
+.dash-datepicker-calendar td:hover {
+  background: var(--an-navy-500) !important;
+  color: var(--an-text) !important;
+}
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-selected {
+  background: var(--an-blue) !important;
+  color: var(--an-text) !important;
+  border-radius: var(--an-r) !important;
+}
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-highlighted {
+  background: rgba(46,134,193,.25) !important;
+  color: #e8eaf6 !important;
+}
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-outside,
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-disabled {
+  color: var(--an-faint) !important;
+  background: #0c2440 !important;
+}
+
+/* ── Fallback for dcc.Tabs that don't carry an .an-tabs className ──────── */
+.dash-tabs .tab,
+.dash-tabs .tab *,
+.dash-tabs .tab--selected,
+.dash-tabs .tab:focus,
+.dash-tabs .tab:active,
+.dash-tabs .tab .tab-label,
+.dash-tabs .react-tabs__tab--selected {
+  color: var(--an-text) !important;
+}
+.dash-tabs {
+  background: var(--an-navy-800) !important;
+}
+.dash-tabs .tab--selected {
+  background-color: var(--an-navy-800) !important;
+  color: var(--an-text) !important;
 }

@@ -20,8 +20,8 @@ sys.path.insert(0, str(project_root))
 
 # Import lightweight style constants (do not import web.core which triggers data loads).
 from web.tabs.atlas_styles import (
-    summary_subtab_style, summary_subtabs_style, summary_subtabs_colors,
-    summary_subtab_selected_style,
+    summary_subtabs_style, summary_subtabs_colors,
+    BOOK_ACCENT,
     ATLAS_PLOTLY_TEMPLATE,
 )
 
@@ -197,14 +197,6 @@ def build_tabs_panel():
     _dd_style    = _DD_STYLE
     _dd_theme    = _DD_THEME
 
-    _card_style: dict = {
-        'padding': '14px 15px', 'background': '#0c2b64',
-        'margin': '10px 12px', 'borderRadius': '6px',
-    }
-    _card_hdr: dict = {
-        'color': '#aab0c0', 'fontSize': '11px', 'fontWeight': '600',
-        'letterSpacing': '0.08em', 'marginBottom': '10px',
-    }
 
     # Default start/end for Run Center: end = previous CN workday, start = end - 3 months
     try:
@@ -243,7 +235,7 @@ def build_tabs_panel():
         [
             # ── Daily Pipeline card ──────────────────────────────────────────
             html.Div([
-                html.Div("DAILY PIPELINE", style=_card_hdr),
+                html.Div("DAILY PIPELINE", className="an-card-hdr"),
                 html.Div([
                     html.Button("Update Data",         id="an-btn-update",     n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
                     html.Button("Run EOD",             id="an-btn-eod",        n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
@@ -261,11 +253,11 @@ def build_tabs_panel():
                         ),
                     ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'position': 'relative', 'zIndex': '1001'}),
                 ], style={'display': 'flex', 'flexDirection': 'row', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '4px'}),
-            ], style=_card_style),
+            ], className="an-card"),
 
             # ── Data Backfill card ──────────────────────────────────────────
             html.Div([
-                html.Div("DATA BACKFILL", style={**_card_hdr, 'marginBottom': '12px'}),
+                html.Div("DATA BACKFILL", className="an-card-hdr", style={'marginBottom': '12px'}),
                 html.Div([
                     # Instrument type
                     html.Div([
@@ -364,15 +356,15 @@ def build_tabs_panel():
                         style={'color': '#aab0c0', 'fontSize': '12px', 'marginLeft': '12px'},
                     ),
                 ], style={'marginTop': '12px', 'display': 'flex', 'alignItems': 'center'}),
-            ], style=_card_style),
+            ], className="an-card"),
 
             # ── Status & Logs card ───────────────────────────────────────────
             html.Div([
-                html.Div("STATUS & LOGS", style=_card_hdr),
+                html.Div("STATUS & LOGS", className="an-card-hdr"),
                 html.Div(id="an-job-status", children="No job running.",
                          style={'fontStyle': 'italic', 'color': '#aab0c0', 'fontSize': '12px', 'marginBottom': '8px'}),
                 html.Div(id="an-run-center-content"),
-            ], style=_card_style),
+            ], className="an-card"),
 
             dcc.Interval(id="an-run-center-interval", interval=_INTERVAL_RUN_CTR_MS, n_intervals=0),
         ]
@@ -384,12 +376,12 @@ def build_tabs_panel():
                 id="an-beta-subtabs",
                 value="candidates",
                 children=[
-                    dcc.Tab(label="Candidates", value="candidates", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Portfolio",  value="portfolio",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Backtest",   value="backtest",   style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Factor",     value="factor",     style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Bond",       value="bond",       style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Futures",    value="futures",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Candidates", value="candidates", className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
+                    dcc.Tab(label="Portfolio",  value="portfolio",  className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
+                    dcc.Tab(label="Backtest",   value="backtest",   className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
+                    dcc.Tab(label="Factor",     value="factor",     className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
+                    dcc.Tab(label="Bond",       value="bond",       className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
+                    dcc.Tab(label="Futures",    value="futures",    className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
                 ],
                 style={**summary_subtabs_style, "marginTop": "8px"},
                 colors=summary_subtabs_colors,
@@ -403,7 +395,7 @@ def build_tabs_panel():
                 html.Div(id="beta-futures-div",    children=build_factor_backtest_layout(),         style={"display": "none"}),
             ], style={"position": "relative"}),
         ],
-        style={"padding": "20px", "margin": "10px", "boxSizing": "border-box"},
+        className="an-tab-pane",
     )
     
     alpha_content = html.Div(
@@ -412,12 +404,12 @@ def build_tabs_panel():
                 id="an-alpha-subtabs",
                 value="candidates",
                 children=[
-                    dcc.Tab(label="Candidates", value="candidates", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
-                    dcc.Tab(label="Portfolio",  value="portfolio",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
-                    dcc.Tab(label="Backtest",   value="backtest",   style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
-                    dcc.Tab(label="Spread",     value="spreads",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
-                    dcc.Tab(label="Pairs",      value="pairs",      style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
-                    dcc.Tab(label="Volatility", value="volatility", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
+                    dcc.Tab(label="Candidates", value="candidates", className="an-subtab", selected_className="an-subtab--selected an-subtab--amber"),
+                    dcc.Tab(label="Portfolio",  value="portfolio",  className="an-subtab", selected_className="an-subtab--selected an-subtab--amber"),
+                    dcc.Tab(label="Backtest",   value="backtest",   className="an-subtab", selected_className="an-subtab--selected an-subtab--amber"),
+                    dcc.Tab(label="Spread",     value="spreads",    className="an-subtab", selected_className="an-subtab--selected an-subtab--amber"),
+                    dcc.Tab(label="Pairs",      value="pairs",      className="an-subtab", selected_className="an-subtab--selected an-subtab--amber"),
+                    dcc.Tab(label="Volatility", value="volatility", className="an-subtab", selected_className="an-subtab--selected an-subtab--amber"),
                 ],
                 style={**summary_subtabs_style, "marginTop": "8px"},
                 colors={**summary_subtabs_colors, "primary": "#f39c12"},
@@ -431,7 +423,7 @@ def build_tabs_panel():
                 html.Div(id="alpha-volatility-div", children=build_volatility_layout(), style={"display": "none"}),
             ], style={"position": "relative"}),
         ],
-        style={"padding": "20px", "margin": "10px", "boxSizing": "border-box"},
+        className="an-tab-pane",
     )
 
     _risk_inner = build_multiasset_risk_layout()
@@ -441,9 +433,9 @@ def build_tabs_panel():
                 id="an-summary-subtabs",
                 value="books",
                 children=[
-                    dcc.Tab(label="Books",   value="books",   style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Risk",    value="risk",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#f39c12")),
-                    dcc.Tab(label="Tickets", value="tickets", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#27ae60")),
+                    dcc.Tab(label="Books",   value="books",   className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
+                    dcc.Tab(label="Risk",    value="risk",    className="an-subtab", selected_className="an-subtab--selected an-subtab--amber"),
+                    dcc.Tab(label="Tickets", value="tickets", className="an-subtab", selected_className="an-subtab--selected an-subtab--green"),
                 ],
                 style={**summary_subtabs_style, "marginTop": "8px"},
                 colors=summary_subtabs_colors,
@@ -454,7 +446,7 @@ def build_tabs_panel():
                 html.Div(id="summary-tickets-div", children=_risk_inner.children[2], style={"display": "none"}),
             ], style={"position": "relative"}),
         ],
-        style={"padding": "20px", "margin": "10px", "boxSizing": "border-box"},
+        className="an-tab-pane",
     )
 
     market_content = html.Div(
@@ -463,11 +455,11 @@ def build_tabs_panel():
                 id="an-market-subtabs",
                 value="data",
                 children=[
-                    dcc.Tab(label="Data",    value="data",    style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Trend",   value="trend",   style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Pricer",  value="pricer",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Surface", value="surface", style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
-                    dcc.Tab(label="Curves",  value="curves",  style=summary_subtab_style, selected_style=summary_subtab_selected_style("#3498db")),
+                    dcc.Tab(label="Data",    value="data",    className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
+                    dcc.Tab(label="Trend",   value="trend",   className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
+                    dcc.Tab(label="Pricer",  value="pricer",  className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
+                    dcc.Tab(label="Surface", value="surface", className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
+                    dcc.Tab(label="Curves",  value="curves",  className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
                 ],
                 style={**summary_subtabs_style, "marginTop": "8px"},
                 colors=summary_subtabs_colors,
@@ -480,7 +472,7 @@ def build_tabs_panel():
                 html.Div(id="market-curves-div",  children=build_curves_layout(),      style={"display": "none"}),
             ], style={"position": "relative"}),
         ],
-        style={"padding": "20px", "margin": "10px", "boxSizing": "border-box"},
+        className="an-tab-pane",
     )
 
     return html.Div(
@@ -519,6 +511,7 @@ def build_tabs_panel():
                     ], style={"width": "100%"}),
                     dcc.Interval(id="an-interval", interval=_INTERVAL_HEADER_MS, n_intervals=0),
                 ],
+                id="an-main-content",
                 className="tab__title",
             ),
         ],
@@ -560,6 +553,17 @@ def _make_tab_switcher(input_id: str, div_ids: list[str], keys: list[str]):
 
 
 
+
+
+@app.callback(
+    Output("an-main-content", "style"),
+    Input("an-tabs", "value"),
+)
+def _set_book_accent(tab):
+    """Propagate the active book's accent color to cards, KPIs, and sub-tabs
+    via the --book-accent CSS variable (see z_atlasnexus-design.css)."""
+    accent = BOOK_ACCENT.get(tab, BOOK_ACCENT["market"])
+    return {"--book-accent": accent}
 
 
 @app.callback(

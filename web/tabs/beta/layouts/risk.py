@@ -7,12 +7,6 @@ from dash import dcc, html, dash_table
 import plotly.graph_objects as go
 
 from ..data import THEME, ALLOCATION_RESULTS
-from web.tabs.atlas_styles import (
-    summary_subtab_style,
-    summary_subtab_selected_style,
-    summary_subtabs_style,
-    summary_subtabs_colors,
-)
 
 
 def build_multiasset_risk_layout():

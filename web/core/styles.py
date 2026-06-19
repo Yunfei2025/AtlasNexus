@@ -23,13 +23,19 @@ from settings.general import GeneralConfig
 
 app_color: Dict[str, str] = {"graph_bg": "#082255", "graph_line": "#007ACE"}
 OSPREAD = SpreadConfig.build_ospreado()
-color_mode: Dict[int, str] = {1: "#F93822", 0: "#007ACE", -1: "#00B612"}
+
+# Signal color convention: 1=SELL/short, 0=NEUTRAL, -1=BUY/long
+color_mode: Dict[int, str] = {
+    1: "#c0392b",   # SELL    — matches --an-red
+    0: "#2e86c1",   # NEUTRAL — matches --an-blue
+    -1: "#27ae60",  # BUY     — matches --an-green
+}
 
 # Common style constants
 GRID_COLOR: str = "#0f3174"
 WHITE: str = "#fff"
 ACCENT: str = px.colors.diverging.balance[3]
-SHAPE_COLOR: str = "#BD9391"
+SHAPE_COLOR: str = "#aab0c0"  # aligned with --an-muted for stat-line overlays
 
 tabs_styles: Dict[str, Any] = {'zIndex': 99, 
                #'display': 'inlineBlock', 
@@ -144,7 +150,7 @@ def getTraceStat(df: Union[pd.Series, pd.DataFrame], stype: str) -> go.Bar:
     trace = go.Bar(
         x=df.index,
         y=df['Zscore'],
-        marker=dict(color=df['color']),
+        marker=dict(color=df['color'], line=dict(width=0)),
         hovertext=hovertext,
         name='Zscore',
     )

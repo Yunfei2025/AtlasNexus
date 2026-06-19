@@ -508,6 +508,12 @@ MACRO_SYMBOLS = {
         'EURCNY.IB',  # 欧元兑人民币汇率
         'JPYCNY.IB',  # 日元兑人民币汇率
         'GBPCNY.IB',
+        'CADCNY.IB',
+        'AUDCNY.IB',
+        'CHFCNY.IB',
+        'KRWCNY.IB',
+        'SGDCNY.IB',
+        'INRCNY.IB',
         # 'USDCNH.FX',
         # 'EURCNH.FX',
         # 'JPYCNH.FX',

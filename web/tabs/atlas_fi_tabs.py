@@ -241,20 +241,12 @@ def build_curves_layout():
                             html.Div(id="ref-bonds", children="Reference Bonds"),
                             dash_table.DataTable(
                                 id="ref-bonds-t",
-                                style_data={
+                                # style_data/style_header removed — CSS .dash-cell/.dash-header
+                                # rules in z_atlasnexus-design.css own colors; keep only sizing here.
+                                style_cell={
                                     "height": "auto",
                                     "width": "60px",
-                                    "backgroundColor": "#082255",
-                                    "color": "#FFFFFF",
                                     "textAlign": "left",
-                                    "font-size": "1em",
-                                },
-                                style_header={
-                                    "backgroundColor": "#082255",
-                                    "color": "#FFFFFF",
-                                    "fontWeight": "bold",
-                                    "textAlign": "left",
-                                    "font-size": "1em",
                                 },
                             ),
                         ],

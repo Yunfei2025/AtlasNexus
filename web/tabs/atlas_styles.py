@@ -13,10 +13,34 @@ from typing import Any, Dict
 
 # Mirror the style objects used by web/core/styles.py and fi.py
 
-# Top-level app tabs (Market/Beta Book/Alpha Book/...) are styled via CSS
-# classes now — see .an-tabs / .an-tab / .an-tab--selected in
-# web/assets/atlasnexus-design.css. Use className="an-tabs" / "an-tab" /
-# "an-tab--selected" on dcc.Tabs/dcc.Tab instead of these dicts.
+# Single source of truth for the navy ramp + signal colors. Mirrors the
+# :root tokens in web/assets/z_atlasnexus-design.css (--an-*).
+TOKENS: Dict[str, str] = {
+    "navy_900": "#040f30", "navy_800": "#082255", "navy_700": "#0c2b64",
+    "navy_600": "#112e66", "navy_500": "#1a3a6e", "navy_400": "#2a5298",
+    "navy_300": "#425476",
+    "blue":     "#2e86c1", "cyan":     "#45b6e6",
+    "green":    "#27ae60", "amber":    "#f39c12",
+    "red":      "#c0392b", "purple":   "#8e44ad",
+    "text":     "#ffffff", "muted":    "#aab0c0", "faint": "#5a6478",
+}
+
+# Per-book accent colors — keep in sync with .an-subtab--* classes and the
+# --book-accent CSS variable injected by _set_book_accent in atlasnexus_daily.py.
+BOOK_ACCENT: Dict[str, str] = {
+    "market":     TOKENS["blue"],
+    "beta":       TOKENS["blue"],
+    "alpha":      TOKENS["amber"],
+    "risk":       TOKENS["green"],
+    "run-center": TOKENS["purple"],
+}
+
+# Top-level app tabs (Market/Beta Book/Alpha Book/...) and sub-tabs are
+# styled via CSS classes — see .an-tabs / .an-tab / .an-tab--selected and
+# .an-subtab / .an-subtab--selected in web/assets/z_atlasnexus-design.css.
+# Use className="an-tabs" / "an-tab" / "an-tab--selected" on dcc.Tabs/dcc.Tab,
+# and className="an-subtab" / selected_className="an-subtab--selected" on
+# sub-tabs, instead of inline style dicts.
 
 summary_subtabs_style: Dict[str, Any] = {
     "marginBottom": "16px",
@@ -27,25 +51,6 @@ summary_subtabs_colors: Dict[str, Any] = {
     "primary": "#3498db",
     "background": "#112e66",
 }
-
-summary_subtab_style: Dict[str, Any] = {
-    "backgroundColor": "#112e66",
-    "color": "#aab0c0",
-    "fontSize": "12px",
-    "padding": "6px 20px",
-    "border": "none",
-}
-
-
-def summary_subtab_selected_style(color: str = "#3498db") -> Dict[str, Any]:
-    return {
-        "backgroundColor": "#0c2b64",
-        "color": color,
-        "fontSize": "12px",
-        "padding": "6px 20px",
-        "borderTop": f"2px solid {color}",
-        "borderBottom": "none",
-    }
 
 # ---------------------------------------------------------------------------
 # Plotly figure layout defaults

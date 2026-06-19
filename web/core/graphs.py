@@ -35,6 +35,20 @@ yunits = BondConfig.get_spread_units()
 ospread = SpreadConfig.build_ospreado()
 
 
+def _zscore_color(z: float) -> str:
+    """Map z-score to a 5-step red->neutral->green scale for better signaling."""
+    if z >= 2.0:
+        return '#27ae60'   # strong buy   — emerald
+    elif z >= 1.0:
+        return '#82e0aa'   # mild buy     — light green
+    elif z <= -2.0:
+        return '#c0392b'   # strong sell  — crimson
+    elif z <= -1.0:
+        return '#f1948a'   # mild sell    — light red
+    else:
+        return '#4a5568'   # neutral      — slate gray
+
+
 def _suppress_curve_yield_jumps(
     curve_yield: pd.Series,
     close_yield: pd.Series,
@@ -338,7 +352,6 @@ def display_click_data(clickData):
               Input("select-season", "value"),
               )
 def statistics(interval, data_rt_js, stype, season):
-    thd = ZSCORE_ALERT_THRESHOLD
     if not data_rt_js:
         empty_layout = layout_stat(yunits.get(stype, "Z-score"))
         return go.Figure(data=[], layout=empty_layout)
@@ -353,11 +366,7 @@ def statistics(interval, data_rt_js, stype, season):
     df_ = pd.DataFrame(df_raw)
     yunit = "Z-score"
     spread = df_[['spread', 'Zscore']].dropna().copy()
-    spread['color'] = 'grey'
-    buy = spread[spread["Zscore"] >= thd].index
-    sell = spread[spread["Zscore"] <= -thd].index
-    spread.loc[buy, 'color'] = 'green'
-    spread.loc[sell, 'color'] = 'red'
+    spread['color'] = spread['Zscore'].apply(_zscore_color)
 
     # Sort by index (ticker code) for better readability
     if stype == 'SectorPCASpread':
