@@ -240,7 +240,21 @@ class StatGenerator:
         # Clean data to handle byte strings and invalid values
         df_act_irs = df_act_irs.apply(pd.to_numeric, errors='coerce')
         df_quo_irs = df_quo_irs.apply(pd.to_numeric, errors='coerce')
-        
+
+        # When processing full history, filter out columns with insufficient coverage
+        # (< 30% non-NaN values) to avoid generating meaningless spreads from sparse data.
+        # This allows spreads to be generated from the earliest common date across
+        # all available instruments.
+        if full_history and len(df_act_irs) > 0:
+            coverage = df_act_irs.notna().sum() / len(df_act_irs)
+            available_cols = coverage[coverage >= 0.3].index.tolist()
+            if available_cols:
+                df_act_irs = df_act_irs[available_cols]
+                df_quo_irs = df_quo_irs[available_cols]
+                first_valid_idx = max(df_act_irs[col].first_valid_index() for col in available_cols if df_act_irs[col].notna().any())
+                df_act_irs = df_act_irs.loc[first_valid_idx:]
+                df_quo_irs = df_quo_irs.loc[first_valid_idx:]
+
         cvpx_stat = st.statAnalysis_IRS(df_act_irs, df_quo_irs)
 
         cpr = irs_px.get('carry3m', pd.DataFrame()) + irs_px.get('roll3m', pd.DataFrame())
@@ -267,30 +281,72 @@ class StatGenerator:
         filtered_terms = [k for k in _irs_terms.keys() if k not in excluded]
         self.spot_ts[btype] = self.env_ts['SwapTS'][filtered_terms]
 
-    def rebuild_irs_spreads_history(self) -> None:
-        """Recompute IRS-pxspds.pkl from the full available IRS curve-price history."""
-        desired_start = pd.Timestamp('2015-01-01').date()
-        cvpx_path = os.path.join(DIR_INPUT, 'IRS-cvpx.pkl')
-        current_start = None
+    def compute_irs_spreads_from_raw(self) -> None:
+        """Compute IRS spreads directly from raw quotes in database-px.pkl.
+
+        This skips curve calibration and creates spreads from close quotes directly.
+        Useful for building historical time series when curve-calibrated data is unavailable.
+        """
+        from curves.calibration.irscurves import irsSpreads
+
+        db_path = os.path.join(DIR_INPUT, 'database-px.pkl')
         try:
-            irs_px = pd.read_pickle(cvpx_path)
-            if isinstance(irs_px, dict):
-                ytm_act = irs_px.get('ytm_act')
-                if isinstance(ytm_act, pd.DataFrame) and not ytm_act.empty:
-                    current_start = pd.Timestamp(ytm_act.index[0]).date()
-        except Exception:
-            current_start = None
+            db = pd.read_pickle(db_path)
+            if not isinstance(db, dict) or 'IRS' not in db:
+                print("ERROR: No IRS data in database-px.pkl")
+                return
 
-        if current_start is None or current_start > desired_start:
-            try:
-                from curves.generators.irs import IRSGenerator
+            irs_db = db['IRS']
+            if not isinstance(irs_db, pd.DataFrame) or irs_db.empty:
+                print("ERROR: IRS data is empty")
+                return
 
-                print(f"INFO: Backfilling IRS-cvpx.pkl from {desired_start} to the latest available raw history...")
-                IRSGenerator(asof=None).backfill_history(start_date=desired_start)
-            except Exception as exc:
-                print(f"WARN: Could not backfill IRS-cvpx.pkl to {desired_start}: {exc}")
+            # Filter to columns that are in IRSConfig.IRS_LIST
+            available_cols = [c for c in IRSConfig.IRS_LIST if c in irs_db.columns]
+            if not available_cols:
+                print("ERROR: No matching IRS columns found")
+                return
 
-        self.compute_irs_spreads(full_history=True)
+            df_irs = irs_db[available_cols].copy()
+            df_irs = df_irs.apply(pd.to_numeric, errors='coerce')
+
+            # Build spreads output directly without needing statAnalysis_IRS
+            # (which requires two different time series for bid/ask or similar)
+            spds = irsSpreads(df_irs)
+
+            # Build StatInfo for the spreads using OU calibration
+            stat_info_spds = st.OU_calibrate(spds)
+            for b in stat_info_spds.index:
+                stat_info_spds.loc[b, 'max'] = stat_info_spds.loc[b, 'max'] - stat_info_spds.loc[b, 'mean']
+                stat_info_spds.loc[b, 'min'] = stat_info_spds.loc[b, 'min'] - stat_info_spds.loc[b, 'mean']
+
+            # Structure matches IRS-pxspds.pkl format
+            cvpx_stat = {
+                'StatInfo': stat_info_spds,
+                'Spread': pd.concat([df_irs, spds], axis=1),
+                'CloseYield': df_irs,
+                'CurveYield': df_irs,
+                'CarryRoll3m': pd.DataFrame(),
+            }
+
+            updatePKL(cvpx_stat, os.path.join(DIR_INPUT, f'IRS-pxspds.pkl'), rewrite=True)
+            print(f"✓ IRS spreads computed from raw data: {df_irs.shape[0]} days, {len(available_cols)} instruments")
+            print(f"  Date range: {df_irs.index[0]} to {df_irs.index[-1]}")
+
+        except Exception as exc:
+            print(f"ERROR in compute_irs_spreads_from_raw: {exc}")
+            raise
+
+    def rebuild_irs_spreads_history(self) -> None:
+        """Recompute IRS-pxspds.pkl from raw close quotes in database-px.pkl.
+
+        Computes spreads directly from raw IRS closing quotes without requiring
+        curve calibration. This creates a clean historical time series from available data.
+        """
+        print("─" * 80)
+        print("Rebuilding IRS-pxspds.pkl from raw data")
+        print("─" * 80)
+        self.compute_irs_spreads_from_raw()
 
     # ---------------------- Other sectors ----------------------
     def compute_other_bond_spreads(self) -> None:
