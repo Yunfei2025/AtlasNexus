@@ -44,7 +44,7 @@ def build_spreads_layout():
         return html.Div(
             text,
             style={
-                "color": "#8fb3d9",
+                "color": "var(--text-secondary)",
                 "fontSize": "10px",
                 "fontWeight": "bold",
                 "letterSpacing": "0.6px",
@@ -77,13 +77,13 @@ def build_spreads_layout():
         {"label": "Futures Swap",           "value": "FuturesSwap"},
     ]
 
-    _DD_STYLE = {"fontSize": "12px", "color": "#fff"}
+    _DD_STYLE = {"fontSize": "12px", "color": "var(--text-primary)"}
 
     def _chart_label(text):
         return html.Div(
             text,
             style={
-                "color": "#8fb3d9",
+                "color": "var(--text-secondary)",
                 "fontSize": "11px",
                 "fontWeight": "bold",
                 "letterSpacing": "0.5px",
@@ -104,12 +104,14 @@ def build_spreads_layout():
                         html.Div(
                             "SPREAD EXPLORER",
                             style={
-                                "color": "#ffffff",
-                                "fontSize": "11px",
-                                "fontWeight": "bold",
-                                "letterSpacing": "1px",
+                                "fontFamily": "var(--font-mono)",
+                                "color": "var(--accent-amber)",
+                                "fontSize": "12px",
+                                "fontWeight": "700",
+                                "letterSpacing": "0.09em",
+                                "textTransform": "uppercase",
                                 "paddingBottom": "10px",
-                                "borderBottom": "1px solid #1e4a8a",
+                                "borderBottom": "1px solid var(--border-default)",
                                 "marginBottom": "2px",
                             },
                         ),
@@ -159,12 +161,13 @@ def build_spreads_layout():
                         ),
                     ],
                     style={
-                        "background": "#0a2850",
-                        "borderRadius": "6px",
-                        "padding": "14px 12px",
+                        "background": "var(--surface-raised)",
+                        "border": "1px solid var(--border-default)",
+                        "borderRadius": "8px",
+                        "padding": "14px 18px",
                     },
                 ),
-                className="one-fourth column histogram__container",
+                className="alpha-spread-sidebar",
             ),
 
             # ── Right chart panel ───────────────────────────────────────────
@@ -201,9 +204,10 @@ def build_spreads_layout():
                     ),
                     html.Div(id="spread-seasonal-stats", style={"marginTop": "6px"}),
                 ],
-                className="three-fourths column futures__price__container",
+                style={"display": "flex", "flexDirection": "column", "gap": "14px"},
             ),
         ],
+        className="alpha-spread-layout",
     )
 
 
@@ -304,96 +308,89 @@ def build_pairs_layout():
     from web.tabs.alpha.data import THEME
 
     _inp = {
-        "width": "100%", "padding": "5px",
-        "backgroundColor": THEME["bg_input"], "color": "#fff",
-        "border": "1px solid #4a6f9f", "borderRadius": "3px",
-        "fontSize": "12px",
+        "width": "100%", "padding": "6px 8px",
+        "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+        "border": f"1px solid {THEME['border']}", "borderRadius": "0",
+        "fontSize": "12px", "textAlign": "center",
     }
-    _th = {"color": THEME["text_sub"], "padding": "6px", "textAlign": "center",
-           "fontSize": "11px", "fontWeight": "bold", "minWidth": "110px"}
-    _td_label = {"color": THEME["text_main"], "padding": "6px",
-                 "fontWeight": "bold", "fontSize": "12px"}
+
+    def _pairs_row(label, ids, values):
+        return html.Div(
+            [html.Div(label, className="row-label")] + [
+                html.Div(dcc.Input(id=i, value=v, type='text', style=_inp), className="cell")
+                for i, v in zip(ids, values)
+            ],
+            style={"display": "contents"},
+        )
 
     return html.Div(
         [
-            # ── Configuration panel ────────────────────────────────────────
+            # ── Configuration panel: compact header strip ──────────────────
             html.Div(
                 [
-                    html.H6("Pairs Analysis",
-                            style={"color": THEME["text_main"], "marginBottom": "6px"}),
-                    html.P(
-                        "Interactive spread analysis with confidence bands (in basis points)",
-                        style={"color": THEME["text_sub"], "fontSize": "12px", "margin": "0 0 10px 0"},
-                    ),
-
-                    # Pairs configuration table
                     html.Div([
-                        html.Table([
-                            html.Thead(html.Tr([
-                                html.Th("", style={**_th, "textAlign": "left", "minWidth": "50px"}),
-                                html.Th("Pair 1", style=_th),
-                                html.Th("Pair 2", style=_th),
-                                html.Th("Pair 3", style=_th),
-                                html.Th("Pair 4", style=_th),
-                            ])),
-                            html.Tbody([
-                                html.Tr([
-                                    html.Td("Leg 1", style=_td_label),
-                                    html.Td(dcc.Input(id='pairs-leg1-1', value='250211.IB', type='text', style=_inp)),
-                                    html.Td(dcc.Input(id='pairs-leg1-2', value='250020.IB', type='text', style=_inp)),
-                                    html.Td(dcc.Input(id='pairs-leg1-3', value='250215.IB', type='text', style=_inp)),
-                                    html.Td(dcc.Input(id='pairs-leg1-4', value='2500006.IB', type='text', style=_inp)),
-                                ]),
-                                html.Tr([
-                                    html.Td("Leg 2", style=_td_label),
-                                    html.Td(dcc.Input(id='pairs-leg2-1', value='240024.IB', type='text', style=_inp)),
-                                    html.Td(dcc.Input(id='pairs-leg2-2', value='FR007S5Y.IR', type='text', style=_inp)),
-                                    html.Td(dcc.Input(id='pairs-leg2-3', value='250018.IB', type='text', style=_inp)),
-                                    html.Td(dcc.Input(id='pairs-leg2-4', value='210005.IB', type='text', style=_inp)),
-                                ]),
-                            ])
-                        ], style={"width": "100%", "borderCollapse": "collapse", "margin": "0 0 8px 0"}),
-
-                        html.Div([
-                            html.Label("Days:", style={"color": THEME["text_sub"], "marginRight": "8px",
-                                                        "fontWeight": "bold", "fontSize": "12px"}),
-                            dcc.Input(
-                                id='pairs-days-input', type='number', value=90, min=1,
-                                style={"width": "70px", "padding": "5px",
-                                       "backgroundColor": THEME["bg_input"], "color": "#fff",
-                                       "border": "1px solid #4a6f9f", "borderRadius": "3px",
-                                       "fontSize": "12px"},
-                            ),
-                        ], style={"display": "flex", "alignItems": "center"}),
-                    ], style={"backgroundColor": THEME["bg_card"], "padding": "12px",
-                              "borderRadius": "4px", "marginBottom": "10px"}),
-
+                        html.Span("Pairs Analysis",
+                                  style={"color": THEME["text_main"], "fontSize": "15px", "fontWeight": "500"}),
+                        html.Span("Interactive spread analysis with confidence bands (in basis points)",
+                                  style={"color": THEME["text_sub"], "fontSize": "12px", "marginLeft": "12px"}),
+                    ]),
                     html.Div([
+                        html.Label("Days:", style={"color": THEME["text_sub"], "marginRight": "8px",
+                                                    "fontWeight": "bold", "fontSize": "12px"}),
+                        dcc.Input(
+                            id='pairs-days-input', type='number', value=90, min=1,
+                            style={"width": "60px", "padding": "5px",
+                                   "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+                                   "border": f"1px solid {THEME['border']}", "borderRadius": "3px",
+                                   "fontSize": "12px", "textAlign": "center"},
+                        ),
                         html.Button(
-                            "🔄 Refresh Plots",
+                            "↻ REFRESH PLOTS",
                             id="pairs-refresh-btn",
                             n_clicks=0,
                             style={
-                                "backgroundColor": THEME["accent"], "color": "white",
-                                "border": "none", "padding": "8px 18px",
+                                "backgroundColor": "transparent", "color": THEME["text_main"],
+                                "border": f"1px solid {THEME['border']}", "padding": "7px 16px",
                                 "borderRadius": "4px", "cursor": "pointer",
-                                "fontSize": "13px", "fontWeight": "bold",
-                                "marginRight": "12px",
+                                "fontSize": "12px", "fontWeight": "600",
                             },
                         ),
                         html.Span(
                             id="pairs-last-updated",
                             children="Last updated: Loading...",
-                            style={"color": THEME["text_sub"], "fontSize": "12px"},
+                            style={"color": THEME["text_sub"], "fontSize": "11px", "fontFamily": "monospace"},
                         ),
-                    ], style={"display": "flex", "alignItems": "center"}),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "10px"}),
                 ],
                 style={
+                    "display": "flex", "alignItems": "center", "justifyContent": "space-between",
+                    "flexWrap": "wrap", "gap": "10px",
                     "backgroundColor": app_color["graph_bg"],
-                    "borderRadius": "6px",
-                    "padding": "15px",
-                    "marginBottom": "12px",
+                    "borderRadius": "6px 6px 0 0",
+                    "padding": "11px 18px",
+                    "borderBottom": f"1px solid {THEME['border_sub']}",
                 },
+            ),
+
+            # ── Pair inputs: data-grid table pattern ────────────────────────
+            html.Div(
+                [
+                    html.Div("", className="col-header"),
+                    html.Div("Pair 1", className="col-header"),
+                    html.Div("Pair 2", className="col-header"),
+                    html.Div("Pair 3", className="col-header"),
+                    html.Div("Pair 4", className="col-header"),
+
+                    _pairs_row("Leg 1",
+                               ['pairs-leg1-1', 'pairs-leg1-2', 'pairs-leg1-3', 'pairs-leg1-4'],
+                               ['250211.IB', '250020.IB', '250215.IB', '2500006.IB']),
+                    _pairs_row("Leg 2",
+                               ['pairs-leg2-1', 'pairs-leg2-2', 'pairs-leg2-3', 'pairs-leg2-4'],
+                               ['240024.IB', 'FR007S5Y.IR', '250018.IB', '210005.IB']),
+                ],
+                className="pairs-input-grid",
+                style={"backgroundColor": app_color["graph_bg"], "borderRadius": "0 0 6px 6px",
+                       "marginBottom": "12px"},
             ),
 
             # ── Results panel ──────────────────────────────────────────────

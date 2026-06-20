@@ -98,6 +98,11 @@ def build_diversified_trades_display(trades: List[Dict]) -> html.Div:
 
 def build_candidates_layout() -> html.Div:
     """Build the CANDIDATES subtab layout."""
+    _label_style = {
+        'color': THEME['text_sub'], 'fontSize': '11px', 'fontWeight': '600',
+        'textTransform': 'uppercase', 'letterSpacing': '0.06em',
+        'marginBottom': '8px', 'display': 'block',
+    }
     return html.Div([
         html.H6("Alpha Candidates Scanner", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
         html.P(
@@ -106,9 +111,10 @@ def build_candidates_layout() -> html.Div:
             style={'color': THEME['text_sub'], 'fontSize': '13px', 'marginBottom': '20px'}
         ),
 
+        # ── 2a: Spread Categories panel — surface-raised ──────────────────
         html.Div([
             html.Div([
-                html.Label("Spread Categories:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginBottom': '8px', 'display': 'block'}),
+                html.Label("Spread Categories", style=_label_style),
                 dcc.Checklist(
                     id='alpha-spread-categories',
                     options=[
@@ -122,25 +128,27 @@ def build_candidates_layout() -> html.Div:
                     ],
                     value=['Bond-Curve', 'Bond-Swap', 'Swap-Spread', 'Tenor-Spread'],
                     inline=True,
-                    labelStyle={'color': THEME['text_main'], 'marginRight': '15px', 'fontSize': '12px'},
-                    inputStyle={'marginRight': '5px'},
+                    inputStyle={'marginRight': '7px', 'accentColor': THEME['purple']},
+                    labelStyle={'color': THEME['text_main'], 'marginRight': '22px', 'fontSize': '13px', 'cursor': 'pointer'},
                 ),
             ], style={'flex': '1'}),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
+        ], style={'background': THEME['bg_raised'], 'border': f"1px solid {THEME['border']}",
+                  'borderRadius': '8px', 'padding': '12px 22px', 'marginBottom': '15px'}),
 
+        # ── 2b: Z-Score + Direction — unified panel ────────────────────────
         html.Div([
             html.Div([
-                html.Label("Z-Score Threshold (MR candidates only):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
+                html.Label("Z-Score Threshold (MR candidates only)", style=_label_style),
                 dcc.Slider(
                     id='alpha-zscore-threshold',
                     min=1.0, max=3.5, step=0.25, value=2.0,
                     marks={i: f'{i:.1f}σ' for i in [1.0, 1.5, 2.0, 2.5, 3.0, 3.5]},
                     tooltip={'placement': 'bottom', 'always_visible': False},
                 ),
-            ], style={'flex': '1', 'marginRight': '30px'}),
+            ], style={'flex': '1', 'paddingRight': '22px', 'borderRight': f"1px solid {THEME['border']}"}),
 
             html.Div([
-                html.Label("Direction:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
+                html.Label("Direction", style=_label_style),
                 dcc.RadioItems(
                     id='alpha-direction-filter',
                     options=[
@@ -149,72 +157,74 @@ def build_candidates_layout() -> html.Div:
                         {'label': ' SELL (z > +thd)', 'value': 'sell'},
                     ],
                     value='all',
-                    inline=True,
-                    labelStyle={'color': THEME['text_main'], 'marginRight': '15px', 'fontSize': '12px'},
+                    inputStyle={'marginRight': '7px', 'accentColor': THEME['purple']},
+                    labelStyle={'color': THEME['text_main'], 'display': 'block', 'marginBottom': '5px', 'fontSize': '13px', 'cursor': 'pointer'},
                 ),
-            ], style={'flex': '1'}),
-        ], style={'display': 'flex', 'alignItems': 'center', 'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
+            ], style={'width': '260px', 'paddingLeft': '22px', 'flexShrink': '0'}),
+        ], style={'display': 'flex', 'alignItems': 'flex-start', 'background': THEME['bg_raised'],
+                  'border': f"1px solid {THEME['border']}", 'borderRadius': '8px',
+                  'padding': '12px 22px', 'marginBottom': '15px'}),
 
-        # ── Seasonal Pre-Filter ────────────────────────────────────────────────
-        html.Div([
-            html.Div([
+        # ── 2c: Seasonal Gate — collapsible <details> ──────────────────────
+        html.Details([
+            html.Summary([
                 dcc.Checklist(
                     id='seasonal-prefilter-toggle',
                     options=[{'label': ' Apply seasonal gate before scan (exclude noise months)', 'value': 'on'}],
                     value=[],
-                    inputStyle={'marginRight': '6px'},
-                    labelStyle={'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': 'bold'},
+                    inputStyle={'marginRight': '6px', 'accentColor': THEME['purple']},
+                    labelStyle={'color': THEME['text_main'], 'fontSize': '14px', 'fontWeight': '600', 'cursor': 'pointer'},
                 ),
-                html.Span(
+                html.Span("▾ expand", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginLeft': 'auto'}),
+            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px', 'listStyle': 'none',
+                      'padding': '11px 22px', 'cursor': 'pointer'}),
+
+            html.Div([
+                html.P(
                     "When ON: instruments whose current-month seasonality is statistically weak "
                     "(low consistency or high p-value) are excluded from scan results.",
-                    style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '26px', 'display': 'block'},
+                    style={'fontStyle': 'italic', 'fontSize': '12px', 'color': THEME['text_sub'], 'marginTop': '4px'},
                 ),
-            ], style={'marginBottom': '10px'}),
-            html.Div([
                 html.Div([
-                    html.Label(
-                        "Min consistency (%)",
-                        style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '3px', 'display': 'block'},
-                    ),
-                    dcc.Slider(
-                        id='seasonal-prefilter-min-consistency',
-                        min=50, max=100, step=5, value=75,
-                        marks={v: f'{v}%' for v in [50, 60, 70, 80, 90, 100]},
-                        tooltip={'placement': 'bottom', 'always_visible': False},
-                    ),
-                ], style={'flex': '2', 'marginRight': '30px'}),
-                html.Div([
-                    html.Label(
-                        "p-value threshold",
-                        style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '3px', 'display': 'block'},
-                    ),
-                    dcc.Dropdown(
-                        id='seasonal-prefilter-p-thresh',
-                        options=[
-                            {'label': '0.05 (strict)', 'value': 0.05},
-                            {'label': '0.10',           'value': 0.10},
-                            {'label': '0.20 (loose)',   'value': 0.20},
-                        ],
-                        value=0.10,
-                        clearable=False,
-                        style={'width': '150px', 'fontSize': '12px'},
-                    ),
-                ], style={'flex': '1'}),
-            ], style={'display': 'flex', 'alignItems': 'flex-end'}),
-        ], style={
-            'backgroundColor': THEME['bg_card'],
-            'padding': '12px 15px',
-            'borderRadius': '5px',
-            'marginBottom': '15px',
-            'borderLeft': f"3px solid {THEME['accent']}",
+                    html.Div([
+                        html.Label("Min consistency (%)", style=_label_style),
+                        dcc.Slider(
+                            id='seasonal-prefilter-min-consistency',
+                            min=50, max=100, step=5, value=75,
+                            marks={v: f'{v}%' for v in [50, 60, 70, 80, 90, 100]},
+                            tooltip={'placement': 'bottom', 'always_visible': False},
+                        ),
+                    ], style={'flex': '1'}),
+                    html.Div([
+                        html.Label("p-value threshold", style=_label_style),
+                        dcc.Dropdown(
+                            id='seasonal-prefilter-p-thresh',
+                            options=[
+                                {'label': '0.05 (strict)', 'value': 0.05},
+                                {'label': '0.10',           'value': 0.10},
+                                {'label': '0.20 (loose)',   'value': 0.20},
+                            ],
+                            value=0.10,
+                            clearable=False,
+                            style={'width': '150px', 'fontSize': '12px'},
+                        ),
+                    ], style={'flexShrink': '0', 'width': '150px'}),
+                ], style={'display': 'flex', 'gap': '20px', 'alignItems': 'flex-end'}),
+            ], style={'padding': '4px 22px 14px', 'borderTop': f"1px solid {THEME['border_sub']}"}),
+        ], className='seasonal-gate', style={
+            'background': THEME['bg_raised'], 'border': f"1px solid {THEME['border']}",
+            'borderRadius': '8px', 'overflow': 'hidden', 'marginBottom': '15px',
         }),
 
+        # ── 2d: Scan button — amber accent ─────────────────────────────────
         html.Div([
             html.Button(
-                "🔍 Scan Candidates",
+                "🔍 SCAN CANDIDATES",
                 id='alpha-scan-btn', n_clicks=0,
-                style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '10px 25px', 'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontWeight': 'bold', 'fontSize': '14px', 'marginRight': '15px'}
+                style={'background': THEME['accent'], 'color': '#0c0c00', 'padding': '10px 20px',
+                       'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer',
+                       'fontWeight': '700', 'fontSize': '12px', 'letterSpacing': '0.05em',
+                       'marginRight': '15px'}
             ),
             html.Span(id='alpha-scan-status', style={'color': THEME['text_sub'], 'fontSize': '12px'}),
         ], style={'marginBottom': '20px'}),
@@ -353,14 +363,14 @@ def build_portfolio_layout() -> html.Div:
                 html.Label("Total Capital:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
                 dcc.Input(
                     id='alpha-total-capital', type='number', value=10, min=1,
-                    style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #4a6f9f', 'backgroundColor': '#2a3f5f', 'color': '#fff'}
+                    style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': f"1px solid {THEME['border']}", 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
                 ),
                 html.Span("Billion CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
 
                 html.Label("Total Single Side DV01:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
                 dcc.Input(
                     id='alpha-dv01-budget', type='number', value=5, min=0,
-                    style={'width': '80px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #4a6f9f', 'backgroundColor': '#2a3f5f', 'color': '#fff'}
+                    style={'width': '80px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': f"1px solid {THEME['border']}", 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
                 ),
                 html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
 
@@ -378,7 +388,7 @@ def build_portfolio_layout() -> html.Div:
                 html.Div([
                     html.Button(
                         'RUN OPTIMIZATION', id='alpha-score-btn', n_clicks=0,
-                        style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '8px 20px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold'}
+                        style={'backgroundColor': THEME['accent'], 'color': '#0c0c00', 'padding': '8px 20px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '13px', 'fontWeight': '700', 'letterSpacing': '0.05em'}
                     ),
                 ], style={'marginLeft': '20px'})
             ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between'}),
@@ -444,15 +454,14 @@ def build_backtest_layout() -> html.Div:
 
         dcc.Tabs(
             id='backtest-mode-tabs', value='individual',
+            className='tab-container an-subtab',
             children=[
                 dcc.Tab(label='Individual Spread', value='individual',
-                        style={'backgroundColor': THEME['bg_card'], 'color': THEME['text_main'], 'padding': '8px'},
-                        selected_style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '8px'}),
+                        className='tab an-subtab', selected_className='tab an-subtab an-subtab--selected'),
                 dcc.Tab(label='Portfolio', value='portfolio',
-                        style={'backgroundColor': THEME['bg_card'], 'color': THEME['text_main'], 'padding': '8px'},
-                        selected_style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '8px'}),
+                        className='tab an-subtab', selected_className='tab an-subtab an-subtab--selected'),
             ],
-            style={'marginBottom': '20px'}
+            style={'marginBottom': '0px'},
         ),
 
         html.Div(id='backtest-mode-content'),
@@ -495,16 +504,22 @@ def build_individual_backtest_panel() -> html.Div:
                     labelStyle={'color': THEME['text_main'], 'marginRight': '15px'},
                 ),
             ], id='bt-trade-style-div', style={'marginBottom': '5px', 'display': 'none'}),
-            html.Div(id='bt-regime-badge', style={'marginTop': '8px', 'minHeight': '22px'}),
+            html.Div(id='bt-regime-badge', style={'marginBottom': '10px', 'minHeight': '22px'}),
+
+            html.Div([
+                html.Label("Min Holding (days):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
+                dcc.Input(id='bt-min-hold', type='number', value=7, min=1, max=30, step=1,
+                          style={'width': '80px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"}),
+            ], style={'display': 'flex', 'alignItems': 'center', 'paddingTop': '10px', 'borderTop': f"1px solid {THEME['border_sub']}"}),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
 
         html.Div([
             html.H6("Strategy Parameters", style={'color': THEME['accent'], 'marginBottom': '15px'}),
 
             html.Div([
-                html.Div([html.Label("Entry Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Exit Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Stop Loss (σ):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
+                html.Div([html.Label("Entry Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"})], style={'display': 'flex', 'alignItems': 'center'}),
+                html.Div([html.Label("Exit Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"})], style={'display': 'flex', 'alignItems': 'center'}),
+                html.Div([html.Label("Stop Loss (σ):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"})], style={'display': 'flex', 'alignItems': 'center'}),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px', 'marginBottom': '15px'}),
 
             html.Div([
@@ -514,27 +529,23 @@ def build_individual_backtest_panel() -> html.Div:
         ], id='bt-mr-params-div', style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
 
         html.Div([
-            html.Div([html.Label("Min Holding (days):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-min-hold', type='number', value=7, min=1, max=30, step=1, style={'width': '80px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
-
-        html.Div([
             html.H6("Trend Parameters (Directional-Change)", style={'color': THEME['accent'], 'marginBottom': '15px'}),
             html.Div([
-                html.Div([html.Label("Theta:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-theta', type='number', value=0.02, min=0.001, max=0.2, step=0.001, style={'width': '90px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Mom window:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Vol window:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Trail mult:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-trailing-mult', type='number', value=1.5, min=0.5, max=5.0, step=0.1, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Momentum buffer:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-carry-buffer', type='number', value=0.0, step=0.0001, style={'width': '90px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
-            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px'}),
+                html.Div([html.Label("Theta", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginBottom': '4px', 'display': 'block'}), dcc.Input(id='bt-theta', type='number', value=0.02, min=0.001, max=0.2, step=0.001, style={'width': '100%', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}", 'textAlign': 'right', 'fontFamily': 'monospace'})]),
+                html.Div([html.Label("Mom window", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginBottom': '4px', 'display': 'block'}), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style={'width': '100%', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}", 'textAlign': 'right', 'fontFamily': 'monospace'})]),
+                html.Div([html.Label("Vol window", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginBottom': '4px', 'display': 'block'}), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style={'width': '100%', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}", 'textAlign': 'right', 'fontFamily': 'monospace'})]),
+                html.Div([html.Label("Trail mult", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginBottom': '4px', 'display': 'block'}), dcc.Input(id='bt-trailing-mult', type='number', value=1.5, min=0.5, max=5.0, step=0.1, style={'width': '100%', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}", 'textAlign': 'right', 'fontFamily': 'monospace'})]),
+                html.Div([html.Label("Momentum buffer", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginBottom': '4px', 'display': 'block'}), dcc.Input(id='bt-carry-buffer', type='number', value=0.0, step=0.0001, style={'width': '100%', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}", 'textAlign': 'right', 'fontFamily': 'monospace'})]),
+            ], className='alpha-trend-params'),
 
             html.Div([
                 dcc.Checklist(id='bt-allow-short', options=[{'label': ' Allow short-spread trades', 'value': 'allow'}], value=['allow'], labelStyle={'color': THEME['text_main'], 'fontSize': '13px'}),
-            ], style={'marginTop': '10px'}),
+            ], style={'marginTop': '12px'}),
         ], id='bt-trend-params-div', style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px', 'display': 'none'}),
 
         html.Div([
-            html.Button("▶️ Run Individual Backtest", id='bt-run-individual-btn', n_clicks=0,
-                        style={'backgroundColor': THEME['success'], 'color': 'white', 'padding': '12px 25px', 'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontWeight': 'bold', 'fontSize': '14px'}),
+            html.Button("▶ Run Individual Backtest", id='bt-run-individual-btn', n_clicks=0,
+                        style={'backgroundColor': THEME['success'], 'color': '#fff', 'padding': '10px 24px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontWeight': '700', 'fontSize': '13px', 'letterSpacing': '0.03em'}),
         ], style={'marginBottom': '20px'}),
 
         dcc.Loading(id='loading-bt-individual', type='circle', color=THEME['accent'], style={'minHeight': '60px'}, children=html.Div([
@@ -559,14 +570,14 @@ def build_portfolio_backtest_panel() -> html.Div:
             html.H6("Backtest Settings", style={'color': THEME['accent'], 'marginBottom': '15px'}),
             html.Div([
                 html.Div([html.Label("Backtest Period:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Dropdown(id='bt-port-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}], value=504, clearable=False, style={'width': '150px', 'marginRight': '30px'})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Initial Capital (MM):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-initial-capital', type='number', value=100, min=10, max=1000, step=10, style={'width': '100px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Transaction Cost (bp):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-txn-cost', type='number', value=0.5, min=0, max=5, step=0.1, style={'width': '80px', 'padding': '5px', 'backgroundColor': '#2a3f5f', 'color': '#fff', 'border': '1px solid #444'})], style={'display': 'flex', 'alignItems': 'center'}),
+                html.Div([html.Label("Initial Capital (MM):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-initial-capital', type='number', value=100, min=10, max=1000, step=10, style={'width': '100px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"})], style={'display': 'flex', 'alignItems': 'center'}),
+                html.Div([html.Label("Transaction Cost (bp):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-txn-cost', type='number', value=0.5, min=0, max=5, step=0.1, style={'width': '80px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"})], style={'display': 'flex', 'alignItems': 'center'}),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px'}),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
 
         html.Div([
-            html.Button("▶️ Run Portfolio Backtest", id='bt-run-portfolio-btn', n_clicks=0,
-                        style={'backgroundColor': THEME['success'], 'color': 'white', 'padding': '12px 25px', 'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontWeight': 'bold', 'fontSize': '14px'}),
+            html.Button("▶ Run Portfolio Backtest", id='bt-run-portfolio-btn', n_clicks=0,
+                        style={'backgroundColor': THEME['success'], 'color': '#fff', 'padding': '10px 24px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontWeight': '700', 'fontSize': '13px', 'letterSpacing': '0.03em'}),
         ], style={'marginBottom': '20px'}),
 
         dcc.Loading(id='loading-bt-portfolio', type='circle', color=THEME['accent'], style={'minHeight': '60px'}, children=html.Div([

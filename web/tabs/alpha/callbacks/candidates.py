@@ -1330,21 +1330,26 @@ def register_candidate_callbacks(app) -> None:
 
         table_div = html.Div([
             html.Div([
-                html.Span('▌', style={'color': THEME['accent'], 'fontSize': '14px', 'marginRight': '6px', 'verticalAlign': 'middle'}),
-                html.Span("Candidate Instruments", style={'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': '700', 'verticalAlign': 'middle'}),
-                html.Span(f"  {len(instruments)} trades", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '6px', 'verticalAlign': 'middle'}),
-            ], style={'marginBottom': '8px', 'paddingBottom': '5px',
-                      'borderBottom': f"1px solid {THEME['accent']}33"}),
-            grid_a,
+                html.Div([
+                    html.Span('▌', style={'color': THEME['accent'], 'fontSize': '14px', 'marginRight': '6px', 'verticalAlign': 'middle'}),
+                    html.Span("Candidate Instruments", style={'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': '700', 'verticalAlign': 'middle'}),
+                    html.Span(f"  {len(instruments)} trades", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '6px', 'verticalAlign': 'middle'}),
+                ], style={'marginBottom': '8px', 'paddingBottom': '5px',
+                          'borderBottom': f"1px solid {THEME['accent']}33"}),
+                grid_a,
+            ], style={'flex': '1', 'minWidth': '0'}),
+
             html.Div([
-                html.Span('▌', style={'color': THEME['warning'], 'fontSize': '14px', 'marginRight': '6px', 'verticalAlign': 'middle'}),
-                html.Span("Saved Positions", style={'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': '700', 'verticalAlign': 'middle'}),
-                html.Span(f"  {len(positions)} trades", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '6px', 'verticalAlign': 'middle'}),
-                html.Span(" · read-only", style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '4px', 'fontStyle': 'italic'}),
-            ], style={'marginBottom': '8px', 'marginTop': '16px', 'paddingBottom': '5px',
-                      'borderBottom': f"1px solid {THEME['warning']}33"}),
-            grid_b,
-        ])
+                html.Div([
+                    html.Span('▌', style={'color': THEME['warning'], 'fontSize': '14px', 'marginRight': '6px', 'verticalAlign': 'middle'}),
+                    html.Span("Saved Positions", style={'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': '700', 'verticalAlign': 'middle'}),
+                    html.Span(f"  {len(positions)} trades", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '6px', 'verticalAlign': 'middle'}),
+                    html.Span(" · read-only", style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '4px', 'fontStyle': 'italic'}),
+                ], style={'marginBottom': '8px', 'paddingBottom': '5px',
+                          'borderBottom': f"1px solid {THEME['warning']}33"}),
+                grid_b,
+            ], style={'flex': '2', 'minWidth': '0', 'borderLeft': f"1px solid {THEME['border']}", 'paddingLeft': '18px'}),
+        ], style={'display': 'flex', 'alignItems': 'flex-start', 'gap': '18px'})
 
         # ── Combined correlation matrix (all instruments from both tables) ──
         all_instruments = instruments + [p for p in positions

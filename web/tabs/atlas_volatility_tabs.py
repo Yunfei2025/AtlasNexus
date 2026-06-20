@@ -26,21 +26,24 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # ---------------------------------------------------------------------------
-# Theme / Style constants (consistent with atlas_alpha_tabs.py)
+# Theme / Style constants — mirrors web/assets/colors.css design tokens.
+# Volatility accent is cyan (--accent-cyan), consistent with the Market book.
 # ---------------------------------------------------------------------------
 THEME = {
-    'bg_main': '#082255',
-    'bg_card': '#0c2b64',
-    'bg_input': '#112e66',
-    'text_main': '#ffffff',
-    'text_sub': '#aab0c0',
-    'accent': '#3498db',
-    'success': '#00cc96',
-    'warning': '#f39c12',
-    'danger': '#ef553b',
-    'table_header': '#1a3a7a',
-    'table_row_even': '#0c2b64',
-    'table_row_odd': '#082255',
+    'bg_main': '#0e1d3a',     # --navy-800
+    'bg_card': '#122a4c',     # --navy-700 / --surface-panel
+    'bg_input': '#17345c',    # --navy-600 / --surface-input
+    'text_main': '#e9eef8',   # --text-primary
+    'text_sub': '#a4b6d2',    # --text-secondary
+    'border': '#2a517f',      # --border-strong
+    'border_sub': '#1e3a5f',  # --border-default
+    'accent': '#45b6e6',      # --accent-cyan (Volatility accent)
+    'success': '#2f9d6b',     # --accent-green
+    'warning': '#e0a23c',     # --accent-amber
+    'danger': '#d56b6b',      # --negative
+    'table_header': '#17345c',
+    'table_row_even': '#122a4c',
+    'table_row_odd': '#0e1d3a',
 }
 
 # ---------------------------------------------------------------------------
@@ -271,113 +274,76 @@ def backtest_strategy(df: pd.DataFrame, signals: pd.Series, transaction_cost: fl
 
 def build_volatility_layout() -> html.Div:
     """Build the main Volatility Analysis layout."""
+    _label_style = {
+        'color': THEME['text_sub'], 'fontSize': '10px', 'fontWeight': '600',
+        'textTransform': 'uppercase', 'letterSpacing': '0.06em',
+        'marginBottom': '4px', 'display': 'block',
+    }
+    _input_style = {
+        'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
+        'border': f"1px solid {THEME['border']}", 'borderRadius': '4px',
+        'padding': '6px', 'width': '70px', 'textAlign': 'center', 'fontSize': '13px',
+    }
     return html.Div([
-        # Header with controls
+        # Header with inline controls — single row
         html.Div([
-            html.H6("📊 Volatility Trading Strategy Analysis", 
-                    style={'color': THEME['text_main'], 'marginBottom': '15px'}),
-            
-            # Control panel
+            html.Span("📊 Volatility Trading Strategy Analysis",
+                      style={'color': THEME['text_main'], 'fontSize': '15px', 'fontWeight': '500', 'whiteSpace': 'nowrap'}),
+
+            html.Div(style={'width': '1px', 'height': '20px', 'background': THEME['border'], 'flexShrink': '0'}),
+
             html.Div([
-                # Ticker selector
-                html.Div([
-                    html.Label("Ticker:", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '5px'}),
-                    dcc.Dropdown(
-                        id='vol-ticker-dropdown',
-                        options=VOL_TICKER_OPTIONS,
-                        value=DEFAULT_TICKER,
-                        style={'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']},
-                        clearable=False,
-                    ),
-                ], style={'width': '200px', 'marginRight': '20px'}),
-                
-                # Lookback period
-                html.Div([
-                    html.Label("Lookback Period:", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '5px'}),
-                    dcc.Input(
-                        id='vol-lookback-input',
-                        type='number',
-                        value=DEFAULT_LOOKBACK,
-                        min=5,
-                        max=60,
-                        step=1,
-                        style={
-                            'backgroundColor': THEME['bg_input'],
-                            'color': THEME['text_main'],
-                            'border': f'1px solid {THEME["bg_card"]}',
-                            'borderRadius': '4px',
-                            'padding': '6px',
-                            'width': '80px',
-                        },
-                    ),
-                ], style={'marginRight': '20px'}),
-                
-                # Bollinger Band multiplier
-                html.Div([
-                    html.Label("Std Deviation Multiplier:", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '5px'}),
-                    dcc.Input(
-                        id='vol-numstd-input',
-                        type='number',
-                        value=DEFAULT_NUM_STD,
-                        min=1.0,
-                        max=3.0,
-                        step=0.1,
-                        style={
-                            'backgroundColor': THEME['bg_input'],
-                            'color': THEME['text_main'],
-                            'border': f'1px solid {THEME["bg_card"]}',
-                            'borderRadius': '4px',
-                            'padding': '6px',
-                            'width': '80px',
-                        },
-                    ),
-                ], style={'marginRight': '20px'}),
-                
-                # Run analysis button
-                html.Div([
-                    html.Label(" ", style={'color': 'transparent', 'fontSize': '12px', 'marginBottom': '5px'}),
-                    html.Button(
-                        "▶ Run Analysis",
-                        id='vol-run-analysis-btn',
-                        n_clicks=0,
-                        style={
-                            'backgroundColor': THEME['accent'],
-                            'color': THEME['text_main'],
-                            'border': 'none',
-                            'borderRadius': '4px',
-                            'padding': '8px 16px',
-                            'cursor': 'pointer',
-                            'fontWeight': 'bold',
-                        },
-                    ),
-                ], style={'marginRight': '20px'}),
-                
-                # Refresh data button
-                html.Div([
-                    html.Label(" ", style={'color': 'transparent', 'fontSize': '12px', 'marginBottom': '5px'}),
-                    html.Button(
-                        "🔄 Refresh Data",
-                        id='vol-refresh-data-btn',
-                        n_clicks=0,
-                        style={
-                            'backgroundColor': THEME['bg_card'],
-                            'color': THEME['text_main'],
-                            'border': f'1px solid {THEME["accent"]}',
-                            'borderRadius': '4px',
-                            'padding': '8px 16px',
-                            'cursor': 'pointer',
-                        },
-                    ),
-                ]),
-            ], style={'display': 'flex', 'alignItems': 'flex-end', 'flexWrap': 'wrap', 'gap': '10px'}),
-            
-            # Status line
+                html.Label("Ticker", style=_label_style),
+                dcc.Dropdown(
+                    id='vol-ticker-dropdown',
+                    options=VOL_TICKER_OPTIONS,
+                    value=DEFAULT_TICKER,
+                    style={'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'minWidth': '180px'},
+                    clearable=False,
+                ),
+            ]),
+
+            html.Div([
+                html.Label("Lookback", style=_label_style),
+                dcc.Input(
+                    id='vol-lookback-input', type='number', value=DEFAULT_LOOKBACK,
+                    min=5, max=60, step=1, style=_input_style,
+                ),
+            ]),
+
+            html.Div([
+                html.Label("Std Dev ×", style=_label_style),
+                dcc.Input(
+                    id='vol-numstd-input', type='number', value=DEFAULT_NUM_STD,
+                    min=1.0, max=3.0, step=0.1, style=_input_style,
+                ),
+            ]),
+
+            html.Button(
+                "▶ Run Analysis", id='vol-run-analysis-btn', n_clicks=0,
+                style={
+                    'backgroundColor': THEME['accent'], 'color': '#0c0c00',
+                    'border': 'none', 'borderRadius': '4px', 'padding': '8px 16px',
+                    'cursor': 'pointer', 'fontWeight': '700', 'fontSize': '12px', 'whiteSpace': 'nowrap',
+                },
+            ),
+
+            html.Button(
+                "↻ Refresh Data", id='vol-refresh-data-btn', n_clicks=0,
+                style={
+                    'backgroundColor': 'transparent', 'color': THEME['text_main'],
+                    'border': f"1px solid {THEME['border']}", 'borderRadius': '4px',
+                    'padding': '8px 16px', 'cursor': 'pointer', 'fontSize': '12px', 'whiteSpace': 'nowrap',
+                },
+            ),
+
             html.Div(id='vol-status-line', children="Ready",
-                     style={'color': THEME['text_sub'], 'marginTop': '10px', 'fontSize': '12px', 'fontStyle': 'italic'}),
-            
+                     style={'color': THEME['text_sub'], 'fontSize': '12px', 'fontStyle': 'italic', 'marginLeft': 'auto'}),
+
         ], style={
+            'display': 'flex', 'alignItems': 'flex-end', 'flexWrap': 'wrap', 'gap': '14px',
             'backgroundColor': THEME['bg_card'],
-            'padding': '15px',
+            'padding': '11px 18px',
             'borderRadius': '5px',
             'marginBottom': '15px',
         }),
@@ -413,68 +379,56 @@ def build_vol_results_display(
     metrics = backtest_results['metrics']
     cumulative_return = backtest_results['cumulative_return']
     
-    # Info panel - latest values
+    # Unified KPI strip — ticker/IV/signal, divider, then performance stats
     latest = df.iloc[-1]
-    info_items = []
-    
-    info_items.append(html.Div([
-        html.Span("Ticker:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-        html.Br(),
-        html.Span(ticker, style={'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '16px'}),
-    ], style={'padding': '10px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '5px', 'marginRight': '10px'}))
-    
+
+    def kpi_cell(label, value, color=None, first=False, last=False):
+        radius = '5px 0 0 5px' if first else ('0 5px 5px 0' if last else '0')
+        return html.Div([
+            html.Div(label, style={
+                'fontSize': '10px', 'fontWeight': '700', 'letterSpacing': '0.07em',
+                'textTransform': 'uppercase', 'color': THEME['text_sub'], 'marginBottom': '5px',
+            }),
+            html.Div(value, style={
+                'fontSize': '16px', 'fontWeight': '600',
+                'color': color or THEME['text_main'], 'lineHeight': '1',
+            }),
+        ], style={
+            'background': THEME['bg_card'], 'border': f"1px solid {THEME['border']}",
+            'borderLeft': 'none' if not first else f"1px solid {THEME['border']}",
+            'borderRadius': radius, 'padding': '10px 14px', 'flexShrink': '0',
+        })
+
+    kpi_items = [kpi_cell('Ticker', ticker, first=True)]
+
     for col in ['IV_1M', 'IV_2M', 'IV_3M']:
         if col in latest.index:
-            info_items.append(html.Div([
-                html.Span(col.replace('IV_', '') + ' IV:', style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-                html.Br(),
-                html.Span(f"{latest[col]:.4f}", style={'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '16px'}),
-            ], style={'padding': '10px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '5px', 'marginRight': '10px'}))
-    
-    # Signal interpretation
+            kpi_items.append(kpi_cell(col.replace('IV_', '') + ' IV', f"{latest[col]:.4f}"))
+
     latest_signal = int(signals.iloc[-1]) if len(signals) > 0 else 0
     if latest_signal == 1:
-        signal_text = "🟢 Long Volatility"
-        signal_color = THEME['success']
+        signal_text, signal_color = "Long Vol", THEME['success']
     elif latest_signal == -1:
-        signal_text = "🔴 Short Volatility"
-        signal_color = THEME['danger']
+        signal_text, signal_color = "Short Vol", THEME['danger']
     else:
-        signal_text = "⚪ Neutral"
-        signal_color = THEME['text_sub']
-    
-    info_items.append(html.Div([
-        html.Span("Current Signal:", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-        html.Br(),
-        html.Span(signal_text, style={'color': signal_color, 'fontWeight': 'bold', 'fontSize': '14px'}),
-    ], style={'padding': '10px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '5px'}))
-    
-    info_panel = html.Div(info_items, style={'display': 'flex', 'marginBottom': '15px', 'flexWrap': 'wrap'})
-    
-    # Metrics panel
+        signal_text, signal_color = "Neutral", THEME['text_sub']
+    kpi_items.append(kpi_cell('Signal', signal_text, color=signal_color))
+
+    kpi_items.append(html.Div(style={'width': '1px', 'background': THEME['border'], 'margin': '6px 4px', 'flexShrink': '0'}))
+
     metrics_items = [
-        ('Total Return', f"{metrics['total_return']:.2%}"),
-        ('Annualized Return', f"{metrics['annualized_return']:.2%}"),
-        ('Volatility', f"{metrics['volatility']:.2%}"),
-        ('Sharpe Ratio', f"{metrics['sharpe_ratio']:.2f}"),
-        ('Win Rate', f"{metrics['win_rate']:.2%}"),
-        ('Max Drawdown', f"{metrics['max_drawdown']:.2%}"),
-        ('Num Trades', str(metrics['num_trades'])),
+        ('Total Return', f"{metrics['total_return']:.2%}", THEME['success']),
+        ('Ann. Return', f"{metrics['annualized_return']:.2%}", THEME['success']),
+        ('Volatility', f"{metrics['volatility']:.2%}", None),
+        ('Sharpe', f"{metrics['sharpe_ratio']:.2f}", None),
+        ('Win Rate', f"{metrics['win_rate']:.2%}", None),
+        ('Max Drawdown', f"{metrics['max_drawdown']:.2%}", THEME['danger']),
     ]
-    
-    metrics_panel = html.Div([
-        html.Div([
-            html.Span(name + ":", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
-            html.Br(),
-            html.Span(value, style={
-                'color': THEME['success'] if 'Return' in name and not value.startswith('-') else 
-                        (THEME['danger'] if value.startswith('-') else THEME['text_main']),
-                'fontWeight': 'bold', 
-                'fontSize': '14px'
-            }),
-        ], style={'padding': '10px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '5px', 'marginRight': '10px', 'marginBottom': '10px'})
-        for name, value in metrics_items
-    ], style={'display': 'flex', 'flexWrap': 'wrap', 'marginBottom': '15px'})
+    for name, value, color in metrics_items:
+        kpi_items.append(kpi_cell(name, value, color=color))
+    kpi_items.append(kpi_cell('Num Trades', str(metrics['num_trades']), last=True))
+
+    kpi_strip = html.Div(kpi_items, style={'display': 'flex', 'overflowX': 'auto', 'marginBottom': '15px'})
     
     # Chart 1: Term Structure
     fig_ts = go.Figure()
@@ -585,8 +539,7 @@ def build_vol_results_display(
     )
     
     return html.Div([
-        info_panel,
-        metrics_panel,
+        kpi_strip,
         html.Div([dcc.Graph(figure=fig_ts, style={'height': '300px'})], style={'marginBottom': '15px'}),
         html.Div([dcc.Graph(figure=fig_bb, style={'height': '350px'})], style={'marginBottom': '15px'}),
         html.Div([dcc.Graph(figure=fig_cum, style={'height': '250px'})], style={'marginBottom': '15px'}),

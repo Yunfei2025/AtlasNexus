@@ -1256,4 +1256,82 @@ details.param-group summary::-webkit-details-marker { color: var(--text-muted); 
   font-size: 13px !important;
   padding: 6px 10px !important;
 }
+
+/* ============================================================
+   ALPHA BOOK — sub-tab layout patterns
+   (Candidates / Backtest / Spread / Pairs)
+   ============================================================ */
+
+/* ── Candidates: collapsible seasonal-gate panel ─────────────────────────── */
+details.seasonal-gate summary { list-style: none; }
+details.seasonal-gate summary::-webkit-details-marker { display: none; }
+
+/* ── Backtest: Trend Parameters 5-column grid ────────────────────────────── */
+.alpha-trend-params {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px 16px;
+}
+
+/* ── Spread: true 2-column sidebar layout ────────────────────────────────── */
+.alpha-spread-layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.alpha-spread-sidebar {
+  position: sticky;
+  top: 14px;
+}
+
+/* ── Pairs: data-grid table pattern for pair inputs ──────────────────────── */
+.pairs-input-grid {
+  display: grid;
+  grid-template-columns: 60px repeat(4, 1fr);
+  border-top: 1px solid var(--navy-800);
+}
+.pairs-input-grid .row-label {
+  background: var(--navy-800);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-default);
+  border-right: 1px solid var(--navy-800);
+}
+.pairs-input-grid .col-header {
+  background: var(--surface-th);
+  font: var(--type-th);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 8px 12px;
+  border-right: 1px solid var(--navy-800);
+}
+.pairs-input-grid .cell {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-default);
+  border-right: 1px solid var(--navy-800);
+}
+
+/* ── Pairs: 2x2 chart grid (used by standalone regression_plots.html too) ── */
+.pairs-chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+/* ── Plotly modebar theming (Volatility / Beta Book charts) ─────────────── */
+.js-plotly-plot .plotly .modebar {
+  background: var(--surface-panel) !important;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: 2px 4px;
+}
+.js-plotly-plot .plotly .modebar-btn path { fill: var(--text-muted) !important; }
+.js-plotly-plot .plotly .modebar-btn:hover path { fill: var(--text-primary) !important; }
 .DayPicker { background: var(--an-navy-700) !important; }

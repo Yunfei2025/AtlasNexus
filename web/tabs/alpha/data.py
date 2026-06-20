@@ -12,21 +12,28 @@ import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# Theme / Style constants
+# Theme / Style constants — mirrors web/assets/colors.css design tokens.
+# Alpha Book accent is amber (--accent-amber), not blue.
 # ---------------------------------------------------------------------------
 THEME = {
-    'bg_main': '#082255',
-    'bg_card': '#0c2b64',
-    'bg_input': '#112e66',
-    'text_main': '#ffffff',
-    'text_sub': '#aab0c0',
-    'accent': '#3498db',
-    'success': '#00cc96',
-    'warning': '#f39c12',
-    'danger': '#ef553b',
-    'table_header': '#1a3a7a',
-    'table_row_even': '#0c2b64',
-    'table_row_odd': '#082255',
+    'bg_main': '#0e1d3a',     # --navy-800 / --surface-sunken-ish working bg
+    'bg_card': '#122a4c',     # --navy-700 / --surface-panel
+    'bg_raised': '#102544',   # --navy-750 / --surface-raised
+    'bg_input': '#17345c',    # --navy-600 / --surface-input
+    'text_main': '#e9eef8',   # --text-primary
+    'text_sub': '#a4b6d2',    # --text-secondary
+    'border': '#2a517f',      # --border-strong
+    'border_sub': '#1e3a5f',  # --border-default
+    'accent': '#e0a23c',      # --accent-amber (Alpha Book accent)
+    'blue': '#3d8bd4',        # --accent-blue (Run/Refresh actions)
+    'cyan': '#45b6e6',        # --accent-cyan
+    'purple': '#7c70d6',      # --accent-purple (checkbox/radio/slider accent)
+    'success': '#2f9d6b',     # --accent-green
+    'warning': '#e0a23c',     # --accent-amber
+    'danger': '#d56b6b',      # --negative
+    'table_header': '#17345c',
+    'table_row_even': '#122a4c',
+    'table_row_odd': '#0e1d3a',
 }
 
 # ---------------------------------------------------------------------------

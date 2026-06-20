@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<!-- @template name="Summary – Books" description="Optimised Summary › Books view: collapsible portfolio combination strip, full-width Beta/Alpha book toggle with expandable rows and column visibility control" -->
+<helmet>
+<script src="./ds-base.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; background: #040f30; color: #aab0c0; -webkit-font-smoothing: antialiased; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: #040f30; }
+::-webkit-scrollbar-thumb { background: #2a5298; border-radius: 2px; }
+
+/* Table */
+.books-table { width: 100%; border-collapse: collapse; font: 12px/1.4 'IBM Plex Mono', monospace; }
+.books-table th {
+  padding: 7px 10px; text-align: left;
+  font: 600 10px/1 'IBM Plex Sans', sans-serif;
+  letter-spacing: .08em; text-transform: uppercase; color: #aab0c0;
+  background: #082255; border-bottom: 1px solid #2a5298;
+  position: sticky; top: 0; z-index: 2; white-space: nowrap;
+  cursor: pointer; user-select: none;
+}
+.books-table th:hover { color: #ffffff; }
+.books-table th .sort-arrow { margin-left: 4px; opacity: .4; font-size: 9px; }
+.books-table th.sorted .sort-arrow { opacity: 1; color: #45b6e6; }
+.books-table td { padding: 6px 10px; border-bottom: 1px solid rgba(42,82,152,0.18); white-space: nowrap; }
+.books-table tr.data-row { cursor: pointer; transition: background 80ms; }
+.books-table tr.data-row:hover td { background: rgba(46,134,193,0.08); }
+.books-table tr.data-row.expanded td { background: rgba(46,134,193,0.12); }
+.books-table tr.expand-detail td { padding: 0; border-bottom: 1px solid rgba(42,82,152,0.3); }
+.books-table .total-row td { font-weight: 700; color: #ffffff; background: rgba(42,82,152,0.15); border-top: 1px solid #2a5298; }
+
+/* Column toggle pill */
+.col-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 9px; border-radius: 20px; font: 600 10px 'IBM Plex Sans', sans-serif;
+  letter-spacing: .05em; cursor: pointer; transition: all 100ms;
+  border: 1px solid rgba(42,82,152,0.5); color: #aab0c0; background: transparent;
+}
+.col-pill.active { background: rgba(42,82,152,0.35); color: #ffffff; border-color: #2a5298; }
+.col-pill:hover { border-color: #45b6e6; color: #ffffff; }
+
+/* Book toggle */
+.book-btn {
+  padding: 7px 18px; background: transparent; border: 1px solid #2a5298;
+  font: 500 13px 'IBM Plex Sans', sans-serif; cursor: pointer; color: #aab0c0;
+  transition: all 100ms;
+}
+.book-btn:first-child { border-radius: 4px 0 0 4px; }
+.book-btn:last-child  { border-radius: 0 4px 4px 0; border-left: none; }
+.book-btn.active-beta  { background: #112e66; color: #45b6e6; border-color: #45b6e6; }
+.book-btn.active-alpha { background: #112e66; color: #f39c12; border-color: #f39c12; }
+.book-btn:not(.active-beta):not(.active-alpha):hover { color: #ffffff; border-color: #aab0c0; }
+
+/* Collapse animation */
+.combo-detail { overflow: hidden; max-height: 0; opacity: 0; transition: max-height .25s ease, opacity .2s ease; }
+.combo-detail.open { max-height: 300px; opacity: 1; }
+
+/* Expand detail panel */
+.expand-panel {
+  padding: 10px 14px 10px 40px; background: #082255;
+  display: flex; flex-wrap: wrap; gap: 18px;
+}
+.expand-kv { display: flex; flex-direction: column; gap: 2px; min-width: 100px; }
+.expand-kv .ek-label { font: 600 9px 'IBM Plex Sans', sans-serif; letter-spacing: .08em; text-transform: uppercase; color: #5a6478; }
+.expand-kv .ek-value { font: 500 12px 'IBM Plex Mono', monospace; color: #ffffff; }
+</style>
+</helmet>
+
+<div style="min-height:100vh; background:#040f30; font-family:'IBM Plex Sans',sans-serif; color:#aab0c0; padding:0 0 40px;">
+
+  <!-- ── Portfolio Combination strip ───────────────────────────────────── -->
+  <div style="background:#082255; border-bottom:1px solid #2a5298;">
+    <!-- Collapsed summary row — always visible -->
+    <div style="display:flex; align-items:center; gap:0; padding:0 20px; cursor:pointer; user-select:none;" onClick="{{ toggleCombo }}">
+      <span style="font:600 11px/1 'IBM Plex Sans',sans-serif; letter-spacing:.08em; text-transform:uppercase; color:#5a6478; white-space:nowrap; padding:12px 0; margin-right:16px;">Portfolio Combination</span>
+      <!-- Equation row -->
+      <div style="display:flex; align-items:center; gap:0; flex:1; overflow:hidden;">
+        <div style="display:flex; flex-direction:column; align-items:center; padding:8px 20px; border-right:1px solid rgba(42,82,152,0.4);">
+          <span style="font:700 18px/1 'IBM Plex Mono',monospace; color:#45b6e6;">10.0%</span>
+          <span style="font:11px 'IBM Plex Sans',sans-serif; color:#5a6478; margin-top:2px;">Target Return</span>
+        </div>
+        <span style="padding:0 14px; color:#2a5298; font-size:18px;">=</span>
+        <div style="display:flex; flex-direction:column; align-items:center; padding:8px 20px; border-right:1px solid rgba(42,82,152,0.4);">
+          <span style="font:700 18px/1 'IBM Plex Mono',monospace; color:#27ae60;">1.5%</span>
+          <span style="font:11px 'IBM Plex Sans',sans-serif; color:#5a6478; margin-top:2px;">Risk Free</span>
+        </div>
+        <span style="padding:0 14px; color:#2a5298; font-size:18px;">+</span>
+        <div style="display:flex; flex-direction:column; align-items:center; padding:8px 20px; border-right:1px solid rgba(42,82,152,0.4);">
+          <span style="font:700 18px/1 'IBM Plex Mono',monospace; color:#2e86c1;">6.0%</span>
+          <span style="font:11px 'IBM Plex Sans',sans-serif; color:#5a6478; margin-top:2px;">Beta Alloc</span>
+        </div>
+        <span style="padding:0 14px; color:#2a5298; font-size:18px;">+</span>
+        <div style="display:flex; flex-direction:column; align-items:center; padding:8px 20px;">
+          <span style="font:700 18px/1 'IBM Plex Mono',monospace; color:#f39c12;">2.5%</span>
+          <span style="font:11px 'IBM Plex Sans',sans-serif; color:#5a6478; margin-top:2px;">Alpha Overlay</span>
+        </div>
+      </div>
+      <!-- Expand toggle -->
+      <span style="font:11px 'IBM Plex Mono',monospace; color:#5a6478; margin-left:12px; flex-shrink:0;">{{ comboChevron }}</span>
+    </div>
+
+    <!-- Expanded detail — collapsible -->
+    <div class="combo-detail {{ comboClass }}">
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; border-top:1px solid rgba(42,82,152,0.3); padding:0 20px 16px;">
+        <!-- RF -->
+        <div style="padding:14px 20px 0 0; border-right:1px solid rgba(42,82,152,0.25);">
+          <div style="font:600 10px 'IBM Plex Sans',sans-serif; letter-spacing:.08em; text-transform:uppercase; color:#5a6478; margin-bottom:6px;">Risk Free Rate</div>
+          <div style="font:700 28px/1 'IBM Plex Mono',monospace; color:#27ae60; margin-bottom:4px;">1.5%</div>
+          <div style="font:12px 'IBM Plex Sans',sans-serif; color:#aab0c0;">Cash / Treasury</div>
+        </div>
+        <!-- Beta -->
+        <div style="padding:14px 20px 0; border-right:1px solid rgba(42,82,152,0.25);">
+          <div style="font:600 10px 'IBM Plex Sans',sans-serif; letter-spacing:.08em; text-transform:uppercase; color:#5a6478; margin-bottom:6px;">Beta Allocation</div>
+          <div style="font:700 28px/1 'IBM Plex Mono',monospace; color:#2e86c1; margin-bottom:4px;">6.0%</div>
+          <div style="font:12px 'IBM Plex Sans',sans-serif; color:#aab0c0;">Strategic Asset Allocation</div>
+          <div style="font:600 12px 'IBM Plex Mono',monospace; color:#f39c12; margin-top:4px;">15.0% Vol × 0.4 Sharpe</div>
+        </div>
+        <!-- Alpha -->
+        <div style="padding:14px 20px 0; border-right:1px solid rgba(42,82,152,0.25);">
+          <div style="font:600 10px 'IBM Plex Sans',sans-serif; letter-spacing:.08em; text-transform:uppercase; color:#5a6478; margin-bottom:6px;">Alpha Overlay</div>
+          <div style="font:700 28px/1 'IBM Plex Mono',monospace; color:#f39c12; margin-bottom:4px;">2.5%</div>
+          <div style="font:12px 'IBM Plex Sans',sans-serif; color:#aab0c0;">Tactical Adjustments</div>
+          <div style="font:600 12px 'IBM Plex Mono',monospace; color:#f39c12; margin-top:4px;">5.0% Vol × 0.5 IR</div>
+        </div>
+        <!-- Combined stats -->
+        <div style="padding:14px 0 0 20px;">
+          <div style="font:600 10px 'IBM Plex Sans',sans-serif; letter-spacing:.08em; text-transform:uppercase; color:#5a6478; margin-bottom:10px;">Combined</div>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <div style="display:flex; justify-content:space-between; font:12px 'IBM Plex Mono',monospace;"><span style="color:#5a6478;">Total Capital</span><span style="color:#ffffff;">22,106 MM CNY</span></div>
+            <div style="display:flex; justify-content:space-between; font:12px 'IBM Plex Mono',monospace;"><span style="color:#5a6478;">DV01 Budget</span><span style="color:#ffffff;">5.0 MM CNY</span></div>
+            <div style="display:flex; justify-content:space-between; font:12px 'IBM Plex Mono',monospace;"><span style="color:#5a6478;">Alpha Trades</span><span style="color:#f39c12;">16</span></div>
+            <div style="display:flex; justify-content:space-between; font:12px 'IBM Plex Mono',monospace;"><span style="color:#5a6478;">Beta Trades</span><span style="color:#45b6e6;">14</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Allocation Snapshot ────────────────────────────────────────────── -->
+  <div style="padding:16px 20px 0;">
+
+    <!-- Section header row -->
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:10px;">
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span style="font:600 13px 'IBM Plex Sans',sans-serif; color:#ffffff;">Portfolio Allocation Snapshot</span>
+        <span style="font:11px 'IBM Plex Mono',monospace; color:#5a6478;">Beta edits saved at 18:37:09</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <!-- Book toggle -->
+        <div style="display:flex;">
+          <button class="book-btn {{ betaBtnClass }}" onClick="{{ showBeta }}">Beta Book</button>
+          <button class="book-btn {{ alphaBtnClass }}" onClick="{{ showAlpha }}">Alpha Book</button>
+        </div>
+        <button style="background:#112e66; border:1px solid #2a5298; color:#aab0c0; font:600 11px 'IBM Plex Mono',monospace; letter-spacing:.05em; padding:6px 12px; border-radius:4px; cursor:pointer;">↻ Refresh</button>
+      </div>
+    </div>
+
+    <!-- Column visibility pills -->
+    <div style="display:flex; align-items:center; gap:6px; margin-bottom:10px; flex-wrap:wrap;">
+      <span style="font:600 10px 'IBM Plex Sans',sans-serif; letter-spacing:.07em; text-transform:uppercase; color:#5a6478; margin-right:4px;">Columns</span>
+      <sc-for list="{{ colPills }}" as="pill" hint-placeholder-count="4">
+        <button class="col-pill {{ pill.cls }}" onClick="{{ pill.toggle }}">{{ pill.label }}</button>
+      </sc-for>
+      <span style="font:11px 'IBM Plex Mono',monospace; color:#5a6478; margin-left:6px;">↕ click row to expand</span>
+    </div>
+
+    <!-- Open date + hint row (calendar selector placeholder) -->
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+      <span style="font:600 10px 'IBM Plex Sans',sans-serif; letter-spacing:.07em; text-transform:uppercase; color:#5a6478;">Open Date</span>
+      <div style="background:#082255; border:1px solid #2a5298; border-radius:4px; padding:4px 10px; font:12px 'IBM Plex Mono',monospace; color:#aab0c0; min-width:160px;">— select date —</div>
+      <span style="font:11px 'IBM Plex Sans',sans-serif; color:#5a6478; font-style:italic;">Click an Open Date cell to edit</span>
+    </div>
+
+    <!-- Table container -->
+    <div style="background:#082255; border:1px solid #2a5298; border-radius:6px; overflow:hidden;">
+      <div style="overflow-x:auto; max-height:calc(100vh - 320px); overflow-y:auto;">
+        <table class="books-table" id="books-table">
+          <thead>{{ tableHead }}</thead>
+          <tbody>{{ tableBody }}</tbody>
+        </table>
+      </div>
+      <!-- Footer totals bar -->
+      <div style="padding:8px 14px; border-top:1px solid rgba(42,82,152,0.4); display:flex; gap:24px; background:#061E44;">
+        <span style="font:12px 'IBM Plex Mono',monospace; color:#5a6478;">{{ footerLabel }}</span>
+        <span style="font:600 12px 'IBM Plex Mono',monospace; color:#ffffff;">{{ footerTotal }}</span>
+        <span style="font:12px 'IBM Plex Mono',monospace; color:#5a6478;">{{ footerExtra }}</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1440, &quot;height&quot;: 820}}">
+class Component extends DCLogic {
+  state = {
+    book: 'beta',          // 'beta' | 'alpha'
+    comboOpen: false,
+    expandedRow: null,     // row id string or null
+    // column visibility — extra cols hidden by default
+    showOpenDate: false,
+    showVolume: false,
+    showScore: false,
+    sortCol: null,
+    sortDir: 1,            // 1=asc -1=desc
+  };
+
+  /* ── Data ──────────────────────────────────────────────────────── */
+  betaRows = [
+    { id:'b1',  assetType:'FX',          universe:'FX Universe',      instrument:'GBPCNY',     duration:'',     capital:'1,051.82', weight:'10.52%', openPrice:'',      openDate:'',           volume:'' },
+    { id:'b2',  assetType:'FX',          universe:'FX Universe',      instrument:'EURCNY',     duration:'',     capital:'1,051.82', weight:'10.52%', openPrice:'',      openDate:'',           volume:'' },
+    { id:'b3',  assetType:'Rates',       universe:'China Gov Bond',   instrument:'250012.IB',  duration:'0.95', capital:'1,817.11', weight:'18.17%', openPrice:'',      openDate:'',           volume:'' },
+    { id:'b4',  assetType:'Rates',       universe:'China Gov Bond',   instrument:'260006.IB',  duration:'1.90', capital:'1,817.11', weight:'18.17%', openPrice:'',      openDate:'',           volume:'' },
+    { id:'b5',  assetType:'Rates',       universe:'China Gov Bond',   instrument:'250014.IB',  duration:'4.50', capital:'1,096.79', weight:'10.97%', openPrice:'',      openDate:'',           volume:'' },
+    { id:'b6',  assetType:'Rates',       universe:'China Gov Bond',   instrument:'260010.IB',  duration:'8.50', capital:'631.71',   weight:'6.32%',  openPrice:'',      openDate:'',           volume:'' },
+    { id:'b7',  assetType:'Rates',       universe:'China Gov Bond',   instrument:'2600001.IB', duration:'13.0', capital:'377.40',   weight:'3.77%',  openPrice:'',      openDate:'',           volume:'' },
+    { id:'b8',  assetType:'Rates',       universe:'China Gov Bond',   instrument:'2600002.IB', duration:'17.0', capital:'262.95',   weight:'2.63%',  openPrice:'',      openDate:'',           volume:'' },
+    { id:'b9',  assetType:'Commodities', universe:'Base Metals',      instrument:'Zinc',       duration:'',     capital:'4,000.00', weight:'20.00%', openPrice:'',      openDate:'',           volume:'' },
+    { id:'b10', assetType:'Commodities', universe:'Base Metals',      instrument:'Aluminium',  duration:'',     capital:'1,899.58', weight:'19.00%', openPrice:'',      openDate:'',           volume:'' },
+    { id:'b11', assetType:'Commodities', universe:'Base Metals',      instrument:'Copper',     duration:'',     capital:'1,899.58', weight:'19.00%', openPrice:'',      openDate:'',           volume:'' },
+    { id:'b12', assetType:'Commodities', universe:'Energy',           instrument:'Crude_Oil',  duration:'',     capital:'1,899.58', weight:'19.00%', openPrice:'',      openDate:'',           volume:'' },
+    { id:'b13', assetType:'Commodities', universe:'Precious Metals',  instrument:'Gold',       duration:'',     capital:'1,899.58', weight:'19.00%', openPrice:'',      openDate:'',           volume:'' },
+    { id:'b14', assetType:'Commodities', universe:'Precious Metals',  instrument:'Silver',     duration:'',     capital:'1,420.30', weight:'14.20%', openPrice:'',      openDate:'',           volume:'' },
+    { id:'b15', assetType:'FX',          universe:'FX Universe',      instrument:'USDCNY',     duration:'',     capital:'981.36',   weight:'9.81%',  openPrice:'',      openDate:'',           volume:'' },
+  ];
+
+  alphaRows = [
+    { id:'a1',  instrument:'CGB-10s30s',   spreadType:'TenorSpread', style:'momentum',      direction:'BUY',  duration:'9.27',  openPrice:'49.02',  volume:'',   openDate:'',           score:'3.65' },
+    { id:'a2',  instrument:'Repo7d-6m2y',  spreadType:'SwapSpread',  style:'momentum',      direction:'BUY',  duration:'1.97',  openPrice:'0.13',   volume:'',   openDate:'',           score:'2.63' },
+    { id:'a3',  instrument:'Shi3M-1y4y',   spreadType:'SwapSpread',  style:'momentum',      direction:'BUY',  duration:'3.88',  openPrice:'9.00',   volume:'',   openDate:'',           score:'2.37' },
+    { id:'a4',  instrument:'CDBCGB-5y',    spreadType:'TenorSpread', style:'momentum',      direction:'BUY',  duration:'4.81',  openPrice:'-1.0',   volume:'',   openDate:'',           score:'2.10' },
+    { id:'a5',  instrument:'Basis-5y',     spreadType:'SwapSpread',  style:'momentum',      direction:'SELL', duration:'4.81',  openPrice:'-0.6',   volume:'',   openDate:'',           score:'1.94' },
+    { id:'a6',  instrument:'250208.IB',    spreadType:'CBondCurve',  style:'mean-reverting',direction:'BUY',  duration:'3.67',  openPrice:'2.80',   volume:'',   openDate:'',           score:'2.80' },
+    { id:'a7',  instrument:'250016.IB',    spreadType:'TBondCurve',  style:'mean-reverting',direction:'BUY',  duration:'8.46',  openPrice:'1.90',   volume:'',   openDate:'',           score:'1.90' },
+    { id:'a8',  instrument:'250355.IB',    spreadType:'CBondCurve',  style:'mean-reverting',direction:'BUY',  duration:'4.27',  openPrice:'1.90',   volume:'',   openDate:'',           score:'1.90' },
+    { id:'a9',  instrument:'Basis-9m3y',   spreadType:'SwapSpread',  style:'mean-reverting',direction:'SELL', duration:'2.93',  openPrice:'0.60',   volume:'',   openDate:'',           score:'0.60' },
+    { id:'a10', instrument:'Shi3M-6m3y',   spreadType:'SwapSpread',  style:'momentum',      direction:'BUY',  duration:'2.93',  openPrice:'0.70',   volume:'',   openDate:'',           score:'0.70' },
+    { id:'a11', instrument:'260005.IB',    spreadType:'TBondCurve',  style:'mean-reverting',direction:'BUY',  duration:'8.92',  openPrice:'2.30',   volume:'',   openDate:'',           score:'2.30' },
+    { id:'a12', instrument:'250011.IB',    spreadType:'TBondCurve',  style:'mean-reverting',direction:'BUY',  duration:'8.22',  openPrice:'2.40',   volume:'',   openDate:'',           score:'2.40' },
+    { id:'a13', instrument:'Repo7d-9m2y',  spreadType:'SwapSpread',  style:'momentum',      direction:'BUY',  duration:'1.97',  openPrice:'0.40',   volume:'',   openDate:'',           score:'0.40' },
+    { id:'a14', instrument:'220017.IB',    spreadType:'TBondCurve',  style:'mean-reverting',direction:'BUY',  duration:'5.67',  openPrice:'3.10',   volume:'',   openDate:'',           score:'3.10' },
+    { id:'a15', instrument:'250022.IB',    spreadType:'TBondCurve',  style:'mean-reverting',direction:'BUY',  duration:'8.66',  openPrice:'2.10',   volume:'',   openDate:'',           score:'2.10' },
+    { id:'a16', instrument:'220003.IB',    spreadType:'TBondCurve',  style:'mean-reverting',direction:'BUY',  duration:'5.22',  openPrice:'2.90',   volume:'',   openDate:'',           score:'2.90' },
+  ];
+
+  renderVals() {
+    const s = this.state;
+
+    /* ── Combo strip ─────────────────────────────── */
+    const comboClass   = s.comboOpen ? 'open' : '';
+    const comboChevron = s.comboOpen ? '▲ collapse' : '▼ details';
+
+    /* ── Book toggle classes ─────────────────────── */
+    const betaBtnClass  = s.book === 'beta'  ? 'active-beta'  : '';
+    const alphaBtnClass = s.book === 'alpha' ? 'active-alpha' : '';
+
+    /* ── Column pill configs ─────────────────────── */
+    const toggle = (key) => () => this.setState(prev => ({ [key]: !prev[key] }));
+    const pillDefs = s.book === 'beta'
+      ? [
+          { key: 'showOpenDate', label: 'Open Date' },
+          { key: 'showVolume',   label: 'Volume'    },
+        ]
+      : [
+          { key: 'showOpenDate', label: 'Open Date' },
+          { key: 'showVolume',   label: 'Volume'    },
+          { key: 'showScore',    label: 'Score'     },
+        ];
+    const colPills = pillDefs.map(p => ({
+      label: p.label,
+      cls:   s[p.key] ? 'active' : '',
+      toggle: toggle(p.key),
+    }));
+
+    /* ── Sorting helper ──────────────────────────── */
+    const sortBy = (col) => () => {
+      this.setState(prev => ({
+        sortCol: col,
+        sortDir: prev.sortCol === col ? -prev.sortDir : 1,
+      }));
+    };
+    const arrow = (col) => {
+      if (s.sortCol !== col) return '↕';
+      return s.sortDir === 1 ? '↑' : '↓';
+    };
+    const thCls = (col) => s.sortCol === col ? 'sorted' : '';
+
+    /* ── Row expand ──────────────────────────────── */
+    const clickRow = (id) => () => {
+      this.setState(prev => ({ expandedRow: prev.expandedRow === id ? null : id }));
+    };
+
+    /* ── Render helpers ──────────────────────────── */
+    const dirBadge = (dir) => {
+      const bg = dir === 'BUY' ? '#1a4731' : '#6e1a1a';
+      const fg = dir === 'BUY' ? '#27ae60' : '#c0392b';
+      const bd = fg;
+      return React.createElement('span', {
+        style: { background: bg, color: fg, border: `1px solid ${bd}`,
+          borderRadius: '3px', padding: '1px 7px', fontSize: '10px', fontWeight: '700',
+          fontFamily: "'IBM Plex Mono', monospace", whiteSpace: 'nowrap' }
+      }, dir);
+    };
+
+    const stylePill = (style) => {
+      const isMR = style === 'mean-reverting';
+      const color = isMR ? '#45b6e6' : '#f39c12';
+      return React.createElement('span', {
+        style: { color, fontSize: '11px', fontFamily: "'IBM Plex Mono', monospace" }
+      }, isMR ? 'MR' : 'MOM');
+    };
+
+    /* ── Sort rows ───────────────────────────────── */
+    const sortRows = (rows) => {
+      if (!s.sortCol) return rows;
+      return [...rows].sort((a, b) => {
+        const va = a[s.sortCol] || ''; const vb = b[s.sortCol] || '';
+        const na = parseFloat(va.toString().replace(/,/g,'')); const nb = parseFloat(vb.toString().replace(/,/g,''));
+        if (!isNaN(na) && !isNaN(nb)) return (na - nb) * s.sortDir;
+        return va.toString().localeCompare(vb.toString()) * s.sortDir;
+      });
+    };
+
+    /* ══ BETA TABLE ══════════════════════════════════════════════ */
+    let tableHead, tableBody, footerLabel, footerTotal, footerExtra;
+
+    if (s.book === 'beta') {
+      tableHead = React.createElement('tr', null,
+        React.createElement('th', { className: thCls('assetType'), onClick: sortBy('assetType') }, 'Asset Type', React.createElement('span', { className: 'sort-arrow' }, arrow('assetType'))),
+        React.createElement('th', { className: thCls('universe'),  onClick: sortBy('universe')  }, 'Universe',   React.createElement('span', { className: 'sort-arrow' }, arrow('universe'))),
+        React.createElement('th', { className: thCls('instrument'),onClick: sortBy('instrument') }, 'Instrument', React.createElement('span', { className: 'sort-arrow' }, arrow('instrument'))),
+        React.createElement('th', { className: thCls('duration'),  onClick: sortBy('duration')  }, 'Duration',   React.createElement('span', { className: 'sort-arrow' }, arrow('duration'))),
+        React.createElement('th', { className: thCls('capital'),   onClick: sortBy('capital')   }, 'Capital MM', React.createElement('span', { className: 'sort-arrow' }, arrow('capital'))),
+        React.createElement('th', { className: thCls('weight'),    onClick: sortBy('weight')    }, 'Weight %',   React.createElement('span', { className: 'sort-arrow' }, arrow('weight'))),
+        s.showOpenDate && React.createElement('th', { className: thCls('openDate'), onClick: sortBy('openDate') }, 'Open Date', React.createElement('span', { className: 'sort-arrow' }, arrow('openDate'))),
+        s.showVolume   && React.createElement('th', { className: thCls('volume'),   onClick: sortBy('volume')   }, 'Volume MM', React.createElement('span', { className: 'sort-arrow' }, arrow('volume'))),
+      );
+
+      const sorted = sortRows(this.betaRows);
+      const rows = [];
+      sorted.forEach(r => {
+        const isExp = s.expandedRow === r.id;
+        rows.push(React.createElement('tr', {
+          key: r.id, className: `data-row${isExp ? ' expanded' : ''}`,
+          onClick: clickRow(r.id),
+        },
+          React.createElement('td', { style: { color: '#aab0c0' } }, r.assetType),
+          React.createElement('td', { style: { color: '#aab0c0' } }, r.universe),
+          React.createElement('td', { style: { color: '#ffffff', fontWeight: '600' } }, r.instrument),
+          React.createElement('td', { style: { color: '#aab0c0', textAlign: 'right' } }, r.duration || '—'),
+          React.createElement('td', { style: { color: '#ffffff', textAlign: 'right' } }, r.capital),
+          React.createElement('td', { style: { color: '#45b6e6', textAlign: 'right', fontWeight: '600' } }, r.weight),
+          s.showOpenDate && React.createElement('td', { style: { color: '#5a6478' } }, r.openDate || '—'),
+          s.showVolume   && React.createElement('td', { style: { color: '#5a6478', textAlign: 'right' } }, r.volume || '—'),
+        ));
+        if (isExp) {
+          const cols = 6 + (s.showOpenDate ? 1 : 0) + (s.showVolume ? 1 : 0);
+          rows.push(React.createElement('tr', { key: r.id + '-exp', className: 'expand-detail' },
+            React.createElement('td', { colSpan: cols },
+              React.createElement('div', { className: 'expand-panel' },
+                React.createElement('div', { className: 'expand-kv' },
+                  React.createElement('span', { className: 'ek-label' }, 'Asset Type'),
+                  React.createElement('span', { className: 'ek-value' }, r.assetType),
+                ),
+                React.createElement('div', { className: 'expand-kv' },
+                  React.createElement('span', { className: 'ek-label' }, 'Universe'),
+                  React.createElement('span', { className: 'ek-value' }, r.universe),
+                ),
+                React.createElement('div', { className: 'expand-kv' },
+                  React.createElement('span', { className: 'ek-label' }, 'Duration'),
+                  React.createElement('span', { className: 'ek-value' }, r.duration || '—'),
+                ),
+                React.createElement('div', { className: 'expand-kv' },
+                  React.createElement('span', { className: 'ek-label' }, 'Open Date'),
+                  React.createElement('span', { className: 'ek-value' }, r.openDate || '—'),
+                ),
+                React.createElement('div', { className: 'expand-kv' },
+                  React.createElement('span', { className: 'ek-label' }, 'Volume MM'),
+                  React.createElement('span', { className: 'ek-value' }, r.volume || '—'),
+                ),
+              )
+            )
+          ));
+        }
+      });
+      tableBody  = rows;
+      footerLabel = 'Total Capital';
+      footerTotal = '22,106.69 MM CNY';
+      footerExtra = `${sorted.length} positions`;
+
+    } else {
+      /* ══ ALPHA TABLE ══════════════════════════════════════════════ */
+      tableHead = React.createElement('tr', null,
+        React.createElement('th', { className: thCls('instrument'),  onClick: sortBy('instrument')  }, 'ID',          React.createElement('span', { className: 'sort-arrow' }, arrow('instrument'))),
+        React.createElement('th', { className: thCls('spreadType'),  onClick: sortBy('spreadType')  }, 'Spread Type', React.createElement('span', { className: 'sort-arrow' }, arrow('spreadType'))),
+        React.createElement('th', { className: thCls('style'),       onClick: sortBy('style')       }, 'Style',       React.createElement('span', { className: 'sort-arrow' }, arrow('style'))),
+        React.createElement('th', { style: { textAlign: 'center' } }, 'Direction'),
+        React.createElement('th', { className: thCls('duration'),    onClick: sortBy('duration')    }, 'Duration',    React.createElement('span', { className: 'sort-arrow' }, arrow('duration'))),
+        React.createElement('th', { className: thCls('openPrice'),   onClick: sortBy('openPrice')   }, 'Open Price BP',React.createElement('span', { className: 'sort-arrow' }, arrow('openPrice'))),
+        s.showVolume   && React.createElement('th', { className: thCls('volume'),   onClick: sortBy('volume')   }, 'Volume MM',   React.createElement('span', { className: 'sort-arrow' }, arrow('volume'))),
+        s.showOpenDate && React.createElement('th', { className: thCls('openDate'), onClick: sortBy('openDate') }, 'Open Date',   React.createElement('span', { className: 'sort-arrow' }, arrow('openDate'))),
+        s.showScore    && React.createElement('th', { className: thCls('score'),    onClick: sortBy('score')    }, 'Score',       React.createElement('span', { className: 'sort-arrow' }, arrow('score'))),
+      );
+
+      const sorted = sortRows(this.alphaRows);
+      const rows = [];
+      sorted.forEach(r => {
+        const isExp = s.expandedRow === r.id;
+        const isMR  = r.style === 'mean-reverting';
+        rows.push(React.createElement('tr', {
+          key: r.id, className: `data-row${isExp ? ' expanded' : ''}`,
+          onClick: clickRow(r.id),
+        },
+          React.createElement('td', { style: { color: '#ffffff', fontWeight: '600' } }, r.instrument),
+          React.createElement('td', { style: { color: '#aab0c0' } }, r.spreadType),
+          React.createElement('td', null, stylePill(r.style)),
+          React.createElement('td', { style: { textAlign: 'center' } }, dirBadge(r.direction)),
+          React.createElement('td', { style: { color: '#aab0c0', textAlign: 'right' } }, r.duration),
+          React.createElement('td', { style: { color: '#ffffff', textAlign: 'right', fontWeight: '600' } }, r.openPrice),
+          s.showVolume   && React.createElement('td', { style: { color: '#5a6478', textAlign: 'right' } }, r.volume   || '—'),
+          s.showOpenDate && React.createElement('td', { style: { color: '#5a6478' } }, r.openDate || '—'),
+          s.showScore    && React.createElement('td', { style: { color: isMR ? '#45b6e6' : '#f39c12', textAlign: 'right', fontWeight: '600' } }, r.score),
+        ));
+        if (isExp) {
+          const cols = 6 + (s.showVolume ? 1 : 0) + (s.showOpenDate ? 1 : 0) + (s.showScore ? 1 : 0);
+          rows.push(React.createElement('tr', { key: r.id + '-exp', className: 'expand-detail' },
+            React.createElement('td', { colSpan: cols },
+              React.createElement('div', { className: 'expand-panel' },
+                React.createElement('div', { className: 'expand-kv' },
+                  React.createElement('span', { className: 'ek-label' }, 'Style'),
+                  React.createElement('span', { className: 'ek-value', style: { color: isMR ? '#45b6e6' : '#f39c12' } }, isMR ? 'Mean-Reverting' : 'Momentum'),
+                ),
+                React.createElement('div', { className: 'expand-kv' },
+                  React.createElement('span', { className: 'ek-label' }, 'Spread Type'),
+                  React.createElement('span', { className: 'ek-value' }, r.spreadType),
+                ),
+                React.createElement('div', { className: 'expand-kv' },
+                  React.createElement('span', { className: 'ek-label' }, 'Open Price BP'),
+                  React.createElement('span', { className: 'ek-value' }, r.openPrice),
+                ),
+                React.createElement('div', { className: 'expand-kv' },
+                  React.createElement('span', { className: 'ek-label' }, 'Score'),
+                  React.createElement('span', { className: 'ek-value', style: { color: isMR ? '#45b6e6' : '#f39c12' } }, r.score),
+                ),
+                React.createElement('div', { className: 'expand-kv' },
+                  React.createElement('span', { className: 'ek-label' }, 'Volume MM'),
+                  React.createElement('span', { className: 'ek-value' }, r.volume || '—'),
+                ),
+                React.createElement('div', { className: 'expand-kv' },
+                  React.createElement('span', { className: 'ek-label' }, 'Open Date'),
+                  React.createElement('span', { className: 'ek-value' }, r.openDate || '—'),
+                ),
+              )
+            )
+          ));
+        }
+      });
+      tableBody  = rows;
+      const buyCount  = sorted.filter(r => r.direction === 'BUY').length;
+      const sellCount = sorted.filter(r => r.direction === 'SELL').length;
+      footerLabel = 'Alpha Trades';
+      footerTotal = `${sorted.length} total`;
+      footerExtra = `BUY ${buyCount}  ·  SELL ${sellCount}`;
+    }
+
+    return {
+      /* combo */
+      toggleCombo:  () => this.setState(s => ({ comboOpen: !s.comboOpen })),
+      comboClass, comboChevron,
+      /* book */
+      showBeta:  () => this.setState({ book: 'beta',  expandedRow: null }),
+      showAlpha: () => this.setState({ book: 'alpha', expandedRow: null }),
+      betaBtnClass, alphaBtnClass,
+      /* pills */
+      colPills,
+      /* table */
+      tableHead, tableBody,
+      footerLabel, footerTotal, footerExtra,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

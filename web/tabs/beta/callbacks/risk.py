@@ -134,14 +134,126 @@ def register_risk_callbacks(app):
     # The show/hide of Books/Risk/Tickets is handled by the app-level
     # _make_tab_switcher (an-summary-subtabs → summary-{books,risk,tickets}-div).
 
+    # ── Portfolio Combination strip: collapse/expand ───────────────────────────
+    @app.callback(
+        [Output('summary-combo-detail', 'style'),
+         Output('summary-combo-chevron', 'children')],
+        Input('summary-combo-toggle', 'n_clicks'),
+        prevent_initial_call=True,
+    )
+    def _toggle_combo_detail(n_clicks):
+        is_open = bool(n_clicks and n_clicks % 2 == 1)
+        style = {'overflow': 'hidden'}
+        style['display'] = 'block' if is_open else 'none'
+        return style, ('▲ collapse' if is_open else '▼ details')
+
+    # ── Beta / Alpha book toggle ────────────────────────────────────────────────
+    _ACCENT = THEME['accent']
+    _WARN = THEME['warning']
+
+    def _book_btn_style(active: bool, accent: str):
+        base = {
+            'padding': '7px 18px', 'fontSize': '13px', 'fontWeight': '500',
+            'cursor': 'pointer', 'border': f'1px solid {THEME["table_header"]}',
+            'transition': 'all 100ms',
+        }
+        if active:
+            base.update({'backgroundColor': THEME['bg_input'], 'color': accent, 'borderColor': accent})
+        else:
+            base.update({'backgroundColor': 'transparent', 'color': THEME['text_sub']})
+        return base
+
+    def _col_pill_style(active: bool):
+        style = {
+            'display': 'inline-flex', 'alignItems': 'center', 'gap': '5px',
+            'padding': '3px 9px', 'borderRadius': '20px', 'fontSize': '10px',
+            'fontWeight': '600', 'letterSpacing': '.05em', 'cursor': 'pointer',
+            'border': f'1px solid {THEME["table_header"]}',
+        }
+        if active:
+            style.update({'backgroundColor': 'rgba(61,139,212,0.25)', 'color': THEME['text_main'], 'borderColor': THEME['accent']})
+        else:
+            style.update({'color': THEME['text_sub']})
+        return style
+
+    def _col_pills_row(book: str, col_vis: dict):
+        col_vis = col_vis or {}
+        label = html.Span("Columns", style={
+            'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.07em',
+            'textTransform': 'uppercase', 'color': THEME['text_sub'], 'marginRight': '4px',
+        })
+        keys = ['open_date', 'volume'] if book == 'beta' else ['open_date', 'volume', 'score']
+        names = {'open_date': 'Open Date', 'volume': 'Volume', 'score': 'Score'}
+        pills = [
+            html.Button(names[k], id=f'summary-col-pill-{k}', n_clicks=0,
+                        style=_col_pill_style(bool(col_vis.get(k))))
+            for k in keys
+        ]
+        return [label, *pills]
+
+    @app.callback(
+        [Output('summary-book-active', 'data'),
+         Output('summary-book-beta-btn', 'style'),
+         Output('summary-book-alpha-btn', 'style'),
+         Output('summary-beta-table-container', 'style'),
+         Output('summary-alpha-table-container', 'style'),
+         Output('summary-col-pills-row', 'children')],
+        [Input('summary-book-beta-btn', 'n_clicks'),
+         Input('summary-book-alpha-btn', 'n_clicks'),
+         Input('summary-col-visibility', 'data')],
+        State('summary-book-active', 'data'),
+        prevent_initial_call=True,
+    )
+    def _toggle_book(_beta_clicks, _alpha_clicks, col_vis, current_book):
+        triggered = dash.ctx.triggered_id
+        if triggered == 'summary-book-alpha-btn':
+            book = 'alpha'
+        elif triggered == 'summary-book-beta-btn':
+            book = 'beta'
+        else:
+            book = current_book or 'beta'
+
+        return (
+            book,
+            _book_btn_style(book == 'beta', _ACCENT),
+            _book_btn_style(book == 'alpha', _WARN),
+            {'minHeight': '60px', 'display': 'block' if book == 'beta' else 'none'},
+            {'minHeight': '60px', 'display': 'block' if book == 'alpha' else 'none'},
+            _col_pills_row(book, col_vis),
+        )
+
+    # ── Column-visibility pills ─────────────────────────────────────────────────
+    @app.callback(
+        Output('summary-col-visibility', 'data'),
+        [Input('summary-col-pill-open_date', 'n_clicks'),
+         Input('summary-col-pill-volume', 'n_clicks'),
+         Input('summary-col-pill-score', 'n_clicks')],
+        State('summary-col-visibility', 'data'),
+        prevent_initial_call=True,
+    )
+    def _toggle_col_visibility(_od_clicks, _vol_clicks, _score_clicks, col_vis):
+        col_vis = dict(col_vis or {})
+        triggered = dash.ctx.triggered_id
+        key = {
+            'summary-col-pill-open_date': 'open_date',
+            'summary-col-pill-volume': 'volume',
+            'summary-col-pill-score': 'score',
+        }.get(triggered)
+        if key is None:
+            raise dash.exceptions.PreventUpdate
+        col_vis[key] = not col_vis.get(key, False)
+        return col_vis
+
     @app.callback(
         [Output('summary-beta-table-container', 'children'),
          Output('summary-refresh-status', 'children')],
-        [Input('summary-refresh-btn', 'n_clicks')],
+        [Input('summary-refresh-btn', 'n_clicks'),
+         Input('summary-col-visibility', 'data')],
         prevent_initial_call=False,
     )
-    def update_summary_book_table(_n_clicks):
+    def update_summary_book_table(_n_clicks, col_vis):
         """Render Beta Book allocation table."""
+        col_vis = col_vis or {}
         import os as _os
         from dash import ctx as _ctx
 
@@ -342,6 +454,11 @@ def register_risk_callbacks(app):
             display_rows.append(total_row)
 
             _editable_cols = {'Open Price', 'Open Date', 'Volume (MM)'}
+            _hidden_cols = []
+            if not col_vis.get('open_date'):
+                _hidden_cols.append('Open Date')
+            if not col_vis.get('volume'):
+                _hidden_cols.append('Volume (MM)')
             _display_col_ids = [c for c in display_rows[0].keys() if c != 'Asset Name']
             columns = [
                 {
@@ -370,6 +487,7 @@ def register_risk_callbacks(app):
                 id='summary-beta-table',
                 data=display_rows,
                 columns=columns,
+                hidden_columns=_hidden_cols,
                 editable=True,
                 style_cell={
                     'textAlign': 'center', 'padding': '6px 8px',
@@ -438,13 +556,15 @@ def register_risk_callbacks(app):
     @app.callback(
         [Output('summary-alpha-table-container', 'children'),
          Output('summary-refresh-status', 'children', allow_duplicate=True)],
-        [Input('summary-refresh-btn', 'n_clicks')],
+        [Input('summary-refresh-btn', 'n_clicks'),
+         Input('summary-col-visibility', 'data')],
         prevent_initial_call='initial_duplicate',
     )
-    def update_summary_alpha_table(_n_clicks):
+    def update_summary_alpha_table(_n_clicks, col_vis):
         """Render Alpha Book allocation table."""
         import os as _os
         from dash import ctx as _ctx
+        col_vis = col_vis or {}
 
         def _no_data(msg: str):
             return (
@@ -626,6 +746,13 @@ def register_risk_callbacks(app):
             display_rows.append(total_row)
 
             _editable_cols = {'Open price (bp)', 'Volume (mm)', 'Open date'}
+            _hidden_cols = []
+            if not col_vis.get('open_date'):
+                _hidden_cols.append('Open date')
+            if not col_vis.get('volume'):
+                _hidden_cols.append('Volume (mm)')
+            if not col_vis.get('score'):
+                _hidden_cols.append('Z-Score')
             columns = [
                 {'name': c, 'id': c, 'editable': c in _editable_cols,
                  **({'type': 'datetime'} if c == 'Open date' else {})}
@@ -697,6 +824,7 @@ def register_risk_callbacks(app):
                 id='summary-alpha-table',
                 data=display_rows,
                 columns=columns,
+                hidden_columns=_hidden_cols,
                 editable=True,
                 row_deletable=True,
                 style_cell={'textAlign': 'center', 'padding': '6px 8px',

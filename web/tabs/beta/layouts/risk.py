@@ -136,6 +136,32 @@ def build_multiasset_risk_layout():
             heatmap_fig.update_layout(title=f"Error: {e}")
             vol_table = html.Div(f"Error generating table: {str(e)}", style={'color': THEME['danger'], 'padding': '10px'})
 
+    # --- Book toggle pill styling helpers ---
+    def book_btn_style(active: bool, accent: str):
+        base = {
+            'padding': '7px 18px', 'fontSize': '13px', 'fontWeight': '500',
+            'cursor': 'pointer', 'border': f'1px solid {THEME["table_header"]}',
+            'transition': 'all 100ms',
+        }
+        if active:
+            base.update({'backgroundColor': THEME['bg_input'], 'color': accent, 'borderColor': accent})
+        else:
+            base.update({'backgroundColor': 'transparent', 'color': THEME['text_sub']})
+        return base
+
+    def col_pill_style(active: bool):
+        base = {
+            'display': 'inline-flex', 'alignItems': 'center', 'gap': '5px',
+            'padding': '3px 9px', 'borderRadius': '20px', 'fontSize': '10px',
+            'fontWeight': '600', 'letterSpacing': '.05em', 'cursor': 'pointer',
+            'border': f'1px solid {THEME["table_header"]}',
+        }
+        if active:
+            base.update({'backgroundColor': 'rgba(61,139,212,0.25)', 'color': THEME['text_main'], 'borderColor': THEME['accent']})
+        else:
+            base.update({'color': THEME['text_sub']})
+        return base
+
     # --- Assemble Layout ---
     # The Books/Risk/Tickets subtab bar is rendered by the app-level
     # _make_tab_switcher; we only build the content divs here.
@@ -144,104 +170,114 @@ def build_multiasset_risk_layout():
         # ── Books subtab ─────────────────────────────────────────────────────
         html.Div(id='summary-tab-books', children=[
 
-        # 1. Combination Section
-        html.H4("Portfolio Combination", style={'color': THEME['text_main'], 'marginBottom': '15px', 'borderBottom': f'2px solid {THEME["accent"]}', 'paddingBottom': '5px'}),
+        # 1. Combination Section — collapsed summary strip, expandable on click
         html.Div([
-            # Equation Row
             html.Div([
-                 # Target Return
-                 html.Div([
-                     html.Div("Target Return", style=label_style()),
-                     html.Div(f"{total_ret:.1f}%", style=value_style(THEME['accent'])),
-                     html.Div("Total Portfolio Target", style={'fontSize': '11px', 'color': THEME['text_sub']})
-                 ], style=card_style()),
-
-                 html.Div("=", style={'fontSize': '24px', 'color': THEME['text_sub'], 'alignSelf': 'center', 'padding': '0 10px'}),
-
-                 # Risk Free
-                 html.Div([
-                     html.Div("Risk Free Rate", style=label_style()),
-                     html.Div(f"{risk_free_rate:.1f}%", style=value_style(THEME['success'])),
-                     html.Div("Cash / Treasury", style={'fontSize': '11px', 'color': THEME['text_sub']})
-                 ], style=card_style()),
-
-                 html.Div("+", style={'fontSize': '24px', 'color': THEME['text_sub'], 'alignSelf': 'center', 'padding': '0 10px'}),
-
-                 # Beta
-                 html.Div([
-                     html.Div("Beta Allocation", style=label_style()),
-                     html.Div(f"{beta_ret:.1f}%", style=value_style(THEME['warning'])),
-                     html.Div([
-                         html.Span("Strategic Asset Allocation", style={'display': 'block', 'marginBottom': '5px'}),
-                         html.Span(f"{beta_vol}% Vol", style={'fontWeight': 'bold', 'color': THEME['warning']}),
-                         html.Span(" × "),
-                         html.Span(f"{beta_sharpe} Sharpe", style={'fontWeight': 'bold', 'color': THEME['warning']}),
-                     ], style={'fontSize': '11px', 'color': THEME['text_sub'], 'backgroundColor': 'rgba(255,255,255,0.05)', 'padding': '5px', 'borderRadius': '4px'})
-                 ], style=card_style()),
-
-                 html.Div("+", style={'fontSize': '24px', 'color': THEME['text_sub'], 'alignSelf': 'center', 'padding': '0 10px'}),
-
-                 # Alpha
-                 html.Div([
-                     html.Div("Alpha Overlay", style=label_style()),
-                     html.Div(f"{alpha_ret:.1f}%", style=value_style(THEME['danger'])),
-                     html.Div([
-                         html.Span("Tactical Adjustments", style={'display': 'block', 'marginBottom': '5px'}),
-                         html.Span(f"{alpha_vol}% Vol", style={'fontWeight': 'bold', 'color': THEME['danger']}),
-                         html.Span(" × "),
-                         html.Span(f"{alpha_ir} IR", style={'fontWeight': 'bold', 'color': THEME['danger']}),
-                     ], style={'fontSize': '11px', 'color': THEME['text_sub'], 'backgroundColor': 'rgba(255,255,255,0.05)', 'padding': '5px', 'borderRadius': '4px'})
-                 ], style=card_style()),
-            ], style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'center', 'alignItems': 'stretch'}),
-
-            html.Hr(style={'borderColor': THEME['table_header'], 'margin': '18px 0 12px 0'}),
-
-            # Portfolio Allocation Snapshot — two-column side-by-side (Beta | Alpha)
-            html.Div([
-                html.Div([
-                    html.Span("Portfolio Allocation Snapshot",
-                              style={'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '13px'}),
-                    html.Div([
-                        html.Button("Refresh", id='summary-refresh-btn', n_clicks=0,
-                                    style={'fontSize': '11px', 'padding': '3px 10px',
-                                           'backgroundColor': THEME['bg_input'],
-                                           'color': THEME['text_main'],
-                                           'border': f'1px solid {THEME["accent"]}',
-                                           'borderRadius': '4px', 'cursor': 'pointer'}),
-                        html.Span(id='summary-refresh-status',
-                                  style={'fontSize': '11px', 'color': THEME['text_sub'],
-                                         'fontStyle': 'italic'}),
-                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
-                ], style={'display': 'flex', 'justifyContent': 'space-between',
-                          'alignItems': 'center', 'marginBottom': '12px'}),
-
-                # Two-column layout: Beta Book left, Alpha Book right
+                html.Span("Portfolio Combination", style={
+                    'fontSize': '11px', 'fontWeight': '600', 'letterSpacing': '.08em',
+                    'textTransform': 'uppercase', 'color': THEME['text_sub'],
+                    'whiteSpace': 'nowrap', 'marginRight': '16px',
+                }),
                 html.Div([
                     html.Div([
-                        html.Div("Beta Book", style={
-                            'color': THEME['accent'], 'fontWeight': 'bold', 'fontSize': '12px',
-                            'borderBottom': f'2px solid {THEME["accent"]}',
-                            'paddingBottom': '6px', 'marginBottom': '10px',
-                        }),
-                        html.Div(id='summary-beta-table-container',
-                                 style={'minHeight': '60px'}),
-                    ], style={'flex': '1', 'minWidth': '0', 'marginRight': '12px'}),
-
+                        html.Span(f"{total_ret:.1f}%", style={'fontSize': '18px', 'fontWeight': '700', 'color': THEME['accent']}),
+                        html.Span("Target Return", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '2px'}),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center', 'padding': '4px 20px', 'borderRight': f'1px solid {THEME["table_header"]}'}),
+                    html.Span("=", style={'padding': '0 14px', 'color': THEME['table_header'], 'fontSize': '18px'}),
                     html.Div([
-                        html.Div("Alpha Book", style={
-                            'color': THEME.get('warning', '#f39c12'), 'fontWeight': 'bold', 'fontSize': '12px',
-                            'borderBottom': f'2px solid {THEME.get("warning", "#f39c12")}',
-                            'paddingBottom': '6px', 'marginBottom': '10px',
-                        }),
-                        html.Div(id='summary-alpha-table-container',
-                                 style={'minHeight': '60px'}),
-                    ], style={'flex': '1', 'minWidth': '0'}),
-                ], style={'display': 'flex', 'gap': '0', 'alignItems': 'flex-start'}),
+                        html.Span(f"{risk_free_rate:.1f}%", style={'fontSize': '18px', 'fontWeight': '700', 'color': THEME['success']}),
+                        html.Span("Risk Free", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '2px'}),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center', 'padding': '4px 20px', 'borderRight': f'1px solid {THEME["table_header"]}'}),
+                    html.Span("+", style={'padding': '0 14px', 'color': THEME['table_header'], 'fontSize': '18px'}),
+                    html.Div([
+                        html.Span(f"{beta_ret:.1f}%", style={'fontSize': '18px', 'fontWeight': '700', 'color': THEME['accent']}),
+                        html.Span("Beta Alloc", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '2px'}),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center', 'padding': '4px 20px', 'borderRight': f'1px solid {THEME["table_header"]}'}),
+                    html.Span("+", style={'padding': '0 14px', 'color': THEME['table_header'], 'fontSize': '18px'}),
+                    html.Div([
+                        html.Span(f"{alpha_ret:.1f}%", style={'fontSize': '18px', 'fontWeight': '700', 'color': THEME['warning']}),
+                        html.Span("Alpha Overlay", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '2px'}),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center', 'padding': '4px 20px'}),
+                ], style={'display': 'flex', 'alignItems': 'center', 'flex': '1', 'overflow': 'hidden'}),
+                html.Span("▼ details", id='summary-combo-chevron', style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginLeft': '12px', 'flexShrink': '0'}),
+            ], id='summary-combo-toggle', n_clicks=0, style={'display': 'flex', 'alignItems': 'center', 'cursor': 'pointer', 'userSelect': 'none', 'padding': '4px 0'}),
 
-            ], style={'backgroundColor': THEME['bg_main'], 'padding': '12px',
-                      'borderRadius': '4px', 'marginTop': '4px'}),
+            # Expanded detail — collapsed by default
+            html.Div(id='summary-combo-detail', children=[
+                html.Hr(style={'borderColor': THEME['table_header'], 'margin': '12px 0'}),
+                html.Div([
+                    html.Div([
+                        html.Div("Risk Free Rate", style=label_style()),
+                        html.Div(f"{risk_free_rate:.1f}%", style=value_style(THEME['success'])),
+                        html.Div("Cash / Treasury", style={'fontSize': '11px', 'color': THEME['text_sub']}),
+                    ], style=card_style()),
+                    html.Div([
+                        html.Div("Beta Allocation", style=label_style()),
+                        html.Div(f"{beta_ret:.1f}%", style=value_style(THEME['accent'])),
+                        html.Div([
+                            html.Span("Strategic Asset Allocation", style={'display': 'block', 'marginBottom': '5px'}),
+                            html.Span(f"{beta_vol}% Vol", style={'fontWeight': 'bold', 'color': THEME['accent']}),
+                            html.Span(" × "),
+                            html.Span(f"{beta_sharpe} Sharpe", style={'fontWeight': 'bold', 'color': THEME['accent']}),
+                        ], style={'fontSize': '11px', 'color': THEME['text_sub'], 'backgroundColor': 'rgba(255,255,255,0.05)', 'padding': '5px', 'borderRadius': '4px'}),
+                    ], style=card_style()),
+                    html.Div([
+                        html.Div("Alpha Overlay", style=label_style()),
+                        html.Div(f"{alpha_ret:.1f}%", style=value_style(THEME['warning'])),
+                        html.Div([
+                            html.Span("Tactical Adjustments", style={'display': 'block', 'marginBottom': '5px'}),
+                            html.Span(f"{alpha_vol}% Vol", style={'fontWeight': 'bold', 'color': THEME['warning']}),
+                            html.Span(" × "),
+                            html.Span(f"{alpha_ir} IR", style={'fontWeight': 'bold', 'color': THEME['warning']}),
+                        ], style={'fontSize': '11px', 'color': THEME['text_sub'], 'backgroundColor': 'rgba(255,255,255,0.05)', 'padding': '5px', 'borderRadius': '4px'}),
+                    ], style=card_style()),
+                ], style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'center', 'alignItems': 'stretch'}),
+            ], style={'display': 'none', 'overflow': 'hidden'}),
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '14px 20px', 'borderRadius': '5px', 'marginBottom': '20px'}),
 
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px', 'marginBottom': '20px'}),
+        # 2. Portfolio Allocation Snapshot — full-width Beta/Alpha toggle
+        html.Div([
+            html.Div([
+                html.Span("Portfolio Allocation Snapshot",
+                          style={'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '13px'}),
+                html.Div([
+                    # Book toggle pills
+                    html.Div([
+                        html.Button("Beta Book", id='summary-book-beta-btn', n_clicks=0,
+                                     style=book_btn_style(True, THEME['accent'])),
+                        html.Button("Alpha Book", id='summary-book-alpha-btn', n_clicks=0,
+                                     style=book_btn_style(False, THEME['warning'])),
+                    ], style={'display': 'flex'}),
+                    html.Button("Refresh", id='summary-refresh-btn', n_clicks=0,
+                                style={'fontSize': '11px', 'padding': '3px 10px',
+                                       'backgroundColor': THEME['bg_input'],
+                                       'color': THEME['text_main'],
+                                       'border': f'1px solid {THEME["accent"]}',
+                                       'borderRadius': '4px', 'cursor': 'pointer'}),
+                    html.Span(id='summary-refresh-status',
+                              style={'fontSize': '11px', 'color': THEME['text_sub'],
+                                     'fontStyle': 'italic'}),
+                ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px'}),
+            ], style={'display': 'flex', 'justifyContent': 'space-between',
+                      'alignItems': 'center', 'marginBottom': '12px', 'flexWrap': 'wrap', 'gap': '10px'}),
+
+            # Column-visibility pills — track via dcc.Store, options depend on active book
+            dcc.Store(id='summary-book-active', data='beta'),
+            dcc.Store(id='summary-col-visibility', data={'open_date': False, 'volume': False, 'score': False}),
+            html.Div([
+                html.Span("Columns", style={
+                    'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.07em',
+                    'textTransform': 'uppercase', 'color': THEME['text_sub'], 'marginRight': '4px',
+                }),
+                html.Button("Open Date", id='summary-col-pill-open_date', n_clicks=0, style=col_pill_style(False)),
+                html.Button("Volume", id='summary-col-pill-volume', n_clicks=0, style=col_pill_style(False)),
+            ], id='summary-col-pills-row', style={'display': 'flex', 'alignItems': 'center', 'gap': '6px', 'marginBottom': '10px', 'flexWrap': 'wrap'}),
+
+            # Single full-width table container — content swapped by book toggle
+            html.Div(id='summary-beta-table-container', style={'minHeight': '60px'}),
+            html.Div(id='summary-alpha-table-container', style={'minHeight': '60px', 'display': 'none'}),
+
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '16px 20px', 'borderRadius': '5px'}),
         ]),  # end summary-tab-books
 
         # ── Risk subtab ──────────────────────────────────────────────────────
