@@ -167,7 +167,11 @@ def build_header():
             # ---- Left: title + timestamps ----
             html.Div(
                 [
-                    html.H4("AtlasNexus · Daily", className="app__header__title"),
+                    html.H4([
+                        "AtlasNexus ",
+                        html.Span("·", className="sep"),
+                        " Daily",
+                    ], className="app__header__title"),
                     html.P(id="an-latest-run",
                            style={"fontSize": "12px", "margin": "0", "color": "#ffffff", "fontWeight": "500"}),
                     html.P(id="an-refresh-time", className="app__header__title--grey",
@@ -233,6 +237,7 @@ def build_tabs_panel():
 
     run_center_content = html.Div(
         [
+            html.Div([
             # ── Daily Pipeline card ──────────────────────────────────────────
             html.Div([
                 html.Div("DAILY PIPELINE", className="an-card-hdr"),
@@ -252,119 +257,124 @@ def build_tabs_panel():
                             style={'fontSize': '13px', 'minWidth': '140px'},
                         ),
                     ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'position': 'relative', 'zIndex': '1001'}),
-                ], style={'display': 'flex', 'flexDirection': 'row', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '4px'}),
+                ], style={'display': 'flex', 'flexDirection': 'row', 'alignItems': 'flex-end', 'flexWrap': 'wrap', 'gap': '14px', 'padding': '22px'}),
             ], className="an-card"),
 
             # ── Data Backfill card ──────────────────────────────────────────
             html.Div([
-                html.Div("DATA BACKFILL", className="an-card-hdr", style={'marginBottom': '12px'}),
+                html.Div("DATA BACKFILL", className="an-card-hdr"),
                 html.Div([
-                    # Instrument type
                     html.Div([
-                        html.Label("Instrument Type", style=_lbl_style),
-                        dcc.Dropdown(
-                            id="an-bt-btype",
-                            options=[
-                                {'label': 'IRS',             'value': 'IRS'},
-                                {'label': 'TBond',           'value': 'TBond'},
-                                {'label': 'CBond',           'value': 'CBond'},
-                                {'label': 'Futures Analytics', 'value': 'Futures'},
-                            ],
-                            value='IRS',
-                            clearable=False,
-                            style=_dd_style,
-                        ),
-                    ], style={'minWidth': '150px', 'flex': '0 0 150px'}),
-                    # Update steps
-                    # pool/bonds/cbts: curve-backtest steps
-                    # rewrite: futures-analytics full rebuild flag
-                    html.Div([
-                        html.Label("Update Steps", style=_lbl_style),
-                        dcc.Dropdown(
-                            id="an-bt-update-list",
-                            options=[
-                                {'label': 'pool',    'value': 'pool'},
-                                {'label': 'bonds',   'value': 'bonds'},
-                                {'label': 'cbts',    'value': 'cbts'},
-                                {'label': 'rewrite', 'value': 'rewrite'},
-                            ],
-                            value=['pool'],
-                            multi=True,
-                            clearable=False,
-                            style=_dd_style,
-                        ),
-                    ], style={'minWidth': '200px', 'flex': '1 1 200px'}),
-                    # Start date
-                    html.Div([
-                        html.Label("Start Date", style=_lbl_style),
-                        dcc.DatePickerSingle(
-                            id="an-bt-start",
-                            date=start_default,
-                            display_format='YYYY-MM-DD',
-                            style={'fontSize': '13px', 'minWidth': '140px'},
-                        ),
-                    ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '1001'}),
-                    # End date
-                    html.Div([
-                        html.Label("End Date", style=_lbl_style),
-                        dcc.DatePickerSingle(
-                            id="an-bt-end",
-                            date=end_default,
-                            display_format='YYYY-MM-DD',
-                            style={'fontSize': '13px', 'minWidth': '140px'},
-                        ),
-                    ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '1001'}),
-                    # Workers (curve-backtest only)
-                    html.Div([
-                        html.Label("Workers", style=_lbl_style),
-                        dcc.Input(
-                            id="an-bt-processes",
-                            type="number",
-                            value=4,
-                            min=1,
-                            max=32,
-                            step=1,
-                            style=_input_style,
-                        ),
-                    ], style={'minWidth': '80px', 'flex': '0 0 80px'}),
-                    # Run button
+                        # Instrument type
+                        html.Div([
+                            html.Label("Instrument Type", style=_lbl_style),
+                            dcc.Dropdown(
+                                id="an-bt-btype",
+                                options=[
+                                    {'label': 'IRS',             'value': 'IRS'},
+                                    {'label': 'TBond',           'value': 'TBond'},
+                                    {'label': 'CBond',           'value': 'CBond'},
+                                    {'label': 'Futures Analytics', 'value': 'Futures'},
+                                ],
+                                value='IRS',
+                                clearable=False,
+                                style=_dd_style,
+                            ),
+                        ], style={'minWidth': '150px', 'flex': '0 0 150px'}),
+                        # Update steps
+                        # pool/bonds/cbts: curve-backtest steps
+                        # rewrite: futures-analytics full rebuild flag
+                        html.Div([
+                            html.Label("Update Steps", style=_lbl_style),
+                            dcc.Dropdown(
+                                id="an-bt-update-list",
+                                options=[
+                                    {'label': 'pool',    'value': 'pool'},
+                                    {'label': 'bonds',   'value': 'bonds'},
+                                    {'label': 'cbts',    'value': 'cbts'},
+                                    {'label': 'rewrite', 'value': 'rewrite'},
+                                ],
+                                value=['pool'],
+                                multi=True,
+                                clearable=False,
+                                style=_dd_style,
+                            ),
+                        ], style={'minWidth': '200px', 'flex': '1 1 200px'}),
+                        # Start date
+                        html.Div([
+                            html.Label("Start Date", style=_lbl_style),
+                            dcc.DatePickerSingle(
+                                id="an-bt-start",
+                                date=start_default,
+                                display_format='YYYY-MM-DD',
+                                style={'fontSize': '13px', 'minWidth': '140px'},
+                            ),
+                        ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '1001'}),
+                        # End date
+                        html.Div([
+                            html.Label("End Date", style=_lbl_style),
+                            dcc.DatePickerSingle(
+                                id="an-bt-end",
+                                date=end_default,
+                                display_format='YYYY-MM-DD',
+                                style={'fontSize': '13px', 'minWidth': '140px'},
+                            ),
+                        ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '1001'}),
+                        # Workers (curve-backtest only)
+                        html.Div([
+                            html.Label("Workers", style=_lbl_style),
+                            dcc.Input(
+                                id="an-bt-processes",
+                                type="number",
+                                value=4,
+                                min=1,
+                                max=32,
+                                step=1,
+                                style=_input_style,
+                            ),
+                        ], style={'minWidth': '80px', 'flex': '0 0 80px'}),
+                        # Run button
+                        html.Div([
+                            html.Button(
+                                "▶  Run Backfill",
+                                id="an-btn-backtest",
+                                n_clicks=0,
+                                style={**_btn_style, 'background': '#1a5276', 'borderColor': '#2e86c1', 'fontWeight': '600'},
+                            ),
+                        ], style={'alignSelf': 'flex-end'}),
+                    ], style={
+                        'display': 'flex', 'flexDirection': 'row', 'gap': '14px',
+                        'alignItems': 'flex-end', 'flexWrap': 'wrap',
+                    }),
+
+                    # ── Factor Series row ────────────────────────────────────────
                     html.Div([
                         html.Button(
-                            "▶  Run Backfill",
-                            id="an-btn-backtest",
+                            "Generate Factor Series",
+                            id="an-btn-gen-factor-series",
                             n_clicks=0,
-                            style={**_btn_style, 'background': '#1a5276', 'borderColor': '#2e86c1', 'fontWeight': '600'},
+                            title="Full rebuild of factor-rates.pkl from raw market data. "
+                                  "Use on-demand when source data changes.",
+                            style={**_btn_style, 'background': '#0e3a3f', 'borderColor': '#36a6b8'},
                         ),
-                    ], style={'alignSelf': 'flex-end'}),
-                ], style={
-                    'display': 'flex', 'flexDirection': 'row', 'gap': '12px',
-                    'alignItems': 'flex-end', 'flexWrap': 'wrap',
-                }),
-
-                # ── Factor Series row ────────────────────────────────────────
-                html.Div([
-                    html.Button(
-                        "Generate Factor Series",
-                        id="an-btn-gen-factor-series",
-                        n_clicks=0,
-                        title="Full rebuild of factor-rates.pkl from raw market data. "
-                              "Use on-demand when source data changes.",
-                        style={**_btn_style, 'background': '#1b4332', 'borderColor': '#2ecc71'},
-                    ),
-                    html.Span(
-                        id="an-gen-factor-series-status",
-                        style={'color': '#aab0c0', 'fontSize': '12px', 'marginLeft': '12px'},
-                    ),
-                ], style={'marginTop': '12px', 'display': 'flex', 'alignItems': 'center'}),
+                        html.Span(
+                            id="an-gen-factor-series-status",
+                            style={'color': '#aab0c0', 'fontSize': '12px', 'marginLeft': '12px'},
+                        ),
+                    ], style={'marginTop': '14px', 'display': 'flex', 'alignItems': 'center'}),
+                ], style={'padding': '22px'}),
             ], className="an-card"),
 
             # ── Status & Logs card ───────────────────────────────────────────
             html.Div([
                 html.Div("STATUS & LOGS", className="an-card-hdr"),
-                html.Div(id="an-job-status", children="No job running.",
-                         style={'fontStyle': 'italic', 'color': '#aab0c0', 'fontSize': '12px', 'marginBottom': '8px'}),
-                html.Div(id="an-run-center-content"),
+                html.Div([
+                    html.Div(id="an-job-status", children="No job running.",
+                             style={'fontStyle': 'italic', 'color': '#aab0c0', 'fontSize': '12px', 'marginBottom': '8px'}),
+                    html.Div(id="an-run-center-content"),
+                ], style={'padding': '22px'}),
             ], className="an-card"),
+            ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '20px'}),
 
             dcc.Interval(id="an-run-center-interval", interval=_INTERVAL_RUN_CTR_MS, n_intervals=0),
         ]

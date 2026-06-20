@@ -16,6 +16,24 @@ from ..data import (
     BOND_SIGNAL_LABELS,
     BOND_SIGNAL_BUCKETS,
 )
+from ...atlas_components import badge
+
+# Diverging heat scale for Z-Score cells (mirrors HeatCell --heat-neg-3..--heat-pos-3)
+_HEAT_SCALE = [
+    ("#6e2a38", "rgba(255,255,255,0.9)"),   # <= -2.5
+    ("#5a2c3e", "rgba(255,255,255,0.85)"),  # -2.5 to -1.5
+    ("#3a2d45", "rgba(255,255,255,0.8)"),   # -1.5 to -0.5
+    ("#16294a", "rgba(255,255,255,0.7)"),   # -0.5 to +0.5
+    ("#1c3a52", "rgba(255,255,255,0.8)"),   # +0.5 to +1.5
+    ("#1f4f6b", "rgba(255,255,255,0.85)"),  # +1.5 to +2.5
+    ("#236a86", "rgba(255,255,255,0.9)"),   # >= +2.5
+]
+
+
+def _zscore_heat_style(z: float) -> dict:
+    idx = min(6, max(0, round(z) + 3))
+    bg, fg = _HEAT_SCALE[idx]
+    return {"backgroundColor": bg, "color": fg, "fontWeight": "600"}
 
 
 def _load_bond_signal_frame(bond_type: str):
@@ -178,41 +196,23 @@ def _build_bond_signal_mini_table(df: pd.DataFrame, columns: dict, title: str, c
             formatted[display_cols_map.get(col, col)] = value
         records.append(formatted)
 
-    # ── Z-Score bar styles (center-anchored, green right / red left) ──────────
+    # ── Z-Score cell styles — diverging heat scale (HeatCell equivalent) ──────
     z_vals = pd.to_numeric(df[col_z], errors='coerce')
-    _pos_clr = "rgba(39,174,96,0.55)"
-    _neg_clr = "rgba(231,76,60,0.55)"
-    _max_abs = max(abs(z_vals.dropna()).max() if not z_vals.dropna().empty else 1.0, 0.1)
     z_bar_styles: list[dict] = []
     for _i, _v in enumerate(z_vals):
         try:
             _v = float(_v)
         except (TypeError, ValueError):
             continue
-        _norm = max(-1.0, min(1.0, _v / _max_abs))
-        _half = abs(_norm) * 50
-        if _norm >= 0:
-            _grad = (f"transparent 50%, "
-                     f"{_pos_clr} 50%, {_pos_clr} {50 + _half:.1f}%, "
-                     f"transparent {50 + _half:.1f}%")
-        else:
-            _grad = (f"transparent {50 - _half:.1f}%, "
-                     f"{_neg_clr} {50 - _half:.1f}%, {_neg_clr} 50%, "
-                     f"transparent 50%")
         z_bar_styles.append({
             "if": {"row_index": _i, "column_id": "Z-Score"},
-            "background": f"linear-gradient(to right, {_grad})",
+            **_zscore_heat_style(_v),
         })
 
+    badge_tone = "error" if color == THEME['danger'] else "ok"
+
     return html.Div([
-        html.Div(title, style={
-            'color': color,
-            'fontSize': '12px',
-            'fontWeight': '700',
-            'letterSpacing': '0.04em',
-            'marginBottom': '8px',
-            'textTransform': 'uppercase',
-        }),
+        badge(title, status=badge_tone, style={'marginBottom': '8px', 'textTransform': 'uppercase'}),
         dash_table.DataTable(
             data=records,
             columns=[
@@ -344,16 +344,7 @@ def _build_bond_signal_cards(bond_type: str):
         ]
         if avg_z is not None and pd.notna(avg_z):
             stats.append(
-                html.Span(
-                    f"Avg Z {avg_z:+.2f}",
-                    style={
-                        'padding': '4px 10px',
-                        'borderRadius': '999px',
-                        'backgroundColor': 'rgba(52, 152, 219, 0.15)',
-                        'color': THEME['accent'],
-                        'fontSize': '11px',
-                    },
-                )
+                badge(f"Avg Z {avg_z:+.2f}", status="ok" if avg_z > 0 else "error")
             )
 
         bucket_cards.append(
@@ -402,10 +393,6 @@ def _build_bond_signal_cards(bond_type: str):
 
     return html.Div(
         bucket_cards,
-        style={
-            'display': 'grid',
-            'gridTemplateColumns': 'repeat(auto-fit, minmax(360px, 1fr))',
-            'gap': '16px',
-            'alignItems': 'start',
-        },
+        className='bond-bucket-grid',
+        style={'alignItems': 'start'},
     ), len(frame)

@@ -14,12 +14,15 @@ except ImportError:
 from .config import UPS, CENTERS, EYES, TEXTS, COLORSCALE
 from .data import genCurveData
 
+_VIEW_MODE_LABELS = {0: "3D", 1: "Today", 2: "Position", 3: "Short", 4: "Long", 5: "Above"}
+
 
 def register_callbacks(app: Dash) -> None:
     
     @app.callback(
         Output("surface-graph", "figure"),
         Output("surface-refresh-status", "children"),
+        Output("surface-chart-context", "children"),
         Input("surface-slider", "value"),
         Input("surface-date-picker-range", "start_date"),
         Input("surface-date-picker-range", "end_date"),
@@ -73,7 +76,7 @@ def register_callbacks(app: Dash) -> None:
                     )
                 ],
             )
-            return dict(data=[], layout=layout), status
+            return dict(data=[], layout=layout), status, "No data available"
 
         if value in [0, 2, 3]:
             z_secondary_beginning = [z[1] for z in zlist if z[0] == "None"]
@@ -130,7 +133,10 @@ def register_callbacks(app: Dash) -> None:
                     "zeroline": False, "backgroundcolor": app_color["graph_bg"], "color": "#E0E0E0"},
             ),
         )
-        return dict(data=data, layout=layout), status
+        country_label = "China" if country == "CN" else "United States"
+        view_label = _VIEW_MODE_LABELS.get(value, "3D")
+        context = f"{country_label} · {view_label} view · through {latest_asof}"
+        return dict(data=data, layout=layout), status, context
 
     @app.callback(Output("surface-text", "children"), [Input("surface-slider", "value")])
     def make_surface_text(value):

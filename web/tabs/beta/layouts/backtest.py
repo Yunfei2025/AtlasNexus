@@ -9,6 +9,7 @@ from dash import dcc, html
 import dash_bootstrap_components as dbc
 
 from ..data import THEME, FUTURES_AVAILABLE, SELECTED_FACTOR_POOL
+from ...atlas_components import button as an_button
 
 # Conditionally import futures discovery helper
 if FUTURES_AVAILABLE:
@@ -149,22 +150,6 @@ def build_beta_backtest_combined_layout():
     Individual Factors: risk-factor model backtest (full controls + enhanced charts).
     Portfolio:          historical allocation analysis (previously the Rebalance subtab).
     """
-    _inner_tab_style = {
-        'backgroundColor': THEME['bg_card'],
-        'color': THEME['text_main'],
-        'padding': '7px 16px',
-        'fontSize': '12px',
-        'borderRadius': '4px 4px 0 0',
-    }
-    _inner_tab_selected = {
-        'backgroundColor': THEME['accent'],
-        'color': 'white',
-        'padding': '7px 16px',
-        'fontSize': '12px',
-        'borderRadius': '4px 4px 0 0',
-        'fontWeight': 'bold',
-    }
-
     return html.Div([
         html.H6("Beta Backtest",
                 style={'color': THEME['text_main'], 'marginBottom': '10px'}),
@@ -179,11 +164,12 @@ def build_beta_backtest_combined_layout():
         dcc.Tabs(
             id='beta-backtest-inner-tabs',
             value='individual-factors',
+            className='tab-container an-subtab',
             children=[
                 dcc.Tab(label='Individual Factors', value='individual-factors',
-                        style=_inner_tab_style, selected_style=_inner_tab_selected),
+                        className='tab an-subtab', selected_className='tab an-subtab an-subtab--selected'),
                 dcc.Tab(label='Portfolio', value='portfolio',
-                        style=_inner_tab_style, selected_style=_inner_tab_selected),
+                        className='tab an-subtab', selected_className='tab an-subtab an-subtab--selected'),
             ],
             style={'marginBottom': '0px'},
         ),
@@ -507,19 +493,19 @@ def build_risk_factor_backtest_layout():
                     dcc.Input(id='rfbt-fm-train', type='number', value=12, min=3,
                               style={**_inp, 'width': '70px',
                                      'MozAppearance': 'textfield', 'appearance': 'textfield'}),
-                ], style={'marginRight': '25px'}),
+                ]),
                 html.Div([
                     html.Label("IC threshold:", style={**_lbl}),
                     dcc.Input(id='rfbt-fm-ic', type='number', value=0.05, step=0.01, min=0.01,
                               style={**_inp, 'width': '70px',
                                      'MozAppearance': 'textfield', 'appearance': 'textfield'}),
-                ], style={'marginRight': '25px'}),
+                ]),
                 html.Div([
                     html.Label("Top N features:", style={**_lbl}),
                     dcc.Input(id='rfbt-fm-topn', type='number', value=8, min=1,
                               style={**_inp, 'width': '70px',
                                      'MozAppearance': 'textfield', 'appearance': 'textfield'}),
-                ], style={'marginRight': '25px'}),
+                ]),
                 html.Div([
                     html.Label("Sizing:", style={**_lbl}),
                     dcc.Dropdown(
@@ -530,15 +516,15 @@ def build_risk_factor_backtest_layout():
                         ],
                         value='discrete',
                         clearable=False,
-                        style={'width': '160px', 'fontSize': '13px'},
+                        style={'width': '100%', 'fontSize': '13px'},
                     ),
-                ], style={'marginRight': '25px'}),
+                ]),
                 html.Div([
                     html.Label("Smooth window (days):", style={**_lbl}),
                     dcc.Input(id='rfbt-fm-possmooth', type='number', value=10, min=1,
                               style={**_inp, 'width': '70px',
                                      'MozAppearance': 'textfield', 'appearance': 'textfield'}),
-                ], style={'marginRight': '25px'}),
+                ]),
                 html.Div([
                     html.Label("Lookback:", style={**_lbl}),
                     dcc.Dropdown(
@@ -552,9 +538,9 @@ def build_risk_factor_backtest_layout():
                         ],
                         value=2,
                         clearable=False,
-                        style={'width': '130px', 'fontSize': '13px'},
+                        style={'width': '100%', 'fontSize': '13px'},
                     ),
-                ], style={'marginRight': '25px'}),
+                ]),
                 html.Div([
                     html.Label("Start Date (optional):", style={**_lbl}),
                     dcc.DatePickerSingle(
@@ -564,7 +550,7 @@ def build_risk_factor_backtest_layout():
                         display_format='YYYY-MM-DD',
                         style={'fontSize': '12px'},
                     ),
-                ], style={'marginRight': '15px'}),
+                ], style={'minWidth': '160px'}),
                 html.Div([
                     html.Label("End Date (optional):", style={**_lbl}),
                     dcc.DatePickerSingle(
@@ -574,22 +560,19 @@ def build_risk_factor_backtest_layout():
                         display_format='YYYY-MM-DD',
                         style={'fontSize': '12px'},
                     ),
-                ]),
-            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '8px',
-                      'alignItems': 'flex-end'}),
+                ], style={'minWidth': '160px'}),
+            ], className='strategy-params-grid'),
         ], style=_card),
 
         # ── Section 3: Actions ──────────────────────────────────────────
         html.Div([
-            html.Button(
-                "▶️ Run Backtest & Save",
+            an_button(
+                "▶ Run Backtest & Save",
                 id='rfbt-run-btn', n_clicks=0,
+                variant="success",
                 title="Trains selected factors and incrementally merges them into "
                       "the .joblib model file. Previously trained factors are preserved.",
-                style={'backgroundColor': THEME['success'], 'color': 'white',
-                       'padding': '10px 22px', 'border': 'none', 'borderRadius': '4px',
-                       'cursor': 'pointer', 'fontWeight': 'bold', 'fontSize': '14px',
-                       'marginRight': '12px'},
+                style_overrides={'padding': '10px 22px', 'fontSize': '14px', 'marginRight': '12px'},
             ),
         ], style={'marginBottom': '20px'}),
 
@@ -631,32 +614,17 @@ def build_factor_backtest_layout():
 
     # Compact style definitions for Strategy Config sidebar
     DARK_INPUT_STYLE = {
-        'backgroundColor': '#132C56',
-        'color': '#E2E8F0',
-        'border': '1px solid #2B4C7E',
+        'backgroundColor': THEME['bg_input'],
+        'color': THEME['text_main'],
+        'border': f'1px solid {THEME["table_header"]}',
         'fontSize': '1.0rem',
         'borderRadius': '4px',
         'padding': '4px 8px'
     }
 
-    SECTION_STYLE = {
-        'marginBottom': '25px',
-    }
-
-    SECTION_TITLE_STYLE = {
-        'color': '#90CDF4',
-        'fontSize': '1.0rem',
-        'fontWeight': '700',
-        'textTransform': 'uppercase',
-        'letterSpacing': '0.05em',
-        'borderBottom': '1px solid #2B4C7E',
-        'paddingBottom': '6px',
-        'marginBottom': '12px'
-    }
-
     LABEL_STYLE = {
         'fontSize': '0.95rem',
-        'color': '#A0AEC0',
+        'color': THEME['text_sub'],
         'marginBottom': '4px',
         'fontWeight': '600',
         'display': 'block'
@@ -664,11 +632,11 @@ def build_factor_backtest_layout():
 
     # Sidebar - single narrow column, ≤25% page width
     _radio_style = {'display': 'inline-block', 'marginRight': '14px',
-                    'fontSize': '0.9rem', 'color': '#CBD5E0', 'cursor': 'pointer'}
+                    'fontSize': '0.9rem', 'color': THEME['text_main'], 'cursor': 'pointer'}
     _radio_input = {"marginRight": "4px", "cursor": 'pointer'}
     _field_mb = {'marginBottom': '10px'}
-    _param_lbl = {'fontSize': '0.8rem', 'color': '#A0AEC0', 'display': 'block'}
-    _param_hd  = {'fontSize': '0.82rem', 'color': '#90CDF4', 'fontWeight': '600', 'marginBottom': '3px'}
+    _param_lbl = {'fontSize': '0.8rem', 'color': THEME['text_sub'], 'display': 'block'}
+    _param_hd  = {'fontSize': '0.82rem', 'color': THEME['accent'], 'fontWeight': '600', 'marginBottom': '3px'}
     _inp = {**DARK_INPUT_STYLE, 'fontSize': '0.88rem', 'padding': '2px 4px', 'width': '100%',
             'MozAppearance': 'textfield', 'WebkitAppearance': 'none', 'appearance': 'textfield'}
 
@@ -676,13 +644,14 @@ def build_factor_backtest_layout():
         html.H4(
             "Strategy Config",
             style={
-                'marginBottom': '14px', 'color': 'white', 'fontWeight': '600',
-                'fontSize': '1.05rem', 'borderBottom': '1px solid #4A5568', 'paddingBottom': '8px',
+                'marginBottom': '14px', 'color': THEME['text_main'], 'fontWeight': '600',
+                'fontSize': '1.05rem', 'borderBottom': f'1px solid {THEME["table_header"]}', 'paddingBottom': '8px',
             }
         ),
 
         # ── Data Settings ──────────────────────────────────────────────
-        html.Div("Data Settings", style=SECTION_TITLE_STYLE),
+        html.Div([
+        html.Div("Data Settings", className='sidebar-section__head'),
 
         html.Div([
             html.Label("Source", style={'fontSize': '0.9rem', 'color': '#A0AEC0', 'fontWeight': '600',
@@ -697,7 +666,7 @@ def build_factor_backtest_layout():
         ], style={**_field_mb, 'display': 'flex', 'flexDirection': 'row', 'alignItems': 'center'}),
 
         html.Div([
-            html.Label("Mode", style={'fontSize': '0.9rem', 'color': '#A0AEC0', 'fontWeight': '600',
+            html.Label("Mode", style={'fontSize': '0.9rem', 'color': THEME['text_sub'], 'fontWeight': '600',
                                       'marginRight': '10px', 'whiteSpace': 'nowrap', 'flexShrink': '0'}),
             dcc.RadioItems(
                 id='bf-trading-mode',
@@ -762,10 +731,12 @@ def build_factor_backtest_layout():
                     value='1Y', clearable=False, style={'fontSize': '0.9rem', 'color': 'black'},
                 ),
             ], style={'flex': 1, 'paddingLeft': '4px'}),
-        ], style={'display': 'flex', 'marginBottom': '18px'}),
+        ], style={'display': 'flex'}),
+        ], className='sidebar-section'),
 
         # ── Strategies ─────────────────────────────────────────────────
-        html.Div("Strategies", style=SECTION_TITLE_STYLE),
+        html.Div([
+        html.Div("Strategies", className='sidebar-section__head'),
         dcc.Checklist(
             id='bf-strategy-selector',
             options=[
@@ -779,15 +750,16 @@ def build_factor_backtest_layout():
                 {'label': ' Mkt Regime',   'value': 'MarketRegime'},
             ],
             value=['MA', 'Boll', 'SAR', 'MarketRegime'],
-            labelStyle={'fontSize': '0.88rem', 'color': '#E2E8F0', 'cursor': 'pointer',
+            labelStyle={'fontSize': '0.88rem', 'color': THEME['text_main'], 'cursor': 'pointer',
                         'display': 'flex', 'alignItems': 'center'},
             inputStyle={"marginRight": "5px", "cursor": 'pointer', "flexShrink": "0"},
-            style={'display': 'grid', 'gridTemplateColumns': 'repeat(3, 1fr)',
-                   'gap': '4px 2px', 'marginBottom': '18px'},
+            className='strategies-grid',
         ),
+        ], className='sidebar-section'),
 
         # ── Regime Logic ───────────────────────────────────────────────
-        html.Div("Regime Logic", style=SECTION_TITLE_STYLE),
+        html.Div([
+        html.Div("Regime Logic", className='sidebar-section__head'),
         html.Div([
             html.Div([
                 html.Label("Trending", style={**LABEL_STYLE, 'fontSize': '0.85rem'}),
@@ -805,64 +777,70 @@ def build_factor_backtest_layout():
                     value='Boll', style={'fontSize': '0.88rem', 'color': 'black'},
                 ),
             ], style={'flex': 1, 'paddingLeft': '4px', 'minWidth': '0'}),
-        ], style={'display': 'flex', 'marginBottom': '18px'}),
+        ], style={'display': 'flex'}),
+        ], className='sidebar-section'),
 
-        # ── Parameters ─────────────────────────────────────────────────
+        # ── Parameters (collapsible per-strategy) ───────────────────────
         html.Div([
-            html.Div("Parameters", style=SECTION_TITLE_STYLE),
+            html.Div("Parameters", className='sidebar-section__head'),
 
-            # MA
-            html.Div('MA', style=_param_hd),
-            html.Div([
-                html.Div([html.Label("Short", style=_param_lbl), dcc.Input(id='bf-ma-short', type='number', value=5,   min=2, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
-                html.Div([html.Label("Long",  style=_param_lbl), dcc.Input(id='bf-ma-long',  type='number', value=20, min=5, style=_inp)], style={'flex': 1, 'marginLeft':  '4px'}),
-            ], style={'display': 'flex', 'marginBottom': '8px'}),
+            html.Details([
+                html.Summary('MA'),
+                html.Div([
+                    html.Div([html.Label("Short", style=_param_lbl), dcc.Input(id='bf-ma-short', type='number', value=5,   min=2, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
+                    html.Div([html.Label("Long",  style=_param_lbl), dcc.Input(id='bf-ma-long',  type='number', value=20, min=5, style=_inp)], style={'flex': 1, 'marginLeft':  '4px'}),
+                ], style={'display': 'flex'}),
+            ], className='param-group', open=True),
 
-            # Bollinger
-            html.Div('Bollinger', style=_param_hd),
-            html.Div([
-                html.Div([html.Label("Period", style=_param_lbl), dcc.Input(id='bf-boll-window', type='number', value=20,  style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
-                html.Div([html.Label("StdDev", style=_param_lbl), dcc.Input(id='bf-boll-std',    type='number', value=1.0, step=0.1, style=_inp)], style={'flex': 1, 'marginLeft': '4px'}),
-            ], style={'display': 'flex', 'marginBottom': '4px'}),
-            dcc.Checklist(id='bf-boll-exit', options=[{'label': ' Exit@MA', 'value': 'exit'}], value=[],
-                          labelStyle={'fontSize': '0.8rem', 'color': '#CBD5E0'}, style={'marginBottom': '8px'}),
+            html.Details([
+                html.Summary('Bollinger'),
+                html.Div([
+                    html.Div([html.Label("Period", style=_param_lbl), dcc.Input(id='bf-boll-window', type='number', value=20,  style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
+                    html.Div([html.Label("StdDev", style=_param_lbl), dcc.Input(id='bf-boll-std',    type='number', value=1.0, step=0.1, style=_inp)], style={'flex': 1, 'marginLeft': '4px'}),
+                ], style={'display': 'flex', 'marginBottom': '4px'}),
+                dcc.Checklist(id='bf-boll-exit', options=[{'label': ' Exit@MA', 'value': 'exit'}], value=[],
+                              labelStyle={'fontSize': '0.8rem', 'color': THEME['text_main']}),
+            ], className='param-group'),
 
-            # VWAP
-            html.Div('VWAP', style=_param_hd),
-            html.Div([html.Label("Window", style=_param_lbl), dcc.Input(id='bf-vwap-window', type='number', value=20, style=_inp)], style={'marginBottom': '8px'}),
+            html.Details([
+                html.Summary('VWAP'),
+                html.Div([html.Label("Window", style=_param_lbl), dcc.Input(id='bf-vwap-window', type='number', value=20, style=_inp)]),
+            ], className='param-group'),
 
-            # Momentum
-            html.Div('Momentum', style=_param_hd),
-            html.Div([html.Label("Lookback", style=_param_lbl), dcc.Input(id='bf-mom-window', type='number', value=14, style=_inp)], style={'marginBottom': '8px'}),
+            html.Details([
+                html.Summary('Momentum'),
+                html.Div([html.Label("Lookback", style=_param_lbl), dcc.Input(id='bf-mom-window', type='number', value=14, style=_inp)]),
+            ], className='param-group'),
 
-            # ATR
-            html.Div('ATR', style=_param_hd),
-            html.Div([
-                html.Div([html.Label("EMA", style=_param_lbl), dcc.Input(id='bf-atr-ema-window', type='number', value=11, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
-                html.Div([html.Label("Win", style=_param_lbl), dcc.Input(id='bf-atr-window',     type='number', value=14, style=_inp)], style={'flex': 1, 'marginLeft': '4px', 'marginRight': '4px'}),
-                html.Div([html.Label("Mult",style=_param_lbl), dcc.Input(id='bf-atr-mult',       type='number', value=2.0, step=0.1, style=_inp)], style={'flex': 1, 'marginLeft': '4px'}),
-            ], style={'display': 'flex', 'marginBottom': '8px'}),
+            html.Details([
+                html.Summary('ATR'),
+                html.Div([
+                    html.Div([html.Label("EMA", style=_param_lbl), dcc.Input(id='bf-atr-ema-window', type='number', value=11, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
+                    html.Div([html.Label("Win", style=_param_lbl), dcc.Input(id='bf-atr-window',     type='number', value=14, style=_inp)], style={'flex': 1, 'marginLeft': '4px', 'marginRight': '4px'}),
+                    html.Div([html.Label("Mult",style=_param_lbl), dcc.Input(id='bf-atr-mult',       type='number', value=2.0, step=0.1, style=_inp)], style={'flex': 1, 'marginLeft': '4px'}),
+                ], style={'display': 'flex'}),
+            ], className='param-group'),
 
-            # SAR
-            html.Div('SAR', style=_param_hd),
-            html.Div([
-                html.Div([html.Label("AF",  style=_param_lbl), dcc.Input(id='bf-sar-af',     type='number', value=0.02, step=0.01, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
-                html.Div([html.Label("Max", style=_param_lbl), dcc.Input(id='bf-sar-max-af', type='number', value=0.2,  step=0.01, style=_inp)], style={'flex': 1, 'marginLeft':  '4px'}),
-            ], style={'display': 'flex', 'marginBottom': '4px'}),
+            html.Details([
+                html.Summary('SAR'),
+                html.Div([
+                    html.Div([html.Label("AF",  style=_param_lbl), dcc.Input(id='bf-sar-af',     type='number', value=0.02, step=0.01, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
+                    html.Div([html.Label("Max", style=_param_lbl), dcc.Input(id='bf-sar-max-af', type='number', value=0.2,  step=0.01, style=_inp)], style={'flex': 1, 'marginLeft':  '4px'}),
+                ], style={'display': 'flex'}),
+            ], className='param-group'),
 
-        ], style={'marginBottom': '15px', 'padding': '10px', 'backgroundColor': '#0a1e3d',
-                  'borderRadius': '4px', 'border': '1px solid #2B4C7E'}),
+        ], className='sidebar-section'),
 
         dbc.Button("Run Backtest", id='bf-run-button', style={
-            'width': '100%', 'padding': '10px', 'backgroundColor': '#007ACE',
+            'width': '100%', 'padding': '10px', 'backgroundColor': THEME['accent'],
             'color': 'white', 'border': 'none', 'cursor': 'pointer',
             'fontSize': '1.0rem', 'fontWeight': 'bold', 'letterSpacing': '0.08rem',
         }),
 
     ], style={
-        'width': '22%', 'minWidth': '220px', 'maxWidth': '280px', 'flexShrink': '0',
-        'padding': '1.2rem 0.9rem', 'backgroundColor': '#082255',
-        'color': 'white', 'overflowY': 'auto', 'fontFamily': '"Open Sans", sans-serif',
+        'width': '280px', 'flexShrink': '0',
+        'padding': '1.2rem 0.9rem', 'backgroundColor': THEME['bg_main'],
+        'color': THEME['text_main'], 'overflowY': 'auto', 'fontFamily': '"Open Sans", sans-serif',
     })
 
     # Content area
@@ -873,6 +851,7 @@ def build_factor_backtest_layout():
             color=THEME['accent'],
             children=html.Div(id='bf-results-container', style={'minHeight': '400px'})
         )
-    ], style={'flex': '1', 'padding': '1.5rem 2rem', 'fontFamily': '"Open Sans", sans-serif', 'minWidth': '0'})
+    ], style={'minWidth': '0'})
 
-    return html.Div([sidebar, content], style={'display': 'flex', 'flexDirection': 'row', 'width': '100%', 'minHeight': 'calc(100vh - 150px)', 'backgroundColor': THEME['bg_main']})
+    return html.Div([sidebar, content], className='futures-layout',
+                     style={'backgroundColor': THEME['bg_main'], 'padding': '0'})

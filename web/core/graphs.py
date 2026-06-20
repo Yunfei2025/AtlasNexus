@@ -287,40 +287,78 @@ def irscurve(interval, ctype):
        return("Error: The figure file does not exist.")
 
 
+_REF_BOND_COLUMNS = [
+    {"name": "Tenor", "id": "Tenor"},
+    {"name": "CGB", "id": "CGB"},
+    {"name": "CR,3m", "id": "CGB_CR"},
+    {"name": "CDB", "id": "CDB"},
+    {"name": "CR,3m", "id": "CDB_CR"},
+]
+
+
+def _ref_bonds_table_data():
+    """On-the-run CGB/CDB reference bonds, reusing the Market Data tab's loader."""
+    try:
+        from web.tabs.atlas_market_data_tab import _load_on_the_run_bonds
+        df = _load_on_the_run_bonds()
+        if df.empty:
+            return [], []
+        return df.to_dict("records"), _REF_BOND_COLUMNS
+    except Exception as e:
+        print(f"[curves_graph] ref bonds load error: {e}")
+        return [], []
+
+
+_CURVE_TYPE_LABELS = {
+    "TBond": "China Government Bond",
+    "CBond": "China Policybank Bond",
+    "IRSSpot": "IRS Spot Curve",
+    "IRSForward": "IRS Forward Curve",
+}
+
+
 @app.callback([Output("curves-graph", "figure"),
                Output("curves-title", "children"),
-               Output("ref-bonds-container", "style")],
+               Output("ref-bonds-container", "style"),
+               Output("ref-bonds-t", "data"),
+               Output("ref-bonds-t", "columns"),
+               Output("curves-chart-subtitle", "children")],
               Input("data-refresh", "n_intervals"),
               Input('curve-selection', 'value'),
               )
 def curves_graph(interval, curve_type):
     """Combined callback for bond and IRS curves."""
+    subtitle = _CURVE_TYPE_LABELS.get(curve_type, curve_type or "")
     try:
         if curve_type in ['TBond', 'CBond']:
             # Bond curves
             figure = _load_pickle_cached(os.path.join(DIR_INPUT, curve_type + '-fig.obj'))
             title = "Real Time Bond Curves"
             ref_bonds_style = {"display": "block"}  # Show reference bonds table
+            ref_bonds_data, ref_bonds_columns = _ref_bonds_table_data()
         elif curve_type == 'IRSSpot':
             # IRS Spot curve
             figure = _load_pickle_cached(os.path.join(DIR_INPUT, 'IRS-spotfig.obj'))
             title = "Real Time Interest Rate Swap Curves - Spot"
             ref_bonds_style = {"display": "none"}  # Hide reference bonds table
+            ref_bonds_data, ref_bonds_columns = [], []
         elif curve_type == 'IRSForward':
             # IRS Forward curve
             figure = _load_pickle_cached(os.path.join(DIR_INPUT, 'IRS-forwardfig.obj'))
             title = "Real Time Interest Rate Swap Curves - Forward"
             ref_bonds_style = {"display": "none"}  # Hide reference bonds table
+            ref_bonds_data, ref_bonds_columns = [], []
         else:
             # Default fallback
             figure = _load_pickle_cached(os.path.join(DIR_INPUT, 'TBond-fig.obj'))
             title = "Real Time Bond Curves"
             ref_bonds_style = {"display": "block"}
-        
-        return figure, title, ref_bonds_style
+            ref_bonds_data, ref_bonds_columns = _ref_bonds_table_data()
+
+        return figure, title, ref_bonds_style, ref_bonds_data, ref_bonds_columns, subtitle
     except FileNotFoundError:
         empty_figure = {"data": [], "layout": {"title": "Error: The figure file does not exist."}}
-        return empty_figure, "Error Loading Curves", {"display": "none"}
+        return empty_figure, "Error Loading Curves", {"display": "none"}, [], [], subtitle
 
 
 @app.callback(Output("trend-graph", "figure"),

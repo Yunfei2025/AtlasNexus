@@ -342,22 +342,22 @@ def register_portfolio_run_callbacks(app):
                 html.Div([
                     html.Span(factor, style={
                         'color': THEME['text_main'], 'fontSize': '12px',
-                        'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0',
+                        'width': '130px', 'fontWeight': 'bold', 'flexShrink': '0',
                     }),
                     html.Span(vol_str, style={
                         'color': vol_color, 'fontSize': '12px',
-                        'width': '62px', 'textAlign': 'right', 'flexShrink': '0',
+                        'width': '80px', 'textAlign': 'right', 'flexShrink': '0',
                         'fontFamily': 'monospace',
                         'fontWeight': 'bold' if has_missing_vol else 'normal',
                     }, title='Volatility: if missing data, estimated at 15% (typical commodity vol)'),
                     html.Span(f"{round(rp_max)}", style={
                         'color': THEME['text_sub'], 'fontSize': '12px',
-                        'width': '105px', 'textAlign': 'right', 'flexShrink': '0',
+                        'width': '100px', 'textAlign': 'right', 'flexShrink': '0',
                         'fontFamily': 'monospace',
                     }, title='Vol√ allocation: from factor volatility weighted by sqrt(vol)'),
                     html.Span(dv01_str, style={
                         'color': THEME['text_sub'], 'fontSize': '12px',
-                        'width': '85px', 'textAlign': 'right', 'flexShrink': '0',
+                        'width': '90px', 'textAlign': 'right', 'flexShrink': '0',
                         'fontFamily': 'monospace',
                     }),
                     html.Span(
@@ -365,7 +365,7 @@ def register_portfolio_run_callbacks(app):
                         title=f"{label}{' (default)' if is_default_coeff else ''}",
                         style={
                             'color': THEME.get('text_sub', '#aaa') if is_default_coeff else color,
-                            'fontSize': '12px', 'width': '44px', 'textAlign': 'center',
+                            'fontSize': '12px', 'width': '70px', 'textAlign': 'center',
                             'flexShrink': '0', 'fontWeight': 'bold',
                             'fontStyle': 'italic' if is_default_coeff else 'normal',
                         }
@@ -376,9 +376,9 @@ def register_portfolio_run_callbacks(app):
                         value=round(suggested),
                         step=1,
                         style={
-                            'flex': '1', 'minWidth': '100px', 'fontSize': '12px', 'padding': '4px 6px',
-                            'backgroundColor': '#ffffff', 'color': '#000000',
-                            'border': f'1px solid {THEME["table_header"]}',
+                            'flex': '1', 'minWidth': '200px', 'fontSize': '13px', 'padding': '5px 8px',
+                            'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
+                            'border': '1px solid #2a517f',
                             'borderRadius': '3px', 'textAlign': 'right',
                             'fontFamily': 'monospace', 'fontWeight': 'normal',
                             'appearance': 'textfield',  # Remove spinner arrows on number input

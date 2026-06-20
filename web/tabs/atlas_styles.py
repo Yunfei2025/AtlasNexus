@@ -16,13 +16,14 @@ from typing import Any, Dict
 # Single source of truth for the navy ramp + signal colors. Mirrors the
 # :root tokens in web/assets/z_atlasnexus-design.css (--an-*).
 TOKENS: Dict[str, str] = {
-    "navy_900": "#040f30", "navy_800": "#082255", "navy_700": "#0c2b64",
-    "navy_600": "#112e66", "navy_500": "#1a3a6e", "navy_400": "#2a5298",
-    "navy_300": "#425476",
-    "blue":     "#2e86c1", "cyan":     "#45b6e6",
-    "green":    "#27ae60", "amber":    "#f39c12",
-    "red":      "#c0392b", "purple":   "#8e44ad",
-    "text":     "#ffffff", "muted":    "#aab0c0", "faint": "#5a6478",
+    "navy_950": "#060d1c", "navy_900": "#0a1428", "navy_850": "#0c1830",
+    "navy_800": "#0e1d3a", "navy_750": "#102544", "navy_700": "#122a4c",
+    "navy_600": "#17345c", "navy_500": "#21426e", "navy_400": "#2e547f",
+    "navy_300": "#3a4d6e",
+    "blue":   "#3d8bd4", "cyan":   "#45b6e6",
+    "green":  "#2f9d6b", "amber":  "#e0a23c",
+    "red":    "#d56b6b", "purple": "#7c70d6", "teal": "#36a6b8",
+    "text":   "#e9eef8", "muted":  "#a4b6d2", "faint": "#4a5d7c",
 }
 
 # Per-book accent colors — keep in sync with .an-subtab--* classes and the
@@ -47,9 +48,9 @@ summary_subtabs_style: Dict[str, Any] = {
 }
 
 summary_subtabs_colors: Dict[str, Any] = {
-    "border": "#061E44",
-    "primary": "#3498db",
-    "background": "#112e66",
+    "border": TOKENS["navy_800"],
+    "primary": TOKENS["blue"],
+    "background": TOKENS["navy_600"],
 }
 
 # ---------------------------------------------------------------------------
@@ -67,39 +68,39 @@ summary_subtabs_colors: Dict[str, Any] = {
 import plotly.graph_objects as go  # noqa: E402
 
 PLOTLY_LAYOUT_DEFAULTS: Dict[str, Any] = {
-    "paper_bgcolor": "#082255",
-    "plot_bgcolor":  "#082255",
-    "font":          {"family": "Open Sans, sans-serif", "size": 12, "color": "#ffffff"},
+    "paper_bgcolor": TOKENS["navy_900"],
+    "plot_bgcolor":  TOKENS["navy_900"],
+    "font":          {"family": "Open Sans, sans-serif", "size": 12, "color": TOKENS["text"]},
     "xaxis": {
-        "gridcolor":     "rgba(170,176,192,0.10)",
-        "zerolinecolor": "rgba(170,176,192,0.22)",
-        "linecolor":     "rgba(170,176,192,0.22)",
-        "tickfont":      {"size": 11, "color": "#aab0c0"},
-        "title_font":    {"size": 12, "color": "#aab0c0"},
+        "gridcolor":     "rgba(164,182,210,0.10)",
+        "zerolinecolor": "rgba(164,182,210,0.22)",
+        "linecolor":     "rgba(164,182,210,0.22)",
+        "tickfont":      {"size": 11, "color": TOKENS["muted"]},
+        "title_font":    {"size": 12, "color": TOKENS["muted"]},
     },
     "yaxis": {
-        "gridcolor":     "rgba(170,176,192,0.10)",
-        "zerolinecolor": "rgba(170,176,192,0.22)",
-        "linecolor":     "rgba(170,176,192,0.22)",
-        "tickfont":      {"size": 11, "color": "#aab0c0"},
-        "title_font":    {"size": 12, "color": "#aab0c0"},
+        "gridcolor":     "rgba(164,182,210,0.10)",
+        "zerolinecolor": "rgba(164,182,210,0.22)",
+        "linecolor":     "rgba(164,182,210,0.22)",
+        "tickfont":      {"size": 11, "color": TOKENS["muted"]},
+        "title_font":    {"size": 12, "color": TOKENS["muted"]},
     },
     "legend": {
-        "bgcolor":     "rgba(8,34,85,0.7)",
-        "bordercolor": "rgba(42,82,152,0.5)",
+        "bgcolor":     "rgba(10,20,40,0.7)",
+        "bordercolor": "rgba(46,84,127,0.5)",
         "borderwidth": 1,
-        "font":        {"size": 11, "color": "#aab0c0"},
+        "font":        {"size": 11, "color": TOKENS["muted"]},
     },
     "margin": {"t": 40, "b": 40, "l": 50, "r": 20},
     "hoverlabel": {
-        "bgcolor":    "#0c2b64",
-        "bordercolor":"#2a5298",
+        "bgcolor":    TOKENS["navy_700"],
+        "bordercolor":TOKENS["navy_400"],
         "font_size":  12,
-        "font_color": "#ffffff",
+        "font_color": TOKENS["text"],
     },
     "colorway": [
-        "#2e86c1", "#27ae60", "#f39c12", "#8e44ad",
-        "#16a085", "#c0392b", "#2980b9", "#d35400",
+        TOKENS["blue"], TOKENS["green"], TOKENS["amber"], TOKENS["purple"],
+        TOKENS["teal"], TOKENS["red"], TOKENS["cyan"], "#d35400",
         "#1abc9c", "#7f8c8d",
     ],
 }

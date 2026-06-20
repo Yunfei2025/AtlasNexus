@@ -29,16 +29,19 @@ from settings.paths import DIR_INPUT, DIR_DATA
 
 # ── Theme ────────────────────────────────────────────────────────────────────
 THEME = {
-    "bg_main":       "#082255",
-    "bg_card":       "#0c2b64",
-    "bg_input":      "#112e66",
-    "text_main":     "#ffffff",
-    "text_sub":      "#aab0c0",
-    "accent":        "#3498db",
-    "accent_light":  "#5dade2",
-    "table_header":  "#061E44",
-    "positive":      "#27ae60",
-    "negative":      "#e74c3c",
+    "bg_main":       "#0a1428",
+    "bg_card":       "#122a4c",
+    "bg_input":      "#17345c",
+    "text_main":     "#e9eef8",
+    "text_sub":      "#a4b6d2",
+    "accent":        "#3d8bd4",
+    "accent_light":  "#45b6e6",
+    "table_header":  "#1e3a5f",
+    "positive":      "#2f9d6b",
+    "negative":      "#d56b6b",
+    "positive_bar":  "rgba(44,110,77,0.55)",
+    "negative_bar":  "rgba(138,58,58,0.55)",
+    "neutral_bar":   "rgba(31,58,94,0.65)",
 }
 
 _ROW_KEY_COL = "__row_key"
@@ -105,8 +108,8 @@ def _bar_styles_zscore(
 ) -> list[dict]:
     """Center-anchored bar: positive (green, right) / negative (red, left)."""
     styles: list[dict] = []
-    pos_color = "rgba(39,174,96,0.55)"
-    neg_color = "rgba(231,76,60,0.55)"
+    pos_color = THEME["positive_bar"]
+    neg_color = THEME["negative_bar"]
     keyed_df = _with_row_keys_df(df)
     for row_key, val in zip(keyed_df[_ROW_KEY_COL], keyed_df[col]):
         try:
@@ -140,6 +143,7 @@ def _dt_style(
     columns: list[dict],
     data: list[dict],
     extra_styles: list[dict] | None = None,
+    cell_conditional: list[dict] | None = None,
 ) -> dash_table.DataTable:
     keyed_data = _with_row_keys_records(data)
     keyed_columns = list(columns)
@@ -159,13 +163,15 @@ def _dt_style(
             {"selector": ".show-hide", "rule": "display: none;"},
             {"selector": ".dash-spreadsheet-menu", "rule": "display: none;"},
         ],
-        style_table={"overflowX": "auto", "borderRadius": "4px"},
+        style_table={"overflowX": "auto", "borderRadius": "4px", "width": "100%", "minWidth": "100%"},
         # style_header removed — CSS .dash-header rule in z_atlasnexus-design.css owns this
         style_cell={
             "textAlign": "center",
             "whiteSpace": "normal",
             "minWidth": "60px",
+            "border": f'1px solid {THEME["table_header"]}',
         },
+        style_cell_conditional=cell_conditional or [],
         style_data_conditional=cond_styles,
     )
 
@@ -173,26 +179,10 @@ def _dt_style(
 def _card(title: str, content: Any) -> html.Div:
     return html.Div(
         [
-            html.Div(
-                title,
-                style={
-                    "color": THEME["accent"],
-                    "fontWeight": "bold",
-                    "fontSize": "13px",
-                    "marginBottom": "8px",
-                    "paddingBottom": "6px",
-                    "borderBottom": f'1px solid {THEME["table_header"]}',
-                    "letterSpacing": "0.05em",
-                },
-            ),
-            content,
+            html.Div(title, className="an-card-hdr"),
+            html.Div(content, style={"padding": "12px 14px"}),
         ],
-        style={
-            "backgroundColor": THEME["bg_card"],
-            "border": f'1px solid {THEME["table_header"]}',
-            "borderRadius": "6px",
-            "padding": "14px 16px",
-        },
+        className="an-card",
     )
 
 
@@ -587,84 +577,81 @@ def build_market_data_layout() -> html.Div:
                         [
                             _card("MONEY MARKET RATES",
                                   html.Div(id="mkt-data-rates-table")),
-                            html.Div(style={"height": "14px"}),
                             _card("REFERENCE BONDS",
                                   html.Div(id="mkt-data-refbond-table")),
-                            html.Div(style={"height": "14px"}),
                             _card("BOND FUTURES & CTD",
                                   html.Div(id="mkt-data-futures-table")),
                         ],
-                        style={"flex": "1 1 auto", "minWidth": "420px",
-                               "display": "flex", "flexDirection": "column"},
+                        style={"display": "flex", "flexDirection": "column", "gap": "20px"},
                     ),
                     # ── Right column: On-the-run bonds + IRS Forward Rates ──
                     html.Div(
                         [
                             _card("ON-THE-RUN BONDS",
                                   html.Div(id="mkt-data-otr-table")),
-                            html.Div(style={"height": "14px"}),
-                            _card(
-                                "IRS FORWARD RATES",
+                            html.Div([
                                 html.Div([
-                                    # ── Shift controls ────────────────────────
-                                    html.Div(
-                                        [
-                                            html.Span(
-                                                "R7D shift (bp):",
-                                                style={"color": THEME["text_sub"], "fontSize": "11px",
-                                                       "marginRight": "6px", "whiteSpace": "nowrap"},
-                                            ),
-                                            dcc.Input(
-                                                id="irs-fwd-r7d-shift",
-                                                type="number",
-                                                value=0,
-                                                step=0.25,
-                                                debounce=True,
-                                                style={
-                                                    "width": "70px", "fontSize": "12px",
-                                                    "backgroundColor": THEME["bg_input"],
-                                                    "color": THEME["text_main"],
-                                                    "border": f'1px solid {THEME["accent"]}',
-                                                    "borderRadius": "3px", "padding": "2px 6px",
-                                                    "textAlign": "right",
-                                                },
-                                            ),
-                                            html.Span(
-                                                "S3M shift (bp):",
-                                                style={"color": THEME["text_sub"], "fontSize": "11px",
-                                                       "marginLeft": "16px", "marginRight": "6px",
-                                                       "whiteSpace": "nowrap"},
-                                            ),
-                                            dcc.Input(
-                                                id="irs-fwd-s3m-shift",
-                                                type="number",
-                                                value=0,
-                                                step=0.25,
-                                                debounce=True,
-                                                style={
-                                                    "width": "70px", "fontSize": "12px",
-                                                    "backgroundColor": THEME["bg_input"],
-                                                    "color": THEME["text_main"],
-                                                    "border": f'1px solid {THEME["accent"]}',
-                                                    "borderRadius": "3px", "padding": "2px 6px",
-                                                    "textAlign": "right",
-                                                },
-                                            ),
-                                        ],
-                                        style={"display": "flex", "alignItems": "center",
-                                               "marginBottom": "10px"},
-                                    ),
-                                    html.Div(id="mkt-data-irs-table"),
-                                ]),
-                            ),
+                                    html.Div("IRS FORWARD RATES", className="an-card-hdr",
+                                             style={"border": "none", "padding": "0", "flex": "1"}),
+                                    html.Div([
+                                        html.Span(
+                                            "R7D shift (bp):",
+                                            style={"color": THEME["text_sub"], "fontSize": "11px",
+                                                   "marginRight": "6px", "whiteSpace": "nowrap"},
+                                        ),
+                                        dcc.Input(
+                                            id="irs-fwd-r7d-shift",
+                                            type="number",
+                                            value=0,
+                                            step=0.25,
+                                            debounce=True,
+                                            style={
+                                                "width": "70px", "fontSize": "12px",
+                                                "backgroundColor": THEME["bg_input"],
+                                                "color": THEME["text_main"],
+                                                "border": f'1px solid {THEME["accent"]}',
+                                                "borderRadius": "3px", "padding": "2px 6px",
+                                                "textAlign": "right",
+                                            },
+                                        ),
+                                        html.Span(
+                                            "S3M shift (bp):",
+                                            style={"color": THEME["text_sub"], "fontSize": "11px",
+                                                   "marginLeft": "16px", "marginRight": "6px",
+                                                   "whiteSpace": "nowrap"},
+                                        ),
+                                        dcc.Input(
+                                            id="irs-fwd-s3m-shift",
+                                            type="number",
+                                            value=0,
+                                            step=0.25,
+                                            debounce=True,
+                                            style={
+                                                "width": "70px", "fontSize": "12px",
+                                                "backgroundColor": THEME["bg_input"],
+                                                "color": THEME["text_main"],
+                                                "border": f'1px solid {THEME["accent"]}',
+                                                "borderRadius": "3px", "padding": "2px 6px",
+                                                "textAlign": "right",
+                                            },
+                                        ),
+                                    ], style={"display": "flex", "alignItems": "center"}),
+                                ], className="an-card-actions"),
+                                html.Div(id="mkt-data-irs-table", style={"padding": "12px 14px"}),
+                            ], className="an-card"),
                         ],
-                        style={"flex": "1.2 1 auto", "minWidth": "0", "display": "flex", "flexDirection": "column"},
+                        style={"display": "flex", "flexDirection": "column", "gap": "20px"},
                     ),
                 ],
-                style={"display": "flex", "gap": "14px", "alignItems": "flex-start"},
+                style={
+                    "display": "grid",
+                    "gridTemplateColumns": "1fr 1fr",
+                    "gap": "20px",
+                    "alignItems": "start",
+                },
             ),
         ],
-        style={"padding": "16px", "backgroundColor": THEME["bg_main"]},
+        style={"padding": "16px"},
     )
 
 
@@ -774,10 +761,11 @@ def register_market_data_callbacks(app) -> None:
                         if len(vals):
                             irs_styles += _bar_styles_gradient(
                                 df_irs, col, vals.min(), vals.max(),
-                                color="rgba(52,152,219,0.45)",
+                                color=THEME["neutral_bar"],
                                 bg=THEME["bg_card"],
                             )
+            irs_cell_styles = [{"if": {"column_id": display_cols[2:]}, "textAlign": "right"}]
             tbl_irs = _dt_style("mkt-dt-irs", cols_irs, df_irs.to_dict("records"),
-                                extra_styles=irs_styles)
+                                extra_styles=irs_styles, cell_conditional=irs_cell_styles)
 
         return tbl_mm, tbl_fut, tbl_ref, tbl_otr, tbl_irs, ts

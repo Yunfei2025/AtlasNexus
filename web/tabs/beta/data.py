@@ -51,20 +51,20 @@ except ImportError:
     FUTURES_AVAILABLE = False
     print("Warning: futures.backtest modules not found.")
 
-# --- Theme Constants (AtlasNexus Dark Blue) ---
+# --- Theme Constants (AtlasNexus Dark Blue — mirrors --an-* tokens in z_atlasnexus-design.css) ---
 THEME = {
-    'bg_main': '#082255',       # Main Deep Blue Background
-    'bg_card': '#0c2b64',       # Slightly lighter blue for cards
-    'bg_input': '#112e66',      # Input/Dropdown container background
-    'text_main': '#ffffff',     # Main text
-    'text_sub': '#aab0c0',      # Secondary text
-    'accent': '#3498db',        # Bright blue accent
-    'success': '#00cc96',       # Green
-    'warning': '#f39c12',       # Orange
-    'danger': '#ef553b',        # Red
-    'table_header': '#061E44',  # Dark header
-    'table_row_odd': '#0c2b64', # Dark row
-    'table_row_even': '#082255',# Darker row
+    'bg_main': '#0a1428',       # --an-navy-900
+    'bg_card': '#122a4c',       # --an-navy-700 / --surface-panel
+    'bg_input': '#17345c',      # --an-navy-600 / --surface-input
+    'text_main': '#e9eef8',     # --an-text / --text-primary
+    'text_sub': '#a4b6d2',      # --an-muted / --text-secondary
+    'accent': '#3d8bd4',        # --an-blue / --accent-blue
+    'success': '#2f9d6b',       # --an-green / --accent-green
+    'warning': '#e0a23c',       # --an-amber / --accent-amber
+    'danger': '#d56b6b',        # --an-red / --negative
+    'table_header': '#0e1d3a',  # --an-navy-800
+    'table_row_odd': '#122a4c', # --an-navy-700
+    'table_row_even': '#0a1428',# --an-navy-900
     'chart_template': 'plotly_dark'
 }
 

@@ -18,9 +18,9 @@ from dash.dependencies import Input, Output
 
 # ── Shared theme (aligned with the rest of Beta Book) ─────────────────────────
 THEME = {
-    "bg_main":       "#082255",
-    "bg_card":       "#0c2b64",
-    "bg_input":      "#112e66",
+    "bg_main":       "#0a1428",
+    "bg_card":       "#122a4c",
+    "bg_input":      "#17345c",
     "text_main":     "#ffffff",
     "text_sub":      "#aab0c0",
     "accent":        "#3498db",
@@ -127,7 +127,8 @@ def build_trend_layout() -> html.Div:
             label,
             id=f"an-trend-btn-{val.replace(':', '-').replace('中债国债到期收益率:', 'tsy').replace('.', '_')}",
             n_clicks=0,
-            style=_BTN_BASE,
+            style=_BTN_ACTIVE if val == "中债国债到期收益率:10年" else _BTN_BASE,
+            className="qs-chip",
         )
         for val, label in _QUICK
     ]
@@ -163,8 +164,9 @@ def build_trend_layout() -> html.Div:
                             html.Div(quick_buttons),
                         ],
                         style={
-                            "width": "130px",
-                            "minWidth": "130px",
+                            "width": "172px",
+                            "minWidth": "172px",
+                            "flexShrink": "0",
                             "backgroundColor": THEME["bg_card"],
                             "padding": "14px 10px",
                             "borderRadius": "5px",
@@ -316,6 +318,14 @@ def register_trend_callbacks(app) -> None:
             return _quick_btn_values[idx]
         except ValueError:
             raise dash.exceptions.PreventUpdate
+
+    # ── Highlight the quick-select button matching the active series ───────────
+    @app.callback(
+        [Output(btn_id, "style") for btn_id in _quick_btn_ids],
+        Input("an-trend-type", "value"),
+    )
+    def _highlight_active_quick_select(ctype):
+        return [_BTN_ACTIVE if val == ctype else _BTN_BASE for val in _quick_btn_values]
 
     # ── Main chart callback ────────────────────────────────────────────────────
     @app.callback(

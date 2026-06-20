@@ -8,6 +8,7 @@ from dash import dcc, html
 from multiasset.storage import load_last_asset_pool
 
 from ..data import THEME
+from ...atlas_components import lbl as an_lbl, asset_pool_item
 
 
 def build_multiasset_portfolio_layout():
@@ -44,21 +45,10 @@ def build_multiasset_portfolio_layout():
                            style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px', 'textAlign': 'center', 'padding': '15px'})]
         pool_count_text = "(0)"
     else:
-        _POOL_COLORS = {
-            'Commodities': '#b48b32',
-            'Equities': '#1a5276',
-            'FX': '#6b4b8a',
-        }
-        pool_display = []
-        for asset in initial_pool:
-            bg_col = _POOL_COLORS.get(asset['type'], '#2c5e40')
-
-            pool_display.append(
-                html.Div([
-                    html.Span(f"• {asset['name']}", style={'fontWeight': 'bold', 'color': 'white'}),
-                    html.Span(f" ({asset.get('universe','')} - {asset.get('sector','')})", style={'color': '#ddd', 'fontSize': '11px', 'marginLeft': '5px'}),
-                ], style={'padding': '5px', 'marginBottom': '5px', 'backgroundColor': bg_col, 'borderRadius': '3px'})
-            )
+        pool_display = [
+            asset_pool_item(asset['name'], f"({asset.get('universe','')} — {asset.get('sector','')})")
+            for asset in initial_pool
+        ]
         pool_count_text = f"({len(initial_pool)})"
 
     return html.Div([
@@ -106,7 +96,8 @@ def build_multiasset_portfolio_layout():
                     ),
                     html.Span(
                         id='max-dv01-display',
-                        style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginRight': '20px', 'fontStyle': 'italic'}
+                        style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginRight': '20px',
+                               'fontFamily': "'IBM Plex Mono', monospace"}
                     ),
 
                     html.Label("Model:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '12px', 'color': THEME['text_main']}),
@@ -211,7 +202,8 @@ def build_multiasset_portfolio_layout():
                         ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '8px'}),
                         html.Div(
                             id='asset-pool-display', children=pool_display,
-                            style={'height': '180px', 'overflowY': 'auto', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '4px', 'padding': '6px', 'backgroundColor': THEME['bg_input']},
+                            className='asset-pool-list',
+                            style={'height': '180px', 'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '4px', 'padding': '6px', 'backgroundColor': THEME['bg_input']},
                         ),
                     ], style={'padding': '12px 14px'}),
                 ], style={'width': '45%', 'borderRight': f'1px solid {THEME["table_header"]}', 'display': 'flex', 'flexDirection': 'column'}),
@@ -239,16 +231,16 @@ def build_multiasset_portfolio_layout():
                     ], style={'marginBottom': '8px'}),
                     # Column headers: Factor | Vol% ann | ×adj | RP Max (MM) | DV01 (MM/bp) | Coeff | Exposure (MM)
                     html.Div([
-                        html.Span("Factor",          style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'fontWeight': 'bold', 'flexShrink': '0'}),
-                        html.Span("Vol %ann",        style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '62px', 'textAlign': 'right', 'flexShrink': '0'}),
-                        html.Span("×adj",            style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '48px', 'textAlign': 'center', 'flexShrink': '0'},
+                        html.Span("Factor",          style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '130px', 'fontWeight': 'bold', 'flexShrink': '0'}),
+                        html.Span("Vol %ann",        style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'textAlign': 'right', 'flexShrink': '0'}),
+                        html.Span("×adj",            style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '60px', 'textAlign': 'center', 'flexShrink': '0'},
                                   title='Tier weight (default: IRDL=1.0, IRSL=0.6, IRCV=0.3). Scales measured vol before risk parity. Edit to customize tier importance.'),
-                        html.Span("RP Max (MM CNY)", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '105px', 'textAlign': 'right', 'flexShrink': '0'},
+                        html.Span("RP Max (MM CNY)", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '100px', 'textAlign': 'right', 'flexShrink': '0'},
                                   title='Risk Parity Max allocation in millions CNY'),
-                        html.Span("DV01 (MM/bp)",    style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '85px', 'textAlign': 'right', 'flexShrink': '0'},
+                        html.Span("DV01 (MM/bp)",    style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '90px', 'textAlign': 'right', 'flexShrink': '0'},
                                   title='Duration risk in MM CNY per basis point (IR factors only; blank for commodities/FX)'),
-                        html.Span("Coeff",           style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '44px', 'textAlign': 'center', 'flexShrink': '0'}),
-                        html.Span("Exposure (MM CNY)",style={'color': THEME['text_sub'], 'fontSize': '11px', 'flex': '1', 'textAlign': 'right'}),
+                        html.Span("Coeff",           style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '70px', 'textAlign': 'center', 'flexShrink': '0'}),
+                        html.Span("Exposure (MM CNY)",style={'color': THEME['text_sub'], 'fontSize': '11px', 'flex': '1', 'minWidth': '200px', 'textAlign': 'right'}),
                     ], style={'display': 'flex', 'alignItems': 'center', 'padding': '0 8px 4px 8px',
                               'borderBottom': f'1px solid {THEME["table_header"]}', 'marginBottom': '4px', 'gap': '4px'}),
                     html.Div(
@@ -300,14 +292,17 @@ def build_multiasset_portfolio_layout():
         # ── IRDL Hedge Overlay (collapsible) ─────────────────────────────────
         html.Details([
             html.Summary([
-                html.Span("🛡 IRDL Hedge Overlay",
-                          style={'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '13px'}),
+                html.Span("🛡", style={'marginRight': '8px'}),
+                html.Span("IRDL Hedge Overlay",
+                          style={'color': THEME['accent'], 'fontFamily': "'IBM Plex Mono', monospace",
+                                 'fontWeight': 'bold', 'fontSize': '13px'}),
                 html.Span("  ·  optional post-optimisation duration hedge via bond futures or pay-fixed IRS",
-                          style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                          style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px'}),
             ], style={
                 'padding': '10px 16px', 'cursor': 'pointer',
                 'listStyleType': 'none', 'WebkitAppearance': 'none', 'MozAppearance': 'none',
-                'backgroundColor': THEME['bg_input'], 'borderRadius': '5px', 'userSelect': 'none',
+                'backgroundColor': 'var(--surface-sunken)', 'borderTop': f'1px solid {THEME["table_header"]}',
+                'borderRadius': '0 0 8px 8px', 'userSelect': 'none', 'display': 'flex', 'alignItems': 'center',
             }),
             html.Div([
                 # Controls row

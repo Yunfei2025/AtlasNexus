@@ -35,9 +35,9 @@ from settings.paths import DIR_INPUT
 
 # ── Shared theme ──────────────────────────────────────────────────────────────
 THEME = {
-    "bg_main":      "#082255",
-    "bg_card":      "#0c2b64",
-    "bg_input":     "#112e66",
+    "bg_main":      "#0a1428",
+    "bg_card":      "#122a4c",
+    "bg_input":     "#17345c",
     "text_main":    "#ffffff",
     "text_sub":     "#aab0c0",
     "accent":       "#3498db",
@@ -369,13 +369,14 @@ def _make_table(
         hidden_columns=hidden_cols,
         sort_action="native",
         page_size=50,
-        style_table={"overflowX": "auto", "borderRadius": "4px"},
+        style_table={"overflowX": "auto", "borderRadius": "4px", "width": "100%", "minWidth": "100%"},
         css=[{"selector": ".show-hide", "rule": "display: none;"}],
         # style_header removed — CSS .dash-header rule in z_atlasnexus-design.css owns this
         style_cell={
             "textAlign":  "center",
             "whiteSpace": "normal",
             "minWidth":   "55px",
+            "border":     f'1px solid {THEME["table_header"]}',
         },
         style_data_conditional=cond,
     )

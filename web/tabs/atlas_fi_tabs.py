@@ -247,6 +247,7 @@ def build_curves_layout():
                                     "height": "auto",
                                     "width": "60px",
                                     "textAlign": "left",
+                                    "border": "1px solid #061E44",
                                 },
                             ),
                         ],
@@ -254,21 +255,34 @@ def build_curves_layout():
                         id="ref-bonds-container",
                     ),
                 ],
-                className="one-fourth column histogram__container",
+                style={
+                    "width":       "260px",
+                    "minWidth":    "260px",
+                    "flexShrink":  "0",
+                    "boxSizing":   "border-box",
+                },
+                className="histogram__container",
             ),
             html.Div(
                 [
-                    html.Div(
-                        [
-                            html.H6(
-                                id="curves-title",
-                                children="Real Time Curves",
-                                className="graph__title",
-                            )
-                        ]
-                    ),
+                    html.Div([
+                        html.Span(
+                            id="curves-title",
+                            children="Real Time Bond Curves",
+                            style={"fontSize": "12px", "fontWeight": "600", "color": "#e9eef8"},
+                        ),
+                        html.Span(" · ", style={"color": "#2e547f", "margin": "0 8px"}),
+                        html.Span(id="curves-chart-subtitle",
+                                  style={"fontSize": "11px", "color": "#4a5d7c"}),
+                    ], style={
+                        "display":      "flex",
+                        "alignItems":   "center",
+                        "padding":      "9px 16px",
+                        "borderBottom": "1px solid rgba(255,255,255,0.06)",
+                    }),
                     dcc.Graph(
                         id="curves-graph",
+                        style={"flex": "1"},
                         figure=dict(
                             layout=dict(
                                 plot_bgcolor=app_color["graph_bg"], paper_bgcolor=app_color["graph_bg"]
@@ -276,9 +290,11 @@ def build_curves_layout():
                         ),
                     ),
                 ],
-                className="three-fourths column futures__price__container",
+                style={"flex": "1", "display": "flex", "flexDirection": "column", "minWidth": "0"},
+                className="futures__price__container",
             ),
-        ]
+        ],
+        style={"display": "flex", "alignItems": "flex-start", "gap": "16px"},
     )
 
 
@@ -1108,6 +1124,9 @@ def register_callbacks(app) -> None:
             Output("curves-graph", "figure"),
             Output("curves-title", "children"),
             Output("ref-bonds-container", "style"),
+            Output("ref-bonds-t", "data"),
+            Output("ref-bonds-t", "columns"),
+            Output("curves-chart-subtitle", "children"),
         ],
         Input("data-refresh", "n_intervals"),
         Input("curve-selection", "value"),
@@ -1115,16 +1134,16 @@ def register_callbacks(app) -> None:
     def _update_curves(interval, curve_type):
         """Update the curves chart."""
         if not PLOTTING_AVAILABLE or go is None:
-            return {"data": [], "layout": {"title": "Plotting not available"}}, "Error", {"display": "none"}
-        
+            return {"data": [], "layout": {"title": "Plotting not available"}}, "Error", {"display": "none"}, [], [], ""
+
         if not GRAPHS_AVAILABLE or orig_curves is None:
             empty_figure = go.Figure(data=[], layout=dict(
                 plot_bgcolor=app_color["graph_bg"],
                 paper_bgcolor=app_color["graph_bg"],
                 title="Data files not loaded. Please run EOD job to generate data."
             ))
-            return empty_figure, "Data Not Available", {"display": "none"}
-        
+            return empty_figure, "Data Not Available", {"display": "none"}, [], [], ""
+
         try:
             return orig_curves(interval, curve_type)
         except Exception as e:
@@ -1136,5 +1155,5 @@ def register_callbacks(app) -> None:
                 paper_bgcolor=app_color["graph_bg"],
                 title=f"Error: {str(e)[:100]}"
             ))
-            return empty_figure, "Error Loading Curves", {"display": "none"}
+            return empty_figure, "Error Loading Curves", {"display": "none"}, [], [], ""
 

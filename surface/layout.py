@@ -13,10 +13,20 @@ from .config import TERM_LIST
 from web.core.styles import app_color
 
 
+_VIEW_MODE_OPTIONS = [
+    {"label": "3D", "value": 0},
+    {"label": "Today", "value": 1},
+    {"label": "Position", "value": 2},
+    {"label": "Short", "value": 3},
+    {"label": "Long", "value": 4},
+    {"label": "Above", "value": 5},
+]
+
+
 def create_layout():
     return html.Div([
         dcc.Store(id="surface-click-output", data={"back": 0, "next": 0}),
-        
+
         html.Div([
             html.Div([
                 html.H6("Yield Surface Controls", className="graph__title"),
@@ -46,17 +56,25 @@ def create_layout():
                 ], style={"marginBottom": "20px"}),
                 html.Div([
                     html.H6("View Mode", style={"color": "#FFFFFF", "margin-bottom": "10px"}),
-                    dcc.Slider(
-                        min=0, max=5, value=0,
-                        marks={
-                            0: {"label": "3D", "style": {"color": "#FFFFFF"}},
-                            1: {"label": "Today", "style": {"color": "#FFFFFF"}},
-                            2: {"label": "Position", "style": {"color": "#FFFFFF"}},
-                            3: {"label": "Short", "style": {"color": "#FFFFFF"}},
-                            4: {"label": "Long", "style": {"color": "#FFFFFF"}},
-                            5: {"label": "Above", "style": {"color": "#FFFFFF"}},
-                        },
+                    dcc.RadioItems(
                         id="surface-slider",
+                        options=_VIEW_MODE_OPTIONS,
+                        value=0,
+                        inline=True,
+                        inputStyle={"display": "none"},
+                        labelStyle={
+                            "display":      "inline-block",
+                            "padding":      "3px 10px",
+                            "marginRight":  "4px",
+                            "marginBottom": "4px",
+                            "fontSize":     "11px",
+                            "border":       "1px solid #1e3a5f",
+                            "borderRadius": "3px",
+                            "color":        "#6f83a3",
+                            "background":   "#17345c",
+                            "cursor":       "pointer",
+                        },
+                        className="surface-mode-chips",
                     ),
                 ], style={"marginBottom": "20px"}),
                 html.Div([
@@ -67,7 +85,7 @@ def create_layout():
                 ], style={"marginBottom": "20px"}),
                 html.Div([
                     html.Button("↻ Refresh Data", id="surface-refresh-btn", n_clicks=0,
-                        style={"background": "#082255", "color": "#44C8F5", "border": "1px solid #007ACE", "padding": "8px 16px", "border-radius": "4px", "cursor": "pointer", "margin-right": "12px"}),
+                        style={"background": "#17345c", "color": "#44C8F5", "border": "1px solid #007ACE", "padding": "8px 16px", "border-radius": "4px", "cursor": "pointer", "margin-right": "12px"}),
                     html.Span(
                         id="surface-refresh-status",
                         children="Loading latest surface data…",
@@ -78,15 +96,29 @@ def create_layout():
                     dcc.Markdown(id="surface-text", style={"color": "#FFFFFF", "fontSize": "13px", "lineHeight": "1.6", "borderTop": "1px solid #007ACE", "paddingTop": "15px", "marginTop": "10px"})
                 ]),
             ], className="graph__title"),
-        ], className="one-fourth column histogram__container"),
-        
+        ], style={
+            "width":       "280px",
+            "minWidth":    "280px",
+            "flexShrink":  "0",
+            "boxSizing":   "border-box",
+        }, className="histogram__container"),
+
         html.Div([
-            html.Div([html.H6("3D Yield Surface Visualization", className="graph__title")]),
+            html.Div([
+                html.Span("3D Yield Surface", style={
+                    "fontSize": "12px", "fontWeight": "600", "color": "#e9eef8",
+                }),
+                html.Span(" · ", style={"color": "#2e547f", "margin": "0 6px"}),
+                html.Span(id="surface-chart-context",
+                          style={"fontSize": "11px", "color": "#4a5d7c"}),
+            ], style={"display": "flex", "alignItems": "center",
+                      "padding": "9px 16px", "borderBottom": "1px solid rgba(255,255,255,0.06)"}),
             dcc.Graph(
                 id="surface-graph",
-                style={"height": "80vh"},
+                style={"height": "calc(80vh - 38px)"},
                 figure=dict(layout=dict(plot_bgcolor=app_color["graph_bg"], paper_bgcolor=app_color["graph_bg"])),
                 config={"displayModeBar": True, "displaylogo": False}
             ),
-        ], className="three-fourths column futures__price__container"),
-    ])
+        ], style={"flex": "1", "display": "flex", "flexDirection": "column", "minWidth": "0"},
+           className="futures__price__container"),
+    ], style={"display": "flex", "alignItems": "flex-start", "gap": "16px"})

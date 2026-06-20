@@ -26,29 +26,30 @@ from typing import Any
 
 from dash import html, dcc
 
-# ── Colour / style constants (mirror atlas_styles.py) ─────────────────────────
+# ── Colour / style constants (mirror tokens/colors.css via --an-* shim) ───────
 
-_NAVY_800   = "#082255"
-_NAVY_700   = "#0c2b64"
-_NAVY_600   = "#112e66"
-_NAVY_500   = "#1a3a6e"
-_BORDER     = "#2a5298"
-_BLUE       = "#2e86c1"
-_GREEN      = "#27ae60"
-_AMBER      = "#f39c12"
-_RED        = "#c0392b"
-_PURPLE     = "#8e44ad"
-_CYAN       = "#45b6e6"
-_TEXT       = "#ffffff"
-_MUTED      = "#aab0c0"
+_NAVY_800   = "#0e1d3a"   # --an-navy-800
+_NAVY_700   = "#122a4c"   # --an-navy-700 / --surface-panel
+_NAVY_600   = "#17345c"   # --an-navy-600 / --surface-input
+_NAVY_500   = "#21426e"   # --an-navy-500 / --surface-hover
+_BORDER     = "#2a517f"   # --an-border / --border-strong
+_BORDER_SUB = "#1e3a5f"   # --an-border2 / --border-default
+_BLUE       = "#3d8bd4"   # --an-blue / --accent-blue
+_GREEN      = "#2f9d6b"   # --an-green / --accent-green
+_AMBER      = "#e0a23c"   # --an-amber / --accent-amber
+_RED        = "#d56b6b"   # --an-red / --negative
+_PURPLE     = "#7c70d6"   # --an-purple / --accent-purple
+_CYAN       = "#45b6e6"   # --an-cyan / --accent-cyan
+_TEXT       = "#e9eef8"   # --an-text / --text-primary
+_MUTED      = "#a4b6d2"   # --an-muted / --text-secondary
 
 # Button variant → (background, border-color)
 _BTN_VARIANTS: dict[str, tuple[str, str]] = {
     "primary":   (_NAVY_500, _BORDER),
-    "secondary": ("#1a5276", "#2e86c1"),
-    "success":   ("#1a4731", "#27ae60"),
-    "danger":    ("#6e1a1a", "#c0392b"),
-    "warning":   ("#6e4b00", "#f39c12"),
+    "secondary": ("#1a5276", _BLUE),
+    "success":   ("#1a4731", _GREEN),
+    "danger":    ("#6e1a1a", _RED),
+    "warning":   ("#6e4b00", _AMBER),
 }
 
 _BASE_BTN: dict[str, Any] = {
@@ -291,6 +292,21 @@ def dropdown(
     """
     style  = {"fontSize": "13px", **(style_overrides or {})}
     return dcc.Dropdown(style=style, optionHeight=30, **kwargs)
+
+
+def asset_pool_item(name: str, meta: str) -> html.Div:
+    """Compact tag-style row for an asset pool list (replaces wide colour bars).
+
+    Example:
+        asset_pool_item("Gold", "(Precious Metals — N/A)")
+    """
+    return html.Div(
+        [
+            html.Span(name, className="asset-pool-item__name"),
+            html.Span(meta, className="asset-pool-item__meta"),
+        ],
+        className="asset-pool-item",
+    )
 
 
 def input_number(

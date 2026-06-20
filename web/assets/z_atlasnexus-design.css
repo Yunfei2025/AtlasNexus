@@ -29,31 +29,88 @@ body, .app__container {
 
 /* ── CSS Variables (single authoritative token block — mirrors atlas_styles.TOKENS) ── */
 :root {
-  --an-navy-950:  #020d22;
-  --an-navy-900:  #040f30;
-  --an-navy-800:  #082255;   /* tabs_styles background */
-  --an-navy-700:  #0c2b64;   /* _card_style background */
-  --an-navy-600:  #112e66;   /* _INPUT_STYLE background */
-  --an-navy-500:  #1a3a6e;   /* _BTN_STYLE background */
-  --an-navy-400:  #2a5298;   /* border colour */
-  --an-navy-300:  #425476;   /* inactive tab background */
+  /* — Ramp (match tokens/colors.css exactly) — */
+  --an-navy-950: #060d1c;   /* was #020d22 */
+  --an-navy-900: #0a1428;   /* was #040f30 — page bg */
+  --an-navy-850: #0c1830;   /* NEW gradient stop */
+  --an-navy-800: #0e1d3a;   /* was #082255 — working bg */
+  --an-navy-750: #102544;   /* NEW raised panel */
+  --an-navy-700: #122a4c;   /* was #0c2b64 — card surface */
+  --an-navy-600: #17345c;   /* was #112e66 — inputs */
+  --an-navy-500: #21426e;   /* was #1a3a6e — buttons */
+  --an-navy-400: #2e547f;   /* was #2a5298 — border */
+  --an-navy-300: #3a4d6e;   /* was #425476 — inactive tab */
 
-  --an-blue:    #2e86c1;
-  --an-cyan:    #45b6e6;
-  --an-green:   #27ae60;
-  --an-amber:   #f39c12;
-  --an-red:     #c0392b;
-  --an-purple:  #8e44ad;
+  /* — Accents (match tokens/colors.css) — */
+  --an-blue:   #3d8bd4;   /* was #2e86c1 */
+  --an-cyan:   #45b6e6;   /* unchanged */
+  --an-green:  #2f9d6b;   /* was #27ae60 */
+  --an-amber:  #e0a23c;   /* was #f39c12 */
+  --an-red:    #d56b6b;   /* was #c0392b */
+  --an-purple: #7c70d6;   /* was #8e44ad */
+  --an-teal:   #36a6b8;   /* NEW — Run Center */
 
-  --an-text:    #ffffff;
-  --an-muted:   #aab0c0;
-  --an-faint:   #5a6478;
+  /* — Text ramp (match tokens/colors.css) — */
+  --an-text:   #e9eef8;   /* was #ffffff */
+  --an-muted:  #a4b6d2;   /* was #aab0c0 */
+  --an-faint:  #4a5d7c;   /* was #5a6478 */
 
-  --an-border:  #2a5298;
-  --an-border2: #061E44;
+  /* — Borders (match tokens/colors.css) — */
+  --an-border:  #2a517f;   /* was #2a5298 */
+  --an-border2: #1e3a5f;   /* was #061E44 */
+
+  /* — Semantic aliases (so design-kit token names work in Python inline styles too) — */
+  --surface-panel:  var(--an-navy-700);
+  --surface-raised: var(--an-navy-750);
+  --surface-input:  var(--an-navy-600);
+  --surface-sunken: var(--an-navy-900);
+  --surface-hover:  var(--an-navy-500);
+  --text-primary:   var(--an-text);
+  --text-secondary: var(--an-muted);
+  --text-heading:   var(--an-text);
+  --text-muted:     #6f83a3;
+  --text-faint:     var(--an-faint);
+  --text-on-accent: var(--an-text);
+  --border-default: var(--an-border2);
+  --border-subtle:  var(--an-border2);
+  --border-strong:  var(--an-border);
+  --accent-blue:    var(--an-blue);
+  --accent-cyan:    var(--an-cyan);
+  --accent-green:   var(--an-green);
+  --accent-amber:   var(--an-amber);
+  --accent-amber-soft: rgba(224,162,60,0.12);
+  --accent-purple:  var(--an-purple);
+  --positive:       var(--an-green);
+  --negative:       var(--an-red);
+
+  /* — Signal (for bar cells) — */
+  --positive-bar:  #2c6e4d;
+  --negative-bar:  #8a3a3a;
+  --neutral-bar:   #1f3a5e;
 
   --an-r: 4px;
   --an-t: 0.15s ease;
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --dur-fast:   0.1s;
+  --dur-normal: 0.15s;
+  --ease-standard: ease;
+  --bw-tab: 2px;
+  --panel-pad: 22px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 20px;
+  --font-sans: "Open Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  --fs-meta: 11px;
+  --fs-sm:   12px;
+  --fw-regular: 400;
+  --fw-medium: 600;
+  --ls-tab: 0.01em;
 
   /* Per-book accent — overridden per active tab via inline style on #an-main-content */
   --book-accent: var(--an-blue);
@@ -64,46 +121,83 @@ body, .app__container {
   --fs-section: 15px;
   --lh-body:    1.55;
   --ls-caps:    0.06em;
+
+  /* Typography tokens (mirrors tokens/typography.css for Dash context) */
+  --type-display: 300 26px/1.2 "Open Sans", sans-serif;
+  --type-h1:      600 18px/1.3 "Open Sans", sans-serif;
+  --type-h2:      600 15px/1.4 "Open Sans", sans-serif;
+  --type-h3:      600 13px/1.4 "Open Sans", sans-serif;
+  --type-body:    400 13px/1.55 "Open Sans", sans-serif;
+  --type-meta:    400 11px/1.5 "Open Sans", sans-serif;
+  --type-th:      600 11px/1.4 "Open Sans", sans-serif;
+  --ls-display:   0.04em;
+  --ls-label:     0.07em;
+  --app-max-w:    2360px;
+  --app-pad-x:    28px;
 }
 
 /* ── App Shell ────────────────────────────────────────────────── */
-.app__container {
-  background: var(--an-navy-900) !important;
+body, .app__container {
+  background: linear-gradient(
+    180deg,
+    var(--an-navy-950) 0%,
+    var(--an-navy-900) 18%,
+    var(--an-navy-850) 100%
+  ) !important;
+  background-attachment: fixed !important;
   min-height: 100vh !important;
-  padding: 0 3% !important;        /* ← restores the left/right boundaries from old style.css */
+}
+
+.app__container {
+  padding: 0 !important;
   box-sizing: border-box !important;
 }
 
-.app__header {
-  background: var(--an-navy-800) !important;
-  border-bottom: 1px solid var(--an-border2) !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-  padding: 10px 0 !important;      /* ← vertical breathing room inside header */
-  margin: 0 -3% !important;        /* ← break out of container padding so header is edge-to-edge */
-  padding-left: 3% !important;     /* ← re-align header content with body content */
-  padding-right: 3% !important;
+#an-main-content {
+  max-width: var(--app-max-w) !important;
+  margin: 0 auto !important;
 }
 
+.app__header {
+  background: transparent !important;
+  border-bottom: none !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  max-width: var(--app-max-w) !important;
+  margin: 0 auto !important;
+  padding: 26px var(--app-pad-x) 0 !important;
+  box-sizing: border-box !important;
+}
+
+/* Display-weight app title */
 .app__header__title {
+  font: var(--type-display) !important;
+  letter-spacing: var(--ls-display) !important;
   color: var(--an-text) !important;
-  font-weight: 300 !important;
-  letter-spacing: 0.02em !important;
   margin: 0 !important;
 }
 
+/* Separator dot between "AtlasNexus" and "Daily" */
+.app__header__title .sep {
+  color: var(--an-faint) !important;
+  margin: 0 6px !important;
+}
+
+/* Timestamp / metadata lines */
 .app__header__title--grey {
+  font: var(--type-meta) !important;
   color: var(--an-muted) !important;
+  letter-spacing: 0 !important;
 }
 
 .app__content {
-  background: var(--an-navy-900) !important;
+  background: transparent !important;
   margin-top: 12px !important;
 }
 
-.tab__title { 
-  background: var(--an-navy-800) !important;
+.tab__title {
+  background: transparent !important;
 }
 
 /* ── Status Pills ─────────────────────────────────────────────── */
@@ -141,10 +235,10 @@ body, .app__container {
   color: #e74c3c !important;
   border-color: rgba(192,57,43,.3) !important;
 }
-.an-status-pill.idle   { 
-  background: rgba(90,100,120,.1) !important;
+.an-status-pill.idle   {
+  background: rgba(100,115,140,.08) !important;
   color: var(--an-muted) !important;
-  border-color: rgba(90,100,120,.25) !important;
+  border-color: rgba(100,115,140,.25) !important;
 }
 
 /* ── Buttons ──────────────────────────────────────────────────── */
@@ -351,6 +445,8 @@ input:disabled {
   font-weight: 600 !important;
   letter-spacing: 0.07em !important;
   text-transform: uppercase !important;
+  border-top: 1px solid var(--an-border2) !important;
+  border-left: 1px solid var(--an-border2) !important;
   border-bottom: 1px solid var(--an-border) !important;
   border-right: 1px solid var(--an-border2) !important;
   padding: 7px 10px !important;
@@ -359,6 +455,8 @@ input:disabled {
 /* Data cells — IMPORTANT: no !important on background to allow style_data_conditional to work */
 .dash-table-container .dash-cell {
   color: var(--an-text) !important;
+  border-top: 1px solid var(--an-border2) !important;
+  border-left: 1px solid var(--an-border2) !important;
   border-bottom: 1px solid var(--an-border2) !important;
   border-right: 1px solid var(--an-border2) !important;
   font-size: 12px !important;
@@ -480,29 +578,42 @@ pre {
   border-radius: var(--an-r) !important;
 }
 .an-tab {
-  background: var(--an-navy-300) !important;
-  color: var(--an-text) !important;
+  background: linear-gradient(
+    180deg,
+    var(--an-navy-300) 0%,
+    #2b3b58 100%
+  ) !important;
+  color: var(--an-muted) !important;
   border: 1px solid var(--an-border2) !important;
+  border-bottom: none !important;
   font-size: 13px !important;
-  font-weight: 600 !important;
-  padding: 8px 20px !important;
-  border-radius: var(--an-r) !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.01em !important;
+  padding: 10px 20px !important;
+  border-radius: 4px 4px 0 0 !important;
+  transition: background 0.15s, color 0.15s !important;
   /* ↓ prevent Dash flex-stretch */
   flex: 0 0 auto !important;
   min-width: 110px !important;
   text-align: center !important;
   white-space: nowrap !important;
 }
+.an-tab:hover {
+  background: var(--an-navy-500) !important;
+  color: var(--an-text) !important;
+}
 .an-tab--selected {
   background: var(--an-navy-800) !important;
   color: var(--an-text) !important;
   border: 1px solid var(--an-border2) !important;
-  border-top: 2px solid var(--book-accent, var(--an-blue)) !important;
+  border-bottom: 2px solid var(--book-accent, var(--an-blue)) !important;
   border-left: none !important;
+  border-top: none !important;
   font-size: 13px !important;
   font-weight: 600 !important;
-  padding: 8px 20px !important;
-  border-radius: var(--an-r) !important;
+  letter-spacing: 0.01em !important;
+  padding: 10px 20px !important;
+  border-radius: 4px 4px 0 0 !important;
   /* ↓ prevent Dash flex-stretch */
   flex: 0 0 auto !important;
   min-width: 110px !important;
@@ -511,25 +622,27 @@ pre {
 }
 
 /* Tab container: left-align, don't distribute */
-.an-tabs > div[role="tablist"],
-.an-tabs > div {
+.an-tabs > div[role="tablist"] {
   display: flex !important;
   flex-direction: row !important;
   justify-content: flex-start !important;   /* ← left-align, don't distribute */
   align-items: stretch !important;
-  flex-wrap: nowrap !important;
+  flex-wrap: wrap !important;
   border-bottom: 1px solid var(--an-border2) !important;
+  width: 100% !important;
 }
 
 /* ── Sub-tabs (dcc.Tab via className — replaces summary_subtab_style dicts) ── */
 .tab.an-subtab,
 div.tab.an-subtab {
-  background: var(--an-navy-600) !important;
+  background: transparent !important;
   color: var(--an-muted) !important;
   font-size: 12px !important;
-  padding: 6px 20px !important;
+  font-weight: 500 !important;
+  padding: 10px 24px !important;
   border: none !important;
   border-bottom: 2px solid transparent !important;
+  letter-spacing: 0.03em !important;
   flex: 0 0 auto !important;
   white-space: nowrap !important;
   cursor: pointer !important;
@@ -538,27 +651,20 @@ div.tab.an-subtab {
 .tab.an-subtab:hover,
 div.tab.an-subtab:hover {
   color: var(--an-text) !important;
-  border-bottom-color: rgba(170,176,192,0.3) !important;
 }
 .tab.an-subtab--selected,
 div.tab.an-subtab--selected {
-  background: var(--an-navy-700) !important;
+  background: transparent !important;
   border-bottom: 2px solid var(--book-accent, var(--an-blue)) !important;
   border-top: none !important;
-  color: var(--an-text) !important;
+  color: var(--book-accent, var(--an-blue)) !important;
   font-weight: 600 !important;
 }
 /* Accent overrides per book */
-.tab.an-subtab--blue   { border-bottom-color: var(--an-blue)   !important; }
-.tab.an-subtab--amber  { border-bottom-color: var(--an-amber)  !important; }
-.tab.an-subtab--green  { border-bottom-color: var(--an-green)  !important; }
-.tab.an-subtab--purple { border-bottom-color: var(--an-purple) !important; }
-
-/* Color the label text to match the accent */
-.tab.an-subtab--blue.an-subtab--selected   { color: var(--an-blue)   !important; }
-.tab.an-subtab--amber.an-subtab--selected  { color: var(--an-amber)  !important; }
-.tab.an-subtab--green.an-subtab--selected  { color: var(--an-green)  !important; }
-.tab.an-subtab--purple.an-subtab--selected { color: var(--an-purple) !important; }
+.tab.an-subtab--blue.an-subtab--selected   { border-bottom-color: var(--an-blue)   !important; color: var(--an-blue)   !important; }
+.tab.an-subtab--amber.an-subtab--selected  { border-bottom-color: var(--an-amber)  !important; color: var(--an-amber)  !important; }
+.tab.an-subtab--green.an-subtab--selected  { border-bottom-color: var(--an-green)  !important; color: var(--an-green)  !important; }
+.tab.an-subtab--purple.an-subtab--selected { border-bottom-color: var(--an-purple) !important; color: var(--an-purple) !important; }
 
 /* Sub-tab container: left-align, border-bottom as the track */
 .tab-container.an-subtab,
@@ -572,25 +678,74 @@ div[role="tablist"]:has(> .tab.an-subtab) {
 
 /* ── Card panels (replaces _card_style / _card_hdr Python dicts) ───────── */
 .an-card {
-  background: var(--an-navy-700) !important;
-  border-left: 3px solid var(--book-accent, var(--an-blue)) !important;
-  padding: 14px 15px !important;
-  margin: 10px 12px !important;
-  border-radius: 6px !important;
+  background: var(--surface-panel) !important;   /* navy-700 */
+  border: 1px solid var(--an-border2) !important; /* all sides */
+  border-left: none !important;                   /* remove accent left bar */
+  border-top: 2px solid var(--book-accent, var(--an-blue)) !important; /* top accent */
+  border-radius: 0 0 6px 6px !important;
+  padding: 0 !important;                          /* tables sit flush */
+  margin: 0 !important;                           /* use gap instead of margin */
+  overflow: hidden !important;
 }
+
+/* Eyebrow header inside the card */
 .an-card-hdr {
+  padding: 12px 14px 10px !important;
   color: var(--an-muted) !important;
   font-size: 11px !important;
   font-weight: 600 !important;
   letter-spacing: 0.08em !important;
-  margin-bottom: 10px !important;
+  text-transform: uppercase !important;
+  border-bottom: 1px solid var(--an-border2) !important;
+  margin-bottom: 0 !important;
+}
+
+/* Card actions row (for IRS shift inputs, refresh buttons, etc.) */
+.an-card-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 10px 14px !important;
+  border-bottom: 1px solid var(--an-border2) !important;
+  gap: 16px !important;
+}
+
+/* ── App wrapper rail (2360/28px transparent canvas) ────────────── */
+.futures__price__container {
+  background: transparent !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  width: 100% !important;
+  max-width: var(--app-max-w) !important;
+  margin: 0 auto !important;
+  padding: 0 var(--app-pad-x) !important;
+  box-sizing: border-box !important;
+}
+
+/* Panel containers (Surface/Curves left sidebars) inherit histogram__container styling,
+   override their old #082255 color to match Data tab's refined palette */
+.histogram__container {
+  background-color: var(--an-navy-900) !important;
+}
+
+/* Main content area inside the rail */
+#an-main-content.tab__title {
+  background: transparent !important;
+  width: 100% !important;
 }
 
 /* ── Tab pane wrapper (replaces alpha_content/beta_content/market_content style) ── */
 .an-tab-pane {
-  padding: 20px !important;
-  margin: 10px !important;
+  width: 100% !important;
+  padding: 8px 0 0 0 !important;
+  margin: 0 !important;
   box-sizing: border-box !important;
+}
+
+/* Sub-tab row underline track */
+.an-tab-pane > .dash-tabs {
+  border-bottom: 1px solid var(--an-border2) !important;
+  margin-bottom: 20px !important;
 }
 
 /* Section headings: slightly larger */
@@ -833,9 +988,272 @@ textarea {
   color: var(--an-text) !important;
 }
 .dash-tabs {
-  background: var(--an-navy-800) !important;
+  background: transparent !important;
 }
 .dash-tabs .tab--selected {
-  background-color: var(--an-navy-800) !important;
+  background-color: transparent !important;
   color: var(--an-text) !important;
 }
+
+/* ── Quick select chip hover (Trend tab series buttons) ──────────────────── */
+.qs-chip {
+  transition: background 0.1s, color 0.1s !important;
+}
+.qs-chip:hover {
+  background: var(--an-navy-500) !important;
+  color:      var(--an-text) !important;
+}
+
+/* ── Surface view-mode chips (dcc.RadioItems with inputStyle:none) ──────── */
+.surface-mode-chips label {
+  transition: background 0.12s, color 0.12s, border-color 0.12s !important;
+}
+.surface-mode-chips label:has(input:checked) {
+  background:   rgba(61,139,212,.20) !important;
+  border-color: var(--an-blue) !important;
+  color:        var(--an-cyan) !important;
+}
+.surface-mode-chips label:hover {
+  background: var(--an-navy-500) !important;
+  color:      var(--an-text) !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Beta Book sub-tab layout optimisation (docs/dev/SUBTAB_LAYOUT_OPTIMISATION.md)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── Segmented toggle — for 2-option mode switches (not navigation) ─────── */
+.seg-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-sunken);
+}
+.seg-toggle__btn {
+  padding: 9px 28px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color var(--dur-fast), background var(--dur-fast);
+}
+.seg-toggle__btn--active {
+  background: var(--accent-blue);
+  color: var(--text-on-accent);
+  font-weight: var(--fw-medium);
+}
+
+/* ── Candidates/Factor pool: factor selection grids ──────────────────────── */
+.factor-pool-section {
+  padding: var(--space-5) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.factor-pool-section:last-child { border-bottom: none; }
+
+.factor-pool-section__heading {
+  font: var(--type-h3);
+  color: var(--text-heading);
+  margin: 0 0 var(--space-3) 0;
+}
+
+.factor-pool-section__note {
+  font: var(--type-meta);
+  color: var(--text-muted);
+  font-style: italic;
+  margin: 0 0 var(--space-4) 0;
+}
+
+.ir-country-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(80px, 1fr));
+  gap: var(--space-4) var(--space-5);
+}
+
+.ir-country-grid__col-head {
+  font: var(--type-label, var(--type-th));
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.factor-inline-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-7);
+  padding: var(--space-2) 0;
+}
+
+.cmd-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3) var(--space-7);
+}
+
+/* ── Portfolio: asset pool tag list ───────────────────────────────────────── */
+.asset-pool-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.asset-pool-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 7px 12px;
+  background: var(--accent-amber-soft);
+  border: 1px solid rgba(224,162,60,0.25);
+  border-radius: var(--radius-xs);
+  cursor: default;
+}
+
+.asset-pool-item__name {
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--accent-amber);
+  flex: 1;
+}
+
+.asset-pool-item__meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-muted);
+}
+
+/* ── Portfolio: Risk Budgets stepper control ──────────────────────────────── */
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+.stepper__btn {
+  width: 30px; height: 30px;
+  background: var(--surface-input);
+  color: var(--accent-blue);
+  border: none; cursor: pointer;
+  font-size: 16px; font-weight: 600;
+  transition: background var(--dur-fast);
+}
+.stepper__btn:hover { background: var(--surface-hover); }
+.stepper__input {
+  width: 70px; text-align: center;
+  background: var(--surface-input);
+  color: var(--text-primary);
+  border: none; border-left: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  font-family: var(--font-mono); font-size: 13px;
+  padding: 0 6px;
+}
+
+/* ── Backtest: Strategy Parameters wrapping grid ──────────────────────────── */
+.strategy-params-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--space-4) var(--space-6);
+  align-items: end;
+}
+
+/* ── Factor: sidebar fixed width ──────────────────────────────────────────── */
+.factor-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--surface-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--panel-pad);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* ── Factor: Plotly modebar theming (terminal look) ───────────────────────── */
+.js-plotly-plot .plotly .modebar {
+  background: var(--surface-panel) !important;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: 2px 4px;
+}
+.js-plotly-plot .plotly .modebar-btn path {
+  fill: var(--text-muted) !important;
+}
+.js-plotly-plot .plotly .modebar-btn:hover path {
+  fill: var(--text-primary) !important;
+}
+
+/* ── Bond: maturity bucket grid ───────────────────────────────────────────── */
+.bond-bucket-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-6);
+}
+@media (max-width: 1200px) {
+  .bond-bucket-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ── Futures: two-panel layout + collapsible sidebar sections ────────────── */
+.futures-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: var(--space-6);
+  padding: var(--panel-pad);
+  min-height: calc(100vh - 120px);
+}
+
+.strategies-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3) var(--space-5);
+}
+
+.sidebar-section {
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-5) 0;
+}
+.sidebar-section:last-child { border-bottom: none; }
+
+.sidebar-section__head {
+  font: var(--type-th);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--accent-blue);
+  margin-bottom: var(--space-4);
+}
+
+details.param-group { margin-bottom: var(--space-3); }
+details.param-group summary {
+  font: var(--type-th);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  cursor: pointer;
+  margin-bottom: var(--space-2);
+}
+details.param-group summary::-webkit-details-marker { color: var(--text-muted); }
+
+/* ── DatePickerSingle dark theming ────────────────────────────────────────── */
+.SingleDatePickerInput {
+  background: var(--surface-input) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-xs) !important;
+}
+.DateInput_input {
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 13px !important;
+  padding: 6px 10px !important;
+}
+.DayPicker { background: var(--an-navy-700) !important; }

@@ -16,6 +16,7 @@ from dash.dependencies import Input, Output, State
 from multiasset.storage import save_asset_pool
 
 from ..data import THEME, DIVERSIFICATION_RECOMMENDATIONS
+from ...atlas_components import asset_pool_item
 
 
 def register_portfolio_pool_callbacks(app):
@@ -144,18 +145,10 @@ def register_portfolio_pool_callbacks(app):
             display = [html.Div("No assets selected.", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'padding': '10px'})]
             count_text = "(0)"
         else:
-            _POOL_COLORS = {
-                'Commodities': '#b48b32',
-                'Equities': '#1a5276',
-                'FX': '#6b4b8a',
-            }
-            display = []
-            for asset in current_pool:
-                bg_col = _POOL_COLORS.get(asset['type'], '#2c5e40')
-                display.append(html.Div([
-                    html.Span(f"• {asset['name']}", style={'fontWeight': 'bold', 'color': 'white'}),
-                    html.Span(f" ({asset.get('universe','')} - {asset.get('sector','')})", style={'color': '#ddd', 'fontSize': '12px'}),
-                ], style={'padding': '5px', 'marginBottom': '5px', 'backgroundColor': bg_col, 'borderRadius': '3px'}))
+            display = [
+                asset_pool_item(asset['name'], f"({asset.get('universe','')} — {asset.get('sector','')})")
+                for asset in current_pool
+            ]
             count_text = f"({len(current_pool)})"
         
         # Save to persistent storage
@@ -204,21 +197,10 @@ def register_portfolio_pool_callbacks(app):
             return (f"✗ Error saving: {str(e)}",) + no_change
 
         # Build display items (same style as manage_asset_pool)
-        _POOL_COLORS = {
-            'Commodities': '#b48b32',
-            'Equities': '#1a5276',
-            'FX': '#6b4b8a',
-        }
-        display = []
-        for asset in new_pool:
-            bg_col = _POOL_COLORS.get(asset.get('type'), '#2c5e40')
-            display.append(html.Div([
-                html.Span(f"• {asset['name']}", style={'fontWeight': 'bold', 'color': 'white'}),
-                html.Span(
-                    f" ({asset.get('universe', '')} - {asset.get('sector', '')})",
-                    style={'color': '#ddd', 'fontSize': '12px'},
-                ),
-            ], style={'padding': '5px', 'marginBottom': '5px', 'backgroundColor': bg_col, 'borderRadius': '3px'}))
+        display = [
+            asset_pool_item(asset['name'], f"({asset.get('universe', '')} — {asset.get('sector', '')})")
+            for asset in new_pool
+        ]
 
         count_text = f"({len(new_pool)})"
 

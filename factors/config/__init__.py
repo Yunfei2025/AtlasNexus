@@ -511,9 +511,9 @@ MACRO_SYMBOLS = {
         'CADCNY.IB',
         'AUDCNY.IB',
         'CHFCNY.IB',
-        'KRWCNY.IB',
-        'SGDCNY.IB',
-        'INRCNY.IB',
+        # 'KRWCNY.IB',
+        # 'SGDCNY.IB',
+        # 'INRCNY.IB',
         # 'USDCNH.FX',
         # 'EURCNH.FX',
         # 'JPYCNH.FX',
@@ -522,7 +522,9 @@ MACRO_SYMBOLS = {
     'currency': [
         'SHIBOR3M.IR',  # SHIBOR利率
         'FR007.IR',  # 回购利率
-        'SOFR.IR','ESTR.IR','SONIA.IR','TONAR.IR','DR001.IB'
+        'DR001.IB',
+        'SOFR.IR','ESTR.IR','SONIA.IR','TONAR.IR',
+        'CORRA.IR','AONIA.IR','SARON.IR',
     ],
 }
 
