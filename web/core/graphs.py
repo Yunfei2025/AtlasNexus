@@ -385,11 +385,12 @@ def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
             mid = _xy_series(_trace_by_name(figure, "Mid"))
             if not hero.empty:
                 s10y = _nearest(hero, 10.0)
-                s2y = _nearest(hero, 2.0)
+                s1y = _nearest(hero, 1.0)
+                s5y = _nearest(hero, 5.0)
                 stats["10Y Spot"] = s10y
-                stats["2Y Spot"] = s2y
-                if s10y is not None and s2y is not None:
-                    stats["2s10s"] = (s10y - s2y) * 100.0
+                stats["1Y Spot"] = s1y
+                if s5y is not None and s1y is not None:
+                    stats["1s5s"] = (s5y - s1y) * 100.0
                 # Implied forward peak: derive forward rates from spot curve,
                 # then find the peak (analogous to IRS Forward 'Fwd peak').
                 spot_arr = hero.values.astype(float)
@@ -449,12 +450,12 @@ def _render_curve_snapshot(curve_type: str, stats: Dict[str, Any]) -> Any:
         if s10y is not None:
             rows.append(_snapshot_stat("10Y Spot", f"{s10y:.3f} %", big=True))
         grid_top = []
-        s2y = stats.get("2Y Spot")
-        if s2y is not None:
-            grid_top.append(_snapshot_stat("2Y Spot", f"{s2y:.3f} %"))
-        slope = stats.get("2s10s")
+        s1y = stats.get("1Y Spot")
+        if s1y is not None:
+            grid_top.append(_snapshot_stat("1Y Spot", f"{s1y:.3f} %"))
+        slope = stats.get("1s5s")
         if slope is not None:
-            grid_top.append(_snapshot_stat("2s10s", f"{slope:+.1f} bp"))
+            grid_top.append(_snapshot_stat("1s5s", f"{slope:+.1f} bp"))
         if grid_top:
             rows.append(html.Div(grid_top, className="curve-snapshot__grid2"))
         grid_bottom = []
