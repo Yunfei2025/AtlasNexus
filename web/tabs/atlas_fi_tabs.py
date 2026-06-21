@@ -459,6 +459,66 @@ def build_pairs_layout():
 
             # ── Hidden loader for triggering updates ────────────────────────
             html.Div(id="pairs-content-loader", style={"display": "none"}),
+
+            # ── Reference section: Z-score color thresholds ──────────────────
+            html.Div([
+                html.Div([
+                    html.H3("Stats Header — Z-Score Colour Thresholds",
+                            style={"color": THEME["text_main"], "fontSize": "15px", "fontWeight": "600",
+                                   "margin": "0 0 6px 0", "letterSpacing": "0.06em", "textTransform": "uppercase"}),
+                    html.Hr(style={"borderColor": THEME["border"], "margin": "12px 0"}),
+                ], style={"marginBottom": "20px"}),
+
+                html.Div([
+                    # NEUTRAL card
+                    html.Div([
+                        html.Div([
+                            html.Div("Neutral", style={"color": "#a4b6d2", "fontSize": "11px", "fontWeight": "700",
+                                                      "letterSpacing": "0.09em", "textTransform": "uppercase", "marginBottom": "8px"}),
+                            html.Div("|z| < 1.5", style={"color": THEME["text_sub"], "fontSize": "12px"}),
+                        ], style={"paddingBottom": "12px", "borderBottom": f"1px solid {THEME['border']}"}),
+                        html.Div([
+                            html.P("Spread is within noise. Colour stays muted. No action implied.",
+                                   style={"color": THEME["text_sub"], "fontSize": "12px", "margin": "12px 0 0 0", "lineHeight": "1.6"}),
+                        ], style={"paddingTop": "12px"}),
+                    ], style={"backgroundColor": THEME["bg_card"], "border": f"1px solid {THEME['border']}", "borderRadius": "6px", "padding": "14px"}),
+
+                    # AMBER card
+                    html.Div([
+                        html.Div([
+                            html.Div("Watch", style={"color": "#e8a13f", "fontSize": "11px", "fontWeight": "700",
+                                                    "letterSpacing": "0.09em", "textTransform": "uppercase", "marginBottom": "8px"}),
+                            html.Div("1.5 ≤ |z| < 2.0", style={"color": THEME["text_sub"], "fontSize": "12px"}),
+                        ], style={"paddingBottom": "12px", "borderBottom": f"1px solid {THEME['border']}"}),
+                        html.Div([
+                            html.P("Elevated deviation, within typical reversion window. Amber draws the eye without demanding action.",
+                                   style={"color": THEME["text_sub"], "fontSize": "12px", "margin": "12px 0 0 0", "lineHeight": "1.6"}),
+                        ], style={"paddingTop": "12px"}),
+                    ], style={"backgroundColor": THEME["bg_card"], "border": f"1px solid {THEME['border']}", "borderRadius": "6px", "padding": "14px"}),
+
+                    # RED card
+                    html.Div([
+                        html.Div([
+                            html.Div("Signal", style={"color": "#e06060", "fontSize": "11px", "fontWeight": "700",
+                                                     "letterSpacing": "0.09em", "textTransform": "uppercase", "marginBottom": "8px"}),
+                            html.Div("|z| ≥ 2.0", style={"color": THEME["text_sub"], "fontSize": "12px"}),
+                        ], style={"paddingBottom": "12px", "borderBottom": f"1px solid {THEME['border']}"}),
+                        html.Div([
+                            html.P("Statistically extreme. Red signals an active opportunity or a blown-up model assumption to check.",
+                                   style={"color": THEME["text_sub"], "fontSize": "12px", "margin": "12px 0 0 0", "lineHeight": "1.6"}),
+                        ], style={"paddingTop": "12px"}),
+                    ], style={"backgroundColor": THEME["bg_card"], "border": f"1px solid {THEME['border']}", "borderRadius": "6px", "padding": "14px"}),
+
+                ], style={
+                    "display": "grid",
+                    "gridTemplateColumns": "repeat(auto-fit, minmax(280px, 1fr))",
+                    "gap": "14px",
+                }),
+            ], style={
+                "marginTop": "40px",
+                "paddingTop": "20px",
+                "borderTop": f"1px solid {THEME['border']}",
+            }),
         ],
         style={"padding": "20px"}
     )
