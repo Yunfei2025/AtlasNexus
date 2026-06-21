@@ -464,12 +464,41 @@ def build_pairs_layout():
     )
 
 
+def _z_score_color(z):
+    """Return hex color for a z-score value based on statistical thresholds.
+
+    Color thresholds:
+    - |z| ≥ 2.0:       Red (#e06060)      — Signal: statistically extreme
+    - 1.5 ≤ |z| < 2.0: Amber (#e8a13f)   — Watch: elevated deviation
+    - |z| < 1.5:       Muted (#a4b6d2)   — Neutral: within noise
+
+    Args:
+        z: Z-score value (float)
+
+    Returns:
+        str: Hex color code
+    """
+    az = abs(z)
+    if az >= 2.0:
+        return '#e06060'  # red — signal
+    elif az >= 1.5:
+        return '#e8a13f'  # amber — watch
+    else:
+        return '#a4b6d2'  # muted — neutral
+
+
 def _build_pair_card(leg1, leg2, stats, figure=None):
     """Build a pair card with smart header showing live stats.
 
+    Header displays:
+    - Pair names: bold instrument codes
+    - last: current spread in basis points
+    - β (beta): slope (change per day)
+    - z (z-score): deviation from mean, color-coded by _z_score_color()
+
     Args:
         leg1, leg2: Instrument names (strings)
-        stats: Dict with keys: last_bp, slope (beta), last_z
+        stats: Dict with keys: last_bp, slope (beta), last_z (z-score)
         figure: Plotly figure object (optional)
 
     Returns:
@@ -481,14 +510,8 @@ def _build_pair_card(leg1, leg2, stats, figure=None):
     slope = stats.get('slope', 0.0)
     last_bp = stats.get('last_bp', 0.0)
 
-    # Determine z-score color based on thresholds
-    az = abs(z)
-    if az >= 2.0:
-        z_color = '#e06060'  # red — signal
-    elif az >= 1.5:
-        z_color = '#e8a13f'  # amber — watch
-    else:
-        z_color = '#a4b6d2'  # muted — neutral
+    # Determine z-score color based on thresholds (see _z_score_color docs)
+    z_color = _z_score_color(z)
 
     sign_z = '+' if z >= 0 else ''
     sign_slope = '+' if slope >= 0 else ''
