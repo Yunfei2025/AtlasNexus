@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
+from dash import html
 from dash.dependencies import Input, Output
 from dash.exceptions import PreventUpdate
 
@@ -290,19 +291,19 @@ def irscurve(interval, ctype):
 _REF_BOND_COLUMNS = [
     {"name": "Tenor", "id": "Tenor"},
     {"name": "CGB", "id": "CGB"},
-    {"name": "CR,3m", "id": "CGB_CR"},
     {"name": "CDB", "id": "CDB"},
-    {"name": "CR,3m", "id": "CDB_CR"},
 ]
 
 
 def _ref_bonds_table_data():
-    """On-the-run CGB/CDB reference bonds, reusing the Market Data tab's loader."""
+    """Reference bonds (TBond/CBond) at standard tenors, from the Market Data tab's loader."""
     try:
-        from web.tabs.atlas_market_data_tab import _load_on_the_run_bonds
-        df = _load_on_the_run_bonds()
+        from web.tabs.atlas_market_data_tab import _load_reference_bonds
+        df = _load_reference_bonds()
         if df.empty:
             return [], []
+        # Keep only Tenor, CGB, CDB columns
+        df = df[["Tenor", "CGB", "CDB"]]
         return df.to_dict("records"), _REF_BOND_COLUMNS
     except Exception as e:
         print(f"[curves_graph] ref bonds load error: {e}")
@@ -317,18 +318,181 @@ _CURVE_TYPE_LABELS = {
 }
 
 
+def _trace_field(trace: Any, field: str, default: Any = None) -> Any:
+    """Read a field off a trace, whether it's a plain dict (plotCurve) or a
+    go.Scatter/go.Bar object (plotIRSSpotCurve/plotIRSForwardCurve return go.Figure)."""
+    if isinstance(trace, dict):
+        return trace.get(field, default)
+    return getattr(trace, field, default)
+
+
+def _trace_by_name(figure: Any, name: str) -> Any:
+    """Find a trace (dict or graph_objs trace) by its `name` in a pickled Plotly figure."""
+    traces = figure.get("data", []) if isinstance(figure, dict) else getattr(figure, "data", [])
+    for tr in traces:
+        if _trace_field(tr, "name") == name:
+            return tr
+    return None
+
+
+def _decode_plotly_array(value: Any) -> Any:
+    """Decode Plotly 6.x's compact typed-array form ({'dtype', 'bdata'}), which
+    go.Scatter/.Bar properties can return as-is after a pickle round-trip."""
+    if isinstance(value, dict) and "bdata" in value and "dtype" in value:
+        import base64
+        return np.frombuffer(base64.b64decode(value["bdata"]), dtype=np.dtype(value["dtype"]))
+    return value
+
+
+def _xy_series(trace: Any) -> pd.Series:
+    if trace is None:
+        return pd.Series(dtype=float)
+    x = pd.to_numeric(pd.Series(_decode_plotly_array(_trace_field(trace, "x", []))), errors="coerce")
+    y = pd.to_numeric(pd.Series(_decode_plotly_array(_trace_field(trace, "y", []))), errors="coerce")
+    s = pd.Series(y.to_numpy(), index=x.to_numpy()).dropna()
+    return s[~s.index.isna()].sort_index()
+
+
+def _nearest(series: pd.Series, target: float) -> Optional[float]:
+    if series.empty:
+        return None
+    idx = (series.index.to_series() - target).abs().idxmin()
+    return float(series.loc[idx])
+
+
+def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
+    """Derive the right-rail snapshot (spot levels, slope, bid-offer, fwd peak)
+    directly from the already-drawn traces, so the rail always matches the chart."""
+    stats: Dict[str, Any] = {}
+    try:
+        if curve_type in ("TBond", "CBond"):
+            # plotCurve names the fitted hero curve after the Curve dict's first
+            # column (typically 'Bid'); fall back to averaging Bid/Ofr fits if absent.
+            hero = _xy_series(_trace_by_name(figure, "Bid"))
+            if hero.empty:
+                hero = _xy_series(_trace_by_name(figure, "Ofr"))
+            band = _trace_by_name(figure, "Bid–Offer")
+            mid = _xy_series(_trace_by_name(figure, "Mid"))
+            if not hero.empty:
+                s10y = _nearest(hero, 10.0)
+                s2y = _nearest(hero, 2.0)
+                stats["10Y Spot"] = s10y
+                stats["2Y Spot"] = s2y
+                if s10y is not None and s2y is not None:
+                    stats["2s10s"] = (s10y - s2y) * 100.0
+                # Peak yield and corresponding tenor
+                peak_idx = hero.idxmax()
+                peak_val = hero.max()
+                if not pd.isna(peak_idx) and not pd.isna(peak_val):
+                    stats["Peak yield"] = (float(peak_val), float(peak_idx))
+            if band is not None:
+                lo = pd.to_numeric(pd.Series(_decode_plotly_array(_trace_field(band, "base", []))), errors="coerce")
+                width = pd.to_numeric(pd.Series(_decode_plotly_array(_trace_field(band, "y", []))), errors="coerce")
+                spr = (width.dropna().abs() * 100.0)  # abs() ensures positive spread
+                if not spr.empty:
+                    stats["Avg Bid–Ofr"] = float(spr.mean())
+                stats["Instruments"] = int(lo.notna().sum())
+            elif not mid.empty:
+                stats["Instruments"] = int(mid.shape[0])
+        elif curve_type in ("IRSSpot", "IRSForward"):
+            # plotIRSSpotCurve names the fit trace 'r7dFitCurve'/'s3mFitCurve';
+            # plotIRSForwardCurve names it 'FR007FitCurve'/'Shibor3MFitCurve'.
+            hero_name = "FR007FitCurve" if curve_type == "IRSForward" else "r7dFitCurve"
+            sec_name = "Shibor3MFitCurve" if curve_type == "IRSForward" else "s3mFitCurve"
+            hero = _xy_series(_trace_by_name(figure, hero_name))
+            sec = _xy_series(_trace_by_name(figure, sec_name))
+            if not hero.empty:
+                stats["FR007 10Y"] = _nearest(hero, 10.0)
+                stats["FR007 2Y"] = _nearest(hero, 2.0)
+            if not sec.empty:
+                stats["Shibor3M 10Y"] = _nearest(sec, 10.0)
+            if curve_type == "IRSForward" and not hero.empty:
+                peak_x = float(hero.idxmax())
+                stats["Fwd peak"] = (float(hero.max()), peak_x)
+    except Exception as e:
+        print(f"[curve_snapshot] stats error: {e}")
+    return stats
+
+
+def _snapshot_stat(label: str, value: str, big: bool = False) -> html.Div:
+    return html.Div([
+        html.Div(label, className="curve-snapshot__k"),
+        html.Div(value, className="curve-snapshot__v" + (" curve-snapshot__v--big" if big else "")),
+    ], className="curve-snapshot__stat")
+
+
+def _render_curve_snapshot(curve_type: str, stats: Dict[str, Any]) -> Any:
+    """Build the right-rail 'Curve Snapshot' panel matching the restyled mockup."""
+    if not stats:
+        return []
+
+    if curve_type in ("TBond", "CBond"):
+        rows = [html.H3("Curve Snapshot", className="curve-snapshot__title")]
+        s10y = stats.get("10Y Spot")
+        if s10y is not None:
+            rows.append(_snapshot_stat("10Y Spot", f"{s10y:.3f} %", big=True))
+        grid_top = []
+        s2y = stats.get("2Y Spot")
+        if s2y is not None:
+            grid_top.append(_snapshot_stat("2Y Spot", f"{s2y:.3f} %"))
+        slope = stats.get("2s10s")
+        if slope is not None:
+            grid_top.append(_snapshot_stat("2s10s", f"{slope:+.1f} bp"))
+        if grid_top:
+            rows.append(html.Div(grid_top, className="curve-snapshot__grid2"))
+        grid_bottom = []
+        spr = stats.get("Avg Bid–Ofr")
+        if spr is not None:
+            grid_bottom.append(_snapshot_stat("Avg Bid–Ofr", f"{spr:.1f} bp"))
+        n = stats.get("Instruments")
+        if n is not None:
+            grid_bottom.append(_snapshot_stat("Instruments", str(n)))
+        if grid_bottom:
+            rows.append(html.Div(className="curve-snapshot__divider"))
+            rows.append(html.Div(grid_bottom, className="curve-snapshot__grid2"))
+        peak = stats.get("Peak yield")
+        if peak is not None:
+            rows.append(html.Div(className="curve-snapshot__divider"))
+            rows.append(_snapshot_stat("Peak yield @ Term", f"{peak[0]:.3f} % @ {peak[1]:.2f}Y"))
+        return rows
+
+    # IRS spot / forward
+    rows = [html.H3("Curve Snapshot", className="curve-snapshot__title")]
+    fr10 = stats.get("FR007 10Y")
+    if fr10 is not None:
+        rows.append(_snapshot_stat("FR007 10Y", f"{fr10:.3f} %", big=True))
+    grid_top = []
+    fr2 = stats.get("FR007 2Y")
+    if fr2 is not None:
+        grid_top.append(_snapshot_stat("FR007 2Y", f"{fr2:.3f} %"))
+    shi10 = stats.get("Shibor3M 10Y")
+    if shi10 is not None:
+        grid_top.append(_snapshot_stat("Shibor3M 10Y", f"{shi10:.3f} %"))
+    if grid_top:
+        rows.append(html.Div(grid_top, className="curve-snapshot__grid2"))
+    peak = stats.get("Fwd peak")
+    if peak is not None:
+        rows.append(html.Div(className="curve-snapshot__divider"))
+        rows.append(_snapshot_stat("Fwd peak @ Term", f"{peak[0]:.2f} % @ {peak[1]:.1f}Y"))
+    return rows
+
+
 @app.callback([Output("curves-graph", "figure"),
                Output("curves-title", "children"),
                Output("ref-bonds-container", "style"),
                Output("ref-bonds-t", "data"),
                Output("ref-bonds-t", "columns"),
-               Output("curves-chart-subtitle", "children")],
+               Output("curves-chart-subtitle", "children"),
+               Output("curves-snapshot", "children")],
               Input("data-refresh", "n_intervals"),
               Input('curve-selection', 'value'),
               )
 def curves_graph(interval, curve_type):
     """Combined callback for bond and IRS curves."""
+    from datetime import datetime
     subtitle = _CURVE_TYPE_LABELS.get(curve_type, curve_type or "")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    subtitle_with_time = f"{subtitle} · {timestamp}"
     try:
         if curve_type in ['TBond', 'CBond']:
             # Bond curves
@@ -355,10 +519,11 @@ def curves_graph(interval, curve_type):
             ref_bonds_style = {"display": "block"}
             ref_bonds_data, ref_bonds_columns = _ref_bonds_table_data()
 
-        return figure, title, ref_bonds_style, ref_bonds_data, ref_bonds_columns, subtitle
+        snapshot = _render_curve_snapshot(curve_type, _curve_snapshot_stats(curve_type, figure))
+        return figure, title, ref_bonds_style, ref_bonds_data, ref_bonds_columns, subtitle_with_time, snapshot
     except FileNotFoundError:
         empty_figure = {"data": [], "layout": {"title": "Error: The figure file does not exist."}}
-        return empty_figure, "Error Loading Curves", {"display": "none"}, [], [], subtitle
+        return empty_figure, "Error Loading Curves", {"display": "none"}, [], [], subtitle_with_time, []
 
 
 @app.callback(Output("trend-graph", "figure"),

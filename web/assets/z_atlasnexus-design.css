@@ -728,6 +728,48 @@ div[role="tablist"]:has(> .tab.an-subtab) {
   background-color: var(--an-navy-900) !important;
 }
 
+/* ── Curves tab: right-rail "Curve Snapshot" panel (mirrors docs/dev/bond-curves-restyle.html) ── */
+.curve-snapshot {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 16px 16px 18px;
+  background-color: var(--an-navy-900);
+  border-left: 1px solid var(--an-border2);
+}
+.curve-snapshot__title {
+  margin: 0;
+  font-size: var(--fs-meta);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--an-muted);
+  font-weight: var(--fw-medium);
+}
+.curve-snapshot__stat .curve-snapshot__k {
+  font-size: var(--fs-meta);
+  color: var(--an-muted);
+  letter-spacing: 0.02em;
+}
+.curve-snapshot__stat .curve-snapshot__v {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: var(--fw-medium);
+  color: var(--an-text);
+  margin-top: 2px;
+}
+.curve-snapshot__stat .curve-snapshot__v--big {
+  font-size: 22px;
+}
+.curve-snapshot__grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 12px;
+}
+.curve-snapshot__divider {
+  height: 1px;
+  background: var(--an-border2);
+}
+
 /* Main content area inside the rail */
 #an-main-content.tab__title {
   background: transparent !important;

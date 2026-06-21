@@ -35,12 +35,125 @@ try:
     SYMBOLS = list(SymbolValidator().values)
 except Exception:
     SYMBOLS = PLOTLY_SYMBOLS
-    
+
 def _symbol(index):
     return SYMBOLS[index % len(SYMBOLS)]
 
 def _palette_color(palette, index):
     return palette[index % len(palette)]
+
+# ---------------------------------------------------------------------------
+# AtlasNexus design tokens (mirrors web/assets/colors.css + typography.css)
+# Curve charts are rendered server-side as pickled Plotly figures, so the CSS
+# custom properties aren't available at draw time — values are hard-coded
+# here to stay in sync with the canonical token files.
+# ---------------------------------------------------------------------------
+CURVE_THEME = {
+    "bg": "#122a4c",            # --navy-700 / --surface-panel
+    "grid": "rgba(255,255,255,0.05)",
+    "axis_line": "#1e3a5f",     # --border-default
+    "axis_text": "#6f83a3",     # --text-muted
+    "text_primary": "#e9eef8",  # --text-primary
+    "text_secondary": "#a4b6d2",# --text-secondary
+    "spot": "#e0a23c",          # --accent-amber (hero curve)
+    "forward": "#45b6e6",       # --accent-cyan
+    "band": "#7d96be",          # bid-offer range
+    "mid": "#e9eef8",           # --text-primary
+    "live": "#41b078",          # --positive (live/RT prints)
+    "whisker": "#4a5d7c",       # --text-faint
+    "font_sans": "IBM Plex Sans, sans-serif",
+    "font_mono": "IBM Plex Mono, monospace",
+}
+
+
+def _curve_axis(title, range_=None, dtick=None):
+    axis = {
+        "showgrid": True,
+        "showline": True,
+        "linecolor": CURVE_THEME["axis_line"],
+        "gridcolor": CURVE_THEME["grid"],
+        "zeroline": False,
+        "title": {"text": title, "font": {"family": CURVE_THEME["font_sans"], "size": 12, "color": CURVE_THEME["axis_text"]}},
+        "tickfont": {"family": CURVE_THEME["font_mono"], "size": 12, "color": CURVE_THEME["axis_text"]},
+    }
+    if range_ is not None:
+        axis["range"] = range_
+    if dtick is not None:
+        axis["dtick"] = dtick
+    return axis
+
+
+def _curve_base_layout(height=660):
+    return dict(
+        plot_bgcolor=CURVE_THEME["bg"],
+        paper_bgcolor=CURVE_THEME["bg"],
+        font={"color": CURVE_THEME["text_secondary"], "family": CURVE_THEME["font_sans"]},
+        height=height,
+        margin=dict(l=62, r=26, t=20, b=54),
+        hoverlabel=dict(
+            bgcolor="rgba(12,24,48,0.96)",
+            bordercolor="#2a517f",
+            font=dict(color=CURVE_THEME["text_primary"], family=CURVE_THEME["font_mono"], size=12),
+        ),
+        legend=dict(
+            x=0.01, y=1.12, traceorder="normal", orientation="h",
+            font={"family": CURVE_THEME["font_sans"], "size": 11, "color": CURVE_THEME["text_secondary"]},
+        ),
+    )
+
+
+def _bid_offer_band_trace(name, tenor, lo, hi):
+    """Floating bar rendering the bid-offer range at each tenor (mockup's range bars)."""
+    return go.Bar(
+        name=name,
+        x=tenor,
+        y=hi - lo,
+        base=lo,
+        width=[0.12] * len(tenor) if len(tenor) else 0.12,
+        marker=dict(color=CURVE_THEME["band"], opacity=0.55, line=dict(color="rgba(255,255,255,0.18)", width=0.5)),
+        hoverinfo="skip",
+    )
+
+
+def _offscale_trace(tenor, value, y_floor, y_ceiling):
+    """Clamp out-of-range (tenor, value) points to the axis floor/ceiling with a caret marker."""
+    clamped_x, clamped_y, labels, rotate = [], [], [], []
+    for t, v in zip(tenor, value):
+        if pd.isna(t) or pd.isna(v):
+            continue
+        if v < y_floor:
+            clamped_x.append(t); clamped_y.append(y_floor); labels.append(f'{t:.2g}Y · {v:.2f}% (off-scale)'); rotate.append(180)
+        elif v > y_ceiling:
+            clamped_x.append(t); clamped_y.append(y_ceiling); labels.append(f'{t:.2g}Y · {v:.2f}% (off-scale)'); rotate.append(0)
+    if not clamped_x:
+        return None
+    return go.Scatter(
+        name='OffScale',
+        x=clamped_x, y=clamped_y,
+        mode='markers+text',
+        marker=dict(symbol='triangle-down', color=CURVE_THEME["spot"], size=11, opacity=0.85),
+        text=labels,
+        textposition='top center',
+        textfont=dict(family=CURVE_THEME["font_mono"], size=10, color=CURVE_THEME["axis_text"]),
+        showlegend=False,
+    )
+
+
+def _whisker_traces(name, tenor, lo, hi):
+    """Uncertainty whiskers (vertical line + caps) drawn as a single Scatter with line breaks."""
+    xs, ys = [], []
+    cap = 0.045
+    for t, l, h in zip(tenor, lo, hi):
+        xs += [t, t, None, t - cap, t + cap, None, t - cap, t + cap, None]
+        ys += [l, h, None, l, l, None, h, h, None]
+    return go.Scatter(
+        name=name,
+        x=xs, y=ys,
+        mode="lines",
+        line=dict(color=CURVE_THEME["whisker"], width=1),
+        hoverinfo="skip",
+        showlegend=bool(len(tenor)),
+    )
 
 def plotCurve(btype, dict_plot):
     from datetime import datetime
@@ -54,101 +167,93 @@ def plotCurve(btype, dict_plot):
     else:
         title = 'Other Bond'
 
-    # pio.renderers.default = 'browser'
     dfl = dict_plot['Curve']
     dfm = dict_plot['Quote']
     dfr = dict_plot['RefSpot']
     dfr = dfr[pd.to_numeric(dfr.index, errors='coerce') <= 10.0]
 
-    # plot curves
-    trace1 = [go.Scatter(
-        name=dfl.columns[i],
-        x=dfl.index,
-        y=dfl.iloc[:, i],
-        line={
-            "width": 3,
-            "color": _palette_color(px.colors.qualitative.Set1, i)
-        })
-        for i in range(dfl.shape[1])]
+    tenor = pd.to_numeric(pd.Series(dfm.index), errors='coerce').to_numpy()
+    bid = pd.to_numeric(dfm['Bid'], errors='coerce').to_numpy()
+    ofr = pd.to_numeric(dfm['Ofr'], errors='coerce').to_numpy()
+    mid = (bid + ofr) / 2.0
+    vol = pd.to_numeric(dfm['vol'], errors='coerce').to_numpy()
 
-    # plot reference markers
-    trace2 = [go.Scatter(
+    # bid-offer range bars (rectangle bands), z below everything
+    trace_band = [_bid_offer_band_trace('Bid–Offer', tenor, bid, ofr)]
+
+    # uncertainty whiskers (mid ± vol) on the subset where vol is available
+    whisk_mask = ~pd.isna(vol)
+    trace_whisk = [_whisker_traces('Uncertainty', tenor[whisk_mask], (mid - vol)[whisk_mask], (mid + vol)[whisk_mask])]
+
+    # mid marks
+    trace_mid = [go.Scatter(
+        name='Mid',
+        x=tenor,
+        y=mid,
+        text=dfm['ID'],
+        mode='markers',
+        marker=dict(color=CURVE_THEME["mid"], size=4, opacity=0.9),
+    )]
+
+    # live/RT prints
+    rt = pd.to_numeric(dfm['RT'], errors='coerce')
+    rt_mask = rt.notna().to_numpy()
+    trace_rt = [go.Scatter(
+        name='RT',
+        x=tenor[rt_mask],
+        y=rt.to_numpy()[rt_mask],
+        mode='markers',
+        marker=dict(symbol='diamond', color=CURVE_THEME["live"], size=7, line=dict(color="#0a1428", width=1)),
+    )]
+
+    # reference markers (selected reference bonds)
+    trace_ref = [go.Scatter(
         name='Ref',
         x=dfr.index,
         y=dfr.iloc[:, i],
         mode='markers',
-        marker=dict(
-            symbol=_symbol(1),
-            color='red',
-            size=15,
-        ))
+        marker=dict(symbol=_symbol(1), color=CURVE_THEME["forward"], size=11,
+                    line=dict(color="#0a1428", width=1)),
+    )
         for i in range(dfr.shape[1])]
 
-    # plot quote markers
-    trace3 = [go.Scatter(
-        name=dfm.columns[i],
-        x=dfm.index,
-        y=dfm.iloc[:, i],
-        mode='markers',
-        marker=dict(
-            symbol=_symbol(1),
-            color=_palette_color(px.colors.qualitative.Bold, i + 1),
-            size=10,
+    # fitted curves: hero (Bid/Ofr average treated as Spot) gets amber, others cyan
+    trace_curve = []
+    for i in range(dfl.shape[1]):
+        is_hero = i == 0
+        trace_curve.append(go.Scatter(
+            name=dfl.columns[i],
+            x=dfl.index,
+            y=dfl.iloc[:, i],
+            line=dict(
+                width=3.5 if is_hero else 2.5,
+                color=CURVE_THEME["spot"] if is_hero else CURVE_THEME["forward"],
+            ),
         ))
-        for i in range(1, 5)]
 
-    # plot adj quote markers
-    trace4 = [go.Scatter(
-        name='Mid',
-        x=dfm.index,
-        y=(dfm['Bid'] + dfm['Ofr']) / 2,
-        error_y=dict(
-            type='data',  # value of error bar given in data coordinates
-            symmetric=False,
-            array=dfm['vol'],
-            arrayminus=dfm['vol'],
-            visible=True),
-        text=dfm['ID'],
-        mode='markers',
-        marker=dict(
-            symbol=_symbol(1),
-            color=px.colors.qualitative.Pastel2[2],
-            size=10,
-            opacity=0.5,
-        ))]
+    # y-range from the fitted curve (robust to a handful of off-scale quotes),
+    # padded; quotes/mids outside this band are clamped with a caret marker
+    # instead of compressing the whole axis (mirrors the mockup's "off-scale" note).
+    curve_vals = pd.to_numeric(dfl.stack(), errors='coerce').dropna()
+    if not curve_vals.empty:
+        pad = max(0.1, (curve_vals.max() - curve_vals.min()) * 0.15)
+        y_floor, y_ceiling = curve_vals.min() - pad, curve_vals.max() + pad
+    else:
+        y_floor, y_ceiling = 0.0, 10.0
 
-    data = trace1 + trace2 + trace3 + trace4
+    trace_offscale = []
+    offscale = _offscale_trace(tenor, mid, y_floor, y_ceiling)
+    if offscale is not None:
+        trace_offscale.append(offscale)
 
-    layout = dict(
-        xaxis_title=dfl.index.name,
-        yaxis_title='%',
-        title={'text': title + '<br> Realtime Curves: ' + d.strftime("%Y-%m-%d %H:%M:%S"), \
-               'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
-        plot_bgcolor=app_color["graph_bg"],
-        paper_bgcolor=app_color["graph_bg"],
-        font={"color": "#fff"},
-        xaxis={
-            "showgrid": True,
-            "showline": True,
-            "gridcolor": "#0f3174",
-            "zeroline": False,
-            # "fixedrange": True,
-            "title": "Tenor",
-        },
-        yaxis={
-            "showgrid": True,
-            "showline": True,
-            "gridcolor": "#0f3174",
-            # "fixedrange": True,
-            "zeroline": False,
-            "title": "%",
-        },
-        height=700,
-        legend=dict(x=0.01, y=1.1, traceorder="normal")
-    )
-    # # plot curve
-    # fig = go.Figure(data=data,layout=layout)
-    # fig.show()
+    data = trace_band + trace_whisk + trace_mid + trace_rt + trace_ref + trace_curve + trace_offscale
+
+    layout = _curve_base_layout()
+    layout.update(dict(
+        barmode='overlay',
+        xaxis=_curve_axis('Tenor (years)'),
+        yaxis=_curve_axis('Yield (%)', range_=[y_floor, y_ceiling]),
+    ))
     return dict(data=data, layout=layout)
 
 def plotBondTS(bonds, df_price, output, C_num, ptype, rtype, adjust=True):
@@ -484,9 +589,11 @@ def plotIRSSpotCurve(fixings, curve_dict):
     from settings.general import DateConfig
     from settings.fixed_income import IRSConfig
     d = DateConfig.get_date_mappings()['d']
-    # pio.renderers.default = 'browser'
     tenor = {'r7d': 7 / GeneralConfig.YN, 's3m': 90 / GeneralConfig.YN}
     label = {'r7d': 'FR007', 's3m': 'Shibor3M', 'basis': 'S.R.'}
+    # r7d is the hero family (amber); s3m is the secondary family (cyan) — mirrors
+    # the mockup's Spot/Forward palette.
+    family_color = {'r7d': CURVE_THEME["spot"], 's3m': CURVE_THEME["forward"]}
     anchor = {}
     for c in curve_dict['inst'].keys():
         idx_ = [curve_dict['inst'][c].index.get_indexer([i], method='nearest')[0] for i in IRSConfig.R7D_LIST.values()]
@@ -499,70 +606,48 @@ def plotIRSSpotCurve(fixings, curve_dict):
         x=[tenor[c]],
         y=[fixings['close'][c]],
         mode='markers',
-        marker=dict(
-            symbol='circle-open',
-            color=_palette_color(px.colors.qualitative.Set1, i),
-            size=20,
-        ),
+        marker=dict(symbol='circle-open', color=family_color[c], size=18),
         showlegend=False)
-                 for (i, c) in enumerate(tenor.keys())] + \
+                 for c in tenor.keys()] + \
              [go.Scatter(
                  name=label[c],
                  x=[tenor[c]],
                  y=[fixings['inst'][c]],
                  mode='markers',
-                 marker=dict(
-                     symbol='circle',
-                     color=_palette_color(px.colors.qualitative.Set1, i),
-                     size=15,
-                 ),
+                 marker=dict(symbol='circle', color=family_color[c], size=13),
                  showlegend=False)
-                 for (i, c) in enumerate(tenor.keys())]
+                 for c in tenor.keys()]
 
     # plot repo and shibor irs curve
     trace1 = [go.Scatter(
         name=label[c] + 'Curve(Close)',
         x=curve_dict['close'][c].index,
         y=curve_dict['close'][c]['SpotRate'],
-        line={
-            "width": 1,
-            "color": _palette_color(px.colors.qualitative.Set1, i),
-            "dash": 'dash',
-        })
-                 for (i, c) in enumerate(tenor.keys())] + \
+        line={"width": 1, "color": family_color[c], "dash": 'dash'})
+                 for c in tenor.keys()] + \
              [go.Scatter(
                  name=label[c] + 'Curve',
                  x=curve_dict['inst'][c].index,
                  y=curve_dict['inst'][c]['SpotRate'],
-                 line={
-                     "width": 1,
-                     "color": _palette_color(px.colors.qualitative.Set1, i)
-                 })
-                 for (i, c) in enumerate(tenor.keys())] + \
+                 line={"width": 1, "color": family_color[c]})
+                 for c in tenor.keys()] + \
              [go.Scatter(
                  name=label[c] + 'FitCurve(Close)',
                  x=curve_dict['closefit'][c].index,
                  y=curve_dict['closefit'][c]['SpotRate'],
-                 line={
-                     "width": 3,
-                     "color": _palette_color(px.colors.qualitative.Set1, i),
-                     "dash": 'dash',
-                 },
+                 line={"width": 3, "color": family_color[c], "dash": 'dash'},
                  showlegend=False)
-                 for (i, c) in enumerate(tenor.keys())] + \
+                 for c in tenor.keys()] + \
              [go.Scatter(
                  name=c + 'FitCurve',
                  x=curve_dict['instfit'][c].index,
                  y=curve_dict['instfit'][c]['SpotRate'],
-                 line={
-                     "width": 3,
-                     "color": _palette_color(px.colors.qualitative.Set1, i)
-                 },
+                 line={"width": 3.5 if c == 'r7d' else 2.5, "color": family_color[c]},
                  showlegend=False)
-                 for (i, c) in enumerate(tenor.keys())]
+                 for c in tenor.keys()]
 
     # Add TBond/CBond fit curves on the spot chart when the refresher has populated them.
-    for btype, color in [('TBond', '#FF8C00'), ('CBond', '#FFFF33')]:
+    for btype, color in [('TBond', '#f0c44d'), ('CBond', '#7fd1ec')]:
         spot_col = f'{btype}SpotRate'
         if spot_col not in curve_dict['instfit']['r7d'].columns:
             continue
@@ -570,24 +655,18 @@ def plotIRSSpotCurve(fixings, curve_dict):
             name=btype + 'FitCurve',
             x=curve_dict['instfit']['r7d'].index,
             y=curve_dict['instfit']['r7d'][spot_col],
-            line={
-                "width": 3,
-                "color": color,
-            },
+            line={"width": 2, "color": color, "dash": 'dot'},
         ))
 
     # plot reference markers
-    colormap = {'s3m':'blue','r7d':'red'}
     trace2 = [go.Scatter(
         name='Ref',
         x=anchor[c].index,
         y=anchor[c].values,
         mode='markers',
-        marker=dict(
-            symbol=_symbol(1),
-            color=colormap[c],
-            size=15,
-        ))
+        marker=dict(symbol=_symbol(1), color=family_color[c], size=12,
+                    line=dict(color="#0a1428", width=1)),
+        )
         for c in tenor.keys()]
 
     if 'adjSpotRate' in curve_dict['instfit']['r7d'].columns:
@@ -597,79 +676,26 @@ def plotIRSSpotCurve(fixings, curve_dict):
             y=curve_dict['instfit'][c]['adjSpotRate'],
             xaxis='x',
             yaxis='y',
-            line={
-                "width": 3,
-                "color": _palette_color(px.colors.qualitative.Set1, i),
-                "dash": 'dot',
-            },
+            line={"width": 3, "color": family_color[c], "dash": 'dot'},
             showlegend=False)
-            for (i, c) in enumerate(tenor.keys())])
-
-    # if 'basis' in curve_dict['close'].keys():
-    #     # plot fit curve
-    #     trace1.extend([go.Scatter(
-    #         name='BasisCurve(Close)',
-    #         x=curve_dict['close']['basis'].index,
-    #         y=curve_dict['close']['basis']['SpotRate'],
-    #         xaxis='x',
-    #         yaxis='y2',
-    #         line={
-    #             "width": 1,
-    #             "color": px.colors.qualitative.Set1[2],
-    #             "dash": 'dash',
-    #         }),
-    #         go.Scatter(
-    #             name='BasisCurve',
-    #             x=curve_dict['inst']['basis'].index,
-    #             y=curve_dict['inst']['basis']['SpotRate'],
-    #             xaxis='x',
-    #             yaxis='y2',
-    #             line={
-    #                 "width": 1,
-    #                 "color": px.colors.qualitative.Set1[2]
-    #             })])
+            for c in tenor.keys()])
 
     data = trace0 + trace1 + trace2
 
-    layout = dict(
-        xaxis_title='years',
-        yaxis_title='%',
-        xaxis={
-            "showgrid": True,
-            "showline": True,
-            "gridcolor": "#0f3174",
-            "zeroline": False,
-            "fixedrange": True,
-            "title": "Tenor",
-            "range": [0, 10.1]
-        },
-        yaxis={
-            "showgrid": True,
-            "showline": True,
-            "gridcolor": "#0f3174",
-            "fixedrange": True,
-            "zeroline": False,
-            "title": "%",
-            # "range":[2,2.9]
-        },
+    layout = _curve_base_layout()
+    layout.update(dict(
+        xaxis=_curve_axis('Tenor (years)', range_=[0, 10.1]),
+        yaxis=_curve_axis('Yield (%)'),
         yaxis2={
             "showgrid": False,
             "showline": True,
+            "linecolor": CURVE_THEME["axis_line"],
             "anchor": 'x',
             "overlaying": 'y',
             "side": 'right',
         },
-        height=700,
-        title={'text': '<br> Realtime IRS Spot Curves: ' + d.strftime("%Y-%m-%d %H:%M:%S"), \
-               'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
-        legend=dict(x=0.01, y=1.0,
-                    traceorder="normal"),
-        plot_bgcolor=app_color["graph_bg"],
-        paper_bgcolor=app_color["graph_bg"],
-        font={"color": "#fff"},
-    )
+    ))
     fig = go.Figure(data=data, layout=layout)
-    # fig.show() 
     return fig
 
 
@@ -677,10 +703,11 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
     from datetime import datetime
     import numpy as np
     d = datetime.today()
-    pio.renderers.default = 'browser'
 
     tenor = {'r7d': 7 / GeneralConfig.YN, 's3m': 90 / GeneralConfig.YN}
     label = {'r7d': 'FR007', 's3m': 'Shibor3M', 'basis': 'S.R.'}
+    # r7d is the hero family (amber); s3m is the secondary family (cyan).
+    family_color = {'r7d': CURVE_THEME["spot"], 's3m': CURVE_THEME["forward"]}
     tenorlist = np.array([1 / 2, 3 / 4, 1, 2, 3, 4, 5, 7, 10]).round(2)
     r7dlist = ['FR007S6M.IR', 'FR007S9M.IR','FR007S1Y.IR', 'FR007S2Y.IR', 'FR007S3Y.IR', 'FR007S4Y.IR', 'FR007S5Y.IR', 'FR007S7Y.IR', 'FR007S10Y.IR']
     s3mlist = ['SHI3MS6M.IR', 'SHI3MS9M.IR','SHI3MS1Y.IR','SHI3MS2Y.IR','SHI3MS3Y.IR', 'SHI3MS4Y.IR', 'SHI3MS5Y.IR', 'SHI3MS7Y.IR', 'SHI3MS10Y.IR']
@@ -741,94 +768,63 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
         x=[0],
         y=[fixings['close'][c]],
         mode='markers',
-        marker=dict(
-            symbol='circle-open',
-            color=_palette_color(px.colors.qualitative.Set1, i),
-            size=15,
-        ),
+        marker=dict(symbol='circle-open', color=family_color[c], size=14),
         showlegend=False)
-                 for (i, c) in enumerate(tenor.keys())] + \
+                 for c in tenor.keys()] + \
              [go.Scatter(
                  name=label[c],
                  x=[0],
                  y=[fixings['inst'][c]],
                  mode='markers',
-                 marker=dict(
-                     symbol='circle',
-                     color=_palette_color(px.colors.qualitative.Set1, i),
-                     size=15,
-                 ),
+                 marker=dict(symbol='circle', color=family_color[c], size=14),
                  showlegend=False)
-                 for (i, c) in enumerate(tenor.keys())]
+                 for c in tenor.keys()]
 
     # plot repo and shibor irs forward curve
     trace1 = [go.Scatter(
         name=label[c] + 'Curve(Close)',
         x=curve_dict['close'][c].index,
         y=curve_dict['close'][c]['ForwardRate'],
-        line={
-            "width": 1,
-            "color": _palette_color(px.colors.qualitative.Set1, i),
-            "dash": 'dash',
-        })
-                 for (i, c) in enumerate(tenor.keys())] + \
+        line={"width": 1, "color": family_color[c], "dash": 'dash'})
+                 for c in tenor.keys()] + \
              [go.Scatter(
                  name=label[c] + 'Curve',
                  x=curve_dict['inst'][c].index,
                  y=curve_dict['inst'][c]['ForwardRate'],
-                 line={
-                     "width": 1,
-                     "color": _palette_color(px.colors.qualitative.Set1, i)
-                 })
-                 for (i, c) in enumerate(tenor.keys())] + \
+                 line={"width": 1, "color": family_color[c]})
+                 for c in tenor.keys()] + \
              [go.Scatter(
                  name=label[c] + 'FitCurve(Close)',
                  x=curve_dict['closefit'][c].index,
                  y=curve_dict['closefit'][c]['ForwardRate'],
-                 line={
-                     "width": 3,
-                     "color": _palette_color(px.colors.qualitative.Set1, i),
-                     "dash": 'dash',
-                 },
+                 line={"width": 3, "color": family_color[c], "dash": 'dash'},
                  showlegend=False)
-                 for (i, c) in enumerate(tenor.keys())] + \
+                 for c in tenor.keys()] + \
              [go.Scatter(
                  name=label[c] + 'FitCurve',
                  x=curve_dict['instfit'][c].index,
                  y=curve_dict['instfit'][c]['ForwardRate'],
-                 line={
-                     "width": 3,
-                     "color": _palette_color(px.colors.qualitative.Set1, i)
-                 },
+                 line={"width": 3.5 if c == 'r7d' else 2.5, "color": family_color[c]},
                  showlegend=False)
-                 for (i, c) in enumerate(tenor.keys())]
-    i = 4
-    for btype in ['TBond','CBond']:
+                 for c in tenor.keys()]
+    for btype, color in [('TBond', '#f0c44d'), ('CBond', '#7fd1ec')]:
         fit_curve = curve_dict['instfit']['r7d']
         fit_curve = fit_curve.loc[fit_curve.index.astype(float) > 1.0]
         trace1.append(go.Scatter(
                      name=btype+' FitCurve',
                      x=fit_curve.index,
                      y=fit_curve[btype+'ForwardRate'],
-                     line={
-                         "width": 3,
-                         "color": _palette_color(px.colors.qualitative.Set1, i)
-                     })
+                     line={"width": 2, "color": color, "dash": 'dot'})
         )
-        i += 1
 
     if 'adjForwardRate' in curve_dict['instfit']['r7d'].columns:
         trace1.extend([go.Scatter(
             name=label[c] + 'FitCurveAdj',
             x=curve_dict['instfit'][c].index,
             y=curve_dict['instfit'][c]['adjForwardRate'],
-            line={
-                "width": 3,
-                "color": _palette_color(px.colors.qualitative.Set1, i),
-                "dash": 'dot',
-            },
+            line={"width": 3, "color": family_color[c], "dash": 'dot'},
             showlegend=False)
-            for (i, c) in enumerate(tenor.keys())])
+            for c in tenor.keys()])
 
     # plot carry bar charts.
     # Layout (width=0.08, spacing 0.02): TBond at T-0.24, CBond at T-0.14,
@@ -859,7 +855,7 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
             x=tenorlist - 0.04,
             y=irs_val.loc[r7dlist, c],
             width=0.08,
-            marker={"color": px.colors.diverging.balance[i]},
+            marker={"color": _bond_colors['TBond'][i]},
             showlegend=True,
             yaxis='y2',
             text=r7dlist,
@@ -872,7 +868,7 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
             x=tenorlist + 0.06,
             y=irs_val.loc[s3mlist, c],
             width=0.08,
-            marker={"color": px.colors.diverging.balance[i]},
+            marker={"color": _bond_colors['CBond'][i]},
             showlegend=False,
             yaxis='y2',
             text=s3mlist,
@@ -883,38 +879,22 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
 
     data = trace2 + trace0 + trace1
 
-    layout = dict(
+    layout = _curve_base_layout()
+    layout.update(dict(
         barmode='overlay',
-        xaxis_title='years',
-        yaxis_title='%',
-        xaxis={
-            "showgrid": True,
-            "showline": True,
-            "gridcolor": "#0f3174",
-            "zeroline": False,
-            "fixedrange": True,
-            "title": "Tenor",
-            "range": [0, 10.1]
-        },
-        yaxis={
-            "showgrid": True,
-            "showline": True,
-            "gridcolor": "#0f3174",
-            "fixedrange": True,
-            "zeroline": False,
-            "title": "%",
-        },
+        xaxis=_curve_axis('Tenor (years)', range_=[0, 10.1]),
+        yaxis=_curve_axis('Yield (%)'),
         yaxis2={
             "showgrid": False,
             "showline": True,
+            "linecolor": CURVE_THEME["axis_line"],
             "zeroline": True,
-            "zerolinecolor": "#fff",
+            "zerolinecolor": "rgba(255,255,255,0.18)",
             "zerolinewidth": 0.01,
             "anchor": 'x',
             "overlaying": 'y',
             "side": 'right',
             "range": [-rmax, rmax],
-            # "tickvals":[]
         },
         shapes=[
             {
@@ -924,14 +904,11 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
                 "x0": 0,
                 "y0": fixing_mean.loc[k + 'tgt', t],
                 "y1": fixing_mean.loc[k + 'tgt', t],
-                "opacity": 0.5,
+                "opacity": 0.6,
                 "type": "line",
-                "line": {"dash": "dot", "color": _palette_color(px.colors.qualitative.Set1, i), "width": 2},
+                "line": {"dash": "dot", "color": family_color[k], "width": 2},
             }
-            for (i, k) in enumerate(tenor.keys()) for t in mymap.keys()],
-        height=700,
-        title={'text': '<br> Realtime IRS Forward Curves: ' + d.strftime("%Y-%m-%d %H:%M:%S"), \
-               'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
+            for k in tenor.keys() for t in mymap.keys()],
         legend=dict(
             x=1.0,
             y=0.0,
@@ -941,12 +918,8 @@ def plotIRSForwardCurve(fixings, curve_dict, irs_val):
             orientation='h',
             entrywidth=120,
             entrywidthmode='pixels',
-            font=dict(size=10),
+            font=dict(size=10, family=CURVE_THEME["font_sans"], color=CURVE_THEME["text_secondary"]),
         ),
-        plot_bgcolor=app_color["graph_bg"],
-        paper_bgcolor=app_color["graph_bg"],
-        font={"color": "#fff"},
-    )
+    ))
     fig = go.Figure(data=data, layout=layout)
-    # fig.show()
     return fig

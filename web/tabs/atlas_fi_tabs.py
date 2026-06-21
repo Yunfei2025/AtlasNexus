@@ -213,7 +213,7 @@ def build_spreads_layout():
 
 def build_curves_layout():
     """Build the legacy 'CURVES' tab layout."""
-    from web.core.styles import app_color
+    from curves.utils.plot import CURVE_THEME
 
     GRAPH_INTERVAL = 60_000
 
@@ -289,7 +289,7 @@ def build_curves_layout():
                         style={"flex": "1"},
                         figure=dict(
                             layout=dict(
-                                plot_bgcolor=app_color["graph_bg"], paper_bgcolor=app_color["graph_bg"]
+                                plot_bgcolor=CURVE_THEME["bg"], paper_bgcolor=CURVE_THEME["bg"]
                             )
                         ),
                     ),
@@ -297,8 +297,18 @@ def build_curves_layout():
                 style={"flex": "1", "display": "flex", "flexDirection": "column", "minWidth": "0"},
                 className="futures__price__container",
             ),
+            html.Div(
+                id="curves-snapshot",
+                className="curve-snapshot",
+                style={
+                    "width":      "220px",
+                    "minWidth":   "220px",
+                    "flexShrink": "0",
+                    "boxSizing":  "border-box",
+                },
+            ),
         ],
-        style={"display": "flex", "alignItems": "flex-start", "gap": "16px"},
+        style={"display": "flex", "alignItems": "stretch", "gap": "16px"},
     )
 
 
@@ -325,26 +335,18 @@ def build_pairs_layout():
 
     return html.Div(
         [
-            # ── Top section: title, description, controls ───────────────────
+            # ── Configuration panel: compact header strip ──────────────────
             html.Div(
                 [
                     html.Div([
-                        html.H2("Pairs Analysis",
-                                style={"color": THEME["text_main"], "fontSize": "22px", "fontWeight": "600",
-                                       "margin": "0 0 4px 0", "letterSpacing": "-0.01em"}),
-                        html.P("Interactive spread analysis with confidence bands (in basis points)",
-                               style={"color": THEME["text_sub"], "fontSize": "13px", "margin": "0"}),
+                        html.Span("Pairs Analysis",
+                                  style={"color": THEME["text_main"], "fontSize": "15px", "fontWeight": "500"}),
+                        html.Span("Interactive spread analysis with confidence bands (in basis points)",
+                                  style={"color": THEME["text_sub"], "fontSize": "12px", "marginLeft": "12px"}),
                     ]),
-                ],
-                style={"marginBottom": "24px"},
-            ),
-
-            # ── Configuration panel: compact inline controls ────────────────
-            html.Div(
-                [
                     html.Div([
-                        html.Label("Lookback Days:", style={"color": THEME["text_sub"], "marginRight": "8px",
-                                                            "fontWeight": "bold", "fontSize": "12px"}),
+                        html.Label("Days:", style={"color": THEME["text_sub"], "marginRight": "8px",
+                                                    "fontWeight": "bold", "fontSize": "12px"}),
                         dcc.Input(
                             id='pairs-days-input', type='number', value=90, min=1,
                             style={"width": "60px", "padding": "5px",
@@ -353,104 +355,76 @@ def build_pairs_layout():
                                    "fontSize": "12px", "textAlign": "center"},
                         ),
                         html.Button(
-                            "↻ Refresh",
+                            "↻ REFRESH PLOTS",
                             id="pairs-refresh-btn",
                             n_clicks=0,
                             style={
-                                "backgroundColor": THEME["accent"],
-                                "color": "#0c0c00",
-                                "border": "none",
-                                "padding": "6px 14px",
-                                "borderRadius": "4px",
-                                "cursor": "pointer",
-                                "fontSize": "12px",
-                                "fontWeight": "600",
-                                "marginLeft": "8px",
+                                "backgroundColor": "transparent", "color": THEME["text_main"],
+                                "border": f"1px solid {THEME['border']}", "padding": "7px 16px",
+                                "borderRadius": "4px", "cursor": "pointer",
+                                "fontSize": "12px", "fontWeight": "600",
                             },
                         ),
                         html.Span(
                             id="pairs-last-updated",
-                            children="Last updated: —",
-                            style={"color": THEME["text_sub"], "fontSize": "11px", "fontFamily": "monospace",
-                                   "marginLeft": "12px"},
+                            children="Last updated: Loading...",
+                            style={"color": THEME["text_sub"], "fontSize": "11px", "fontFamily": "monospace"},
                         ),
-                    ], style={"display": "flex", "alignItems": "center", "gap": "0"}),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "10px"}),
                 ],
                 style={
-                    "display": "flex", "alignItems": "center", "justifyContent": "flex-start",
-                    "gap": "16px",
-                    "backgroundColor": THEME["bg_raised"],
-                    "border": f"1px solid {THEME['border']}",
-                    "borderRadius": "8px",
-                    "padding": "12px 18px",
-                    "marginBottom": "20px",
+                    "display": "flex", "alignItems": "center", "justifyContent": "space-between",
+                    "flexWrap": "wrap", "gap": "10px",
+                    "backgroundColor": app_color["graph_bg"],
+                    "borderRadius": "6px 6px 0 0",
+                    "padding": "11px 18px",
+                    "borderBottom": f"1px solid {THEME['border_sub']}",
                 },
             ),
 
-            # ── Pair inputs: 2-column grid table pattern ────────────────────
-            html.Details(
+            # ── Pair inputs: data-grid table pattern ────────────────────────
+            html.Div(
                 [
-                    html.Summary(
-                        "Configure Pairs",
-                        style={
-                            "color": THEME["text_main"],
-                            "fontSize": "14px",
-                            "fontWeight": "600",
-                            "padding": "12px 18px",
-                            "cursor": "pointer",
-                            "backgroundColor": THEME["bg_raised"],
-                            "border": f"1px solid {THEME['border']}",
-                            "borderRadius": "8px",
-                            "marginBottom": "20px",
-                        }
-                    ),
-                    html.Div(
-                        [
-                            html.Div("", className="col-header"),
-                            html.Div("Pair 1", className="col-header"),
-                            html.Div("Pair 2", className="col-header"),
-                            html.Div("Pair 3", className="col-header"),
-                            html.Div("Pair 4", className="col-header"),
+                    html.Div("", className="col-header"),
+                    html.Div("Pair 1", className="col-header"),
+                    html.Div("Pair 2", className="col-header"),
+                    html.Div("Pair 3", className="col-header"),
+                    html.Div("Pair 4", className="col-header"),
 
-                            _pairs_row("Leg 1",
-                                       ['pairs-leg1-1', 'pairs-leg1-2', 'pairs-leg1-3', 'pairs-leg1-4'],
-                                       ['250211.IB', '250020.IB', '250215.IB', '2500006.IB']),
-                            _pairs_row("Leg 2",
-                                       ['pairs-leg2-1', 'pairs-leg2-2', 'pairs-leg2-3', 'pairs-leg2-4'],
-                                       ['240024.IB', 'FR007S5Y.IR', '250018.IB', '210005.IB']),
-                        ],
-                        className="pairs-input-grid",
-                        style={"backgroundColor": THEME["bg_input"], "borderRadius": "0 0 8px 8px",
-                               "padding": "8px"}
-                    ),
+                    _pairs_row("Leg 1",
+                               ['pairs-leg1-1', 'pairs-leg1-2', 'pairs-leg1-3', 'pairs-leg1-4'],
+                               ['250211.IB', '250020.IB', '250215.IB', '2500006.IB']),
+                    _pairs_row("Leg 2",
+                               ['pairs-leg2-1', 'pairs-leg2-2', 'pairs-leg2-3', 'pairs-leg2-4'],
+                               ['240024.IB', 'FR007S5Y.IR', '250018.IB', '210005.IB']),
                 ],
-                style={"marginBottom": "20px"},
+                className="pairs-input-grid",
+                style={"backgroundColor": app_color["graph_bg"], "borderRadius": "0 0 6px 6px",
+                       "marginBottom": "12px"},
             ),
 
-            # ── Results panel: 2x2 responsive grid ──────────────────────────
+            # ── Results panel ──────────────────────────────────────────────
             html.Div(
                 id="pairs-plots-container",
                 style={
-                    "display": "grid",
-                    "gridTemplateColumns": "repeat(auto-fit, minmax(500px, 1fr))",
-                    "gap": "20px",
-                    "marginBottom": "20px",
+                    "backgroundColor": app_color["graph_bg"],
+                    "borderRadius": "6px",
+                    "padding": "10px",
+                    "minHeight": "400px",
                 },
                 children=[
                     html.Div([
-                        html.Div(
-                            "Generating pairs analysis…",
-                            style={"textAlign": "center", "color": THEME["text_sub"],
-                                   "padding": "40px 20px", "fontSize": "13px"}
-                        )
+                        html.P("Loading Pairs Analysis…",
+                               style={"textAlign": "center", "color": THEME["text_sub"],
+                                      "margin": "40px 0 6px 0", "fontSize": "13px"}),
+                        html.P("Please wait while we load the regression plots.",
+                               style={"textAlign": "center", "color": THEME["text_sub"],
+                                      "fontSize": "12px"}),
                     ])
                 ],
             ),
-
-            # ── Hidden loader for triggering updates ────────────────────────
             html.Div(id="pairs-content-loader", style={"display": "none"}),
-        ],
-        style={"padding": "20px"}
+        ]
     )
 
 
@@ -1160,6 +1134,7 @@ def register_callbacks(app) -> None:
             Output("ref-bonds-t", "data"),
             Output("ref-bonds-t", "columns"),
             Output("curves-chart-subtitle", "children"),
+            Output("curves-snapshot", "children"),
         ],
         Input("data-refresh", "n_intervals"),
         Input("curve-selection", "value"),
@@ -1167,7 +1142,7 @@ def register_callbacks(app) -> None:
     def _update_curves(interval, curve_type):
         """Update the curves chart."""
         if not PLOTTING_AVAILABLE or go is None:
-            return {"data": [], "layout": {"title": "Plotting not available"}}, "Error", {"display": "none"}, [], [], ""
+            return {"data": [], "layout": {"title": "Plotting not available"}}, "Error", {"display": "none"}, [], [], "", []
 
         if not GRAPHS_AVAILABLE or orig_curves is None:
             empty_figure = go.Figure(data=[], layout=dict(
@@ -1175,7 +1150,7 @@ def register_callbacks(app) -> None:
                 paper_bgcolor=app_color["graph_bg"],
                 title="Data files not loaded. Please run EOD job to generate data."
             ))
-            return empty_figure, "Data Not Available", {"display": "none"}, [], [], ""
+            return empty_figure, "Data Not Available", {"display": "none"}, [], [], "", []
 
         try:
             return orig_curves(interval, curve_type)
@@ -1188,5 +1163,5 @@ def register_callbacks(app) -> None:
                 paper_bgcolor=app_color["graph_bg"],
                 title=f"Error: {str(e)[:100]}"
             ))
-            return empty_figure, "Error Loading Curves", {"display": "none"}, [], [], ""
+            return empty_figure, "Error Loading Curves", {"display": "none"}, [], [], "", []
 
