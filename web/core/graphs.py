@@ -421,12 +421,21 @@ def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
             sec = _xy_series(_trace_by_name(figure, sec_name))
             if not hero.empty:
                 s10y = _nearest(hero, 10.0)
-                s1y = _nearest(hero, 1.0)
                 s5y = _nearest(hero, 5.0)
                 stats["FR007 10Y"] = s10y
                 stats["FR007 5Y"] = s5y
-                if s5y is not None and s1y is not None:
-                    stats["1s5s"] = (s5y - s1y) * 100.0
+                # Repo7d-1s5s: use actual IRS contract quotes (FR007S5Y.IR - FR007S1Y.IR)
+                # from IRS-spdsrt.pkl, not derived from fitted curve.
+                try:
+                    irs_data = _load_pickle_cached(os.path.join(DIR_INPUT, 'IRS-spdsrt.pkl'))
+                    if irs_data and 'swaps' in irs_data:
+                        swaps = irs_data['swaps']
+                        if 'FR007S5Y.IR' in swaps.index and 'FR007S1Y.IR' in swaps.index:
+                            s5y_quote = float(swaps.loc['FR007S5Y.IR', 'Quote'])
+                            s1y_quote = float(swaps.loc['FR007S1Y.IR', 'Quote'])
+                            stats["Repo7d-1s5s"] = (s5y_quote - s1y_quote) * 100.0
+                except Exception:
+                    pass  # Fallback: leave Repo7d-1s5s unset if data unavailable
             if not sec.empty:
                 stats["Shibor3M 10Y"] = _nearest(sec, 10.0)
             if curve_type == "IRSForward" and not hero.empty:
@@ -460,7 +469,7 @@ def _render_curve_snapshot(curve_type: str, stats: Dict[str, Any]) -> Any:
             grid_top.append(_snapshot_stat("1Y Spot", f"{s1y:.3f} %"))
         slope = stats.get("1s5s")
         if slope is not None:
-            grid_top.append(_snapshot_stat("1s5s", f"{slope:+.1f} bp"))
+            grid_top.append(_snapshot_stat("Repo7d-1s5s", f"{slope:+.1f} bp"))
         if grid_top:
             rows.append(html.Div(grid_top, className="curve-snapshot__grid2"))
         grid_bottom = []
@@ -488,9 +497,9 @@ def _render_curve_snapshot(curve_type: str, stats: Dict[str, Any]) -> Any:
     fr5 = stats.get("FR007 5Y")
     if fr5 is not None:
         grid_top.append(_snapshot_stat("FR007 5Y", f"{fr5:.3f} %"))
-    slope = stats.get("1s5s")
+    slope = stats.get("Repo7d-1s5s")
     if slope is not None:
-        grid_top.append(_snapshot_stat("1s5s", f"{slope:+.1f} bp"))
+        grid_top.append(_snapshot_stat("Repo7d-1s5s", f"{slope:+.1f} bp"))
     if grid_top:
         rows.append(html.Div(grid_top, className="curve-snapshot__grid2"))
     grid_bottom = []
