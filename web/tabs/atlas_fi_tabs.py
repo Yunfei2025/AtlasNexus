@@ -490,47 +490,48 @@ def build_pairs_layout():
             # ── Z-Score Thresholds Reference (moved to top) ──────────────────
             html.Div([
                 html.Div("Z-Score Colour Thresholds",
-                         style={"color": THEME["text_sub"], "fontSize": "10px", "fontWeight": "700",
-                                "letterSpacing": "0.06em", "textTransform": "uppercase", "marginBottom": "6px"}),
+                         style={"color": THEME["text_sub"], "fontSize": "11px", "fontWeight": "700",
+                                "letterSpacing": "0.06em", "textTransform": "uppercase", "marginBottom": "8px"}),
                 html.Div([
                     html.Div([
-                        html.Span("● ", style={"color": "#a4b6d2", "fontWeight": "700"}),
+                        html.Span("● ", style={"color": "#a4b6d2", "fontWeight": "700", "fontSize": "12px"}),
                         html.Span("Neutral: |z| < 1.5",
-                                 style={"color": THEME["text_sub"], "fontSize": "10px"}),
-                    ]),
+                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
                     html.Div([
-                        html.Span("● ", style={"color": "#e8a13f", "fontWeight": "700"}),
+                        html.Span("● ", style={"color": "#e8a13f", "fontWeight": "700", "fontSize": "12px"}),
                         html.Span("Watch: 1.5 ≤ |z| < 2.0",
-                                 style={"color": THEME["text_sub"], "fontSize": "10px"}),
-                    ]),
+                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
                     html.Div([
-                        html.Span("● ", style={"color": "#e06060", "fontWeight": "700"}),
+                        html.Span("● ", style={"color": "#e06060", "fontWeight": "700", "fontSize": "12px"}),
                         html.Span("Signal: |z| ≥ 2.0",
-                                 style={"color": THEME["text_sub"], "fontSize": "10px"}),
-                    ]),
+                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
                 ], style={
                     "display": "flex",
-                    "gap": "18px",
+                    "gap": "24px",
                     "flexWrap": "wrap",
+                    "alignItems": "center",
                 }),
             ], style={
-                "marginBottom": "12px",
-                "paddingLeft": "12px",
-                "paddingRight": "12px",
-                "paddingTop": "8px",
-                "paddingBottom": "8px",
+                "marginBottom": "14px",
+                "paddingLeft": "14px",
+                "paddingRight": "14px",
+                "paddingTop": "10px",
+                "paddingBottom": "10px",
                 "borderLeft": f"3px solid {THEME['border']}",
                 "backgroundColor": THEME["bg_raised"],
-                "borderRadius": "3px",
+                "borderRadius": "4px",
             }),
 
-            # ── Results panel: Full-width vertical list (1 column) ──────────────
+            # ── Results panel: 2x2 grid for pair cards ──────────────────────────
             html.Div(
                 id="pairs-plots-container",
                 style={
                     "display": "grid",
-                    "gridTemplateColumns": "1fr",
-                    "gap": "12px",
+                    "gridTemplateColumns": "1fr 1fr",
+                    "gap": "14px",
                     "marginBottom": "20px",
                 },
                 children=[
@@ -538,7 +539,7 @@ def build_pairs_layout():
                         html.Div(
                             "Click Refresh to generate pair analysis",
                             style={"textAlign": "center", "color": THEME["text_sub"],
-                                   "padding": "30px 20px", "fontSize": "12px"}
+                                   "padding": "40px 20px", "fontSize": "12px"}
                         )
                     ])
                 ],
