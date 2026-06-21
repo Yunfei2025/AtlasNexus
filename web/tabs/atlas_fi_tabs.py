@@ -313,7 +313,7 @@ def build_curves_layout():
 
 
 def build_pairs_layout():
-    """Build the legacy 'Pairs' tab layout."""
+    """Build the optimized 'Pairs' tab layout with smart cards and live stats."""
     from web.core.styles import app_color
     from web.tabs.alpha.data import THEME
 
@@ -335,18 +335,26 @@ def build_pairs_layout():
 
     return html.Div(
         [
-            # ── Configuration panel: compact header strip ──────────────────
+            # ── Top section: title, description, controls ───────────────────
             html.Div(
                 [
                     html.Div([
-                        html.Span("Pairs Analysis",
-                                  style={"color": THEME["text_main"], "fontSize": "15px", "fontWeight": "500"}),
-                        html.Span("Interactive spread analysis with confidence bands (in basis points)",
-                                  style={"color": THEME["text_sub"], "fontSize": "12px", "marginLeft": "12px"}),
+                        html.H2("Pairs Analysis",
+                                style={"color": THEME["text_main"], "fontSize": "22px", "fontWeight": "600",
+                                       "margin": "0 0 4px 0", "letterSpacing": "-0.01em"}),
+                        html.P("Interactive spread analysis with confidence bands (in basis points)",
+                               style={"color": THEME["text_sub"], "fontSize": "13px", "margin": "0"}),
                     ]),
+                ],
+                style={"marginBottom": "24px"},
+            ),
+
+            # ── Configuration panel: compact inline controls ────────────────
+            html.Div(
+                [
                     html.Div([
-                        html.Label("Days:", style={"color": THEME["text_sub"], "marginRight": "8px",
-                                                    "fontWeight": "bold", "fontSize": "12px"}),
+                        html.Label("Lookback Days:", style={"color": THEME["text_sub"], "marginRight": "8px",
+                                                            "fontWeight": "bold", "fontSize": "12px"}),
                         dcc.Input(
                             id='pairs-days-input', type='number', value=90, min=1,
                             style={"width": "60px", "padding": "5px",
@@ -355,76 +363,104 @@ def build_pairs_layout():
                                    "fontSize": "12px", "textAlign": "center"},
                         ),
                         html.Button(
-                            "↻ REFRESH PLOTS",
+                            "↻ Refresh",
                             id="pairs-refresh-btn",
                             n_clicks=0,
                             style={
-                                "backgroundColor": "transparent", "color": THEME["text_main"],
-                                "border": f"1px solid {THEME['border']}", "padding": "7px 16px",
-                                "borderRadius": "4px", "cursor": "pointer",
-                                "fontSize": "12px", "fontWeight": "600",
+                                "backgroundColor": THEME["accent"],
+                                "color": "#0c0c00",
+                                "border": "none",
+                                "padding": "6px 14px",
+                                "borderRadius": "4px",
+                                "cursor": "pointer",
+                                "fontSize": "12px",
+                                "fontWeight": "600",
+                                "marginLeft": "8px",
                             },
                         ),
                         html.Span(
                             id="pairs-last-updated",
-                            children="Last updated: Loading...",
-                            style={"color": THEME["text_sub"], "fontSize": "11px", "fontFamily": "monospace"},
+                            children="Last updated: —",
+                            style={"color": THEME["text_sub"], "fontSize": "11px", "fontFamily": "monospace",
+                                   "marginLeft": "12px"},
                         ),
-                    ], style={"display": "flex", "alignItems": "center", "gap": "10px"}),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "0"}),
                 ],
                 style={
-                    "display": "flex", "alignItems": "center", "justifyContent": "space-between",
-                    "flexWrap": "wrap", "gap": "10px",
-                    "backgroundColor": app_color["graph_bg"],
-                    "borderRadius": "6px 6px 0 0",
-                    "padding": "11px 18px",
-                    "borderBottom": f"1px solid {THEME['border_sub']}",
+                    "display": "flex", "alignItems": "center", "justifyContent": "flex-start",
+                    "gap": "16px",
+                    "backgroundColor": THEME["bg_raised"],
+                    "border": f"1px solid {THEME['border']}",
+                    "borderRadius": "8px",
+                    "padding": "12px 18px",
+                    "marginBottom": "20px",
                 },
             ),
 
-            # ── Pair inputs: data-grid table pattern ────────────────────────
-            html.Div(
+            # ── Pair inputs: 2-column grid table pattern ────────────────────
+            html.Details(
                 [
-                    html.Div("", className="col-header"),
-                    html.Div("Pair 1", className="col-header"),
-                    html.Div("Pair 2", className="col-header"),
-                    html.Div("Pair 3", className="col-header"),
-                    html.Div("Pair 4", className="col-header"),
+                    html.Summary(
+                        "Configure Pairs",
+                        style={
+                            "color": THEME["text_main"],
+                            "fontSize": "14px",
+                            "fontWeight": "600",
+                            "padding": "12px 18px",
+                            "cursor": "pointer",
+                            "backgroundColor": THEME["bg_raised"],
+                            "border": f"1px solid {THEME['border']}",
+                            "borderRadius": "8px",
+                            "marginBottom": "20px",
+                        }
+                    ),
+                    html.Div(
+                        [
+                            html.Div("", className="col-header"),
+                            html.Div("Pair 1", className="col-header"),
+                            html.Div("Pair 2", className="col-header"),
+                            html.Div("Pair 3", className="col-header"),
+                            html.Div("Pair 4", className="col-header"),
 
-                    _pairs_row("Leg 1",
-                               ['pairs-leg1-1', 'pairs-leg1-2', 'pairs-leg1-3', 'pairs-leg1-4'],
-                               ['250211.IB', '250020.IB', '250215.IB', '2500006.IB']),
-                    _pairs_row("Leg 2",
-                               ['pairs-leg2-1', 'pairs-leg2-2', 'pairs-leg2-3', 'pairs-leg2-4'],
-                               ['240024.IB', 'FR007S5Y.IR', '250018.IB', '210005.IB']),
+                            _pairs_row("Leg 1",
+                                       ['pairs-leg1-1', 'pairs-leg1-2', 'pairs-leg1-3', 'pairs-leg1-4'],
+                                       ['250211.IB', '250020.IB', '250215.IB', '2500006.IB']),
+                            _pairs_row("Leg 2",
+                                       ['pairs-leg2-1', 'pairs-leg2-2', 'pairs-leg2-3', 'pairs-leg2-4'],
+                                       ['240024.IB', 'FR007S5Y.IR', '250018.IB', '210005.IB']),
+                        ],
+                        className="pairs-input-grid",
+                        style={"backgroundColor": THEME["bg_input"], "borderRadius": "0 0 8px 8px",
+                               "padding": "8px"}
+                    ),
                 ],
-                className="pairs-input-grid",
-                style={"backgroundColor": app_color["graph_bg"], "borderRadius": "0 0 6px 6px",
-                       "marginBottom": "12px"},
+                style={"marginBottom": "20px"},
             ),
 
-            # ── Results panel ──────────────────────────────────────────────
+            # ── Results panel: 2x2 responsive grid ──────────────────────────
             html.Div(
                 id="pairs-plots-container",
                 style={
-                    "backgroundColor": app_color["graph_bg"],
-                    "borderRadius": "6px",
-                    "padding": "10px",
-                    "minHeight": "400px",
+                    "display": "grid",
+                    "gridTemplateColumns": "repeat(auto-fit, minmax(500px, 1fr))",
+                    "gap": "20px",
+                    "marginBottom": "20px",
                 },
                 children=[
                     html.Div([
-                        html.P("Loading Pairs Analysis…",
-                               style={"textAlign": "center", "color": THEME["text_sub"],
-                                      "margin": "40px 0 6px 0", "fontSize": "13px"}),
-                        html.P("Please wait while we load the regression plots.",
-                               style={"textAlign": "center", "color": THEME["text_sub"],
-                                      "fontSize": "12px"}),
+                        html.Div(
+                            "Generating pairs analysis…",
+                            style={"textAlign": "center", "color": THEME["text_sub"],
+                                   "padding": "40px 20px", "fontSize": "13px"}
+                        )
                     ])
                 ],
             ),
+
+            # ── Hidden loader for triggering updates ────────────────────────
             html.Div(id="pairs-content-loader", style={"display": "none"}),
-        ]
+        ],
+        style={"padding": "20px"}
     )
 
 

@@ -1367,6 +1367,60 @@ details.seasonal-gate summary::-webkit-details-marker { display: none; }
   gap: 14px;
 }
 
+/* ── Pair card (smart header with live stats) ─────────────────────── */
+.pair-card {
+  background: var(--an-navy-800) !important;
+  border: 1px solid var(--an-border2) !important;
+  border-radius: 7px !important;
+  overflow: hidden !important;
+}
+
+.pair-card__header {
+  background: var(--an-navy-600) !important;
+  padding: 13px 18px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+  display: flex !important;
+  align-items: baseline !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+}
+
+.pair-card__name {
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.09em !important;
+  text-transform: uppercase !important;
+  color: var(--an-muted) !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+.pair-card__name b {
+  color: var(--an-text) !important;
+  font-weight: 700 !important;
+}
+
+.pair-card__stats {
+  display: flex !important;
+  gap: 16px !important;
+  font-size: 12px !important;
+  color: var(--an-muted) !important;
+}
+
+.pair-card__stat b {
+  color: var(--an-cyan) !important;
+  font-weight: 600 !important;
+}
+
+.pair-card__stat.z b {
+  color: var(--an-amber) !important;
+}
+
+.pair-card__chart {
+  height: 430px !important;
+}
+
 /* ── Plotly modebar theming (Volatility / Beta Book charts) ─────────────── */
 .js-plotly-plot .plotly .modebar {
   background: var(--surface-panel) !important;
