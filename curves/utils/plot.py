@@ -10,7 +10,7 @@ import plotly.graph_objs as go
 import plotly.io as pio
 import plotly.express as px
 from plotly.subplots import make_subplots
-from settings.general import GeneralConfig, app_color
+from settings.general import GeneralConfig
 
 try:
     from plotly.validators.scatter.marker import SymbolValidator
@@ -443,6 +443,27 @@ def plotBondTS(bonds, df_price, output, C_num, ptype, rtype, adjust=True):
     fig.show()
     return fig
 
+# ── Trend dashboard palette (mirrors docs/dev "Trend Dashboard — Layout
+#    Improvements" mockup): red+blue hero, one teal for funding rates, one
+#    amber for curve factors — kills the old rainbow Set1 palette. ─────────
+TREND_THEME = {
+    "bg":           "#0c1530",                 # panel bg
+    "grid":         "rgba(150,170,210,0.07)",  # ~8% gridlines
+    "axis_line":    "rgba(255,255,255,0.06)",
+    "axis_text":    "#9fb0c8",
+    "text_primary": "#e6edf7",
+    "hero_series":  "#ef4444",
+    "hero_trend":   "#5b9bd5",
+    "local_max":    "#f5a623",
+    "local_min":    "#46c46e",
+    "down_confirm": "#ef4444",
+    "up_confirm":   "#5b9bd5",
+    "funding":      "#22d3ee",
+    "factor":       "#fbbf24",
+    "group_label":  "#6b7c9a",
+}
+
+
 def plotTrend(dfp, dfv, dff):
     pio.renderers.default = 'browser'
     dfl1 = dfp['Line1']
@@ -452,22 +473,25 @@ def plotTrend(dfp, dfv, dff):
     bgx = {
         "showgrid": True,
         "showline": True,
-        "gridcolor": "#0f3174",
+        "gridcolor": TREND_THEME["grid"],
+        "linecolor": TREND_THEME["axis_line"],
         "zeroline": False,
+        "tickfont": {"size": 11, "color": TREND_THEME["axis_text"]},
     }
     bgy = {
         "showgrid": True,
         "showline": True,
-        "gridcolor": "#0f3174",
+        "gridcolor": TREND_THEME["grid"],
+        "linecolor": TREND_THEME["axis_line"],
         "zeroline": False,
         "title": "%",
+        "tickfont": {"size": 11, "color": TREND_THEME["axis_text"]},
     }
 
-    # ── New layout: 3 rows × 3 cols ──────────────────────────────────────────
+    # ── Layout: 3 rows × 3 cols ───────────────────────────────────────────────
     # Row 1 (50 %)  : big trend figure spanning all 3 columns
     # Row 2 (25 %)  : 3 fixing subplots (FR001 / FR007 / SHIBOR3M) side-by-side
     # Row 3 (25 %)  : 3 factor subplots side-by-side
-    # Old right-column arrangement was: col 1 → row 1, col 2 → row 2 (transposed)
     n_fix = min(dfv.shape[1], 3)
     n_fac = min(dff.shape[1], 3)
 
@@ -490,17 +514,19 @@ def plotTrend(dfp, dfv, dff):
         specs=specs,
         row_heights=[0.50, 0.25, 0.25],
         horizontal_spacing=0.05,
-        vertical_spacing=0.06,
+        vertical_spacing=0.1,
         subplot_titles=subplot_titles,
     )
 
     # ── Row 1: main trend chart ──────────────────────────────────────────────
+    # Source series (red hero) vs. trend/extrema line (blue hero)
+    hero_colors = [TREND_THEME["hero_series"], TREND_THEME["hero_trend"]]
     for i in range(dfl1.shape[1]):
         fig.add_trace(go.Scatter(
             name=dfl1.columns[i],
             x=dfl1.index,
             y=dfl1.iloc[:, i],
-            line={"width": 3, "color": _palette_color(px.colors.qualitative.Set1, i)},
+            line={"width": 2, "color": _palette_color(hero_colors, i)},
         ), row=1, col=1)
 
     for i in range(dfl2.shape[1]):
@@ -508,14 +534,16 @@ def plotTrend(dfp, dfv, dff):
             name=dfl2.columns[i],
             x=dfl2.index,
             y=dfl2.iloc[:, i],
-            line={"width": 3, "color": _palette_color(px.colors.qualitative.Set1, i + 1)},
+            mode='lines+markers',
+            line={"width": 2, "color": _palette_color(hero_colors, i + 1)},
+            marker={"size": 5, "color": _palette_color(hero_colors, i + 1)},
         ), row=1, col=1)
 
     marker_styles = {
-        'Local Max': {'symbol': 'triangle-down', 'color': '#f39c12', 'size': 10},
-        'Local Min': {'symbol': 'triangle-up', 'color': '#2ecc71', 'size': 10},
-        'Downward Trend Confirmed': {'symbol': 'x', 'color': '#e74c3c', 'size': 9},
-        'Upward Trend Confirmed': {'symbol': 'cross', 'color': '#3498db', 'size': 9},
+        'Local Max': {'symbol': 'triangle-down', 'color': TREND_THEME["local_max"], 'size': 10},
+        'Local Min': {'symbol': 'triangle-up', 'color': TREND_THEME["local_min"], 'size': 10},
+        'Downward Trend Confirmed': {'symbol': 'x', 'color': TREND_THEME["down_confirm"], 'size': 9},
+        'Upward Trend Confirmed': {'symbol': 'cross', 'color': TREND_THEME["up_confirm"], 'size': 9},
     }
     for i in range(dfm.shape[1]):
         col = dfm.columns[i]
@@ -523,7 +551,7 @@ def plotTrend(dfp, dfv, dff):
             col,
             {
                 'symbol': _symbol(1 + i * 4),
-                'color': _palette_color(px.colors.qualitative.Set1, i),
+                'color': TREND_THEME["hero_trend"],
                 'size': 10,
             },
         )
@@ -537,41 +565,37 @@ def plotTrend(dfp, dfv, dff):
                 color=style['color'],
                 size=style['size'],
             ),
+            hoverinfo='skip',
         ), row=1, col=1)
 
-    # ── Row 2: fixings — one subplot per series ──────────────────────────────
+    # ── Row 2: fixings — one subplot per series (single teal) ────────────────
     for i in range(n_fix):
         fig.add_trace(go.Scatter(
             name=dfv.columns[i],
             x=dfv.index,
             y=dfv.iloc[:, i],
-            line={"width": 2, "color": _palette_color(px.colors.qualitative.Set1, i + 1)},
+            line={"width": 1.6, "color": TREND_THEME["funding"]},
             showlegend=False,
         ), row=2, col=i + 1)
 
-    # ── Row 3: factors — one subplot per series ──────────────────────────────
+    # ── Row 3: factors — one subplot per series (single amber) ───────────────
     for i in range(n_fac):
         fig.add_trace(go.Scatter(
             name=dff.columns[i],
             x=dff.index,
             y=dff.iloc[:, i],
-            line={"width": 2, "color": _palette_color(px.colors.qualitative.Set1, i + 4)},
+            line={"width": 1.6, "color": TREND_THEME["factor"]},
             showlegend=False,
         ), row=3, col=i + 1)
 
     # ── Global styling ───────────────────────────────────────────────────────
     fig.update_layout(
-        height=800,
-        title={
-            "text": "Trends: CNBD Treasury Bond, IRS and Fixings",
-            "x": 0.5,
-            "xanchor": "center",
-            "yanchor": "top",
-        },
-        legend=dict(x=0.01, y=0.88, traceorder="normal"),
-        plot_bgcolor=app_color["graph_bg"],
-        paper_bgcolor=app_color["graph_bg"],
-        font={"color": "#fff"},
+        height=820,
+        margin=dict(l=6, r=6, t=46, b=6),
+        showlegend=False,
+        plot_bgcolor="rgba(255,255,255,0.012)",
+        paper_bgcolor=TREND_THEME["bg"],
+        font={"color": TREND_THEME["text_primary"], "family": "-apple-system,Helvetica Neue,Arial,sans-serif"},
     )
     fig.update_xaxes(**bgx)
     fig.update_yaxes(**bgy)
@@ -581,7 +605,20 @@ def plotTrend(dfp, dfv, dff):
     # Style subplot annotation titles (row/col labels)
     for ann in fig.layout.annotations:
         ann.font.size = 11
-        ann.font.color = "#aab0c0"
+        ann.font.color = TREND_THEME["axis_text"]
+
+    # Group labels ("FUNDING RATES" / "CURVE FACTORS") above rows 2 and 3,
+    # echoing the mockup's section headers between chart rows.
+    fig.add_annotation(
+        text="FUNDING RATES", xref="paper", yref="paper",
+        x=0, y=0.685, xanchor="left", yanchor="bottom", showarrow=False,
+        font={"size": 10.5, "color": TREND_THEME["group_label"], "family": "-apple-system,Helvetica Neue,Arial,sans-serif"},
+    )
+    fig.add_annotation(
+        text="CURVE FACTORS", xref="paper", yref="paper",
+        x=0, y=0.355, xanchor="left", yanchor="bottom", showarrow=False,
+        font={"size": 10.5, "color": TREND_THEME["group_label"], "family": "-apple-system,Helvetica Neue,Arial,sans-serif"},
+    )
 
     return fig
 

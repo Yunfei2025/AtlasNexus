@@ -10,6 +10,7 @@
   body{display:flex;align-items:center;justify-content:center;padding-bottom:72px;box-sizing:border-box;
     background:radial-gradient(130% 100% at 50% 0%,#082255 0%,#040f30 40%,#020d22 100%)}
   #globe{position:fixed;top:calc(50% - 36px);left:50%;transform:translate(-50%,-50%);pointer-events:none;opacity:.88}
+  #curves{position:fixed;inset:0;pointer-events:none;opacity:.55}
   .grid{position:fixed;inset:0;pointer-events:none;
     background-image:linear-gradient(#2a5298 1px,transparent 1px),linear-gradient(90deg,#2a5298 1px,transparent 1px);
     background-size:64px 64px;mask-image:radial-gradient(70% 65% at 50% 44%,#000 0%,transparent 75%);opacity:.45}
@@ -48,6 +49,7 @@
   .tick-d.up{color:#27ae60}.tick-d.dn{color:#e74c3c}
 </style></head>
 <body>
+<canvas id="curves"></canvas>
 <canvas id="globe"></canvas>
 <div class="grid"></div>
 <div class="vignette"></div>
@@ -118,6 +120,70 @@
 <div class="ticker" id="ticker"></div>
 <script>
 function mkRng(seed){let s=seed;return()=>{s=(s*16807)%2147483647;return s/2147483647;};}
+
+(function(){
+  const cv=document.getElementById('curves'),cx=cv.getContext('2d');
+  const DPR=Math.min(window.devicePixelRatio||1,2);
+  let W,H;
+  function resize(){
+    W=innerWidth;H=innerHeight;
+    cv.width=W*DPR;cv.height=H*DPR;
+    cv.style.width=W+'px';cv.style.height=H+'px';
+    cx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  resize();
+  window.addEventListener('resize',resize);
+
+  // Real historical OHLC bars (bond + commodity futures), baked into a static
+  // JSON file by web/assets/_extract_cover_data.py — not synthetic data.
+  const PANELS=[
+    {key:'TL2603', up:'69,182,230',  dn:'231,76,60', base:.60, amp:.17},
+    {key:'RB2605', up:'39,174,96',   dn:'231,76,60', base:.30, amp:.13},
+  ];
+  const candleW=6,gap=2.5;
+  let startT=null;
+
+  fetch('/dashboard/assets/cover-data.json').then(r=>r.json()).then(data=>{
+    PANELS.forEach(p=>{p.bars=data[p.key]||[];});
+    requestAnimationFrame(draw);
+  }).catch(()=>{});
+
+  function draw(t){
+    if(startT===null)startT=t;
+    const el=t-startT;
+    cx.clearRect(0,0,W,H);
+    PANELS.forEach(p=>{
+      const bars=p.bars;if(!bars||!bars.length)return;
+      const n=bars.length;
+      const step=candleW+gap;
+      const pxPerMs=0.012;                         // slow, steady drift
+      const span=step*n;
+      const offset=(el*pxPerMs)%span;
+      const firstIdx=Math.floor(offset/step);
+      const subPx=offset-firstIdx*step;
+      const count=Math.ceil(W/step)+2;
+      const yTop=H*(p.base-p.amp),yBot=H*(p.base+p.amp);
+      for(let i=0;i<count;i++){
+        const idx=((firstIdx+i)%n+n)%n;
+        const b=bars[idx];if(!b)continue;
+        const [o,h,l,c]=b;
+        const x=i*step-subPx;
+        const yO=yBot-o*(yBot-yTop),yH=yBot-h*(yBot-yTop);
+        const yL=yBot-l*(yBot-yTop),yC=yBot-c*(yBot-yTop);
+        const up=c>=o;
+        const col=up?p.up:p.dn;
+        cx.strokeStyle=`rgba(${col},.40)`;
+        cx.lineWidth=1;
+        cx.beginPath();cx.moveTo(x+candleW/2,yH);cx.lineTo(x+candleW/2,yL);cx.stroke();
+        const bodyTop=Math.min(yO,yC),bodyH=Math.max(Math.abs(yC-yO),1);
+        cx.fillStyle=`rgba(${col},${up?.22:.30})`;
+        cx.fillRect(x,bodyTop,candleW,bodyH);
+      }
+    });
+    requestAnimationFrame(draw);
+  }
+})();
+
 const cv=document.getElementById('globe'),gx=cv.getContext('2d');
 const DPR=Math.min(window.devicePixelRatio||1,2);
 const SZ=Math.min(innerWidth*.9,(innerHeight-72)*.92);
@@ -202,10 +268,17 @@ function drawGlobe(){
   }
   if(landRings.length){
     landRings.forEach(ring=>{
-      gx.beginPath();let f=true;
-      ring.forEach(([lo,la])=>{const p=proj(la,lo);if(p.z<0){f=true;return;}f?gx.moveTo(p.x,p.y):gx.lineTo(p.x,p.y);f=false;});
-      gx.fillStyle='rgba(28,65,138,.17)';gx.fill();
-      gx.strokeStyle='rgba(100,158,235,.26)';gx.lineWidth=.7;gx.stroke();
+      // Draw each visible (front-facing) arc of the ring as its own subpath —
+      // filling a polygon that's been cut by the horizon produces wrong,
+      // murky shapes, so render the coastline as a clean outline instead.
+      gx.beginPath();let drawing=false;
+      ring.forEach(([lo,la])=>{
+        const p=proj(la,lo);
+        if(p.z<0){drawing=false;return;}
+        if(!drawing){gx.moveTo(p.x,p.y);drawing=true;}
+        else gx.lineTo(p.x,p.y);
+      });
+      gx.strokeStyle='rgba(140,190,245,.55)';gx.lineWidth=.85;gx.stroke();
     });
   }
   ARCS.forEach(([fr,to,[r,g,b,a]])=>{

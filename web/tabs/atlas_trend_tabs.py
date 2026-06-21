@@ -29,6 +29,17 @@ THEME = {
     "chart_template": "plotly_dark",
 }
 
+# Marker key — mirrors the hero chart's trace colors/symbols (see
+# curves/utils/plot.py TREND_THEME) so the legend lives outside the plot.
+_MARKER_KEY = [
+    {"kind": "line",   "color": "#ef4444", "label": "Series"},
+    {"kind": "line",   "color": "#5b9bd5", "label": "Trend Line"},
+    {"kind": "glyph",  "color": "#f5a623", "glyph": "▼", "label": "Local Max"},
+    {"kind": "glyph",  "color": "#46c46e", "glyph": "▲", "label": "Local Min"},
+    {"kind": "glyph",  "color": "#ef4444", "glyph": "✕", "label": "Downward Confirmed"},
+    {"kind": "glyph",  "color": "#5b9bd5", "glyph": "✚", "label": "Upward Confirmed"},
+]
+
 # ── Dropdown options (disabled items act as visual group separators) ───────────
 _OPTIONS = [
     {"label": "── Treasury Yields ──────────",   "value": "__t__",    "disabled": True},
@@ -103,6 +114,47 @@ _BTN_ACTIVE = {
 }
 
 
+def _marker_key() -> html.Div:
+    """Marker legend lifted out of the chart (mirrors the mockup's `.key` strip)."""
+    items = []
+    for i, m in enumerate(_MARKER_KEY):
+        if i == 2:
+            items.append(html.Div(style={
+                "width": "1px", "height": "16px",
+                "backgroundColor": THEME["table_header"],
+            }))
+        if m["kind"] == "line":
+            swatch = html.Span(style={
+                "display": "inline-block", "width": "20px", "height": "0",
+                "borderTop": f'3px solid {m["color"]}', "borderRadius": "2px",
+            })
+        else:
+            swatch = html.Span(m["glyph"], style={
+                "color": m["color"], "fontSize": "13px", "width": "14px",
+                "display": "inline-block", "textAlign": "center",
+            })
+        items.append(html.Div(
+            [swatch, html.Span(m["label"], style={"marginLeft": "7px"})],
+            style={"display": "flex", "alignItems": "center", "gap": "2px"},
+        ))
+    return html.Div(
+        items,
+        style={
+            "display": "flex",
+            "flexWrap": "wrap",
+            "gap": "16px",
+            "alignItems": "center",
+            "padding": "9px 14px",
+            "backgroundColor": THEME["bg_card"],
+            "border": f'1px solid {THEME["table_header"]}',
+            "borderRadius": "8px",
+            "fontSize": "12px",
+            "color": THEME["text_sub"],
+            "marginBottom": "10px",
+        },
+    )
+
+
 def _section_label(text: str) -> html.Div:
     return html.Div(
         text,
@@ -137,42 +189,56 @@ def build_trend_layout() -> html.Div:
         [
             html.Div(
                 [
-                    # ── Left sidebar ─────────────────────────────────────────────
+                    # ── Left sidebar — fills the column height, no stranded void ──
                     html.Div(
                         [
-                            _section_label("Series"),
-                            dcc.Dropdown(
-                                id="an-trend-type",
-                                options=_OPTIONS,
-                                value="中债国债到期收益率:10年",
-                                clearable=False,
-                                optionHeight=28,
+                            html.Div(
+                                [
+                                    _section_label("Series"),
+                                    dcc.Dropdown(
+                                        id="an-trend-type",
+                                        options=_OPTIONS,
+                                        value="中债国债到期收益率:10年",
+                                        clearable=False,
+                                        optionHeight=28,
+                                        style={
+                                            "backgroundColor": THEME["bg_input"],
+                                            "color": THEME["text_main"],
+                                            "fontSize": "12px",
+                                            "marginBottom": "14px",
+                                        },
+                                    ),
+                                    html.Hr(
+                                        style={
+                                            "borderColor": THEME["table_header"],
+                                            "margin": "6px 0 10px 0",
+                                        }
+                                    ),
+                                    _section_label("Quick select"),
+                                ],
+                                style={"flex": "0 0 auto"},
+                            ),
+                            html.Div(
+                                quick_buttons,
                                 style={
-                                    "backgroundColor": THEME["bg_input"],
-                                    "color": THEME["text_main"],
-                                    "fontSize": "12px",
-                                    "marginBottom": "14px",
+                                    "flex": "1",
+                                    "minHeight": "0",
+                                    "overflowY": "auto",
+                                    "paddingRight": "2px",
                                 },
                             ),
-                            html.Hr(
-                                style={
-                                    "borderColor": THEME["table_header"],
-                                    "margin": "6px 0 10px 0",
-                                }
-                            ),
-                            _section_label("Quick select"),
-                            html.Div(quick_buttons),
                         ],
                         style={
                             "width": "172px",
                             "minWidth": "172px",
                             "flexShrink": "0",
+                            "alignSelf": "stretch",
+                            "display": "flex",
+                            "flexDirection": "column",
                             "backgroundColor": THEME["bg_card"],
                             "padding": "14px 10px",
                             "borderRadius": "5px",
                             "border": f'1px solid {THEME["table_header"]}',
-                            "overflowY": "auto",
-                            "maxHeight": "620px",
                             "boxSizing": "border-box",
                         },
                     ),
@@ -180,52 +246,63 @@ def build_trend_layout() -> html.Div:
                     # ── Chart panel ───────────────────────────────────────────────
                     html.Div(
                         [
-                            # Info strip above the chart
+                            # Single header: series title + inline "Updated" timestamp
                             html.Div(
                                 id="an-trend-info",
                                 style={
-                                    "color": THEME["text_sub"],
-                                    "fontSize": "11px",
-                                    "marginBottom": "8px",
+                                    "color": THEME["text_main"],
+                                    "fontSize": "16px",
+                                    "fontWeight": "600",
+                                    "marginBottom": "10px",
                                     "paddingLeft": "4px",
                                 },
                             ),
-                            dcc.Graph(
-                                id="an-trend-graph",
-                                style={"height": "820px"},
-                                config={
-                                    "displayModeBar": True,
-                                    "scrollZoom": True,
-                                    "modeBarButtonsToRemove": ["select2d", "lasso2d"],
-                                    "toImageButtonOptions": {
-                                        "format": "svg",
-                                        "filename": "trend_chart",
-                                    },
-                                },
-                                figure={
-                                    "data": [],
-                                    "layout": {
-                                        "plot_bgcolor": THEME["bg_main"],
-                                        "paper_bgcolor": THEME["bg_card"],
-                                        "font": {"color": THEME["text_main"]},
-                                        "xaxis": {"color": THEME["text_sub"]},
-                                        "yaxis": {"color": THEME["text_sub"]},
-                                        "annotations": [
-                                            {
-                                                "text": "Select a series — run EOD to generate data",
-                                                "xref": "paper",
-                                                "yref": "paper",
-                                                "x": 0.5,
-                                                "y": 0.5,
-                                                "showarrow": False,
-                                                "font": {
-                                                    "size": 13,
-                                                    "color": THEME["text_sub"],
-                                                },
-                                            }
+                            # Marker key — lifted out of the plot
+                            _marker_key(),
+                            html.Div(
+                                dcc.Graph(
+                                    id="an-trend-graph",
+                                    style={"height": "820px"},
+                                    config={
+                                        "displayModeBar": "hover",
+                                        "displaylogo": False,
+                                        "scrollZoom": True,
+                                        "modeBarButtonsToRemove": [
+                                            "select2d", "lasso2d", "autoScale2d",
+                                            "zoomIn2d", "zoomOut2d", "toggleSpikelines",
+                                            "hoverClosestCartesian", "hoverCompareCartesian",
                                         ],
+                                        "toImageButtonOptions": {
+                                            "format": "svg",
+                                            "filename": "trend_chart",
+                                        },
                                     },
-                                },
+                                    figure={
+                                        "data": [],
+                                        "layout": {
+                                            "plot_bgcolor": THEME["bg_main"],
+                                            "paper_bgcolor": THEME["bg_card"],
+                                            "font": {"color": THEME["text_main"]},
+                                            "xaxis": {"color": THEME["text_sub"]},
+                                            "yaxis": {"color": THEME["text_sub"]},
+                                            "annotations": [
+                                                {
+                                                    "text": "Select a series — run EOD to generate data",
+                                                    "xref": "paper",
+                                                    "yref": "paper",
+                                                    "x": 0.5,
+                                                    "y": 0.5,
+                                                    "showarrow": False,
+                                                    "font": {
+                                                        "size": 13,
+                                                        "color": THEME["text_sub"],
+                                                    },
+                                                }
+                                            ],
+                                        },
+                                    },
+                                ),
+                                className="an-card",
                             ),
                         ],
                         style={"flex": "1", "minWidth": "0"},
@@ -367,19 +444,11 @@ def register_trend_callbacks(app) -> None:
                 import copy
                 fig = copy.deepcopy(fig)
 
-            # Apply Beta Book theme
-            layout = fig.setdefault("layout", {})
-            layout["plot_bgcolor"] = THEME["bg_main"]
-            layout["paper_bgcolor"] = THEME["bg_card"]
-            layout.setdefault("font", {})["color"] = THEME["text_main"]
-            layout.setdefault("xaxis", {})["gridcolor"] = THEME["table_header"]
-            layout.setdefault("yaxis", {})["gridcolor"] = THEME["table_header"]
-            layout["title"] = {
-                "text": label,
-                "font": {"color": THEME["text_main"], "size": 14},
-            }
-            layout["margin"] = {"l": 60, "r": 20, "t": 40, "b": 40}
-            info = f"Updated {timestamp}  ·  {label}"
+            # Figure already carries the Trend Dashboard styling applied in
+            # curves/utils/plot.py::plotTrend (TREND_THEME) — leave it as-is.
+            # The series title lives in the HTML header instead of the plot
+            # (single header, no triple-repeated "10Y Treasury").
+            info = f"{label}  ·  Updated {timestamp}"
             return fig, info
 
         except FileNotFoundError:
