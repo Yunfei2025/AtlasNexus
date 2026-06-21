@@ -924,9 +924,24 @@ def register_callbacks(app) -> None:
 
                         # Extract numeric spread values properly
                         if isinstance(spread_df, pd.DataFrame):
-                            # Get the first column as spread values
-                            spread = pd.to_numeric(spread_df.iloc[:, 0], errors='coerce').values
-                            dates = spread_df.index
+                            # Try to get 'spread' column first, fallback to first numeric column
+                            if 'spread' in spread_df.columns:
+                                spread = pd.to_numeric(spread_df['spread'], errors='coerce').values
+                            else:
+                                # Find first numeric column
+                                for col in spread_df.columns:
+                                    try:
+                                        spread = pd.to_numeric(spread_df[col], errors='coerce').values
+                                        if not np.all(np.isnan(spread)):
+                                            break
+                                    except:
+                                        continue
+
+                            # Extract dates: try 'date' column or use index
+                            if 'date' in spread_df.columns:
+                                dates = pd.to_datetime(spread_df['date']).values
+                            else:
+                                dates = spread_df.index
                         else:
                             # If it's a Series
                             spread = pd.to_numeric(spread_df, errors='coerce').values
@@ -935,7 +950,10 @@ def register_callbacks(app) -> None:
                         # Remove NaN values
                         valid_idx = ~np.isnan(spread)
                         spread = spread[valid_idx]
-                        dates = dates[valid_idx]
+                        if isinstance(dates, np.ndarray):
+                            dates = dates[valid_idx]
+                        else:
+                            dates = dates[valid_idx] if hasattr(dates, '__getitem__') else dates
 
                         if len(spread) < 2:
                             continue
