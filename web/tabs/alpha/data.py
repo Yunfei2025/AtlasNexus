@@ -59,9 +59,9 @@ SPREAD_CATEGORIES = {
         'style': 'Mixed',
     },
     'Tenor-Spread': {
-        'label': 'Tenor Spreads',
+        'label': 'Curve & Cross-Asset Spreads',
         'types': ['TenorSpread'],
-        'description': 'Curve slope / cross-curve spreads (e.g. 5s10s, 10s30s)',
+        'description': 'Curve slope, cross-curve, and bond/CD-vs-repo spreads (e.g. 5s10s, CDBCGB, CGBRepo7d)',
         'style': 'Mixed',
     },
     'Bond-Futures': {
@@ -133,7 +133,7 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
     if not isinstance(cnbd_data, dict) or 'CGB' not in cnbd_data or 'CDB' not in cnbd_data:
         return {}
     try:
-        return {
+        result = {
             'CGB-5s10s': cnbd_data['CGB']['中债国债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
             'CGB-10s30s': cnbd_data['CGB']['中债国债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
             'CDB-5s10s': cnbd_data['CDB']['中债国开债到期收益率:10年'] - cnbd_data['CDB']['中债国开债到期收益率:5年'],
@@ -142,6 +142,32 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
             'CDBCGB-10y': cnbd_data['CDB']['中债国开债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
             'CDBCGB-30y': cnbd_data['CDB']['中债国开债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:30年'],
         }
+
+        swap_ts = cnbd_data.get('SwapTS')
+        icp = cnbd_data.get('ICP')
+
+        if isinstance(swap_ts, pd.DataFrame):
+            cgb = cnbd_data['CGB']
+            if 'FR007S1Y.IR' in swap_ts.columns and '中债国债到期收益率:1年' in cgb.columns:
+                result['CGBRepo7d-1y'] = cgb['中债国债到期收益率:1年'] - swap_ts['FR007S1Y.IR']
+            if 'FR007S2Y.IR' in swap_ts.columns and '中债国债到期收益率:2年' in cgb.columns:
+                result['CGBRepo7d-2y'] = cgb['中债国债到期收益率:2年'] - swap_ts['FR007S2Y.IR']
+            if 'FR007S5Y.IR' in swap_ts.columns and '中债国债到期收益率:5年' in cgb.columns:
+                result['CGBRepo7d-5y'] = cgb['中债国债到期收益率:5年'] - swap_ts['FR007S5Y.IR']
+            if 'FR007S10Y.IR' in swap_ts.columns and '中债国债到期收益率:10年' in cgb.columns:
+                result['CGBRepo7d-10y'] = cgb['中债国债到期收益率:10年'] - swap_ts['FR007S10Y.IR']
+
+            if isinstance(icp, pd.DataFrame):
+                if 'FR007S3M.IR' in swap_ts.columns and '中债商业银行同业存单到期收益率(AAA):3个月' in icp.columns:
+                    result['ICPRepo7d-3m'] = icp['中债商业银行同业存单到期收益率(AAA):3个月'] - swap_ts['FR007S3M.IR']
+                if 'FR007S6M.IR' in swap_ts.columns and '中债商业银行同业存单到期收益率(AAA):6个月' in icp.columns:
+                    result['ICPRepo7d-6m'] = icp['中债商业银行同业存单到期收益率(AAA):6个月'] - swap_ts['FR007S6M.IR']
+                if 'FR007S9M.IR' in swap_ts.columns and '中债商业银行同业存单到期收益率(AAA):9个月' in icp.columns:
+                    result['ICPRepo7d-9m'] = icp['中债商业银行同业存单到期收益率(AAA):9个月'] - swap_ts['FR007S9M.IR']
+                if 'FR007S1Y.IR' in swap_ts.columns and '中债商业银行同业存单到期收益率(AAA):1年' in icp.columns:
+                    result['ICPRepo7d-1y'] = icp['中债商业银行同业存单到期收益率(AAA):1年'] - swap_ts['FR007S1Y.IR']
+
+        return result
     except Exception:
         return {}
 
@@ -828,32 +854,24 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         return None
 
     elif spread_type == 'TenorSpread':
-        # Primary: read from pre-computed Tenor-spds.pkl written by StatGenerator.
+        # Primary: compute from database-px.pkl via loadCNBDTS for full historical data.
+        try:
+            from curves.utils.loader import loadCNBDTS
+            env = loadCNBDTS()
+            tenor_ts = _build_tenor_spread_timeseries(env)
+            if tenor_ts:
+                df = pd.DataFrame(tenor_ts)
+                return df.apply(pd.to_numeric, errors='coerce')
+        except Exception:
+            pass
+
+        # Fallback: read from pre-computed Tenor-spds.pkl (limited to ~1 year).
         tenor_spds = _load_pickle_safe(dir_input / 'Tenor-spds.pkl')
         if isinstance(tenor_spds, dict):
             spd = tenor_spds.get('TenorSpread', {}).get('Spread')
             if isinstance(spd, pd.DataFrame) and not spd.empty:
                 return spd.apply(pd.to_numeric, errors='coerce')
 
-        # Fallback: compute on-the-fly (lightweight loader first, then database-px.pkl).
-        try:
-            from curves.utils.loader import loadCNBDTS
-            env = loadCNBDTS()
-            tenor_ts = _build_tenor_spread_timeseries(env)
-            if tenor_ts:
-                return pd.DataFrame(tenor_ts)
-        except Exception:
-            pass
-
-        try:
-            db_path = dir_input / 'database-px.pkl'
-            if db_path.exists():
-                db = pd.read_pickle(db_path)
-                tenor_ts = _build_tenor_spread_timeseries(db)
-                if tenor_ts:
-                    return pd.DataFrame(tenor_ts)
-        except Exception:
-            pass
         return None
 
     elif spread_type == 'NetBasis':

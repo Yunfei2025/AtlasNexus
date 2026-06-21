@@ -77,7 +77,7 @@ class BondConfig:
         'NetBasis': 'Net Basis of Futures Contract and Deliverable Bond',
         'TermBasis': 'Term Basis between Futures Contracts',
         'BinarySpread': 'Spread Regression',
-        'TenorSpread': 'Tenor Spreads',
+        'TenorSpread': 'Curve & Cross-Asset Spreads',
     }
     COLUMNS_EN = [
         'NAME', 'FULLNAME', 'SEC_TYPE', 'OUTSTANDINGBALANCE', 'CARRYDATE','MATURITYDATE',

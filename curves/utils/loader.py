@@ -67,6 +67,7 @@ def loadCNBDTS():
             'SwapTS': empty_frame,
             'CGB': empty_frame,
             'CDB': empty_frame,
+            'ICP': empty_frame,
             'SOFR': empty_frame,
             'FX': empty_frame,
             'FXSwap': empty_frame,
@@ -76,6 +77,7 @@ def loadCNBDTS():
     env['SwapTS'] = ts['IRS']
     env['CGB'] = ts['CGB']
     env['CDB'] = ts['CDB']
+    env['ICP'] = ts.get('ICP', pd.DataFrame())
     env['SOFR'] = ts['sofr']
     env['FX'] = ts['fx']
     env['FXSwap'] = ts['fxswap']

@@ -101,6 +101,22 @@ def _sector_pca_sort_key(ticker: str) -> tuple:
     return (4, ticker)
 
 
+# Explicit display order for TenorSpread (curve & cross-asset spreads).
+# Unrecognised tickers sort after all listed ones, alphabetically.
+_TENOR_SPREAD_ORDER = [
+    'CGB-5s10s', 'CGB-10s20s', 'CGB-10s30s',
+    'CDB-5s10s',
+    'CDBCGB-5y', 'CDBCGB-10y',
+    'CGBRepo7d-1y', 'CGBRepo7d-2y', 'CGBRepo7d-5y', 'CGBRepo7d-10y',
+    'ICPRepo7d-3m', 'ICPRepo7d-6m', 'ICPRepo7d-9m', 'ICPRepo7d-1y',
+]
+_TENOR_SPREAD_RANK = {ticker: i for i, ticker in enumerate(_TENOR_SPREAD_ORDER)}
+
+
+def _tenor_spread_sort_key(ticker: str) -> tuple:
+    return (_TENOR_SPREAD_RANK.get(ticker, len(_TENOR_SPREAD_ORDER)), ticker)
+
+
 # Thresholds and type groupings
 ZSCORE_ALERT_THRESHOLD: float = 2.0
 TYPES_SIMPLE_ONLY: set[str] = set()
@@ -613,6 +629,8 @@ def statistics(interval, data_rt_js, stype, season):
     # Sort by index (ticker code) for better readability
     if stype == 'SectorPCASpread':
         spread = spread.loc[sorted(spread.index, key=_sector_pca_sort_key)]
+    elif stype == 'TenorSpread':
+        spread = spread.loc[sorted(spread.index, key=_tenor_spread_sort_key)]
     else:
         spread = spread.sort_index()
     

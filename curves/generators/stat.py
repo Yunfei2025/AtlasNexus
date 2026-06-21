@@ -123,9 +123,9 @@ class StatGenerator:
         return column_map
 
     def _ensure_cgb_cdb_timeseries(self) -> dict:
-        """Ensure CGB/CDB key-rate time series are available for spread generation."""
+        """Ensure CGB/CDB/ICP key-rate time series are available for spread generation."""
         env_ts = self.env_ts if isinstance(self.env_ts, dict) else {}
-        if 'CGB' in env_ts and 'CDB' in env_ts:
+        if 'CGB' in env_ts and 'CDB' in env_ts and 'ICP' in env_ts:
             return env_ts
 
         try:
@@ -135,6 +135,8 @@ class StatGenerator:
                     env_ts['CGB'] = db['CGB']
                 if 'CDB' in db and 'CDB' not in env_ts:
                     env_ts['CDB'] = db['CDB']
+                if 'ICP' in db and 'ICP' not in env_ts:
+                    env_ts['ICP'] = db['ICP']
                 if 'IRS' in db and 'SwapTS' not in env_ts:
                     env_ts['SwapTS'] = db['IRS']
                 self.env_ts = env_ts
@@ -640,9 +642,9 @@ class StatGenerator:
 
     # ---------------------- Tenor spreads ----------------------
     def compute_tenor_spreads(self) -> None:
-        """Build tenor-spread (CGB/CDB slope + CDBCGB cross-sector) time series,
-        compute carry+roll (3m, %) for each instrument, run OU statistics, and
-        persist to ``Tenor-spds.pkl``.
+        """Build tenor-spread (CGB/CDB slope, CDBCGB cross-sector, bond-vs-repo
+        and CD-vs-repo cross-curve) time series, compute carry+roll (3m, %) for
+        each instrument, run OU statistics, and persist to ``Tenor-spds.pkl``.
 
         File structure::
 
@@ -650,7 +652,7 @@ class StatGenerator:
               'TenorSpread'
                 'Spread'       : pd.DataFrame  — annual yield diff in %  (index=date, cols=instruments)
                 'CarryRoll3m'  : pd.DataFrame  — 3m carry in % for a BUY trade
-                                               (XsYs: negated; CDBCGB: positive)
+                                               (XsYs: negated; cross-curve: positive)
                 'StatInfo'     : pd.DataFrame  — OU statistics per instrument
         """
         env_ts = self._ensure_cgb_cdb_timeseries()
@@ -660,6 +662,8 @@ class StatGenerator:
 
         cgb = env_ts['CGB']
         cdb = env_ts['CDB']
+        icp = env_ts.get('ICP')
+        swap_ts = env_ts.get('SwapTS')
 
         # Column name helpers — allow the function to work even if a key is missing.
         def _series(src: dict, key: Optional[str]):
@@ -669,9 +673,26 @@ class StatGenerator:
                 return None
             return pd.to_numeric(v, errors='coerce')
 
-        cgb_cols = self._resolve_curve_column_map(cgb, [5, 10, 20, 30])
+        def _icp_col(months: int) -> Optional[str]:
+            if not isinstance(icp, pd.DataFrame):
+                return None
+            if months % 12 == 0:
+                col = f'中债商业银行同业存单到期收益率(AAA):{months // 12}年'
+            else:
+                col = f'中债商业银行同业存单到期收益率(AAA):{months}个月'
+            return col if col in icp.columns else None
+
+        def _swap_col(tag: str) -> Optional[str]:
+            if not isinstance(swap_ts, pd.DataFrame):
+                return None
+            col = f'FR007S{tag}.IR'
+            return col if col in swap_ts.columns else None
+
+        cgb_cols = self._resolve_curve_column_map(cgb, [1, 2, 5, 10, 20, 30])
         cdb_cols = self._resolve_curve_column_map(cdb, [5, 10])
 
+        cgb1  = _series(cgb, cgb_cols.get(1))
+        cgb2  = _series(cgb, cgb_cols.get(2))
         cgb5  = _series(cgb, cgb_cols.get(5))
         cgb10 = _series(cgb, cgb_cols.get(10))
         cgb20 = _series(cgb, cgb_cols.get(20))
@@ -679,13 +700,38 @@ class StatGenerator:
         cdb5  = _series(cdb, cdb_cols.get(5))
         cdb10 = _series(cdb, cdb_cols.get(10))
 
+        icp3m  = _series(icp, _icp_col(3))  if icp is not None else None
+        icp6m  = _series(icp, _icp_col(6))  if icp is not None else None
+        icp9m  = _series(icp, _icp_col(9))  if icp is not None else None
+        icp1y  = _series(icp, _icp_col(12)) if icp is not None else None
+
+        repo1y  = _series(swap_ts, _swap_col('1Y'))  if swap_ts is not None else None
+        repo2y  = _series(swap_ts, _swap_col('2Y'))  if swap_ts is not None else None
+        repo5y  = _series(swap_ts, _swap_col('5Y'))  if swap_ts is not None else None
+        repo10y = _series(swap_ts, _swap_col('10Y')) if swap_ts is not None else None
+        repo3m  = _series(swap_ts, _swap_col('3M'))  if swap_ts is not None else None
+        repo6m  = _series(swap_ts, _swap_col('6M'))  if swap_ts is not None else None
+        repo9m  = _series(swap_ts, _swap_col('9M'))  if swap_ts is not None else None
+
         instruments = {}
         if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10  - cgb5
-        if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30  - cgb10
         if cgb10 is not None and cgb20 is not None: instruments['CGB-10s20s'] = cgb20  - cgb10
+        if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30  - cgb10
         if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10  - cdb5
         if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5   - cgb5
         if cdb10 is not None and cgb10 is not None: instruments['CDBCGB-10y'] = cdb10  - cgb10
+
+        # Bond-vs-Repo cross-curve: CGB key-rate yield minus matched-tenor FR007 IRS rate
+        if cgb1  is not None and repo1y  is not None: instruments['CGBRepo7d-1y']  = cgb1  - repo1y
+        if cgb2  is not None and repo2y  is not None: instruments['CGBRepo7d-2y']  = cgb2  - repo2y
+        if cgb5  is not None and repo5y  is not None: instruments['CGBRepo7d-5y']  = cgb5  - repo5y
+        if cgb10 is not None and repo10y is not None: instruments['CGBRepo7d-10y'] = cgb10 - repo10y
+
+        # CD-vs-Repo cross-curve: NCD (AAA) yield minus matched-tenor FR007 IRS rate
+        if icp3m is not None and repo3m is not None: instruments['ICPRepo7d-3m'] = icp3m - repo3m
+        if icp6m is not None and repo6m is not None: instruments['ICPRepo7d-6m'] = icp6m - repo6m
+        if icp9m is not None and repo9m is not None: instruments['ICPRepo7d-9m'] = icp9m - repo9m
+        if icp1y is not None and repo1y is not None: instruments['ICPRepo7d-1y'] = icp1y - repo1y
 
         if not instruments:
             print('Warning: Could not build any tenor-spread series.')
@@ -696,10 +742,10 @@ class StatGenerator:
         df_spread = df_spread.loc[self.start:self.da].sort_index()
 
         # Carry+Roll (3m) in %:
-        #   XsYs (CGB-10s30s etc.)  BUY = long short-tenor, short long-tenor
+        #   XsYs (CGB-10s30s etc.)        BUY = long short-tenor, short long-tenor
         #     → carry = Y_short − Y_long = −spread  → CR3m = −spread × 0.25
-        #   CDBCGB cross-sector     BUY = long CDB, short CGB
-        #     → carry = Y_CDB − Y_CGB = +spread     → CR3m = +spread × 0.25
+        #   Cross-curve (CDBCGB, *Repo7d-*) BUY = long the bond/CD leg, short the swap/CGB leg
+        #     → carry = Y_leg1 − Y_leg2 = +spread   → CR3m = +spread × 0.25
         df_cr3m = df_spread.copy() * (90.0 / 360.0)
         for col in df_cr3m.columns:
             if re.search(r'\d+s\d+', col, re.IGNORECASE):
