@@ -288,23 +288,36 @@ def irscurve(interval, ctype):
        return("Error: The figure file does not exist.")
 
 
-_REF_BOND_COLUMNS = [
-    {"name": "Tenor", "id": "Tenor"},
-    {"name": "CGB", "id": "CGB"},
-    {"name": "CDB", "id": "CDB"},
-]
+def _ref_bonds_table_data(curve_type: str):
+    """Reference bonds at standard tenors, showing only the relevant bond ID column.
 
-
-def _ref_bonds_table_data():
-    """Reference bonds (TBond/CBond) at standard tenors, from the Market Data tab's loader."""
+    For TBond (China Government), show Tenor + CGB.
+    For CBond (China Policybank), show Tenor + CDB.
+    Data sourced from the Market Data tab's canonical reference set.
+    """
     try:
         from web.tabs.atlas_market_data_tab import _load_reference_bonds
         df = _load_reference_bonds()
         if df.empty:
             return [], []
-        # Keep only Tenor, CGB, CDB columns
-        df = df[["Tenor", "CGB", "CDB"]]
-        return df.to_dict("records"), _REF_BOND_COLUMNS
+
+        if curve_type == "TBond":
+            df = df[["Tenor", "CGB"]]
+            columns = [
+                {"name": "Tenor", "id": "Tenor"},
+                {"name": "CGB", "id": "CGB"},
+            ]
+        elif curve_type == "CBond":
+            df = df[["Tenor", "CDB"]]
+            columns = [
+                {"name": "Tenor", "id": "Tenor"},
+                {"name": "CDB", "id": "CDB"},
+            ]
+        else:
+            # Fallback for non-bond curves (shouldn't happen, but be safe)
+            return [], []
+
+        return df.to_dict("records"), columns
     except Exception as e:
         print(f"[curves_graph] ref bonds load error: {e}")
         return [], []
@@ -503,7 +516,7 @@ def curves_graph(interval, curve_type):
             figure = _load_pickle_cached(os.path.join(DIR_INPUT, curve_type + '-fig.obj'))
             title = "Real Time Bond Curves"
             ref_bonds_style = {"display": "block"}  # Show reference bonds table
-            ref_bonds_data, ref_bonds_columns = _ref_bonds_table_data()
+            ref_bonds_data, ref_bonds_columns = _ref_bonds_table_data(curve_type)
         elif curve_type == 'IRSSpot':
             # IRS Spot curve
             figure = _load_pickle_cached(os.path.join(DIR_INPUT, 'IRS-spotfig.obj'))
@@ -521,7 +534,7 @@ def curves_graph(interval, curve_type):
             figure = _load_pickle_cached(os.path.join(DIR_INPUT, 'TBond-fig.obj'))
             title = "Real Time Bond Curves"
             ref_bonds_style = {"display": "block"}
-            ref_bonds_data, ref_bonds_columns = _ref_bonds_table_data()
+            ref_bonds_data, ref_bonds_columns = _ref_bonds_table_data("TBond")
 
         snapshot = _render_curve_snapshot(curve_type, _curve_snapshot_stats(curve_type, figure))
         return figure, title, ref_bonds_style, ref_bonds_data, ref_bonds_columns, subtitle_with_time, snapshot
