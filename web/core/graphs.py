@@ -420,8 +420,13 @@ def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
             hero = _xy_series(_trace_by_name(figure, hero_name))
             sec = _xy_series(_trace_by_name(figure, sec_name))
             if not hero.empty:
-                stats["FR007 10Y"] = _nearest(hero, 10.0)
-                stats["FR007 2Y"] = _nearest(hero, 2.0)
+                s10y = _nearest(hero, 10.0)
+                s1y = _nearest(hero, 1.0)
+                s5y = _nearest(hero, 5.0)
+                stats["FR007 10Y"] = s10y
+                stats["FR007 5Y"] = s5y
+                if s5y is not None and s1y is not None:
+                    stats["1s5s"] = (s5y - s1y) * 100.0
             if not sec.empty:
                 stats["Shibor3M 10Y"] = _nearest(sec, 10.0)
             if curve_type == "IRSForward" and not hero.empty:
@@ -480,14 +485,21 @@ def _render_curve_snapshot(curve_type: str, stats: Dict[str, Any]) -> Any:
     if fr10 is not None:
         rows.append(_snapshot_stat("FR007 10Y", f"{fr10:.3f} %", big=True))
     grid_top = []
-    fr2 = stats.get("FR007 2Y")
-    if fr2 is not None:
-        grid_top.append(_snapshot_stat("FR007 2Y", f"{fr2:.3f} %"))
-    shi10 = stats.get("Shibor3M 10Y")
-    if shi10 is not None:
-        grid_top.append(_snapshot_stat("Shibor3M 10Y", f"{shi10:.3f} %"))
+    fr5 = stats.get("FR007 5Y")
+    if fr5 is not None:
+        grid_top.append(_snapshot_stat("FR007 5Y", f"{fr5:.3f} %"))
+    slope = stats.get("1s5s")
+    if slope is not None:
+        grid_top.append(_snapshot_stat("1s5s", f"{slope:+.1f} bp"))
     if grid_top:
         rows.append(html.Div(grid_top, className="curve-snapshot__grid2"))
+    grid_bottom = []
+    shi10 = stats.get("Shibor3M 10Y")
+    if shi10 is not None:
+        grid_bottom.append(_snapshot_stat("Shibor3M 10Y", f"{shi10:.3f} %"))
+    if grid_bottom:
+        rows.append(html.Div(className="curve-snapshot__divider"))
+        rows.append(html.Div(grid_bottom, className="curve-snapshot__grid2"))
     peak = stats.get("Fwd peak")
     if peak is not None:
         rows.append(html.Div(className="curve-snapshot__divider"))
