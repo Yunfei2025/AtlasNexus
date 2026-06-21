@@ -464,11 +464,106 @@ def build_pairs_layout():
     )
 
 
+def _build_pair_card(leg1, leg2, stats, figure=None):
+    """Build a pair card with smart header showing live stats.
+
+    Args:
+        leg1, leg2: Instrument names (strings)
+        stats: Dict with keys: last_bp, slope (beta), last_z
+        figure: Plotly figure object (optional)
+
+    Returns:
+        html.Div: Card component with header and chart
+    """
+    from web.tabs.alpha.data import THEME
+
+    z = stats.get('last_z', 0.0)
+    slope = stats.get('slope', 0.0)
+    last_bp = stats.get('last_bp', 0.0)
+
+    # Determine z-score color based on thresholds
+    az = abs(z)
+    if az >= 2.0:
+        z_color = '#e06060'  # red — signal
+    elif az >= 1.5:
+        z_color = '#e8a13f'  # amber — watch
+    else:
+        z_color = '#a4b6d2'  # muted — neutral
+
+    sign_z = '+' if z >= 0 else ''
+    sign_slope = '+' if slope >= 0 else ''
+
+    # Build header with stats
+    header = html.Div(
+        [
+            html.Div([
+                html.B(leg1, style={'color': '#e9eef8'}),
+                html.Span(' vs ', style={'color': '#4a5d7c'}),
+                html.B(leg2, style={'color': '#e9eef8'}),
+            ], style={
+                'fontSize': '11px',
+                'fontWeight': '700',
+                'letterSpacing': '0.09em',
+                'textTransform': 'uppercase',
+                'color': '#6f83a3',
+            }),
+            html.Div([
+                html.Span(['last ', html.B(f'{last_bp:.1f} bp')]),
+                html.Span(['β ', html.B(f'{sign_slope}{slope:.3f}/d')]),
+                html.Span([
+                    'z ',
+                    html.Span(f'{sign_z}{z:.1f}σ', style={'color': z_color, 'fontWeight': '700'}),
+                ]),
+            ], style={
+                'display': 'flex',
+                'gap': '16px',
+                'fontSize': '12px',
+                'color': '#6f83a3',
+            }),
+        ],
+        style={
+            'padding': '13px 18px',
+            'borderBottom': '1px solid rgba(255,255,255,0.06)',
+            'display': 'flex',
+            'alignItems': 'baseline',
+            'justifyContent': 'space-between',
+            'gap': '12px',
+            'background': '#17345c',
+        },
+        className='pair-card__header',
+    )
+
+    # Build chart section
+    if figure:
+        chart = dcc.Graph(
+            figure=figure,
+            config={'displayModeBar': 'hover', 'displaylogo': False, 'responsive': True},
+            style={'height': '430px'},
+        )
+    else:
+        chart = html.Div(
+            'Loading chart...',
+            style={'height': '430px', 'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center', 'color': THEME['text_sub']},
+        )
+
+    # Build card
+    return html.Div(
+        [header, chart],
+        className='pair-card',
+        style={
+            'background': '#0e1d3a',
+            'border': '1px solid #1e3a5f',
+            'borderRadius': '7px',
+            'overflow': 'hidden',
+        },
+    )
+
+
 def build_surface_layout():
     """Build the legacy 'SURFACE' (Yield Surface) layout."""
     # Import locally from the surface package in root
     from surface.layout import create_layout
-    
+
     return create_layout()
 
 
@@ -752,22 +847,28 @@ def register_callbacks(app) -> None:
          Input("pairs-days-input", "value")],
     )
     def _load_pairs_content(_, n_clicks, leg1_1, leg2_1, leg1_2, leg2_2, leg1_3, leg2_3, leg1_4, leg2_4, window_days):
-        # Re-run pairs analysis using input parameters when refresh clicked
+        """Build pair cards with Plotly figures and smart headers showing live stats."""
+        from web.tabs.alpha.data import THEME
+        import numpy as np
+
+        # Determine if we should recompute pairs analysis
         trigger_id = None
+        cards = []
+        last_updated = "Last updated: Loading..."
+
         if callback_context.triggered:
             trigger_id = callback_context.triggered[0]["prop_id"].split(".")[0]
             if trigger_id == "pairs-refresh-btn" and n_clicks and n_clicks > 0:
                 try:
                     from pairs.manager import PairManager
-                    from pairs.dashboard import Dashboard
-                    
+
                     # Validate window_days
                     if not window_days or window_days < 1:
                         window_days = 90
-                    
+
                     # Create PairManager and add pairs based on user inputs
                     manager = PairManager()
-                    
+
                     # Add pairs if both legs are provided
                     pairs_config = [
                         ("Pair 1", leg1_1, leg2_1),
@@ -775,43 +876,134 @@ def register_callbacks(app) -> None:
                         ("Pair 3", leg1_3, leg2_3),
                         ("Pair 4", leg1_4, leg2_4),
                     ]
-                    
+
                     for name, leg1, leg2 in pairs_config:
                         if leg1 and leg2 and leg1.strip() and leg2.strip():
                             manager.add_pair(name, leg1.strip(), leg2.strip(), window=int(window_days))
-                    
+
                     if len(manager) == 0:
                         raise ValueError("No valid pairs configured. Please provide at least one pair.")
-                    
+
                     # Prepare analysis for all pairs
                     analyses = manager.prepare_analysis()
-                    
-                    # Generate dashboard HTML
-                    project_root = Path(__file__).resolve().parents[2]
-                    output_path = project_root / "pairs" / "regression_plots.html"
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-                    
-                    dashboard_gen = Dashboard()
-                    pairs_data = {}
+
+                    # Build cards with Plotly figures
                     for pair_name, pair in manager.pairs.items():
-                        if pair_name in analyses:
-                            pairs_data[pair_name] = {
-                                'name': pair_name,
-                                'leg1': pair.leg1,
-                                'leg2': pair.leg2,
-                                'spread_df': analyses[pair_name]['spread_df'],
-                                'regression_result': analyses[pair_name]['regression_result']
-                            }
-                    
-                    dashboard_gen.create_unified_dashboard(pairs_data, str(output_path))
+                        if pair_name not in analyses:
+                            continue
+
+                        analysis = analyses[pair_name]
+                        spread_df = analysis.get('spread_df')
+                        reg_result = analysis.get('regression_result')
+
+                        if spread_df is None or len(spread_df) == 0:
+                            continue
+
+                        # Compute statistics
+                        spread = spread_df.values.flatten()
+                        dates = spread_df.index
+
+                        # OLS fit
+                        xs = np.arange(len(spread), dtype=float)
+                        slope, intercept = np.polyfit(xs, spread, 1)
+                        trend = intercept + slope * xs
+                        resid = spread - trend
+                        sigma = resid.std()
+                        last_z = resid[-1] / sigma if sigma > 0 else 0.0
+
+                        stats = {
+                            'last_bp': float(spread[-1]),
+                            'slope': float(slope),
+                            'last_z': float(last_z),
+                        }
+
+                        # Build Plotly figure
+                        fig = go.Figure()
+
+                        # Upper and lower bands (±1σ)
+                        upper = trend + sigma
+                        lower = trend - sigma
+
+                        fig.add_trace(go.Scatter(
+                            x=dates, y=upper,
+                            mode='lines',
+                            line=dict(width=0),
+                            showlegend=False,
+                            hoverinfo='skip',
+                        ))
+                        fig.add_trace(go.Scatter(
+                            x=dates, y=lower,
+                            mode='lines',
+                            line=dict(width=0),
+                            fill='tonexty',
+                            fillcolor='rgba(69,182,230,0.10)',
+                            name='±1σ confidence',
+                            hoverinfo='skip',
+                        ))
+
+                        # Spread points
+                        fig.add_trace(go.Scatter(
+                            x=dates, y=spread,
+                            mode='markers',
+                            name='Spread',
+                            marker=dict(color='#7fd1c0', size=5, opacity=0.85),
+                        ))
+
+                        # Trend line (cyan hero)
+                        fig.add_trace(go.Scatter(
+                            x=dates, y=trend,
+                            mode='lines',
+                            name='Trend (OLS)',
+                            line=dict(color='#45b6e6', width=2.5),
+                        ))
+
+                        # Update layout with AtlasNexus theme
+                        fig.update_layout(
+                            paper_bgcolor='#0e1d3a',
+                            plot_bgcolor='#0e1d3a',
+                            font=dict(family='-apple-system,system-ui,sans-serif', color='#6f83a3', size=12),
+                            margin=dict(l=48, r=16, t=30, b=36),
+                            hovermode='x unified',
+                            xaxis=dict(
+                                gridcolor='rgba(255,255,255,0.06)',
+                                zeroline=False,
+                                linecolor='rgba(255,255,255,0.18)',
+                                ticks='outside',
+                                tickcolor='rgba(255,255,255,0.18)',
+                                tickfont=dict(size=11, color='#6f83a3'),
+                                nticks=7,
+                            ),
+                            yaxis=dict(
+                                title=dict(text='Spread (bp)', font=dict(size=11, color='#6f83a3')),
+                                gridcolor='rgba(255,255,255,0.06)',
+                                zeroline=False,
+                                linecolor='rgba(255,255,255,0.18)',
+                                ticks='outside',
+                                tickcolor='rgba(255,255,255,0.18)',
+                                tickfont=dict(size=11, color='#6f83a3'),
+                            ),
+                            legend=dict(
+                                orientation='h', x=0, y=1.06,
+                                xanchor='left', yanchor='bottom',
+                                bgcolor='rgba(0,0,0,0)', borderwidth=0,
+                                font=dict(size=11, color='#6f83a3'),
+                            ),
+                            showlegend=True,
+                        )
+
+                        # Build card
+                        card = _build_pair_card(pair.leg1, pair.leg2, stats, fig)
+                        cards.append(card)
 
                     last_updated = f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
                 except Exception as e:
                     import traceback
-                    error_msg = f"Error: {str(e)}"
-                    print(f"Pairs analysis error: {error_msg}")
-                    print(traceback.format_exc())
-                    last_updated = f"Error: {str(e)[:120]} at {datetime.datetime.now().strftime('%H:%M:%S')}"
+                    print(f"Pairs analysis error: {str(e)}")
+                    traceback.print_exc()
+                    last_updated = f"Error: {str(e)[:100]} at {datetime.datetime.now().strftime('%H:%M:%S')}"
+                    cards = [html.Div(f"Error: {str(e)[:120]}", style={'color': THEME['text_sub']})]
+
             elif trigger_id in {
                 "pairs-leg1-1", "pairs-leg2-1",
                 "pairs-leg1-2", "pairs-leg2-2",
@@ -820,56 +1012,22 @@ def register_callbacks(app) -> None:
                 "pairs-days-input",
             }:
                 last_updated = "Pending changes - click Refresh Plots"
+                cards = [html.Div("Waiting for refresh...", style={'color': THEME['text_sub'], 'padding': '40px', 'textAlign': 'center'})]
             else:
                 last_updated = f"Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         else:
             last_updated = "Last updated: Loading..."
 
-        # Prefer local file if available
-        try:
-            project_root = Path(__file__).resolve().parents[2]
-            pairs_html_path = project_root / "pairs" / "regression_plots.html"
-            if pairs_html_path.exists():
-                cache_buster = f"?v={datetime.datetime.now().timestamp()}"
-                iframe_content = html.Div(
-                    [
-                        html.Iframe(
-                            id="pairs-iframe",
-                            src=f"/pairs/regression_plots.html{cache_buster}",
-                            style={
-                                "width": "100%",
-                                "height": "720px",
-                                "border": "1px solid #1a3a7a",
-                                "borderRadius": "4px",
-                                "overflow": "hidden",
-                            },
-                        )
-                    ],
-                    style={"overflow": "hidden"},
-                )
-            else:
-                iframe_content = html.Div(
-                    [
-                        html.H4("Pairs Analysis", style={"color": "#333", "margin-bottom": "20px"}),
-                        html.P(
-                            "The pairs regression plots file is not available at the moment.",
-                            style={"color": "#666"},
-                        ),
-                        html.P(
-                            "Please ensure the pairs analysis has been run and the regression_plots.html file exists.",
-                            style={"color": "#666", "font-size": "14px"},
-                        ),
-                    ]
-                )
-        except Exception as e:
-            iframe_content = html.Div(
-                [
-                    html.H4("Error Loading Pairs Content", style={"color": "#d32f2f"}),
-                    html.P(f"An error occurred: {str(e)}", style={"color": "#666"}),
-                ]
+        # Return cards or placeholder
+        if not cards:
+            content = html.Div(
+                "Click 'Refresh' to generate pair analysis",
+                style={'color': THEME['text_sub'], 'padding': '40px', 'textAlign': 'center'},
             )
+        else:
+            content = html.Div(cards)
 
-        return iframe_content, last_updated
+        return content, last_updated
 
     # Spreads callbacks
     @app.callback(
