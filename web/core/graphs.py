@@ -377,11 +377,18 @@ def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
                 stats["2Y Spot"] = s2y
                 if s10y is not None and s2y is not None:
                     stats["2s10s"] = (s10y - s2y) * 100.0
-                # Peak yield and corresponding tenor
-                peak_idx = hero.idxmax()
-                peak_val = hero.max()
-                if not pd.isna(peak_idx) and not pd.isna(peak_val):
-                    stats["Peak yield"] = (float(peak_val), float(peak_idx))
+                # Implied forward peak: derive forward rates from spot curve,
+                # then find the peak (analogous to IRS Forward 'Fwd peak').
+                spot_arr = hero.values.astype(float)
+                tenor_arr = hero.index.values.astype(float)
+                if len(tenor_arr) > 1:
+                    df_DF = np.exp(-spot_arr * tenor_arr / 100)
+                    fwd_arr = -100 * np.gradient(np.log(df_DF + 1e-12), tenor_arr)
+                    fwd_series = pd.Series(fwd_arr, index=tenor_arr)
+                    fwd_peak_idx = fwd_series.idxmax()
+                    fwd_peak_val = fwd_series.max()
+                    if not pd.isna(fwd_peak_idx) and not pd.isna(fwd_peak_val):
+                        stats["Fwd peak"] = (float(fwd_peak_val), float(fwd_peak_idx))
             if band is not None:
                 lo = pd.to_numeric(pd.Series(_decode_plotly_array(_trace_field(band, "base", []))), errors="coerce")
                 width = pd.to_numeric(pd.Series(_decode_plotly_array(_trace_field(band, "y", []))), errors="coerce")
@@ -447,10 +454,10 @@ def _render_curve_snapshot(curve_type: str, stats: Dict[str, Any]) -> Any:
         if grid_bottom:
             rows.append(html.Div(className="curve-snapshot__divider"))
             rows.append(html.Div(grid_bottom, className="curve-snapshot__grid2"))
-        peak = stats.get("Peak yield")
+        peak = stats.get("Fwd peak")
         if peak is not None:
             rows.append(html.Div(className="curve-snapshot__divider"))
-            rows.append(_snapshot_stat("Peak yield @ Term", f"{peak[0]:.3f} % @ {peak[1]:.2f}Y"))
+            rows.append(_snapshot_stat("Fwd peak @ Term", f"{peak[0]:.3f} % @ {peak[1]:.2f}Y"))
         return rows
 
     # IRS spot / forward
