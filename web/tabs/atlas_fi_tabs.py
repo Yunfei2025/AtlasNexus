@@ -349,7 +349,7 @@ def build_pairs_layout():
                 style={"marginBottom": "24px"},
             ),
 
-            # ── Controls row: Lookback + Configure + Refresh on same line ──────
+            # ── Controls row: Lookback + Configure + Refresh ──────────────────
             html.Div(
                 [
                     # Left: Lookback Days input
@@ -368,16 +368,16 @@ def build_pairs_layout():
                         style={"display": "flex", "alignItems": "center", "gap": "4px", "flexShrink": "0"}
                     ),
 
-                    # Middle: Configure Pairs (collapsible inline)
+                    # Middle: Configure Pairs (collapsible modal)
                     html.Details(
                         [
                             html.Summary(
-                                "⚙ Configure",
+                                "⚙ Configure Pairs",
                                 style={
                                     "color": THEME["text_main"],
                                     "fontSize": "11px",
                                     "fontWeight": "600",
-                                    "padding": "4px 10px",
+                                    "padding": "5px 12px",
                                     "cursor": "pointer",
                                     "backgroundColor": THEME["bg_input"],
                                     "border": f"1px solid {THEME['border']}",
@@ -387,23 +387,65 @@ def build_pairs_layout():
                             ),
                             html.Div(
                                 [
-                                    html.Div("", className="col-header"),
-                                    html.Div("P1", className="col-header"),
-                                    html.Div("P2", className="col-header"),
-                                    html.Div("P3", className="col-header"),
-                                    html.Div("P4", className="col-header"),
-
-                                    _pairs_row("Leg 1",
-                                               ['pairs-leg1-1', 'pairs-leg1-2', 'pairs-leg1-3', 'pairs-leg1-4'],
-                                               ['250211.IB', '250020.IB', '250215.IB', '2500006.IB']),
-                                    _pairs_row("Leg 2",
-                                               ['pairs-leg2-1', 'pairs-leg2-2', 'pairs-leg2-3', 'pairs-leg2-4'],
-                                               ['240024.IB', 'FR007S5Y.IR', '250018.IB', '210005.IB']),
+                                    # 2x2 grid for pair inputs
+                                    html.Div([
+                                        html.Div([
+                                            html.Div("Pair 1", style={"fontSize": "10px", "fontWeight": "600", "color": THEME["text_sub"], "marginBottom": "4px"}),
+                                            html.Div([
+                                                dcc.Input(id='pairs-leg1-1', type='text', value='250211.IB',
+                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px",
+                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
+                                                dcc.Input(id='pairs-leg2-1', type='text', value='240024.IB',
+                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px", "marginTop": "3px",
+                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
+                                            ]),
+                                        ]),
+                                        html.Div([
+                                            html.Div("Pair 2", style={"fontSize": "10px", "fontWeight": "600", "color": THEME["text_sub"], "marginBottom": "4px"}),
+                                            html.Div([
+                                                dcc.Input(id='pairs-leg1-2', type='text', value='250020.IB',
+                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px",
+                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
+                                                dcc.Input(id='pairs-leg2-2', type='text', value='FR007S5Y.IR',
+                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px", "marginTop": "3px",
+                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
+                                            ]),
+                                        ]),
+                                        html.Div([
+                                            html.Div("Pair 3", style={"fontSize": "10px", "fontWeight": "600", "color": THEME["text_sub"], "marginBottom": "4px"}),
+                                            html.Div([
+                                                dcc.Input(id='pairs-leg1-3', type='text', value='250215.IB',
+                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px",
+                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
+                                                dcc.Input(id='pairs-leg2-3', type='text', value='250018.IB',
+                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px", "marginTop": "3px",
+                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
+                                            ]),
+                                        ]),
+                                        html.Div([
+                                            html.Div("Pair 4", style={"fontSize": "10px", "fontWeight": "600", "color": THEME["text_sub"], "marginBottom": "4px"}),
+                                            html.Div([
+                                                dcc.Input(id='pairs-leg1-4', type='text', value='2500006.IB',
+                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px",
+                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
+                                                dcc.Input(id='pairs-leg2-4', type='text', value='210005.IB',
+                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px", "marginTop": "3px",
+                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
+                                            ]),
+                                        ]),
+                                    ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "12px"}),
                                 ],
-                                className="pairs-input-grid",
                                 style={"backgroundColor": THEME["bg_input"], "borderRadius": "0 0 3px 3px",
-                                       "padding": "6px", "position": "absolute", "top": "100%", "left": "0",
-                                       "marginTop": "2px", "zIndex": "10", "minWidth": "280px",
+                                       "padding": "12px", "position": "absolute", "top": "100%", "left": "0",
+                                       "marginTop": "2px", "zIndex": "10", "minWidth": "450px",
                                        "border": f"1px solid {THEME['border']}", "borderTop": "none"}
                             ),
                         ],
@@ -441,9 +483,46 @@ def build_pairs_layout():
                     "border": f"1px solid {THEME['border']}",
                     "borderRadius": "6px",
                     "padding": "8px 12px",
-                    "marginBottom": "16px",
+                    "marginBottom": "12px",
                 },
             ),
+
+            # ── Z-Score Thresholds Reference (moved to top) ──────────────────
+            html.Div([
+                html.Div("Z-Score Colour Thresholds",
+                         style={"color": THEME["text_sub"], "fontSize": "10px", "fontWeight": "700",
+                                "letterSpacing": "0.06em", "textTransform": "uppercase", "marginBottom": "6px"}),
+                html.Div([
+                    html.Div([
+                        html.Span("● ", style={"color": "#a4b6d2", "fontWeight": "700"}),
+                        html.Span("Neutral: |z| < 1.5",
+                                 style={"color": THEME["text_sub"], "fontSize": "10px"}),
+                    ]),
+                    html.Div([
+                        html.Span("● ", style={"color": "#e8a13f", "fontWeight": "700"}),
+                        html.Span("Watch: 1.5 ≤ |z| < 2.0",
+                                 style={"color": THEME["text_sub"], "fontSize": "10px"}),
+                    ]),
+                    html.Div([
+                        html.Span("● ", style={"color": "#e06060", "fontWeight": "700"}),
+                        html.Span("Signal: |z| ≥ 2.0",
+                                 style={"color": THEME["text_sub"], "fontSize": "10px"}),
+                    ]),
+                ], style={
+                    "display": "flex",
+                    "gap": "18px",
+                    "flexWrap": "wrap",
+                }),
+            ], style={
+                "marginBottom": "12px",
+                "paddingLeft": "12px",
+                "paddingRight": "12px",
+                "paddingTop": "8px",
+                "paddingBottom": "8px",
+                "borderLeft": f"3px solid {THEME['border']}",
+                "backgroundColor": THEME["bg_raised"],
+                "borderRadius": "3px",
+            }),
 
             # ── Results panel: Full-width vertical list (1 column) ──────────────
             html.Div(
@@ -467,46 +546,6 @@ def build_pairs_layout():
 
             # ── Hidden loader for triggering updates ────────────────────────
             html.Div(id="pairs-content-loader", style={"display": "none"}),
-
-            # ── Reference section: Z-score color thresholds (compact) ────────
-            html.Div([
-                html.Div("Z-Score Colour Thresholds",
-                         style={"color": THEME["text_sub"], "fontSize": "10px", "fontWeight": "700",
-                                "letterSpacing": "0.06em", "textTransform": "uppercase", "marginBottom": "8px"}),
-
-                html.Div([
-                    # NEUTRAL
-                    html.Div([
-                        html.Span("● ", style={"color": "#a4b6d2", "fontWeight": "700"}),
-                        html.Span("Neutral: |z| < 1.5 — within noise",
-                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
-                    ]),
-                    # AMBER
-                    html.Div([
-                        html.Span("● ", style={"color": "#e8a13f", "fontWeight": "700"}),
-                        html.Span("Watch: 1.5 ≤ |z| < 2.0 — elevated",
-                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
-                    ]),
-                    # RED
-                    html.Div([
-                        html.Span("● ", style={"color": "#e06060", "fontWeight": "700"}),
-                        html.Span("Signal: |z| ≥ 2.0 — extreme",
-                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
-                    ]),
-                ], style={
-                    "display": "flex",
-                    "gap": "20px",
-                    "flexWrap": "wrap",
-                }),
-            ], style={
-                "marginTop": "16px",
-                "paddingTop": "12px",
-                "paddingLeft": "12px",
-                "borderTop": f"1px solid {THEME['border']}",
-                "backgroundColor": THEME["bg_raised"],
-                "borderRadius": "6px",
-                "padding": "10px 12px",
-            }),
         ],
         style={"padding": "20px"}
     )
