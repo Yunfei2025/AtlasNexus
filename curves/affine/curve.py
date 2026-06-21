@@ -437,12 +437,19 @@ class IRSCurve:
         for tau in taus:
             y, b = af.Affine(tau, self.factors, self.S2, self.gamma, self.mtype, self.caltype)
             spot_curve.append(float(y))
+        spot_arr = np.array(spot_curve)
+        # Differentiate discount factors against the *unrounded* tau grid — rounding
+        # the grid first (e.g. to 4dp) makes spacing slightly non-uniform, and
+        # np.gradient amplifies that jitter into a visible zigzag in ForwardRate.
+        # Only the display index is rounded, after the derivative is taken.
+        df_DF_vals = np.exp(-spot_arr * taus / 100)
+        df_forward = _instantaneous_forward_from_discount(df_DF_vals, taus)
+
         df_curve = pd.Series(spot_curve)
         df_curve.index = taus.round(4)
         df_curve.name = 'SpotRate'
-        df_DF = np.exp(-np.array(df_curve.values) * np.array(df_curve.index) / 100)
-        df_DF = pd.Series(df_DF, name='DF',index=df_curve.index)
-        df_forward = _instantaneous_forward_from_discount(df_DF.values, df_curve.index.values)
+        df_DF = pd.Series(df_DF_vals, name='DF', index=df_curve.index)
+        df_forward.index = df_curve.index
         self.curves = pd.concat([df_curve, df_forward, df_DF], axis=1)
         return self
      

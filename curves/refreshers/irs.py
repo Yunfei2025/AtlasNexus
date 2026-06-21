@@ -259,12 +259,24 @@ class IRSRefresher:
 	def _interpolate_tbond_cbond_forward(self, bond_type: str):
 		with open(os.path.join(DIR_INPUT, f"{bond_type}-fig.obj"), 'rb') as file:
 			figure = pickle.load(file)
-        
-		x_src = np.asarray(figure['data'][1].x, dtype=float)
-		y_src = np.asarray(figure['data'][1].y, dtype=float)
-		sort_idx_src = np.argsort(x_src)
-		x_src = x_src[sort_idx_src]
-		y_src = y_src[sort_idx_src]
+
+		# Look up traces by name, not position — plotCurve()'s trace order/count
+		# varies (bands/whiskers/off-scale markers are conditional), so indexing by
+		# data[0]/data[1] can silently grab the wrong trace (e.g. the Bid-Offer band
+		# or Uncertainty whiskers instead of the fitted curve), producing a zigzag.
+		traces_by_name = {}
+		for t in figure['data']:
+			name = t.get('name') if isinstance(t, dict) else getattr(t, 'name', None)
+			if name is not None:
+				traces_by_name[name] = t
+
+		def _xy(trace):
+			x = np.asarray(trace['x'] if isinstance(trace, dict) else trace.x, dtype=float)
+			y = np.asarray(trace['y'] if isinstance(trace, dict) else trace.y, dtype=float)
+			order = np.argsort(x)
+			return x[order], y[order]
+
+		x_src, y_src = _xy(traces_by_name['ForwardRate'])
 
 		target_index = self.curve_dictionary['instfit']['r7d'].index.values.astype(float)
 		first_target_x = float(target_index[0])
@@ -286,12 +298,10 @@ class IRSRefresher:
 
 		interpolated_values = np.interp(target_index, x_src, y_src)
 		self.curve_dictionary['instfit']['r7d'][f"{bond_type}ForwardRate"] = interpolated_values
-		# Also store SpotRate (data[0]) for carry/roll computation in the forward-curve plot
-		x_spot = np.asarray(figure['data'][0].x, dtype=float)
-		y_spot = np.asarray(figure['data'][0].y, dtype=float)
-		sort_spot = np.argsort(x_spot)
+		# Also store SpotRate for carry/roll computation in the forward-curve plot
+		x_spot, y_spot = _xy(traces_by_name['SpotRate'])
 		self.curve_dictionary['instfit']['r7d'][f"{bond_type}SpotRate"] = np.interp(
-			target_index, x_spot[sort_spot], y_spot[sort_spot]
+			target_index, x_spot, y_spot
 		)
 
 	def plot_curves(self):
@@ -315,51 +325,78 @@ class IRSRefresher:
 	def compute_stats(self):
 		"""Compute spreads statistics and forward rates."""
 		logger.info("Computing statistics...")
-		
+
 		# Load existing statistics
 		cvpx_stat = updatePKL({}, os.path.join(DIR_INPUT, 'IRS-pxspds.pkl'))
 		spreads = _normalize_legacy_repo_frame(cvpx_stat['StatInfo'])
 		cvpx_stat['StatInfo'] = spreads
 		logger.info(f"Loaded existing statistics for {len(spreads)} instruments")
-		
+
+		# Ensure all instruments from IRS_LIST exist in spreads index
+		missing_irs = [instr for instr in IRSConfig.IRS_LIST if instr not in spreads.index]
+		if missing_irs:
+			logger.info(f"Adding {len(missing_irs)} missing instruments to spreads index")
+			spreads = pd.concat([spreads, pd.DataFrame(index=missing_irs)], verify_integrity=False)
+
+		missing_spreads = [s for s in self.spreads_list if s not in spreads.index]
+		if missing_spreads:
+			logger.info(f"Adding {len(missing_spreads)} missing spread instruments to spreads index")
+			spreads = pd.concat([spreads, pd.DataFrame(index=missing_spreads)], verify_integrity=False)
+
 		# Update pricing data
-		spreads.loc[IRSConfig.IRS_LIST, 'CvPx'] = self.cv_irs.loc['FixRate']
-		spreads.loc[self.spreads_list, 'CvPx'] = self.cv_spreads.loc['FixRate']
-		spreads.loc[IRSConfig.IRS_LIST, 'QtPx'] = self.qt_irs.loc[0]
-		spreads.loc[self.spreads_list, 'QtPx'] = self.qt_spreads.loc[0]
+		spreads.loc[IRSConfig.IRS_LIST, 'CvPx'] = self.cv_irs.loc['FixRate'].values
+		spreads.loc[self.spreads_list, 'CvPx'] = self.cv_spreads.loc['FixRate'].values
+		spreads.loc[IRSConfig.IRS_LIST, 'QtPx'] = self.qt_irs.loc[0].values
+		spreads.loc[self.spreads_list, 'QtPx'] = self.qt_spreads.loc[0].values
 		if self.quote_frame is not None and not self.quote_frame.empty:
-			spreads.loc[IRSConfig.IRS_LIST, 'Bid'] = self.quote_frame['Bid']
-			spreads.loc[IRSConfig.IRS_LIST, 'Ofr'] = self.quote_frame['Ofr']
+			# Only update Bid/Ofr for instruments that exist in both spreads and quote_frame
+			bid_idx = [i for i in IRSConfig.IRS_LIST if i in spreads.index]
+			ofr_idx = [i for i in IRSConfig.IRS_LIST if i in spreads.index]
+			if bid_idx:
+				spreads.loc[bid_idx, 'Bid'] = self.quote_frame.loc[bid_idx, 'Bid'].values
+				spreads.loc[ofr_idx, 'Ofr'] = self.quote_frame.loc[ofr_idx, 'Ofr'].values
 			try:
-				spreads.loc[self.spreads_list, 'Bid'] = irs.irsQuoteComposite(
-					self.spreads_list,
-					self.quote_frame['Bid'],
-					quote_side='Bid',
-					opposite_cost=self.quote_frame['Ofr'],
-				).round(4)
-				spreads.loc[self.spreads_list, 'Ofr'] = irs.irsQuoteComposite(
-					self.spreads_list,
-					self.quote_frame['Ofr'],
-					quote_side='Ofr',
-					opposite_cost=self.quote_frame['Bid'],
-				).round(4)
+				spreads_bid_idx = [s for s in self.spreads_list if s in spreads.index]
+				if spreads_bid_idx:
+					spreads.loc[spreads_bid_idx, 'Bid'] = irs.irsQuoteComposite(
+						spreads_bid_idx,
+						self.quote_frame['Bid'],
+						quote_side='Bid',
+						opposite_cost=self.quote_frame['Ofr'],
+					).round(4)
+					spreads.loc[spreads_bid_idx, 'Ofr'] = irs.irsQuoteComposite(
+						spreads_bid_idx,
+						self.quote_frame['Ofr'],
+						quote_side='Ofr',
+						opposite_cost=self.quote_frame['Bid'],
+					).round(4)
 			except Exception as exc:
 				logger.warning(f"Could not derive IRS spread bid/ofr quotes: {exc}")
 		
 		# Calculate spreads and Z-scores
 		spreads['spread'] = spreads['QtPx']
-		spreads.loc[IRSConfig.IRS_LIST, 'spread'] = spreads.loc[IRSConfig.IRS_LIST, 'QtPx'] - spreads.loc[IRSConfig.IRS_LIST, 'CvPx']
+		irs_idx = [i for i in IRSConfig.IRS_LIST if i in spreads.index]
+		if irs_idx:
+			spreads.loc[irs_idx, 'spread'] = spreads.loc[irs_idx, 'QtPx'] - spreads.loc[irs_idx, 'CvPx']
 		spreads['Zscore'] = (spreads['spread'] - spreads['mean']) / spreads['vol']
-		
+
 		# Update changes in basis points
-		spreads.loc[IRSConfig.IRS_LIST, 'Chg(bp)'] = (self.cv_irs_adjusted.loc['FixRate'] * 100).round(2)
-		spreads.loc[self.spreads_list, 'Chg(bp)'] = (self.cv_spreads_adjusted.loc['FixRate'] * 100).round(2)
-		
+		irs_idx = [i for i in IRSConfig.IRS_LIST if i in spreads.index]
+		if irs_idx:
+			spreads.loc[irs_idx, 'Chg(bp)'] = (self.cv_irs_adjusted.loc['FixRate'].loc[irs_idx] * 100).round(2).values
+		spreads_idx = [s for s in self.spreads_list if s in spreads.index]
+		if spreads_idx:
+			spreads.loc[spreads_idx, 'Chg(bp)'] = (self.cv_spreads_adjusted.loc['FixRate'].loc[spreads_idx] * 100).round(2).values
+
 		# Update carry metrics
 		for key in IRSConfig.CARRY_LIST:
-			composite = irs.irsSpreadComposite(self.spreads_list, self.contracts['value'][key])
-			spreads.loc[self.spreads_list, key] = composite.round(2)
-			spreads.loc[IRSConfig.IRS_LIST, key] = self.contracts['value'].loc[IRSConfig.IRS_LIST, key].round(2)
+			spreads_carry_idx = [s for s in self.spreads_list if s in spreads.index]
+			if spreads_carry_idx:
+				composite = irs.irsSpreadComposite(spreads_carry_idx, self.contracts['value'][key])
+				spreads.loc[spreads_carry_idx, key] = composite.round(2).values
+			irs_carry_idx = [i for i in IRSConfig.IRS_LIST if i in spreads.index]
+			if irs_carry_idx:
+				spreads.loc[irs_carry_idx, key] = self.contracts['value'].loc[irs_carry_idx, key].round(2).values
 	
 		# Create time-based forward rates dataframe
 		logger.info("Creating time-based forward rates dataframe...")

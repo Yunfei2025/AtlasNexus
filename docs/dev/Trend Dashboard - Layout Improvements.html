@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trend Dashboard — Layout Improvements</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<style>
+  :root{
+    --bg:#070d1c;
+    --panel:#0c1530;
+    --panel-2:#0e1838;
+    --line:#1b2a4d;
+    --ink:#e6edf7;
+    --ink-2:#9fb0c8;
+    --ink-3:#6b7c9a;
+    --accent:#5b9bd5;
+    --hero-series:#ef4444;
+    --hero-trend:#5b9bd5;
+    --teal:#22d3ee;
+    --amber:#fbbf24;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
+    font-size:14px;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* top tab bar */
+  .tabbar{display:flex;gap:30px;align-items:center;padding:16px 26px;border-bottom:1px solid rgba(255,255,255,.04)}
+  .tabbar a{color:var(--ink-3);text-decoration:none;font-size:15px;font-weight:500}
+  .tabbar a.active{color:var(--accent)}
+  .tabbar a.active{position:relative}
+  .tabbar a.active::after{content:"";position:absolute;left:0;right:0;bottom:-17px;height:2px;background:var(--accent)}
+
+  .app{display:flex;gap:18px;padding:18px 22px 26px;align-items:stretch}
+
+  /* ---------- sidebar ---------- */
+  .sidebar{
+    width:196px;flex:0 0 196px;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:16px 14px;
+    display:flex;flex-direction:column;
+    /* IMPROVED: fills the column height — no dead void */
+  }
+  .mode-current .sidebar{align-self:flex-start;height:560px} /* replicate the stranded short card */
+  .side-label{font-size:11px;letter-spacing:.12em;color:var(--accent);font-weight:700;margin:2px 2px 8px}
+  .select{
+    width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+    border-radius:8px;padding:9px 11px;font-size:13px;display:flex;justify-content:space-between;align-items:center;cursor:pointer
+  }
+  .select .chev{color:var(--ink-3)}
+  .divider{height:1px;background:linear-gradient(90deg,transparent,var(--line),transparent);margin:14px 2px}
+  .qs{display:flex;flex-direction:column;gap:6px;overflow:auto;flex:1;min-height:0;padding-right:2px}
+  .mode-current .qs{flex:0 0 auto;overflow:visible}
+  .qs::-webkit-scrollbar{width:6px}
+  .qs::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+  .qs button{
+    text-align:left;background:transparent;border:1px solid transparent;color:var(--ink-2);
+    border-radius:7px;padding:8px 11px;font-size:13px;cursor:pointer;transition:.12s
+  }
+  .qs button:hover{background:var(--panel-2);color:var(--ink)}
+  .qs button.active{background:rgba(91,155,213,.16);border-color:rgba(91,155,213,.4);color:#cfe2f7}
+
+  /* ---------- main ---------- */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;gap:14px}
+  .header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
+  .htitle{font-size:22px;font-weight:600;letter-spacing:-.01em}
+  .hsub{font-size:12.5px;color:var(--ink-3);margin-top:3px}
+  .mode-current .htitle::after{content:"  ·  Updated 23:36:33 · 10Y Treasury";font-size:13px;color:var(--ink-3);font-weight:400}
+  .mode-current .hsub{display:none}
+
+  /* segmented toggle */
+  .seg{display:flex;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:3px}
+  .seg button{border:0;background:transparent;color:var(--ink-2);padding:7px 16px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer}
+  .seg button.on{background:var(--accent);color:#06101f}
+
+  /* marker key (improved only) */
+  .key{display:flex;flex-wrap:wrap;gap:18px 22px;align-items:center;padding:11px 16px;background:var(--panel);border:1px solid var(--line);border-radius:10px;font-size:12.5px;color:var(--ink-2)}
+  .mode-current .key{display:none}
+  .key .item{display:flex;align-items:center;gap:8px}
+  .key .sw{width:22px;height:0;border-top-width:3px;border-top-style:solid;border-radius:2px}
+  .key .gly{font-size:14px;line-height:1;width:16px;text-align:center}
+  .key .sep{width:1px;height:16px;background:var(--line)}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 6px 4px}
+  #chartMain{height:362px}
+
+  .grouplabel{font-size:11px;letter-spacing:.13em;color:var(--ink-3);font-weight:700;margin:6px 2px -2px}
+  .mode-current .grouplabel{display:none}
+
+  .row{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .cell{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 4px 2px}
+  .cell .pchart{height:188px}
+
+  .footnote{color:var(--ink-3);font-size:12px;margin:2px 2px 0;line-height:1.5}
+  .footnote b{color:var(--ink-2);font-weight:600}
+</style>
+</head>
+<body class="mode-improved">
+
+  <nav class="tabbar">
+    <a href="#">Data</a>
+    <a href="#" class="active">Trend</a>
+    <a href="#">Pricer</a>
+    <a href="#">Surface</a>
+    <a href="#">Curves</a>
+  </nav>
+
+  <div class="app">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="side-label">SERIES</div>
+      <div class="select"><span id="seriesName">10Y Treasury</span><span class="chev">▾</span></div>
+      <div class="divider"></div>
+      <div class="side-label">QUICK SELECT</div>
+      <div class="qs" id="qs"></div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+      <div class="header">
+        <div>
+          <div class="htitle">10Y Treasury</div>
+          <div class="hsub">Updated 23:36:33 · CN govt bond YTM</div>
+        </div>
+        <div class="seg" id="seg">
+          <button data-mode="current">Current</button>
+          <button data-mode="improved" class="on">Improved</button>
+        </div>
+      </div>
+
+      <!-- marker key (improved) -->
+      <div class="key">
+        <div class="item"><span class="sw" style="border-top-color:var(--hero-series)"></span>10Y Yield</div>
+        <div class="item"><span class="sw" style="border-top-color:var(--hero-trend)"></span>Trend Line</div>
+        <div class="sep"></div>
+        <div class="item"><span class="gly" style="color:#f5a623">▼</span>Local Max</div>
+        <div class="item"><span class="gly" style="color:#46c46e">▲</span>Local Min</div>
+        <div class="item"><span class="gly" style="color:#ef4444">✕</span>Downward Confirmed</div>
+        <div class="item"><span class="gly" style="color:#5b9bd5">✚</span>Upward Confirmed</div>
+      </div>
+
+      <div class="panel"><div id="chartMain"></div></div>
+
+      <div class="grouplabel">FUNDING RATES</div>
+      <div class="row">
+        <div class="cell"><div class="pchart" id="c_fr001"></div></div>
+        <div class="cell"><div class="pchart" id="c_fr007"></div></div>
+        <div class="cell"><div class="pchart" id="c_shibor"></div></div>
+      </div>
+
+      <div class="grouplabel">CURVE FACTORS</div>
+      <div class="row">
+        <div class="cell"><div class="pchart" id="c_level"></div></div>
+        <div class="cell"><div class="pchart" id="c_slope"></div></div>
+        <div class="cell"><div class="pchart" id="c_curv"></div></div>
+      </div>
+
+      <div class="footnote">
+        <b>What changed:</b> sidebar fills its column (no stranded void) · marker key lifted out of the plot · color system — red+blue hero, one <span style="color:var(--teal)">teal</span> for funding rates, one <span style="color:var(--amber)">amber</span> for curve factors (kills the rainbow) · two rows labelled as families · gridlines dialled to ~8% · trimmed Plotly modebar · single header (no triple "10Y Treasury") · romanised series label.
+      </div>
+    </main>
+  </div>
+
+<script>
+/* ---------------- seeded RNG ---------------- */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;}}
+
+/* ---------------- dates ---------------- */
+const N=365, start=new Date(2025,6,1);
+const dates=[...Array(N)].map((_,i)=>{const d=new Date(start);d.setDate(d.getDate()+i);return d;});
+const frac=i=>i/(N-1);
+
+/* ---------------- hero series ---------------- */
+// control polyline (the trend line). [fraction, value]
+const ctrl=[
+ [0.00,1.640],[0.05,1.628],[0.10,1.700],[0.135,1.702],[0.155,1.690],
+ [0.22,1.845],[0.245,1.800],[0.275,1.890],[0.295,1.835],[0.315,1.900],
+ [0.345,1.862],[0.40,1.795],[0.46,1.870],[0.50,1.800],[0.55,1.900],
+ [0.625,1.790],[0.645,1.830],[0.665,1.775],[0.705,1.832],[0.85,1.700],
+ [0.92,1.745],[0.965,1.730],[1.00,1.728]
+];
+function interp(f){
+  for(let k=0;k<ctrl.length-1;k++){
+    const [f0,v0]=ctrl[k],[f1,v1]=ctrl[k+1];
+    if(f>=f0&&f<=f1){const t=(f-f0)/(f1-f0);return v0+(v1-v0)*t;}
+  }
+  return ctrl[ctrl.length-1][1];
+}
+const rng=mulberry32(42);
+const heroSeries=dates.map((_,i)=>{
+  const base=interp(frac(i));
+  const n=(rng()-0.5)*0.011+(rng()-0.5)*0.006;
+  return +(base+n).toFixed(4);
+});
+const trendX=ctrl.map(c=>dates[Math.round(c[0]*(N-1))]);
+const trendY=ctrl.map(c=>c[1]);
+function markers(fracs){return{x:fracs.map(f=>dates[Math.round(f*(N-1))]),y:fracs.map(f=>interp(f))};}
+const mMax=markers([0.22,0.275,0.315,0.46,0.55,0.705]);
+const mMin=markers([0.155,0.295,0.40,0.665,0.85]);
+const mDown=markers([0.16,0.285,0.345,0.625,0.86]);
+const mUp=markers([0.135,0.255,0.55,0.645,0.92]);
+
+/* ---------------- small multiples ---------------- */
+function ou(seed,mean,vol,rev,clamp,spikes=[]){
+  const r=mulberry32(seed);let v=mean;const out=[];
+  for(let i=0;i<N;i++){
+    v+=rev*(mean-v)+(r()-0.5)*vol;
+    let y=v;
+    for(const s of spikes){if(Math.abs(i-s.at)<2)y+=s.amp*(1-Math.abs(i-s.at)/2);}
+    y=Math.max(clamp[0],Math.min(clamp[1],y));
+    out.push(+y.toFixed(4));
+  }
+  return out;
+}
+// trend-shaped helpers for smoother series
+function shaped(seed,pts,vol,clamp){
+  const r=mulberry32(seed);
+  return dates.map((_,i)=>{
+    const f=frac(i);let base=pts[pts.length-1][1];
+    for(let k=0;k<pts.length-1;k++){const[a,va]=pts[k],[b,vb]=pts[k+1];if(f>=a&&f<=b){base=va+(vb-va)*((f-a)/(b-a));break;}}
+    return +Math.max(clamp[0],Math.min(clamp[1],base+(r()-0.5)*vol)).toFixed(4);
+  });
+}
+const fr001 = ou(7,1.46,0.10,0.08,[1.30,2.02],[{at:9,amp:0.55},{at:30,amp:0.4}]);
+const fr007 = ou(11,1.56,0.07,0.06,[1.38,2.24],[{at:20,amp:0.35},{at:70,amp:0.5},{at:185,amp:0.65}]);
+const shibor= shaped(3,[[0,1.66],[0.06,1.55],[0.45,1.58],[0.62,1.60],[0.75,1.52],[0.88,1.43],[1,1.43]],0.018,[1.4,1.7]);
+const level = shaped(5,[[0,2.88],[0.07,2.55],[0.28,2.02],[0.5,2.18],[0.72,2.42],[0.86,2.18],[1,2.34]],0.05,[1.95,3]);
+const slope = shaped(8,[[0,-1.6],[0.08,-0.55],[0.16,-0.62],[0.3,-0.72],[0.6,-0.95],[1,-1.06]],0.05,[-1.65,-0.45]);
+const curv  = ou(13,-1.45,0.09,0.05,[-2.05,-0.35],[{at:14,amp:0.9},{at:60,amp:-0.35}]);
+
+/* ---------------- styling per mode ---------------- */
+const RAINBOW={fr001:'#3b82f6',fr007:'#22c55e',shibor:'#c026d3',level:'#f97316',slope:'#eab308',curv:'#ea580c'};
+const SYS={fr001:'#22d3ee',fr007:'#22d3ee',shibor:'#22d3ee',level:'#fbbf24',slope:'#fbbf24',curv:'#fbbf24'};
+
+function grid(mode){return mode==='current'?'rgba(70,110,200,0.34)':'rgba(150,170,210,0.07)';}
+function plotBg(mode){return mode==='current'?'rgba(11,20,46,0.55)':'rgba(255,255,255,0.012)';}
+
+function baseLayout(mode,opt={}){
+  return Object.assign({
+    paper_bgcolor:'rgba(0,0,0,0)',
+    plot_bgcolor:plotBg(mode),
+    font:{color:'#aab8d0',family:'-apple-system,Helvetica Neue,Arial,sans-serif',size:11},
+    margin:{l:40,r:12,t:10,b:26},
+    showlegend:false,
+    xaxis:{gridcolor:grid(mode),zeroline:false,linecolor:'rgba(255,255,255,.06)',tickformat:'%b %Y',nticks:5,tickfont:{size:10.5}},
+    yaxis:{gridcolor:grid(mode),zeroline:false,linecolor:'rgba(255,255,255,.06)',tickfont:{size:10.5}}
+  },opt);
+}
+function cfg(mode){
+  if(mode==='current')return{responsive:true,displaylogo:true};
+  return{responsive:true,displaylogo:false,displayModeBar:'hover',
+    modeBarButtonsToRemove:['lasso2d','select2d','autoScale2d','zoomIn2d','zoomOut2d','toggleSpikelines','hoverClosestCartesian','hoverCompareCartesian']};
+}
+
+function small(id,y,color,title,mode){
+  const tr={x:dates,y,type:'scatter',mode:'lines',line:{color,width:1.4},hoverinfo:'skip'};
+  const lay=baseLayout(mode,{margin:{l:38,r:10,t:24,b:24},
+    title:{text:title,font:{size:12,color:mode==='current'?'#cdd8ea':'#dfe7f4'},x:0.02,xanchor:'left',y:0.97}});
+  Plotly.react(id,[tr],lay,cfg(mode));
+}
+
+function renderHero(mode){
+  const traces=[
+    {x:dates,y:heroSeries,type:'scatter',mode:'lines',name:'10Y Yield',line:{color:'#ef4444',width:2},
+     hovertemplate:'%{y:.3f}%<extra></extra>'},
+    {x:trendX,y:trendY,type:'scatter',mode:'lines+markers',name:'Trend Line',
+     line:{color:'#5b9bd5',width:2},marker:{size:5,color:'#5b9bd5'},hoverinfo:'skip'},
+    {x:mMax.x,y:mMax.y,type:'scatter',mode:'markers',name:'Local Max',marker:{symbol:'triangle-down',size:11,color:'#f5a623'},hoverinfo:'skip'},
+    {x:mMin.x,y:mMin.y,type:'scatter',mode:'markers',name:'Local Min',marker:{symbol:'triangle-up',size:11,color:'#46c46e'},hoverinfo:'skip'},
+    {x:mDown.x,y:mDown.y,type:'scatter',mode:'markers',name:'Downward Confirmed',marker:{symbol:'x',size:10,color:'#ef4444'},hoverinfo:'skip'},
+    {x:mUp.x,y:mUp.y,type:'scatter',mode:'markers',name:'Upward Confirmed',marker:{symbol:'cross',size:10,color:'#5b9bd5'},hoverinfo:'skip'}
+  ];
+  const lay=baseLayout(mode,{
+    margin:{l:46,r:14,t:14,b:30},
+    yaxis:{gridcolor:grid(mode),zeroline:false,linecolor:'rgba(255,255,255,.06)',ticksuffix:'',title:{text:'%',font:{size:12}},tickfont:{size:12}},
+    xaxis:{gridcolor:grid(mode),zeroline:false,linecolor:'rgba(255,255,255,.06)',tickformat:'%b %Y',tickfont:{size:12}}
+  });
+  if(mode==='current'){
+    lay.showlegend=true;
+    lay.legend={x:0.02,y:0.97,xanchor:'left',yanchor:'top',bgcolor:'rgba(12,21,48,0.85)',bordercolor:'rgba(91,155,213,.4)',borderwidth:1,font:{size:12}};
+  }else{
+    lay.showlegend=false;
+  }
+  Plotly.react('chartMain',traces,lay,cfg(mode));
+}
+
+function renderAll(mode){
+  const pal=mode==='current'?RAINBOW:SYS;
+  renderHero(mode);
+  small('c_fr001',fr001,pal.fr001,'FR001.IR',mode);
+  small('c_fr007',fr007,pal.fr007,'FR007.IR',mode);
+  small('c_shibor',shibor,pal.shibor,'SHIBOR 3M',mode);
+  small('c_level',level,pal.level,'Level',mode);
+  small('c_slope',slope,pal.slope,'Slope',mode);
+  small('c_curv',curv,pal.curv,'Curvature',mode);
+}
+
+/* ---------------- quick select ---------------- */
+const items=['1Y Tsy','5Y Tsy','10Y Tsy','30Y Tsy','5s1s','10s5s','30s10s','IRS 1Y','IRS 2Y','IRS 5Y','IRS 2s1s','IRS 5s2s','IRS 5s1s','BdSwap 1Y','BdSwap 2Y','BdSwap 5Y'];
+const qs=document.getElementById('qs');
+items.forEach(t=>{const b=document.createElement('button');b.textContent=t;if(t==='10Y Tsy')b.classList.add('active');
+  b.onclick=()=>{qs.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+    document.getElementById('seriesName').textContent=t.replace('Tsy','Treasury');
+    document.querySelector('.htitle').firstChild.textContent=t.replace('Tsy','Treasury');};
+  qs.appendChild(b);});
+
+/* ---------------- mode toggle ---------------- */
+let MODE='improved';
+const seg=document.getElementById('seg');
+seg.addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b)return;
+  MODE=b.dataset.mode;
+  seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+  document.body.className='mode-'+MODE;
+  renderAll(MODE);
+});
+
+renderAll(MODE);
+window.addEventListener('resize',()=>renderAll(MODE));
+</script>
+</body>
+</html>

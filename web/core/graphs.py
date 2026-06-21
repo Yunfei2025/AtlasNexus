@@ -366,11 +366,8 @@ def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
     stats: Dict[str, Any] = {}
     try:
         if curve_type in ("TBond", "CBond"):
-            # plotCurve names the fitted hero curve after the Curve dict's first
-            # column (typically 'Bid'); fall back to averaging Bid/Ofr fits if absent.
-            hero = _xy_series(_trace_by_name(figure, "Bid"))
-            if hero.empty:
-                hero = _xy_series(_trace_by_name(figure, "Ofr"))
+            # plotCurve names the fitted hero (yield) curve trace 'SpotRate'.
+            hero = _xy_series(_trace_by_name(figure, "SpotRate"))
             band = _trace_by_name(figure, "Bid–Offer")
             mid = _xy_series(_trace_by_name(figure, "Mid"))
             if not hero.empty:

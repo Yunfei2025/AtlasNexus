@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pairs Analysis — Chart Redesign</title>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<style>
+  :root{
+    --an-bg:#0a1530;
+    --an-navy-800:#0e1d3a;
+    --an-navy-700:#122a4c;
+    --an-navy-600:#17345c;
+    --an-border:#1e3a5f;
+    --an-border2:#061E44;
+    --an-text:#e9eef8;
+    --an-muted:#6f83a3;
+    --an-cyan:#45b6e6;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--an-bg);color:var(--an-text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;}
+  .wrap{max-width:1640px;margin:0 auto;padding:40px 32px 64px;}
+  h1{font-size:22px;font-weight:600;margin:0 0 4px;letter-spacing:-0.01em;}
+  .sub{color:var(--an-muted);font-size:13px;margin:0 0 32px;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start;}
+  .col-label{display:flex;align-items:center;gap:10px;margin:0 0 12px;}
+  .tag{font-size:11px;font-weight:700;letter-spacing:0.09em;text-transform:uppercase;
+    padding:3px 9px;border-radius:3px;}
+  .tag.before{background:rgba(192,57,43,0.16);color:#e8836f;border:1px solid #6e2a22;}
+  .tag.after{background:rgba(69,182,230,0.16);color:var(--an-cyan);border:1px solid #2a5e7f;}
+  .col-note{font-size:12px;color:var(--an-muted);}
+
+  /* card chrome — mirrors the dashboard */
+  .card{background:var(--an-navy-800);border:1px solid var(--an-border);
+    border-radius:7px;overflow:hidden;}
+
+  /* BEFORE header: heavy white bold bar (as in screenshot) */
+  .hdr-before{background:var(--an-navy-600);padding:16px 20px;
+    border-bottom:1px solid var(--an-border);font-size:19px;font-weight:800;
+    color:#fff;letter-spacing:0.01em;}
+
+  /* AFTER header: quiet system label + live stats */
+  .hdr-after{padding:13px 18px;border-bottom:1px solid rgba(255,255,255,0.06);
+    display:flex;align-items:baseline;justify-content:space-between;gap:12px;}
+  .hdr-after .name{font-size:11px;font-weight:700;letter-spacing:0.09em;
+    text-transform:uppercase;color:var(--an-muted);}
+  .hdr-after .name b{color:var(--an-text);font-weight:700;}
+  .hdr-after .stats{display:flex;gap:16px;font-size:12px;color:var(--an-muted);}
+  .hdr-after .stats b{color:var(--an-cyan);font-weight:600;}
+  .hdr-after .stats .z{color:#e8a13f;}
+
+  .plot{height:430px;}
+  .legend-cap{font-size:11px;color:var(--an-muted);padding:10px 18px 0;}
+
+  /* ── z-score spec section ──────────────────────────────────────── */
+  .section{margin:56px 0 0;}
+  .section-title{font-size:13px;font-weight:700;letter-spacing:0.09em;
+    text-transform:uppercase;color:var(--an-muted);margin:0 0 6px;}
+  .section-rule{height:1px;background:var(--an-border);margin:0 0 24px;}
+  .z-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:0 0 32px;}
+  .z-card{background:var(--an-navy-800);border:1px solid var(--an-border);border-radius:7px;overflow:hidden;}
+  .z-hdr{padding:13px 18px;border-bottom:1px solid rgba(255,255,255,0.06);
+    display:flex;align-items:baseline;justify-content:space-between;gap:12px;}
+  .z-hdr .name{font-size:11px;font-weight:700;letter-spacing:0.09em;
+    text-transform:uppercase;color:var(--an-muted);}
+  .z-hdr .name b{color:var(--an-text);font-weight:700;}
+  .z-hdr .stats{display:flex;gap:16px;font-size:12px;color:var(--an-muted);}
+  .z-hdr .stats b{color:var(--an-cyan);font-weight:600;}
+  .z-body{padding:20px 18px 18px;display:flex;gap:18px;align-items:flex-start;}
+  .z-chip{flex:none;display:flex;flex-direction:column;align-items:center;
+    gap:6px;padding:10px 18px;border-radius:5px;border:1px solid;}
+  .z-chip .val{font-size:22px;font-weight:700;line-height:1;letter-spacing:-0.01em;}
+  .z-chip .rule{font-size:11px;letter-spacing:0.04em;opacity:0.75;}
+  .z-desc{font-size:12px;color:var(--an-muted);line-height:1.6;}
+  .z-desc strong{font-weight:600;}
+
+  /* neutral */
+  .z-neutral .z-chip{background:rgba(111,131,163,0.1);border-color:rgba(111,131,163,0.3);}
+  .z-neutral .z-chip .val{color:#a4b6d2;}
+  .z-neutral .z-chip .rule{color:#6f83a3;}
+  /* amber */
+  .z-amber .z-chip{background:rgba(232,161,63,0.1);border-color:rgba(232,161,63,0.35);}
+  .z-amber .z-chip .val{color:#e8a13f;}
+  .z-amber .z-chip .rule{color:#c08030;}
+  .z-amber .stat-z{color:#e8a13f !important;}
+  /* red */
+  .z-red .z-chip{background:rgba(224,96,96,0.12);border-color:rgba(224,96,96,0.35);}
+  .z-red .z-chip .val{color:#e06060;}
+  .z-red .z-chip .rule{color:#b04040;}
+  .z-red .stat-z{color:#e06060 !important;}
+
+  /* code block */
+  .code-wrap{background:#060f22;border:1px solid var(--an-border);border-radius:7px;
+    overflow:hidden;}
+  .code-hdr{background:var(--an-navy-700);padding:10px 18px;
+    border-bottom:1px solid var(--an-border);
+    font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;
+    color:var(--an-muted);display:flex;align-items:center;gap:8px;}
+  .code-hdr span{color:var(--an-text);}
+  pre{margin:0;padding:20px 22px;font-family:'SF Mono',ui-monospace,Menlo,monospace;
+    font-size:12.5px;line-height:1.65;color:#c8d8f0;overflow-x:auto;
+    tab-size:4;white-space:pre;}
+  .ck{color:#8ab6d8;} /* keyword */
+  .cc{color:#6f83a3;font-style:italic;} /* comment */
+  .cs{color:#7fbe9e;} /* string */
+  .cn{color:#e8a13f;} /* number */
+  .cf{color:#45b6e6;} /* function */
+  .cv{color:#c8d8f0;} /* var */
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Pairs Analysis — chart redesign</h1>
+  <p class="sub">Same data, same 2×2 grid. Left is today's output; right applies the AtlasNexus chart treatment. Both render in real Plotly.</p>
+
+  <div class="grid">
+    <div>
+      <div class="col-label">
+        <span class="tag before">Before</span>
+        <span class="col-note">unstyled Plotly defaults — bright grid, clashing traces, boxed legend, visible toolbar</span>
+      </div>
+      <div class="card">
+        <div class="hdr-before">PAIR 1: 250211.IB vs 240024.IB</div>
+        <div id="before" class="plot"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="col-label">
+        <span class="tag after">After</span>
+        <span class="col-note">navy-seamless plot, cyan trend hero, soft band, header carries live stats</span>
+      </div>
+      <div class="card">
+        <div class="hdr-after">
+          <div class="name"><b>250211.IB</b> vs <b>240024.IB</b></div>
+          <div class="stats">
+            <span>last <b>18.4 bp</b></span>
+            <span>β <b>−0.062/d</b></span>
+            <span class="z">z <span style="color:#e8a13f">−1.7σ</span></span>
+          </div>
+        </div>
+        <div id="after" class="plot"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+  <!-- ── Z-score header spec ──────────────────────────────────────── -->
+  <div class="section">
+    <p class="section-title">Stats header — z-score colour thresholds</p>
+    <div class="section-rule"></div>
+    <div class="z-grid">
+
+      <!-- NEUTRAL -->
+      <div class="z-card z-neutral">
+        <div class="z-hdr">
+          <div class="name"><b>250215.IB</b> vs <b>250018.IB</b></div>
+          <div class="stats">
+            <span>last <b>29.1 bp</b></span>
+            <span>β <b>−0.018/d</b></span>
+            <span>z <span class="stat-z" style="color:#a4b6d2">+0.4σ</span></span>
+          </div>
+        </div>
+        <div class="z-body">
+          <div class="z-chip">
+            <div class="val">+0.4σ</div>
+            <div class="rule">|z| &lt; 1.5</div>
+          </div>
+          <div class="z-desc">
+            <strong style="color:#a4b6d2">Neutral</strong> — spread is within noise.
+            Colour stays muted (<code style="color:#6f83a3">#a4b6d2</code>).
+            No action implied.
+          </div>
+        </div>
+      </div>
+
+      <!-- AMBER -->
+      <div class="z-card z-amber">
+        <div class="z-hdr">
+          <div class="name"><b>250211.IB</b> vs <b>240024.IB</b></div>
+          <div class="stats">
+            <span>last <b>18.4 bp</b></span>
+            <span>β <b>−0.062/d</b></span>
+            <span>z <span class="stat-z">−1.7σ</span></span>
+          </div>
+        </div>
+        <div class="z-body">
+          <div class="z-chip">
+            <div class="val">−1.7σ</div>
+            <div class="rule">1.5 ≤ |z| &lt; 2.0</div>
+          </div>
+          <div class="z-desc">
+            <strong style="color:#e8a13f">Watch</strong> — elevated deviation, within a typical
+            reversion window. Amber (<code style="color:#e8a13f">#e8a13f</code>) draws the eye
+            without demanding action.
+          </div>
+        </div>
+      </div>
+
+      <!-- RED -->
+      <div class="z-card z-red">
+        <div class="z-hdr">
+          <div class="name"><b>2500006.IB</b> vs <b>210005.IB</b></div>
+          <div class="stats">
+            <span>last <b>−14.2 bp</b></span>
+            <span>β <b>−0.091/d</b></span>
+            <span>z <span class="stat-z">+2.3σ</span></span>
+          </div>
+        </div>
+        <div class="z-body">
+          <div class="z-chip">
+            <div class="val">+2.3σ</div>
+            <div class="rule">|z| ≥ 2.0</div>
+          </div>
+          <div class="z-desc">
+            <strong style="color:#e06060">Signal</strong> — statistically extreme.
+            Red (<code style="color:#e06060">#e06060</code>) signals an active opportunity
+            or a blown-up model assumption to check.
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Python wiring -->
+    <div class="code-wrap">
+      <div class="code-hdr">pairs.py — <span>compute stats &amp; drive header colour</span></div>
+      <pre><span class="cc"># ── 1. compute after OLS fit ──────────────────────────────────────────</span>
+import numpy as np
+
+<span class="ck">def</span> <span class="cf">pair_stats</span>(dates, spread):
+    xs   = np.arange(len(spread), dtype=float)
+    slope, intercept = np.polyfit(xs, spread, <span class="cn">1</span>)
+    trend   = intercept + slope * xs
+    resid   = spread - trend
+    sigma   = resid.std()
+    last_z  = resid[<span class="cn">-1</span>] / sigma <span class="ck">if</span> sigma > <span class="cn">0</span> <span class="ck">else</span> <span class="cn">0.0</span>
+    <span class="ck">return</span> {
+        <span class="cs">'last_bp'</span>  : <span class="cf">round</span>(spread[<span class="cn">-1</span>], <span class="cn">1</span>),
+        <span class="cs">'slope'</span>    : <span class="cf">round</span>(slope, <span class="cn">3</span>),        <span class="cc"># bp/day</span>
+        <span class="cs">'last_z'</span>   : <span class="cf">round</span>(last_z, <span class="cn">2</span>),
+        <span class="cs">'trend'</span>    : trend,
+        <span class="cs">'upper'</span>    : trend + sigma,
+        <span class="cs">'lower'</span>    : trend - sigma,
+    }
+
+<span class="cc"># ── 2. colour helper ──────────────────────────────────────────────────</span>
+<span class="ck">def</span> <span class="cf">z_colour</span>(z):
+    <span class="cs">"""Returns hex colour for a z-score value."""</span>
+    az = abs(z)
+    <span class="ck">if</span>   az >= <span class="cn">2.0</span>: <span class="ck">return</span> <span class="cs">'#e06060'</span>   <span class="cc"># red   — signal</span>
+    <span class="ck">elif</span> az >= <span class="cn">1.5</span>: <span class="ck">return</span> <span class="cs">'#e8a13f'</span>   <span class="cc"># amber — watch</span>
+    <span class="ck">else</span>:          <span class="ck">return</span> <span class="cs">'#a4b6d2'</span>   <span class="cc"># muted — neutral</span>
+
+<span class="cc"># ── 3. build the card header (Dash html.Div) ──────────────────────────</span>
+<span class="ck">from</span> dash <span class="ck">import</span> html
+
+<span class="ck">def</span> <span class="cf">pair_card_header</span>(leg1, leg2, stats):
+    z    = stats[<span class="cs">'last_z'</span>]
+    sign = <span class="cs">'+'</span> <span class="ck">if</span> z >= <span class="cn">0</span> <span class="ck">else</span> <span class="cs">''</span>
+    slope_sign = <span class="cs">'+'</span> <span class="ck">if</span> stats[<span class="cs">'slope'</span>] >= <span class="cn">0</span> <span class="ck">else</span> <span class="cs">''</span>
+    <span class="ck">return</span> html.Div([
+        html.Div([
+            html.B(leg1, style={<span class="cs">'color'</span>: <span class="cs">'#e9eef8'</span>}),
+            html.Span(<span class="cs">' vs '</span>, style={<span class="cs">'color'</span>: <span class="cs">'#4a5d7c'</span>}),
+            html.B(leg2, style={<span class="cs">'color'</span>: <span class="cs">'#e9eef8'</span>}),
+        ], style={<span class="cs">'fontSize'</span>: <span class="cs">'11px'</span>, <span class="cs">'fontWeight'</span>: <span class="cs">'700'</span>,
+                  <span class="cs">'letterSpacing'</span>: <span class="cs">'0.09em'</span>, <span class="cs">'textTransform'</span>: <span class="cs">'uppercase'</span>,
+                  <span class="cs">'color'</span>: <span class="cs">'#6f83a3'</span>}),
+        html.Div([
+            html.Span([<span class="cs">'last '</span>, html.B(f<span class="cs">'{stats["last_bp"]:+.1f} bp'</span>)]),
+            html.Span([<span class="cs">'β '</span>,    html.B(f<span class="cs">'{slope_sign}{stats["slope"]:.3f}/d'</span>)]),
+            html.Span([<span class="cs">'z '</span>,
+                html.Span(f<span class="cs">'{sign}{z:.1f}σ'</span>,
+                          style={<span class="cs">'color'</span>: <span class="cf">z_colour</span>(z), <span class="cs">'fontWeight'</span>: <span class="cs">'700'</span>}),
+            ]),
+        ], style={<span class="cs">'display'</span>: <span class="cs">'flex'</span>, <span class="cs">'gap'</span>: <span class="cs">'16px'</span>,
+                  <span class="cs">'fontSize'</span>: <span class="cs">'12px'</span>, <span class="cs">'color'</span>: <span class="cs">'#6f83a3'</span>}),
+    ], style={
+        <span class="cs">'padding'</span>: <span class="cs">'13px 18px'</span>,
+        <span class="cs">'borderBottom'</span>: <span class="cs">'1px solid rgba(255,255,255,0.06)'</span>,
+        <span class="cs">'display'</span>: <span class="cs">'flex'</span>, <span class="cs">'alignItems'</span>: <span class="cs">'baseline'</span>,
+        <span class="cs">'justifyContent'</span>: <span class="cs">'space-between'</span>, <span class="cs">'gap'</span>: <span class="cs">'12px'</span>,
+    })
+
+<span class="cc"># ── 4. in your pairs layout loop ──────────────────────────────────────</span>
+<span class="cc"># s = pair_stats(dates_array, spread_array)</span>
+<span class="cc"># header = pair_card_header('250211.IB', '240024.IB', s)</span>
+<span class="cc"># fig    = build_pairs_fig(dates_array, spread_array, s)   # see style_pairs_fig() above</span>
+<span class="cc"># card   = html.Div([header, dcc.Graph(figure=fig, config=MODEBAR_CFG)])</span></pre>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── synthetic data matching PAIR 1 in the screenshot ──────────────────
+function genData(){
+  const start = new Date(2026,1,8);   // Feb 8 2026
+  const n = 92;
+  const dates = [], spread = [];
+  let seed = 42;
+  const rnd = () => { seed = (seed*9301+49297)%233280; return seed/233280; };
+  for(let i=0;i<n;i++){
+    const d = new Date(start); d.setDate(d.getDate()+i);
+    dates.push(d);
+    const base = 24.0 - (6.0*i/n);              // declining 24 → 18
+    const noise = (rnd()-0.5)*3.4;
+    spread.push(base + noise);
+  }
+  // OLS trend
+  const xs = dates.map((_,i)=>i);
+  const mx = xs.reduce((a,b)=>a+b,0)/n;
+  const my = spread.reduce((a,b)=>a+b,0)/n;
+  let num=0,den=0;
+  for(let i=0;i<n;i++){num+=(xs[i]-mx)*(spread[i]-my);den+=(xs[i]-mx)**2;}
+  const slope=num/den, icpt=my-slope*mx;
+  const trend = xs.map(x=>icpt+slope*x);
+  // residual std → ±1σ band
+  const resid = spread.map((y,i)=>y-trend[i]);
+  const sd = Math.sqrt(resid.reduce((a,r)=>a+r*r,0)/n);
+  const upper = trend.map(t=>t+sd);
+  const lower = trend.map(t=>t-sd);
+  return {dates,spread,trend,upper,lower};
+}
+const D = genData();
+
+// ── BEFORE: current look ──────────────────────────────────────────────
+Plotly.newPlot('before', [
+  { x:D.dates, y:D.upper, mode:'lines', name:'+1σ',
+    line:{color:'#d4d44a',width:1.5,dash:'dash'}, showlegend:false, hoverinfo:'skip' },
+  { x:D.dates, y:D.lower, mode:'lines', name:'±1σ Confidence',
+    line:{color:'#d4d44a',width:1.5,dash:'dash'}, fill:'tonexty',
+    fillcolor:'rgba(120,135,160,0.28)', hoverinfo:'skip' },
+  { x:D.dates, y:D.spread, mode:'markers', name:'Spread',
+    marker:{color:'#2dd4a7',size:7} },
+  { x:D.dates, y:D.trend, mode:'lines', name:'Trend (OLS)',
+    line:{color:'#ff6b9d',width:3} },
+],{
+  paper_bgcolor:'#0e1d3a', plot_bgcolor:'#0e1d3a',
+  font:{color:'#ffffff',size:12},
+  margin:{l:55,r:20,t:20,b:60},
+  xaxis:{ title:{text:'Date'}, gridcolor:'#ffffff', gridwidth:1.4,
+    linecolor:'#ffffff', tickcolor:'#ffffff', zeroline:false },
+  yaxis:{ title:{text:'Spread (bp)'}, gridcolor:'#ffffff', gridwidth:1.4,
+    linecolor:'#ffffff', tickcolor:'#ffffff', zeroline:false },
+  legend:{ x:0.02,y:0.98,xanchor:'left',yanchor:'top',
+    bgcolor:'rgba(14,29,58,0.9)', bordercolor:'#ffffff', borderwidth:1.5,
+    font:{color:'#ffffff'} },
+},{ displayModeBar:true, displaylogo:false, responsive:true });
+
+// ── AFTER: AtlasNexus treatment ───────────────────────────────────────
+const AN={navy:'#0e1d3a',grid:'rgba(255,255,255,0.06)',axis:'rgba(255,255,255,0.18)',
+  muted:'#6f83a3',cyan:'#45b6e6',dot:'#7fd1c0',band:'rgba(69,182,230,0.10)'};
+Plotly.newPlot('after', [
+  { x:D.dates, y:D.upper, mode:'lines', line:{width:0},
+    showlegend:false, hoverinfo:'skip' },
+  { x:D.dates, y:D.lower, mode:'lines', line:{width:0}, fill:'tonexty',
+    fillcolor:AN.band, name:'±1σ confidence', hoverinfo:'skip' },
+  { x:D.dates, y:D.spread, mode:'markers', name:'Spread',
+    marker:{color:AN.dot,size:5,opacity:0.85} },
+  { x:D.dates, y:D.trend, mode:'lines', name:'Trend (OLS)',
+    line:{color:AN.cyan,width:2.5} },
+],{
+  paper_bgcolor:AN.navy, plot_bgcolor:AN.navy,
+  font:{family:'-apple-system,system-ui,sans-serif',color:AN.muted,size:12},
+  margin:{l:48,r:16,t:30,b:36},
+  hovermode:'x unified',
+  xaxis:{ gridcolor:AN.grid, zeroline:false, linecolor:AN.axis,
+    ticks:'outside', tickcolor:AN.axis, tickfont:{size:11,color:AN.muted},
+    nticks:7 },
+  yaxis:{ title:{text:'Spread (bp)',font:{size:11,color:AN.muted}},
+    gridcolor:AN.grid, zeroline:false, linecolor:AN.axis,
+    ticks:'outside', tickcolor:AN.axis, tickfont:{size:11,color:AN.muted} },
+  legend:{ orientation:'h', x:0, y:1.06, xanchor:'left', yanchor:'bottom',
+    bgcolor:'rgba(0,0,0,0)', borderwidth:0, font:{size:11,color:AN.muted} },
+},{
+  displayModeBar:'hover', displaylogo:false,
+  modeBarButtonsToRemove:['lasso2d','select2d','autoScale2d','zoomIn2d','zoomOut2d'],
+  responsive:true,
+});
+</script>
+</body>
+</html>
