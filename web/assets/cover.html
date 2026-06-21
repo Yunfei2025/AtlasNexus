@@ -3,7 +3,6 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AtlasNexus</title>
-<script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;500;600&display=swap');
   html,body{height:100%;margin:0;overflow:hidden;font-family:'Open Sans',sans-serif}
@@ -21,7 +20,7 @@
   .mono{width:46px;height:46px}
   .word{font-family:'Open Sans',sans-serif;font-weight:300;font-size:62px;letter-spacing:.05em;color:#ffffff;line-height:1}
   .word b{font-weight:600}
-  .tag{font-family:'Open Sans',sans-serif;font-size:16px;color:#aab0c0;letter-spacing:.02em;margin:0 auto 26px;max-width:500px;line-height:1.65}
+  .tag{font-family:'Open Sans',sans-serif;font-size:16px;color:#aab0c0;letter-spacing:.02em;margin:0 auto 26px;max-width:none;white-space:nowrap;line-height:1.65}
   .asset-grid{display:flex;gap:11px;justify-content:center;margin-bottom:26px;flex-wrap:wrap}
   .ac{display:flex;flex-direction:column;align-items:center;gap:7px;padding:14px 14px 12px;
     background:rgba(10,36,90,.7);border:1px solid rgba(42,82,152,.32);border-radius:8px;width:130px;
@@ -35,6 +34,7 @@
     transition:filter .15s ease,transform .15s ease}
   .cta:hover{filter:brightness(1.12);transform:translateY(-1px)}
   .meta{margin-top:18px;font-family:'Courier New',monospace;font-size:11px;color:#5a6478}
+  .copyright{margin-top:12px;font-family:'Courier New',monospace;font-size:10px;color:#475569;letter-spacing:.01em}
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#27ae60;
     box-shadow:0 0 6px #27ae60;margin-right:6px;vertical-align:middle}
   .ticker{position:fixed;bottom:0;left:0;right:0;height:72px;z-index:20;
@@ -65,7 +65,7 @@
     </svg>
     <div class="word">Atlas<b>Nexus</b></div>
   </div>
-  <p class="tag">Multi-asset systematic investment platform — fixed income, FX, equities &amp; commodities in one terminal.</p>
+  <p class="tag">Hierarchical Multi-asset Multi-strategy Systematic Investment Platform</p>
   <div class="asset-grid">
     <div class="ac">
       <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style="color:#45b6e6">
@@ -115,7 +115,8 @@
     </div>
   </div>
   <button class="cta" onclick="location.href='/dashboard'">Enter Terminal &nbsp;→</button>
-  <div class="meta"><span class="dot"></span>Latest EOD: run_id=20260617-eod-210752 · asof=2026-06-17 · status=completed</div>
+  <div class="meta"><span class="dot"></span>Data last updated: June 17, 2026</div>
+  <div class="copyright">&copy; 2026 Ma Yunfei. All rights reserved.</div>
 </div>
 <div class="ticker" id="ticker"></div>
 <script>
@@ -221,15 +222,12 @@ const ARCS=[
   ['London','Tokyo',       [69,182,230,.25]],
 ];
 let landRings=[];
-fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json')
+// Local static file (baked by web/assets/_extract_world_land.py) — avoids a
+// runtime fetch to an external CDN, which proved unreliable on this network.
+fetch('/dashboard/assets/world-land.json')
   .then(r=>r.json())
-  .then(world=>{
-    if(typeof topojson==='undefined')return;
-    const land=topojson.feature(world,world.objects.land);
-    const geom=land.geometry;
-    const polys=geom.type==='MultiPolygon'?geom.coordinates:geom.type==='Polygon'?[geom.coordinates]:[];
-    landRings=polys.map(p=>p[0]).filter(r=>r.length>10);
-  }).catch(()=>{});
+  .then(rings=>{landRings=rings.map(ring=>ring.map(([lo,la])=>[lo,la]));})
+  .catch(()=>{});
 function proj(lat,lon){
   const phi=lat*Math.PI/180,lam=lon*Math.PI/180-rot;
   const x=Math.cos(phi)*Math.sin(lam),y=-Math.sin(phi),z=Math.cos(phi)*Math.cos(lam);
@@ -255,30 +253,33 @@ function drawGlobe(){
   bg.addColorStop(.55,'rgba(8,26,72,.93)');
   bg.addColorStop(1,'rgba(3,10,32,.96)');
   gx.fillStyle=bg;gx.fillRect(0,0,SZ,SZ);
-  const gs=(f,c)=>{gx.strokeStyle=c;gx.lineWidth=.5;gx.stroke();};
-  for(let lat=-80;lat<=80;lat+=20){
-    gx.beginPath();let f=true;
-    for(let lo=-180;lo<=180;lo+=2){const p=proj(lat,lo);if(p.z<0){f=true;continue;}f?gx.moveTo(p.x,p.y):gx.lineTo(p.x,p.y);f=false;}
-    gs(f,'rgba(69,182,230,.07)');
-  }
-  for(let lo=-180;lo<180;lo+=20){
-    gx.beginPath();let f=true;
-    for(let lat=-90;lat<=90;lat+=2){const p=proj(lat,lo);if(p.z<0){f=true;continue;}f?gx.moveTo(p.x,p.y):gx.lineTo(p.x,p.y);f=false;}
-    gs(f,'rgba(69,182,230,.07)');
-  }
   if(landRings.length){
     landRings.forEach(ring=>{
-      // Draw each visible (front-facing) arc of the ring as its own subpath —
-      // filling a polygon that's been cut by the horizon produces wrong,
-      // murky shapes, so render the coastline as a clean outline instead.
-      gx.beginPath();let drawing=false;
+      // A ring crossing the horizon becomes several disjoint visible chains;
+      // filling them all within one path would self-intersect across the
+      // back of the globe, so close + fill each chain on its own. Low alpha
+      // keeps it a soft landmass tint rather than a busy coastline outline.
+      let chain=[];
+      const flushChain=()=>{
+        if(chain.length<2){chain=[];return;}
+        // Draw coastline as a soft stroke. No fill = no winding artifacts.
+        // The subtle line reads as land boundary without visual noise.
+        gx.beginPath();
+        gx.moveTo(chain[0][0],chain[0][1]);
+        for(let i=1;i<chain.length;i++)gx.lineTo(chain[i][0],chain[i][1]);
+        gx.strokeStyle='rgba(100,150,220,.22)';
+        gx.lineWidth=1.2;
+        gx.lineJoin='round';
+        gx.lineCap='round';
+        gx.stroke();
+        chain=[];
+      };
       ring.forEach(([lo,la])=>{
         const p=proj(la,lo);
-        if(p.z<0){drawing=false;return;}
-        if(!drawing){gx.moveTo(p.x,p.y);drawing=true;}
-        else gx.lineTo(p.x,p.y);
+        if(p.z<0){flushChain();return;}
+        chain.push([p.x,p.y]);
       });
-      gx.strokeStyle='rgba(140,190,245,.55)';gx.lineWidth=.85;gx.stroke();
+      flushChain();
     });
   }
   ARCS.forEach(([fr,to,[r,g,b,a]])=>{
