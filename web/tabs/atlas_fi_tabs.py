@@ -349,109 +349,117 @@ def build_pairs_layout():
                 style={"marginBottom": "24px"},
             ),
 
-            # ── Configuration panel: compact inline controls ────────────────
+            # ── Controls row: Lookback + Configure + Refresh on same line ──────
             html.Div(
                 [
-                    html.Div([
-                        html.Label("Lookback Days:", style={"color": THEME["text_sub"], "marginRight": "8px",
-                                                            "fontWeight": "bold", "fontSize": "12px"}),
-                        dcc.Input(
-                            id='pairs-days-input', type='number', value=90, min=1,
-                            style={"width": "60px", "padding": "5px",
-                                   "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
-                                   "border": f"1px solid {THEME['border']}", "borderRadius": "3px",
-                                   "fontSize": "12px", "textAlign": "center"},
-                        ),
-                        html.Button(
-                            "↻ Refresh",
-                            id="pairs-refresh-btn",
-                            n_clicks=0,
-                            style={
-                                "backgroundColor": THEME["accent"],
-                                "color": "#0c0c00",
-                                "border": "none",
-                                "padding": "6px 14px",
-                                "borderRadius": "4px",
-                                "cursor": "pointer",
-                                "fontSize": "12px",
-                                "fontWeight": "600",
-                                "marginLeft": "8px",
-                            },
-                        ),
-                        html.Span(
-                            id="pairs-last-updated",
-                            children="Last updated: —",
-                            style={"color": THEME["text_sub"], "fontSize": "11px", "fontFamily": "monospace",
-                                   "marginLeft": "12px"},
-                        ),
-                    ], style={"display": "flex", "alignItems": "center", "gap": "0"}),
+                    # Left: Lookback Days input
+                    html.Div(
+                        [
+                            html.Label("Lookback Days:", style={"color": THEME["text_sub"], "marginRight": "6px",
+                                                                "fontWeight": "bold", "fontSize": "11px"}),
+                            dcc.Input(
+                                id='pairs-days-input', type='number', value=90, min=1,
+                                style={"width": "50px", "padding": "4px 6px",
+                                       "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+                                       "border": f"1px solid {THEME['border']}", "borderRadius": "3px",
+                                       "fontSize": "11px", "textAlign": "center"},
+                            ),
+                        ],
+                        style={"display": "flex", "alignItems": "center", "gap": "4px", "flexShrink": "0"}
+                    ),
+
+                    # Middle: Configure Pairs (collapsible inline)
+                    html.Details(
+                        [
+                            html.Summary(
+                                "⚙ Configure",
+                                style={
+                                    "color": THEME["text_main"],
+                                    "fontSize": "11px",
+                                    "fontWeight": "600",
+                                    "padding": "4px 10px",
+                                    "cursor": "pointer",
+                                    "backgroundColor": THEME["bg_input"],
+                                    "border": f"1px solid {THEME['border']}",
+                                    "borderRadius": "3px",
+                                    "listStyle": "none",
+                                }
+                            ),
+                            html.Div(
+                                [
+                                    html.Div("", className="col-header"),
+                                    html.Div("P1", className="col-header"),
+                                    html.Div("P2", className="col-header"),
+                                    html.Div("P3", className="col-header"),
+                                    html.Div("P4", className="col-header"),
+
+                                    _pairs_row("Leg 1",
+                                               ['pairs-leg1-1', 'pairs-leg1-2', 'pairs-leg1-3', 'pairs-leg1-4'],
+                                               ['250211.IB', '250020.IB', '250215.IB', '2500006.IB']),
+                                    _pairs_row("Leg 2",
+                                               ['pairs-leg2-1', 'pairs-leg2-2', 'pairs-leg2-3', 'pairs-leg2-4'],
+                                               ['240024.IB', 'FR007S5Y.IR', '250018.IB', '210005.IB']),
+                                ],
+                                className="pairs-input-grid",
+                                style={"backgroundColor": THEME["bg_input"], "borderRadius": "0 0 3px 3px",
+                                       "padding": "6px", "position": "absolute", "top": "100%", "left": "0",
+                                       "marginTop": "2px", "zIndex": "10", "minWidth": "280px",
+                                       "border": f"1px solid {THEME['border']}", "borderTop": "none"}
+                            ),
+                        ],
+                        style={"position": "relative", "display": "inline-block"}
+                    ),
+
+                    # Right: Refresh button + status
+                    html.Button(
+                        "↻ Refresh",
+                        id="pairs-refresh-btn",
+                        n_clicks=0,
+                        style={
+                            "backgroundColor": THEME["accent"],
+                            "color": "#0c0c00",
+                            "border": "none",
+                            "padding": "5px 12px",
+                            "borderRadius": "3px",
+                            "cursor": "pointer",
+                            "fontSize": "11px",
+                            "fontWeight": "600",
+                            "marginLeft": "auto",
+                        },
+                    ),
+
+                    html.Span(
+                        id="pairs-last-updated",
+                        children="—",
+                        style={"color": THEME["text_sub"], "fontSize": "10px", "fontFamily": "monospace",
+                               "marginLeft": "8px", "marginRight": "4px", "whiteSpace": "nowrap"},
+                    ),
                 ],
                 style={
-                    "display": "flex", "alignItems": "center", "justifyContent": "flex-start",
-                    "gap": "16px",
+                    "display": "flex", "alignItems": "center", "gap": "12px",
                     "backgroundColor": THEME["bg_raised"],
                     "border": f"1px solid {THEME['border']}",
-                    "borderRadius": "8px",
-                    "padding": "12px 18px",
-                    "marginBottom": "20px",
+                    "borderRadius": "6px",
+                    "padding": "8px 12px",
+                    "marginBottom": "16px",
                 },
             ),
 
-            # ── Pair inputs: 2-column grid table pattern ────────────────────
-            html.Details(
-                [
-                    html.Summary(
-                        "Configure Pairs",
-                        style={
-                            "color": THEME["text_main"],
-                            "fontSize": "14px",
-                            "fontWeight": "600",
-                            "padding": "12px 18px",
-                            "cursor": "pointer",
-                            "backgroundColor": THEME["bg_raised"],
-                            "border": f"1px solid {THEME['border']}",
-                            "borderRadius": "8px",
-                            "marginBottom": "20px",
-                        }
-                    ),
-                    html.Div(
-                        [
-                            html.Div("", className="col-header"),
-                            html.Div("Pair 1", className="col-header"),
-                            html.Div("Pair 2", className="col-header"),
-                            html.Div("Pair 3", className="col-header"),
-                            html.Div("Pair 4", className="col-header"),
-
-                            _pairs_row("Leg 1",
-                                       ['pairs-leg1-1', 'pairs-leg1-2', 'pairs-leg1-3', 'pairs-leg1-4'],
-                                       ['250211.IB', '250020.IB', '250215.IB', '2500006.IB']),
-                            _pairs_row("Leg 2",
-                                       ['pairs-leg2-1', 'pairs-leg2-2', 'pairs-leg2-3', 'pairs-leg2-4'],
-                                       ['240024.IB', 'FR007S5Y.IR', '250018.IB', '210005.IB']),
-                        ],
-                        className="pairs-input-grid",
-                        style={"backgroundColor": THEME["bg_input"], "borderRadius": "0 0 8px 8px",
-                               "padding": "8px"}
-                    ),
-                ],
-                style={"marginBottom": "20px"},
-            ),
-
-            # ── Results panel: 2x2 responsive grid ──────────────────────────
+            # ── Results panel: Full-width vertical list (1 column) ──────────────
             html.Div(
                 id="pairs-plots-container",
                 style={
                     "display": "grid",
-                    "gridTemplateColumns": "repeat(auto-fit, minmax(500px, 1fr))",
-                    "gap": "20px",
+                    "gridTemplateColumns": "1fr",
+                    "gap": "12px",
                     "marginBottom": "20px",
                 },
                 children=[
                     html.Div([
                         html.Div(
-                            "Generating pairs analysis…",
+                            "Click Refresh to generate pair analysis",
                             style={"textAlign": "center", "color": THEME["text_sub"],
-                                   "padding": "40px 20px", "fontSize": "13px"}
+                                   "padding": "30px 20px", "fontSize": "12px"}
                         )
                     ])
                 ],
@@ -460,64 +468,44 @@ def build_pairs_layout():
             # ── Hidden loader for triggering updates ────────────────────────
             html.Div(id="pairs-content-loader", style={"display": "none"}),
 
-            # ── Reference section: Z-score color thresholds ──────────────────
+            # ── Reference section: Z-score color thresholds (compact) ────────
             html.Div([
-                html.Div([
-                    html.H3("Stats Header — Z-Score Colour Thresholds",
-                            style={"color": THEME["text_main"], "fontSize": "15px", "fontWeight": "600",
-                                   "margin": "0 0 6px 0", "letterSpacing": "0.06em", "textTransform": "uppercase"}),
-                    html.Hr(style={"borderColor": THEME["border"], "margin": "12px 0"}),
-                ], style={"marginBottom": "20px"}),
+                html.Div("Z-Score Colour Thresholds",
+                         style={"color": THEME["text_sub"], "fontSize": "10px", "fontWeight": "700",
+                                "letterSpacing": "0.06em", "textTransform": "uppercase", "marginBottom": "8px"}),
 
                 html.Div([
-                    # NEUTRAL card
+                    # NEUTRAL
                     html.Div([
-                        html.Div([
-                            html.Div("Neutral", style={"color": "#a4b6d2", "fontSize": "11px", "fontWeight": "700",
-                                                      "letterSpacing": "0.09em", "textTransform": "uppercase", "marginBottom": "8px"}),
-                            html.Div("|z| < 1.5", style={"color": THEME["text_sub"], "fontSize": "12px"}),
-                        ], style={"paddingBottom": "12px", "borderBottom": f"1px solid {THEME['border']}"}),
-                        html.Div([
-                            html.P("Spread is within noise. Colour stays muted. No action implied.",
-                                   style={"color": THEME["text_sub"], "fontSize": "12px", "margin": "12px 0 0 0", "lineHeight": "1.6"}),
-                        ], style={"paddingTop": "12px"}),
-                    ], style={"backgroundColor": THEME["bg_card"], "border": f"1px solid {THEME['border']}", "borderRadius": "6px", "padding": "14px"}),
-
-                    # AMBER card
+                        html.Span("● ", style={"color": "#a4b6d2", "fontWeight": "700"}),
+                        html.Span("Neutral: |z| < 1.5 — within noise",
+                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
+                    ]),
+                    # AMBER
                     html.Div([
-                        html.Div([
-                            html.Div("Watch", style={"color": "#e8a13f", "fontSize": "11px", "fontWeight": "700",
-                                                    "letterSpacing": "0.09em", "textTransform": "uppercase", "marginBottom": "8px"}),
-                            html.Div("1.5 ≤ |z| < 2.0", style={"color": THEME["text_sub"], "fontSize": "12px"}),
-                        ], style={"paddingBottom": "12px", "borderBottom": f"1px solid {THEME['border']}"}),
-                        html.Div([
-                            html.P("Elevated deviation, within typical reversion window. Amber draws the eye without demanding action.",
-                                   style={"color": THEME["text_sub"], "fontSize": "12px", "margin": "12px 0 0 0", "lineHeight": "1.6"}),
-                        ], style={"paddingTop": "12px"}),
-                    ], style={"backgroundColor": THEME["bg_card"], "border": f"1px solid {THEME['border']}", "borderRadius": "6px", "padding": "14px"}),
-
-                    # RED card
+                        html.Span("● ", style={"color": "#e8a13f", "fontWeight": "700"}),
+                        html.Span("Watch: 1.5 ≤ |z| < 2.0 — elevated",
+                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
+                    ]),
+                    # RED
                     html.Div([
-                        html.Div([
-                            html.Div("Signal", style={"color": "#e06060", "fontSize": "11px", "fontWeight": "700",
-                                                     "letterSpacing": "0.09em", "textTransform": "uppercase", "marginBottom": "8px"}),
-                            html.Div("|z| ≥ 2.0", style={"color": THEME["text_sub"], "fontSize": "12px"}),
-                        ], style={"paddingBottom": "12px", "borderBottom": f"1px solid {THEME['border']}"}),
-                        html.Div([
-                            html.P("Statistically extreme. Red signals an active opportunity or a blown-up model assumption to check.",
-                                   style={"color": THEME["text_sub"], "fontSize": "12px", "margin": "12px 0 0 0", "lineHeight": "1.6"}),
-                        ], style={"paddingTop": "12px"}),
-                    ], style={"backgroundColor": THEME["bg_card"], "border": f"1px solid {THEME['border']}", "borderRadius": "6px", "padding": "14px"}),
-
+                        html.Span("● ", style={"color": "#e06060", "fontWeight": "700"}),
+                        html.Span("Signal: |z| ≥ 2.0 — extreme",
+                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
+                    ]),
                 ], style={
-                    "display": "grid",
-                    "gridTemplateColumns": "repeat(auto-fit, minmax(280px, 1fr))",
-                    "gap": "14px",
+                    "display": "flex",
+                    "gap": "20px",
+                    "flexWrap": "wrap",
                 }),
             ], style={
-                "marginTop": "40px",
-                "paddingTop": "20px",
+                "marginTop": "16px",
+                "paddingTop": "12px",
+                "paddingLeft": "12px",
                 "borderTop": f"1px solid {THEME['border']}",
+                "backgroundColor": THEME["bg_raised"],
+                "borderRadius": "6px",
+                "padding": "10px 12px",
             }),
         ],
         style={"padding": "20px"}
