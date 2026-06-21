@@ -899,9 +899,23 @@ def register_callbacks(app) -> None:
                         if spread_df is None or len(spread_df) == 0:
                             continue
 
-                        # Compute statistics
-                        spread = spread_df.values.flatten()
-                        dates = spread_df.index
+                        # Extract numeric spread values properly
+                        if isinstance(spread_df, pd.DataFrame):
+                            # Get the first column as spread values
+                            spread = pd.to_numeric(spread_df.iloc[:, 0], errors='coerce').values
+                            dates = spread_df.index
+                        else:
+                            # If it's a Series
+                            spread = pd.to_numeric(spread_df, errors='coerce').values
+                            dates = spread_df.index
+
+                        # Remove NaN values
+                        valid_idx = ~np.isnan(spread)
+                        spread = spread[valid_idx]
+                        dates = dates[valid_idx]
+
+                        if len(spread) < 2:
+                            continue
 
                         # OLS fit
                         xs = np.arange(len(spread), dtype=float)
