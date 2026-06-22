@@ -29,7 +29,7 @@ def build_multiasset_factor_layout():
             # Interest Rate Factors — grouped by domicile
             html.Div([
                 html.H6("📊 Interest Rates (IR)", className='factor-pool-section__heading'),
-                html.P("Each domicile covers: IRDL (Level · Bullish/Bearish), IRSL (Slope · Flattener/Steepener), IRCV (Curvature · Concave/Convex)",
+                  html.P("Each domicile covers: IRDL (Level · Bullish/Bearish), IRSL (Slope · Steepener/Flattener), IRCV (Curvature · Concave/Convex)",
                        className='factor-pool-section__note'),
                 html.Div([
                     html.Div([

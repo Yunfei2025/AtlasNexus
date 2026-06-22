@@ -462,10 +462,13 @@ def register_backtest_hist_callbacks(app):
                                 for f in asset_to_factors.get(name, ())]
                         sigs = [s for s in sigs if s is not None]
                         raw_coeff = float(np.mean(sigs)) if sigs else 1.0
-                        # Floor: keep a minimum 20% of RP weight even for flat/negative
-                        # signals so the pool stays diversified and no single asset can
-                        # absorb 100% simply because it is the only positive signal.
-                        coeff = max(raw_coeff, _SIGNAL_FLOOR)
+                        # Floor the magnitude, not the sign: steepener/flattening
+                        # signals must remain directional, but very small signals still
+                        # get a minimum allocation so the pool stays diversified.
+                        if raw_coeff == 0.0:
+                            coeff = 0.0
+                        else:
+                            coeff = float(np.copysign(max(abs(raw_coeff), _SIGNAL_FLOOR), raw_coeff))
                         scaled[name] = weight * coeff
 
                     total_scaled = sum(scaled.values())

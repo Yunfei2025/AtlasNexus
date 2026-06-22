@@ -749,7 +749,9 @@ def register_backtest_rfbt_callbacks(app):
                 _z = _s.get('z_score', 0.0)
                 _ls = _s.get('last_signal', 0.0)
                 _icir = _s.get('icir', 0.0)
-                _scalar = float(_ls)   # quantised target in [-1,1]
+                _scalar = -float(_ls) if _f.startswith('IRSL.') else float(_ls)
+                # IRSL is displayed as steepener on the positive side; flip the
+                # stored scalar so Factor Model Scaling keeps the same convention.
                 _bucket = _bucket_label(_scalar)
                 _conf = (abs(_icir) >= 0.5) and 1.0 or (abs(_icir) >= 0.25) and 0.5 or 0.2
                 snapshot_records.append({

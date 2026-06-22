@@ -536,7 +536,10 @@ def register_portfolio_run_callbacks(app):
                             for f in _asset_to_factors.get(name, ())
                             if f in _snap_by_rf]
                     raw_coeff = float(np.mean(sigs)) if sigs else 1.0
-                    coeff = max(raw_coeff, _SIGNAL_FLOOR)
+                    if raw_coeff == 0.0:
+                        coeff = 0.0
+                    else:
+                        coeff = float(np.copysign(max(abs(raw_coeff), _SIGNAL_FLOOR), raw_coeff))
                     _scaled[name] = wt * coeff
 
                 _total_scaled = sum(_scaled.values())

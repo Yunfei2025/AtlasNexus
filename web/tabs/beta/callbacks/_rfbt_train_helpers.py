@@ -97,7 +97,7 @@ def _render_signal_cards(factor_stats: Dict) -> html.Div:
         is_curv = prefix == 'IRCV'
         if ls > 0:
             if is_slope:
-                dir_label, sub_label = '⬆ Flattener', 'curve expected to flatten'
+                dir_label, sub_label = '⬆ Steepener', 'curve expected to steepen'
             elif is_curv:
                 dir_label, sub_label = '⬆ Concave', 'curvature expected ↓'
             elif is_yield:
@@ -108,7 +108,7 @@ def _render_signal_cards(factor_stats: Dict) -> html.Div:
             dir_color = THEME['success']
         elif ls < 0:
             if is_slope:
-                dir_label, sub_label = '⬇ Steepener', 'curve expected to steepen'
+                dir_label, sub_label = '⬇ Flattener', 'curve expected to flatten'
             elif is_curv:
                 dir_label, sub_label = '⬇ Convex', 'curvature expected ↑'
             elif is_yield:
