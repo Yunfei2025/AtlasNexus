@@ -19,6 +19,7 @@ from multiasset.layout import prepare_portfolio_table
 from settings.paths import DIR_INPUT
 
 from ..data import THEME, ALLOCATION_RESULTS
+from ...alpha.data import load_spread_data as _load_alpha_spread_data
 from ._common import (
     _SUMMARY_BETA_PARQUET,
     _SUMMARY_ALPHA_PARQUET,
@@ -609,6 +610,63 @@ def register_risk_callbacks(app):
             except Exception:
                 return None
 
+        _BONDCURVE_OTR_BANDS = {
+            '1Y': (0.9, 1.2), '2Y': (1.6, 2.5), '5Y': (4.0, 6.0),
+            '10Y': (8.5, 10.0), '20Y': (15.0, 25.0), '30Y': (25.0, 30.0),
+        }
+
+        def _pick_otr_by_liquidity(btype: str) -> dict:
+            """Most liquid (highest turnover) on-the-run bond per TTM band."""
+            try:
+                bi = pd.read_pickle(str(DIR_INPUT / f'{btype}-InstrumentInfo.pkl'))
+            except Exception:
+                return {}
+            if not isinstance(bi, pd.DataFrame) or bi.empty:
+                return {}
+            need = ['起息日期', '到期日期', '证券全称', '成交量', '债券余额:亿']
+            if not all(c in bi.columns for c in need):
+                return {}
+            today = pd.Timestamp.today().normalize()
+            vol = pd.to_numeric(bi['成交量'], errors='coerce')
+            bal = pd.to_numeric(bi['债券余额:亿'], errors='coerce')
+            tr  = (vol / bal / 1e4).replace([np.inf, -np.inf], 0).fillna(0)
+            mat = pd.to_datetime(bi['到期日期'], errors='coerce')
+            sdt = pd.to_datetime(bi['起息日期'], errors='coerce')
+            ttm = (mat - today).dt.days / 365.0
+            kw  = '国债' if btype == 'TBond' else '国家开发银行'
+            nm  = bi['证券全称'].astype(str).str.contains(kw, na=False)
+            res = {}
+            for tenor, (lo, hi) in _BONDCURVE_OTR_BANDS.items():
+                mask = (ttm.notna() & sdt.notna() & (sdt < today) & (mat > today)
+                        & (ttm > lo) & (ttm <= hi) & nm & (bal > 0) & (vol > 0))
+                bkt = tr[mask]
+                res[tenor] = bkt.idxmax() if not bkt.empty and (bkt > 0).any() else ''
+            return res
+
+        _bondcurve_otr_cache: dict[str, dict] = {}
+
+        def _resolve_bondcurve_legs(spread_type: str, trade_id: str) -> tuple[str, str]:
+            """leg1 = the bond itself; leg2 = most liquid OTR bond with similar TTM."""
+            if spread_type not in ('TBondCurve', 'CBondCurve'):
+                return ('', '')
+            btype = 'TBond' if spread_type == 'TBondCurve' else 'CBond'
+            if btype not in _bondcurve_otr_cache:
+                _bondcurve_otr_cache[btype] = _pick_otr_by_liquidity(btype)
+            otr = _bondcurve_otr_cache[btype]
+
+            ttm = None
+            try:
+                snap = _load_alpha_spread_data(spread_type)
+                if isinstance(snap, pd.DataFrame) and trade_id in snap.index and 'ttm' in snap.columns:
+                    ttm = float(snap.loc[trade_id, 'ttm'])
+            except Exception:
+                ttm = None
+            if ttm is None or not pd.notna(ttm):
+                return (trade_id, '')
+
+            band = min(_BONDCURVE_OTR_BANDS, key=lambda k: abs(((_BONDCURVE_OTR_BANDS[k][0] + _BONDCURVE_OTR_BANDS[k][1]) / 2) - ttm))
+            return (trade_id, otr.get(band, ''))
+
         if not _os.path.exists(_SUMMARY_ALPHA_PARQUET):
             return _no_data(
                 "No Alpha snapshot found. Click RUN OPTIMIZATION in the Alpha Book → Portfolio tab first."
@@ -637,6 +695,7 @@ def register_risk_callbacks(app):
                 open_price_str = str(saved.get('open_price_bp', ''))
                 volume_str     = str(saved.get('volume_mm', ''))
                 open_date_str  = str(saved.get('open_date', ''))
+                leg1, leg2     = _resolve_bondcurve_legs(spread_type, trade_id)
 
                 spread_val = row.get('spread', None)
                 cp_bp      = round(float(spread_val), 4) if pd.notna(spread_val) else None
@@ -673,6 +732,8 @@ def register_risk_callbacks(app):
 
                 display_rows.append({
                     'ID':                     trade_id,
+                    'Leg 1':                  leg1,
+                    'Leg 2':                  leg2,
                     'Spread Type':            spread_type,
                     'Style':                  row.get('style', ''),
                     'Direction':              row.get('direction', ''),
