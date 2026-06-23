@@ -148,9 +148,15 @@ def compute_factor_vol_map(
     if not available_factors:
         return {}
 
-    end_date = factor_levels.index.max()
+    # Anchor to the last day of the previous month — same cut-off the factor
+    # model uses for training — so we never overfit to current-month/today data.
+    _today = pd.Timestamp.today().normalize()
+    end_date = _today.replace(day=1) - relativedelta(days=1)
+    end_date = min(end_date, factor_levels.index.max())
     start_date = end_date - relativedelta(years=lookback_years)
-    window = factor_levels.loc[factor_levels.index >= start_date, available_factors]
+    window = factor_levels.loc[
+        (factor_levels.index >= start_date) & (factor_levels.index <= end_date), available_factors
+    ]
     if isinstance(window, pd.Series):
         window = window.to_frame()
 

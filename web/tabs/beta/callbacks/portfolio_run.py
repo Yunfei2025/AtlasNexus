@@ -35,6 +35,7 @@ from multiasset.factor_optimizer import FactorRiskParityOptimizer
 from multiasset.factor_backtest import compute_ewma_factor_vols, get_factor_weighted_duration
 from multiasset.budget import derive_vol_sqrt_budgets
 from multiasset.config import RiskModelConfig
+from multiasset.backtest_cache import scalar_to_coeff
 from settings.paths import DIR_INPUT
 
 from ..data import (
@@ -338,28 +339,33 @@ def register_portfolio_run_callbacks(app):
                     dv01 = round(rp_max * dur / 10_000, 2)
                     dv01_str = f"{dv01:.2f}"
 
-            rows.append(
-                html.Div([
-                    html.Span(factor, style={
-                        'color': THEME['text_main'], 'fontSize': '12px',
-                        'width': '130px', 'fontWeight': 'bold', 'flexShrink': '0',
-                    }),
-                    html.Span(vol_str, style={
-                        'color': vol_color, 'fontSize': '12px',
-                        'width': '80px', 'textAlign': 'right', 'flexShrink': '0',
-                        'fontFamily': 'monospace',
-                        'fontWeight': 'bold' if has_missing_vol else 'normal',
-                    }, title='Volatility: if missing data, estimated at 15% (typical commodity vol)'),
-                    html.Span(f"{round(rp_max)}", style={
-                        'color': THEME['text_sub'], 'fontSize': '12px',
-                        'width': '100px', 'textAlign': 'right', 'flexShrink': '0',
-                        'fontFamily': 'monospace',
-                    }, title='Vol√ allocation: from factor volatility weighted by sqrt(vol)'),
-                    html.Span(dv01_str, style={
-                        'color': THEME['text_sub'], 'fontSize': '12px',
-                        'width': '90px', 'textAlign': 'right', 'flexShrink': '0',
-                        'fontFamily': 'monospace',
-                    }),
+            # Build row content — coeff column only shown in factor_scaling mode
+            row_content = [
+                html.Span(factor, style={
+                    'color': THEME['text_main'], 'fontSize': '12px',
+                    'width': '130px', 'fontWeight': 'bold', 'flexShrink': '0',
+                }),
+                html.Span(vol_str, style={
+                    'color': vol_color, 'fontSize': '12px',
+                    'width': '80px', 'textAlign': 'right', 'flexShrink': '0',
+                    'fontFamily': 'monospace',
+                    'fontWeight': 'bold' if has_missing_vol else 'normal',
+                }, title='Volatility: if missing data, estimated at 15% (typical commodity vol)'),
+                html.Span(f"{round(rp_max)}", style={
+                    'color': THEME['text_sub'], 'fontSize': '12px',
+                    'width': '100px', 'textAlign': 'right', 'flexShrink': '0',
+                    'fontFamily': 'monospace',
+                }, title='Vol√ allocation: from factor volatility weighted by sqrt(vol)'),
+                html.Span(dv01_str, style={
+                    'color': THEME['text_sub'], 'fontSize': '12px',
+                    'width': '90px', 'textAlign': 'right', 'flexShrink': '0',
+                    'fontFamily': 'monospace',
+                }),
+            ]
+
+            # Add coeff column only in factor_scaling mode
+            if allocation_mode == 'factor_scaling':
+                row_content.append(
                     html.Span(
                         f"×{coeff:+.1f}",
                         title=f"{label}{' (default)' if is_default_coeff else ''}",
@@ -369,26 +375,65 @@ def register_portfolio_run_callbacks(app):
                             'flexShrink': '0', 'fontWeight': 'bold',
                             'fontStyle': 'italic' if is_default_coeff else 'normal',
                         }
-                    ),
-                    dcc.Input(
-                        id={'type': 'risk-budget-input', 'index': factor},
-                        type='number',
-                        value=round(suggested),
-                        step=1,
-                        style={
-                            'flex': '1', 'minWidth': '200px', 'fontSize': '13px', 'padding': '5px 8px',
-                            'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
-                            'border': '1px solid #2a517f',
-                            'borderRadius': '3px', 'textAlign': 'right',
-                            'fontFamily': 'monospace', 'fontWeight': 'normal',
-                            'appearance': 'textfield',  # Remove spinner arrows on number input
-                        }
-                    ),
-                ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px', 'gap': '4px'})
+                    )
+                )
+
+            # Exposure input: in user_defined mode, allow editing; otherwise read-only
+            is_disabled = allocation_mode != 'user_defined'
+            row_content.append(
+                dcc.Input(
+                    id={'type': 'risk-budget-input', 'index': factor},
+                    type='number',
+                    value=round(suggested),
+                    step=1,
+                    disabled=is_disabled,
+                    className='no-spinner',
+                    style={
+                        'width': '110px', 'flexShrink': '0', 'fontSize': '13px', 'padding': '5px 8px',
+                        'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
+                        'border': '1px solid #2a517f',
+                        'borderRadius': '3px', 'textAlign': 'right',
+                        'fontFamily': 'monospace', 'fontWeight': 'normal',
+                        'opacity': '0.6' if is_disabled else '1.0',
+                        'cursor': 'not-allowed' if is_disabled else 'text',
+                    }
+                )
+            )
+
+            rows.append(
+                html.Div(row_content, style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px', 'gap': '4px'})
             )
 
         return rows
 
+
+    # ── 3.7b Risk Budget Header (dynamic based on allocation mode) ────────
+    @app.callback(
+        Output('risk-budget-header-row', 'children'),
+        [Input('allocation-mode', 'value')],
+    )
+    def render_risk_budget_header(allocation_mode):
+        """Render column headers; conditionally show Coeff only in factor_scaling mode."""
+        header_items = [
+            html.Span("Factor",          style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '130px', 'fontWeight': 'bold', 'flexShrink': '0'}),
+            html.Span("Vol %ann",        style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'textAlign': 'right', 'flexShrink': '0'}),
+            html.Span("RP Max (MM CNY)", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '100px', 'textAlign': 'right', 'flexShrink': '0'},
+                      title='Risk Parity Max allocation in millions CNY'),
+            html.Span("DV01 (MM/bp)",    style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '90px', 'textAlign': 'right', 'flexShrink': '0'},
+                      title='Duration risk in MM CNY per basis point (IR factors only; blank for commodities/FX)'),
+        ]
+
+        # Add Coeff column only in factor_scaling mode
+        if allocation_mode == 'factor_scaling':
+            header_items.append(
+                html.Span("Coeff", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '70px', 'textAlign': 'center', 'flexShrink': '0'})
+            )
+
+        header_items.append(
+            html.Span("Exposure (MM CNY)", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '110px', 'flexShrink': '0', 'textAlign': 'right'})
+        )
+
+        return header_items
 
     # ── 3.8  Mode status hint ─────────────────────────────────────────
     @app.callback(
@@ -468,7 +513,6 @@ def register_portfolio_run_callbacks(app):
             rp_budgets_out = {}
             factor_names_in_pool = [id_dict['index'] for id_dict in (budget_ids or [])]
             total_capital_m = total_capital_cny / 1e6
-            _missing_signals: list[str] = []
             _opt_warnings: list[str] = []
 
             if allocation_mode == 'risk_parity':
@@ -516,9 +560,6 @@ def register_portfolio_run_callbacks(app):
             if allocation_mode == 'factor_scaling':
                 _snap_by_rf = ({rec['risk_factor']: rec for rec in signal_snapshot
                                 if rec.get('risk_factor')} if signal_snapshot else {})
-                _missing_signals = [a for a in summary['Asset'].tolist()
-                                    if a not in {n for rec in _snap_by_rf.values()
-                                                 for n in [rec.get('risk_factor', '')]}]
 
                 # Build asset→factors map from pool
                 _asset_to_factors: dict = {}
@@ -532,21 +573,24 @@ def register_portfolio_run_callbacks(app):
                 for _, row in summary.iterrows():
                     name = row['Asset']
                     wt = float(row['Weight (%)']) / 100.0
-                    sigs = [float(_snap_by_rf[f].get('scalar', 1.0))
+                    sigs = [float(_snap_by_rf[f].get('scalar', 0.0))
                             for f in _asset_to_factors.get(name, ())
                             if f in _snap_by_rf]
-                    raw_coeff = float(np.mean(sigs)) if sigs else 1.0
-                    if raw_coeff == 0.0:
-                        coeff = 0.0
+                    # For multiple factors per asset (e.g., CN10Y has IRDL.CN, IRSL.CN, IRCV.CN),
+                    # blend the scalars: average of individual coeff values
+                    if sigs:
+                        coeffs = [scalar_to_coeff(s, f) for s, f in
+                                  zip(sigs, _asset_to_factors.get(name, ()))]
+                        coeff = float(np.mean(coeffs))
                     else:
-                        coeff = float(np.copysign(max(abs(raw_coeff), _SIGNAL_FLOOR), raw_coeff))
+                        coeff = 1.0  # No signal → neutral (full RP)
                     _scaled[name] = wt * coeff
 
                 _total_scaled = sum(_scaled.values())
                 if _total_scaled > 1e-9:
                     _weights = {k: v / _total_scaled for k, v in _scaled.items()}
                     for _ in range(3):
-                        _capped = {k: min(v, _CLASS_CAPS.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT))
+                        _capped = {k: max(0, min(v, _CLASS_CAPS.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT)))
                                    for k, v in _weights.items()}
                         _cap_tot = sum(_capped.values())
                         if _cap_tot > 1e-9:
@@ -688,12 +732,6 @@ def register_portfolio_run_callbacks(app):
             
             _dv01_info = f"  ·  DV01 {total_dv01:.2f} MM / max {total_capital_cny * float(max_duration or 5) / 1e10:.2f} MM{dv01_cap_msg}"
             _status_children = [html.Span(f"✓ Analysis completed!{_dv01_info}", style={'color': THEME['success'], 'fontWeight': 'bold'})]
-            if _missing_signals:
-                _status_children.append(html.Span(
-                    f"  ⚠ {len(_missing_signals)} factor(s) have no signal — held at neutral (0): "
-                    + ", ".join(_missing_signals),
-                    style={'color': THEME.get('warning', '#f39c12'), 'fontSize': '12px', 'marginLeft': '12px'},
-                ))
             for _ow in _opt_warnings:
                 _status_children.append(html.Span(
                     f"  ⚠ Optimizer: {_ow[:120]}",

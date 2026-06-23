@@ -33,7 +33,9 @@ def build_multiasset_factor_layout():
                        className='factor-pool-section__note'),
                 html.Div([
                     html.Div([
-                        html.Div(f"{flag} {code}", className='ir-country-grid__col-head'),
+                        html.Div([
+                            html.Span(code, className=f'country-chip country-chip--{code.lower()}'),
+                        ], className='ir-country-grid__col-head'),
                         dcc.Checklist(
                             id=f'factor-selection-ir-{code.lower()}',
                             options=[{'label': ' IRDL', 'value': f'IRDL.{code}'},
@@ -44,9 +46,7 @@ def build_multiasset_factor_layout():
                                         'fontSize': '12px', 'marginBottom': '3px'},
                             inputStyle={'marginRight': '5px'},
                         ),
-                    ]) for flag, code in [
-                        ('🇨🇳', 'CN'), ('🇺🇸', 'US'), ('🇪🇺', 'EU'), ('🇯🇵', 'JP'), ('🇬🇧', 'UK'),
-                    ]
+                    ]) for code in ['CN', 'US', 'EU', 'JP', 'UK']
                 ], className='ir-country-grid'),
             ], className='factor-pool-section'),
 

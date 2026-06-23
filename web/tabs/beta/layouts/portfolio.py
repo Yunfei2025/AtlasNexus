@@ -70,7 +70,7 @@ def build_multiasset_portfolio_layout():
                         id='capital-input',
                         type='number',
                         value=initial_capital,
-                        style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000',
+                        style={'width': '70px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': f'0.5px solid {THEME["bg_card"]}', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
                                'MozAppearance': 'textfield', 'appearance': 'textfield'}
                     ),
                     dcc.Dropdown(
@@ -91,7 +91,7 @@ def build_multiasset_portfolio_layout():
                         type='number',
                         value=5,
                         min=0.1, max=50, step=0.1,
-                        style={'width': '60px', 'marginRight': '4px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #444', 'backgroundColor': '#fff', 'color': '#000',
+                        style={'width': '45px', 'marginRight': '4px', 'padding': '5px', 'borderRadius': '4px', 'border': f'0.5px solid {THEME["bg_card"]}', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
                                'MozAppearance': 'textfield', 'appearance': 'textfield'}
                     ),
                     html.Span(
@@ -219,30 +219,21 @@ def build_multiasset_portfolio_layout():
                         dcc.RadioItems(
                             id='allocation-mode',
                             options=[
+                                {'label': ' Risk Parity', 'value': 'risk_parity'},
                                 {'label': ' Factor Model Scaling', 'value': 'factor_scaling'},
                                 {'label': ' User Defined', 'value': 'user_defined'},
                             ],
-                            value='factor_scaling',
+                            value='risk_parity',
                             inputStyle={'marginRight': '5px'},
                             labelStyle={'display': 'inline', 'marginRight': '16px', 'color': THEME['text_main'], 'fontSize': '12px'},
                             style={'display': 'inline-flex'},
                         ),
                         html.Span(id='factor-signals-toggle-status', style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '8px'}),
                     ], style={'marginBottom': '8px'}),
-                    # Column headers: Factor | Vol% ann | ×adj | RP Max (MM) | DV01 (MM/bp) | Coeff | Exposure (MM)
-                    html.Div([
-                        html.Span("Factor",          style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '130px', 'fontWeight': 'bold', 'flexShrink': '0'}),
-                        html.Span("Vol %ann",        style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'textAlign': 'right', 'flexShrink': '0'}),
-                        html.Span("×adj",            style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '60px', 'textAlign': 'center', 'flexShrink': '0'},
-                                  title='Tier weight (default: IRDL=1.0, IRSL=0.6, IRCV=0.3). Scales measured vol before risk parity. Edit to customize tier importance.'),
-                        html.Span("RP Max (MM CNY)", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '100px', 'textAlign': 'right', 'flexShrink': '0'},
-                                  title='Risk Parity Max allocation in millions CNY'),
-                        html.Span("DV01 (MM/bp)",    style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '90px', 'textAlign': 'right', 'flexShrink': '0'},
-                                  title='Duration risk in MM CNY per basis point (IR factors only; blank for commodities/FX)'),
-                        html.Span("Coeff",           style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '70px', 'textAlign': 'center', 'flexShrink': '0'}),
-                        html.Span("Exposure (MM CNY)",style={'color': THEME['text_sub'], 'fontSize': '11px', 'flex': '1', 'minWidth': '200px', 'textAlign': 'right'}),
-                    ], style={'display': 'flex', 'alignItems': 'center', 'padding': '0 8px 4px 8px',
-                              'borderBottom': f'1px solid {THEME["table_header"]}', 'marginBottom': '4px', 'gap': '4px'}),
+                    # Column headers — dynamically updated based on allocation mode
+                    html.Div(id='risk-budget-header-row',
+                             style={'display': 'flex', 'alignItems': 'center', 'padding': '0 8px 4px 8px',
+                                    'borderBottom': f'1px solid {THEME["table_header"]}', 'marginBottom': '4px', 'gap': '4px'}),
                     html.Div(
                         id='risk-budget-container',
                         children=[html.Div("Add assets to see risk factors", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px'})] if not initial_pool else [],

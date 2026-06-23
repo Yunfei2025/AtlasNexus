@@ -9,6 +9,7 @@ from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
+import os
 import traceback
 from dateutil.relativedelta import relativedelta
 
@@ -18,6 +19,11 @@ from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
 from multiasset.factor_backtest import load_factor_backtest, compute_portfolio_metrics
 from multiasset.config import RiskModelConfig
+from multiasset.backtest_cache import (
+    RPCacheParams, FactorTiltCacheParams,
+    load_rp, save_rp, load_factor_tilt, save_factor_tilt,
+    scalar_to_coeff, rp_hash,
+)
 from settings.paths import DIR_INPUT
 
 from ..data import THEME, SELECTED_FACTOR_POOL, get_assets_from_factors, FACTOR_TO_ASSET_MAP
@@ -25,6 +31,29 @@ from ..data import THEME, SELECTED_FACTOR_POOL, get_assets_from_factors, FACTOR_
 
 def register_backtest_hist_callbacks(app):
     """Register historical-allocation backtest callbacks."""
+
+    # 4.3 Toggle visibility between Preset Lookback and Custom Period
+    @app.callback(
+        [Output('backtest-lookback-container', 'style'),
+         Output('backtest-period-container', 'style')],
+        [Input('backtest-date-mode', 'value')],
+        prevent_initial_call=False
+    )
+    def toggle_date_mode_visibility(date_mode):
+        """Show/hide lookback dropdown or date range picker based on date mode."""
+        print(f"[Backtest Date Mode] Switched to: {date_mode}")
+        if date_mode == 'preset':
+            print("  → Showing Preset Lookback dropdown, hiding Custom Period picker")
+            return (
+                {'marginRight': '25px', 'display': 'block'},  # lookback container visible
+                {'marginRight': '25px', 'display': 'none'},   # period container hidden
+            )
+        else:  # custom
+            print("  → Showing Custom Period picker, hiding Preset Lookback dropdown")
+            return (
+                {'marginRight': '25px', 'display': 'none'},   # lookback container hidden
+                {'marginRight': '25px', 'display': 'block'},  # period container visible
+            )
 
     # 4.4 Update date range based on lookback preset dropdown
     @app.callback(
@@ -334,150 +363,213 @@ def register_backtest_hist_callbacks(app):
             allocations_by_date = {}
             asset_pools_by_date = {}  # Track asset pool changes
             all_assets_ever = set()
-            
+
             print(f"\n{'='*60}")
             print(f"Running Correlation-Based Backtest: {start_date.date()} to {end_date.date()}")
             print(f"Rebalance dates: {len(rebalance_dates)}")
             print(f"First rebalance: {rebalance_dates[0].date() if rebalance_dates else 'N/A'}")
             print(f"Last rebalance: {rebalance_dates[-1].date() if rebalance_dates else 'N/A'}")
             print(f"{'='*60}")
-            
-            # Cache of portfolio+optimizer keyed by frozenset of asset names.
-            # Re-using objects avoids redundant construction for recurring asset sets
-            # while still allowing the asset set to change month-to-month.
-            _optimizer_cache: dict = {}
 
-            for rebalance_date in rebalance_dates:
-                # --- Step 1: Rolling correlation screen on the lookback window ---
-                corr_end = rebalance_date
-                corr_start = rebalance_date - corr_lookback_delta
+            # ── Step A: pure risk-parity (RP) weights — cached, independent of
+            #    factor-scaling selection. Adding/removing a factor from the
+            #    scaling pool never forces this to recompute.
+            rp_params = RPCacheParams(
+                rebalance_dates=tuple(sorted(d.strftime('%Y-%m-%d') for d in rebalance_dates)),
+                corr_lookback=corr_lookback or '3M',
+                top_pairs=top_pairs,
+                factor_pool=tuple(sorted(available_factors)),
+                factor_model_lookback_years=1.0,
+                ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA,
+                use_vol_sqrt_budgets=True,
+                use_dv01_shape=True,
+                bounds_version="RiskModelConfig.v1",
+            )
+            rp_h = None
+            cached_rp = load_rp(DIR_INPUT, rp_params)
+            if cached_rp is not None:
+                rp_weights_by_date = cached_rp['weights_by_date']
+                asset_pools_by_date = cached_rp['asset_pools_by_date']
+                screened_factors_by_date = cached_rp['screened_factors_by_date']
+                rp_h = rp_hash(rp_params)
+                print(f"  RP base: cache hit ({rp_h})")
+            else:
+                rp_weights_by_date = {}  # rebalance_date -> {asset_name: weight}
+                asset_pools_by_date = {}
+                screened_factors_by_date = {}  # rebalance_date -> [factor_code, ...]
 
-                df_subset = risk_factors.loc[corr_start:corr_end,
-                                             [f for f in available_factors if f in risk_factors.columns]]
-                if df_subset.empty or len(df_subset) < 20:
-                    print(f"  {rebalance_date.date()}: Skipped (insufficient data)")
-                    continue
+                # Cache of portfolio+optimizer keyed by frozenset of asset names.
+                # Re-using objects avoids redundant construction for recurring asset sets
+                # while still allowing the asset set to change month-to-month.
+                _optimizer_cache: dict = {}
 
-                df_changes = df_subset.diff().dropna()
-                if df_changes.empty:
-                    continue
+                for rebalance_date in rebalance_dates:
+                    # --- Step 1: Rolling correlation screen on the lookback window ---
+                    corr_end = rebalance_date
+                    corr_start = rebalance_date - corr_lookback_delta
 
-                corr_matrix = df_changes.corr()
-
-                # Find the `top_pairs` lowest-correlation factor pairs in this window
-                mask = np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
-                corr_stacked = corr_matrix.where(mask).stack().reset_index()
-                corr_stacked.columns = ['Factor A', 'Factor B', 'Correlation']
-                corr_stacked['AbsCorrelation'] = corr_stacked['Correlation'].abs()
-                bottom_pairs = corr_stacked.sort_values('AbsCorrelation').head(top_pairs)
-
-                low_corr_factors = (
-                    set(bottom_pairs['Factor A']) | set(bottom_pairs['Factor B'])
-                )
-                low_corr_factors_list = sorted(low_corr_factors)
-
-                # --- Step 2: Map screened factors → assets ---
-                selected_assets = get_assets_from_factors(low_corr_factors_list)
-
-                if not selected_assets:
-                    print(f"  {rebalance_date.date()}: Skipped (no mappable assets)")
-                    continue
-
-                selected_asset_names = [a['name'] for a in selected_assets]
-                all_assets_ever.update(selected_asset_names)
-
-                # --- Step 3: Optimise with time-varying EWMA covariance ---
-                # Re-use a cached portfolio/optimizer when the asset set is the same
-                # as a previous month; the rolling vol window still changes because
-                # fit_and_calculate() slices by rebalance_date.
-                _key = frozenset(selected_asset_names)
-                if _key not in _optimizer_cache:
-                    try:
-                        _port = create_custom_portfolio(selected_asset_names, use_deterministic=True)
-                        _opt  = FactorRiskParityOptimizer(
-                            portfolio=_port,
-                            input_dir=str(DIR_INPUT),
-                            factor_model_lookback_years=1.0,
-                            vol_lookback_months=vol_lookback_months,
-                            ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA,
-                        )
-                        _optimizer_cache[_key] = _opt
-                    except Exception as e:
-                        print(f"  {rebalance_date.date()}: Portfolio creation failed: {e}")
+                    df_subset = risk_factors.loc[corr_start:corr_end,
+                                                 [f for f in available_factors if f in risk_factors.columns]]
+                    if df_subset.empty or len(df_subset) < 20:
+                        print(f"  {rebalance_date.date()}: Skipped (insufficient data)")
                         continue
 
-                try:
-                    weights_series, _ = _optimizer_cache[_key].fit_and_calculate(
-                        pd.Timestamp(rebalance_date),
-                        use_vol_sqrt_budgets=True,
-                        # use_dv01_shape=True (default): two-stage — ERC across factors
-                        # (stage 1, rolling covariance) then DV01 split within each
-                        # factor group (stage 2, analytic inverse-duration).
+                    df_changes = df_subset.diff().dropna()
+                    if df_changes.empty:
+                        continue
+
+                    corr_matrix = df_changes.corr()
+
+                    # Find the `top_pairs` lowest-correlation factor pairs in this window
+                    mask = np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+                    corr_stacked = corr_matrix.where(mask).stack().reset_index()
+                    corr_stacked.columns = ['Factor A', 'Factor B', 'Correlation']
+                    corr_stacked['AbsCorrelation'] = corr_stacked['Correlation'].abs()
+                    bottom_pairs = corr_stacked.sort_values('AbsCorrelation').head(top_pairs)
+
+                    low_corr_factors = (
+                        set(bottom_pairs['Factor A']) | set(bottom_pairs['Factor B'])
                     )
-                    weights = weights_series.to_dict()
-                except Exception as e:
-                    print(f"  {rebalance_date.date()}: Factor risk optimization failed: {e}")
-                    continue
-                
-                if not weights or sum(weights.values()) == 0:
-                    print(f"  {rebalance_date.date()}: Skipped (invalid weights)")
-                    continue
-                
-                # Filter out negligible weights (floating point precision artifacts)
-                weights = {k: v for k, v in weights.items() if abs(v) >= 1e-6}
-                
-                # Renormalize weights after filtering
-                weight_sum = sum(weights.values())
-                if weight_sum > 0:
-                    weights = {k: v / weight_sum for k, v in weights.items()}
-                else:
-                    continue
+                    low_corr_factors_list = sorted(low_corr_factors)
 
-                # ── Factor Model Scaling: tilt each asset's risk-parity weight by
-                #    the FactorModel signal of the factor(s) it maps from, then
-                #    renormalise so total capital is always fully deployed.
-                #    Signals adjust relative proportions, not absolute allocation.
-                #
-                #    Signal levels (bucketed):
-                #      Long-only [0,1]:    0, 0.5, 1, 1.5, 2
-                #      Long-short [-1,1]: -2, -1, 0, 1, 2
-                #
-                #    Scaling: w_scaled = w_rp * signal_level
-                #    Renorm:  w_final  = w_scaled / sum(w_scaled)  → always sums to 1
-                #    Fallback: if all signals are 0 or missing, keep pure RP weights.
-                if alloc_mode == 'factor_scaling':
-                    # Per-class hard caps on final weight (after signal tilt + renorm).
-                    # Commodity vol is much higher than bonds/FX, so tighter cap.
-                    _CLASS_CAPS = RiskModelConfig.CLASS_CAPS
-                    _SIGNAL_FLOOR = RiskModelConfig.SIGNAL_FLOOR
+                    # --- Step 2: Map screened factors → assets ---
+                    selected_assets = get_assets_from_factors(low_corr_factors_list)
 
-                    asset_to_factors = {}
-                    for f in low_corr_factors_list:
-                        for a in FACTOR_TO_ASSET_MAP.get(f, []):
-                            asset_to_factors.setdefault(a['name'], set()).add(f)
+                    if not selected_assets:
+                        print(f"  {rebalance_date.date()}: Skipped (no mappable assets)")
+                        continue
 
-                    scaled = {}
-                    for name, weight in weights.items():
-                        sigs = [_factor_signal_asof(f, pd.Timestamp(rebalance_date))
-                                for f in asset_to_factors.get(name, ())]
-                        sigs = [s for s in sigs if s is not None]
-                        raw_coeff = float(np.mean(sigs)) if sigs else 1.0
-                        # Floor the magnitude, not the sign: steepener/flattening
-                        # signals must remain directional, but very small signals still
-                        # get a minimum allocation so the pool stays diversified.
-                        if raw_coeff == 0.0:
-                            coeff = 0.0
-                        else:
-                            coeff = float(np.copysign(max(abs(raw_coeff), _SIGNAL_FLOOR), raw_coeff))
-                        scaled[name] = weight * coeff
+                    selected_asset_names = [a['name'] for a in selected_assets]
 
-                    total_scaled = sum(scaled.values())
+                    # --- Step 3: Optimise with time-varying EWMA covariance ---
+                    # Re-use a cached portfolio/optimizer when the asset set is the same
+                    # as a previous month; the rolling vol window still changes because
+                    # fit_and_calculate() slices by rebalance_date.
+                    _key = frozenset(selected_asset_names)
+                    if _key not in _optimizer_cache:
+                        try:
+                            _port = create_custom_portfolio(selected_asset_names, use_deterministic=True)
+                            _opt  = FactorRiskParityOptimizer(
+                                portfolio=_port,
+                                input_dir=str(DIR_INPUT),
+                                factor_model_lookback_years=1.0,
+                                vol_lookback_months=vol_lookback_months,
+                                ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA,
+                            )
+                            _optimizer_cache[_key] = _opt
+                        except Exception as e:
+                            print(f"  {rebalance_date.date()}: Portfolio creation failed: {e}")
+                            continue
+
+                    try:
+                        weights_series, _ = _optimizer_cache[_key].fit_and_calculate(
+                            pd.Timestamp(rebalance_date),
+                            use_vol_sqrt_budgets=True,
+                            # use_dv01_shape=True (default): two-stage — ERC across factors
+                            # (stage 1, rolling covariance) then DV01 split within each
+                            # factor group (stage 2, analytic inverse-duration).
+                        )
+                        weights = weights_series.to_dict()
+                    except Exception as e:
+                        print(f"  {rebalance_date.date()}: Factor risk optimization failed: {e}")
+                        continue
+
+                    if not weights or sum(weights.values()) == 0:
+                        print(f"  {rebalance_date.date()}: Skipped (invalid weights)")
+                        continue
+
+                    # Filter out negligible weights (floating point precision artifacts)
+                    weights = {k: v for k, v in weights.items() if abs(v) >= 1e-6}
+
+                    # Renormalize weights after filtering
+                    weight_sum = sum(weights.values())
+                    if weight_sum > 0:
+                        weights = {k: v / weight_sum for k, v in weights.items()}
+                    else:
+                        continue
+
+                    rp_weights_by_date[rebalance_date] = weights
+                    filtered_assets = [a for a in selected_assets if a['name'] in weights]
+                    asset_pools_by_date[rebalance_date] = filtered_assets
+                    screened_factors_by_date[rebalance_date] = low_corr_factors_list
+
+                    print(f"  {rebalance_date.date()}: {len(selected_asset_names)} assets, {len(low_corr_factors_list)} screened factors (of {len(available_factors)} total)")
+
+                rp_h = save_rp(DIR_INPUT, rp_params, rp_weights_by_date, asset_pools_by_date, screened_factors_by_date)
+                print(f"  RP base: computed and cached ({rp_h})")
+
+            # ── Step B: factor-scaling tilts — cached per factor, each keyed on
+            #    the RP base it was tilted from. Adding factor N+1 only computes
+            #    factor N+1's tilt; previously-cached factors are reused as-is.
+            factor_tilts_by_factor: dict = {}
+            if alloc_mode == 'factor_scaling':
+                try:
+                    _signal_pkl_mtime = os.path.getmtime(os.path.join(str(DIR_INPUT), 'factor-backtest.pkl'))
+                except OSError:
+                    _signal_pkl_mtime = 0.0
+
+                for f_code in sorted(factor_signal_series.keys()):
+                    tilt_params = FactorTiltCacheParams(
+                        factor_code=f_code,
+                        scalar_to_coeff_version="v1",
+                        factor_to_asset_map_version="v1",
+                        signal_pkl_mtime=_signal_pkl_mtime,
+                        class_caps_version="RiskModelConfig.v1",
+                    )
+                    cached_tilt = load_factor_tilt(DIR_INPUT, rp_h, tilt_params)
+                    if cached_tilt is not None:
+                        factor_tilts_by_factor[f_code] = cached_tilt['tilt_weights_by_date']
+                        print(f"  Factor {f_code}: cache hit")
+                        continue
+
+                    tilt_rows = {}
+                    for rebalance_date, weights in rp_weights_by_date.items():
+                        # Only tilt with this factor on dates where it was actually
+                        # screened in (low_corr_factors_list) — matches the original
+                        # per-date asset_to_factors gating exactly.
+                        if f_code not in screened_factors_by_date.get(rebalance_date, ()):
+                            continue
+                        mapped_assets = {a['name'] for a in FACTOR_TO_ASSET_MAP.get(f_code, [])}
+                        sig = _factor_signal_asof(f_code, pd.Timestamp(rebalance_date))
+                        if sig is None:
+                            continue
+                        coeff = scalar_to_coeff(sig, f_code)
+                        tilt_rows[rebalance_date] = {
+                            name: weight * coeff for name, weight in weights.items()
+                            if name in mapped_assets
+                        }
+                    tilt_df = pd.DataFrame(tilt_rows).T
+                    factor_tilts_by_factor[f_code] = tilt_df
+                    save_factor_tilt(DIR_INPUT, rp_h, tilt_params, tilt_df)
+                    print(f"  Factor {f_code}: computed and cached")
+
+            # ── Step C: blend per-date — average each asset's tilted weight
+            #    across the factors that touch it, falling back to the RP
+            #    weight for assets touched by zero factors, then renormalise,
+            #    apply class caps, and finally apply capital ONCE to the
+            #    blended vector (never per-factor, so summing contributions
+            #    from N factors cannot inflate total deployed capital).
+            _CLASS_CAPS = RiskModelConfig.CLASS_CAPS
+
+            for rebalance_date, weights in rp_weights_by_date.items():
+                if alloc_mode == 'factor_scaling' and factor_tilts_by_factor:
+                    blended = {}
+                    for name, rp_weight in weights.items():
+                        tilted_vals = []
+                        for f_code, tilt_df in factor_tilts_by_factor.items():
+                            if rebalance_date in tilt_df.index and name in tilt_df.columns:
+                                v = tilt_df.loc[rebalance_date, name]
+                                if pd.notna(v):
+                                    tilted_vals.append(float(v))
+                        blended[name] = float(np.mean(tilted_vals)) if tilted_vals else rp_weight
+
+                    total_scaled = sum(blended.values())
                     if total_scaled > 1e-9:
-                        weights = {k: v / total_scaled for k, v in scaled.items()}
-                        # Apply per-class caps then renormalise (iterate once to spread
+                        weights = {k: v / total_scaled for k, v in blended.items()}
+                        # Apply per-class caps then renormalise (iterate to spread
                         # any excess evenly across uncapped assets).
                         for _ in range(3):
-                            capped = {k: min(v, _CLASS_CAPS.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT))
+                            capped = {k: max(0, min(v, _CLASS_CAPS.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT)))
                                       for k, v in weights.items()}
                             cap_total = sum(capped.values())
                             if cap_total > 1e-9:
@@ -486,22 +578,19 @@ def register_backtest_hist_callbacks(app):
                         print(f"  {rebalance_date.date()}: All signals zero, using RP weights")
                         # weights already set from RP optimizer above, leave unchanged
 
-                # Store only assets with non-negligible weights in asset pool tracking
-                filtered_assets = [a for a in selected_assets if a['name'] in weights]
-                asset_pools_by_date[rebalance_date] = filtered_assets
-                
-                # Calculate allocations
+                all_assets_ever.update(weights.keys())
+
+                # Calculate allocations — capital applied once, on the final
+                # (blended + capped, or pure-RP) weight vector.
                 row = {'Date': rebalance_date}
                 current_allocations = {}
                 for name, weight in weights.items():
                     alloc = weight * total_capital_cny
                     row[name] = alloc / 1_000_000  # Store in millions for chart
                     current_allocations[name] = alloc
-                
+
                 history_data.append(row)
                 allocations_by_date[rebalance_date] = current_allocations
-                
-                print(f"  {rebalance_date.date()}: {len(selected_asset_names)} assets, {len(low_corr_factors_list)} screened factors (of {len(available_factors)} total)")
             
             if not history_data:
                 err_fig = go.Figure().update_layout(title="No valid rebalance periods found", template=THEME['chart_template'])

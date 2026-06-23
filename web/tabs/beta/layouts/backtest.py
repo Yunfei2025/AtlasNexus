@@ -245,8 +245,26 @@ def build_multiasset_backtest_layout():
         # ── Section 2: Backtest settings ────────────────────────────────
         html.Div([
             html.H6("Backtest Settings", style={'color': THEME['accent'], 'marginBottom': '15px'}),
+            
+            # Date mode selector (Preset Lookback vs Custom Period)
             html.Div([
-                # Backtest Lookback (Preset Options)
+                html.Label("Date Mode:", style={**_lbl}),
+                dcc.RadioItems(
+                    id='backtest-date-mode',
+                    options=[
+                        {'label': ' Preset Lookback', 'value': 'preset'},
+                        {'label': ' Custom Period', 'value': 'custom'},
+                    ],
+                    value='preset',
+                    inline=True,
+                    style={'display': 'flex', 'gap': '20px', 'fontSize': '13px',
+                           'color': THEME['text_main']},
+                    labelStyle={'display': 'flex', 'alignItems': 'center', 'gap': '6px', 'cursor': 'pointer'},
+                ),
+            ], style={'marginBottom': '15px'}),
+            
+            html.Div([
+                # Backtest Lookback (Preset Options) — shown when date_mode='preset'
                 html.Div([
                     html.Label("Backtest Lookback:", style={**_lbl}),
                     dcc.Dropdown(
@@ -261,9 +279,9 @@ def build_multiasset_backtest_layout():
                         clearable=False,
                         style={'width': '150px', 'fontSize': '13px'}
                     ),
-                ], style={'marginRight': '25px'}),
+                ], id='backtest-lookback-container', style={'marginRight': '25px', 'display': 'block'}),
 
-                # Backtest Period (Custom Date Range)
+                # Backtest Period (Custom Date Range) — shown when date_mode='custom'
                 html.Div([
                     html.Label("Backtest Period:", style={**_lbl}),
                     html.Div([
@@ -279,7 +297,7 @@ def build_multiasset_backtest_layout():
                             with_portal=False,
                         )
                     ], style={'display': 'flex', 'gap': '10px', 'position': 'relative', 'zIndex': 999}),
-                ], style={'marginRight': '25px'}),
+                ], id='backtest-period-container', style={'marginRight': '25px', 'display': 'none'}),
 
                 # Total Capital (dedicated for backtest)
                 html.Div([

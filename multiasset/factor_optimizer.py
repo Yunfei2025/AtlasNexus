@@ -834,14 +834,15 @@ class FactorRiskParityOptimizer:
         Returns:
             Tuple of (summary, asset_returns, volatilities, factor_exposures, factor_risk_contributions)
         """
-        # Snap to the 1st of the current month so the portfolio tab uses the same
-        # cut-off as the monthly backtest rebalance dates (avoids look-ahead bias).
+        # Snap to the last day of the previous month — the same cut-off the
+        # factor model uses for training — so the portfolio tab never fits on
+        # current-month/today's data (avoids look-ahead bias / overfitting).
         _today = pd.Timestamp.today().normalize()
-        _first_of_month = _today.replace(day=1)
+        _prev_month_end = _today.replace(day=1) - relativedelta(days=1)
         _data_max = self.portfolio.risk_factor_loader.last_date()
         if _data_max is None:
             raise RuntimeError("RiskFactorLoader: no data loaded — call load_risk_factors() first.")
-        rebalance_date = min(_first_of_month, _data_max)
+        rebalance_date = min(_prev_month_end, _data_max)
         
         # Fit and Calculate
         weights, factor_vols = self.fit_and_calculate(

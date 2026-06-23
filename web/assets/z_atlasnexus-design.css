@@ -362,9 +362,19 @@ input[type="search"]:focus {
 input::placeholder { 
   color: var(--an-faint) !important;
 }
-input:disabled { 
+input:disabled {
   opacity: 0.4 !important;
   cursor: not-allowed !important;
+}
+
+/* Hide the up/down spinner buttons on number inputs (e.g. risk-budget Exposure boxes) */
+input.no-spinner::-webkit-outer-spin-button,
+input.no-spinner::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+input.no-spinner[type="number"] {
+  -moz-appearance: textfield !important;
 }
 
 /* ── dcc.DatePickerSingle ─────────────────────────────────────── */
@@ -1124,6 +1134,26 @@ textarea {
   align-items: center;
   gap: 5px;
 }
+
+/* Country code chip — replaces flag emoji, which Windows renders as boxed
+   letters instead of flag glyphs (no flag support in the system emoji font). */
+.country-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 3px);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.5;
+}
+.country-chip--cn { background: #4a1f1f; color: #e07a7a; border: 1px solid #6e2a2a; }
+.country-chip--us { background: #1f2c4a; color: #7a9ae0; border: 1px solid #2a3f6e; }
+.country-chip--eu { background: #1f3a4a; color: #6ec0e0; border: 1px solid #2a5a6e; }
+.country-chip--jp { background: #4a1f3a; color: #e07ac0; border: 1px solid #6e2a5a; }
+.country-chip--uk { background: #2a2a4a; color: #9a9ae0; border: 1px solid #3f3f6e; }
 
 .factor-inline-row {
   display: flex;

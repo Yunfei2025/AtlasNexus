@@ -43,7 +43,7 @@ def preview_object(obj, *, max_rows: int = 20, max_cols: int = 12) -> str:
 if __name__ == "__main__":
     # Example usage when run directly
     # TBond prices demo
-    file_path = os.path.join(DIR_INPUT, 'macro-px.pkl')
+    file_path = os.path.join(DIR_INPUT, 'database-px.pkl')
     key = 'IRS'
     dps = '2025-08-01'
     ds = '2025-10-15'

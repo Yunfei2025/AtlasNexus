@@ -19,7 +19,7 @@ from settings.paths import DIR_INPUT as _DIR_INPUT
 from ..data import (
     THEME, SPREAD_CATEGORIES,
     load_spread_data, load_spread_timeseries, display_key,
-    _get_duration_mult,
+    _get_duration_mult, resolve_legs, _load_leg_data,
 )
 from ..scoring import _compute_risk_parity_weights
 
@@ -327,8 +327,27 @@ def register_portfolio_callbacks(app) -> None:
             df_nonzero = df_scored[df_scored['weight'] > 0.0001].copy()
             optimized_results = df_nonzero.to_dict('records')
 
+            # Step F: Resolve underlying instrument legs for each trade
+            try:
+                _leg_data = _load_leg_data()
+                leg1_list = []
+                leg2_list = []
+                for _, row in df_scored.iterrows():
+                    stype = str(row.get('spread_type', ''))
+                    tid = str(row.get('ID', ''))
+                    dur = float(row.get('_duration', 0.0)) if pd.notna(row.get('_duration')) else 0.0
+                    l1, l2 = resolve_legs(stype, tid, dur, _leg_data)
+                    leg1_list.append(l1)
+                    leg2_list.append(l2)
+                df_scored['Leg1'] = leg1_list
+                df_scored['Leg2'] = leg2_list
+            except Exception as e:
+                print(f"⚠ Leg resolution failed: {e}")
+                df_scored['Leg1'] = ''
+                df_scored['Leg2'] = ''
+
             display_cols = [
-                'ID', 'spread_type', 'style', 'direction',
+                'ID', 'spread_type', 'Leg1', 'Leg2', 'style', 'direction',
                 'Zscore', 'spread', 'mean', 'vol', 'halflife',
                 'carry_roll', 'breakeven_3m', 'stop_loss', 'profit_target',
                 'seasonal_edge_bps', 'score',
@@ -388,7 +407,7 @@ def register_portfolio_callbacks(app) -> None:
             conditional_style += [{'if': {'row_index': last_row_idx}, 'fontWeight': 'bold', 'borderTop': f'1px solid {THEME["accent"]}'}]
 
             _port_col_labels = {
-                'spread_type': 'type', 'style': 'regime',
+                'spread_type': 'type', 'Leg1': 'leg 1', 'Leg2': 'leg 2', 'style': 'regime',
                 'Zscore': 'z-score', 'spread': 'spread(bp)', 'mean': 'mean(bp)',
                 'vol': 'vol(bp)', 'halflife': 'hl(d)',
                 'carry_roll': 'carry+roll(3m)', 'breakeven_3m': 'b/e(3m)',
