@@ -269,9 +269,9 @@ def register_candidate_callbacks(app) -> None:
             style_s = df_all['style'].astype(str).str.strip().str.lower()
             is_mr_row = style_s.eq('meanreversion')
             if direction == 'buy':
-                df_all = df_all[(~is_mr_row) | (df_all['Zscore'] >= z_thd)].copy()
-            elif direction == 'sell':
                 df_all = df_all[(~is_mr_row) | (df_all['Zscore'] <= -z_thd)].copy()
+            elif direction == 'sell':
+                df_all = df_all[(~is_mr_row) | (df_all['Zscore'] >= z_thd)].copy()
 
         if df_all.empty:
             return (
@@ -281,7 +281,7 @@ def register_candidate_callbacks(app) -> None:
 
         if 'direction' not in df_all.columns and 'Zscore' in df_all.columns:
             df_all = df_all.copy()
-            df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) > 0 else 'SELL')
+            df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) < 0 else 'SELL')
 
         if 'score' not in df_all.columns:
             # Load seasonal-spds.pkl (for edge term + optional pre-filter gate).

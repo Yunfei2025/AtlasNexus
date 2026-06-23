@@ -160,6 +160,10 @@ def build_candidates_layout() -> html.Div:
                     inputStyle={'marginRight': '7px', 'accentColor': THEME['purple']},
                     labelStyle={'color': THEME['text_main'], 'display': 'block', 'marginBottom': '5px', 'fontSize': '13px', 'cursor': 'pointer'},
                 ),
+                html.P(
+                    "BUY: spread is WIDE (cheap) → expect to narrow. SELL: spread is TIGHT (expensive) → expect to widen.",
+                    style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic', 'marginTop': '6px'},
+                ),
             ], style={'width': '260px', 'paddingLeft': '22px', 'flexShrink': '0'}),
         ], style={'display': 'flex', 'alignItems': 'flex-start', 'background': THEME['bg_raised'],
                   'border': f"1px solid {THEME['border']}", 'borderRadius': '8px',
