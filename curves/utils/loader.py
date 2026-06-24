@@ -78,6 +78,7 @@ def loadCNBDTS():
     env['CGB'] = ts['CGB']
     env['CDB'] = ts['CDB']
     env['ICP'] = ts.get('ICP', pd.DataFrame())
+    env['LGB'] = ts.get('LGB', pd.DataFrame())  # local government bonds; not yet populated
     env['SOFR'] = ts['sofr']
     env['FX'] = ts['fx']
     env['FXSwap'] = ts['fxswap']

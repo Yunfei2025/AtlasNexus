@@ -123,14 +123,6 @@ def build_spreads_layout():
                             clearable=False,
                             style=_DD_STYLE,
                         ),
-                        _field_label("Futures Season"),
-                        dcc.Dropdown(
-                            options=list(FuturesConfig.SEASONS.keys()),
-                            value=list(FuturesConfig.SEASONS.keys())[0],
-                            id="select-season",
-                            clearable=False,
-                            style=_DD_STYLE,
-                        ),
                         _field_label("Seasonal Highlight Month"),
                         dcc.Dropdown(
                             options=[
@@ -1182,9 +1174,8 @@ def register_callbacks(app) -> None:
         Input("data-refresh", "n_intervals"),
         Input("realtime-data", "data"),
         Input("spread-type", "value"),
-        Input("select-season", "value"),
     )
-    def _update_spread_bar(interval, data_rt_js, stype, season):
+    def _update_spread_bar(interval, data_rt_js, stype):
         """Update the spread bar chart."""
         if not PLOTTING_AVAILABLE or go is None:
             # Return a simple dict-based figure if plotly isn't available
@@ -1262,7 +1253,7 @@ def register_callbacks(app) -> None:
                         ))
 
             # Forward real data to original implementation
-            return orig_statistics(interval, data_rt_js, stype, season)
+            return orig_statistics(interval, data_rt_js, stype, None)
         except Exception as e:
             print(f"Error in _update_spread_bar: {e}")
             import traceback
@@ -1289,10 +1280,9 @@ def register_callbacks(app) -> None:
     @app.callback(
         Output("graph-spread", "figure"),
         Input("spread-type", "value"),
-        Input("select-season", "value"),
         Input("ticker", "children"),
     )
-    def _update_spread_ts(stype, season, ticker):
+    def _update_spread_ts(stype, ticker):
         """Update the spread time series chart."""
         if not PLOTTING_AVAILABLE or go is None:
             return {"data": [], "layout": {"title": "Plotting not available"}}
@@ -1317,7 +1307,7 @@ def register_callbacks(app) -> None:
                     paper_bgcolor=app_color["graph_bg"],
                     title="Please select a ticker from the bar chart above"
                 ))
-            return orig_spreadts(stype, season, ticker)
+            return orig_spreadts(stype, None, ticker)
         except Exception as e:
             print(f"Error in _update_spread_ts: {e}")
             import traceback

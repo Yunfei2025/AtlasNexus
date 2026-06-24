@@ -316,6 +316,19 @@ def build_multiasset_risk_layout():
                       'borderRadius': '5px', 'marginBottom': '16px',
                       'border': f'1px solid {THEME["table_header"]}'}),
 
+            # ── Net position by instrument (Beta + Alpha legs combined) ───────
+            html.Div([
+                html.H6("Net Position by Instrument  (Beta + Alpha legs)", style={
+                    'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '13px',
+                }),
+                html.Div(id='risk-netpos-container',
+                         children=[html.Div("Click Refresh to load positions.",
+                                            style={'color': THEME['text_sub'], 'fontStyle': 'italic',
+                                                   'padding': '20px', 'textAlign': 'center'})]),
+            ], style={'backgroundColor': THEME['bg_card'], 'padding': '14px 16px',
+                      'borderRadius': '5px', 'marginBottom': '16px',
+                      'border': f'1px solid {THEME["table_header"]}'}),
+
             # ── Risk exposure table ───────────────────────────────────────────
             html.Div([
                 html.H6("Risk Exposure (Beta + Alpha)", style={

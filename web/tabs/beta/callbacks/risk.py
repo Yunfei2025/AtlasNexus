@@ -1319,6 +1319,7 @@ def register_risk_callbacks(app):
     # ── Risk subtab: inventory + factor exposure + key-term DV01 ladder ─────────
     @app.callback(
         [Output('risk-inventory-container', 'children'),
+         Output('risk-netpos-container', 'children'),
          Output('risk-exposure-container', 'children'),
          Output('risk-refresh-status', 'children')],
         [Input('an-summary-subtabs', 'value'),
@@ -1362,6 +1363,17 @@ def register_risk_callbacks(app):
         }
         _KT_COLS = ['CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M']
 
+        # ── Net position by instrument: signed capital (MM CNY) per code ──────
+        # Beta Book positions are always long. Alpha Book legs are long/short
+        # per the BUY/SELL direction of the spread (BUY → +leg1 / -leg2).
+        net_pos: dict = {}
+
+        def _add_net(code: str, cap_mm: float, source: str):
+            if not code or abs(cap_mm) < 1e-9:
+                return
+            e = net_pos.setdefault(code, {'Beta': 0.0, 'Alpha': 0.0})
+            e[source] = round(e[source] + cap_mm, 4)
+
         # ── Load Beta positions ───────────────────────────────────────────────
         beta_rows, kt_grid = [], {t: {c: 0.0 for c in _KT_COLS} for t in _TENOR_ORDER}
         if _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
@@ -1380,14 +1392,20 @@ def register_risk_callbacks(app):
                     except (ValueError, TypeError):
                         dv01_mm = 0.0
 
+                    instrument = str(r.get('Instrument', ''))
                     beta_rows.append({
                         'Book': 'Beta', 'Name': name,
-                        'Instrument': str(r.get('Instrument', '')),
+                        'Instrument': instrument,
                         'Leg1': '', 'Leg2': '',  # Beta positions don't have legs
                         'Sector': sector,
                         'Capital (MM)': cap_str, 'DV01 (MM/bp)': f"{dv01_mm:.4f}",
                         'Direction': 'LONG',
                     })
+                    try:
+                        cap_mm = float(cap_str.replace(',', '')) if cap_str else 0.0
+                    except (ValueError, TypeError):
+                        cap_mm = 0.0
+                    _add_net(instrument, cap_mm, 'Beta')  # Beta Book positions are always long
 
                     # Key Term: CN bonds → CGB; others → Others
                     tenor = _SECTOR_TO_TENOR.get(sector)
@@ -1423,6 +1441,12 @@ def register_risk_callbacks(app):
 
                     leg1, leg2 = _resolve_legs(stype, tid, duration, _ld)
 
+                    # Net capital per leg: BUY → long leg1 / short leg2 (and vice
+                    # versa for SELL), at full notional on each side.
+                    _abs_notional = abs(notional)
+                    _add_net(leg1, _abs_notional * dir_sign, 'Alpha')
+                    _add_net(leg2, -_abs_notional * dir_sign, 'Alpha')
+
                     alpha_rows.append({
                         'Book': 'Alpha', 'Name': tid, 'Instrument': tid,
                         'Leg1': leg1, 'Leg2': leg2,
@@ -1454,6 +1478,7 @@ def register_risk_callbacks(app):
         if not beta_rows and not alpha_rows:
             return (
                 _no_data_div("No positions found — run analysis (Beta) or optimization (Alpha) first."),
+                _no_data_div("No data."),
                 _no_data_div("No data."),
                 "",
             )
@@ -1487,6 +1512,45 @@ def register_risk_callbacks(app):
             style_table={'overflowX': 'auto'},
             sort_action='native', page_size=40,
         )
+
+        # ── Net position by instrument (Beta long + Alpha legs combined) ──────
+        _netpos_rows = []
+        for code in sorted(net_pos.keys()):
+            e = net_pos[code]
+            net = round(e['Beta'] + e['Alpha'], 4)
+            if abs(net) < 1e-6 and abs(e['Beta']) < 1e-6 and abs(e['Alpha']) < 1e-6:
+                continue
+            _netpos_rows.append({
+                'Instrument': code,
+                'Beta (MM)': f"{e['Beta']:+.1f}" if abs(e['Beta']) > 1e-6 else '',
+                'Alpha (MM)': f"{e['Alpha']:+.1f}" if abs(e['Alpha']) > 1e-6 else '',
+                'Net (MM)': f"{net:+.1f}",
+                'Direction': 'LONG' if net > 1e-6 else ('SHORT' if net < -1e-6 else 'FLAT'),
+            })
+        _netpos_rows.sort(key=lambda r: -abs(float(r['Net (MM)'])))
+
+        if _netpos_rows:
+            netpos_table = dash_table.DataTable(
+                data=_netpos_rows,
+                columns=[{'name': c, 'id': c} for c in
+                         ['Instrument', 'Beta (MM)', 'Alpha (MM)', 'Net (MM)', 'Direction']],
+                style_cell={'textAlign': 'center', 'padding': '5px 8px', 'fontSize': '12px',
+                            'backgroundColor': THEME['table_row_odd'],
+                            'color': THEME['text_main'], 'border': 'none'},
+                style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'],
+                              'fontWeight': 'bold', 'border': 'none'},
+                style_data_conditional=[
+                    {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                    {'if': {'filter_query': '{Direction} = "LONG"'},
+                     'backgroundColor': 'rgba(0,204,150,0.08)'},
+                    {'if': {'filter_query': '{Direction} = "SHORT"'},
+                     'backgroundColor': 'rgba(239,85,59,0.08)'},
+                ],
+                style_table={'overflowX': 'auto'},
+                sort_action='native', page_size=40,
+            )
+        else:
+            netpos_table = _no_data_div("No netted positions found.")
 
         # ── Bar-in-cell helper ────────────────────────────────────────────────
         def _make_bar_styles(rows: list, cols: list, shared_max: bool = True) -> list:
@@ -1720,5 +1784,5 @@ def register_risk_callbacks(app):
         n_alpha = len(alpha_rows)
         status  = (f"{n_beta} beta · {n_alpha} alpha positions · "
                    f"updated {datetime.now().strftime('%H:%M:%S')}")
-        return inventory_table, exposure_panel, status
+        return inventory_table, netpos_table, exposure_panel, status
 

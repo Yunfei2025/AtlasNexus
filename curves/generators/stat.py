@@ -111,6 +111,7 @@ class StatGenerator:
         candidates = [
             '中债国债到期收益率:',
             '中债国开债到期收益率:',
+            '中国:地方政府债到期收益率(AAA):',
         ]
 
         column_map: dict[int, str] = {}
@@ -137,6 +138,8 @@ class StatGenerator:
                     env_ts['CDB'] = db['CDB']
                 if 'ICP' in db and 'ICP' not in env_ts:
                     env_ts['ICP'] = db['ICP']
+                if 'LGB' in db and 'LGB' not in env_ts:
+                    env_ts['LGB'] = db['LGB']
                 if 'IRS' in db and 'SwapTS' not in env_ts:
                     env_ts['SwapTS'] = db['IRS']
                 self.env_ts = env_ts
@@ -153,9 +156,12 @@ class StatGenerator:
             bond_px = updatePKL({}, os.path.join(DIR_INPUT, f'{btype}-cvpx.pkl'))
             ref = loadRefData(btype)
             curve = curve_objs[self.dp]
+            # Use full history (not self.start:self.da) so Spread/BondCarry retain
+            # all available history for seasonal charting; statAnalysis_BC/_BS
+            # internally restrict OU/z-score calibration to a rolling window.
             bonds = bond_px['ytm_quo'].columns.intersection(env['Def'].index)
-            df_act = bond_px['ytm_act'].loc[self.start:self.da, bonds].drop_duplicates()
-            df_quo = bond_px['ytm_quo'].loc[self.start:self.da, bonds].drop_duplicates()
+            df_act = bond_px['ytm_act'].loc[:self.da, bonds].drop_duplicates()
+            df_quo = bond_px['ytm_quo'].loc[:self.da, bonds].drop_duplicates()
             
             # Clean data to handle byte strings and invalid values before statistical analysis
             df_act = df_act.apply(pd.to_numeric, errors='coerce')
@@ -356,9 +362,12 @@ class StatGenerator:
             env_obond = loadInstrumentDefinition(obtype)
             obond_px = updatePKL({}, os.path.join(DIR_INPUT, f'{obtype}-cvpx.pkl'))
 
+            # Use full history (not self.start:self.da) so Spread retains all
+            # available history for seasonal charting; statAnalysis_BC internally
+            # restricts OU/z-score calibration to a rolling window.
             bonds_obond = obond_px['ytm_quo'].columns.intersection(env_obond['Def'].index)
-            df_act_obond = obond_px['ytm_act'].loc[self.start:self.da, bonds_obond].drop_duplicates()
-            df_quo_obond = obond_px['ytm_quo'].loc[self.start:self.da, bonds_obond].drop_duplicates()
+            df_act_obond = obond_px['ytm_act'].loc[:self.da, bonds_obond].drop_duplicates()
+            df_quo_obond = obond_px['ytm_quo'].loc[:self.da, bonds_obond].drop_duplicates()
             
             # Clean data to handle byte strings and invalid values
             df_act_obond = df_act_obond.apply(pd.to_numeric, errors='coerce')
@@ -406,7 +415,10 @@ class StatGenerator:
             if df_.shape[0] > 0:
                 anchor[k] = df_.index[0]
 
-        bond_ts = self.df_act_tbond.loc[self.start:].apply(pd.to_numeric, errors='coerce')
+        # Use full history (not self.start:) so Spread retains all available
+        # history for seasonal charting; the linear-fit/OU calibration below is
+        # restricted to the rolling self.start:self.da window for freshness.
+        bond_ts = self.df_act_tbond.apply(pd.to_numeric, errors='coerce')
         spreads_bi: dict[str, pd.DataFrame] = {}
         # Term spreads (10Y-5Y, 30Y-10Y)
         term_cols = list(anchor.values())
@@ -419,19 +431,19 @@ class StatGenerator:
             group_df = self.bond_groups[k].apply(pd.to_numeric, errors='coerce')
             spreads_bi[k] = group_df.sub(bond_ts[anchor[t]], axis=0)
 
-        spreads_b = pd.concat(spreads_bi, axis=1).droplevel(0, axis=1).sort_index()
-        spreads_b.drop(columns=list(anchor.values()), inplace=True, errors='ignore')
-        spreads_b = spreads_b.loc[self.start:self.da]
+        spreads_b_full = pd.concat(spreads_bi, axis=1).droplevel(0, axis=1).sort_index()
+        spreads_b_full.drop(columns=list(anchor.values()), inplace=True, errors='ignore')
+        spreads_b_stats = spreads_b_full.loc[self.start:self.da]  # rolling window for calibration
 
-        # Fast linear fit per series
-        stat0 = pd.DataFrame(index=spreads_b.columns)
+        # Fast linear fit per series (calibrated on rolling window only)
+        stat0 = pd.DataFrame(index=spreads_b_stats.columns)
         resi_cols = {}
         for k in self.bond_groups.keys():
             for c in self.bond_groups[k].columns:
                 if c not in anchor.values():
                     stat0.loc[c, 'label'] = k
-        for col in spreads_b.columns:
-            series = spreads_b[col].dropna().reset_index(drop=True)
+        for col in spreads_b_stats.columns:
+            series = spreads_b_stats[col].dropna().reset_index(drop=True)
             level_pred, slope, intercept, res = self._fast_linear_fit(series)
             if not np.isnan(level_pred):
                 stat0.loc[col, 'level'] = level_pred
@@ -449,8 +461,9 @@ class StatGenerator:
         stat_ = pd.concat([stat0, stat1], axis=1)
         # Use raw historical spread mean and std for Z-score (not linear trend extrapolation).
         # This keeps Z-scores stable regardless of when the generator was last run.
-        raw_mean = spreads_b.mean()
-        raw_std  = spreads_b.std()
+        # Calibrated on the rolling window, matching stat0/stat1 above.
+        raw_mean = spreads_b_stats.mean()
+        raw_std  = spreads_b_stats.std()
         stat_['mean'] = raw_mean.reindex(stat_.index)
         stat_['vol']  = raw_std.reindex(stat_.index)
         stat_.drop('level', axis=1, inplace=True)
@@ -459,10 +472,11 @@ class StatGenerator:
         # with pd.ExcelWriter(os.path.join(DIR_OUTPUT, 'PairSpreads.xlsx')) as writer:
         #     stat_.to_excel(writer)
 
-        # Persist in spreads dict for downstream use
+        # Persist in spreads dict for downstream use. Spread keeps full history
+        # for the seasonal chart; StatInfo reflects only the rolling-window calibration.
         self.spreads['BinarySpread'] = {
             'StatInfo': stat_,
-            'Spread': spreads_b,
+            'Spread': spreads_b_full,
             'Anchor': anchor,
         }
 
@@ -522,10 +536,9 @@ class StatGenerator:
 
         analytics = _loadPKL(os.path.join(DIR_INPUT, 'futures-analytics.pkl'))
         if not analytics:
+            # Leave any existing futures-spds.pkl untouched rather than wiping
+            # accumulated history with an empty placeholder.
             print('compute_futures_stats: futures-analytics.pkl missing/empty — skipping.')
-            updatePKL({'NetBasis': {}, 'NetIRR': pd.DataFrame(), 'TermBasis': {},
-                       'FuturesSwap': {}}, os.path.join(DIR_INPUT, f'{btype}-spds.pkl'),
-                      rewrite=True)
             return
 
         swap_ts = self.env_ts.get('SwapTS')
@@ -544,89 +557,121 @@ class StatGenerator:
         da_ts    = pd.Timestamp(self.da)
 
         for ctype in FuturesConfig.CONTRACT_TYPES:
-            df = analytics.get(ctype)
-            if not isinstance(df, pd.DataFrame) or df.empty:
+            df_full = analytics.get(ctype)
+            if not isinstance(df_full, pd.DataFrame) or df_full.empty:
                 continue
-            df = df.copy()
-            df.index = pd.DatetimeIndex(df.index)
-            df = df.loc[start_ts:da_ts]
-            if df.empty:
+            df_full = df_full.copy()
+            df_full.index = pd.DatetimeIndex(df_full.index)
+
+            # For StatInfo (OU calibration, z-scores): use rolling window for freshness
+            df_stats = df_full.loc[start_ts:da_ts]
+            if df_stats.empty:
                 continue
 
+            # For Spread timeseries: use full history for seasonal chart
             tenor = FuturesConfig.CONTRACT_TENOR.get(ctype, 5.0)
-            irr   = pd.to_numeric(df['irr'],  errors='coerce')
-            fytm  = pd.to_numeric(df['fytm'], errors='coerce')
+            irr_full   = pd.to_numeric(df_full['irr'],  errors='coerce')
+            fytm_full  = pd.to_numeric(df_full['fytm'], errors='coerce')
+            irr_stats  = pd.to_numeric(df_stats['irr'],  errors='coerce')
+            fytm_stats = pd.to_numeric(df_stats['fytm'], errors='coerce')
 
             # Null out bad-CTD artifact days: deeply negative IRR (< -0.5 %) is
             # a clear data error for CNY treasury futures (genuine negative carry is
             # at most a few bp).  Also null fytm on those same days since it
             # reflects the same bad CTD pricing.
-            _irr_bad = irr < -0.5
-            irr  = irr.where(~_irr_bad)
-            fytm = fytm.where(~_irr_bad)
+            _irr_bad_full   = irr_full < -0.5
+            _irr_bad_stats  = irr_stats < -0.5
+            irr_full   = irr_full.where(~_irr_bad_full)
+            fytm_full  = fytm_full.where(~_irr_bad_full)
+            irr_stats  = irr_stats.where(~_irr_bad_stats)
+            fytm_stats = fytm_stats.where(~_irr_bad_stats)
 
             # ── Term Basis: front − next-season close (price points) ──────────
-            _fc = pd.to_numeric(df['futures_close'], errors='coerce')
-            _nc = pd.to_numeric(df['next_close'],   errors='coerce')
+            # Use full history for Spread, rolling window for stats
+            _fc_full = pd.to_numeric(df_full['futures_close'], errors='coerce')
+            _nc_full = pd.to_numeric(df_full['next_close'],   errors='coerce')
+            _fc_stats = pd.to_numeric(df_stats['futures_close'], errors='coerce')
+            _nc_stats = pd.to_numeric(df_stats['next_close'],   errors='coerce')
             # Null out rows where either price is frozen for >= 3 consecutive days
             # (stale close artifact after contract roll).
             _STALE_W = 3
-            _fc_stale = _fc.rolling(_STALE_W).apply(
+            _fc_stale_full = _fc_full.rolling(_STALE_W).apply(
                 lambda x: (x.max() - x.min()) < 1e-8, raw=True
             ).fillna(0).astype(bool)
-            _nc_stale = _nc.rolling(_STALE_W).apply(
+            _nc_stale_full = _nc_full.rolling(_STALE_W).apply(
                 lambda x: (x.max() - x.min()) < 1e-8, raw=True
             ).fillna(0).astype(bool)
-            term = (_fc - _nc).where(~(_fc_stale | _nc_stale))
-            if term.notna().sum() > 20:
-                tb_cols[ctype] = term
+            term_full = (_fc_full - _nc_full).where(~(_fc_stale_full | _nc_stale_full))
+
+            _fc_stale_stats = _fc_stats.rolling(_STALE_W).apply(
+                lambda x: (x.max() - x.min()) < 1e-8, raw=True
+            ).fillna(0).astype(bool)
+            _nc_stale_stats = _nc_stats.rolling(_STALE_W).apply(
+                lambda x: (x.max() - x.min()) < 1e-8, raw=True
+            ).fillna(0).astype(bool)
+            term_stats = (_fc_stats - _nc_stats).where(~(_fc_stale_stats | _nc_stale_stats))
+
+            if term_full.notna().sum() > 20:
+                tb_cols[ctype] = term_full
 
             # ── Bond-Futures: IRR − repo (FR007 + funding), in bp ─────────────
             if fr007_ts is not None:
-                repo = fr007_ts.reindex(df.index).ffill() + funding_pct  # %
-                bf_spread = ((irr - repo) * 100).dropna()                # bp
-                bf_spread = bf_spread.loc[bf_spread.index.min():da_ts] if not bf_spread.empty else bf_spread
-                if bf_spread.notna().sum() >= 30:
-                    nb_cols[ctype] = bf_spread
-                    si = st.OU_calibrate(bf_spread.to_frame(ctype))
+                repo_full = fr007_ts.reindex(df_full.index).ffill() + funding_pct  # %
+                bf_spread_full = ((irr_full - repo_full) * 100).dropna()            # bp (full history)
+
+                repo_stats = fr007_ts.reindex(df_stats.index).ffill() + funding_pct  # %
+                bf_spread_stats = ((irr_stats - repo_stats) * 100).dropna()          # bp (rolling window)
+
+                if bf_spread_full.notna().sum() >= 30:
+                    nb_cols[ctype] = bf_spread_full
+                    si = st.OU_calibrate(bf_spread_stats.to_frame(ctype))  # calibrate on rolling window
                     si.loc[ctype, 'tenor']       = tenor
                     si.loc[ctype, 'ttm']         = tenor
-                    # 3m cash-and-carry pickup from the annual IRR−repo spread.
-                    si.loc[ctype, 'carry_3m_bp'] = float(bf_spread.iloc[-1]) * (90.0 / 360.0)
-                    last = df.dropna(subset=['ctd_code']).iloc[-1] if df['ctd_code'].notna().any() else None
+                    # 3m cash-and-carry pickup from the annual IRR−repo spread (use latest value).
+                    si.loc[ctype, 'carry_3m_bp'] = float(bf_spread_full.iloc[-1]) * (90.0 / 360.0)
+                    last = df_stats.dropna(subset=['ctd_code']).iloc[-1] if df_stats['ctd_code'].notna().any() else None
                     if last is not None:
                         si.loc[ctype, 'ctd_code'] = last['ctd_code']
                         si.loc[ctype, 'futures']  = last.get('contract_code', ctype)
                     spreads['NetBasis'][ctype] = {
                         'StatInfo': si,
-                        'Spread'  : bf_spread.to_frame(ctype),
+                        'Spread'  : bf_spread_full.to_frame(ctype),  # full history for seasonal chart
                     }
 
             # ── Futures-Swap: FYTM − matched-tenor FR007 IRS, in bp ───────────
             irs_ticker = self._CTYPE_IRS.get(ctype)
             if isinstance(swap_ts, pd.DataFrame) and irs_ticker in (swap_ts.columns if swap_ts is not None else []):
-                irs_s = pd.to_numeric(swap_ts[irs_ticker], errors='coerce')
-                irs_s.index = pd.DatetimeIndex(irs_s.index)
-                irs_s = irs_s.reindex(df.index).ffill()
-                fs_spread = ((fytm - irs_s) * 100).dropna()              # bp
-                fs_spread = fs_spread.loc[fs_spread.index.min():da_ts] if not fs_spread.empty else fs_spread
-                if fs_spread.notna().sum() >= 30:
-                    si = st.OU_calibrate(fs_spread.to_frame(ctype))
+                irs_s_full = pd.to_numeric(swap_ts[irs_ticker], errors='coerce')
+                irs_s_full.index = pd.DatetimeIndex(irs_s_full.index)
+                irs_s_full = irs_s_full.reindex(df_full.index).ffill()
+                fs_spread_full = ((fytm_full - irs_s_full) * 100).dropna()  # bp (full history)
+
+                irs_s_stats = pd.to_numeric(swap_ts[irs_ticker], errors='coerce')
+                irs_s_stats.index = pd.DatetimeIndex(irs_s_stats.index)
+                irs_s_stats = irs_s_stats.reindex(df_stats.index).ffill()
+                fs_spread_stats = ((fytm_stats - irs_s_stats) * 100).dropna()  # bp (rolling window)
+
+                if fs_spread_full.notna().sum() >= 30:
+                    si = st.OU_calibrate(fs_spread_stats.to_frame(ctype))  # calibrate on rolling window
                     si.loc[ctype, 'tenor'] = tenor
-                    # 3m carry of pay-fixed-IRS / long-futures: FYTM − IRS pickup.
-                    carry_ts = ((fytm - irs_s).dropna() * (90.0 / 360.0) * 100)
+                    # 3m carry of pay-fixed-IRS / long-futures: FYTM − IRS pickup (use latest).
+                    carry_ts = ((fytm_full - irs_s_full).dropna() * (90.0 / 360.0) * 100)
                     si.loc[ctype, 'carry_3m_bp'] = float(carry_ts.iloc[-1]) if len(carry_ts) else np.nan
                     spreads['FuturesSwap'][ctype] = {
                         'StatInfo'   : si,
-                        'Spread'     : fs_spread.to_frame(ctype),
+                        'Spread'     : fs_spread_full.to_frame(ctype),  # full history for seasonal chart
                         'CarryRoll3m': carry_ts,
                     }
 
-        # Term Basis: flat StatInfo across ctypes
+        # Term Basis: flat StatInfo across ctypes (calibrated on rolling window, Spread from full history)
         if tb_cols:
-            tb_df = pd.DataFrame(tb_cols).apply(pd.to_numeric, errors='coerce')
-            tb_df = tb_df.loc[tb_df.index.min():da_ts].dropna(how='all')
-            spreads['TermBasis'] = st.statAnalysis(tb_df)
+            tb_df_full = pd.DataFrame(tb_cols).apply(pd.to_numeric, errors='coerce')  # full history
+            tb_df_stats = tb_df_full.loc[start_ts:da_ts]  # rolling window for calibration
+            stat_result = st.statAnalysis(tb_df_stats.dropna(how='all'))  # calibrate on rolling window
+            spreads['TermBasis'] = {
+                'Spread': tb_df_full.dropna(how='all'),      # full history for seasonal chart
+                'StatInfo': stat_result['StatInfo'],          # calibrated on rolling window
+            }
 
         # NetIRR: flat DataFrame mirror of the Bond-Futures (IRR−repo) spread,
         # kept for legacy web/core consumers that read futures-spds['NetIRR'].
@@ -635,7 +680,12 @@ class StatGenerator:
         else:
             spreads['NetIRR'] = pd.DataFrame()
 
-        updatePKL(spreads, os.path.join(DIR_INPUT, f'{btype}-spds.pkl'), rewrite=True)
+        # Merge (not overwrite): StatInfo/Spread are computed on a rolling
+        # self.start:self.da window for calibration freshness, but persisting
+        # with rewrite=True would discard everything older than that window on
+        # every run. updatePKL's default merge keeps history (by date index)
+        # while StatInfo rows still refresh to the latest calibration.
+        updatePKL(spreads, os.path.join(DIR_INPUT, f'{btype}-spds.pkl'))
         print(f'compute_futures_stats: BondFutures={list(spreads["NetBasis"].keys())}, '
               f'TermBasis={list(spreads.get("TermBasis", {}).get("StatInfo", pd.DataFrame()).index)}, '
               f'FuturesSwap={list(spreads["FuturesSwap"].keys())}')
@@ -664,6 +714,7 @@ class StatGenerator:
         cdb = env_ts['CDB']
         icp = env_ts.get('ICP')
         swap_ts = env_ts.get('SwapTS')
+        lgb = env_ts.get('LGB')  # local government bonds; not yet populated in database-px.pkl
 
         # Column name helpers — allow the function to work even if a key is missing.
         def _series(src: dict, key: Optional[str]):
@@ -690,6 +741,7 @@ class StatGenerator:
 
         cgb_cols = self._resolve_curve_column_map(cgb, [1, 2, 5, 10, 20, 30])
         cdb_cols = self._resolve_curve_column_map(cdb, [5, 10])
+        lgb_cols = self._resolve_curve_column_map(lgb, [5, 10, 30]) if lgb is not None else {}
 
         cgb1  = _series(cgb, cgb_cols.get(1))
         cgb2  = _series(cgb, cgb_cols.get(2))
@@ -699,6 +751,9 @@ class StatGenerator:
         cgb30 = _series(cgb, cgb_cols.get(30))
         cdb5  = _series(cdb, cdb_cols.get(5))
         cdb10 = _series(cdb, cdb_cols.get(10))
+        lgb5  = _series(lgb, lgb_cols.get(5))  if lgb is not None else None
+        lgb10 = _series(lgb, lgb_cols.get(10)) if lgb is not None else None
+        lgb30 = _series(lgb, lgb_cols.get(30)) if lgb is not None else None
 
         icp3m  = _series(icp, _icp_col(3))  if icp is not None else None
         icp6m  = _series(icp, _icp_col(6))  if icp is not None else None
@@ -721,6 +776,12 @@ class StatGenerator:
         if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5   - cgb5
         if cdb10 is not None and cgb10 is not None: instruments['CDBCGB-10y'] = cdb10  - cgb10
 
+        # LGB (local government bond) vs CGB cross-sector spreads — LGB data not
+        # yet available in database-px.pkl; populated automatically once present.
+        if lgb5  is not None and cgb5  is not None: instruments['LGBCGB-5y']  = lgb5   - cgb5
+        if lgb10 is not None and cgb10 is not None: instruments['LGBCGB-10y'] = lgb10  - cgb10
+        if lgb30 is not None and cgb30 is not None: instruments['LGBCGB-30y'] = lgb30  - cgb30
+
         # Bond-vs-Repo cross-curve: CGB key-rate yield minus matched-tenor FR007 IRS rate
         if cgb1  is not None and repo1y  is not None: instruments['CGBRepo7d-1y']  = cgb1  - repo1y
         if cgb2  is not None and repo2y  is not None: instruments['CGBRepo7d-2y']  = cgb2  - repo2y
@@ -738,35 +799,41 @@ class StatGenerator:
             return
 
         # Spread DataFrame: annual yield diff in % (e.g. 0.30 for 30bp)
-        df_spread = pd.DataFrame(instruments).apply(pd.to_numeric, errors='coerce')
-        df_spread = df_spread.loc[self.start:self.da].sort_index()
+        # Keep full history for seasonal chart, use rolling window only for calibration
+        df_spread_full = pd.DataFrame(instruments).apply(pd.to_numeric, errors='coerce').sort_index()
+        df_spread_stats = df_spread_full.loc[self.start:self.da]  # rolling window for OU calibration
 
         # Carry+Roll (3m) in %:
         #   XsYs (CGB-10s30s etc.)        BUY = long short-tenor, short long-tenor
         #     → carry = Y_short − Y_long = −spread  → CR3m = −spread × 0.25
         #   Cross-curve (CDBCGB, *Repo7d-*) BUY = long the bond/CD leg, short the swap/CGB leg
         #     → carry = Y_leg1 − Y_leg2 = +spread   → CR3m = +spread × 0.25
-        df_cr3m = df_spread.copy() * (90.0 / 360.0)
-        for col in df_cr3m.columns:
+        df_cr3m_full = df_spread_full.copy() * (90.0 / 360.0)
+        for col in df_cr3m_full.columns:
             if re.search(r'\d+s\d+', col, re.IGNORECASE):
-                df_cr3m[col] = -df_cr3m[col]
+                df_cr3m_full[col] = -df_cr3m_full[col]
 
-        # OU statistics on spread levels
+        # OU statistics on spread levels (using rolling window only)
         try:
-            stat_info = st.OU_calibrate(df_spread.dropna(how='all'))
+            stat_info = st.OU_calibrate(df_spread_stats.dropna(how='all'))
         except Exception as exc:
             print(f'Warning: OU calibration for tenor spreads failed: {exc}')
-            stat_info = pd.DataFrame(index=df_spread.columns)
+            stat_info = pd.DataFrame(index=df_spread_full.columns)
 
         tenor_spds = {
             'TenorSpread': {
-                'Spread':      df_spread,
-                'CarryRoll3m': df_cr3m,
-                'StatInfo':    stat_info,
+                'Spread':      df_spread_full,     # full history for seasonal chart
+                'CarryRoll3m': df_cr3m_full,
+                'StatInfo':    stat_info,          # calibrated on rolling window
             }
         }
+        # Merge (not overwrite): Spread/StatInfo are computed on a rolling
+        # self.start:self.da window for calibration freshness, but persisting
+        # with rewrite=True would discard everything older than that window on
+        # every run. updatePKL's default merge keeps history (by date index)
+        # while StatInfo still refreshes to the latest calibration.
         out_path = os.path.join(DIR_INPUT, 'Tenor-spds.pkl')
-        updatePKL(tenor_spds, out_path, rewrite=True)
+        updatePKL(tenor_spds, out_path)
         
     def compute_seasonal_screener(self) -> None:
         """Precompute per-instrument monthly seasonality stats for the screener.

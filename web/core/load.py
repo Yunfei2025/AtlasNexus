@@ -255,6 +255,8 @@ def _build_tenor_spread_fallback() -> dict:
             v = src.get(k)
             return pd.to_numeric(v, errors='coerce') if v is not None else None
 
+        lgb = db.get('LGB', {})
+
         cgb5  = _s(cgb, '中债国债到期收益率:5年')
         cgb10 = _s(cgb, '中债国债到期收益率:10年')
         cgb20 = _s(cgb, '中债国债到期收益率:20年')
@@ -262,6 +264,9 @@ def _build_tenor_spread_fallback() -> dict:
         cdb5  = _s(cdb, '中债国开债到期收益率:5年')
         cdb10 = _s(cdb, '中债国开债到期收益率:10年')
         cdb30 = _s(cdb, '中债国开债到期收益率:30年')
+        lgb5  = _s(lgb, '中国:地方政府债到期收益率(AAA):5年')  if lgb else None
+        lgb10 = _s(lgb, '中国:地方政府债到期收益率(AAA):10年') if lgb else None
+        lgb30 = _s(lgb, '中国:地方政府债到期收益率(AAA):30年') if lgb else None
 
         instruments = {}
         if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10 - cgb5
@@ -270,6 +275,11 @@ def _build_tenor_spread_fallback() -> dict:
         if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10 - cdb5
         if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5  - cgb5
         if cdb10 is not None and cgb10 is not None: instruments['CDBCGB-10y'] = cdb10 - cgb10
+        # LGB (local government bond) vs CGB cross-sector spreads — LGB data not
+        # yet available in database-px.pkl; populated automatically once present.
+        if lgb5  is not None and cgb5  is not None: instruments['LGBCGB-5y']  = lgb5  - cgb5
+        if lgb10 is not None and cgb10 is not None: instruments['LGBCGB-10y'] = lgb10 - cgb10
+        if lgb30 is not None and cgb30 is not None: instruments['LGBCGB-30y'] = lgb30 - cgb30
 
         if not instruments:
             return {}

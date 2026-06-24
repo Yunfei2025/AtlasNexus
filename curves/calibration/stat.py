@@ -178,7 +178,7 @@ def statAnalysis_BC(env, df1, df2, zscore_lookback: int = 252):
                 CloseYield=df1,
                 CurveYield=df2)
 
-def statAnalysis_BS(env, df_act, irsKeyTS, bond_key_ts=None):
+def statAnalysis_BS(env, df_act, irsKeyTS, bond_key_ts=None, zscore_lookback: int = 252):
     """Compute bond-swap spread statistics and BUY-side carry+roll time series.
 
     BondCarry stores the BUY-side (long bond, pay fixed IRS) annual carry+roll in bp:
@@ -265,7 +265,11 @@ def statAnalysis_BS(env, df_act, irsKeyTS, bond_key_ts=None):
 
     spread = df_act - irs
     spread = spread[bonds]
-    stat_info = OU_calibrate(spread)
+    # Use a 1-year rolling window for mean/vol/stationarity so old regimes
+    # don't dilute the normalisation. Full spread history is kept in the
+    # returned dict for downstream charting (matches statAnalysis_BC).
+    spread_stat = spread.iloc[-zscore_lookback:] if len(spread) > zscore_lookback else spread
+    stat_info = OU_calibrate(spread_stat)
     for b in bonds:
         stat_info.loc[b, 'ttm'] = env['Def'].loc[b, '剩余期限']
         # BUY-side annual carry+roll in bp:
