@@ -298,7 +298,8 @@ def build_report_data(*, weights_final: dict, weights_prev: dict | None,
     max_dd_month = perf_period.get('Max Drawdown', 0.0) or 0.0
     sharpe_12m = perf_12m.get('Sharpe', 0.0) or 0.0
     report_period_label = f"{pd.Timestamp(start_date).strftime('%Y-%m-%d')} 至 {pd.Timestamp(end_date).strftime('%Y-%m-%d')}"
-    report_month_label = f"{pd.Timestamp(start_date).strftime('%Y 年 %-m 月')}"
+    ts = pd.Timestamp(start_date)
+    report_month_label = f"{ts.year} 年 {ts.month} 月"
 
     kpis = [
         {"label": "FICC-RP 月度收益", "value": f"{month_ret_gross:+.2%}",
