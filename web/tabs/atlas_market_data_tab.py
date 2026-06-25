@@ -164,7 +164,7 @@ def _dt_style(
             {"selector": ".dash-spreadsheet-menu", "rule": "display: none;"},
         ],
         style_table={"overflowX": "auto", "borderRadius": "4px", "width": "100%", "minWidth": "100%"},
-        # style_header removed — CSS .dash-header rule in z_atlasnexus-design.css owns this
+        # style_header removed — CSS .dash-header rule in design.css owns this
         style_cell={
             "textAlign": "center",
             "whiteSpace": "normal",
@@ -539,34 +539,40 @@ def build_market_data_layout() -> html.Div:
             # Refresh button row
             html.Div(
                 [
-                    html.Span(
+                    html.H1(
                         "Market Data Snapshot",
-                        style={"color": THEME["text_main"], "fontWeight": "bold",
-                               "fontSize": "15px"},
+                        style={"margin": 0, "color": "var(--text-primary)",
+                               "fontFamily": "var(--type-h1-family)",
+                               "fontWeight": "var(--type-h1-weight)",
+                               "fontSize": "var(--fs-h1)",
+                               "lineHeight": "var(--lh-snug)"},
                     ),
                     html.Button(
                         "↻ Refresh",
                         id="market-data-refresh-btn",
                         n_clicks=0,
                         style={
-                            "marginLeft": "20px",
-                            "backgroundColor": THEME["bg_input"],
-                            "color": THEME["accent"],
-                            "border": f'1px solid {THEME["accent"]}',
-                            "borderRadius": "4px",
+                            "backgroundColor": "transparent",
+                            "color": THEME["accent_light"],
+                            "border": f'1px solid {THEME["accent_light"]}',
+                            "borderRadius": "var(--radius-sm)",
                             "padding": "4px 14px",
                             "fontSize": "12px",
+                            "fontWeight": "500",
                             "cursor": "pointer",
                         },
                     ),
                     html.Span(
                         id="market-data-timestamp",
-                        style={"color": THEME["text_sub"], "fontSize": "11px",
-                               "marginLeft": "16px"},
+                        style={"color": "var(--text-muted)",
+                               "fontFamily": "var(--type-meta-family)",
+                               "fontWeight": "var(--type-meta-weight)",
+                               "fontSize": "var(--fs-meta)",
+                               "lineHeight": "var(--lh-snug)"},
                     ),
                 ],
-                style={"display": "flex", "alignItems": "center",
-                       "marginBottom": "16px"},
+                style={"display": "flex", "alignItems": "center", "gap": "16px",
+                       "marginBottom": "18px"},
             ),
 
             # Left column (Money Market / Reference Bonds / Bond Futures) + Right column (On-the-run / IRS)
@@ -651,7 +657,9 @@ def build_market_data_layout() -> html.Div:
                 },
             ),
         ],
-        style={"padding": "16px"},
+        # Market book cards default to --an-blue; this subtab overrides to
+        # --accent-cyan to match the Market > Data design (cyan = Market book).
+        style={"padding": "16px", "--book-accent": THEME["accent_light"]},
     )
 
 

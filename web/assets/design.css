@@ -1,0 +1,1489 @@
+/* ============================================================
+   AtlasNexus Design System — Dash Integration Stylesheet (FIXED)
+   ============================================================
+   DROP THIS FILE into your  web/assets/  folder as:
+     design.css
+   
+   (The 'z_' prefix ensures this loads LAST, winning all conflicts.)
+
+   Targets real classNames from atlasnexus_daily.py + atlas_styles.py:
+     app shell · dcc.Dropdown · dcc.DatePickerSingle · html.Button
+     dcc.Input · dash_table.DataTable · status pills · scrollbars
+   
+   KEY FIXES:
+   - Removed !important from .dash-cell background (allows style_data_conditional bars)
+   - Added html font-size reset (counteracts app.css 62.5% hack)
+   - Added !important to all other rules to beat inline Python styles
+   ============================================================ */
+
+/* ── Reset the Skeleton font-size hack from app.css ──────────── */
+html {
+  font-size: 10px;  /* app.css sets 62.5%; this resets to 1rem = 10px */
+}
+body, .app__container {
+  font-size: var(--fs-body) !important;       /* 13px — from token */
+  line-height: var(--lh-body) !important;     /* 1.55 — from token */
+  font-family: var(--font-sans) !important;
+  color: var(--an-text) !important;
+}
+
+/* ── CSS Variables (single authoritative token block — mirrors atlas_styles.TOKENS) ── */
+:root {
+  /* — Ramp (match tokens/colors.css exactly) — */
+  --an-navy-950: #060d1c;   /* was #020d22 */
+  --an-navy-900: #0a1428;   /* was #040f30 — page bg */
+  --an-navy-850: #0c1830;   /* NEW gradient stop */
+  --an-navy-800: #0e1d3a;   /* was #082255 — working bg */
+  --an-navy-750: #102544;   /* NEW raised panel */
+  --an-navy-700: #122a4c;   /* was #0c2b64 — card surface */
+  --an-navy-600: #17345c;   /* was #112e66 — inputs */
+  --an-navy-500: #21426e;   /* was #1a3a6e — buttons */
+  --an-navy-400: #2e547f;   /* was #2a5298 — border */
+  --an-navy-300: #3a4d6e;   /* was #425476 — inactive tab */
+
+  /* — Accents (match tokens/colors.css) — */
+  --an-blue:   #3d8bd4;   /* was #2e86c1 */
+  --an-cyan:   #45b6e6;   /* unchanged */
+  --an-green:  #2f9d6b;   /* was #27ae60 */
+  --an-amber:  #e0a23c;   /* was #f39c12 */
+  --an-red:    #d56b6b;   /* was #c0392b */
+  --an-purple: #7c70d6;   /* was #8e44ad */
+  --an-teal:   #36a6b8;   /* NEW — Run Center */
+
+  /* — Text ramp (match tokens/colors.css) — */
+  --an-text:   #e9eef8;   /* was #ffffff */
+  --an-muted:  #a4b6d2;   /* was #aab0c0 */
+  --an-faint:  #4a5d7c;   /* was #5a6478 */
+
+  /* — Borders (match tokens/colors.css) — */
+  --an-border:  #2a517f;   /* was #2a5298 */
+  --an-border2: #1e3a5f;   /* was #061E44 */
+
+  /* — Semantic aliases (so design-kit token names work in Python inline styles too) — */
+  --surface-panel:  var(--an-navy-700);
+  --surface-raised: var(--an-navy-750);
+  --surface-input:  var(--an-navy-600);
+  --surface-sunken: var(--an-navy-900);
+  --surface-hover:  var(--an-navy-500);
+  --text-primary:   var(--an-text);
+  --text-secondary: var(--an-muted);
+  --text-heading:   var(--an-text);
+  --text-muted:     #6f83a3;
+  --text-faint:     var(--an-faint);
+  --text-on-accent: var(--an-text);
+  --border-default: var(--an-border2);
+  --border-subtle:  var(--an-border2);
+  --border-strong:  var(--an-border);
+  --accent-blue:    var(--an-blue);
+  --accent-cyan:    var(--an-cyan);
+  --accent-green:   var(--an-green);
+  --accent-amber:   var(--an-amber);
+  --accent-amber-soft: rgba(224,162,60,0.12);
+  --accent-purple:  var(--an-purple);
+  --positive:       var(--an-green);
+  --negative:       var(--an-red);
+
+  /* — Signal (for bar cells) — */
+  --positive-bar:  #2c6e4d;
+  --negative-bar:  #8a3a3a;
+  --neutral-bar:   #1f3a5e;
+
+  --an-r: 4px;
+  --an-t: 0.15s ease;
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --dur-fast:   0.1s;
+  --dur-normal: 0.15s;
+  --ease-standard: ease;
+  --bw-tab: 2px;
+  --panel-pad: 22px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 20px;
+  --font-sans: "Open Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  --fs-meta: 11px;
+  --fs-sm:   12px;
+  --fw-regular: 400;
+  --fw-medium: 600;
+  --ls-tab: 0.01em;
+
+  /* Per-book accent — overridden per active tab via inline style on #an-main-content */
+  --book-accent: var(--an-blue);
+
+  /* Typography scale (merged from atlasnexus_tabs.css) */
+  --fs-caption: 11px;
+  --fs-body:    13px;
+  --fs-section: 15px;
+  --lh-body:    1.55;
+  --ls-caps:    0.06em;
+
+  /* Typography tokens (mirrors tokens/typography.css for Dash context) */
+  --type-display: 300 26px/1.2 "Open Sans", sans-serif;
+  --type-h1:      600 18px/1.3 "Open Sans", sans-serif;
+  --type-h2:      600 15px/1.4 "Open Sans", sans-serif;
+  --type-h3:      600 13px/1.4 "Open Sans", sans-serif;
+  --type-body:    400 13px/1.55 "Open Sans", sans-serif;
+  --type-meta:    400 11px/1.5 "Open Sans", sans-serif;
+  --type-th:      600 11px/1.4 "Open Sans", sans-serif;
+  --ls-display:   0.04em;
+  --ls-label:     0.07em;
+  --app-max-w:    2360px;
+  --app-pad-x:    28px;
+}
+
+/* ── App Shell ────────────────────────────────────────────────── */
+body, .app__container {
+  background: linear-gradient(
+    180deg,
+    var(--an-navy-950) 0%,
+    var(--an-navy-900) 18%,
+    var(--an-navy-850) 100%
+  ) !important;
+  background-attachment: fixed !important;
+  min-height: 100vh !important;
+}
+
+.app__container {
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+
+#an-main-content {
+  max-width: var(--app-max-w) !important;
+  margin: 0 auto !important;
+}
+
+.app__header {
+  background: transparent !important;
+  border-bottom: none !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  max-width: var(--app-max-w) !important;
+  margin: 0 auto !important;
+  padding: 26px var(--app-pad-x) 0 !important;
+  box-sizing: border-box !important;
+}
+
+/* Display-weight app title */
+.app__header__title {
+  font-family: var(--type-display-family) !important;
+  font-weight: var(--type-display-weight) !important;
+  font-size: var(--type-display-size) !important;
+  line-height: var(--type-display-lh) !important;
+  letter-spacing: var(--ls-display) !important;
+  color: var(--an-text) !important;
+  margin: 0 !important;
+}
+
+/* Separator dot between "AtlasNexus" and "Daily" */
+.app__header__title .sep {
+  color: var(--an-faint) !important;
+  margin: 0 6px !important;
+}
+
+/* Timestamp / metadata lines */
+.app__header__title--grey {
+  font-family: var(--type-meta-family) !important;
+  font-weight: var(--type-meta-weight) !important;
+  font-size: var(--type-meta-size) !important;
+  line-height: var(--type-meta-lh) !important;
+  color: var(--an-muted) !important;
+  letter-spacing: 0 !important;
+}
+
+.app__content {
+  background: transparent !important;
+  margin-top: 12px !important;
+}
+
+.tab__title {
+  background: transparent !important;
+}
+
+/* ── Status Pills ─────────────────────────────────────────────── */
+.an-status-pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.06em !important;
+  padding: 2px 9px !important;
+  border-radius: 20px !important;
+  border: 1px solid transparent !important;
+  white-space: nowrap !important;
+  transition: opacity var(--an-t) !important;
+}
+.an-status-pill .dot {
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 50% !important;
+  background: currentColor !important;
+}
+.an-status-pill.ok     { 
+  background: rgba(39,174,96,.12) !important;
+  color: #27ae60 !important;
+  border-color: rgba(39,174,96,.3) !important;
+}
+.an-status-pill.warn   { 
+  background: rgba(243,156,18,.12) !important;
+  color: #f39c12 !important;
+  border-color: rgba(243,156,18,.3) !important;
+}
+.an-status-pill.error  { 
+  background: rgba(192,57,43,.12) !important;
+  color: #e74c3c !important;
+  border-color: rgba(192,57,43,.3) !important;
+}
+.an-status-pill.idle   {
+  background: rgba(100,115,140,.08) !important;
+  color: var(--an-muted) !important;
+  border-color: rgba(100,115,140,.25) !important;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+button {
+  font-family: inherit !important;
+  cursor: pointer !important;
+  transition: filter var(--an-t), transform var(--an-t) !important;
+}
+button:hover  { 
+  filter: brightness(1.12) !important;
+}
+button:active { 
+  filter: brightness(0.9) !important;
+  transform: translateY(1px) !important;
+}
+button:focus-visible {
+  outline: 2px solid var(--an-cyan) !important;
+  outline-offset: 2px !important;
+}
+button:disabled { 
+  opacity: 0.45 !important;
+  cursor: not-allowed !important;
+  filter: none !important;
+}
+
+/* ── dcc.Dropdown (React-Select 2.x) ──────────────────────────── */
+.Select-control {
+  background: var(--an-navy-600) !important;
+  border: 1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+  min-height: 34px !important;
+  transition: border-color var(--an-t), box-shadow var(--an-t) !important;
+}
+.Select-control:hover { 
+  border-color: var(--an-blue) !important;
+  box-shadow: none !important;
+}
+.Select.is-open .Select-control,
+.Select.is-focused .Select-control {
+  border-color: var(--an-cyan) !important;
+  box-shadow: 0 0 0 2px rgba(69,182,230,.18) !important;
+}
+.Select-value-label  { 
+  color: var(--an-text) !important;
+}
+.Select-placeholder  { 
+  color: var(--an-muted) !important;
+}
+.Select-arrow { 
+  border-color: var(--an-muted) transparent transparent !important;
+}
+.Select.is-open .Select-arrow { 
+  border-color: transparent transparent var(--an-muted) !important;
+}
+
+.Select-menu-outer {
+  background: var(--an-navy-700) !important;
+  border: 1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,.55) !important;
+  z-index: 2000 !important;
+}
+.Select-option {
+  background: transparent !important;
+  color: var(--an-muted) !important;
+  font-size: 13px !important;
+  padding: 8px 12px !important;
+  transition: background var(--an-t), color var(--an-t) !important;
+}
+.Select-option:hover,
+.Select-option.is-focused { 
+  background: rgba(42,82,152,.35) !important;
+  color: var(--an-text) !important;
+}
+.Select-option.is-selected { 
+  background: rgba(46,134,193,.22) !important;
+  color: var(--an-cyan) !important;
+}
+
+/* Multi-select chips */
+.Select--multi .Select-value {
+  background: rgba(42,82,152,.45) !important;
+  border: 1px solid var(--an-border) !important;
+  color: var(--an-text) !important;
+  border-radius: 3px !important;
+}
+.Select--multi .Select-value-icon { 
+  border-right: 1px solid var(--an-border) !important;
+  color: var(--an-muted) !important;
+}
+.Select--multi .Select-value-icon:hover { 
+  background: rgba(192,57,43,.3) !important;
+  color: #e74c3c !important;
+}
+.Select-input > input { 
+  color: var(--an-text) !important;
+  background: transparent !important;
+}
+
+/* ── dcc.Input / html inputs ──────────────────────────────────── */
+input[type="text"],
+input[type="number"],
+input[type="search"],
+input[type="email"] {
+  background: var(--an-navy-600) !important;
+  color: var(--an-text) !important;
+  border: 1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+  padding: 5px 8px !important;
+  font-family: inherit !important;
+  font-size: 13px !important;
+  transition: border-color var(--an-t), box-shadow var(--an-t) !important;
+}
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="search"]:focus {
+  border-color: var(--an-cyan) !important;
+  box-shadow: 0 0 0 2px rgba(69,182,230,.18) !important;
+  outline: none !important;
+}
+input::placeholder { 
+  color: var(--an-faint) !important;
+}
+input:disabled {
+  opacity: 0.4 !important;
+  cursor: not-allowed !important;
+}
+
+/* Hide the up/down spinner buttons on number inputs (e.g. risk-budget Exposure boxes) */
+input.no-spinner::-webkit-outer-spin-button,
+input.no-spinner::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+input.no-spinner[type="number"] {
+  -moz-appearance: textfield !important;
+}
+
+/* ── dcc.DatePickerSingle ─────────────────────────────────────── */
+.SingleDatePickerInput {
+  background: var(--an-navy-600) !important;
+  border: 1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+  transition: border-color var(--an-t) !important;
+}
+.SingleDatePickerInput:focus-within {
+  border-color: var(--an-cyan) !important;
+  box-shadow: 0 0 0 2px rgba(69,182,230,.18) !important;
+}
+.DateInput { 
+  background: transparent !important;
+}
+.DateInput_input {
+  background: transparent !important;
+  color: var(--an-text) !important;
+  border: none !important;
+  font-size: 13px !important;
+  padding: 5px 8px !important;
+  font-family: inherit !important;
+}
+.DateInput_input__focused { 
+  border-bottom: 2px solid var(--an-cyan) !important;
+}
+.DayPicker {
+  background: var(--an-navy-700) !important;
+  border: 1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,.55) !important;
+}
+.CalendarDay__default { 
+  background: transparent !important;
+  color: var(--an-muted) !important;
+  border: 1px solid transparent !important;
+}
+.CalendarDay__default:hover { 
+  background: rgba(42,82,152,.35) !important;
+  color: var(--an-text) !important;
+}
+.CalendarDay__selected { 
+  background: var(--an-blue) !important;
+  color: #fff !important;
+  border-color: var(--an-cyan) !important;
+}
+.CalendarDay__today { 
+  color: var(--an-cyan) !important;
+  font-weight: 600 !important;
+}
+.CalendarMonth_caption { 
+  color: var(--an-text) !important;
+}
+.DayPickerNavigation_button {
+  border: 1px solid var(--an-border) !important;
+  background: var(--an-navy-600) !important;
+  color: var(--an-muted) !important;
+  border-radius: var(--an-r) !important;
+  transition: background var(--an-t) !important;
+}
+.DayPickerNavigation_button:hover { 
+  background: var(--an-navy-500) !important;
+}
+
+/* ── DataTable ────────────────────────────────────────────────── */
+.dash-table-container .dash-spreadsheet-container {
+  border: 1px solid var(--an-border2) !important;
+  border-radius: var(--an-r) !important;
+  overflow: hidden !important;
+}
+
+/* Header row */
+.dash-table-container .dash-header {
+  background: var(--an-navy-700) !important;
+  color: var(--an-muted) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.07em !important;
+  text-transform: uppercase !important;
+  border-top: 1px solid var(--an-border2) !important;
+  border-left: 1px solid var(--an-border2) !important;
+  border-bottom: 1px solid var(--an-border) !important;
+  border-right: 1px solid var(--an-border2) !important;
+  padding: 7px 10px !important;
+}
+
+/* Data cells — IMPORTANT: no !important on background to allow style_data_conditional to work */
+.dash-table-container .dash-cell {
+  color: var(--an-text) !important;
+  font-family: var(--font-mono) !important;
+  border-top: 1px solid var(--an-border2) !important;
+  border-left: 1px solid var(--an-border2) !important;
+  border-bottom: 1px solid var(--an-border2) !important;
+  border-right: 1px solid var(--an-border2) !important;
+  font-size: 12px !important;
+  padding: 5px 10px !important;
+}
+
+/* Row hover — subtle background */
+.dash-table-container .dash-spreadsheet-inner tr:hover .dash-cell {
+  background: rgba(42,82,152,.18) !important;
+}
+
+/* BUT if a cell has no conditional, fall back to navy */
+.dash-table-container .dash-cell:not([style*="background"]) {
+  background: var(--an-navy-800) !important;
+}
+
+/* Selected cell */
+.dash-table-container .dash-cell.focused {
+  box-shadow: inset 0 0 0 1px var(--an-cyan) !important;
+}
+
+/* Sort indicators */
+.dash-table-container .column-header--sort span { 
+  color: var(--an-cyan) !important;
+}
+
+/* Filter row */
+.dash-table-container .dash-filter input {
+  background: var(--an-navy-700) !important;
+  color: var(--an-text) !important;
+  border: 1px solid var(--an-border) !important;
+  font-size: 11px !important;
+}
+
+/* Pagination */
+.previous-next-container button,
+.current-page-container input,
+.last-page-container button,
+.first-page-container button {
+  background: var(--an-navy-700) !important;
+  color: var(--an-muted) !important;
+  border: 1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+}
+.previous-next-container button:hover,
+.last-page-container button:hover,
+.first-page-container button:hover {
+  background: var(--an-navy-500) !important;
+  color: var(--an-text) !important;
+}
+
+/* ── Plotly modebar ───────────────────────────────────────────── */
+.modebar { 
+  background: transparent !important;
+}
+.modebar-btn path { 
+  fill: var(--an-muted) !important;
+}
+.modebar-btn:hover path { 
+  fill: var(--an-cyan) !important;
+}
+.modebar-btn.active path { 
+  fill: var(--an-blue) !important;
+}
+
+/* ── Dash loading overlay ─────────────────────────────────────── */
+._dash-loading-callback { 
+  background: rgba(4,15,48,.55) !important;
+}
+[data-dash-is-loading="true"] { 
+  opacity: 0.65 !important;
+  transition: opacity 0.2s !important;
+}
+
+/* ── Scrollbars (WebKit/Blink) ────────────────────────────────── */
+::-webkit-scrollbar { 
+  width: 6px !important;
+  height: 6px !important;
+}
+::-webkit-scrollbar-track { 
+  background: var(--an-navy-950) !important;
+}
+::-webkit-scrollbar-thumb { 
+  background: var(--an-navy-400) !important;
+  border-radius: 3px !important;
+}
+::-webkit-scrollbar-thumb:hover { 
+  background: var(--an-blue) !important;
+}
+
+/* Firefox */
+* { 
+  scrollbar-width: thin !important;
+  scrollbar-color: var(--an-navy-400) var(--an-navy-950) !important;
+}
+
+/* ── Log/pre output ───────────────────────────────────────────── */
+pre {
+  background: var(--an-navy-950) !important;
+  color: #c8d8f0 !important;
+  border-radius: var(--an-r) !important;
+  font-size: 12px !important;
+  line-height: 1.6 !important;
+  padding: 10px 12px !important;
+}
+
+/* ── Tooltip / popover ────────────────────────────────────────── */
+.dash-tooltip {
+  background: var(--an-navy-700) !important;
+  border: 1px solid var(--an-border) !important;
+  border-radius: var(--an-r) !important;
+  color: var(--an-text) !important;
+  font-size: 12px !important;
+}
+
+/* ── Top-level app Tabs (dcc.Tabs/dcc.Tab via className) ───────── */
+.an-tabs {
+  z-index: 99 !important;
+  border-radius: var(--an-r) !important;
+}
+.an-tab {
+  background: linear-gradient(
+    180deg,
+    var(--an-navy-300) 0%,
+    #2b3b58 100%
+  ) !important;
+  color: var(--an-muted) !important;
+  border: 1px solid var(--an-border2) !important;
+  border-bottom: none !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.01em !important;
+  padding: 10px 20px !important;
+  border-radius: 4px 4px 0 0 !important;
+  transition: background 0.15s, color 0.15s !important;
+  /* ↓ prevent Dash flex-stretch */
+  flex: 0 0 auto !important;
+  min-width: 110px !important;
+  text-align: center !important;
+  white-space: nowrap !important;
+}
+.an-tab:hover {
+  background: var(--an-navy-500) !important;
+  color: var(--an-text) !important;
+}
+.an-tab--selected {
+  background: var(--an-navy-800) !important;
+  color: var(--an-text) !important;
+  border: 1px solid var(--an-border2) !important;
+  border-bottom: 2px solid var(--book-accent, var(--an-blue)) !important;
+  border-left: none !important;
+  border-top: none !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em !important;
+  padding: 10px 20px !important;
+  border-radius: 4px 4px 0 0 !important;
+  /* ↓ prevent Dash flex-stretch */
+  flex: 0 0 auto !important;
+  min-width: 110px !important;
+  text-align: center !important;
+  white-space: nowrap !important;
+}
+
+/* Tab container: left-align, don't distribute */
+.an-tabs > div[role="tablist"] {
+  display: flex !important;
+  flex-direction: row !important;
+  justify-content: flex-start !important;   /* ← left-align, don't distribute */
+  align-items: stretch !important;
+  flex-wrap: wrap !important;
+  border-bottom: 1px solid var(--an-border2) !important;
+  width: 100% !important;
+}
+
+/* ── Sub-tabs (dcc.Tab via className — replaces summary_subtab_style dicts) ── */
+.tab.an-subtab,
+div.tab.an-subtab {
+  background: transparent !important;
+  color: var(--an-muted) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  padding: 10px 24px !important;
+  border: none !important;
+  border-bottom: 2px solid transparent !important;
+  letter-spacing: 0.03em !important;
+  flex: 0 0 auto !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  transition: color 0.15s ease, border-color 0.15s ease !important;
+}
+.tab.an-subtab:hover,
+div.tab.an-subtab:hover {
+  color: var(--an-text) !important;
+}
+.tab.an-subtab--selected,
+div.tab.an-subtab--selected {
+  background: transparent !important;
+  border-bottom: 2px solid var(--book-accent, var(--an-blue)) !important;
+  border-top: none !important;
+  color: var(--book-accent, var(--an-blue)) !important;
+  font-weight: 600 !important;
+}
+/* Accent overrides per book */
+.tab.an-subtab--blue.an-subtab--selected   { border-bottom-color: var(--an-blue)   !important; color: var(--an-blue)   !important; }
+.tab.an-subtab--amber.an-subtab--selected  { border-bottom-color: var(--an-amber)  !important; color: var(--an-amber)  !important; }
+.tab.an-subtab--green.an-subtab--selected  { border-bottom-color: var(--an-green)  !important; color: var(--an-green)  !important; }
+.tab.an-subtab--purple.an-subtab--selected { border-bottom-color: var(--an-purple) !important; color: var(--an-purple) !important; }
+
+/* Sub-tab container: left-align, border-bottom as the track */
+.tab-container.an-subtab,
+div[role="tablist"]:has(> .tab.an-subtab) {
+  display: flex !important;
+  flex-direction: row !important;
+  justify-content: flex-start !important;
+  border-bottom: 1px solid var(--an-border2) !important;
+  gap: 0 !important;
+}
+
+/* ── Card panels (replaces _card_style / _card_hdr Python dicts) ───────── */
+.an-card {
+  background: var(--surface-panel) !important;   /* navy-700 */
+  border: 1px solid var(--an-border2) !important; /* all sides */
+  border-left: none !important;                   /* remove accent left bar */
+  border-top: 2px solid var(--book-accent, var(--an-blue)) !important; /* top accent */
+  border-radius: var(--radius-md) !important;    /* 8px all corners */
+  padding: 0 !important;                          /* tables sit flush */
+  margin: 0 !important;                           /* use gap instead of margin */
+  overflow: hidden !important;
+}
+
+/* Eyebrow header inside the card */
+.an-card-hdr {
+  padding: 12px 14px 10px !important;
+  color: var(--an-muted) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  border-bottom: 1px solid var(--an-border2) !important;
+  margin-bottom: 0 !important;
+}
+
+/* Card actions row (for IRS shift inputs, refresh buttons, etc.) */
+.an-card-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 10px 14px !important;
+  border-bottom: 1px solid var(--an-border2) !important;
+  gap: 16px !important;
+}
+
+/* ── App wrapper rail (2360/28px transparent canvas) ────────────── */
+.futures__price__container {
+  background: transparent !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  width: 100% !important;
+  max-width: var(--app-max-w) !important;
+  margin: 0 auto !important;
+  padding: 0 var(--app-pad-x) !important;
+  box-sizing: border-box !important;
+}
+
+/* Panel containers (Surface/Curves left sidebars) inherit histogram__container styling,
+   override their old #082255 color to match Data tab's refined palette */
+.histogram__container {
+  background-color: var(--an-navy-900) !important;
+}
+
+/* ── Curves tab: right-rail "Curve Snapshot" panel (mirrors docs/dev/bond-curves-restyle.html) ── */
+.curve-snapshot {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 16px 16px 18px;
+  background-color: var(--an-navy-900);
+  border-left: 1px solid var(--an-border2);
+}
+.curve-snapshot__title {
+  margin: 0;
+  font-size: var(--fs-meta);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--an-muted);
+  font-weight: var(--fw-medium);
+}
+.curve-snapshot__stat .curve-snapshot__k {
+  font-size: var(--fs-meta);
+  color: var(--an-muted);
+  letter-spacing: 0.02em;
+}
+.curve-snapshot__stat .curve-snapshot__v {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: var(--fw-medium);
+  color: var(--an-text);
+  margin-top: 2px;
+}
+.curve-snapshot__stat .curve-snapshot__v--big {
+  font-size: 22px;
+}
+.curve-snapshot__grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 12px;
+}
+.curve-snapshot__divider {
+  height: 1px;
+  background: var(--an-border2);
+}
+
+/* Main content area inside the rail */
+#an-main-content.tab__title {
+  background: transparent !important;
+  width: 100% !important;
+}
+
+/* ── Tab pane wrapper (replaces alpha_content/beta_content/market_content style) ── */
+.an-tab-pane {
+  width: 100% !important;
+  padding: 8px 0 0 0 !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+}
+
+/* Sub-tab row underline track */
+.an-tab-pane > .dash-tabs {
+  border-bottom: 1px solid var(--an-border2) !important;
+  margin-bottom: 20px !important;
+}
+
+/* Section headings: slightly larger */
+.futures__price__container h5,
+.futures__price__container h6,
+.an-tab-pane h5,
+.an-tab-pane h6 {
+  font-size: var(--fs-section) !important;    /* 15px */
+  font-weight: 600 !important;
+  color: var(--an-text) !important;
+  margin: 0 0 8px 0 !important;
+}
+
+/* ── KPI values — pick up the active book's accent colour ──────────────── */
+.an-kpi-value {
+  color: var(--book-accent, var(--an-blue)) !important;
+}
+
+/* ============================================================
+   Merged from atlasnexus_tabs.css (file consolidation, step 9)
+   ============================================================ */
+
+/* ── Typography helpers ──────────────────────────────────────── */
+.an-section-title {
+  color: var(--an-muted) !important;
+  font-size: var(--fs-caption) !important;
+  font-weight: 600 !important;
+  letter-spacing: var(--ls-caps) !important;
+  text-transform: uppercase !important;
+  margin-bottom: 10px !important;
+}
+.an-label {
+  color: var(--an-muted) !important;
+  font-size: var(--fs-caption) !important;
+  margin-bottom: 4px !important;
+  display: block !important;
+}
+.an-value {
+  font-size: var(--fs-section) !important;
+  font-weight: 600 !important;
+  color: var(--an-text) !important;
+  line-height: 1.3 !important;
+}
+
+/* ── Status / severity badges ────────────────────────────────── */
+.an-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 2px 8px !important;
+  border-radius: 3px !important;
+  font-size: var(--fs-caption) !important;
+  font-weight: 600 !important;
+  border: 1px solid currentColor !important;
+  line-height: 1.6 !important;
+}
+.an-badge--ok      { color: var(--an-green) !important; background: rgba(39,174,96,.12)  !important; }
+.an-badge--warn    { color: var(--an-amber) !important; background: rgba(243,156,18,.12)  !important; }
+.an-badge--error   { color: var(--an-red)   !important; background: rgba(192,57,43,.12)   !important; }
+.an-badge--neutral { color: var(--an-muted) !important; background: rgba(170,176,192,.10) !important; }
+.an-badge--accent  { color: var(--an-cyan)  !important; background: rgba(46,134,193,.15)  !important; }
+
+/* ── Plain HTML table styling (scoped to .app__container) ──────── */
+.app__container table {
+  border-collapse: collapse !important;
+  width: 100% !important;
+}
+.app__container th {
+  background: var(--an-navy-500) !important;
+  color: var(--an-muted) !important;
+  font-size: var(--fs-caption) !important;
+  font-weight: 600 !important;
+  letter-spacing: var(--ls-caps) !important;
+  text-transform: uppercase !important;
+  padding: 8px 10px !important;
+  border-bottom: 1px solid var(--an-navy-500) !important;
+}
+.app__container td {
+  padding: 6px 10px !important;
+  border-bottom: 1px solid rgba(26,58,110,.5) !important;
+  font-size: var(--fs-body) !important;
+  color: var(--an-text) !important;
+}
+.app__container tr:hover td {
+  background: rgba(26,58,110,.4) !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Dash 4 dcc.Dropdown dark-mode overrides                                    */
+/* Class names sourced from dash/dcc/async-dropdown.js bundle (Dash 4.1.0)    */
+/* -------------------------------------------------------------------------- */
+.dash-dropdown {
+  background: var(--an-navy-600) !important;
+  color: var(--an-text) !important;
+  border-color: rgba(180,180,180,.4) !important;
+}
+.dash-dropdown-value,
+.dash-dropdown-value-item {
+  color: var(--an-text) !important;
+}
+.dash-dropdown-placeholder {
+  color: var(--an-muted) !important;
+}
+.dash-dropdown-trigger-icon,
+.dash-dropdown-value-count {
+  color: var(--an-muted) !important;
+  fill: var(--an-muted) !important;
+}
+.dash-dropdown-content {
+  background: var(--an-navy-700) !important;
+  border-color: var(--an-blue) !important;
+  color: var(--an-text) !important;
+}
+.dash-dropdown-options {
+  background: var(--an-navy-700) !important;
+}
+.dash-dropdown-option {
+  background: var(--an-navy-700) !important;
+  color: var(--an-text) !important;
+}
+.dash-dropdown-option:hover,
+.dash-dropdown-option:focus-within {
+  background: #1a3a7a !important;
+  color: var(--an-text) !important;
+}
+.dash-dropdown-search-container {
+  background: var(--an-navy-600) !important;
+  border-color: rgba(180,180,180,.4) !important;
+}
+.dash-dropdown-search {
+  color: var(--an-text) !important;
+}
+.dash-dropdown-action-button {
+  color: var(--an-muted) !important;
+}
+.dash-dropdown-action-button:hover {
+  color: var(--an-blue) !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* dcc.Input dark-mode fix (Dash 4.x)                                         */
+/*                                                                             */
+/* In Dash 4.x, dcc.Input renders as:                                         */
+/*   <div class="dash-input-container" style="[Python style props]">         */
+/*     <input class="dash-input-element" />                                  */
+/*   </div>                                                                   */
+/* The Python `style` prop lands on the wrapper div. Without !important the   */
+/* inherited color from .app__container can win over the container's inline   */
+/* color value, producing white-on-white text. Force inheritance instead.     */
+/* -------------------------------------------------------------------------- */
+.dash-input-element {
+  color: inherit !important;
+  background: inherit !important;
+  background-color: inherit !important;
+}
+input[type="email"],
+input[type="number"],
+input[type="password"],
+input[type="search"],
+input[type="tel"],
+input[type="text"],
+input[type="url"],
+textarea {
+  background-color: inherit;
+  color: inherit;
+}
+
+/* -------------------------------------------------------------------------- */
+/* DatePicker dark theme — Dash 4.x (new custom component, replaces react-dates) */
+/* Override the Dash Design System CSS variables scoped to the datepicker.      */
+/* -------------------------------------------------------------------------- */
+.dash-datepicker,
+.dash-datepicker-content {
+  --Dash-Fill-Inverse-Strong:     var(--an-navy-700);
+  --Dash-Fill-Interactive-Strong: var(--an-blue);
+  --Dash-Fill-Interactive-Weak:   rgba(46,134,193,.20);
+  --Dash-Text-Strong:             #e8eaf6;
+  --Dash-Text-Weak:               var(--an-muted);
+  --Dash-Text-Disabled:           var(--an-faint);
+  --Dash-Stroke-Strong:           var(--an-navy-500);
+  --Dash-Shading-Strong:          rgba(0,0,0,.60);
+  --Dash-Shading-Weak:            rgba(0,0,0,.30);
+  --Dash-Spacing:                 4px;
+  color: #e8eaf6 !important;
+}
+.dash-datepicker {
+  overflow: visible !important;
+}
+.dash-datepicker-content {
+  position: absolute !important;
+  overflow: visible !important;
+  z-index: 1000 !important;
+}
+.dash-datepicker-calendar-month-header,
+.dash-datepicker-controls,
+.dash-datepicker-month-nav {
+  background: var(--an-navy-700) !important;
+  color: #e8eaf6 !important;
+}
+.dash-datepicker-month-nav button {
+  background: transparent !important;
+  color: #e8eaf6 !important;
+  border: none !important;
+}
+.dash-datepicker-month-nav button:hover {
+  color: var(--an-blue) !important;
+}
+.dash-datepicker-calendar td,
+.dash-datepicker-calendar th {
+  background: var(--an-navy-600) !important;
+  color: #e8eaf6 !important;
+}
+.dash-datepicker-calendar td:hover {
+  background: var(--an-navy-500) !important;
+  color: var(--an-text) !important;
+}
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-selected {
+  background: var(--an-blue) !important;
+  color: var(--an-text) !important;
+  border-radius: var(--an-r) !important;
+}
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-highlighted {
+  background: rgba(46,134,193,.25) !important;
+  color: #e8eaf6 !important;
+}
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-outside,
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-disabled {
+  color: var(--an-faint) !important;
+  background: #0c2440 !important;
+}
+
+/* ── Fallback for dcc.Tabs that don't carry an .an-tabs className ──────── */
+.dash-tabs .tab,
+.dash-tabs .tab *,
+.dash-tabs .tab--selected,
+.dash-tabs .tab:focus,
+.dash-tabs .tab:active,
+.dash-tabs .tab .tab-label,
+.dash-tabs .react-tabs__tab--selected {
+  color: var(--an-text) !important;
+}
+.dash-tabs {
+  background: transparent !important;
+}
+.dash-tabs .tab--selected {
+  background-color: transparent !important;
+  color: var(--an-text) !important;
+}
+
+/* ── Quick select chip hover (Trend tab series buttons) ──────────────────── */
+.qs-chip {
+  transition: background 0.1s, color 0.1s !important;
+}
+.qs-chip:hover {
+  background: var(--an-navy-500) !important;
+  color:      var(--an-text) !important;
+}
+
+/* ── Surface view-mode chips (dcc.RadioItems with inputStyle:none) ──────── */
+.surface-mode-chips label {
+  transition: background 0.12s, color 0.12s, border-color 0.12s !important;
+}
+.surface-mode-chips label:has(input:checked) {
+  background:   rgba(61,139,212,.20) !important;
+  border-color: var(--an-blue) !important;
+  color:        var(--an-cyan) !important;
+}
+.surface-mode-chips label:hover {
+  background: var(--an-navy-500) !important;
+  color:      var(--an-text) !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Beta Book sub-tab layout optimisation (docs/dev/SUBTAB_LAYOUT_OPTIMISATION.md)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── Segmented toggle — for 2-option mode switches (not navigation) ─────── */
+.seg-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-sunken);
+}
+.seg-toggle__btn {
+  padding: 9px 28px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color var(--dur-fast), background var(--dur-fast);
+}
+.seg-toggle__btn--active {
+  background: var(--accent-blue);
+  color: var(--text-on-accent);
+  font-weight: var(--fw-medium);
+}
+
+/* ── Candidates/Factor pool: factor selection grids ──────────────────────── */
+.factor-pool-section {
+  padding: var(--space-5) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.factor-pool-section:last-child { border-bottom: none; }
+
+.factor-pool-section__heading {
+  font-family: var(--type-h3-family);
+  font-weight: var(--type-h3-weight);
+  font-size: var(--type-h3-size);
+  line-height: var(--type-h3-lh);
+  color: var(--text-heading);
+  margin: 0 0 var(--space-3) 0;
+}
+
+.factor-pool-section__note {
+  font-family: var(--type-meta-family);
+  font-weight: var(--type-meta-weight);
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-lh);
+  color: var(--text-muted);
+  font-style: italic;
+  margin: 0 0 var(--space-4) 0;
+}
+
+.ir-country-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(80px, 1fr));
+  gap: var(--space-4) var(--space-5);
+}
+
+.ir-country-grid__col-head {
+  font-family: var(--type-label-family, var(--type-th-family));
+  font-weight: var(--type-label-weight, var(--type-th-weight));
+  font-size: var(--type-label-size, var(--type-th-size));
+  line-height: var(--type-label-lh, var(--type-th-lh));
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Country code chip — replaces flag emoji, which Windows renders as boxed
+   letters instead of flag glyphs (no flag support in the system emoji font). */
+.country-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 3px);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.5;
+}
+.country-chip--cn { background: #4a1f1f; color: #e07a7a; border: 1px solid #6e2a2a; }
+.country-chip--us { background: #1f2c4a; color: #7a9ae0; border: 1px solid #2a3f6e; }
+.country-chip--eu { background: #1f3a4a; color: #6ec0e0; border: 1px solid #2a5a6e; }
+.country-chip--jp { background: #4a1f3a; color: #e07ac0; border: 1px solid #6e2a5a; }
+.country-chip--uk { background: #2a2a4a; color: #9a9ae0; border: 1px solid #3f3f6e; }
+
+.factor-inline-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-7);
+  padding: var(--space-2) 0;
+}
+
+.cmd-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3) var(--space-7);
+}
+
+/* ── Portfolio: asset pool tag list ───────────────────────────────────────── */
+.asset-pool-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.asset-pool-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 7px 12px;
+  background: var(--accent-amber-soft);
+  border: 1px solid rgba(224,162,60,0.25);
+  border-radius: var(--radius-xs);
+  cursor: default;
+}
+
+.asset-pool-item__name {
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--accent-amber);
+  flex: 1;
+}
+
+.asset-pool-item__meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-muted);
+}
+
+/* ── Portfolio: Risk Budgets stepper control ──────────────────────────────── */
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+.stepper__btn {
+  width: 30px; height: 30px;
+  background: var(--surface-input);
+  color: var(--accent-blue);
+  border: none; cursor: pointer;
+  font-size: 16px; font-weight: 600;
+  transition: background var(--dur-fast);
+}
+.stepper__btn:hover { background: var(--surface-hover); }
+.stepper__input {
+  width: 70px; text-align: center;
+  background: var(--surface-input);
+  color: var(--text-primary);
+  border: none; border-left: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  font-family: var(--font-mono); font-size: 13px;
+  padding: 0 6px;
+}
+
+/* ── Backtest: Strategy Parameters wrapping grid ──────────────────────────── */
+.strategy-params-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--space-4) var(--space-6);
+  align-items: end;
+}
+
+/* ── Factor: sidebar fixed width ──────────────────────────────────────────── */
+.factor-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--surface-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--panel-pad);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* ── Factor: Plotly modebar theming (terminal look) ───────────────────────── */
+.js-plotly-plot .plotly .modebar {
+  background: var(--surface-panel) !important;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: 2px 4px;
+}
+.js-plotly-plot .plotly .modebar-btn path {
+  fill: var(--text-muted) !important;
+}
+.js-plotly-plot .plotly .modebar-btn:hover path {
+  fill: var(--text-primary) !important;
+}
+
+/* ── Bond: maturity bucket grid ───────────────────────────────────────────── */
+.bond-bucket-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-6);
+}
+@media (max-width: 1200px) {
+  .bond-bucket-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ── Futures: two-panel layout + collapsible sidebar sections ────────────── */
+.futures-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: var(--space-6);
+  padding: var(--panel-pad);
+  min-height: calc(100vh - 120px);
+}
+
+.strategies-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3) var(--space-5);
+}
+
+.sidebar-section {
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-5) 0;
+}
+.sidebar-section:last-child { border-bottom: none; }
+
+.sidebar-section__head {
+  font-family: var(--type-th-family);
+  font-weight: var(--type-th-weight);
+  font-size: var(--type-th-size);
+  line-height: var(--type-th-lh);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--accent-blue);
+  margin-bottom: var(--space-4);
+}
+
+details.param-group { margin-bottom: var(--space-3); }
+details.param-group summary {
+  font-family: var(--type-th-family);
+  font-weight: var(--type-th-weight);
+  font-size: var(--type-th-size);
+  line-height: var(--type-th-lh);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  cursor: pointer;
+  margin-bottom: var(--space-2);
+}
+details.param-group summary::-webkit-details-marker { color: var(--text-muted); }
+
+/* ── DatePickerSingle dark theming ────────────────────────────────────────── */
+.SingleDatePickerInput {
+  background: var(--surface-input) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-xs) !important;
+}
+.DateInput_input {
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 13px !important;
+  padding: 6px 10px !important;
+}
+
+/* ============================================================
+   ALPHA BOOK — sub-tab layout patterns
+   (Candidates / Backtest / Spread / Pairs)
+   ============================================================ */
+
+/* ── Candidates: collapsible seasonal-gate panel ─────────────────────────── */
+details.seasonal-gate summary { list-style: none; }
+details.seasonal-gate summary::-webkit-details-marker { display: none; }
+
+/* ── Backtest: Trend Parameters 5-column grid ────────────────────────────── */
+.alpha-trend-params {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px 16px;
+}
+
+/* ── Spread: true 2-column sidebar layout ────────────────────────────────── */
+.alpha-spread-layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.alpha-spread-sidebar {
+  position: sticky;
+  top: 14px;
+}
+
+/* ── Pairs: data-grid table pattern for pair inputs ──────────────────────── */
+.pairs-input-grid {
+  display: grid;
+  grid-template-columns: 60px repeat(4, 1fr);
+  border-top: 1px solid var(--navy-800);
+}
+.pairs-input-grid .row-label {
+  background: var(--navy-800);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-default);
+  border-right: 1px solid var(--navy-800);
+}
+.pairs-input-grid .col-header {
+  background: var(--surface-th);
+  font-family: var(--type-th-family);
+  font-weight: var(--type-th-weight);
+  font-size: var(--type-th-size);
+  line-height: var(--type-th-lh);
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 8px 12px;
+  border-right: 1px solid var(--navy-800);
+}
+.pairs-input-grid .cell {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-default);
+  border-right: 1px solid var(--navy-800);
+}
+
+/* ── Pairs: 2x2 chart grid (used by standalone regression_plots.html too) ── */
+.pairs-chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+/* ── Pair card (smart header with live stats) ─────────────────────── */
+.pair-card {
+  background: var(--an-navy-800) !important;
+  border: 1px solid var(--an-border2) !important;
+  border-radius: 7px !important;
+  overflow: hidden !important;
+}
+
+.pair-card__header {
+  background: var(--an-navy-600) !important;
+  padding: 13px 18px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+  display: flex !important;
+  align-items: baseline !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+}
+
+.pair-card__name {
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.09em !important;
+  text-transform: uppercase !important;
+  color: var(--an-muted) !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+.pair-card__name b {
+  color: var(--an-text) !important;
+  font-weight: 700 !important;
+}
+
+.pair-card__stats {
+  display: flex !important;
+  gap: 16px !important;
+  font-size: 12px !important;
+  color: var(--an-muted) !important;
+}
+
+.pair-card__stat b {
+  color: var(--an-cyan) !important;
+  font-weight: 600 !important;
+}
+
+.pair-card__stat.z b {
+  color: var(--an-amber) !important;
+}
+
+.pair-card__chart {
+  height: 430px !important;
+}
+
+/* ── Plotly modebar theming (Volatility / Beta Book charts) ─────────────── */
+.js-plotly-plot .plotly .modebar {
+  background: var(--surface-panel) !important;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: 2px 4px;
+}
+.js-plotly-plot .plotly .modebar-btn path { fill: var(--text-muted) !important; }
+.js-plotly-plot .plotly .modebar-btn:hover path { fill: var(--text-primary) !important; }
+.DayPicker { background: var(--an-navy-700) !important; }
