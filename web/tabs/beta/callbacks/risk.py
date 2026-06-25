@@ -29,6 +29,14 @@ from ._common import (
     _get_beta_close_prices,
     _load_cr_ts,
 )
+from ._risk_charts import (
+    build_net_position_fig,
+    build_dv01_ladder_fig,
+    build_factor_risk_fig,
+    build_kpi_cards,
+    build_kpi_strip,
+    build_inventory_summary,
+)
 
 
 def _coerce_float(value) -> float | None:
@@ -1276,16 +1284,19 @@ def register_risk_callbacks(app):
 
     # ── Risk subtab: inventory + factor exposure + key-term DV01 ladder ─────────
     @app.callback(
-        [Output('risk-inventory-container', 'children'),
+        [Output('risk-kpi-container', 'children'),
          Output('risk-netpos-container', 'children'),
-         Output('risk-exposure-container', 'children'),
+         Output('risk-dv01-container', 'children'),
+         Output('risk-factor-container', 'children'),
+         Output('risk-inventory-container', 'children'),
          Output('risk-refresh-status', 'children')],
         [Input('an-summary-subtabs', 'value'),
          Input('risk-refresh-btn', 'n_clicks'),
-         Input('allocation-results-store', 'data')],
+         Input('allocation-results-store', 'data'),
+         Input('risk-inventory-expanded', 'data')],
         prevent_initial_call=False,
     )
-    def update_risk_tables(tab_value, _n_clicks, allocation_results_data):
+    def update_risk_tables(tab_value, _n_clicks, allocation_results_data, inventory_expanded):
         import os as _os
         import re
 
@@ -1434,14 +1445,17 @@ def register_risk_callbacks(app):
                 pass
 
         if not beta_rows and not alpha_rows:
+            _empty_msg = "No positions found — run analysis (Beta) or optimization (Alpha) first."
             return (
-                _no_data_div("No positions found — run analysis (Beta) or optimization (Alpha) first."),
+                build_kpi_strip({"long": 0.0, "short": 0.0, "net": 0.0, "dv01": 0.0}),
+                _no_data_div(_empty_msg),
                 _no_data_div("No data."),
                 _no_data_div("No data."),
+                _no_data_div(_empty_msg),
                 "",
             )
 
-        # ── Inventory table ───────────────────────────────────────────────────
+        # ── Inventory table (full DataTable, shown when expanded) ─────────────
         all_rows = beta_rows + alpha_rows
         _dir_style = [
             {'if': {'filter_query': '{Direction} = "BUY"'},
@@ -1471,77 +1485,16 @@ def register_risk_callbacks(app):
             sort_action='native', page_size=40,
         )
 
-        # ── Net position by instrument (Beta long + Alpha legs combined) ──────
-        _netpos_rows = []
-        for code in sorted(net_pos.keys()):
-            e = net_pos[code]
-            net = round(e['Beta'] + e['Alpha'], 4)
-            if abs(net) < 1e-6 and abs(e['Beta']) < 1e-6 and abs(e['Alpha']) < 1e-6:
-                continue
-            _netpos_rows.append({
-                'Instrument': code,
-                'Beta (MM)': f"{e['Beta']:+.1f}" if abs(e['Beta']) > 1e-6 else '',
-                'Alpha (MM)': f"{e['Alpha']:+.1f}" if abs(e['Alpha']) > 1e-6 else '',
-                'Net (MM)': f"{net:+.1f}",
-                'Direction': 'LONG' if net > 1e-6 else ('SHORT' if net < -1e-6 else 'FLAT'),
-            })
-        _netpos_rows.sort(key=lambda r: -abs(float(r['Net (MM)'])))
+        inventory_content = (
+            inventory_table if inventory_expanded
+            else build_inventory_summary(beta_rows, alpha_rows)
+        )
 
-        if _netpos_rows:
-            netpos_table = dash_table.DataTable(
-                data=_netpos_rows,
-                columns=[{'name': c, 'id': c} for c in
-                         ['Instrument', 'Beta (MM)', 'Alpha (MM)', 'Net (MM)', 'Direction']],
-                style_cell={'textAlign': 'center', 'padding': '5px 8px', 'fontSize': '12px',
-                            'backgroundColor': THEME['table_row_odd'],
-                            'color': THEME['text_main'], 'border': 'none'},
-                style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'],
-                              'fontWeight': 'bold', 'border': 'none'},
-                style_data_conditional=[
-                    {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
-                    {'if': {'filter_query': '{Direction} = "LONG"'},
-                     'backgroundColor': 'rgba(0,204,150,0.08)'},
-                    {'if': {'filter_query': '{Direction} = "SHORT"'},
-                     'backgroundColor': 'rgba(239,85,59,0.08)'},
-                ],
-                style_table={'overflowX': 'auto'},
-                sort_action='native', page_size=40,
-            )
-        else:
-            netpos_table = _no_data_div("No netted positions found.")
+        # ── Net position by instrument chart (Beta long + Alpha legs combined) ─
+        netpos_fig = build_net_position_fig(net_pos)
+        netpos_graph = dcc.Graph(figure=netpos_fig, config={'displayModeBar': False})
 
-        # ── Bar-in-cell helper ────────────────────────────────────────────────
-        def _make_bar_styles(rows: list, cols: list, shared_max: bool = True) -> list:
-            """Return style_data_conditional entries for gradient bar-in-cell effect."""
-            col_vals: dict = {}
-            for c in cols:
-                vals = []
-                for row in rows:
-                    try:
-                        vals.append(float(str(row.get(c, '')).replace(',', '').replace('+', '').strip()))
-                    except (ValueError, TypeError):
-                        vals.append(None)
-                col_vals[c] = vals
-            if shared_max:
-                max_abs = max((abs(v) for cv in col_vals.values() for v in cv if v is not None), default=0.0)
-            styles = []
-            for c in cols:
-                if not shared_max:
-                    max_abs = max((abs(v) for v in col_vals[c] if v is not None), default=0.0)
-                if max_abs < 1e-10:
-                    continue
-                for i, v in enumerate(col_vals[c]):
-                    if v is None or abs(v) < 1e-10:
-                        continue
-                    pct = min(abs(v) / max_abs * 100, 100)
-                    if v > 0:
-                        bg = f"linear-gradient(90deg, rgba(39,174,96,0.22) {pct:.1f}%, transparent {pct:.1f}%)"
-                    else:
-                        bg = f"linear-gradient(270deg, rgba(231,76,60,0.22) {pct:.1f}%, transparent {pct:.1f}%)"
-                    styles.append({'if': {'row_index': i, 'column_id': c}, 'background': bg})
-            return styles
-
-        # ── Factor Risk Exposure (Beta only, no SPDL/SPSL, non-zero only) ────
+        # ── Factor Risk (Beta only, no SPDL/SPSL) — feeds the Factor Risk chart ─
         # Try to get factor_risk from the store (updated by RUN ANALYSIS),
         # fall back to global ALLOCATION_RESULTS for backwards compatibility
         _factor_risk_records = None
@@ -1558,205 +1511,34 @@ def register_risk_callbacks(app):
         else:
             factor_risk_df = None
 
-        _SKIP_PREFIXES = ('SPDL', 'SPSL')
-        if (factor_risk_df is not None and not factor_risk_df.empty
-                and 'Risk Factor' in factor_risk_df.columns
-                and 'Net Exposure' in factor_risk_df.columns):
-            fr_rows = []
-            for _, fr in factor_risk_df.iterrows():
-                rf  = str(fr['Risk Factor'])
-                if any(rf.startswith(p) for p in _SKIP_PREFIXES):
-                    continue
-                exp = float(fr.get('Net Exposure', 0) or 0)
-                rc  = float(fr.get('Risk Contribution (%)', 0) or 0)
-                vol = float(fr.get('Volatility (% ann.)', 0) or 0)
-                if abs(exp) < 1e-8:          # skip truly-zero exposures
-                    continue
-                fr_rows.append({
-                    'Risk Factor':  rf,
-                    'Exposure':     f"{exp:+.4f}",
-                    'Vol (% ann.)': f"{vol:.2f}%",
-                    'RC (%)':       f"{rc:.1f}%",
-                })
-            if fr_rows:
-                _exp_styles = [
-                    {'if': {'filter_query': '{Exposure} contains "+"', 'column_id': 'Exposure'},
-                     'color': THEME['success']},
-                    {'if': {'filter_query': '{Exposure} contains "-"', 'column_id': 'Exposure'},
-                     'color': THEME['danger']},
-                ]
-                _exp_bar_styles = _make_bar_styles(fr_rows, ['Exposure'])
-                factor_exp_table = dash_table.DataTable(
-                    data=fr_rows,
-                    columns=[{'name': c, 'id': c} for c in
-                             ['Risk Factor', 'Exposure', 'Vol (% ann.)', 'RC (%)']],
-                    style_cell={'textAlign': 'center', 'padding': '5px 10px', 'fontSize': '12px',
-                                'backgroundColor': THEME['table_row_odd'],
-                                'color': THEME['text_main'], 'border': 'none'},
-                    style_header={'backgroundColor': THEME['table_header'],
-                                  'color': THEME['text_main'], 'fontWeight': 'bold', 'border': 'none'},
-                    style_data_conditional=[
-                        {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
-                        *_exp_styles,
-                        *_exp_bar_styles,
-                    ],
-                    style_table={'overflowX': 'auto', 'maxWidth': '520px'},
-                )
-            else:
-                factor_exp_table = _no_data_div(
-                    "No non-zero IR/CMD/FX factor exposures found (run Beta Analysis first).")
-        else:
-            factor_exp_table = _no_data_div(
-                "Beta factor risk not yet computed — run RUN ANALYSIS in Beta Book first.")
+        # ── DV01 Duration Ladder chart (Beta + Alpha combined, from kt_grid) ───
+        dv01_fig = build_dv01_ladder_fig(kt_grid, _TENOR_ORDER)
+        dv01_graph = dcc.Graph(figure=dv01_fig, config={'displayModeBar': False})
 
-        # ── Key Term Exposure ladder ──────────────────────────────────────────
-        # Compute row totals; skip entirely-zero rows
-        kt_display = []
-        for tenor in _TENOR_ORDER:
-            row = kt_grid[tenor]
-            total = round(sum(row.values()), 4)
-            if all(abs(v) < 1e-8 for v in row.values()):
-                continue
-            kt_display.append({
-                'Tenor':   tenor,
-                'Bonds':   f"{row['Bonds']:+.4f}" if abs(row['Bonds']) > 1e-8 else '',
-                'Swaps':   f"{row['Swaps']:+.4f}" if abs(row['Swaps']) > 1e-8 else '',
-                'Futures': f"{row['Futures']:+.4f}" if abs(row['Futures']) > 1e-8 else '',
-                'Other':   f"{row['Other']:+.4f}" if abs(row['Other']) > 1e-8 else '',
-                'Total':   f"{total:+.4f}" if abs(total) > 1e-8 else '',
-            })
+        # ── Factor Risk Attribution chart (sqrt-scale, from factor_risk_df) ────
+        factor_fig = build_factor_risk_fig(factor_risk_df)
+        factor_graph = dcc.Graph(figure=factor_fig, config={'displayModeBar': False})
 
-        _kt_pos_style = [
-            {'if': {'filter_query': f'{{{c}}} contains "+"', 'column_id': c},
-             'color': THEME['success']}
-            for c in ['Bonds', 'Swaps', 'Futures', 'Other', 'Total']
-        ]
-        _kt_neg_style = [
-            {'if': {'filter_query': f'{{{c}}} contains "-"', 'column_id': c},
-             'color': THEME['danger']}
-            for c in ['Bonds', 'Swaps', 'Futures', 'Other', 'Total']
-        ]
-        _kt_bar_styles = _make_bar_styles(
-            kt_display, ['Bonds', 'Swaps', 'Futures', 'Other', 'Total'],
-            shared_max=True,
-        ) if kt_display else []
-
-        kt_table = (
-            dash_table.DataTable(
-                data=kt_display,
-                columns=[{'name': c, 'id': c} for c in
-                         ['Tenor', 'Bonds', 'Swaps', 'Futures', 'Other', 'Total']],
-                style_cell={'textAlign': 'center', 'padding': '5px 10px', 'fontSize': '12px',
-                            'backgroundColor': THEME['table_row_odd'],
-                            'color': THEME['text_main'], 'border': 'none'},
-                style_cell_conditional=[
-                    {'if': {'column_id': 'Tenor'}, 'fontWeight': 'bold',
-                     'color': THEME['accent'], 'textAlign': 'left'},
-                ],
-                style_header={'backgroundColor': THEME['table_header'],
-                              'color': THEME['text_main'], 'fontWeight': 'bold', 'border': 'none'},
-                style_data_conditional=[
-                    {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
-                    *_kt_pos_style, *_kt_neg_style, *_kt_bar_styles,
-                ],
-                style_table={'overflowX': 'auto', 'maxWidth': '700px'},
-            )
-            if kt_display
-            else _no_data_div("No rate positions found for Key Term Exposure.")
-        )
-
-        # ── Factor Risk Attribution table (from last Beta run, non-zero rows) ──
-        _fr_attr_div = html.Div()
-        # Use the same factor_risk_df computed above (from store or global state)
-        _fr_attr_df = factor_risk_df
-        if _fr_attr_df is not None and not _fr_attr_df.empty:
-            try:
-                _ra = _fr_attr_df.copy()
-                # Filter rows where Net Exposure is effectively zero
-                if 'Net Exposure' in _ra.columns:
-                    _ra = _ra[_ra['Net Exposure'].abs() >= 1e-8]
-                if not _ra.empty:
-                    n_rc = len(_ra)
-                    _ra['Target RC (%)'] = round(100.0 / n_rc, 1) if n_rc else 0.0
-                    _ra['Δ RC (%)'] = (_ra['Risk Contribution (%)'] - _ra['Target RC (%)']).round(1)
-                    _ra['Risk Contribution (%)'] = _ra['Risk Contribution (%)'].round(1)
-                    _ra['Volatility (% ann.)'] = (_ra['Volatility (% ann.)'] * 100).round(2)
-                    _ra['Net Exposure'] = _ra['Net Exposure'].round(4)
-                    _fr_attr_div = html.Div([
-                        html.H6("Factor Risk Attribution",
-                                style={'color': THEME['warning'], 'fontSize': '12px',
-                                       'marginBottom': '6px', 'marginTop': '0'}),
-                        html.Div("Beta book only  ·  Rows with zero net exposure hidden",
-                                 style={'color': THEME['text_sub'], 'fontSize': '10px',
-                                        'marginBottom': '6px', 'fontStyle': 'italic'}),
-                        dash_table.DataTable(
-                            data=_ra[[
-                                'Risk Factor', 'Volatility (% ann.)', 'Net Exposure',
-                                'Risk Contribution (%)', 'Target RC (%)', 'Δ RC (%)',
-                            ]].to_dict('records'),
-                            columns=[
-                                {'name': 'Factor',        'id': 'Risk Factor'},
-                                {'name': 'Vol % (ann.)',  'id': 'Volatility (% ann.)'},
-                                {'name': 'Net Exp.',      'id': 'Net Exposure'},
-                                {'name': 'RC %',          'id': 'Risk Contribution (%)'},
-                                {'name': 'Target RC %',   'id': 'Target RC (%)'},
-                                {'name': 'Δ RC %',        'id': 'Δ RC (%)'},
-                            ],
-                            style_cell={
-                                'textAlign': 'center', 'padding': '5px 8px',
-                                'fontFamily': 'monospace', 'fontSize': '11px',
-                                'backgroundColor': THEME['table_row_odd'],
-                                'color': THEME['text_main'], 'border': 'none',
-                            },
-                            style_header={
-                                'backgroundColor': THEME['table_header'],
-                                'color': THEME['text_main'], 'fontWeight': 'bold',
-                                'textAlign': 'center', 'border': 'none', 'fontSize': '11px',
-                            },
-                            style_data_conditional=[
-                                {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
-                                {'if': {'filter_query': '{Δ RC %} > 5',  'column_id': 'Δ RC %'},
-                                 'color': THEME.get('warning', '#f39c12')},
-                                {'if': {'filter_query': '{Δ RC %} < -5', 'column_id': 'Δ RC %'},
-                                 'color': THEME.get('warning', '#f39c12')},
-                            ],
-                            style_table={'overflowX': 'auto', 'maxWidth': '600px'},
-                        ),
-                    ], style={'backgroundColor': THEME['bg_card'], 'padding': '12px 14px',
-                              'borderRadius': '5px', 'border': f'1px solid {THEME["table_header"]}',
-                              'marginTop': '16px'})
-            except Exception:
-                pass
-
-        # ── Assemble second panel: Factor Exposure + Key Term side-by-side ────
-        exposure_panel = html.Div([
-            html.Div([
-                html.H6("Beta book",
-                        style={'color': THEME['warning'], 'fontSize': '12px', 'marginBottom': '4px'}),
-                html.Div(
-                    "Exposure: portfolio beta to factor (signed, dimensionless = Bᵀw)",
-                    style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginBottom': '6px',
-                           'fontStyle': 'italic'},
-                ),
-                factor_exp_table,
-            ], style={'flex': '1', 'minWidth': '280px', 'marginRight': '20px'}),
-            html.Div([
-                html.H6("Beta + Alpha: DV01 (MM/bp)",
-                        style={'color': THEME['accent'], 'fontSize': '12px', 'marginBottom': '8px'}),
-                html.Div(
-                    "Bonds = Treasury/Policybank/CDB duration  ·  Swaps = IRS/Repo/ICP  ·  "
-                    "Futures = Bond futures, term basis, futures-swap",
-                    style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginBottom': '6px',
-                           'fontStyle': 'italic'},
-                ),
-                kt_table,
-            ], style={'flex': '1', 'minWidth': '340px'}),
-            html.Div(_fr_attr_div, style={'flex': '1 1 100%'}),
-        ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '16px', 'alignItems': 'flex-start'})
+        # ── KPI strip ───────────────────────────────────────────────────────────
+        kpis = build_kpi_cards(net_pos, kt_grid, _TENOR_ORDER)
+        kpi_strip = build_kpi_strip(kpis)
 
         n_beta  = len(beta_rows)
         n_alpha = len(alpha_rows)
         status  = (f"{n_beta} beta · {n_alpha} alpha positions · "
                    f"updated {datetime.now().strftime('%H:%M:%S')}")
-        return inventory_table, netpos_table, exposure_panel, status
+        return kpi_strip, netpos_graph, dv01_graph, factor_graph, inventory_content, status
+
+    # ── Position Inventory: collapse/expand toggle ──────────────────────────────
+    @app.callback(
+        [Output('risk-inventory-expanded', 'data'),
+         Output('risk-inventory-toggle-btn', 'children')],
+        Input('risk-inventory-toggle-btn', 'n_clicks'),
+        State('risk-inventory-expanded', 'data'),
+        prevent_initial_call=True,
+    )
+    def _toggle_risk_inventory(_n_clicks, expanded):
+        is_expanded = not bool(expanded)
+        label = "▲ Collapse" if is_expanded else "▼ Expand table"
+        return is_expanded, label
 

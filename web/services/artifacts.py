@@ -70,20 +70,71 @@ def find_latest_run(mode: str | None = None) -> RunMeta | None:
     return None
 
 
-def format_run_meta(meta: RunMeta | None) -> str:
-    if not meta:
-        return "No runs found under runs/."
+def get_data_generation_date() -> str | None:
+    """Get the last date from CBond-cvpx.pkl as the data generation date.
 
-    parts = [
-        f"run_id={meta.run_id}",
-        f"mode={meta.mode}",
-        f"asof={meta.asof}",
-    ]
-    if meta.generated_at:
-        parts.append(f"generated_at={meta.generated_at}")
-    if meta.status:
-        parts.append(f"status={meta.status}")
-    return " | ".join(parts)
+    Returns ISO format date string (YYYY-MM-DD) or None if file not found.
+    """
+    try:
+        import pandas as pd
+        # input/ is at the same level as bin-v4.0/, not inside it
+        input_dir = project_root().parent / "input"
+        cbond_file = input_dir / "CBond-cvpx.pkl"
+
+        if not cbond_file.exists():
+            return None
+
+        data = pd.read_pickle(cbond_file)
+
+        # Extract the index (dates) from ytm_act if it's a dict
+        if isinstance(data, dict) and 'ytm_act' in data:
+            ytm_data = data['ytm_act']
+            if hasattr(ytm_data, 'index') and len(ytm_data.index) > 0:
+                last_date = ytm_data.index[-1]
+                # Convert to datetime if needed and format as YYYY-MM-DD
+                if hasattr(last_date, 'strftime'):
+                    return last_date.strftime('%Y-%m-%d')
+                else:
+                    return str(last_date)[:10]  # Extract date part from string
+
+        return None
+    except Exception:
+        return None
+
+
+def format_run_meta(meta: RunMeta | None) -> str:
+    """Format run metadata into human-readable text.
+
+    Shows asof date and data generation date (from pickle file) in readable format.
+    Falls back to generated_at if data date cannot be determined.
+    """
+    if not meta:
+        return "No recent runs found"
+
+    # Parse asof date to readable format (YYYY-MM-DD → Jun 17, 2026)
+    asof_readable = "Unknown"
+    if meta.asof:
+        try:
+            # Handle both YYYY-MM-DD and ISO format
+            asof_date = datetime.fromisoformat(meta.asof.split('T')[0])
+            asof_readable = asof_date.strftime('%b %d, %Y')
+        except Exception:
+            asof_readable = meta.asof
+
+    # Try to get data generation date from pickle file
+    data_date = get_data_generation_date()
+
+    if data_date:
+        try:
+            data_date_obj = datetime.fromisoformat(data_date)
+            data_readable = data_date_obj.strftime('%b %d, %Y')
+        except Exception:
+            data_readable = data_date
+
+        return f"Run: {asof_readable} | Data: {data_readable}"
+    else:
+        # Fallback if we can't read pickle file
+        return f"Run: {asof_readable}"
 
 
 def load_step_result(step_name: str, mode: str = "eod") -> dict[str, Any] | None:

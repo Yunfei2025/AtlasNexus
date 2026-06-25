@@ -10,6 +10,7 @@ Port: 8080
 from __future__ import annotations
 import sys
 import os
+import re
 from dash import dcc, html
 from dash.dependencies import Input, Output, State
 
@@ -238,143 +239,142 @@ def build_tabs_panel():
     run_center_content = html.Div(
         [
             html.Div([
-            # ── Daily Pipeline card ──────────────────────────────────────────
-            html.Div([
-                html.Div("DAILY PIPELINE", className="an-card-hdr"),
-                html.Div([
-                    html.Button("Update Data",         id="an-btn-update",     n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
-                    html.Button("Run EOD",             id="an-btn-eod",        n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
-                    html.Button("Run EOD (+update)",   id="an-btn-eod-update", n_clicks=0, style={**_btn_style, 'marginRight': '16px'}),
-                    html.Button("Refresh Instruments", id="an-btn-refresh-instruments", n_clicks=0, style={**_btn_style, 'marginRight': '10px'}),
-                    # As-of date shared by all buttons — on the same row
-                    html.Div([
-                        html.Label("As Of Date", style={**_lbl_style, 'marginBottom': '4px', 'display': 'block'}),
-                        dcc.DatePickerSingle(
-                            id="an-eod-asof",
-                            date=asof_default,
-                            display_format='YYYY-MM-DD',
-                            first_day_of_week=1,
-                            style={'fontSize': '13px', 'minWidth': '140px'},
-                        ),
-                    ], style={'display': 'flex', 'flexDirection': 'column', 'justifyContent': 'center', 'position': 'relative', 'zIndex': '1001'}),
-                ], style={'display': 'flex', 'flexDirection': 'row', 'alignItems': 'flex-end', 'flexWrap': 'wrap', 'gap': '14px', 'padding': '22px'}),
-            ], className="an-card"),
 
-            # ── Data Backfill card ──────────────────────────────────────────
-            html.Div([
-                html.Div("DATA BACKFILL", className="an-card-hdr"),
+                # ── LEFT COLUMN: Daily Pipeline + Data Backfill ──────────────
                 html.Div([
+
+                    # Daily Pipeline panel
                     html.Div([
-                        # Instrument type
+                        html.Div("Daily Pipeline", className="rc-section-label"),
                         html.Div([
-                            html.Label("Instrument Type", style=_lbl_style),
-                            dcc.Dropdown(
-                                id="an-bt-btype",
-                                options=[
-                                    {'label': 'IRS',             'value': 'IRS'},
-                                    {'label': 'TBond',           'value': 'TBond'},
-                                    {'label': 'CBond',           'value': 'CBond'},
-                                    {'label': 'Futures Analytics', 'value': 'Futures'},
-                                ],
-                                value='IRS',
-                                clearable=False,
-                                style=_dd_style,
-                            ),
-                        ], style={'minWidth': '150px', 'flex': '0 0 150px'}),
-                        # Update steps
-                        # pool/bonds/cbts: curve-backtest steps
-                        # rewrite: futures-analytics full rebuild flag
-                        html.Div([
-                            html.Label("Update Steps", style=_lbl_style),
-                            dcc.Dropdown(
-                                id="an-bt-update-list",
-                                options=[
-                                    {'label': 'pool',    'value': 'pool'},
-                                    {'label': 'bonds',   'value': 'bonds'},
-                                    {'label': 'cbts',    'value': 'cbts'},
-                                    {'label': 'rewrite', 'value': 'rewrite'},
-                                ],
-                                value=['pool'],
-                                multi=True,
-                                clearable=False,
-                                style=_dd_style,
-                            ),
-                        ], style={'minWidth': '200px', 'flex': '1 1 200px'}),
-                        # Start date
-                        html.Div([
-                            html.Label("Start Date", style=_lbl_style),
+                            html.Label("As Of Date", style={**_lbl_style, 'marginBottom': '4px', 'display': 'block'}),
                             dcc.DatePickerSingle(
-                                id="an-bt-start",
-                                date=start_default,
+                                id="an-eod-asof",
+                                date=asof_default,
                                 display_format='YYYY-MM-DD',
-                                style={'fontSize': '13px', 'minWidth': '140px'},
+                                first_day_of_week=1,
+                                style={'fontSize': '13px', 'width': '100%'},
                             ),
-                        ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '1001'}),
-                        # End date
+                        ], style={'marginBottom': '14px', 'position': 'relative', 'zIndex': '1001'}),
                         html.Div([
-                            html.Label("End Date", style=_lbl_style),
-                            dcc.DatePickerSingle(
-                                id="an-bt-end",
-                                date=end_default,
-                                display_format='YYYY-MM-DD',
-                                style={'fontSize': '13px', 'minWidth': '140px'},
-                            ),
-                        ], style={'minWidth': '160px', 'flex': '0 0 160px', 'position': 'relative', 'zIndex': '1001'}),
-                        # Workers (curve-backtest only)
+                            html.Div([
+                                html.Button("Update Data", id="an-btn-update", n_clicks=0,
+                                            style={**_btn_style, 'flex': '1'}),
+                                html.Button("Run EOD", id="an-btn-eod", n_clicks=0,
+                                            style={**_btn_style, 'flex': '1'}),
+                            ], style={'display': 'flex', 'gap': '10px'}),
+                            html.Button("Run EOD + Update Data", id="an-btn-eod-update", n_clicks=0,
+                                        style={**_btn_style, 'width': '100%'}),
+                            html.Button("Refresh Instruments", id="an-btn-refresh-instruments", n_clicks=0,
+                                        style={**_btn_style, 'width': '100%'}),
+                        ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '8px'}),
+                    ], className="rc-panel"),
+
+                    # Data Backfill panel
+                    html.Div([
+                        html.Div("Data Backfill", className="rc-section-label"),
                         html.Div([
-                            html.Label("Workers", style=_lbl_style),
-                            dcc.Input(
-                                id="an-bt-processes",
-                                type="number",
-                                value=4,
-                                min=1,
-                                max=32,
-                                step=1,
-                                style=_input_style,
-                            ),
-                        ], style={'minWidth': '80px', 'flex': '0 0 80px'}),
-                        # Run button
-                        html.Div([
+                            html.Div([
+                                html.Div([
+                                    html.Label("Instrument Type", style=_lbl_style),
+                                    dcc.Dropdown(
+                                        id="an-bt-btype",
+                                        options=[
+                                            {'label': 'IRS',             'value': 'IRS'},
+                                            {'label': 'TBond',           'value': 'TBond'},
+                                            {'label': 'CBond',           'value': 'CBond'},
+                                            {'label': 'Futures Analytics', 'value': 'Futures'},
+                                        ],
+                                        value='IRS',
+                                        clearable=False,
+                                        style=_dd_style,
+                                    ),
+                                ], style={'flex': '1'}),
+                                html.Div([
+                                    html.Label("Update Steps", style=_lbl_style),
+                                    dcc.Dropdown(
+                                        id="an-bt-update-list",
+                                        options=[
+                                            {'label': 'pool',    'value': 'pool'},
+                                            {'label': 'bonds',   'value': 'bonds'},
+                                            {'label': 'cbts',    'value': 'cbts'},
+                                            {'label': 'rewrite', 'value': 'rewrite'},
+                                        ],
+                                        value=['pool'],
+                                        multi=True,
+                                        clearable=False,
+                                        style=_dd_style,
+                                    ),
+                                ], style={'flex': '1'}),
+                            ], style={'display': 'flex', 'gap': '10px'}),
+                            html.Div([
+                                html.Div([
+                                    html.Label("Start Date", style=_lbl_style),
+                                    dcc.DatePickerSingle(
+                                        id="an-bt-start",
+                                        date=start_default,
+                                        display_format='YYYY-MM-DD',
+                                        style={'fontSize': '13px', 'width': '100%'},
+                                    ),
+                                ], style={'flex': '1', 'position': 'relative', 'zIndex': '1001'}),
+                                html.Div([
+                                    html.Label("End Date", style=_lbl_style),
+                                    dcc.DatePickerSingle(
+                                        id="an-bt-end",
+                                        date=end_default,
+                                        display_format='YYYY-MM-DD',
+                                        style={'fontSize': '13px', 'width': '100%'},
+                                    ),
+                                ], style={'flex': '1', 'position': 'relative', 'zIndex': '1001'}),
+                                html.Div([
+                                    html.Label("Workers", style=_lbl_style),
+                                    dcc.Input(
+                                        id="an-bt-processes",
+                                        type="number",
+                                        value=4,
+                                        min=1,
+                                        max=32,
+                                        step=1,
+                                        style=_input_style,
+                                    ),
+                                ], style={'width': '56px'}),
+                            ], style={'display': 'flex', 'gap': '10px'}),
                             html.Button(
                                 "▶  Run Backfill",
                                 id="an-btn-backtest",
                                 n_clicks=0,
-                                style={**_btn_style, 'background': '#1a5276', 'borderColor': '#2e86c1', 'fontWeight': '600'},
+                                style={**_btn_style, 'background': '#0e3a3f', 'borderColor': '#36a6b8',
+                                       'fontWeight': '600', 'width': '100%'},
                             ),
-                        ], style={'alignSelf': 'flex-end'}),
-                    ], style={
-                        'display': 'flex', 'flexDirection': 'row', 'gap': '14px',
-                        'alignItems': 'flex-end', 'flexWrap': 'wrap',
-                    }),
+                            html.Button(
+                                "Generate Factor Series",
+                                id="an-btn-gen-factor-series",
+                                n_clicks=0,
+                                title="Full rebuild of factor-rates.pkl from raw market data. "
+                                      "Use on-demand when source data changes.",
+                                style={**_btn_style, 'background': 'transparent',
+                                       'borderColor': '#2f9d6b', 'color': '#2f9d6b', 'width': '100%'},
+                            ),
+                            html.Span(
+                                id="an-gen-factor-series-status",
+                                style={'color': '#aab0c0', 'fontSize': '12px'},
+                            ),
+                        ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
+                    ], className="rc-panel"),
 
-                    # ── Factor Series row ────────────────────────────────────────
-                    html.Div([
-                        html.Button(
-                            "Generate Factor Series",
-                            id="an-btn-gen-factor-series",
-                            n_clicks=0,
-                            title="Full rebuild of factor-rates.pkl from raw market data. "
-                                  "Use on-demand when source data changes.",
-                            style={**_btn_style, 'background': '#0e3a3f', 'borderColor': '#36a6b8'},
-                        ),
-                        html.Span(
-                            id="an-gen-factor-series-status",
-                            style={'color': '#aab0c0', 'fontSize': '12px', 'marginLeft': '12px'},
-                        ),
-                    ], style={'marginTop': '14px', 'display': 'flex', 'alignItems': 'center'}),
-                ], style={'padding': '22px'}),
-            ], className="an-card"),
+                ], className="rc-left-col"),
 
-            # ── Status & Logs card ───────────────────────────────────────────
-            html.Div([
-                html.Div("STATUS & LOGS", className="an-card-hdr"),
+                # ── RIGHT COLUMN: Status bar + Log viewer ────────────────────
                 html.Div([
-                    html.Div(id="an-job-status", children="No job running.",
-                             style={'fontStyle': 'italic', 'color': '#aab0c0', 'fontSize': '12px', 'marginBottom': '8px'}),
+                    html.Div(
+                        id="an-job-status",
+                        children="No job running.",
+                        style={'fontStyle': 'italic', 'color': '#aab0c0', 'fontSize': '12px'},
+                    ),
                     html.Div(id="an-run-center-content"),
-                ], style={'padding': '22px'}),
-            ], className="an-card"),
-            ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '20px'}),
+                ], className="rc-right-col"),
+
+            ], className="rc-grid", style={'marginTop': '28px'}),
 
             dcc.Interval(id="an-run-center-interval", interval=_INTERVAL_RUN_CTR_MS, n_intervals=0),
         ]
@@ -805,152 +805,92 @@ _make_tab_switcher(
 )
 
 
+_LOG_LEVEL_RE = re.compile(r"^(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL):\s*(.*)$")
+_LOG_LEVEL_COLOR = {
+    "INFO": "#4a9eff", "DEBUG": "#6b7fa0",
+    "WARNING": "#e0a23c", "WARN": "#e0a23c",
+    "ERROR": "#e05c5c", "CRITICAL": "#e05c5c",
+}
+_LOG_MSG_COLOR = {
+    "WARNING": "#c8944a", "WARN": "#c8944a",
+    "ERROR": "#d56b6b", "CRITICAL": "#d56b6b",
+}
+
+
+def _render_log_line(line: str):
+    m = _LOG_LEVEL_RE.match(line)
+    if not m:
+        return html.Div(line, className="rc-log-line")
+    level, msg = m.group(1), m.group(2)
+    return html.Div(
+        [
+            html.Span(level, className="rc-log-level",
+                      style={"color": _LOG_LEVEL_COLOR.get(level, "#6b7fa0")}),
+            html.Span(msg, style={"color": _LOG_MSG_COLOR.get(level, "var(--text-secondary)")}),
+        ],
+        className="rc-log-line",
+    )
+
+
 @app.callback(
     Output("an-run-center-content", "children"),
     Input("an-run-center-interval", "n_intervals"),
     State("an-job-id", "data"),
 )
 def _update_run_center(n, job_id):
-    """Update Run Center content on interval.
+    """Update Run Center status bar + log viewer on interval.
 
     Each tick:
     - Auto-finalizes any RUNNING jobs whose PID has exited.
-    - Shows a live "running jobs" badge strip.
-    - Shows full log/status for the last-launched job (job_id from store).
+    - Renders an IDLE/RUNNING status bar with last-run summary.
+    - Renders the tailed log as individually colored, level-coded lines.
     """
     meta = find_latest_run(mode="eod")
-
-    # Auto-finalize all stale RUNNING jobs and collect what is truly running.
     running_jobs = list_running_jobs()  # already finalizes stale entries internally
+    is_running = bool(running_jobs)
 
-    _state_colors = {
-        "RUNNING":  ("#1a5276", "#2e86c1"),
-        "FINISHED": ("#1a4731", "#27ae60"),
-        "FAILED":   ("#6e1a1a", "#c0392b"),
-    }
+    status = finalize_job_if_done(job_id) if job_id else None
 
-    def _badge(s):
-        bg, fg = _state_colors.get(s, ("#2c2c3e", "#aab0c0"))
-        return html.Span(
-            s,
-            style={
-                "background": bg, "color": fg, "border": f"1px solid {fg}",
-                "borderRadius": "3px", "padding": "1px 6px",
-                "fontSize": "11px", "fontWeight": "600",
-            },
-        )
-
-    def _job_row(s):
-        jid   = s.get("job_id", "?")
-        state = s.get("state", "UNKNOWN")
-        jtype = _cmd_type(s.get("cmd", [])) or "?"
-        pid   = s.get("pid")
-        start = s.get("started_at", "")[:19]
-        return html.Div(
-            [
-                _badge(state),
-                html.Span(f" {jtype}",  style={"color": "#ffffff", "fontWeight": "600", "marginLeft": "6px"}),
-                html.Span(f" {jid[:8]}\u2026", style={"color": "#aab0c0", "fontSize": "11px"}),
-                html.Span(f" pid={pid}",       style={"color": "#aab0c0", "fontSize": "11px", "marginLeft": "8px"}),
-                html.Span(f" started {start}", style={"color": "#aab0c0", "fontSize": "11px", "marginLeft": "8px"}),
-            ],
-            style={"padding": "4px 0"},
-        )
-
-    # Running jobs banner
-    if running_jobs:
-        banner = html.Div(
-            [html.Div("RUNNING JOBS", style={"color": "#aab0c0", "fontSize": "11px",
-                                              "fontWeight": "600", "letterSpacing": "0.08em",
-                                              "marginBottom": "6px"})] +
-            [_job_row(j) for j in running_jobs],
-            style={"background": "#0c2b64", "border": "1px solid #2a5298",
-                   "borderRadius": "5px", "padding": "10px 14px", "marginBottom": "10px"},
-        )
+    if is_running:
+        jtype = _cmd_type(running_jobs[0].get("cmd", [])) or "job"
+        dot_color, status_text, status_color = "#e0a23c", f"RUNNING ({jtype})", "#e0a23c"
     else:
-        banner = html.Div(
-            "No jobs currently running.",
-            style={"color": "#aab0c0", "fontSize": "12px", "fontStyle": "italic",
-                   "marginBottom": "8px"},
-        )
-
-    # Finalize & refresh status for the tracked job_id
-    status = None
-    if job_id:
-        status = finalize_job_if_done(job_id)
-
-    header = html.Div(
-        [
-            html.P(f"Latest EOD run: {format_run_meta(meta)}",
-                   style={"margin": "0 0 8px 0", "color": "#aab0c0", "fontSize": "12px"}),
-            banner,
-        ]
-    )
+        dot_color, status_text, status_color = "#41b078", "IDLE", "#41b078"
 
     if status:
         state   = status.get("state", "UNKNOWN")
-        pid     = status.get("pid")
         started = status.get("started_at", "")[:19]
-        ended   = status.get("ended_at", "") or "—"
-        cmd     = status.get("cmd", [])
-        jtype   = _cmd_type(cmd) or "?"
-        return html.Div(
-            [
-                header,
-                html.Hr(style={"borderColor": "#1a3a6e", "margin": "0 0 10px 0"}),
-                html.Div(
-                    [
-                        html.Div(
-                            "LAST JOB",
-                            style={"color": "#aab0c0", "fontSize": "11px", "fontWeight": "600",
-                                   "letterSpacing": "0.08em", "marginBottom": "6px"},
-                        ),
-                        html.Div(
-                            [
-                                _badge(state),
-                                html.Span(f"  {jtype}",
-                                          style={"color": "#ffffff", "fontWeight": "600"}),
-                            ],
-                            style={"marginBottom": "6px"},
-                        ),
-                        html.Div(
-                            [
-                                html.Strong("Job ID: "),   html.Span(job_id), html.Br(),
-                                html.Strong("PID: "),      html.Span(str(pid)), html.Br(),
-                                html.Strong("Started: "),  html.Span(started), html.Br(),
-                                html.Strong("Ended: "),    html.Span(str(ended)[:19]), html.Br(),
-                                html.Strong("Cmd: "),      html.Code(" ".join(str(a) for a in cmd)),
-                            ],
-                            style={"lineHeight": "1.8em", "fontSize": "12px"},
-                        ),
-                    ],
-                    style={"background": "#082255", "borderRadius": "5px",
-                           "padding": "10px 14px", "marginBottom": "10px"},
-                ),
-                html.Div(
-                    "LOG OUTPUT (TAIL)",
-                    style={"color": "#aab0c0", "fontSize": "11px", "fontWeight": "600",
-                           "letterSpacing": "0.08em", "marginBottom": "4px"},
-                ),
-                html.Pre(
-                    tail_log(job_id, max_lines=200),
-                    style={"whiteSpace": "pre-wrap", "maxHeight": "360px", "overflowY": "auto",
-                           "background": "#040f24", "color": "#c8d8f0",
-                           "padding": "10px", "borderRadius": "4px", "fontSize": "12px"},
-                ),
-            ]
-        )
+        ended   = (status.get("ended_at", "") or "")[:19] or "—"
+        jtype   = _cmd_type(status.get("cmd", [])) or "?"
+        last_run_text = f"Last: {jtype} | {started} → {ended} | {state}"
     else:
-        return html.Div(
-            [
-                header,
-                html.Hr(style={"borderColor": "#1a3a6e", "margin": "0 0 10px 0"}),
-                html.P(
-                    "No active job selected. Start a job using the buttons above to see live logs.",
-                    style={"color": "#aab0c0", "fontStyle": "italic", "fontSize": "12px"},
-                ),
-            ]
-        )
+        last_run_text = f"Latest EOD: {format_run_meta(meta)}"
+
+    status_bar = html.Div(
+        [
+            html.Div([
+                html.Span(className="rc-status-dot",
+                          style={"background": dot_color, "boxShadow": f"0 0 6px {dot_color}"}),
+                html.Span(status_text, className="rc-status-text", style={"color": status_color}),
+            ], style={"display": "flex", "alignItems": "center", "gap": "8px"}),
+            html.Span(last_run_text, className="rc-status-meta"),
+        ],
+        className="rc-status-bar",
+    )
+
+    log_text = tail_log(job_id, max_lines=200) if job_id else ""
+    lines = [ln for ln in log_text.splitlines() if ln.strip()]
+    if lines:
+        log_children = [_render_log_line(ln) for ln in lines]
+    else:
+        log_children = [html.Div(
+            "No logs. Start a job to see output here.", className="rc-log-empty",
+        )]
+
+    log_viewer = html.Div(log_children, id="an-run-center-log-viewer", className="rc-log-viewer")
+
+    return html.Div([status_bar, html.Div(log_viewer, className="rc-panel-flush")],
+                     style={"display": "flex", "flexDirection": "column", "gap": "14px"})
 
 
 # (tab-switcher callbacks registered above via _make_tab_switcher)

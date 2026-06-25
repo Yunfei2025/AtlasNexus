@@ -285,62 +285,81 @@ def build_multiasset_risk_layout():
 
         # Header row
         html.Div([
-            html.H4("Combined Book Risk", style={
-                'color': THEME['text_main'], 'margin': '0',
-                'borderBottom': f'2px solid {THEME["warning"]}', 'paddingBottom': '5px', 'flex': '1',
+            html.Div("Combined Book Risk", style={
+                'color': THEME['text_main'], 'fontWeight': '600', 'fontSize': '16px', 'flex': '1',
             }),
             html.Div([
+                html.Span(id='risk-refresh-status', style={
+                    'fontSize': '11px', 'color': THEME['text_sub'], 'fontStyle': 'italic',
+                    'fontFamily': 'var(--font-mono)',
+                }),
                 html.Button("Refresh", id='risk-refresh-btn', n_clicks=0, style={
                     'fontSize': '11px', 'padding': '3px 10px',
                     'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
                     'border': f'1px solid {THEME["warning"]}', 'borderRadius': '4px', 'cursor': 'pointer',
                 }),
-                html.Span(id='risk-refresh-status', style={
-                    'fontSize': '11px', 'color': THEME['text_sub'], 'fontStyle': 'italic',
-                }),
-            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px'}),
         ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center',
                   'marginBottom': '16px'}),
 
         dcc.Loading(type='circle', color=THEME['accent'], children=[
-            # ── Inventory table ───────────────────────────────────────────────
+
+            # ── KPI strip (4 cards) ─────────────────────────────────────────
+            html.Div(id='risk-kpi-container'),
+
+            # ── Charts: Net Position (1fr) | DV01 + Factor Risk (440px) ─────
             html.Div([
-                html.H6("Position Inventory  (Beta + Alpha)", style={
-                    'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '13px',
-                }),
+                html.Div([
+                    html.Div("Net Position by Instrument", className='risk-panel-header'),
+                    html.Div([
+                        html.Div([
+                            html.Div(style={'width': '8px', 'height': '8px', 'borderRadius': '1px',
+                                            'background': c, 'flexShrink': '0'}),
+                            html.Span(l, style={'fontSize': '11px', 'color': THEME['text_sub']}),
+                        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '5px'})
+                        for c, l in [('#3d8bd4', 'Beta only'), ('#e0a23c', 'Alpha long'),
+                                     ('#d56b6b', 'Alpha short'), ('#41b078', 'Mixed long')]
+                    ], style={'display': 'flex', 'gap': '18px', 'marginBottom': '10px', 'flexWrap': 'wrap'}),
+                    html.Div(id='risk-netpos-container',
+                             children=[html.Div("Click Refresh to load positions.",
+                                                style={'color': THEME['text_sub'], 'fontStyle': 'italic',
+                                                       'padding': '20px', 'textAlign': 'center'})]),
+                ], className='risk-panel'),
+
+                html.Div([
+                    html.Div([
+                        html.Div("DV01 Duration Ladder (MM/bp)", className='risk-panel-header'),
+                        html.Div(id='risk-dv01-container',
+                                 children=[html.Div("Click Refresh to load positions.",
+                                                    style={'color': THEME['text_sub'], 'fontStyle': 'italic',
+                                                           'padding': '20px', 'textAlign': 'center'})]),
+                    ], className='risk-panel'),
+                    html.Div([
+                        html.Div("Factor Risk Attribution", className='risk-panel-header'),
+                        html.Div(id='risk-factor-container',
+                                 children=[html.Div("Click Refresh to load exposures.",
+                                                    style={'color': THEME['text_sub'], 'fontStyle': 'italic',
+                                                           'padding': '20px', 'textAlign': 'center'})]),
+                    ], className='risk-panel'),
+                ], className='risk-charts-right-col'),
+            ], className='risk-charts-grid'),
+
+            # ── Position Inventory (collapsible) ─────────────────────────────
+            html.Div([
+                html.Div([
+                    html.Div("Position Inventory (Beta + Alpha)", className='risk-panel-header',
+                              style={'flex': '1', 'border': 'none', 'marginBottom': '0', 'paddingBottom': '0'}),
+                    html.Button("▼ Expand table", id='risk-inventory-toggle-btn', n_clicks=0,
+                                className='risk-inventory-toggle-btn'),
+                ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center',
+                          'marginBottom': '14px', 'paddingBottom': '8px',
+                          'borderBottom': f'1px solid {THEME["table_header"]}'}),
+                dcc.Store(id='risk-inventory-expanded', data=False),
                 html.Div(id='risk-inventory-container',
                          children=[html.Div("Click Refresh to load positions.",
                                             style={'color': THEME['text_sub'], 'fontStyle': 'italic',
                                                    'padding': '20px', 'textAlign': 'center'})]),
-            ], style={'backgroundColor': THEME['bg_card'], 'padding': '14px 16px',
-                      'borderRadius': '5px', 'marginBottom': '16px',
-                      'border': f'1px solid {THEME["table_header"]}'}),
-
-            # ── Net position by instrument (Beta + Alpha legs combined) ───────
-            html.Div([
-                html.H6("Net Position by Instrument  (Beta + Alpha legs)", style={
-                    'color': THEME['accent'], 'marginBottom': '8px', 'fontSize': '13px',
-                }),
-                html.Div(id='risk-netpos-container',
-                         children=[html.Div("Click Refresh to load positions.",
-                                            style={'color': THEME['text_sub'], 'fontStyle': 'italic',
-                                                   'padding': '20px', 'textAlign': 'center'})]),
-            ], style={'backgroundColor': THEME['bg_card'], 'padding': '14px 16px',
-                      'borderRadius': '5px', 'marginBottom': '16px',
-                      'border': f'1px solid {THEME["table_header"]}'}),
-
-            # ── Risk exposure table ───────────────────────────────────────────
-            html.Div([
-                html.H6("Risk Exposure (Beta + Alpha)", style={
-                    'color': THEME['warning'], 'marginBottom': '8px', 'fontSize': '13px',
-                }),
-                html.Div(id='risk-exposure-container',
-                         children=[html.Div("Click Refresh to load exposures.",
-                                            style={'color': THEME['text_sub'], 'fontStyle': 'italic',
-                                                   'padding': '20px', 'textAlign': 'center'})]),
-            ], style={'backgroundColor': THEME['bg_card'], 'padding': '14px 16px',
-                      'borderRadius': '5px',
-                      'border': f'1px solid {THEME["table_header"]}'}),
+            ], className='risk-panel'),
         ]),
 
         ]),

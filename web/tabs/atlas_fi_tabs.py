@@ -1157,14 +1157,17 @@ def register_callbacks(app) -> None:
         else:
             last_updated = "Last updated: Loading..."
 
-        # Return cards or placeholder
+        # Return cards or placeholder. NOTE: pairs-plots-container is a CSS
+        # grid (2x2); the children list must be the cards themselves, not a
+        # single wrapper html.Div, otherwise the grid only has one child and
+        # the 4 cards stack 4x1 inside it instead of tiling 2x2.
         if not cards:
-            content = html.Div(
+            content = [html.Div(
                 "Click 'Refresh' to generate pair analysis",
                 style={'color': THEME['text_sub'], 'padding': '40px', 'textAlign': 'center'},
-            )
+            )]
         else:
-            content = html.Div(cards)
+            content = cards
 
         return content, last_updated
 

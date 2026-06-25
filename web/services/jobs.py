@@ -353,3 +353,57 @@ def _status_watcher(proc: subprocess.Popen, status_path: Path) -> None:
 def refresh_job_state(job_id: str) -> dict[str, Any] | None:
     """Finalize the job if its PID has exited, then return the latest status."""
     return finalize_job_if_done(job_id)
+
+
+def kill_job(job_id: str) -> str:
+    """Kill a running job by its job_id.
+
+    Returns a status message describing what was done.
+    """
+    status = get_job_status(job_id)
+    if status is None:
+        return f"Job {job_id} not found."
+
+    if status.get("state") != "RUNNING":
+        return f"Job {job_id} is {status.get('state', 'UNKNOWN')} (not running)."
+
+    pid = status.get("pid")
+    if not pid:
+        status["state"] = "FINISHED"
+        status["ended_at"] = now_iso()
+        status["error"] = "Job marked as RUNNING but had no PID; finalized."
+        (jobs_dir() / job_id / "status.json").write_text(
+            json.dumps(status, indent=2), encoding="utf-8"
+        )
+        return f"Job {job_id}: No PID recorded; marked FINISHED."
+
+    try:
+        pid = int(pid)
+        # Attempt to kill the process
+        if sys.platform.startswith("win"):
+            import ctypes
+            ctypes.windll.kernel32.TerminateProcess(
+                ctypes.windll.kernel32.OpenProcess(0x0001, False, pid), 1
+            )
+        else:
+            os.kill(pid, 9)  # SIGKILL on Unix
+
+        # Mark job as finished
+        status["state"] = "FINISHED"
+        status["ended_at"] = now_iso()
+        status["error"] = "Job killed by user."
+        (jobs_dir() / job_id / "status.json").write_text(
+            json.dumps(status, indent=2), encoding="utf-8"
+        )
+        return f"Job {job_id} (PID {pid}) killed successfully."
+    except ProcessLookupError:
+        # Process already gone
+        status["state"] = "FINISHED"
+        status["ended_at"] = now_iso()
+        status["error"] = "Job process not found (may have already exited)."
+        (jobs_dir() / job_id / "status.json").write_text(
+            json.dumps(status, indent=2), encoding="utf-8"
+        )
+        return f"Job {job_id}: Process not found; marked FINISHED."
+    except Exception as e:
+        return f"Error killing job {job_id}: {e}"
