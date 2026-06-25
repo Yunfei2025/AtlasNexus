@@ -202,7 +202,7 @@ def render_report_pdf(report_data: dict[str, Any], output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(channel="msedge")
         try:
             page = browser.new_page()
             page.set_content(html, wait_until="networkidle")
