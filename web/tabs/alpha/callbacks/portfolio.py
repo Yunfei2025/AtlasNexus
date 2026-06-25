@@ -206,11 +206,21 @@ def register_portfolio_callbacks(app) -> None:
                 # Apply user-assigned regime and direction overrides from curated store
                 _entry_map = {e['instrument']: e for e in curated_instruments}
                 for inst, entry in _entry_map.items():
-                    stored_dir    = str(entry.get('direction', '') or '').strip().upper()
-                    stored_regime = str(entry.get('regime',    '') or '').strip().lower()
+                    # Normalize regime: handle 'momentum' vs 'trend-following' synonyms
+                    stored_regime = str(entry.get('regime', '') or '').strip().lower()
+                    if stored_regime in {'mean-reverting', 'meanreversion', 'mean_reverting', 'mr'}:
+                        stored_regime = 'mean-reverting'
+                    elif stored_regime in {'trend', 'trendfollowing', 'trend_following', 'carry', 'mixed', 'momentum'}:
+                        stored_regime = 'momentum'
+
+                    # Normalize direction
+                    stored_dir = str(entry.get('direction', '') or '').strip().upper()
+                    if stored_dir not in {'BUY', 'SELL'}:
+                        stored_dir = ''
+
                     mask = df_curated['ID'] == inst
                     if mask.any():
-                        if stored_dir in {'BUY', 'SELL'}:
+                        if stored_dir:
                             df_curated.loc[mask, 'direction'] = stored_dir
                         if stored_regime in {'mean-reverting', 'momentum'}:
                             df_curated.loc[mask, 'style'] = stored_regime
@@ -470,6 +480,7 @@ def register_portfolio_callbacks(app) -> None:
                 _save_cols = [
                     c for c in [
                         'ID', 'spread_type', 'category', 'style', 'direction',
+                        'Leg1', 'Leg2',
                         'Zscore', 'spread', 'carry_roll', 'breakeven_3m', 'vol', 'halflife',
                         'stop_loss', 'profit_target',
                         'notional_mm', '_duration', 'DV01_k', 'weight', 'risk_contribution',

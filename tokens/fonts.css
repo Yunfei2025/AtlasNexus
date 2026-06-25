@@ -1,0 +1,4 @@
+/* AtlasNexus webfonts — loaded from Google Fonts CDN.
+   IBM Plex Sans = UI / display.  IBM Plex Mono = all numeric & tabular data.
+   NOTE: substitution flagged to user — swap for self-hosted .woff2 if offline use is required. */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');

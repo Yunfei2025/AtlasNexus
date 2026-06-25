@@ -56,6 +56,7 @@ def build_multiasset_portfolio_layout():
         dcc.Store(id='portfolio-data-store'),
         dcc.Store(id='asset-pool-store', data=initial_pool),
         dcc.Store(id='rp-budget-store', data={}),
+        dcc.Store(id='allocation-results-store', data={}),
 
         html.Div([
             # Section 1: Configuration Header & Capital

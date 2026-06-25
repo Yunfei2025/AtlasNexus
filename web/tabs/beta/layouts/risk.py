@@ -343,7 +343,7 @@ def build_multiasset_risk_layout():
                       'border': f'1px solid {THEME["table_header"]}'}),
         ]),
 
-        ], style={'display': 'none'}),
+        ]),
 
         # ── Tickets subtab ───────────────────────────────────────────────────
         html.Div(id='summary-tab-tickets', children=[
@@ -353,6 +353,6 @@ def build_multiasset_risk_layout():
             html.Div("Ticket implementation pending...", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'textAlign': 'center', 'padding': '30px'})
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px'}),
 
-        ], style={'display': 'none'}),
+        ]),
 
     ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px', 'borderRadius': '5px', 'margin': '10px'})

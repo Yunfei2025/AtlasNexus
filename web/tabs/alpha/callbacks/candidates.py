@@ -986,8 +986,9 @@ def register_candidate_callbacks(app) -> None:
         if trig_dict and trig_dict.get('type') == 'curated-del':
             if not any(nc for nc in del_clicks if nc):
                 raise PreventUpdate
-            idx = trig_dict['index']
-            return [e for i, e in enumerate(current) if i != idx]
+            trig_stype = trig_dict.get('stype', '')
+            trig_inst = trig_dict.get('inst', '')
+            return [e for e in current if not (e.get('spread_type') == trig_stype and e.get('instrument') == trig_inst)]
 
         raise PreventUpdate
 
@@ -996,8 +997,8 @@ def register_candidate_callbacks(app) -> None:
     # -------------------------------------------------------------------------
     @app.callback(
         Output('alpha-curated-instruments-store', 'data', allow_duplicate=True),
-        [Input({'type': 'curated-regime',    'index': ALL}, 'value'),
-         Input({'type': 'curated-direction', 'index': ALL}, 'value')],
+        [Input({'type': 'curated-regime',    'stype': ALL, 'inst': ALL}, 'value'),
+         Input({'type': 'curated-direction', 'stype': ALL, 'inst': ALL}, 'value')],
         State('alpha-curated-instruments-store', 'data'),
         prevent_initial_call=True,
     )
@@ -1014,19 +1015,23 @@ def register_candidate_callbacks(app) -> None:
             raise PreventUpdate
 
         trig_type = trig_dict.get('type', '')
-        trig_idx  = trig_dict.get('index', None)
-        if trig_idx is None or trig_idx >= len(current):
+        trig_stype = trig_dict.get('stype', '')
+        trig_inst = trig_dict.get('inst', '')
+        if not trig_stype or not trig_inst:
             raise PreventUpdate
 
         updated = [dict(e) for e in current]
         new_val = ctx.triggered[0]['value']
-        if trig_type == 'curated-regime':
-            updated[trig_idx]['regime'] = new_val or 'uncertain'
-        elif trig_type == 'curated-direction':
-            updated[trig_idx]['direction'] = new_val or ''
-        else:
-            raise PreventUpdate
-        return updated
+        for e in updated:
+            if e.get('spread_type') == trig_stype and e.get('instrument') == trig_inst:
+                if trig_type == 'curated-regime':
+                    e['regime'] = new_val or 'uncertain'
+                elif trig_type == 'curated-direction':
+                    e['direction'] = new_val or ''
+                else:
+                    raise PreventUpdate
+                return updated
+        raise PreventUpdate
 
     # -------------------------------------------------------------------------
     # PORTFOLIO: Populate saved-positions store from alpha_book_positions.parquet
@@ -1186,7 +1191,7 @@ def register_candidate_callbacks(app) -> None:
 
         # ── Card grid: candidate instruments (from correlation check + user-added) ──
         curated_cards = []
-        for i, entry in enumerate(instruments):
+        for entry_id, entry in enumerate(instruments):
             stype = entry.get('spread_type', '')
             inst  = entry.get('instrument', '')
             stored_regime = entry.get('regime', 'uncertain')
@@ -1204,7 +1209,7 @@ def register_candidate_callbacks(app) -> None:
 
             regime_widget = (
                 dcc.Dropdown(
-                    id={'type': 'curated-regime', 'index': i},
+                    id={'type': 'curated-regime', 'stype': stype, 'inst': inst},
                     options=_REGIME_OPTIONS,
                     value=regime if regime_known else None,
                     placeholder='regime…', clearable=False,
@@ -1214,7 +1219,7 @@ def register_candidate_callbacks(app) -> None:
             )
             dir_widget = (
                 dcc.Dropdown(
-                    id={'type': 'curated-direction', 'index': i},
+                    id={'type': 'curated-direction', 'stype': stype, 'inst': inst},
                     options=_DIR_OPTIONS,
                     value=direction if dir_known else None,
                     placeholder='dir…', clearable=False,
@@ -1231,7 +1236,7 @@ def register_candidate_callbacks(app) -> None:
                         'flex': '1', 'overflow': 'hidden', 'textOverflow': 'ellipsis', 'whiteSpace': 'nowrap',
                     }),
                     _matrix_dot(inst, stype),
-                    html.Button("×", id={'type': 'curated-del', 'index': i}, n_clicks=0,
+                    html.Button("×", id={'type': 'curated-del', 'stype': stype, 'inst': inst}, n_clicks=0,
                                 style={'background': 'none', 'border': f"1px solid {THEME['danger']}",
                                        'color': THEME['danger'], 'borderRadius': '3px',
                                        'cursor': 'pointer', 'padding': '0px 4px',

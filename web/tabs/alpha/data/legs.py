@@ -19,7 +19,7 @@ def _parse_repo_spread_legs(spread_id: str) -> tuple[str, str]:
         '2y': '2Y', '3y': '3Y', '5y': '5Y', '10y': '10Y'
     }
 
-    # Handle Basis spreads (e.g., "Basis-5y" → SHI3MS5Y.IR vs FR007S5Y.IR)
+    # Handle Basis spreads (e.g., "Basis-5y" → SHI3MS5Y.IR (higher-yield) vs FR007S5Y.IR)
     m = re.match(r'basis-(\d+)y$', spread_id.lower())
     if m:
         tenor = _TENOR_MAP.get(f"{m.group(1)}y", f"FR007S{m.group(1).upper()}Y.IR")
@@ -35,7 +35,7 @@ def _parse_repo_spread_legs(spread_id: str) -> tuple[str, str]:
         return ('', '')
     t1 = _TENOR_MAP.get(pairs[0], pairs[0].upper())
     t2 = _TENOR_MAP.get(pairs[1], pairs[1].upper())
-    return (f'FR007S{t1}.IR', f'FR007S{t2}.IR')
+    return (f'FR007S{t2}.IR', f'FR007S{t1}.IR')
 
 
 def _tenor_str_to_years(tenor: str) -> float:
@@ -215,13 +215,15 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
         elif upper.startswith('CGB-'):
             m = re.search(r'(\d+)S(\d+)S', upper)
             if m:
-                return (otr_cgb.get(_t_label(float(m.group(1))), ''),
-                        otr_cgb.get(_t_label(float(m.group(2))), ''))
+                t1 = _t_label(float(m.group(1)))
+                t2 = _t_label(float(m.group(2)))
+                return (otr_cgb.get(t2, ''), otr_cgb.get(t1, ''))
         elif upper.startswith('CDB-'):
             m = re.search(r'(\d+)S(\d+)S', upper)
             if m:
-                return (otr_cdb.get(_t_label(float(m.group(1))), ''),
-                        otr_cdb.get(_t_label(float(m.group(2))), ''))
+                t1 = _t_label(float(m.group(1)))
+                t2 = _t_label(float(m.group(2)))
+                return (otr_cdb.get(t2, ''), otr_cdb.get(t1, ''))
         return ('', '')
 
     # Bond-Curve: leg1 is the bond, leg2 is nearest duration reference bond
@@ -238,7 +240,8 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
     elif stype == 'CBondSwap':
         return (tid, _duration_to_fr007_tenor(duration))
 
-    # NetBasis (Bond-Futures): CTD vs Futures contract
+    # NetBasis (Bond-Futures): leg1 = CTD (long cash), leg2 = Futures (short contract)
+    # Economic trade: long CTD bond, short futures contract (receive carry/repo benefit)
     elif stype == 'NetBasis':
         ctype = tid.split('-')[0]
         si = nb.get(ctype, {}).get('StatInfo')
@@ -248,11 +251,13 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
             return (ctd, fut)
         return ('', '')
 
-    # TermBasis (Calendar Spreads): Front vs Next futures contract
+    # TermBasis (Calendar Spreads): leg1 = Front contract, leg2 = Next contract
+    # Economic trade: long near contract, short far contract (capture roll-down)
     elif stype == 'TermBasis':
         return _futs_front_next(tid)
 
-    # FuturesSwap: Futures contract vs IRS
+    # FuturesSwap: leg1 = Futures contract, leg2 = IRS (matched tenor)
+    # Economic trade: long futures (physical), pay fixed IRS (hedge rate risk)
     elif stype == 'FuturesSwap':
         front, _ = _futs_front_next(tid)
         return (front, fs_irs.get(tid, ''))

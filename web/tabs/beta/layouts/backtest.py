@@ -370,22 +370,39 @@ def build_multiasset_backtest_layout():
                     labelStyle={'marginRight': '20px', 'color': THEME['text_main'], 'fontSize': '13px'},
                 ),
             ], style={'marginTop': '15px'}),
+
+            # Action Buttons Row
+            html.Div([
+                html.Button(
+                    "▶️ Run Historical Analysis",
+                    id='run-history-button',
+                    n_clicks=0,
+                    style={'backgroundColor': THEME['success'], 'color': 'white',
+                           'padding': '10px 22px', 'border': 'none', 'borderRadius': '4px',
+                           'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold',
+                           'marginRight': '12px'}
+                ),
+                html.Button(
+                    "📄 Generate Report", id='gen-report-button', n_clicks=0,
+                    style={'backgroundColor': THEME['accent'], 'color': 'white',
+                           'padding': '10px 22px', 'border': 'none', 'borderRadius': '4px',
+                           'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold',
+                           'marginRight': '12px'}
+                ),
+                html.Button(
+                    "⬇️ Download Report", id='dl-report-button', n_clicks=0, disabled=True,
+                    style={'backgroundColor': THEME['success'], 'color': 'white',
+                           'padding': '10px 22px', 'border': 'none', 'borderRadius': '4px',
+                           'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold'}
+                ),
+            ], style={'marginTop': '15px', 'display': 'flex', 'gap': '8px', 'alignItems': 'center'}),
+
+            html.Div(id='report-status-message', style={'marginTop': '10px', 'fontSize': '13px'}),
         ], style=_card),
 
-        # ── Section 3: Action ───────────────────────────────────────────
-        html.Div([
-            html.Button(
-                "▶️ Run Historical Analysis",
-                id='run-history-button',
-                n_clicks=0,
-                style={'backgroundColor': THEME['success'], 'color': 'white',
-                       'padding': '10px 22px', 'border': 'none', 'borderRadius': '4px',
-                       'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold',
-                       'marginRight': '12px'}
-            ),
-            html.Div(id='performance-metrics-container',
-                     style={'marginTop': '15px'}),
-        ], style={'marginBottom': '15px'}),
+        # ── Metrics Display ─────────────────────────────────────────────
+        html.Div(id='performance-metrics-container',
+                 style={'marginTop': '15px', 'marginBottom': '15px'}),
 
         # ── Results ─────────────────────────────────────────────────────
         dcc.Loading(
@@ -400,7 +417,25 @@ def build_multiasset_backtest_layout():
                 # Asset Pool Changes Section
                 html.Div(id='asset-changes-container')
             ]
-        )
+        ),
+
+        # ── Section 4: Monthly Report ───────────────────────────────────
+        html.Div(id='risk-budget-allocation-panel', style={'marginTop': '20px'}),
+
+        html.Div([
+            html.H6("本月要点 (Monthly Highlights)", style={'color': THEME['accent'], 'marginBottom': '10px'}),
+            dcc.Textarea(
+                id='report-commentary-input',
+                style={'width': '100%', 'height': '110px', 'fontSize': '13px',
+                       'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
+                       'border': f'1px solid {THEME["accent"]}', 'borderRadius': '4px',
+                       'padding': '8px'},
+            ),
+        ], id='report-commentary-container', style={**_card, 'display': 'none'}),
+
+        dcc.Store(id='backtest-results-store'),
+        dcc.Store(id='report-meta-store'),
+        dcc.Download(id='report-download'),
     ], style={'padding': '10px'})
 
 

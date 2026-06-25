@@ -1,0 +1,55 @@
+/* ============================================================
+   AtlasNexus — TYPOGRAPHY TOKENS
+   IBM Plex Sans  → UI, headings, labels, prose
+   IBM Plex Mono  → all numeric / tabular data, metadata, IDs, codes
+   Technical terminal: tight tracking on data, airy tracking on display.
+   ============================================================ */
+:root {
+  /* ---- Families ---- */
+  --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  /* ---- Weights ---- */
+  --fw-light:   300; /* @kind font */
+  --fw-regular: 400; /* @kind font */
+  --fw-medium:  500; /* @kind font */
+  --fw-semibold:600; /* @kind font */
+  --fw-bold:    700; /* @kind font */
+
+  /* ---- Type scale (px) ---- */
+  --fs-display: 30px;  /* app title "AtlasNexus · Daily" */
+  --fs-h1:      22px;  /* panel section title */
+  --fs-h2:      18px;  /* sub-section title */
+  --fs-h3:      15px;  /* card / group heading */
+  --fs-body:    14px;  /* body copy */
+  --fs-sm:      13px;  /* dense controls */
+  --fs-data:    13px;  /* table cell data (mono) */
+  --fs-meta:    12px;  /* metadata strip (mono) */
+  --fs-label:   11px;  /* uppercase eyebrow / TH labels */
+  --fs-micro:   10px;  /* badges, tiny tags */
+
+  /* ---- Line heights ---- */
+  --lh-tight:   1.15; /* @kind font */
+  --lh-snug:    1.35; /* @kind font */
+  --lh-normal:  1.5;  /* @kind font */
+
+  /* ---- Letter spacing ---- */
+  --ls-display:  0.06em;  /* airy title @kind font */
+  --ls-label:    0.09em;  /* uppercase eyebrows / TH @kind font */
+  --ls-tab:      0.02em;  /* @kind font */
+  --ls-data:     0; /* @kind font */
+  --ls-tight:   -0.01em;  /* @kind font */
+
+  /* ============================================================
+     SEMANTIC TEXT ROLES (shorthands: weight family size/lh)
+     ============================================================ */
+  --type-display:  var(--fw-light) var(--fs-display)/var(--lh-tight) var(--font-sans);
+  --type-h1:       var(--fw-regular) var(--fs-h1)/var(--lh-snug) var(--font-sans);
+  --type-h2:       var(--fw-medium) var(--fs-h2)/var(--lh-snug) var(--font-sans);
+  --type-h3:       var(--fw-semibold) var(--fs-h3)/var(--lh-snug) var(--font-sans);
+  --type-body:     var(--fw-regular) var(--fs-body)/var(--lh-normal) var(--font-sans);
+  --type-data:     var(--fw-medium) var(--fs-data)/var(--lh-snug) var(--font-mono);
+  --type-meta:     var(--fw-regular) var(--fs-meta)/var(--lh-snug) var(--font-mono);
+  --type-th:       var(--fw-bold) var(--fs-label)/var(--lh-tight) var(--font-mono);
+  --type-label:    var(--fw-semibold) var(--fs-label)/var(--lh-tight) var(--font-sans);
+}

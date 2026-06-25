@@ -149,7 +149,8 @@ def register_backtest_hist_callbacks(app):
         [Output('historical-allocation-chart', 'figure'),
          Output('pnl-attribution-chart', 'figure'),
          Output('performance-metrics-container', 'children'),
-         Output('asset-changes-container', 'children')],
+         Output('asset-changes-container', 'children'),
+         Output('backtest-results-store', 'data')],
         [Input('run-history-button', 'n_clicks')],
         [State('backtest-capital-input', 'value'),
          State('backtest-capital-unit', 'value'),
@@ -177,7 +178,7 @@ def register_backtest_hist_callbacks(app):
         )
         
         if n_clicks == 0:
-            return empty_fig, empty_fig, None, None
+            return empty_fig, empty_fig, None, None, None
 
         # Refresh factor-rates.pkl incrementally before backtesting so that
         # any data gap since the last "Predict" run is filled automatically.
@@ -229,7 +230,7 @@ def register_backtest_hist_callbacks(app):
                     "Factor Model Scaling needs factor signals — run the Individual Factors "
                     "backtest to populate factor-backtest.pkl, then retry.",
                     style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'},
-                )
+                ), None
 
         def _factor_signal_asof(factor_code, asof_date):
             """Most-recent FactorModel position for `factor_code` on/before `asof_date`."""
@@ -253,7 +254,7 @@ def register_backtest_hist_callbacks(app):
             
             if risk_factors.empty:
                 err_fig = go.Figure().update_layout(title="No risk factor data available", template=THEME['chart_template'])
-                return err_fig, err_fig, None, html.Div("No data", style={'color': THEME['warning']})
+                return err_fig, err_fig, None, html.Div("No data", style={'color': THEME['warning']}), None
             
             # Get selected factors from global factor pool (set in Factor tab)
             selected_factors = []
@@ -271,9 +272,9 @@ def register_backtest_hist_callbacks(app):
                     font={'color': THEME['text_main']}
                 )
                 return err_fig, err_fig, None, html.Div(
-                    "Go to Factor tab and select factors for the analysis pool.", 
+                    "Go to Factor tab and select factors for the analysis pool.",
                     style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}
-                )
+                ), None
             
             print(f"Using factor pool from Factor tab: {selected_factors}")
             
@@ -289,9 +290,9 @@ def register_backtest_hist_callbacks(app):
                 )
                 missing = [f for f in selected_factors if f not in risk_factors.columns]
                 return err_fig, err_fig, None, html.Div(
-                    f"Missing factors: {missing}", 
+                    f"Missing factors: {missing}",
                     style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}
-                )
+                ), None
             
             # Get the actual data range for selected factors
             # Use dropna(how='any') to ensure ALL selected factors have data
@@ -350,7 +351,7 @@ def register_backtest_hist_callbacks(app):
             
             if not rebalance_dates:
                 err_fig = go.Figure().update_layout(title="Not enough historical data for the selected period", template=THEME['chart_template'])
-                return err_fig, err_fig, None, html.Div("Insufficient data", style={'color': THEME['warning']})
+                return err_fig, err_fig, None, html.Div("Insufficient data", style={'color': THEME['warning']}), None
             
             # Convert capital
             total_capital_value = float(total_capital) if total_capital else 100
@@ -362,6 +363,7 @@ def register_backtest_hist_callbacks(app):
             history_data = []
             allocations_by_date = {}
             asset_pools_by_date = {}  # Track asset pool changes
+            final_weights_by_date = {}  # rebalance_date -> {asset_name: blended weight fraction}
             all_assets_ever = set()
 
             print(f"\n{'='*60}")
@@ -591,10 +593,11 @@ def register_backtest_hist_callbacks(app):
 
                 history_data.append(row)
                 allocations_by_date[rebalance_date] = current_allocations
+                final_weights_by_date[rebalance_date] = dict(weights)
             
             if not history_data:
                 err_fig = go.Figure().update_layout(title="No valid rebalance periods found", template=THEME['chart_template'])
-                return err_fig, err_fig, None, html.Div("No valid periods", style={'color': THEME['warning']})
+                return err_fig, err_fig, None, html.Div("No valid periods", style={'color': THEME['warning']}), None
             
             # Use user-selected date range for display (we already validated it's valid)
             display_start = start_date
@@ -761,6 +764,7 @@ def register_backtest_hist_callbacks(app):
             
             # --- NAV index (base 1000) and Performance Metrics ---
             metrics_table = None
+            results_payload = None
             if not df_pnl.empty and len(df_pnl) > 1:
                 initial_capital = total_capital_cny / 1_000_000
                 portfolio_values = initial_capital + df_pnl['Total']
@@ -885,11 +889,27 @@ def register_backtest_hist_callbacks(app):
                     style_table={'overflowX': 'auto', 'maxHeight': '400px', 'overflowY': 'auto'}
                 )
             ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'})
-            
-            return fig_alloc, fig_pnl, metrics_table, asset_changes_table
-            
+
+            sorted_rb = sorted(final_weights_by_date.keys())
+            if sorted_rb:
+                results_payload = {
+                    'weights_final': final_weights_by_date[sorted_rb[-1]],
+                    'weights_prev': final_weights_by_date[sorted_rb[-2]] if len(sorted_rb) > 1 else {},
+                    'rebalance_date': sorted_rb[-1].strftime('%Y-%m-%d'),
+                    'nav_dates': [d.strftime('%Y-%m-%d') for d in df_pnl['Date']],
+                    'nav_gross_values': nav_series.round(4).tolist() if not df_pnl.empty and len(df_pnl) > 1 else [],
+                    'nav_net_values': nav_net_series.round(4).tolist() if not df_pnl.empty and len(df_pnl) > 1 else [],
+                    'start_date': start_date.strftime('%Y-%m-%d'),
+                    'end_date': end_date.strftime('%Y-%m-%d'),
+                    'alloc_mode': alloc_mode,
+                }
+            else:
+                results_payload = None
+
+            return fig_alloc, fig_pnl, metrics_table, asset_changes_table, results_payload
+
         except Exception as e:
             traceback.print_exc()
             err_fig = go.Figure().update_layout(title=f"Error: {str(e)}", template=THEME['chart_template'])
-            return err_fig, err_fig, None, html.Div(f"Error: {str(e)}", style={'color': THEME['danger']})
+            return err_fig, err_fig, None, html.Div(f"Error: {str(e)}", style={'color': THEME['danger']}), None
 

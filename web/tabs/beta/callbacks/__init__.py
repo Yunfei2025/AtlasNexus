@@ -13,6 +13,7 @@ from .backtest_hist import register_backtest_hist_callbacks
 from .backtest_futures import register_backtest_futures_callbacks
 from .backtest_rfbt import register_backtest_rfbt_callbacks
 from .risk import register_risk_callbacks
+from .report_export import register_report_export_callbacks
 
 
 def register_portfolio_callbacks(app):
@@ -31,6 +32,7 @@ def register_multiasset_callbacks(app):
     register_backtest_futures_callbacks(app)
     register_backtest_rfbt_callbacks(app)
     register_risk_callbacks(app)
+    register_report_export_callbacks(app)
 
 
 __all__ = [
@@ -44,4 +46,5 @@ __all__ = [
     "register_backtest_futures_callbacks",
     "register_backtest_rfbt_callbacks",
     "register_risk_callbacks",
+    "register_report_export_callbacks",
 ]

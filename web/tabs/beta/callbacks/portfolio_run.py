@@ -475,7 +475,8 @@ def register_portfolio_run_callbacks(app):
          Output('status-message', 'children'),
          Output('timestamp-display', 'children'),
          Output('portfolio-data-store', 'data'),
-         Output('rp-budget-store', 'data')],
+         Output('rp-budget-store', 'data'),
+         Output('allocation-results-store', 'data')],
         [Input('run-button', 'n_clicks')],
         [State('capital-input', 'value'),
          State('capital-unit', 'value'),
@@ -491,7 +492,7 @@ def register_portfolio_run_callbacks(app):
                      max_duration):
         if n_clicks == 0:
             return (html.Div("No data available. Click 'Run Analysis' to start.", style={'color': THEME['text_sub']}),
-                    "", "", {}, {})
+                    "", "", {}, {}, {})
 
         try:
             # Validate asset pool
@@ -499,7 +500,7 @@ def register_portfolio_run_callbacks(app):
                 error_msg = html.Span("⚠ Please add assets to the pool before running analysis", 
                                     style={'color': THEME['warning'], 'fontWeight': 'bold'})
                 return (html.Div("No assets in pool.", style={'color': THEME['warning']}),
-                        error_msg, "", {}, {})
+                        error_msg, "", {}, {}, {})
             
             # Convert capital to CNY
             multiplier = 1e9 if capital_unit == 'billion' else 1e6
@@ -554,7 +555,7 @@ def register_portfolio_run_callbacks(app):
                 error_msg = html.Span("⚠ No matching assets found in optimization results",
                                     style={'color': THEME['warning'], 'fontWeight': 'bold'})
                 return (html.Div("No matching assets found.", style={'color': THEME['warning']}),
-                        error_msg, "", {}, {})
+                        error_msg, "", {}, {}, {})
 
             # ── Factor Scaling: post-hoc signal tilt + class caps (mirrors backtest) ──
             if allocation_mode == 'factor_scaling':
@@ -824,9 +825,17 @@ def register_portfolio_run_callbacks(app):
                 if isinstance(factor_risk, pd.DataFrame) and not factor_risk.empty
                 else []
             )
+            _allocation_results = {
+                'summary': summary.to_dict() if isinstance(summary, pd.DataFrame) else {},
+                'factor_exposures': factor_exp.to_dict() if isinstance(factor_exp, pd.DataFrame) else {},
+                'factor_risk': _store_factor_risk,
+                'portfolio': portfolio.to_dict() if isinstance(portfolio, pd.DataFrame) else {},
+                'timestamp': datetime.now().isoformat(),
+            }
             return (portfolio_table, status_msg, timestamp_msg,
                     {'status': 'success', 'factor_risk': _store_factor_risk},
-                    rp_budgets_out)
+                    rp_budgets_out,
+                    _allocation_results)
             
         except Exception as e:
             # Print full traceback for debugging
@@ -838,7 +847,7 @@ def register_portfolio_run_callbacks(app):
             
             error_msg = html.Span(f"✗ Error: {str(e)}", style={'color': THEME['danger'], 'fontWeight': 'bold'})
             return (html.Div(f"Error: {str(e)}", style={'color': THEME['danger']}),
-                    error_msg, "", {}, {})
+                    error_msg, "", {}, {}, {})
 
 
     # ── IRDL Hedge Overlay callback ───────────────────────────────────────────

@@ -610,62 +610,18 @@ def register_risk_callbacks(app):
             except Exception:
                 return None
 
-        _BONDCURVE_OTR_BANDS = {
-            '1Y': (0.9, 1.2), '2Y': (1.6, 2.5), '5Y': (4.0, 6.0),
-            '10Y': (8.5, 10.0), '20Y': (15.0, 25.0), '30Y': (25.0, 30.0),
-        }
+        # Load leg data once for all spread types (used by _resolve_legs below)
+        _ld = None
 
-        def _pick_otr_by_liquidity(btype: str) -> dict:
-            """Most liquid (highest turnover) on-the-run bond per TTM band."""
-            try:
-                bi = pd.read_pickle(str(DIR_INPUT / f'{btype}-InstrumentInfo.pkl'))
-            except Exception:
-                return {}
-            if not isinstance(bi, pd.DataFrame) or bi.empty:
-                return {}
-            need = ['起息日期', '到期日期', '证券全称', '成交量', '债券余额:亿']
-            if not all(c in bi.columns for c in need):
-                return {}
-            today = pd.Timestamp.today().normalize()
-            vol = pd.to_numeric(bi['成交量'], errors='coerce')
-            bal = pd.to_numeric(bi['债券余额:亿'], errors='coerce')
-            tr  = (vol / bal / 1e4).replace([np.inf, -np.inf], 0).fillna(0)
-            mat = pd.to_datetime(bi['到期日期'], errors='coerce')
-            sdt = pd.to_datetime(bi['起息日期'], errors='coerce')
-            ttm = (mat - today).dt.days / 365.0
-            kw  = '国债' if btype == 'TBond' else '国家开发银行'
-            nm  = bi['证券全称'].astype(str).str.contains(kw, na=False)
-            res = {}
-            for tenor, (lo, hi) in _BONDCURVE_OTR_BANDS.items():
-                mask = (ttm.notna() & sdt.notna() & (sdt < today) & (mat > today)
-                        & (ttm > lo) & (ttm <= hi) & nm & (bal > 0) & (vol > 0))
-                bkt = tr[mask]
-                res[tenor] = bkt.idxmax() if not bkt.empty and (bkt > 0).any() else ''
-            return res
-
-        _bondcurve_otr_cache: dict[str, dict] = {}
-
-        def _resolve_bondcurve_legs(spread_type: str, trade_id: str) -> tuple[str, str]:
-            """leg1 = the bond itself; leg2 = most liquid OTR bond with similar TTM."""
-            if spread_type not in ('TBondCurve', 'CBondCurve'):
-                return ('', '')
-            btype = 'TBond' if spread_type == 'TBondCurve' else 'CBond'
-            if btype not in _bondcurve_otr_cache:
-                _bondcurve_otr_cache[btype] = _pick_otr_by_liquidity(btype)
-            otr = _bondcurve_otr_cache[btype]
-
-            ttm = None
-            try:
-                snap = _load_alpha_spread_data(spread_type)
-                if isinstance(snap, pd.DataFrame) and trade_id in snap.index and 'ttm' in snap.columns:
-                    ttm = float(snap.loc[trade_id, 'ttm'])
-            except Exception:
-                ttm = None
-            if ttm is None or not pd.notna(ttm):
-                return (trade_id, '')
-
-            band = min(_BONDCURVE_OTR_BANDS, key=lambda k: abs(((_BONDCURVE_OTR_BANDS[k][0] + _BONDCURVE_OTR_BANDS[k][1]) / 2) - ttm))
-            return (trade_id, otr.get(band, ''))
+        def _resolve_bondcurve_legs(spread_type: str, trade_id: str, duration: float) -> tuple[str, str]:
+            """Resolve leg1/leg2 for all spread types using the canonical leg resolver."""
+            nonlocal _ld
+            if _ld is None:
+                try:
+                    _ld = _load_leg_data()
+                except Exception:
+                    _ld = {}
+            return _resolve_legs(spread_type, trade_id, duration, _ld)
 
         if not _os.path.exists(_SUMMARY_ALPHA_PARQUET):
             return _no_data(
@@ -695,7 +651,6 @@ def register_risk_callbacks(app):
                 open_price_str = str(saved.get('open_price_bp', ''))
                 volume_str     = str(saved.get('volume_mm', ''))
                 open_date_str  = str(saved.get('open_date', ''))
-                leg1, leg2     = _resolve_bondcurve_legs(spread_type, trade_id)
 
                 spread_val = row.get('spread', None)
                 cp_bp      = round(float(spread_val), 4) if pd.notna(spread_val) else None
@@ -708,6 +663,9 @@ def register_risk_callbacks(app):
                     duration = round(dv01_k * 10.0 / notional, 2)
                 else:
                     duration = 0.0
+
+                # Resolve leg1/leg2 for all spread types
+                leg1, leg2 = _resolve_bondcurve_legs(spread_type, trade_id, duration)
 
                 mtm_price_mm = mtm_spd_bp = mtm_carry_mm = mtm_total_mm = None
                 try:
@@ -1323,10 +1281,11 @@ def register_risk_callbacks(app):
          Output('risk-exposure-container', 'children'),
          Output('risk-refresh-status', 'children')],
         [Input('an-summary-subtabs', 'value'),
-         Input('risk-refresh-btn', 'n_clicks')],
+         Input('risk-refresh-btn', 'n_clicks'),
+         Input('allocation-results-store', 'data')],
         prevent_initial_call=False,
     )
-    def update_risk_tables(tab_value, _n_clicks):
+    def update_risk_tables(tab_value, _n_clicks, allocation_results_data):
         import os as _os
         import re
 
@@ -1351,17 +1310,18 @@ def register_risk_callbacks(app):
         _SECTOR_TO_TENOR = {'1Y': '1Y', '2Y': '2Y', '5Y': '5Y',
                             '10Y': '10Y', '20Y': '20Y', '30Y': '30Y'}
 
-        # ── Alpha spread-type → Key Term column ──────────────────────────────
+        # ── Alpha spread-type → Key Term column (Bonds/Swaps/Futures/Other) ───
         _ALPHA_COL = {
-            'TBondCurve':  'CGB',   'TBondSwap':  'CGB',
-            'CBondCurve':  'PBB',   'CBondSwap':  'PBB',
-            'TenorSpread': 'CGB',   # CGB leg is always present in tenor spreads
-            'IRS':         'Repo7d',
-            'SwapSpread':  'Repo7d',  # Repo7d-XyYy IRS spreads stored as SwapSpread
-            'CDB':         'PBB',
-            'ICP':         'Shi3M',
+            'TBondCurve':  'Bonds', 'TBondSwap':  'Bonds',
+            'CBondCurve':  'Bonds', 'CBondSwap':  'Bonds',
+            'TenorSpread': 'Bonds',
+            'IRS':         'Swaps',
+            'SwapSpread':  'Swaps',  # Repo7d-XyYy IRS spreads stored as SwapSpread
+            'CDB':         'Bonds',
+            'ICP':         'Swaps',
+            'NetBasis':    'Futures', 'TermBasis': 'Futures', 'FuturesSwap': 'Futures',
         }
-        _KT_COLS = ['CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M']
+        _KT_COLS = ['Bonds', 'Swaps', 'Futures', 'Other']
 
         # ── Net position by instrument: signed capital (MM CNY) per code ──────
         # Beta Book positions are always long. Alpha Book legs are long/short
@@ -1395,11 +1355,10 @@ def register_risk_callbacks(app):
                     instrument = str(r.get('Instrument', ''))
                     beta_rows.append({
                         'Book': 'Beta', 'Name': name,
-                        'Instrument': instrument,
-                        'Leg1': '', 'Leg2': '',  # Beta positions don't have legs
-                        'Sector': sector,
+                        'Leg1': instrument,  # For Beta, Leg1 is the instrument itself
+                        'Leg2': '',
                         'Capital (MM)': cap_str, 'DV01 (MM/bp)': f"{dv01_mm:.4f}",
-                        'Direction': 'LONG',
+                        'Direction': 'BUY',  # Beta positions are always BUY
                     })
                     try:
                         cap_mm = float(cap_str.replace(',', '')) if cap_str else 0.0
@@ -1407,10 +1366,10 @@ def register_risk_callbacks(app):
                         cap_mm = 0.0
                     _add_net(instrument, cap_mm, 'Beta')  # Beta Book positions are always long
 
-                    # Key Term: CN bonds → CGB; others → Others
+                    # Key Term: rate-tenor Beta positions are bond duration; non-rate sectors → Other
                     tenor = _SECTOR_TO_TENOR.get(sector)
                     if tenor and dv01_mm != 0.0:
-                        col = 'CGB' if name.startswith('CN') else 'Others'
+                        col = 'Bonds' if sector in _SECTOR_TO_TENOR else 'Other'
                         kt_grid[tenor][col] = round(kt_grid[tenor][col] + dv01_mm, 4)
             except Exception:
                 pass
@@ -1448,9 +1407,8 @@ def register_risk_callbacks(app):
                     _add_net(leg2, -_abs_notional * dir_sign, 'Alpha')
 
                     alpha_rows.append({
-                        'Book': 'Alpha', 'Name': tid, 'Instrument': tid,
+                        'Book': 'Alpha', 'Name': tid,
                         'Leg1': leg1, 'Leg2': leg2,
-                        'Sector': stype,
                         'Capital (MM)': f"{notional:.1f}",
                         'DV01 (MM/bp)': f"{dv01_mm * dir_sign:.4f}",
                         'Direction': direction,
@@ -1458,7 +1416,7 @@ def register_risk_callbacks(app):
 
                     # Key Term ladder: IRS spreads (any Repo7d-XyYy ID) get split
                     # across both tenor legs; everything else goes to a single bucket.
-                    col = _ALPHA_COL.get(stype, 'Others')
+                    col = _ALPHA_COL.get(stype, 'Other')
                     if dv01_mm != 0.0:
                         _l1, _l2 = _parse_repo_spread_legs(tid)
                         _m1 = re.search(r'FR007S([^.]+)\.IR', _l1)
@@ -1486,9 +1444,9 @@ def register_risk_callbacks(app):
         # ── Inventory table ───────────────────────────────────────────────────
         all_rows = beta_rows + alpha_rows
         _dir_style = [
-            {'if': {'filter_query': '{Direction} = "LONG" or {Direction} = "BUY"'},
+            {'if': {'filter_query': '{Direction} = "BUY"'},
              'backgroundColor': 'rgba(0,204,150,0.08)'},
-            {'if': {'filter_query': '{Direction} = "SHORT" or {Direction} = "SELL"'},
+            {'if': {'filter_query': '{Direction} = "SELL"'},
              'backgroundColor': 'rgba(239,85,59,0.08)'},
             {'if': {'filter_query': '{Book} = "Beta"', 'column_id': 'Book'},
              'color': THEME['accent'], 'fontWeight': 'bold'},
@@ -1498,7 +1456,7 @@ def register_risk_callbacks(app):
         inventory_table = dash_table.DataTable(
             data=all_rows,
             columns=[{'name': c, 'id': c} for c in
-                     ['Book', 'Name', 'Instrument', 'Leg1', 'Leg2', 'Sector',
+                     ['Book', 'Name', 'Leg1', 'Leg2',
                       'Capital (MM)', 'DV01 (MM/bp)', 'Direction']],
             style_cell={'textAlign': 'center', 'padding': '5px 8px', 'fontSize': '12px',
                         'backgroundColor': THEME['table_row_odd'],
@@ -1584,7 +1542,22 @@ def register_risk_callbacks(app):
             return styles
 
         # ── Factor Risk Exposure (Beta only, no SPDL/SPSL, non-zero only) ────
-        factor_risk_df = ALLOCATION_RESULTS.get('factor_risk')
+        # Try to get factor_risk from the store (updated by RUN ANALYSIS),
+        # fall back to global ALLOCATION_RESULTS for backwards compatibility
+        _factor_risk_records = None
+        if allocation_results_data and isinstance(allocation_results_data, dict):
+            _factor_risk_records = allocation_results_data.get('factor_risk')
+        if not _factor_risk_records:
+            _factor_risk_records = ALLOCATION_RESULTS.get('factor_risk')
+
+        # Convert records list to DataFrame if needed
+        if isinstance(_factor_risk_records, list) and _factor_risk_records:
+            factor_risk_df = pd.DataFrame(_factor_risk_records)
+        elif isinstance(_factor_risk_records, pd.DataFrame):
+            factor_risk_df = _factor_risk_records
+        else:
+            factor_risk_df = None
+
         _SKIP_PREFIXES = ('SPDL', 'SPSL')
         if (factor_risk_df is not None and not factor_risk_df.empty
                 and 'Risk Factor' in factor_risk_df.columns
@@ -1645,27 +1618,26 @@ def register_risk_callbacks(app):
             if all(abs(v) < 1e-8 for v in row.values()):
                 continue
             kt_display.append({
-                'Tenor': tenor,
-                'CGB':    f"{row['CGB']:+.4f}" if abs(row['CGB']) > 1e-8 else '',
-                'PBB':    f"{row['PBB']:+.4f}" if abs(row['PBB']) > 1e-8 else '',
-                'Others': f"{row['Others']:+.4f}" if abs(row['Others']) > 1e-8 else '',
-                'Repo7d': f"{row['Repo7d']:+.4f}" if abs(row['Repo7d']) > 1e-8 else '',
-                'Shi3M':  f"{row['Shi3M']:+.4f}" if abs(row['Shi3M']) > 1e-8 else '',
-                'Total':  f"{total:+.4f}" if abs(total) > 1e-8 else '',
+                'Tenor':   tenor,
+                'Bonds':   f"{row['Bonds']:+.4f}" if abs(row['Bonds']) > 1e-8 else '',
+                'Swaps':   f"{row['Swaps']:+.4f}" if abs(row['Swaps']) > 1e-8 else '',
+                'Futures': f"{row['Futures']:+.4f}" if abs(row['Futures']) > 1e-8 else '',
+                'Other':   f"{row['Other']:+.4f}" if abs(row['Other']) > 1e-8 else '',
+                'Total':   f"{total:+.4f}" if abs(total) > 1e-8 else '',
             })
 
         _kt_pos_style = [
             {'if': {'filter_query': f'{{{c}}} contains "+"', 'column_id': c},
              'color': THEME['success']}
-            for c in ['CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M', 'Total']
+            for c in ['Bonds', 'Swaps', 'Futures', 'Other', 'Total']
         ]
         _kt_neg_style = [
             {'if': {'filter_query': f'{{{c}}} contains "-"', 'column_id': c},
              'color': THEME['danger']}
-            for c in ['CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M', 'Total']
+            for c in ['Bonds', 'Swaps', 'Futures', 'Other', 'Total']
         ]
         _kt_bar_styles = _make_bar_styles(
-            kt_display, ['CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M', 'Total'],
+            kt_display, ['Bonds', 'Swaps', 'Futures', 'Other', 'Total'],
             shared_max=True,
         ) if kt_display else []
 
@@ -1673,7 +1645,7 @@ def register_risk_callbacks(app):
             dash_table.DataTable(
                 data=kt_display,
                 columns=[{'name': c, 'id': c} for c in
-                         ['Tenor', 'CGB', 'PBB', 'Others', 'Repo7d', 'Shi3M', 'Total']],
+                         ['Tenor', 'Bonds', 'Swaps', 'Futures', 'Other', 'Total']],
                 style_cell={'textAlign': 'center', 'padding': '5px 10px', 'fontSize': '12px',
                             'backgroundColor': THEME['table_row_odd'],
                             'color': THEME['text_main'], 'border': 'none'},
@@ -1695,7 +1667,8 @@ def register_risk_callbacks(app):
 
         # ── Factor Risk Attribution table (from last Beta run, non-zero rows) ──
         _fr_attr_div = html.Div()
-        _fr_attr_df = ALLOCATION_RESULTS.get('factor_risk')
+        # Use the same factor_risk_df computed above (from store or global state)
+        _fr_attr_df = factor_risk_df
         if _fr_attr_df is not None and not _fr_attr_df.empty:
             try:
                 _ra = _fr_attr_df.copy()
@@ -1771,7 +1744,8 @@ def register_risk_callbacks(app):
                 html.H6("Beta + Alpha: DV01 (MM/bp)",
                         style={'color': THEME['accent'], 'fontSize': '12px', 'marginBottom': '8px'}),
                 html.Div(
-                    "CGB = Gov Bond  ·  PBB = Policybank Bond  ·  Repo7d = FR007 IRS  ·  Shi3M = ICP/SHIBOR",
+                    "Bonds = Treasury/Policybank/CDB duration  ·  Swaps = IRS/Repo/ICP  ·  "
+                    "Futures = Bond futures, term basis, futures-swap",
                     style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginBottom': '6px',
                            'fontStyle': 'italic'},
                 ),
