@@ -571,7 +571,7 @@ def _make_tab_switcher(input_id: str, div_ids: list[str], keys: list[str]):
 )
 def _set_book_accent(tab):
     """Propagate the active book's accent color to cards, KPIs, and sub-tabs
-    via the --book-accent CSS variable (see z_atlasnexus-design.css)."""
+    via the --book-accent CSS variable (see design.css)."""
     accent = BOOK_ACCENT.get(tab, BOOK_ACCENT["market"])
     return {"--book-accent": accent}
 

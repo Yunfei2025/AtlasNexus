@@ -51,7 +51,7 @@ except ImportError:
     FUTURES_AVAILABLE = False
     print("Warning: futures.backtest modules not found.")
 
-# --- Theme Constants (AtlasNexus Dark Blue — mirrors --an-* tokens in z_atlasnexus-design.css) ---
+# --- Theme Constants (AtlasNexus Dark Blue — mirrors --an-* tokens in design.css) ---
 THEME = {
     'bg_main': '#0a1428',       # --an-navy-900
     'bg_card': '#122a4c',       # --an-navy-700 / --surface-panel

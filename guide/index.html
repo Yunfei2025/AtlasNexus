@@ -1,0 +1,93 @@
+<!-- @dsCard group="AtlasNexus Daily" viewport="1600x900" name="AtlasNexus Daily — full app" subtitle="Interactive 5-book terminal recreation" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AtlasNexus · Daily</title>
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>
+  html,body{background:var(--bg-frame)}
+  body{margin:0;min-height:100vh;background:linear-gradient(180deg,var(--navy-950) 0%,var(--navy-900) 18%,var(--navy-850) 100%);background-attachment:fixed}
+  .placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:340px;
+    border:1px dashed var(--border-strong);border-radius:var(--radius-md);color:var(--text-muted);text-align:center;gap:8px}
+  .placeholder b{font:var(--type-h2);color:var(--text-secondary)}
+</style></head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="AppShell.jsx"></script>
+<script type="text/babel" src="MarketData.jsx"></script>
+<script type="text/babel" src="MarketTrend.jsx"></script>
+<script type="text/babel" src="MarketPricer.jsx"></script>
+<script type="text/babel" src="MarketCurves.jsx"></script>
+<script type="text/babel" src="MarketSurface.jsx"></script>
+<script type="text/babel" src="BetaCandidates.jsx"></script>
+<script type="text/babel" src="BetaPortfolio.jsx"></script>
+<script type="text/babel" src="BetaFactor.jsx"></script>
+<script type="text/babel" src="BetaBond.jsx"></script>
+<script type="text/babel" src="BetaFutures.jsx"></script>
+<script type="text/babel" src="BacktestBeta.jsx"></script>
+<script type="text/babel" src="AlphaCandidates.jsx"></script>
+<script type="text/babel" src="AlphaPortfolio.jsx"></script>
+<script type="text/babel" src="AlphaSpread.jsx"></script>
+<script type="text/babel" src="AlphaPairs.jsx"></script>
+<script type="text/babel" src="AlphaVolatility.jsx"></script>
+<script type="text/babel" src="BacktestAlpha.jsx"></script>
+<script type="text/babel" src="SummaryBooks.jsx"></script>
+<script type="text/babel" src="SummaryRisk.jsx"></script>
+<script type="text/babel" src="SummaryTickets.jsx"></script>
+<script type="text/babel" src="RunCenter.jsx"></script>
+<script type="text/babel" data-presets="react">
+  const { useState } = React;
+
+  function Placeholder({ book, sub }) {
+    return (
+      <div className="placeholder">
+        <b>{book} · {sub}</b>
+        <div style={{ font: 'var(--type-body)', maxWidth: '440px' }}>
+          This workflow view exists in the product but was not part of the supplied source.
+          It would follow the same panel · table · control system shown in the other tabs.
+        </div>
+      </div>
+    );
+  }
+
+  function App() {
+    const [book, setBook] = useState('Market');
+    const [sub, setSub] = useState('Data');
+
+    let screen;
+    if (book === 'Market' && sub === 'Data') screen = <MarketData />;
+    else if (book === 'Market' && sub === 'Trend') screen = <MarketTrend />;
+    else if (book === 'Market' && sub === 'Pricer') screen = <MarketPricer />;
+    else if (book === 'Market' && sub === 'Surface') screen = <MarketSurface />;
+    else if (book === 'Market' && sub === 'Curves') screen = <MarketCurves />;
+    else if (book === 'Beta Book' && sub === 'Candidates') screen = <BetaCandidates />;
+    else if (book === 'Beta Book' && sub === 'Portfolio') screen = <BetaPortfolio />;
+    else if (book === 'Beta Book' && sub === 'Factor') screen = <BetaFactor />;
+    else if (book === 'Beta Book' && sub === 'Bond') screen = <BetaBond />;
+    else if (book === 'Beta Book' && sub === 'Futures') screen = <BetaFutures />;
+    else if (book === 'Beta Book' && sub === 'Backtest') screen = <BacktestBeta />;
+    else if (book === 'Alpha Book' && sub === 'Candidates') screen = <AlphaCandidates />;
+    else if (book === 'Alpha Book' && sub === 'Portfolio') screen = <AlphaPortfolio />;
+    else if (book === 'Alpha Book' && sub === 'Spread') screen = <AlphaSpread />;
+    else if (book === 'Alpha Book' && sub === 'Pairs') screen = <AlphaPairs />;
+    else if (book === 'Alpha Book' && sub === 'Volatility') screen = <AlphaVolatility />;
+    else if (book === 'Alpha Book' && sub === 'Backtest') screen = <BacktestAlpha />;
+    else if (book === 'Summary' && sub === 'Books') screen = <SummaryBooks />;
+    else if (book === 'Summary' && sub === 'Risk') screen = <SummaryRisk />;
+    else if (book === 'Summary' && sub === 'Tickets') screen = <SummaryTickets />;
+    else if (book === 'Run Center') screen = <RunCenter />;
+    else screen = <Placeholder book={book} sub={sub} />;
+
+    return (
+      <AppShell book={book} setBook={setBook} sub={sub} setSub={setSub}>
+        {screen}
+      </AppShell>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body></html>

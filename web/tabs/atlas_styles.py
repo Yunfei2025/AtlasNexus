@@ -14,7 +14,7 @@ from typing import Any, Dict
 # Mirror the style objects used by web/core/styles.py and fi.py
 
 # Single source of truth for the navy ramp + signal colors. Mirrors the
-# :root tokens in web/assets/z_atlasnexus-design.css (--an-*).
+# :root tokens in web/assets/design.css (--an-*).
 TOKENS: Dict[str, str] = {
     "navy_950": "#060d1c", "navy_900": "#0a1428", "navy_850": "#0c1830",
     "navy_800": "#0e1d3a", "navy_750": "#102544", "navy_700": "#122a4c",
@@ -38,7 +38,7 @@ BOOK_ACCENT: Dict[str, str] = {
 
 # Top-level app tabs (Market/Beta Book/Alpha Book/...) and sub-tabs are
 # styled via CSS classes — see .an-tabs / .an-tab / .an-tab--selected and
-# .an-subtab / .an-subtab--selected in web/assets/z_atlasnexus-design.css.
+# .an-subtab / .an-subtab--selected in web/assets/design.css.
 # Use className="an-tabs" / "an-tab" / "an-tab--selected" on dcc.Tabs/dcc.Tab,
 # and className="an-subtab" / selected_className="an-subtab--selected" on
 # sub-tabs, instead of inline style dicts.

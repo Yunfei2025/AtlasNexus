@@ -1,6 +1,6 @@
 /* body, button, .app__container, .app__content, .app__header, .Select-*
    base rules removed here (AtlasNexus Design System — Improvement Plan,
-   step 10) — now owned exclusively by z_atlasnexus-design.css, which
+   step 10) — now owned exclusively by design.css, which
    loads last and would have overridden these anyway. */
 
 h6 {
@@ -202,4 +202,4 @@ h6 {
 }
 
 /* .dash-datepicker* dark theme rules removed here — duplicated in, and now
-   owned by, z_atlasnexus-design.css (which loads last). */
+   owned by, design.css (which loads last). */

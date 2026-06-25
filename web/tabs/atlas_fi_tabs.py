@@ -238,7 +238,7 @@ def build_curves_layout():
                             dash_table.DataTable(
                                 id="ref-bonds-t",
                                 # style_data/style_header removed — CSS .dash-cell/.dash-header
-                                # rules in z_atlasnexus-design.css own colors; keep only sizing here.
+                                # rules in design.css own colors; keep only sizing here.
                                 style_cell={
                                     "height": "auto",
                                     "width": "60px",

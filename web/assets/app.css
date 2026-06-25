@@ -6,7 +6,7 @@
 
 NOTE: html/body/h1-h6/button/forms/table base styles were removed here
 (AtlasNexus Design System — Improvement Plan, step 10). They are now owned
-exclusively by z_atlasnexus-design.css, which loads last and would have
+exclusively by design.css, which loads last and would have
 overridden them anyway. This file keeps only the Skeleton 12-column grid
 and .u-* utilities, which neither of the other stylesheets define.
 */

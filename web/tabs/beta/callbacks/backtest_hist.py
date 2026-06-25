@@ -813,28 +813,25 @@ def register_backtest_hist_callbacks(app):
                 max_drawdown      = _perf.get('Max Drawdown', 0.0)
                 sharpe_net        = _perf_net.get('Sharpe', 0.0) or 0.0
 
-                _th = {'padding': '8px 12px', 'backgroundColor': THEME['table_header'], 'color': 'white', 'fontSize': '12px'}
-                _td_base = {'padding': '8px 12px', 'textAlign': 'center', 'fontWeight': 'bold', 'backgroundColor': THEME['bg_input'], 'fontSize': '12px'}
-                metrics_table = html.Table([
-                    html.Tr([
-                        html.Th("Ann. Return", style=_th),
-                        html.Th("Sharpe (gross)", style=_th),
-                        html.Th("Sharpe (net tx)", style=_th),
-                        html.Th("Max Drawdown", style=_th),
-                        html.Th("# Rebalances", style=_th),
-                        html.Th("Ann. Turnover", style=_th),
-                        html.Th("Total Tx Cost (MM)", style=_th),
-                    ]),
-                    html.Tr([
-                        html.Td(f"{annualized_return:.2%}", style={**_td_base, 'color': THEME['success'] if annualized_return >= 0 else THEME['danger']}),
-                        html.Td(f"{sharpe_ratio:.2f}", style={**_td_base, 'color': THEME['success'] if sharpe_ratio >= 1 else THEME['warning'] if sharpe_ratio >= 0 else THEME['danger']}),
-                        html.Td(f"{sharpe_net:.2f}", style={**_td_base, 'color': THEME['success'] if sharpe_net >= 1 else THEME['warning'] if sharpe_net >= 0 else THEME['danger']}),
-                        html.Td(f"{max_drawdown:.2%}", style={**_td_base, 'color': THEME['danger']}),
-                        html.Td(f"{len(allocations_by_date)}", style={**_td_base, 'color': THEME['text_main']}),
-                        html.Td(f"{_ann_turnover:.0%}", style={**_td_base, 'color': THEME['text_main']}),
-                        html.Td(f"{_total_tx_cost_m:.2f}", style={**_td_base, 'color': THEME['text_sub']}),
-                    ]),
-                ], style={'borderCollapse': 'collapse', 'fontSize': '14px'})
+                _kpi_cells = [
+                    ("Ann. Return", f"{annualized_return:.2%}",
+                     'var(--positive)' if annualized_return >= 0 else 'var(--negative)'),
+                    ("Sharpe (gross)", f"{sharpe_ratio:.2f}",
+                     'var(--positive)' if sharpe_ratio >= 1 else ('var(--accent-amber)' if sharpe_ratio >= 0 else 'var(--negative)')),
+                    ("Sharpe (net tx)", f"{sharpe_net:.2f}",
+                     'var(--positive)' if sharpe_net >= 1 else ('var(--accent-amber)' if sharpe_net >= 0 else 'var(--negative)')),
+                    ("Max Drawdown", f"{max_drawdown:.2%}", 'var(--negative)'),
+                    ("# Rebalances", f"{len(allocations_by_date)}", 'var(--text-primary)'),
+                    ("Ann. Turnover", f"{_ann_turnover:.0%}", 'var(--text-primary)'),
+                    ("Total Tx Cost (MM)", f"{_total_tx_cost_m:.2f}", 'var(--text-secondary)'),
+                ]
+                metrics_table = html.Div([
+                    html.Div([
+                        html.Div(label, className='an-kpi-cell__label'),
+                        html.Div(value, className='an-kpi-cell__value', style={'color': color}),
+                    ], className='an-kpi-cell')
+                    for label, value, color in _kpi_cells
+                ], className='an-kpi-grid')
             
             # --- Build Monthly Holdings Table ---
             asset_holdings_rows = []

@@ -42,6 +42,14 @@
 
   /* ============================================================
      SEMANTIC TEXT ROLES (shorthands: weight family size/lh)
+     NOTE: these are for reference/documentation only. Do NOT use
+     `font: var(--type-X)` — the `font` shorthand does not reliably
+     resolve a `var()` whose value itself contains a nested `var()`
+     (e.g. the family component), so browsers silently fall back to
+     the initial font-family (`monospace`/`serif`). Use the longhand
+     `--type-X-family` / `--type-X-weight` / `--type-X-size` /
+     `--type-X-lh` properties below instead (see .type-* helper
+     classes or apply the four longhand CSS properties directly).
      ============================================================ */
   --type-display:  var(--fw-light) var(--fs-display)/var(--lh-tight) var(--font-sans);
   --type-h1:       var(--fw-regular) var(--fs-h1)/var(--lh-snug) var(--font-sans);
@@ -52,4 +60,15 @@
   --type-meta:     var(--fw-regular) var(--fs-meta)/var(--lh-snug) var(--font-mono);
   --type-th:       var(--fw-bold) var(--fs-label)/var(--lh-tight) var(--font-mono);
   --type-label:    var(--fw-semibold) var(--fs-label)/var(--lh-tight) var(--font-sans);
+
+  /* ---- Longhand role tokens (safe to use with font-family/-size/-weight) ---- */
+  --type-display-family: var(--font-sans); --type-display-weight: var(--fw-light);   --type-display-size: var(--fs-display); --type-display-lh: var(--lh-tight);
+  --type-h1-family:      var(--font-sans); --type-h1-weight:      var(--fw-regular); --type-h1-size:      var(--fs-h1);      --type-h1-lh:      var(--lh-snug);
+  --type-h2-family:      var(--font-sans); --type-h2-weight:      var(--fw-medium);  --type-h2-size:      var(--fs-h2);      --type-h2-lh:      var(--lh-snug);
+  --type-h3-family:      var(--font-sans); --type-h3-weight:      var(--fw-semibold);--type-h3-size:      var(--fs-h3);      --type-h3-lh:      var(--lh-snug);
+  --type-body-family:    var(--font-sans); --type-body-weight:    var(--fw-regular); --type-body-size:    var(--fs-body);    --type-body-lh:    var(--lh-normal);
+  --type-data-family:    var(--font-mono); --type-data-weight:    var(--fw-medium);  --type-data-size:    var(--fs-data);    --type-data-lh:    var(--lh-snug);
+  --type-meta-family:    var(--font-mono); --type-meta-weight:    var(--fw-regular); --type-meta-size:    var(--fs-meta);    --type-meta-lh:    var(--lh-snug);
+  --type-th-family:      var(--font-mono); --type-th-weight:      var(--fw-bold);    --type-th-size:      var(--fs-label);   --type-th-lh:      var(--lh-tight);
+  --type-label-family:   var(--font-sans); --type-label-weight:   var(--fw-semibold);--type-label-size:   var(--fs-label);   --type-label-lh:   var(--lh-tight);
 }

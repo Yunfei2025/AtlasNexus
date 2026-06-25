@@ -79,7 +79,7 @@ web/
 │   ├── content.py                Static HTML (headers, footers)
 │   └── load.py                   Data loaders for UI
 └── assets/                       CSS, fonts, JS
-    ├── z_atlasnexus-design.css   Main design system (colors, spacing, typography)
+    ├── design.css   Main design system (colors, spacing, typography)
     ├── colors.css, spacing.css, typography.css   **Canonical tokens**
     └── *.js                       Interactive scripts (resize iframes, etc.)
 ```
@@ -287,18 +287,18 @@ def run(cfg: RunConfig):
 All styling is **CSS custom properties** (variables). Never hardcode colors or spacing.
 
 **File organization:**
-- `z_atlasnexus-design.css` — Main design system (panels, buttons, tables, modebar, etc.)
+- `design.css` — Main design system (panels, buttons, tables, modebar, etc.)
 - `atlasnexus_tabs.css` — Tab-specific overrides
 - `app.css`, `style.css` — Legacy/global styles (prefer tokens)
 
 **When adding a new component:**
 1. Define layout in Python (e.g., `html.Div([...], className="my-panel")`)
-2. Add styles to `z_atlasnexus-design.css` using variables: `background: var(--surface-panel)`
+2. Add styles to `design.css` using variables: `background: var(--surface-panel)`
 3. Use `atlas_components.py` helpers instead of inline styles
 
 **Example:**
 ```css
-/* z_atlasnexus-design.css */
+/* design.css */
 .my-panel {
   background: var(--surface-panel);
   border: 1px solid var(--border-default);
@@ -414,7 +414,7 @@ def update_graph(tab):
 
 ### Update CSS without restarting
 
-1. Edit `web/assets/z_atlasnexus-design.css`.
+1. Edit `web/assets/design.css`.
 2. Refresh the browser (Cmd+R / Ctrl+R).
 3. Dash auto-detects CSS changes.
 

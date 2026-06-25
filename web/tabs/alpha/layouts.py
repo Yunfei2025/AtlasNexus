@@ -8,6 +8,7 @@ from typing import Dict, List
 from dash import dcc, html, dash_table
 
 from .data import THEME, SPREAD_CATEGORIES
+from ..atlas_components import button as an_button
 
 
 _BACKTEST_SPREAD_TYPE_OPTIONS = [
@@ -449,111 +450,148 @@ def build_basket_layout() -> html.Div:
 def build_backtest_layout() -> html.Div:
     """Build the BACKTEST subtab layout."""
     return html.Div([
-        html.H6("Alpha Backtest", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
-        html.P(
+        html.H1("Alpha Backtest", style={
+            'margin': '0 0 6px', 'fontSize': '22px', 'fontWeight': '600',
+            'color': 'var(--text-primary)',
+        }),
+        html.Div(
             "Backtest individual spread trades or the full portfolio using historical data. "
             "Evaluate strategy performance with z-score (mean-reversion or momentum) or directional-change trend rules.",
-            style={'color': THEME['text_sub'], 'fontSize': '13px', 'marginBottom': '20px'}
+            style={'fontSize': '13px', 'color': 'var(--text-secondary)', 'maxWidth': '800px',
+                   'marginBottom': '16px'}
         ),
 
         dcc.Tabs(
             id='backtest-mode-tabs', value='individual',
-            className='tab-container an-subtab',
+            className='tab-container an-pill-toggle',
             children=[
                 dcc.Tab(label='Individual Spread', value='individual',
-                        className='tab an-subtab', selected_className='tab an-subtab an-subtab--selected'),
+                        className='tab an-pill-toggle', selected_className='tab an-pill-toggle an-pill-toggle--selected'),
                 dcc.Tab(label='Portfolio', value='portfolio',
-                        className='tab an-subtab', selected_className='tab an-subtab an-subtab--selected'),
+                        className='tab an-pill-toggle', selected_className='tab an-pill-toggle an-pill-toggle--selected'),
             ],
-            style={'marginBottom': '0px'},
+            style={'marginBottom': '16px', 'width': 'fit-content'},
         ),
 
         html.Div(id='backtest-mode-content'),
 
-    ], style={'padding': '10px'})
+    ], style={'padding': '10px', 'display': 'flex', 'flexDirection': 'column', 'gap': '4px'})
 
 
 def build_individual_backtest_panel() -> html.Div:
     """Build the individual spread backtest panel."""
+    _card = {
+        'background': 'var(--surface-panel)', 'border': '1px solid var(--border-strong)',
+        'borderRadius': '6px', 'padding': '14px 16px',
+    }
+    _hdr = {'margin': '0 0 12px', 'fontSize': '14px', 'fontWeight': '600',
+            'color': 'var(--text-primary)'}
+    _lbl = {'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '0.05em',
+            'textTransform': 'uppercase', 'color': 'var(--text-muted)',
+            'display': 'block', 'marginBottom': '5px'}
+    _inp = {
+        'width': '100%', 'background': 'var(--surface-input)',
+        'border': '1px solid var(--border-default)', 'borderRadius': '6px',
+        'padding': '7px 10px', 'color': 'var(--text-primary)', 'fontSize': '13px',
+        'boxSizing': 'border-box',
+    }
+    _inp_mono = {**_inp, 'textAlign': 'right', 'fontFamily': 'var(--font-mono, monospace)'}
+
     return html.Div([
         html.Div([
-            html.H6("Spread Selection", style={'color': THEME['accent'], 'marginBottom': '15px'}),
-
+            # Spread Selection — LEFT
             html.Div([
+                html.H2("Spread Selection", style=_hdr),
                 html.Div([
-                    html.Label("Spread Type:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginBottom': '5px', 'display': 'block'}),
-                    dcc.Dropdown(
-                        id='bt-spread-type',
-                        options=_BACKTEST_SPREAD_TYPE_OPTIONS,
-                        value='TBondCurve', clearable=False,
-                        style={'width': '250px'},
+                    html.Div([
+                        html.Label("Spread Type", style=_lbl),
+                        dcc.Dropdown(
+                            id='bt-spread-type',
+                            options=_BACKTEST_SPREAD_TYPE_OPTIONS,
+                            value='TBondCurve', clearable=False,
+                            style={'fontSize': '13px'},
+                        ),
+                    ]),
+                    html.Div([
+                        html.Label("Instrument", style=_lbl),
+                        dcc.Dropdown(id='bt-instrument', options=[], placeholder="Select instrument...",
+                                     style={'fontSize': '13px'}),
+                    ]),
+                    html.Div([
+                        html.Label("Min Holding (days)", style=_lbl),
+                        dcc.Input(id='bt-min-hold', type='number', value=7, min=1, max=30, step=1, style=_inp),
+                    ]),
+                ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
+            ], style={**_card, 'minWidth': '220px', 'maxWidth': '260px'}),
+
+            # Trade Style + Trend Params — CENTER (2-col grid)
+            html.Div([
+                # Trade Style
+                html.Div([
+                    html.H2("Trade Style", style={**_hdr, 'fontSize': '12px'}),
+                    html.Div([
+                        dcc.RadioItems(
+                            id='bt-trade-style',
+                            options=[
+                                {'label': ' Mean-Reversion', 'value': 'mr'},
+                                {'label': ' Trend (Directional-Change)', 'value': 'trend'},
+                            ],
+                            value='mr',
+                            className='an-radio-stack',
+                            labelStyle={'display': 'flex', 'alignItems': 'center', 'gap': '6px',
+                                        'color': 'var(--text-secondary)', 'fontSize': '11px',
+                                        'marginBottom': '6px', 'cursor': 'pointer'},
+                            inputStyle={'accentColor': 'var(--accent-amber)', 'cursor': 'pointer'},
+                        ),
+                        html.Div(id='bt-regime-badge', style={'minHeight': '20px', 'marginTop': '2px'}),
+                    ], id='bt-trade-style-div', style={'display': 'none'}),
+                ], style={**_card, 'flex': '1'}),
+
+                # Trend Parameters
+                html.Div([
+                    html.H2("Trend", style={**_hdr, 'fontSize': '12px'}),
+                    html.Div([
+                        html.Div([html.Label("Theta", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-theta', type='number', value=0.02, min=0.001, max=0.2, step=0.001, style=_inp_mono)]),
+                        html.Div([html.Label("Mom window", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style=_inp_mono)]),
+                        html.Div([html.Label("Vol window", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style=_inp_mono)]),
+                        html.Div([html.Label("Trail mult", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-trailing-mult', type='number', value=1.5, min=0.5, max=5.0, step=0.1, style=_inp_mono)]),
+                        html.Div([html.Label("Momentum buffer", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-carry-buffer', type='number', value=0.0, step=0.0001, style=_inp_mono)]),
+                    ], className='alpha-trend-params', style={'marginBottom': '10px'}),
+                    dcc.Checklist(
+                        id='bt-allow-short',
+                        options=[{'label': ' Allow short-spread trades', 'value': 'allow'}], value=['allow'],
+                        labelStyle={'color': 'var(--text-secondary)', 'fontSize': '11px', 'cursor': 'pointer'},
+                        inputStyle={'accentColor': 'var(--accent-amber)', 'cursor': 'pointer', 'marginRight': '6px'},
                     ),
-                ], style={'marginRight': '20px'}),
+                ], id='bt-trend-params-div', style={**_card, 'flex': '1', 'display': 'none'}),
+            ], style={'display': 'flex', 'gap': '14px', 'flex': '1'}),
+        ], style={'display': 'flex', 'gap': '14px', 'alignItems': 'flex-start', 'marginBottom': '14px',
+                  'flexWrap': 'wrap'}),
 
+        # Strategy Parameters (mean-reversion z-score + period)
+        html.Div([
+            html.H2("Strategy Parameters", style=_hdr),
+            html.Div([
+                html.Div([html.Label("Entry Z-Score", style=_lbl), dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25, style=_inp)]),
+                html.Div([html.Label("Exit Z-Score", style=_lbl), dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25, style=_inp)]),
+                html.Div([html.Label("Stop Loss (σ)", style=_lbl), dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style=_inp)]),
                 html.Div([
-                    html.Label("Instrument:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginBottom': '5px', 'display': 'block'}),
-                    dcc.Dropdown(id='bt-instrument', options=[], placeholder="Select instrument...", style={'width': '250px'}),
-                ], style={'marginRight': '20px'}),
-            ], style={'display': 'flex', 'marginBottom': '15px'}),
+                    html.Label("Backtest Period", style=_lbl),
+                    dcc.Dropdown(id='bt-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}], value=504, clearable=False, style={'fontSize': '13px'}),
+                ]),
+            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(130px, 1fr))', 'gap': '12px'}),
+        ], id='bt-mr-params-div', style={**_card, 'marginBottom': '14px'}),
 
-            html.Div([
-                html.Label("Trade Style:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginBottom': '5px', 'display': 'block'}),
-                dcc.RadioItems(
-                    id='bt-trade-style',
-                    options=[
-                        {'label': ' Mean-Reversion', 'value': 'mr'},
-                        {'label': ' Trend (Directional-Change)', 'value': 'trend'},
-                    ],
-                    value='mr', inline=True,
-                    labelStyle={'color': THEME['text_main'], 'marginRight': '15px'},
-                ),
-            ], id='bt-trade-style-div', style={'marginBottom': '5px', 'display': 'none'}),
-            html.Div(id='bt-regime-badge', style={'marginBottom': '10px', 'minHeight': '22px'}),
-
-            html.Div([
-                html.Label("Min Holding (days):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                dcc.Input(id='bt-min-hold', type='number', value=7, min=1, max=30, step=1,
-                          style={'width': '80px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"}),
-            ], style={'display': 'flex', 'alignItems': 'center', 'paddingTop': '10px', 'borderTop': f"1px solid {THEME['border_sub']}"}),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
-
+        # Run Button
         html.Div([
-            html.H6("Strategy Parameters", style={'color': THEME['accent'], 'marginBottom': '15px'}),
-
-            html.Div([
-                html.Div([html.Label("Entry Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Exit Z-Score:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Stop Loss (σ):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style={'width': '80px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"})], style={'display': 'flex', 'alignItems': 'center'}),
-            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px', 'marginBottom': '15px'}),
-
-            html.Div([
-                html.Label("Backtest Period:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                dcc.Dropdown(id='bt-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}], value=504, clearable=False, style={'width': '150px'}),
-            ], style={'display': 'flex', 'alignItems': 'center'}),
-        ], id='bt-mr-params-div', style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
-
-        html.Div([
-            html.H6("Trend Parameters (Directional-Change)", style={'color': THEME['accent'], 'marginBottom': '15px'}),
-            html.Div([
-                html.Div([html.Label("Theta", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginBottom': '4px', 'display': 'block'}), dcc.Input(id='bt-theta', type='number', value=0.02, min=0.001, max=0.2, step=0.001, style={'width': '100%', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}", 'textAlign': 'right', 'fontFamily': 'monospace'})]),
-                html.Div([html.Label("Mom window", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginBottom': '4px', 'display': 'block'}), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style={'width': '100%', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}", 'textAlign': 'right', 'fontFamily': 'monospace'})]),
-                html.Div([html.Label("Vol window", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginBottom': '4px', 'display': 'block'}), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style={'width': '100%', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}", 'textAlign': 'right', 'fontFamily': 'monospace'})]),
-                html.Div([html.Label("Trail mult", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginBottom': '4px', 'display': 'block'}), dcc.Input(id='bt-trailing-mult', type='number', value=1.5, min=0.5, max=5.0, step=0.1, style={'width': '100%', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}", 'textAlign': 'right', 'fontFamily': 'monospace'})]),
-                html.Div([html.Label("Momentum buffer", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '12px', 'marginBottom': '4px', 'display': 'block'}), dcc.Input(id='bt-carry-buffer', type='number', value=0.0, step=0.0001, style={'width': '100%', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}", 'textAlign': 'right', 'fontFamily': 'monospace'})]),
-            ], className='alpha-trend-params'),
-
-            html.Div([
-                dcc.Checklist(id='bt-allow-short', options=[{'label': ' Allow short-spread trades', 'value': 'allow'}], value=['allow'], labelStyle={'color': THEME['text_main'], 'fontSize': '13px'}),
-            ], style={'marginTop': '12px'}),
-        ], id='bt-trend-params-div', style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px', 'display': 'none'}),
-
-        html.Div([
-            html.Button("▶ Run Individual Backtest", id='bt-run-individual-btn', n_clicks=0,
-                        style={'backgroundColor': THEME['success'], 'color': '#fff', 'padding': '10px 24px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontWeight': '700', 'fontSize': '13px', 'letterSpacing': '0.03em'}),
-        ], style={'marginBottom': '20px'}),
+            an_button(
+                "▶ Run Individual Backtest", id='bt-run-individual-btn', n_clicks=0,
+                variant="success", style_overrides={'padding': '10px 20px', 'fontSize': '12px'},
+            ),
+        ], style={'marginBottom': '16px'}),
 
         dcc.Loading(id='loading-bt-individual', type='circle', color=THEME['accent'], style={'minHeight': '60px'}, children=html.Div([
-            html.Span(id='bt-individual-status', style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '8px', 'display': 'block'}),
+            html.Span(id='bt-individual-status', style={'color': 'var(--text-muted)', 'fontSize': '12px', 'marginBottom': '8px', 'display': 'block'}),
             html.Div(id='bt-individual-results'),
         ])),
     ])
@@ -561,31 +599,67 @@ def build_individual_backtest_panel() -> html.Div:
 
 def build_portfolio_backtest_panel() -> html.Div:
     """Build the portfolio backtest panel."""
+    _card = {
+        'background': 'var(--surface-panel)', 'border': '1px solid var(--border-strong)',
+        'borderRadius': '6px', 'padding': '14px 16px',
+    }
+    _hdr = {'margin': '0 0 10px', 'fontSize': '14px', 'fontWeight': '600',
+            'color': 'var(--text-primary)'}
+    _lbl = {'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '0.05em',
+            'textTransform': 'uppercase', 'color': 'var(--text-muted)',
+            'display': 'block', 'marginBottom': '6px'}
+    _inp = {
+        'width': '100%', 'background': 'var(--surface-input)',
+        'border': '1px solid var(--border-default)', 'borderRadius': '6px',
+        'padding': '8px 10px', 'color': 'var(--text-primary)', 'fontSize': '13px',
+        'boxSizing': 'border-box',
+    }
+
     return html.Div([
         html.Div([
-            html.H6("Portfolio Data", style={'color': THEME['accent'], 'marginBottom': '10px'}),
-            html.Div(id='bt-portfolio-data-preview', children=[
-                html.P("No portfolio data loaded. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.",
-                       style={'color': THEME['warning'], 'fontStyle': 'italic'})
-            ]),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
-
-        html.Div([
-            html.H6("Backtest Settings", style={'color': THEME['accent'], 'marginBottom': '15px'}),
+            # Portfolio Data — LEFT
             html.Div([
-                html.Div([html.Label("Backtest Period:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Dropdown(id='bt-port-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}], value=504, clearable=False, style={'width': '150px', 'marginRight': '30px'})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Initial Capital (MM):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-initial-capital', type='number', value=100, min=10, max=1000, step=10, style={'width': '100px', 'marginRight': '30px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"})], style={'display': 'flex', 'alignItems': 'center'}),
-                html.Div([html.Label("Transaction Cost (bp):", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}), dcc.Input(id='bt-txn-cost', type='number', value=0.5, min=0, max=5, step=0.1, style={'width': '80px', 'padding': '5px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'border': f"1px solid {THEME['border']}"})], style={'display': 'flex', 'alignItems': 'center'}),
-            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px'}),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}),
+                html.H2("Portfolio Data", style=_hdr),
+                html.Div(id='bt-portfolio-data-preview', children=[
+                    html.P("No portfolio data loaded. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.",
+                           style={'color': 'var(--accent-amber)', 'fontStyle': 'italic', 'fontSize': '12px'})
+                ]),
+            ], style={**_card, 'minWidth': '260px', 'maxWidth': '320px'}),
 
-        html.Div([
-            html.Button("▶ Run Portfolio Backtest", id='bt-run-portfolio-btn', n_clicks=0,
-                        style={'backgroundColor': THEME['success'], 'color': '#fff', 'padding': '10px 24px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontWeight': '700', 'fontSize': '13px', 'letterSpacing': '0.03em'}),
-        ], style={'marginBottom': '20px'}),
+            # Backtest Settings — MIDDLE
+            html.Div([
+                html.H2("Backtest Settings", style=_hdr),
+                html.Div([
+                    html.Div([
+                        html.Label("Backtest Period", style=_lbl),
+                        dcc.Dropdown(id='bt-port-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}], value=504, clearable=False, style={'fontSize': '13px'}),
+                    ]),
+                    html.Div([
+                        html.Label("Initial Capital (MM)", style=_lbl),
+                        dcc.Input(id='bt-initial-capital', type='number', value=100, min=10, max=1000, step=10, style=_inp),
+                    ]),
+                    html.Div([
+                        html.Label("Transaction Cost (bp)", style=_lbl),
+                        dcc.Input(id='bt-txn-cost', type='number', value=0.5, min=0, max=5, step=0.1, style=_inp),
+                    ]),
+                ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(150px, 1fr))', 'gap': '12px'}),
+            ], style={**_card, 'flex': '1'}),
+
+            # Actions — RIGHT
+            html.Div([
+                html.H2("Actions", style={**_hdr, 'fontSize': '12px'}),
+                html.Div([
+                    an_button(
+                        "▶ Run Portfolio Backtest", id='bt-run-portfolio-btn', n_clicks=0,
+                        variant="success", style_overrides={'padding': '10px 12px', 'fontSize': '11px'},
+                    ),
+                ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
+            ], style={**_card, 'minWidth': '160px'}),
+        ], style={'display': 'flex', 'gap': '14px', 'alignItems': 'flex-start', 'marginBottom': '16px',
+                  'flexWrap': 'wrap'}),
 
         dcc.Loading(id='loading-bt-portfolio', type='circle', color=THEME['accent'], style={'minHeight': '60px'}, children=html.Div([
-            html.Span(id='bt-portfolio-status', style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '8px', 'display': 'block'}),
+            html.Span(id='bt-portfolio-status', style={'color': 'var(--text-muted)', 'fontSize': '12px', 'marginBottom': '8px', 'display': 'block'}),
             html.Div(id='bt-portfolio-results'),
         ])),
     ])

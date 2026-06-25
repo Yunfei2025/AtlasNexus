@@ -371,7 +371,7 @@ def _make_table(
         page_size=50,
         style_table={"overflowX": "auto", "borderRadius": "4px", "width": "100%", "minWidth": "100%"},
         css=[{"selector": ".show-hide", "rule": "display: none;"}],
-        # style_header removed — CSS .dash-header rule in z_atlasnexus-design.css owns this
+        # style_header removed — CSS .dash-header rule in design.css owns this
         style_cell={
             "textAlign":  "center",
             "whiteSpace": "normal",

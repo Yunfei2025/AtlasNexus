@@ -824,6 +824,116 @@ div[role="tablist"]:has(> .tab.an-subtab) {
   color: var(--book-accent, var(--an-blue)) !important;
 }
 
+/* ── Pill toggle (mode switch — e.g. Individual Factors / Portfolio) ───── */
+.an-pill-toggle.tab-container {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  width: fit-content !important;
+  gap: 4px !important;
+  background: var(--surface-input) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: 6px !important;
+  padding: 4px !important;
+  margin-bottom: 0 !important;
+}
+.tab.an-pill-toggle,
+div.tab.an-pill-toggle {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 4px !important;
+  padding: 8px 16px !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.05em !important;
+  text-transform: uppercase !important;
+  color: var(--text-muted) !important;
+  flex: 0 0 auto !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  transition: background 0.15s, color 0.15s !important;
+}
+.tab.an-pill-toggle:hover,
+div.tab.an-pill-toggle:hover {
+  background: rgba(47, 157, 107, 0.16) !important;
+  color: var(--text-primary) !important;
+}
+.tab.an-pill-toggle--selected,
+div.tab.an-pill-toggle--selected {
+  background: var(--book-accent, var(--accent-green)) !important;
+  color: var(--text-on-accent) !important;
+  font-weight: 600 !important;
+}
+.tab.an-pill-toggle--selected:hover,
+div.tab.an-pill-toggle--selected:hover {
+  background: var(--book-accent, var(--accent-green)) !important;
+}
+
+/* ── KPI metric grid (Beta backtest results strip) ──────────────────────── */
+.an-kpi-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important;
+  gap: 12px !important;
+}
+.an-kpi-cell {
+  background: var(--surface-panel) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 8px !important;
+  padding: 12px 8px !important;
+  text-align: center !important;
+}
+.an-kpi-cell__label {
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  color: var(--text-muted) !important;
+  margin-bottom: 6px !important;
+}
+.an-kpi-cell__value {
+  font-size: 18px !important;
+  font-weight: 600 !important;
+  line-height: 1.2 !important;
+}
+
+/* ── Segmented control (dcc.RadioItems rendered as pill buttons) ────────── */
+.an-segmented {
+  display: inline-flex !important;
+  gap: 4px !important;
+  background: var(--surface-input) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: 6px !important;
+  padding: 4px !important;
+}
+.an-segmented__label {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 1 !important;
+  padding: 6px 10px !important;
+  border-radius: 4px !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  color: var(--text-muted) !important;
+  cursor: pointer !important;
+  transition: background 0.15s, color 0.15s !important;
+}
+label.selected .an-segmented__label {
+  background: var(--book-accent, var(--accent-green)) !important;
+  color: var(--text-on-accent) !important;
+  font-weight: 600 !important;
+}
+label:not(.selected):hover .an-segmented__label {
+  background: rgba(47, 157, 107, 0.16) !important;
+  color: var(--text-primary) !important;
+}
+.an-segmented__input {
+  position: absolute !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
 /* ============================================================
    Merged from atlasnexus_tabs.css (file consolidation, step 9)
    ============================================================ */

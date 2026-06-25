@@ -250,8 +250,12 @@ def register_backtest_callbacks(app) -> None:
         Input('bt-trade-style', 'value'),
     )
     def toggle_backtest_params(style):
-        base_mr    = {'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}
-        base_trend = {'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'}
+        base_mr = {
+            'background': 'var(--surface-panel)', 'border': '1px solid var(--border-strong)',
+            'borderRadius': '6px', 'padding': '14px 16px', 'marginBottom': '14px',
+        }
+        base_trend = {'background': 'var(--surface-panel)', 'border': '1px solid var(--border-strong)',
+                      'borderRadius': '6px', 'padding': '14px 16px', 'flex': '1'}
         if style == 'trend':
             base_mr['display'] = 'none'
         else:
@@ -520,7 +524,7 @@ def register_backtest_callbacks(app) -> None:
         portfolio_data = _load_portfolio_snapshot(optimized_data)
 
         if not portfolio_data:
-            return html.P("No portfolio data loaded. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.", style={'color': THEME['warning'], 'fontStyle': 'italic'})
+            return html.P("No portfolio data loaded. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.", style={'color': 'var(--accent-amber)', 'fontStyle': 'italic', 'fontSize': '12px'})
 
         try:
             n_assets = len(portfolio_data)
@@ -534,25 +538,33 @@ def register_backtest_callbacks(app) -> None:
                 style_counts[style] = style_counts.get(style, 0) + 1
 
             sorted_assets = sorted(portfolio_data, key=lambda x: float(x.get('weight', 0) or 0), reverse=True)
-            asset_list = []
+            asset_rows = []
             for item in sorted_assets:
                 w = float(item.get('weight', 0) or 0)
-                asset_list.append(html.Li(f"{item.get('ID', 'Unknown')} - {w*100:.1f}% ({item.get('direction', 'N/A')})", style={'color': THEME['text_main'], 'fontSize': '11px', 'marginBottom': '3px'}))
+                _dir = item.get('direction', 'N/A')
+                _dir_color = 'var(--accent-green)' if _dir == 'BUY' else ('var(--negative)' if _dir == 'SELL' else 'var(--text-muted)')
+                asset_rows.append(html.Div([
+                    html.Span('•', style={'color': 'var(--text-muted)', 'marginRight': '6px'}),
+                    html.Span(f"{item.get('ID', 'Unknown')} — {w*100:.1f}%", style={'color': 'var(--text-secondary)'}),
+                    html.Span(f" ({_dir})", style={'color': _dir_color, 'fontWeight': '600', 'marginLeft': '4px'}),
+                ], style={'fontSize': '11px', 'padding': '3px 0', 'fontFamily': 'var(--font-mono, monospace)'}))
+
+            _stat_lbl = {'fontSize': '9px', 'fontWeight': '600', 'letterSpacing': '0.05em',
+                         'textTransform': 'uppercase', 'color': 'var(--text-muted)', 'marginBottom': '2px'}
 
             return html.Div([
                 html.Div([
-                    html.Div([html.Strong("Total Assets: ", style={'color': THEME['text_sub']}), html.Span(f"{len(asset_list)}", style={'color': THEME['success'], 'fontWeight': 'bold', 'fontSize': '16px'})], style={'marginRight': '30px'}),
-                    html.Div([html.Strong("Weight Sum: ", style={'color': THEME['text_sub']}), html.Span(f"{total_weight*100:.1f}%", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
-                    html.Div([html.Strong("Direction: ", style={'color': THEME['text_sub']}), html.Span(f"BUY: {n_buy} / SELL: {n_sell}", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
-                    html.Div([html.Strong("Styles: ", style={'color': THEME['text_sub']}), html.Span(' | '.join([f"{k}: {v}" for k, v in style_counts.items()]), style={'color': THEME['text_main'], 'fontSize': '12px'})]),
-                ], style={'display': 'flex', 'flexWrap': 'wrap', 'marginBottom': '15px'}),
-                html.Div([
-                    html.Strong("Active Portfolio Assets (Backtest Universe):", style={'color': THEME['text_sub'], 'display': 'block', 'marginBottom': '8px'}),
-                    html.Div([html.Ul(asset_list, style={'margin': '0', 'paddingLeft': '20px'})], style={'maxHeight': '150px', 'overflowY': 'auto', 'border': '1px solid #444', 'padding': '5px', 'borderRadius': '4px'})
-                ]),
+                    html.Div([html.Div("Total Assets", style=_stat_lbl), html.Div(f"{n_assets}", style={'color': 'var(--accent-amber)', 'fontSize': '13px', 'fontWeight': '600'})]),
+                    html.Div([html.Div("Weight Sum", style=_stat_lbl), html.Div(f"{total_weight*100:.1f}%", style={'color': 'var(--text-primary)', 'fontSize': '13px'})]),
+                    html.Div([html.Div("Direction", style=_stat_lbl), html.Div(f"BUY: {n_buy} / SELL: {n_sell}", style={'color': 'var(--text-primary)', 'fontSize': '12px'})]),
+                    html.Div([html.Div("Styles", style=_stat_lbl), html.Div(' | '.join([f"{k}: {v}" for k, v in style_counts.items()]), style={'color': 'var(--text-primary)', 'fontSize': '11px'})]),
+                ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '8px', 'marginBottom': '12px'}),
+                html.Div("Active Portfolio Assets (Backtest Universe):", style={'fontSize': '11px', 'color': 'var(--text-muted)', 'marginBottom': '6px'}),
+                html.Div(asset_rows, style={'maxHeight': '180px', 'overflowY': 'auto', 'border': '1px solid var(--border-default)',
+                                            'borderRadius': '4px', 'padding': '6px 10px', 'background': 'var(--surface-input)'}),
             ])
         except Exception as e:
-            return html.P(f"Error parsing portfolio data: {str(e)}", style={'color': THEME['danger']})
+            return html.P(f"Error parsing portfolio data: {str(e)}", style={'color': 'var(--negative)'})
 
     # -------------------------------------------------------------------------
     # BACKTEST: Run Portfolio Backtest

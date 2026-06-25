@@ -27,6 +27,18 @@ def _coerce_datetime_series(series: pd.Series | None) -> pd.Series | None:
     return coerced
 
 
+_STAT_LBL = {'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '0.05em',
+             'textTransform': 'uppercase', 'color': 'var(--text-muted)'}
+_STAT_VAL = {'fontFamily': 'var(--font-mono, monospace)', 'fontWeight': '600', 'fontSize': '13px'}
+
+
+def _stat_pair(label: str, value: str, color: str) -> html.Div:
+    return html.Div([
+        html.Span(f"{label}: ", style=_STAT_LBL),
+        html.Span(value, style={**_STAT_VAL, 'color': color}),
+    ])
+
+
 def build_backtest_results_display(results: Dict[str, Any], title: str = "Backtest Results") -> html.Div:
     """Build the display for backtest results."""
     import plotly.graph_objects as go
@@ -51,27 +63,28 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         return html.Div("No trades generated with current parameters.", style={'color': THEME['warning'], 'padding': '20px'})
 
     metrics_div = html.Div([
-        html.H6(title, style={'color': THEME['text_main'], 'marginBottom': '15px'}),
+        html.Div(title, style={'fontSize': '11px', 'color': 'var(--text-muted)', 'marginBottom': '10px'}),
         html.Div([
-            html.Div([html.Strong("Total Trades: ", style={'color': THEME['text_sub']}), html.Span(f"{results['n_trades']}", style={'color': THEME['text_main']})], style={'marginRight': '25px'}),
-            html.Div([html.Strong("Win Rate: ", style={'color': THEME['text_sub']}), html.Span(f"{results['win_rate']:.1f}%", style={'color': THEME['success'] if results['win_rate'] > 50 else THEME['danger']})], style={'marginRight': '25px'}),
-            html.Div([html.Strong("Total PnL: ", style={'color': THEME['text_sub']}), html.Span(f"{results['total_pnl']:.1f} bp", style={'color': THEME['success'] if results['total_pnl'] > 0 else THEME['danger']})], style={'marginRight': '25px'}),
-            html.Div([html.Strong("Avg PnL: ", style={'color': THEME['text_sub']}), html.Span(f"{results['avg_pnl']:.2f} bp", style={'color': THEME['text_main']})], style={'marginRight': '25px'}),
-            html.Div([html.Strong("Avg Hold: ", style={'color': THEME['text_sub']}), html.Span(f"{results['avg_hold']:.0f} days", style={'color': THEME['text_main']})], style={'marginRight': '25px'}),
-            html.Div([html.Strong("Sharpe: ", style={'color': THEME['text_sub']}), html.Span(f"{results['sharpe']:.2f}", style={'color': THEME['success'] if results['sharpe'] > 1 else THEME['text_main']})], style={'marginRight': '25px'}),
-            html.Div([html.Strong("Max DD: ", style={'color': THEME['text_sub']}), html.Span(f"{results['max_drawdown']:.1f} bp", style={'color': THEME['danger']})]),
-        ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '20px'}),
+            _stat_pair("Total Trades", f"{results['n_trades']}", 'var(--text-primary)'),
+            _stat_pair("Win Rate", f"{results['win_rate']:.1f}%", 'var(--accent-green)' if results['win_rate'] > 50 else 'var(--negative)'),
+            _stat_pair("Total PnL", f"{results['total_pnl']:.1f} bp", 'var(--accent-green)' if results['total_pnl'] > 0 else 'var(--negative)'),
+            _stat_pair("Avg PnL", f"{results['avg_pnl']:.2f} bp", 'var(--text-primary)'),
+            _stat_pair("Avg Hold", f"{results['avg_hold']:.0f} days", 'var(--text-primary)'),
+            _stat_pair("Sharpe", f"{results['sharpe']:.2f}", 'var(--accent-green)' if results['sharpe'] > 1 else 'var(--text-primary)'),
+            _stat_pair("Max DD", f"{results['max_drawdown']:.1f} bp", 'var(--accent-amber)'),
+        ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '20px'}),
         html.Div(
             [
-                html.Strong("Open Position: ", style={'color': THEME['text_sub']}),
+                html.Span("Open Position: ", style=_STAT_LBL),
                 html.Span(
                     open_trade_text,
-                    style={'color': THEME['warning'] if open_trade else THEME['text_sub']}
+                    style={'color': 'var(--accent-amber)' if open_trade else 'var(--text-muted)', 'fontSize': '12px'}
                 )
             ],
-            style={'display': 'block' if open_trade else 'none', 'marginBottom': '4px'}
+            style={'display': 'block' if open_trade else 'none', 'marginTop': '8px'}
         ),
-    ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '15px'})
+    ], style={'background': 'var(--surface-panel)', 'border': '1px solid var(--border-strong)',
+              'borderRadius': '6px', 'padding': '12px 16px', 'marginBottom': '15px'})
 
     is_trend = 'trend_state_ts' in results
     is_bondswap = results.get('spread_type') in ('TBondSwap', 'CBondSwap', 'BondSwap')
