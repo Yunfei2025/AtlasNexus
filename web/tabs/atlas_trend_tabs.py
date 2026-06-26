@@ -94,63 +94,57 @@ _QUICK = [
 
 _BTN_BASE = {
     "width": "100%",
-    "marginBottom": "3px",
     "padding": "5px 8px",
-    "backgroundColor": THEME["bg_input"],
-    "color": THEME["text_main"],
-    "border": f'1px solid {THEME["table_header"]}',
+    "background": "transparent",
+    "color": "var(--text-secondary)",
+    "border": "none",
     "borderRadius": "3px",
     "cursor": "pointer",
-    "fontSize": "11px",
+    "fontSize": "10px",
     "textAlign": "left",
     "fontFamily": "inherit",
+    "transition": "all 0.12s",
 }
 
 _BTN_ACTIVE = {
     **_BTN_BASE,
-    "backgroundColor": THEME["accent"],
-    "borderColor": THEME["accent_light"],
-    "fontWeight": "bold",
+    "background": "var(--accent-cyan)",
+    "color": "var(--text-on-accent)",
 }
 
 
 def _marker_key() -> html.Div:
-    """Marker legend lifted out of the chart (mirrors the mockup's `.key` strip)."""
+    """Marker legend lifted out of the chart."""
     items = []
-    for i, m in enumerate(_MARKER_KEY):
-        if i == 2:
-            items.append(html.Div(style={
-                "width": "1px", "height": "16px",
-                "backgroundColor": THEME["table_header"],
-            }))
+    for m in _MARKER_KEY:
         if m["kind"] == "line":
-            swatch = html.Span(style={
-                "display": "inline-block", "width": "20px", "height": "0",
-                "borderTop": f'3px solid {m["color"]}', "borderRadius": "2px",
+            swatch = html.Div(style={
+                "width": "18px", "height": "2px",
+                "background": m["color"], "borderRadius": "1px",
+                "flexShrink": "0",
             })
         else:
             swatch = html.Span(m["glyph"], style={
-                "color": m["color"], "fontSize": "13px", "width": "14px",
-                "display": "inline-block", "textAlign": "center",
+                "color": m["color"], "fontSize": "11px",
+                "width": "14px", "display": "inline-block", "textAlign": "center",
             })
         items.append(html.Div(
-            [swatch, html.Span(m["label"], style={"marginLeft": "7px"})],
-            style={"display": "flex", "alignItems": "center", "gap": "2px"},
+            [swatch, html.Span(m["label"])],
+            style={
+                "display": "flex", "alignItems": "center", "gap": "5px",
+                "color": "var(--text-secondary)", "fontSize": "10px",
+            },
         ))
     return html.Div(
         items,
         style={
             "display": "flex",
             "flexWrap": "wrap",
-            "gap": "16px",
-            "alignItems": "center",
-            "padding": "9px 14px",
-            "backgroundColor": THEME["bg_card"],
-            "border": f'1px solid {THEME["table_header"]}',
-            "borderRadius": "8px",
-            "fontSize": "12px",
-            "color": THEME["text_sub"],
-            "marginBottom": "10px",
+            "gap": "14px",
+            "padding": "6px 12px",
+            "background": "var(--surface-panel)",
+            "border": "1px solid var(--border-strong)",
+            "borderRadius": "5px",
         },
     )
 
@@ -171,9 +165,8 @@ def _section_label(text: str) -> html.Div:
 
 
 def build_trend_layout() -> html.Div:
-    """Return the TREND tab content for the Beta Book."""
+    """Return the TREND tab content for the Market section."""
 
-    # Quick-select button list (individual IDs for direct callback targeting)
     quick_buttons = [
         html.Button(
             label,
@@ -185,80 +178,96 @@ def build_trend_layout() -> html.Div:
         for val, label in _QUICK
     ]
 
+    _lbl = {
+        "color": "var(--text-muted)",
+        "fontSize": "9px",
+        "textTransform": "uppercase",
+        "letterSpacing": "0.07em",
+        "fontWeight": "600",
+        "marginBottom": "6px",
+        "display": "block",
+    }
+
     return html.Div(
         [
             html.Div(
                 [
-                    # ── Left sidebar — fills the column height, no stranded void ──
+                    # ── Left sidebar: Series panel + Quick Select panel ──────────
                     html.Div(
                         [
+                            # Series panel (top)
                             html.Div(
                                 [
-                                    _section_label("Series"),
+                                    html.Div("Series", style=_lbl),
                                     dcc.Dropdown(
                                         id="an-trend-type",
                                         options=_OPTIONS,
                                         value="中债国债到期收益率:10年",
                                         clearable=False,
                                         optionHeight=28,
+                                        style={"fontSize": "11px"},
+                                    ),
+                                ],
+                                style={
+                                    "background": "var(--surface-panel)",
+                                    "border": "1px solid var(--border-strong)",
+                                    "borderRadius": "6px 6px 0 0",
+                                    "borderBottom": "none",
+                                    "padding": "10px 12px",
+                                },
+                            ),
+                            # Quick Select panel (bottom, flex to fill remaining height)
+                            html.Div(
+                                [
+                                    html.Div("Quick Select", style=_lbl),
+                                    html.Div(
+                                        quick_buttons,
                                         style={
-                                            "backgroundColor": THEME["bg_input"],
-                                            "color": THEME["text_main"],
-                                            "fontSize": "12px",
-                                            "marginBottom": "14px",
+                                            "display": "flex",
+                                            "flexDirection": "column",
+                                            "gap": "2px",
+                                            "overflowY": "auto",
+                                            "maxHeight": "480px",
                                         },
                                     ),
-                                    html.Hr(
-                                        style={
-                                            "borderColor": THEME["table_header"],
-                                            "margin": "6px 0 10px 0",
-                                        }
-                                    ),
-                                    _section_label("Quick select"),
                                 ],
-                                style={"flex": "0 0 auto"},
-                            ),
-                            html.Div(
-                                quick_buttons,
                                 style={
+                                    "background": "var(--surface-panel)",
+                                    "border": "1px solid var(--border-strong)",
+                                    "borderRadius": "0 0 6px 6px",
+                                    "borderTop": "1px solid var(--border-default)",
+                                    "padding": "10px 12px",
                                     "flex": "1",
                                     "minHeight": "0",
-                                    "overflowY": "auto",
-                                    "paddingRight": "2px",
                                 },
                             ),
                         ],
                         style={
-                            "width": "172px",
-                            "minWidth": "172px",
+                            "width": "160px",
+                            "minWidth": "160px",
                             "flexShrink": "0",
-                            "alignSelf": "stretch",
                             "display": "flex",
                             "flexDirection": "column",
-                            "backgroundColor": THEME["bg_card"],
-                            "padding": "14px 10px",
-                            "borderRadius": "5px",
-                            "border": f'1px solid {THEME["table_header"]}',
-                            "boxSizing": "border-box",
+                            "alignSelf": "stretch",
                         },
                     ),
 
-                    # ── Chart panel ───────────────────────────────────────────────
+                    # ── Main content ─────────────────────────────────────────────
                     html.Div(
                         [
-                            # Single header: series title + inline "Updated" timestamp
+                            # Header: series title + "Updated" timestamp
                             html.Div(
                                 id="an-trend-info",
                                 style={
-                                    "color": THEME["text_main"],
-                                    "fontSize": "16px",
-                                    "fontWeight": "600",
+                                    "display": "flex",
+                                    "alignItems": "baseline",
+                                    "gap": "10px",
                                     "marginBottom": "10px",
-                                    "paddingLeft": "4px",
                                 },
                             ),
-                            # Marker key — lifted out of the plot
+                            # Legend strip
                             _marker_key(),
+                            # Chart
                             html.Div(
                                 dcc.Graph(
                                     id="an-trend-graph",
@@ -285,24 +294,18 @@ def build_trend_layout() -> html.Div:
                                             "font": {"color": THEME["text_main"]},
                                             "xaxis": {"color": THEME["text_sub"]},
                                             "yaxis": {"color": THEME["text_sub"]},
-                                            "annotations": [
-                                                {
-                                                    "text": "Select a series — run EOD to generate data",
-                                                    "xref": "paper",
-                                                    "yref": "paper",
-                                                    "x": 0.5,
-                                                    "y": 0.5,
-                                                    "showarrow": False,
-                                                    "font": {
-                                                        "size": 13,
-                                                        "color": THEME["text_sub"],
-                                                    },
-                                                }
-                                            ],
+                                            "annotations": [{
+                                                "text": "Select a series — run EOD to generate data",
+                                                "xref": "paper", "yref": "paper",
+                                                "x": 0.5, "y": 0.5,
+                                                "showarrow": False,
+                                                "font": {"size": 13, "color": THEME["text_sub"]},
+                                            }],
                                         },
                                     },
                                 ),
                                 className="an-card",
+                                style={"marginTop": "10px"},
                             ),
                         ],
                         style={"flex": "1", "minWidth": "0"},
@@ -311,15 +314,13 @@ def build_trend_layout() -> html.Div:
                 style={
                     "display": "flex",
                     "flexDirection": "row",
-                    "gap": "14px",
+                    "gap": "16px",
                     "alignItems": "flex-start",
                 },
             ),
         ],
         style={
-            "backgroundColor": THEME["bg_main"],
             "padding": "16px",
-            "borderRadius": "5px",
             "margin": "10px",
         },
     )
@@ -448,7 +449,17 @@ def register_trend_callbacks(app) -> None:
             # curves/utils/plot.py::plotTrend (TREND_THEME) — leave it as-is.
             # The series title lives in the HTML header instead of the plot
             # (single header, no triple-repeated "10Y Treasury").
-            info = f"{label}  ·  Updated {timestamp}"
+            info = [
+                html.Span(label, style={
+                    "color": "var(--text-primary)",
+                    "fontSize": "16px",
+                    "fontWeight": "600",
+                }),
+                html.Span(f"Updated {timestamp}", style={
+                    "color": "var(--text-muted)",
+                    "fontSize": "12px",
+                }),
+            ]
             return fig, info
 
         except FileNotFoundError:

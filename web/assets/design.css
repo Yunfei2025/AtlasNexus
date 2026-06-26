@@ -1179,13 +1179,13 @@ textarea {
   transition: background 0.12s, color 0.12s, border-color 0.12s !important;
 }
 .surface-mode-chips label:has(input:checked) {
-  background:   rgba(61,139,212,.20) !important;
-  border-color: var(--an-blue) !important;
-  color:        var(--an-cyan) !important;
+  background:   var(--accent-cyan-soft) !important;
+  border-color: var(--accent-cyan) !important;
+  color:        var(--accent-cyan) !important;
 }
 .surface-mode-chips label:hover {
-  background: var(--an-navy-500) !important;
-  color:      var(--an-text) !important;
+  background: var(--navy-500) !important;
+  color:      var(--text-primary) !important;
 }
 
 /* ════════════════════════════════════════════════════════════════════════

@@ -5,7 +5,18 @@ from __future__ import annotations
 
 from dash import dcc, html
 
-from ..data import THEME, BOND_SIGNAL_LABELS
+from ..data import BOND_SIGNAL_LABELS
+
+
+_LBL = {
+    'color': 'var(--text-muted)',
+    'fontSize': '9px',
+    'fontWeight': '600',
+    'textTransform': 'uppercase',
+    'letterSpacing': '0.06em',
+    'marginBottom': '4px',
+    'display': 'block',
+}
 
 
 def build_multiasset_bond_layout():
@@ -16,73 +27,78 @@ def build_multiasset_bond_layout():
     ]
 
     return html.Div([
+        # ── Header ──────────────────────────────────────────────────────────
         html.Div([
             html.Div([
                 html.H4("Bond Trading Signals (Z-Score)", style={
-                    'margin': '0 0 6px 0',
-                    'color': THEME['text_main'],
+                    'margin': '0 0 4px',
+                    'color': 'var(--text-primary)',
+                    'fontSize': '16px',
+                    'fontWeight': '700',
                 }),
-                html.P(
-                    "Realtime relative-value signals by maturity bucket. Labels are inverted per request: low Z shows SELL and high Z shows BUY.",
-                    style={'margin': '0', 'color': THEME['text_sub'], 'fontSize': '13px'},
+                html.Div(
+                    "Realtime relative-value signals by maturity bucket. "
+                    "Labels are inverted per request: low Z shows SELL and high Z shows BUY.",
+                    style={'color': 'var(--text-muted)', 'fontSize': '11px'},
                 ),
             ], style={'flex': '1 1 auto', 'minWidth': '280px'}),
+
+            # Bond type selector + Refresh
             html.Div([
                 html.Div([
-                    html.Label('Bond Type', style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '6px', 'display': 'block'}),
+                    html.Div('Bond Type', style=_LBL),
                     dcc.Dropdown(
                         id='beta-bond-type-selector',
                         options=dropdown_options,
                         value='TBond',
                         clearable=False,
-                        style={'minWidth': '240px', 'fontSize': '13px'},
+                        style={'minWidth': '200px', 'fontSize': '12px'},
                     ),
-                ], style={'minWidth': '240px'}),
+                ]),
                 html.Button(
                     'Refresh Data',
                     id='beta-bond-refresh-btn',
                     n_clicks=0,
                     style={
-                        'backgroundColor': THEME['accent'],
-                        'color': 'white',
-                        'padding': '10px 16px',
+                        'background': 'var(--accent-blue)',
+                        'color': '#fff',
+                        'padding': '7px 14px',
                         'border': 'none',
-                        'borderRadius': '8px',
+                        'borderRadius': '5px',
                         'cursor': 'pointer',
-                        'fontSize': '13px',
-                        'fontWeight': 'bold',
-                        'height': '40px',
+                        'fontSize': '11px',
+                        'fontWeight': '600',
                         'alignSelf': 'flex-end',
                     },
                 ),
             ], style={
                 'display': 'flex',
-                'gap': '12px',
-                'alignItems': 'stretch',
-                'flexWrap': 'wrap',
-                'justifyContent': 'flex-end',
+                'gap': '10px',
+                'alignItems': 'flex-end',
+                'flexShrink': '0',
             }),
         ], style={
             'display': 'flex',
             'justifyContent': 'space-between',
-            'gap': '16px',
+            'alignItems': 'flex-start',
+            'gap': '12px',
             'flexWrap': 'wrap',
             'marginBottom': '14px',
         }),
+
+        # ── Meta row ────────────────────────────────────────────────────────
         html.Div(id='beta-bond-status', style={
-            'color': THEME['text_sub'],
-            'fontSize': '12px',
+            'color': 'var(--text-muted)',
+            'fontSize': '10px',
             'marginBottom': '16px',
         }),
+
+        # ── Signals grid ────────────────────────────────────────────────────
         dcc.Loading(
             id='beta-bond-loading',
             type='circle',
-            color=THEME['accent'],
+            color='var(--accent-blue)',
             style={'minHeight': '420px'},
             children=html.Div(id='beta-bond-signals-container', style={'minHeight': '420px'}),
         ),
-    ], style={
-        'padding': '18px',
-        'backgroundColor': THEME['bg_main'],
-        'borderRadius': '10px',
-    })
+    ], style={'padding': '16px', 'margin': '10px'})

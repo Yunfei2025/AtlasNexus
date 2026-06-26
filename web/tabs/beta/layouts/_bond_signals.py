@@ -6,34 +6,15 @@ from __future__ import annotations
 import os
 
 import pandas as pd
-from dash import html, dash_table
+from dash import html
 
 from settings.paths import DIR_INPUT
 
 from ..data import (
-    THEME,
     BOND_SIGNAL_FILE_MAP,
     BOND_SIGNAL_LABELS,
     BOND_SIGNAL_BUCKETS,
 )
-from ...atlas_components import badge
-
-# Diverging heat scale for Z-Score cells (mirrors HeatCell --heat-neg-3..--heat-pos-3)
-_HEAT_SCALE = [
-    ("#6e2a38", "rgba(255,255,255,0.9)"),   # <= -2.5
-    ("#5a2c3e", "rgba(255,255,255,0.85)"),  # -2.5 to -1.5
-    ("#3a2d45", "rgba(255,255,255,0.8)"),   # -1.5 to -0.5
-    ("#16294a", "rgba(255,255,255,0.7)"),   # -0.5 to +0.5
-    ("#1c3a52", "rgba(255,255,255,0.8)"),   # +0.5 to +1.5
-    ("#1f4f6b", "rgba(255,255,255,0.85)"),  # +1.5 to +2.5
-    ("#236a86", "rgba(255,255,255,0.9)"),   # >= +2.5
-]
-
-
-def _zscore_heat_style(z: float) -> dict:
-    idx = min(6, max(0, round(z) + 3))
-    bg, fg = _HEAT_SCALE[idx]
-    return {"backgroundColor": bg, "color": fg, "fontWeight": "600"}
 
 
 def _load_bond_signal_frame(bond_type: str):
@@ -139,114 +120,96 @@ def _resolve_bond_signal_columns(frame: pd.DataFrame):
     }
 
 
-def _build_bond_signal_mini_table(df: pd.DataFrame, columns: dict, title: str, color: str):
+def _build_bond_signal_mini_table(df: pd.DataFrame, columns: dict, title: str, is_sell: bool):
     if df.empty:
         return html.Div(
             "No signals in this bucket.",
             style={
-                'color': THEME['text_sub'],
-                'fontSize': '12px',
-                'padding': '18px 12px',
+                'color': 'var(--text-muted)',
+                'fontSize': '11px',
+                'padding': '12px',
                 'textAlign': 'center',
-                'backgroundColor': THEME['bg_input'],
-                'borderRadius': '8px',
-                'border': f'1px solid {THEME["table_header"]}',
+                'background': 'var(--surface-input)',
+                'borderRadius': '6px',
             },
         )
 
     col_id = columns['id']
-    col_name = columns['name']
     col_ttm = columns['ttm']
     col_z = columns['z']
     col_mid = columns.get('mid')
     col_cr3m = columns.get('cr3m')
 
-    target_cols = [col_id]
-    if col_name != col_id:
-        target_cols.append(col_name)
-    if col_mid and col_mid in df.columns:
-        target_cols.append(col_mid)
-    if col_cr3m and col_cr3m in df.columns:
-        target_cols.append(col_cr3m)
-    target_cols.extend([col_ttm, col_z])
-    valid_cols = [col for col in target_cols if col in df.columns]
+    badge_bg = '#b91c1c' if is_sell else '#166534'
+    z_color  = '#f87171' if is_sell else '#34d399'
 
-    display_cols_map = {
-        col_id: 'Code',
-        col_name: 'Name',
-        col_mid: 'Mid Price',
-        col_cr3m: 'C+R,3m',
-        col_ttm: 'TTM',
-        col_z: 'Z-Score',
+    def _z_bg(z_val: float) -> str:
+        if is_sell:
+            alpha = min(abs(z_val) / 4, 1) * 0.3
+            return f'rgba(239,68,68,{alpha:.2f})'
+        alpha = min(abs(z_val) / 3, 1) * 0.25
+        return f'rgba(52,211,153,{alpha:.2f})'
+
+    _th = {
+        'padding': '3px 6px',
+        'fontSize': '8px',
+        'fontWeight': '600',
+        'textTransform': 'uppercase',
+        'letterSpacing': '0.05em',
+        'color': 'var(--text-muted)',
+        'borderBottom': '1px solid rgba(255,255,255,0.08)',
     }
+    _td_base = {'padding': '4px 6px', 'fontSize': '10px',
+                'borderBottom': '1px solid rgba(255,255,255,0.04)'}
 
-    records = []
-    for record in df[valid_cols].to_dict('records'):
-        formatted = {}
-        for col in valid_cols:
-            value = record.get(col)
-            if col == col_ttm and pd.notna(value):
-                value = f"{float(value):.2f}Y"
-            elif col == col_mid and pd.notna(value):
-                value = f"{float(value):.3f}"
-            elif col == col_cr3m and pd.notna(value):
-                value = f"{float(value):.2f}"
-            elif col == col_z and pd.notna(value):
-                value = round(float(value), 4)
-            formatted[display_cols_map.get(col, col)] = value
-        records.append(formatted)
-
-    # ── Z-Score cell styles — diverging heat scale (HeatCell equivalent) ──────
-    z_vals = pd.to_numeric(df[col_z], errors='coerce')
-    z_bar_styles: list[dict] = []
-    for _i, _v in enumerate(z_vals):
+    rows = []
+    for _, row in df.iterrows():
         try:
-            _v = float(_v)
+            z_val = float(row[col_z]) if pd.notna(row[col_z]) else 0.0
         except (TypeError, ValueError):
-            continue
-        z_bar_styles.append({
-            "if": {"row_index": _i, "column_id": "Z-Score"},
-            **_zscore_heat_style(_v),
-        })
+            z_val = 0.0
+        mid_str = f"{float(row[col_mid]):.3f}" if col_mid and col_mid in df.columns and pd.notna(row.get(col_mid)) else '—'
+        cr_val  = float(row[col_cr3m]) if col_cr3m and col_cr3m in df.columns and pd.notna(row.get(col_cr3m)) else None
+        ttm_str = f"{float(row[col_ttm]):.2f}Y" if pd.notna(row[col_ttm]) else '—'
 
-    badge_tone = "error" if color == THEME['danger'] else "ok"
+        cr_color = '#34d399' if (cr_val is not None and cr_val >= 0) else '#f87171'
+        cr_str   = f"{cr_val:.2f}" if cr_val is not None else '—'
+
+        rows.append(html.Tr([
+            html.Td(str(row[col_id]), style={**_td_base, 'color': 'var(--text-primary)', 'fontWeight': '500', 'textAlign': 'left'}),
+            html.Td(mid_str,          style={**_td_base, 'color': 'var(--text-secondary)', 'textAlign': 'right'}),
+            html.Td(cr_str,           style={**_td_base, 'color': cr_color, 'textAlign': 'right'}),
+            html.Td(ttm_str,          style={**_td_base, 'color': 'var(--text-muted)', 'textAlign': 'right'}),
+            html.Td(f"{z_val:.2f}",   style={**_td_base, 'color': z_color, 'fontWeight': '700',
+                                             'textAlign': 'right', 'background': _z_bg(z_val)}),
+        ]))
 
     return html.Div([
-        badge(title, status=badge_tone, style={'marginBottom': '8px', 'textTransform': 'uppercase'}),
-        dash_table.DataTable(
-            data=records,
-            columns=[
-                (
-                    {'name': display_cols_map.get(col, col), 'id': display_cols_map.get(col, col),
-                     'type': 'numeric', 'format': {'specifier': '.2f'}}
-                    if col == col_z else
-                    {'name': display_cols_map.get(col, col), 'id': display_cols_map.get(col, col)}
-                )
-                for col in valid_cols
-            ],
-            style_cell={
-                'textAlign': 'center',
-                'padding': '7px 8px',
-                'backgroundColor': THEME['bg_input'],
-                'color': THEME['text_main'],
-                'border': 'none',
-                'fontSize': '11px',
-                'whiteSpace': 'normal',
-                'height': 'auto',
+        html.Div(
+            title,
+            style={
+                'display': 'inline-block',
+                'padding': '2px 10px',
+                'borderRadius': '12px',
+                'background': badge_bg,
+                'color': '#fff',
+                'fontSize': '9px',
+                'fontWeight': '700',
+                'letterSpacing': '0.06em',
+                'marginBottom': '6px',
             },
-            style_header={
-                'backgroundColor': THEME['table_header'],
-                'fontWeight': 'bold',
-                'color': color,
-                'border': 'none',
-            },
-            style_data_conditional=[
-                {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['table_row_even']},
-                *z_bar_styles,
-            ],
-            style_table={'overflowX': 'auto'},
         ),
-    ])
+        html.Table([
+            html.Thead(html.Tr([
+                html.Th('NAME',      style={**_th, 'textAlign': 'left'}),
+                html.Th('MID PRICE', style={**_th, 'textAlign': 'right'}),
+                html.Th('C+R,3M',   style={**_th, 'textAlign': 'right'}),
+                html.Th('TTM',       style={**_th, 'textAlign': 'right'}),
+                html.Th('Z-SCORE',   style={**_th, 'textAlign': 'right'}),
+            ])),
+            html.Tbody(rows),
+        ], style={'width': '100%', 'borderCollapse': 'collapse', 'fontSize': '10px'}),
+    ], style={'marginBottom': '10px'})
 
 
 def _build_bond_signal_cards(bond_type: str):
@@ -255,17 +218,17 @@ def _build_bond_signal_cards(bond_type: str):
         empty_state = html.Div([
             html.H5(
                 f"{BOND_SIGNAL_LABELS.get(bond_type, bond_type)} signals unavailable",
-                style={'color': THEME['warning'], 'marginBottom': '8px'},
+                style={'color': 'var(--accent-amber)', 'marginBottom': '8px'},
             ),
             html.P(
                 source_key,
-                style={'color': THEME['text_sub'], 'margin': '0', 'fontSize': '13px'},
+                style={'color': 'var(--text-muted)', 'margin': '0', 'fontSize': '13px'},
             ),
         ], style={
             'padding': '28px',
-            'backgroundColor': THEME['bg_card'],
-            'borderRadius': '12px',
-            'border': f'1px dashed {THEME["table_header"]}',
+            'background': 'var(--surface-panel)',
+            'borderRadius': '8px',
+            'border': '1px dashed var(--border-strong)',
             'textAlign': 'center',
         })
         return empty_state, None
@@ -274,7 +237,7 @@ def _build_bond_signal_cards(bond_type: str):
     if columns is None:
         return html.Div(
             "Missing required columns for bond signals (ttm, z-score, code).",
-            style={'color': THEME['danger'], 'padding': '20px', 'textAlign': 'center'},
+            style={'color': '#f87171', 'padding': '20px', 'textAlign': 'center'},
         ), None
 
     col_ttm = columns['ttm']
@@ -315,7 +278,7 @@ def _build_bond_signal_cards(bond_type: str):
     if frame.empty:
         return html.Div(
             "No valid numeric signal rows found in the realtime dataset.",
-            style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'},
+            style={'color': 'var(--accent-amber)', 'padding': '20px', 'textAlign': 'center'},
         ), None
 
     bucket_cards = []
@@ -330,69 +293,60 @@ def _build_bond_signal_cards(bond_type: str):
             buy_candidates = bucket_df.sort_values(col_z, ascending=False).head(5)
             avg_z = bucket_df[col_z].mean()
 
-        stats = [
-            html.Span(
-                f"{len(bucket_df)} bonds",
-                style={
-                    'padding': '4px 10px',
-                    'borderRadius': '999px',
-                    'backgroundColor': THEME['bg_input'],
-                    'color': THEME['text_sub'],
-                    'fontSize': '11px',
-                },
-            )
-        ]
+        avg_z_pos = avg_z is not None and pd.notna(avg_z) and avg_z >= 0
+        avg_z_badge = []
         if avg_z is not None and pd.notna(avg_z):
-            stats.append(
-                badge(f"Avg Z {avg_z:+.2f}", status="ok" if avg_z > 0 else "error")
-            )
+            avg_z_badge = [html.Span(
+                f"Avg Z {avg_z:+.2f}",
+                style={
+                    'padding': '2px 8px',
+                    'borderRadius': '10px',
+                    'fontSize': '9px',
+                    'fontWeight': '700',
+                    'background': 'rgba(52,211,153,0.18)' if avg_z_pos else 'rgba(239,68,68,0.18)',
+                    'color': '#34d399' if avg_z_pos else '#f87171',
+                },
+            )]
 
         bucket_cards.append(
             html.Div([
+                # ── Card header ─────────────────────────────────────────────
                 html.Div([
-                    html.Div(bucket_label, style={
-                        'color': THEME['text_main'],
-                        'fontSize': '16px',
+                    html.Span(bucket_label, style={
+                        'color': 'var(--text-primary)',
+                        'fontSize': '14px',
                         'fontWeight': '700',
                     }),
-                    html.Div(f"TTM in ({min_ttm:.0f}, {max_ttm:.0f}] years", style={
-                        'color': THEME['text_sub'],
-                        'fontSize': '12px',
-                        'marginTop': '2px',
-                    }),
-                ]),
-                html.Div(stats, style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap'}),
-                html.Div([
-                    html.Div(
-                        _build_bond_signal_mini_table(
-                            sell_candidates,
-                            columns,
-                            'SELL (Low Z)',
-                            THEME['danger'],
-                        ),
-                        style={'flex': '1 1 0'},
-                    ),
-                    html.Div(
-                        _build_bond_signal_mini_table(
-                            buy_candidates,
-                            columns,
-                            'BUY (High Z)',
-                            THEME['success'],
-                        ),
-                        style={'flex': '1 1 0'},
-                    ),
-                ], style={'display': 'flex', 'gap': '12px', 'flexWrap': 'wrap', 'marginTop': '16px'}),
+                ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'baseline', 'marginBottom': '3px'}),
+                html.Div(f"TTM in ({min_ttm:.0f}, {max_ttm:.0f}] years", style={
+                    'color': 'var(--text-muted)',
+                    'fontSize': '9px',
+                    'marginBottom': '8px',
+                }),
+                html.Div(
+                    [html.Span(f"{len(bucket_df)} bonds", style={
+                        'color': 'var(--text-muted)', 'fontSize': '10px',
+                    })] + avg_z_badge,
+                    style={'display': 'flex', 'gap': '8px', 'alignItems': 'center', 'marginBottom': '12px'},
+                ),
+                # ── SELL table ──────────────────────────────────────────────
+                _build_bond_signal_mini_table(sell_candidates, columns, 'SELL (LOW Z)', is_sell=True),
+                # ── BUY table ───────────────────────────────────────────────
+                _build_bond_signal_mini_table(buy_candidates, columns, 'BUY (HIGH Z)', is_sell=False),
             ], style={
-                'background': 'linear-gradient(180deg, rgba(12,43,100,0.98), rgba(8,34,85,0.98))',
-                'border': f'1px solid {THEME["table_header"]}',
-                'borderRadius': '14px',
-                'padding': '18px',
-                'boxShadow': '0 10px 24px rgba(0, 0, 0, 0.18)',
+                'background': 'var(--surface-panel)',
+                'border': '1px solid var(--border-strong)',
+                'borderRadius': '8px',
+                'padding': '14px',
             })
         )
 
     return html.Div(
         bucket_cards,
-        className='bond-bucket-grid',
-        style={'alignItems': 'start'},
+        style={
+            'display': 'grid',
+            'gridTemplateColumns': 'repeat(3, 1fr)',
+            'gap': '14px',
+            'alignItems': 'start',
+        },
     ), len(frame)

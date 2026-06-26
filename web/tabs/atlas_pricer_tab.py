@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """PRICER subtab for the MARKET section.
 
 Shows bid/offer price tables for:
@@ -671,7 +671,15 @@ def _build_swap_rows(subtype: str) -> list[dict]:
 
 def build_pricer_layout() -> html.Div:
     """Return the PRICER subtab content for the MARKET section."""
-    _lbl = {"color": THEME["text_sub"], "fontSize": "11px", "marginBottom": "4px", "display": "block"}
+    _lbl = {
+        "color": "var(--text-muted)",
+        "fontSize": "9px",
+        "fontWeight": "600",
+        "textTransform": "uppercase",
+        "letterSpacing": "0.07em",
+        "marginBottom": "4px",
+        "display": "block",
+    }
 
     return html.Div(
         [
@@ -686,10 +694,9 @@ def build_pricer_layout() -> html.Div:
                                 options=_L1_OPTIONS,
                                 value="TBond",
                                 clearable=False,
-                                style={"fontSize": "13px"},
+                                style={"fontSize": "12px", "width": "160px"},
                             ),
                         ],
-                        style={"width": "200px", "minWidth": "160px"},
                     ),
                     html.Div(
                         [
@@ -699,57 +706,59 @@ def build_pricer_layout() -> html.Div:
                                 options=_BOND_TERM_OPTIONS,
                                 value="1-3Y",
                                 clearable=False,
-                                style={"fontSize": "13px"},
+                                style={"fontSize": "12px", "width": "120px"},
                             ),
                         ],
-                        style={"width": "200px", "minWidth": "160px"},
                     ),
                     html.Div(
                         [
-                            html.Label("\u00a0", style={**_lbl, "marginBottom": "0"}),
-                            html.Button(
-                                "↻  Refresh",
-                                id="pricer-refresh-btn",
-                                n_clicks=0,
-                                style={
-                                    "backgroundColor": THEME["bg_input"],
-                                    "color":           THEME["accent"],
-                                    "border":          f'1px solid {THEME["accent"]}',
-                                    "borderRadius":    "4px",
-                                    "padding":         "5px 14px",
-                                    "fontSize":        "12px",
-                                    "cursor":          "pointer",
-                                },
+                            html.Label(" ", style={**_lbl, "marginBottom": "0"}),
+                            html.Div(
+                                [
+                                    html.Button(
+                                        "↻ Refresh",
+                                        id="pricer-refresh-btn",
+                                        n_clicks=0,
+                                        style={
+                                            "background":   "rgba(69,182,230,0.08)",
+                                            "color":        "var(--accent-cyan)",
+                                            "border":       "1px solid var(--accent-cyan)",
+                                            "borderRadius": "5px",
+                                            "padding":      "7px 14px",
+                                            "fontSize":     "11px",
+                                            "cursor":       "pointer",
+                                        },
+                                    ),
+                                    html.Span(
+                                        id="pricer-timestamp",
+                                        style={
+                                            "color":    "var(--text-muted)",
+                                            "fontSize": "11px",
+                                        },
+                                    ),
+                                ],
+                                style={"display": "flex", "alignItems": "center", "gap": "10px"},
                             ),
                         ],
                     ),
-                    html.Span(
-                        id="pricer-timestamp",
-                        style={"color": THEME["text_sub"], "fontSize": "11px",
-                               "alignSelf": "flex-end", "paddingBottom": "4px"},
-                    ),
                 ],
                 style={
-                    "display":    "flex",
-                    "gap":        "16px",
-                    "alignItems": "flex-end",
-                    "flexWrap":   "wrap",
-                    "marginBottom": "16px",
+                    "display":      "flex",
+                    "gap":          "12px",
+                    "alignItems":   "flex-end",
+                    "flexWrap":     "wrap",
+                    "marginBottom": "14px",
                 },
             ),
             # ── Table area ────────────────────────────────────────────────────
             html.Div(id="pricer-table-container"),
         ],
         style={
-            "backgroundColor": THEME["bg_main"],
-            "padding":         "16px",
-            "borderRadius":    "5px",
-            "margin":          "10px",
+            "padding": "16px",
+            "margin":  "10px",
         },
     )
 
-
-# ── Callbacks ─────────────────────────────────────────────────────────────────
 
 def register_pricer_callbacks(app) -> None:
     """Register PRICER subtab callbacks onto *app*."""
@@ -797,8 +806,12 @@ def register_pricer_callbacks(app) -> None:
             return html.Div([
                 html.Div(
                     f"BOND PRICER  —  {label}  ·  {l2}",
-                    style={"color": THEME["accent"], "fontWeight": "bold",
-                           "fontSize": "13px", "marginBottom": "10px"},
+                    style={
+                        "color": "var(--accent-cyan)",
+                        "fontSize": "11px",
+                        "letterSpacing": "0.04em",
+                        "marginBottom": "10px",
+                    },
                 ),
                 _make_table("pricer-bond-tbl", rows, extra_styles=styles),
             ]), ts
@@ -817,8 +830,12 @@ def register_pricer_callbacks(app) -> None:
         return html.Div([
             html.Div(
                 f"SWAP PRICER  —  {label}",
-                style={"color": THEME["accent"], "fontWeight": "bold",
-                       "fontSize": "13px", "marginBottom": "10px"},
+                style={
+                    "color": "var(--accent-cyan)",
+                    "fontSize": "11px",
+                    "letterSpacing": "0.04em",
+                    "marginBottom": "10px",
+                },
             ),
             _make_table("pricer-swap-tbl", rows, extra_styles=styles),
         ]), ts

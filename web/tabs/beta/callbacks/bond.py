@@ -10,7 +10,7 @@ import dash
 from dash import html
 from dash.dependencies import Input, Output
 
-from ..data import THEME, BOND_SIGNAL_LABELS
+from ..data import BOND_SIGNAL_LABELS
 from ..layouts import _build_bond_signal_cards
 
 
@@ -46,7 +46,7 @@ def register_bond_callbacks(app):
         except Exception as e:
             traceback.print_exc()
             return (
-                html.Div(f"Error loading bond signals: {e}", style={'color': THEME['danger'], 'padding': '20px'}),
+                html.Div(f"Error loading bond signals: {e}", style={'color': '#f87171', 'padding': '20px'}),
                 f"Load failed · {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             )
 
