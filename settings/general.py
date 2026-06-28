@@ -19,7 +19,7 @@ class TradingHoursConfig:
     CREDIT_START_HOUR: int = 10
     CREDIT_END_HOUR: int = 12
     INIT_END_HOUR: int = 18 # 18
-    WEEKDAYS_ONLY: bool = True 
+    WEEKDAYS_ONLY: bool = True
 
 
 class GeneralConfig:

@@ -30,8 +30,26 @@ from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output, State
 
 
+def _fi_card_header(title: str, badge_text: str | None = None) -> html.Div:
+    """Card header row — title + optional meta badge. Matches the Alpha Book card pattern."""
+    children_left = [
+        html.Span(title, style={'fontSize': '13px', 'fontWeight': '600', 'color': 'var(--text-primary)'}),
+    ]
+    if badge_text:
+        children_left.append(html.Span(badge_text, style={
+            'fontSize': '9px', 'color': 'var(--text-muted)', 'background': 'var(--surface-input)',
+            'padding': '2px 7px', 'borderRadius': '3px', 'border': '1px solid var(--border-default)',
+        }))
+    return html.Div(
+        children_left,
+        style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
+               'padding': '11px 16px', 'background': 'var(--surface-panel)',
+               'borderBottom': '1px solid var(--border-strong)'},
+    )
+
+
 def build_spreads_layout():
-    """Build the legacy 'Spread Info' layout."""
+    """Build the 'Spread Analysis' layout (Alpha Book > Spread subtab)."""
     # Local imports to keep module import light
     from settings.fixed_income import InstitutionConfig
     from settings.futures import FuturesConfig
@@ -39,20 +57,11 @@ def build_spreads_layout():
 
     GRAPH_INTERVAL_LONG = 300_000
 
-    # Compact uppercase label for sidebar field groups
-    def _field_label(text):
-        return html.Div(
-            text,
-            style={
-                "color": "var(--text-secondary)",
-                "fontSize": "10px",
-                "fontWeight": "bold",
-                "letterSpacing": "0.6px",
-                "textTransform": "uppercase",
-                "marginTop": "10px",
-                "marginBottom": "3px",
-            },
-        )
+    _label_style = {
+        'color': 'var(--text-muted)', 'fontSize': '9px', 'fontWeight': '600',
+        'textTransform': 'uppercase', 'letterSpacing': '0.06em',
+        'marginBottom': '4px', 'display': 'block',
+    }
 
     # Dropdown options for spread type with disabled group headers
     _spread_options = [
@@ -77,45 +86,31 @@ def build_spreads_layout():
         {"label": "Futures Swap",           "value": "FuturesSwap"},
     ]
 
-    _DD_STYLE = {"fontSize": "12px", "color": "var(--text-primary)"}
+    _DD_STYLE = {"fontSize": "11px", "color": "var(--text-primary)"}
 
-    def _chart_label(text):
-        return html.Div(
-            text,
-            style={
-                "color": "var(--text-secondary)",
-                "fontSize": "11px",
-                "fontWeight": "bold",
-                "letterSpacing": "0.5px",
-                "textTransform": "uppercase",
-                "padding": "6px 0 4px 2px",
-            },
-        )
+    return html.Div([
+        dcc.Store(id="realtime-data"),
+        dcc.Interval(id="data-refresh-long", interval=int(GRAPH_INTERVAL_LONG), n_intervals=0),
 
-    return html.Div(
-        [
-            dcc.Store(id="realtime-data"),
-            dcc.Interval(id="data-refresh-long", interval=int(GRAPH_INTERVAL_LONG), n_intervals=0),
-
-            # ── Left control panel ──────────────────────────────────────────
+        html.Div([
+            html.H1("Spread Analysis", style={
+                'margin': '0 0 3px', 'fontSize': '20px', 'fontWeight': '600',
+                'color': 'var(--text-primary)',
+            }),
             html.Div(
-                html.Div(
-                    [
-                        html.Div(
-                            "SPREAD EXPLORER",
-                            style={
-                                "fontFamily": "var(--font-mono)",
-                                "color": "var(--accent-amber)",
-                                "fontSize": "12px",
-                                "fontWeight": "700",
-                                "letterSpacing": "0.09em",
-                                "textTransform": "uppercase",
-                                "paddingBottom": "10px",
-                                "borderBottom": "1px solid var(--border-default)",
-                                "marginBottom": "2px",
-                            },
-                        ),
-                        _field_label("Spread Type"),
+                "Time series, seasonal patterns, and daily statistics",
+                style={'fontSize': '11px', 'color': 'var(--text-muted)'},
+            ),
+        ], style={'marginBottom': '4px'}),
+
+        # ── Top row: Controls (left) + Daily Spread Statistics + Spread Time Series (right) ──
+        html.Div([
+            # Controls card — narrow, fixed width
+            html.Div([
+                _fi_card_header("Controls"),
+                html.Div([
+                    html.Div([
+                        html.Label("Spread Type", style=_label_style),
                         dcc.Dropdown(
                             options=_spread_options,
                             value="SectorPCASpread",
@@ -123,7 +118,9 @@ def build_spreads_layout():
                             clearable=False,
                             style=_DD_STYLE,
                         ),
-                        _field_label("Seasonal Highlight Month"),
+                    ]),
+                    html.Div([
+                        html.Label("Seasonal Highlight Month", style=_label_style),
                         dcc.Dropdown(
                             options=[
                                 {"label": m, "value": i + 1}
@@ -138,7 +135,9 @@ def build_spreads_layout():
                             placeholder="None",
                             style=_DD_STYLE,
                         ),
-                        _field_label("Seasonal Years"),
+                    ]),
+                    html.Div([
+                        html.Label("Seasonal Years", style=_label_style),
                         dcc.Dropdown(
                             options=[
                                 {"label": "3 years", "value": 3},
@@ -151,156 +150,246 @@ def build_spreads_layout():
                             clearable=False,
                             style=_DD_STYLE,
                         ),
-                    ],
-                    style={
-                        "background": "var(--surface-raised)",
-                        "border": "1px solid var(--border-default)",
-                        "borderRadius": "8px",
-                        "padding": "14px 18px",
-                    },
-                ),
-                className="alpha-spread-sidebar",
-            ),
+                    ]),
+                    html.Button(
+                        "↻ Refresh", id="alpha-spread-refresh-btn", n_clicks=0,
+                        style={'padding': '6px 12px', 'background': 'var(--accent-amber)', 'color': 'var(--navy-950)',
+                               'border': 'none', 'borderRadius': '4px', 'fontSize': '10px', 'fontWeight': '700',
+                               'cursor': 'pointer', 'width': '100%'},
+                    ),
+                    html.Div(id="alpha-spread-updated-at", style={'fontSize': '8px', 'color': 'var(--text-muted)'}),
+                ], style={'padding': '12px 14px', 'display': 'flex', 'flexDirection': 'column', 'gap': '12px'}),
+            ], style={'width': '220px', 'flexShrink': '0', 'border': '1px solid var(--border-strong)',
+                      'borderRadius': '8px', 'overflow': 'hidden'}),
 
-            # ── Right chart panel ───────────────────────────────────────────
-            html.Div(
-                [
-                    _chart_label("Daily Spread Statistics"),
-                    dcc.Graph(
-                        id="graph-spread-bar",
-                        figure=dict(layout=dict(
-                            plot_bgcolor=app_color["graph_bg"],
-                            paper_bgcolor=app_color["graph_bg"],
-                        )),
-                        config={"displayModeBar": False},
+            # Daily Spread Statistics + Spread Time Series (stacked vertically on right)
+            html.Div([
+                # Daily Spread Statistics
+                html.Div([
+                    _fi_card_header("Daily Spread Statistics", badge_text="Z-score distribution · pick spreads below"),
+                    html.Div(
+                        dcc.Graph(
+                            id="graph-spread-bar",
+                            figure=dict(layout=dict(
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                            )),
+                            config={"displayModeBar": False},
+                            style={'padding': '12px 16px', 'height': '350px'},
+                        ),
                     ),
-                    _chart_label("Spread Time Series"),
-                    html.Div(id="ticker", className="graph__title"),
-                    dcc.Graph(
-                        id="graph-spread",
-                        figure=dict(layout=dict(
-                            plot_bgcolor=app_color["graph_bg"],
-                            paper_bgcolor=app_color["graph_bg"],
-                        )),
-                        config={"displayModeBar": False},
+                ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden',
+                          'backgroundColor': 'transparent', 'flex': '1'}),
+
+                # Spread Time Series
+                html.Div([
+                    _fi_card_header("Spread Time Series"),
+                    html.Div(id="ticker", className="graph__title", style={'padding': '8px 16px 0'}),
+                    html.Div(
+                        dcc.Graph(
+                            id="graph-spread",
+                            figure=dict(layout=dict(
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                autosize=True,
+                            )),
+                            config={"displayModeBar": False, "responsive": True},
+                            style={'height': '100%', 'width': '100%'},
+                        ),
+                        style={'padding': '8px', 'height': '350px'},
                     ),
-                    _chart_label("Seasonal Pattern"),
-                    dcc.Graph(
-                        id="graph-spread-seasonal",
-                        figure=dict(layout=dict(
-                            plot_bgcolor=app_color["graph_bg"],
-                            paper_bgcolor=app_color["graph_bg"],
-                        )),
-                        config={"displayModeBar": False},
-                        style={"height": "320px"},
-                    ),
-                    html.Div(id="spread-seasonal-stats", style={"marginTop": "6px"}),
-                ],
-                style={"display": "flex", "flexDirection": "column", "gap": "14px"},
-            ),
-        ],
-        className="alpha-spread-layout",
-    )
+                ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden',
+                          'backgroundColor': 'transparent', 'flex': '1'}),
+            ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px', 'flex': '1', 'minWidth': '0'}),
+        ], style={'display': 'flex', 'gap': '12px', 'alignItems': 'flex-start'}),
+
+        # ── Seasonal Pattern (right) + Monthly Statistics (left, narrower) ─────
+        html.Div([
+            # Monthly Statistics — left, narrower
+            html.Div([
+                _fi_card_header("Monthly Statistics", badge_text="Directional bias"),
+                html.Div(id="spread-seasonal-stats", style={'padding': '12px 16px', 'overflow': 'auto', 'maxHeight': '340px'}),
+            ], style={'flex': '0 0 300px', 'border': '1px solid var(--border-strong)', 'borderRadius': '8px',
+                      'overflow': 'hidden', 'backgroundColor': 'transparent'}),
+
+            # Seasonal Pattern — right, flex 1
+            html.Div([
+                _fi_card_header("Seasonal Pattern", badge_text="Year-over-year overlay"),
+                dcc.Graph(
+                    id="graph-spread-seasonal",
+                    figure=dict(layout=dict(
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                    )),
+                    config={"displayModeBar": False},
+                    style={"height": "340px", 'padding': '8px'},
+                ),
+            ], style={'flex': '1', 'minWidth': '0', 'border': '1px solid var(--border-strong)',
+                      'borderRadius': '8px', 'overflow': 'hidden', 'backgroundColor': 'transparent'}),
+        ], style={'display': 'flex', 'gap': '12px', 'alignItems': 'stretch'}),
+
+    ], style={'padding': '10px', 'display': 'flex', 'flexDirection': 'column', 'gap': '10px'})
+
+
+_CURVE_LBL = {
+    "color": "var(--text-muted)",
+    "fontSize": "9px",
+    "textTransform": "uppercase",
+    "letterSpacing": "0.07em",
+    "fontWeight": "600",
+    "marginBottom": "6px",
+    "display": "block",
+}
 
 
 def build_curves_layout():
-    """Build the legacy 'CURVES' tab layout."""
+    """Build the 'Curves' tab layout (Market > Curves), styled per guide/MarketCurves.jsx."""
     from curves.utils.plot import CURVE_THEME
-
-    GRAPH_INTERVAL = 60_000
 
     return html.Div(
         [
             html.Div(
                 [
+                    # ── Left sidebar: Curve Type panel + Reference Bonds panel ──
                     html.Div(
                         [
-                            html.H6("Curve Type"),
-                            dcc.Dropdown(
-                                options=[
-                                    {"label": "China Government Bond", "value": "TBond"},
-                                    {"label": "China Policybank Bond", "value": "CBond"},
-                                    {"label": "IRS Spot Curve", "value": "IRSSpot"},
-                                    {"label": "IRS Forward Curve", "value": "IRSForward"},
+                            # Curve Type panel (top)
+                            html.Div(
+                                [
+                                    html.Div("Curve Type", style=_CURVE_LBL),
+                                    dcc.Dropdown(
+                                        options=[
+                                            {"label": "China Government Bond", "value": "TBond"},
+                                            {"label": "China Policybank Bond", "value": "CBond"},
+                                            {"label": "IRS Spot Curve", "value": "IRSSpot"},
+                                            {"label": "IRS Forward Curve", "value": "IRSForward"},
+                                        ],
+                                        value="TBond",
+                                        id="curve-selection",
+                                        clearable=False,
+                                        optionHeight=28,
+                                        style={"fontSize": "11px"},
+                                    ),
                                 ],
-                                value="TBond",
-                                id="curve-selection",
-                                className="custom-dropdown",
-                                style={'color': '#fff'}
+                                style={
+                                    "background": "var(--surface-panel)",
+                                    "border": "1px solid var(--border-strong)",
+                                    "borderRadius": "6px 6px 0 0",
+                                    "borderBottom": "none",
+                                    "padding": "10px 12px",
+                                },
                             ),
-                            # dcc.Interval(id="data-refresh", interval=int(GRAPH_INTERVAL), n_intervals=0), # Moved to apps/atlasnexus_daily.py
-                        ],
-                        className="graph__title",
-                    ),
-                    html.Div(
-                        [
-                            html.Div(id="ref-bonds", children="Reference Bonds"),
-                            dash_table.DataTable(
-                                id="ref-bonds-t",
-                                # style_data/style_header removed — CSS .dash-cell/.dash-header
-                                # rules in design.css own colors; keep only sizing here.
-                                style_cell={
-                                    "height": "auto",
-                                    "width": "60px",
-                                    "textAlign": "left",
-                                    "border": "1px solid #061E44",
+                            # Reference Bonds panel (bottom, flex to fill remaining height)
+                            html.Div(
+                                [
+                                    html.Div("Reference Bonds", style=_CURVE_LBL),
+                                    dash_table.DataTable(
+                                        id="ref-bonds-t",
+                                        # style_data/style_header removed — CSS .dash-cell/.dash-header
+                                        # rules in design.css own colors; keep only sizing here.
+                                        style_cell={
+                                            "height": "auto",
+                                            "width": "60px",
+                                            "textAlign": "left",
+                                            "border": "1px solid #061E44",
+                                        },
+                                    ),
+                                ],
+                                id="ref-bonds-container",
+                                style={
+                                    "background": "var(--surface-panel)",
+                                    "border": "1px solid var(--border-strong)",
+                                    "borderRadius": "0 0 6px 6px",
+                                    "borderTop": "1px solid var(--border-default)",
+                                    "padding": "10px 12px",
+                                    "flex": "1",
+                                    "minHeight": "0",
                                 },
                             ),
                         ],
-                        className="graph__title",
-                        id="ref-bonds-container",
+                        style={
+                            "width": "200px",
+                            "minWidth": "200px",
+                            "flexShrink": "0",
+                            "display": "flex",
+                            "flexDirection": "column",
+                            "alignSelf": "stretch",
+                        },
+                    ),
+
+                    # ── Center: header + legend + chart ──────────────────────
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.Span(
+                                        id="curves-title",
+                                        children="Real Time Bond Curves",
+                                        style={"fontSize": "13px", "fontWeight": "600", "color": "var(--text-primary)"},
+                                    ),
+                                    html.Span(" · ", style={"color": "var(--text-faint)", "margin": "0 8px"}),
+                                    html.Span(
+                                        id="curves-chart-subtitle",
+                                        style={"fontSize": "11px", "color": "var(--text-muted)"},
+                                    ),
+                                ],
+                                style={
+                                    "display": "flex",
+                                    "alignItems": "baseline",
+                                    "marginBottom": "10px",
+                                },
+                            ),
+                            dcc.Graph(
+                                id="curves-graph",
+                                style={"height": "660px"},
+                                config={
+                                    "displayModeBar": "hover",
+                                    "displaylogo": False,
+                                    "scrollZoom": True,
+                                    "modeBarButtonsToRemove": [
+                                        "select2d", "lasso2d", "autoScale2d",
+                                        "zoomIn2d", "zoomOut2d", "toggleSpikelines",
+                                        "hoverClosestCartesian", "hoverCompareCartesian",
+                                    ],
+                                    "toImageButtonOptions": {
+                                        "format": "svg",
+                                        "filename": "curves_chart",
+                                    },
+                                },
+                                figure=dict(
+                                    layout=dict(
+                                        plot_bgcolor=CURVE_THEME["bg"], paper_bgcolor=CURVE_THEME["bg"]
+                                    )
+                                ),
+                                className="an-card",
+                            ),
+                        ],
+                        style={"flex": "1", "display": "flex", "flexDirection": "column", "minWidth": "0"},
+                    ),
+
+                    # ── Right: Curve Snapshot rail ───────────────────────────
+                    html.Div(
+                        id="curves-snapshot",
+                        className="curve-snapshot",
+                        style={
+                            "width": "200px",
+                            "minWidth": "200px",
+                            "flexShrink": "0",
+                            "alignSelf": "stretch",
+                            "borderRadius": "6px",
+                            "border": "1px solid var(--border-strong)",
+                        },
                     ),
                 ],
                 style={
-                    "width":       "260px",
-                    "minWidth":    "260px",
-                    "flexShrink":  "0",
-                    "boxSizing":   "border-box",
-                },
-                className="histogram__container",
-            ),
-            html.Div(
-                [
-                    html.Div([
-                        html.Span(
-                            id="curves-title",
-                            children="Real Time Bond Curves",
-                            style={"fontSize": "12px", "fontWeight": "600", "color": "#e9eef8"},
-                        ),
-                        html.Span(" · ", style={"color": "#2e547f", "margin": "0 8px"}),
-                        html.Span(id="curves-chart-subtitle",
-                                  style={"fontSize": "11px", "color": "#4a5d7c"}),
-                    ], style={
-                        "display":      "flex",
-                        "alignItems":   "center",
-                        "padding":      "9px 16px",
-                        "borderBottom": "1px solid rgba(255,255,255,0.06)",
-                    }),
-                    dcc.Graph(
-                        id="curves-graph",
-                        style={"flex": "1"},
-                        figure=dict(
-                            layout=dict(
-                                plot_bgcolor=CURVE_THEME["bg"], paper_bgcolor=CURVE_THEME["bg"]
-                            )
-                        ),
-                    ),
-                ],
-                style={"flex": "1", "display": "flex", "flexDirection": "column", "minWidth": "0"},
-                className="futures__price__container",
-            ),
-            html.Div(
-                id="curves-snapshot",
-                className="curve-snapshot",
-                style={
-                    "width":      "220px",
-                    "minWidth":   "220px",
-                    "flexShrink": "0",
-                    "boxSizing":  "border-box",
+                    "display": "flex",
+                    "flexDirection": "row",
+                    "gap": "16px",
+                    "alignItems": "flex-start",
                 },
             ),
         ],
-        style={"display": "flex", "alignItems": "stretch", "gap": "16px"},
+        style={"padding": "16px", "margin": "10px"},
     )
 
 
@@ -309,227 +398,112 @@ def build_pairs_layout():
     from web.core.styles import app_color
     from web.tabs.alpha.data import THEME
 
-    _inp = {
-        "width": "100%", "padding": "6px 8px",
+    _label_style = {
+        'color': THEME['text_sub'], 'fontSize': '9px', 'fontWeight': '600',
+        'textTransform': 'uppercase', 'letterSpacing': '0.06em',
+        'marginBottom': '4px', 'display': 'block',
+    }
+    _pair_input_style = {
+        "width": "100%", "padding": "4px", "fontSize": "11px",
         "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
-        "border": f"1px solid {THEME['border']}", "borderRadius": "0",
-        "fontSize": "12px", "textAlign": "center",
+        "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box",
     }
 
-    def _pairs_row(label, ids, values):
-        return html.Div(
-            [html.Div(label, className="row-label")] + [
-                html.Div(dcc.Input(id=i, value=v, type='text', style=_inp), className="cell")
-                for i, v in zip(ids, values)
-            ],
-            style={"display": "contents"},
-        )
-
-    return html.Div(
-        [
-            # ── Top section: title, description, controls ───────────────────
-            html.Div(
-                [
-                    html.Div([
-                        html.H2("Pairs Analysis",
-                                style={"color": THEME["text_main"], "fontSize": "22px", "fontWeight": "600",
-                                       "margin": "0 0 4px 0", "letterSpacing": "-0.01em"}),
-                        html.P("Interactive spread analysis with confidence bands (in basis points)",
-                               style={"color": THEME["text_sub"], "fontSize": "13px", "margin": "0"}),
-                    ]),
-                ],
-                style={"marginBottom": "24px"},
-            ),
-
-            # ── Controls row: Lookback + Configure + Refresh ──────────────────
-            html.Div(
-                [
-                    # Left: Lookback Days input
-                    html.Div(
-                        [
-                            html.Label("Lookback Days:", style={"color": THEME["text_sub"], "marginRight": "6px",
-                                                                "fontWeight": "bold", "fontSize": "11px"}),
-                            dcc.Input(
-                                id='pairs-days-input', type='number', value=90, min=1,
-                                style={"width": "50px", "padding": "4px 6px",
-                                       "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
-                                       "border": f"1px solid {THEME['border']}", "borderRadius": "3px",
-                                       "fontSize": "11px", "textAlign": "center"},
-                            ),
-                        ],
-                        style={"display": "flex", "alignItems": "center", "gap": "4px", "flexShrink": "0"}
-                    ),
-
-                    # Middle: Configure Pairs (collapsible modal)
-                    html.Details(
-                        [
-                            html.Summary(
-                                "⚙ Configure Pairs",
-                                style={
-                                    "color": THEME["text_main"],
-                                    "fontSize": "11px",
-                                    "fontWeight": "600",
-                                    "padding": "5px 12px",
-                                    "cursor": "pointer",
-                                    "backgroundColor": THEME["bg_input"],
-                                    "border": f"1px solid {THEME['border']}",
-                                    "borderRadius": "3px",
-                                    "listStyle": "none",
-                                }
-                            ),
-                            html.Div(
-                                [
-                                    # 2x2 grid for pair inputs
-                                    html.Div([
-                                        html.Div([
-                                            html.Div("Pair 1", style={"fontSize": "10px", "fontWeight": "600", "color": THEME["text_sub"], "marginBottom": "4px"}),
-                                            html.Div([
-                                                dcc.Input(id='pairs-leg1-1', type='text', value='260010.IB',
-                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px",
-                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
-                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
-                                                dcc.Input(id='pairs-leg2-1', type='text', value='260008.IB',
-                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px", "marginTop": "3px",
-                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
-                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
-                                                html.Div("CGB-5s10s", style={"fontSize": "10px", "color": THEME["text_sub"], "marginTop": "4px", "fontStyle": "italic"}),
-                                            ]),
-                                        ]),
-                                        html.Div([
-                                            html.Div("Pair 2", style={"fontSize": "10px", "fontWeight": "600", "color": THEME["text_sub"], "marginBottom": "4px"}),
-                                            html.Div([
-                                                dcc.Input(id='pairs-leg1-2', type='text', value='2600002.IB',
-                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px",
-                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
-                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
-                                                dcc.Input(id='pairs-leg2-2', type='text', value='260010.IB',
-                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px", "marginTop": "3px",
-                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
-                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
-                                                html.Div("CGB-10s30s", style={"fontSize": "10px", "color": THEME["text_sub"], "marginTop": "4px", "fontStyle": "italic"}),
-                                            ]),
-                                        ]),
-                                        html.Div([
-                                            html.Div("Pair 3", style={"fontSize": "10px", "fontWeight": "600", "color": THEME["text_sub"], "marginBottom": "4px"}),
-                                            html.Div([
-                                                dcc.Input(id='pairs-leg1-3', type='text', value='260205.IB',
-                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px",
-                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
-                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
-                                                dcc.Input(id='pairs-leg2-3', type='text', value='260010.IB',
-                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px", "marginTop": "3px",
-                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
-                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
-                                                html.Div("CDBCGB-10y", style={"fontSize": "10px", "color": THEME["text_sub"], "marginTop": "4px", "fontStyle": "italic"}),
-                                            ]),
-                                        ]),
-                                        html.Div([
-                                            html.Div("Pair 4", style={"fontSize": "10px", "fontWeight": "600", "color": THEME["text_sub"], "marginBottom": "4px"}),
-                                            html.Div([
-                                                dcc.Input(id='pairs-leg1-4', type='text', value='260008.IB',
-                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px",
-                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
-                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
-                                                dcc.Input(id='pairs-leg2-4', type='text', value='FR007S5Y.IR',
-                                                         style={"width": "100%", "padding": "4px", "fontSize": "11px", "marginTop": "3px",
-                                                                "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
-                                                                "border": f"1px solid {THEME['border']}", "borderRadius": "2px", "boxSizing": "border-box"}),
-                                                html.Div("CGBRepo7d-5y", style={"fontSize": "10px", "color": THEME["text_sub"], "marginTop": "4px", "fontStyle": "italic"}),
-                                            ]),
-                                        ]),
-                                    ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "12px"}),
-                                ],
-                                style={"backgroundColor": THEME["bg_input"], "borderRadius": "0 0 3px 3px",
-                                       "padding": "12px", "position": "absolute", "top": "100%", "left": "0",
-                                       "marginTop": "2px", "zIndex": "10", "minWidth": "450px",
-                                       "border": f"1px solid {THEME['border']}", "borderTop": "none"}
-                            ),
-                        ],
-                        style={"position": "relative", "display": "inline-block"}
-                    ),
-
-                    # Right: Refresh button + status
-                    html.Button(
-                        "↻ Refresh",
-                        id="pairs-refresh-btn",
-                        n_clicks=0,
-                        style={
-                            "backgroundColor": THEME["accent"],
-                            "color": "#0c0c00",
-                            "border": "none",
-                            "padding": "5px 12px",
-                            "borderRadius": "3px",
-                            "cursor": "pointer",
-                            "fontSize": "11px",
-                            "fontWeight": "600",
-                            "marginLeft": "auto",
-                        },
-                    ),
-
-                    html.Span(
-                        id="pairs-last-updated",
-                        children="—",
-                        style={"color": THEME["text_sub"], "fontSize": "10px", "fontFamily": "monospace",
-                               "marginLeft": "8px", "marginRight": "4px", "whiteSpace": "nowrap"},
-                    ),
-                ],
-                style={
-                    "display": "flex", "alignItems": "center", "gap": "12px",
-                    "backgroundColor": THEME["bg_raised"],
-                    "border": f"1px solid {THEME['border']}",
-                    "borderRadius": "6px",
-                    "padding": "8px 12px",
-                    "marginBottom": "12px",
-                },
-            ),
-
-            # ── Z-Score Thresholds Reference (after Configure Pairs) ──────────────────
+    def _pair_config_cell(title, leg1_id, leg1_val, leg2_id, leg2_val, hint):
+        return html.Div([
+            html.Div(title, style={"fontSize": "10px", "fontWeight": "600", "color": THEME["text_sub"], "marginBottom": "4px"}),
             html.Div([
-                html.Div("Z-Score Colour Thresholds",
-                         style={"color": THEME["text_sub"], "fontSize": "11px", "fontWeight": "700",
-                                "letterSpacing": "0.06em", "textTransform": "uppercase", "marginBottom": "8px"}),
+                dcc.Input(id=leg1_id, type='text', value=leg1_val, style=_pair_input_style),
+                dcc.Input(id=leg2_id, type='text', value=leg2_val, style={**_pair_input_style, "marginTop": "3px"}),
+                html.Div(hint, style={"fontSize": "10px", "color": THEME["text_sub"], "marginTop": "4px", "fontStyle": "italic"}),
+            ]),
+        ])
+
+    return html.Div([
+        html.Div([
+            html.H1("Pairs Analysis", style={
+                'margin': '0 0 3px', 'fontSize': '20px', 'fontWeight': '600',
+                'color': 'var(--text-primary)',
+            }),
+            html.Div(
+                "Relative value spreads with OLS trends and confidence bands",
+                style={'fontSize': '11px', 'color': 'var(--text-muted)'},
+            ),
+        ], style={'marginBottom': '4px'}),
+
+        # ── Main layout: Controls (left) + Charts (right) ──────────────────────
+        html.Div([
+            # Controls card — narrow, fixed width
+            html.Div([
+                _fi_card_header("Controls"),
                 html.Div([
                     html.Div([
-                        html.Span("● ", style={"color": "#a4b6d2", "fontWeight": "700", "fontSize": "12px"}),
-                        html.Span("Neutral: |z| < 1.5",
-                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
-                    ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
-                    html.Div([
-                        html.Span("● ", style={"color": "#e8a13f", "fontWeight": "700", "fontSize": "12px"}),
-                        html.Span("Watch: 1.5 ≤ |z| < 2.0",
-                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
-                    ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
-                    html.Div([
-                        html.Span("● ", style={"color": "#e06060", "fontWeight": "700", "fontSize": "12px"}),
-                        html.Span("Signal: |z| ≥ 2.0",
-                                 style={"color": THEME["text_sub"], "fontSize": "11px"}),
-                    ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
-                ], style={
-                    "display": "flex",
-                    "gap": "24px",
-                    "flexWrap": "wrap",
-                    "alignItems": "center",
-                }),
-            ], style={
-                "marginBottom": "14px",
-                "paddingLeft": "14px",
-                "paddingRight": "14px",
-                "paddingTop": "10px",
-                "paddingBottom": "10px",
-                "borderLeft": f"3px solid {THEME['border']}",
-                "backgroundColor": THEME["bg_raised"],
-                "borderRadius": "4px",
-            }),
+                        html.Label("Lookback Days", style=_label_style),
+                        dcc.Input(
+                            id='pairs-days-input', type='number', value=90, min=1,
+                            style={"width": "100%", "padding": "6px 8px", "boxSizing": "border-box",
+                                   "backgroundColor": THEME["bg_input"], "color": THEME["text_main"],
+                                   "border": f"1px solid {THEME['border']}", "borderRadius": "4px",
+                                   "fontSize": "11px", "textAlign": "right"},
+                        ),
+                    ]),
 
-            # ── Results panel: 2x2 grid for pair cards ──────────────────────────
+                    html.Details([
+                        html.Summary("⚙ Configure", style={
+                            'padding': '6px 12px', 'background': 'var(--surface-panel)',
+                            'color': 'var(--text-secondary)', 'border': '1px solid var(--border-default)',
+                            'borderRadius': '4px', 'fontSize': '10px', 'cursor': 'pointer', 'listStyle': 'none',
+                        }),
+                        html.Div([
+                            _pair_config_cell("Pair 1", 'pairs-leg1-1', '260010.IB', 'pairs-leg2-1', '260008.IB', "CGB-5s10s"),
+                            _pair_config_cell("Pair 2", 'pairs-leg1-2', '2600002.IB', 'pairs-leg2-2', '260010.IB', "CGB-10s30s"),
+                            _pair_config_cell("Pair 3", 'pairs-leg1-3', '260205.IB', 'pairs-leg2-3', '260010.IB', "CDBCGB-10y"),
+                            _pair_config_cell("Pair 4", 'pairs-leg1-4', '260008.IB', 'pairs-leg2-4', 'FR007S5Y.IR', "CGBRepo7d-5y"),
+                        ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "10px",
+                                  "padding": "10px", "marginTop": "6px",
+                                  "backgroundColor": THEME["bg_input"], "borderRadius": "4px",
+                                  "border": f"1px solid {THEME['border']}"}),
+                    ]),
+
+                    html.Button(
+                        "↻ Refresh", id="pairs-refresh-btn", n_clicks=0,
+                        style={'padding': '6px 12px', 'background': THEME['accent'], 'color': 'var(--navy-950)',
+                               'border': 'none', 'borderRadius': '4px', 'fontSize': '10px', 'fontWeight': '700',
+                               'cursor': 'pointer', 'width': '100%'},
+                    ),
+                    html.Span(
+                        id="pairs-last-updated", children="—",
+                        style={"color": THEME["text_sub"], "fontSize": "8px", "fontFamily": "monospace"},
+                    ),
+
+                    # ── Z-Score Thresholds (moved to bottom, vertically stacked) ──
+                    html.Div([
+                        html.Div("Z-Score Thresholds", style={'fontSize': '10px', 'fontWeight': '600', 'color': THEME['text_sub'], 'marginBottom': '8px'}),
+                        html.Div([
+                            html.Div([
+                                html.Span(style={'width': '8px', 'height': '8px', 'borderRadius': '50%',
+                                                 'background': color, 'display': 'inline-block', 'flexShrink': '0'}),
+                                html.Span([
+                                    html.Span(label, style={'color': 'var(--text-secondary)', 'fontWeight': '600', 'display': 'block', 'fontSize': '9px'}),
+                                    html.Span(rng, style={'color': 'var(--text-muted)', 'fontSize': '8px'}),
+                                ], style={'minWidth': '0', 'flex': '1'}),
+                            ], style={'display': 'flex', 'alignItems': 'flex-start', 'gap': '6px'})
+                            for color, rng, label in [
+                                ('#a4b6d2', '|z| < 1.5', 'Neutral'),
+                                (THEME['accent'], '1.5 ≤ |z| < 2.0', 'Watch'),
+                                ('#e06060', '|z| ≥ 2.0', 'Signal'),
+                            ]
+                        ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '6px', 'fontSize': '9px'}),
+                    ], style={'padding': '10px', 'background': THEME['bg_input'], 'borderRadius': '4px',
+                              'border': f"1px solid {THEME['border_sub']}"}),
+                ], style={'padding': '12px 14px', 'display': 'flex', 'flexDirection': 'column', 'gap': '12px'}),
+            ], style={'width': '220px', 'flexShrink': '0', 'border': '1px solid var(--border-strong)',
+                      'borderRadius': '8px', 'overflow': 'hidden'}),
+
+            # ── Results panel: 2x2 grid for pair cards (right side) ──────────
             html.Div(
                 id="pairs-plots-container",
-                style={
-                    "display": "grid",
-                    "gridTemplateColumns": "1fr 1fr",
-                    "gap": "14px",
-                    "marginBottom": "20px",
-                },
+                style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "10px", "flex": "1", "minWidth": "0"},
                 children=[
                     html.Div([
                         html.Div(
@@ -540,12 +514,11 @@ def build_pairs_layout():
                     ])
                 ],
             ),
+        ], style={'display': 'flex', 'gap': '12px', 'alignItems': 'flex-start'}),
 
-            # ── Hidden loader for triggering updates ────────────────────────
-            html.Div(id="pairs-content-loader", style={"display": "none"}),
-        ],
-        style={"padding": "20px"}
-    )
+        # ── Hidden loader for triggering updates ────────────────────────────
+        html.Div(id="pairs-content-loader", style={"display": "none"}),
+    ], style={'padding': '10px', 'display': 'flex', 'flexDirection': 'column', 'gap': '10px'})
 
 
 def _z_score_color(z):
@@ -801,8 +774,8 @@ def register_callbacks(app) -> None:
 
     def _fut_empty(title):
         return go.Figure(data=[], layout=dict(
-            plot_bgcolor=app_color["graph_bg"],
-            paper_bgcolor=app_color["graph_bg"],
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
             title=title,
         ))
 
@@ -833,8 +806,8 @@ def register_callbacks(app) -> None:
             from web.core.styles import layout_stat
             layout = layout_stat("Z-score")
         except Exception:
-            layout = dict(plot_bgcolor=app_color["graph_bg"],
-                          paper_bgcolor=app_color["graph_bg"],
+            layout = dict(plot_bgcolor="rgba(0,0,0,0)",
+                          paper_bgcolor="rgba(0,0,0,0)",
                           font=dict(color="#ffffff"), yaxis=dict(title="Z-score"))
         fig = go.Figure(data=[trace], layout=layout)
         fig.update_layout(clickmode="event+select")
@@ -914,12 +887,14 @@ def register_callbacks(app) -> None:
                  f"Latest: {_fmt(float(s.iloc[-1]))}, Mean: {_fmt(mean)}, "
                  f"Vol: {_fmt(vol)}, Max: {_fmt(vmax)}, Min: {_fmt(vmin)}")
         layout_kwargs = dict(
-            plot_bgcolor=app_color["graph_bg"], paper_bgcolor=app_color["graph_bg"],
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
             font=dict(color="#ffffff"), title=title,
             xaxis=dict(range=[start, s.index[-1]]),
             yaxis=dict(title=unit),
             showlegend=(_yaxis2 is not None),
             legend=dict(orientation="h", x=0, y=1.08, font=dict(size=11)),
+            margin=dict(l=50, r=50, t=60, b=40),
+            hovermode='x unified',
         )
         if _yaxis2 is not None:
             layout_kwargs["yaxis2"] = _yaxis2
@@ -1173,12 +1148,22 @@ def register_callbacks(app) -> None:
 
     # Spreads callbacks
     @app.callback(
+        Output("alpha-spread-updated-at", "children"),
+        Input("data-refresh", "n_intervals"),
+        Input("spread-type", "value"),
+        Input("alpha-spread-refresh-btn", "n_clicks"),
+    )
+    def _update_spread_timestamp(_interval, _stype, _refresh_clicks):
+        return f"Updated: {datetime.datetime.now().strftime('%H:%M:%S')}"
+
+    @app.callback(
         Output("graph-spread-bar", "figure"),
         Input("data-refresh", "n_intervals"),
         Input("realtime-data", "data"),
         Input("spread-type", "value"),
+        Input("alpha-spread-refresh-btn", "n_clicks"),
     )
-    def _update_spread_bar(interval, data_rt_js, stype):
+    def _update_spread_bar(interval, data_rt_js, stype, _refresh_clicks):
         """Update the spread bar chart."""
         if not PLOTTING_AVAILABLE or go is None:
             # Return a simple dict-based figure if plotly isn't available
@@ -1186,8 +1171,8 @@ def register_callbacks(app) -> None:
         
         if not GRAPHS_AVAILABLE or orig_statistics is None:
             return go.Figure(data=[], layout=dict(
-                plot_bgcolor=app_color["graph_bg"],
-                paper_bgcolor=app_color["graph_bg"],
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
                 title="Data files not loaded. Please run EOD job to generate data."
             ))
         
@@ -1250,8 +1235,8 @@ def register_callbacks(app) -> None:
                     if stype not in data_rt or data_rt.get(stype) is None:
                         # Return a friendly empty chart instead of crashing
                         return go.Figure(data=[], layout=dict(
-                            plot_bgcolor=app_color["graph_bg"],
-                            paper_bgcolor=app_color["graph_bg"],
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            paper_bgcolor="rgba(0,0,0,0)",
                             title=f"Waiting for data: {stype}..."
                         ))
 
@@ -1262,8 +1247,8 @@ def register_callbacks(app) -> None:
             import traceback
             traceback.print_exc()
             empty_figure = go.Figure(data=[], layout=dict(
-                plot_bgcolor=app_color["graph_bg"],
-                paper_bgcolor=app_color["graph_bg"],
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
                 title=f"Error: {str(e)[:100]}"
             ))
             return empty_figure
@@ -1280,6 +1265,24 @@ def register_callbacks(app) -> None:
             raise PreventUpdate
         return clickData["points"][0]["label"]
 
+    def _fit_to_frame(fig):
+        """Strip any hardcoded height/width so the graph fills its container
+        (dcc.Graph has responsive=True + height:100% on the Spread Time Series card).
+        Accepts either a go.Figure or a plain {data, layout} dict (spreadts() returns the latter)."""
+        try:
+            if isinstance(fig, dict):
+                layout = fig.setdefault("layout", {})
+                layout["height"] = None
+                layout["width"] = None
+                layout["autosize"] = True
+                layout["margin"] = dict(l=50, r=20, t=40, b=40)
+            else:
+                fig.update_layout(height=None, width=None, autosize=True,
+                                   margin=dict(l=50, r=20, t=40, b=40))
+        except Exception:
+            pass
+        return fig
+
     @app.callback(
         Output("graph-spread", "figure"),
         Input("spread-type", "value"),
@@ -1289,38 +1292,38 @@ def register_callbacks(app) -> None:
         """Update the spread time series chart."""
         if not PLOTTING_AVAILABLE or go is None:
             return {"data": [], "layout": {"title": "Plotting not available"}}
-        
+
         if not GRAPHS_AVAILABLE or orig_spreadts is None:
-            return go.Figure(data=[], layout=dict(
-                plot_bgcolor=app_color["graph_bg"],
-                paper_bgcolor=app_color["graph_bg"],
+            return _fit_to_frame(go.Figure(data=[], layout=dict(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
                 title="Data files not loaded. Please run EOD job to generate data."
-            ))
-        
+            )))
+
         try:
             # Futures spreads render directly from futures-spds.pkl (new pipeline).
             # These default to the first contract type when no bar is clicked yet.
             if stype in _FUT_SPREADS:
-                return _futures_ts_figure(stype, ticker)
+                return _fit_to_frame(_futures_ts_figure(stype, ticker))
 
             # Handle empty/None ticker gracefully
             if not ticker:
-                return go.Figure(data=[], layout=dict(
-                    plot_bgcolor=app_color["graph_bg"],
-                    paper_bgcolor=app_color["graph_bg"],
+                return _fit_to_frame(go.Figure(data=[], layout=dict(
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
                     title="Please select a ticker from the bar chart above"
-                ))
-            return orig_spreadts(stype, None, ticker)
+                )))
+            return _fit_to_frame(orig_spreadts(stype, None, ticker))
         except Exception as e:
             print(f"Error in _update_spread_ts: {e}")
             import traceback
             traceback.print_exc()
             empty_figure = go.Figure(data=[], layout=dict(
-                plot_bgcolor=app_color["graph_bg"],
-                paper_bgcolor=app_color["graph_bg"],
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
                 title=f"Error: {str(e)[:100]}"
             ))
-            return empty_figure
+            return _fit_to_frame(empty_figure)
 
     # Seasonal overlay callback
     @app.callback(
@@ -1342,8 +1345,8 @@ def register_callbacks(app) -> None:
         )
 
         _empty_fig = go.Figure(layout=dict(
-            plot_bgcolor=app_color["graph_bg"],
-            paper_bgcolor=app_color["graph_bg"],
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
             font=dict(color="#ffffff"),
         ))
 
@@ -1452,7 +1455,7 @@ def register_callbacks(app) -> None:
                     style={"fontSize": "9px", "color": "#8fb3d9", "marginTop": "4px", "padding": "0 6px"},
                 )
                 stats_children = html.Div([header] + rows + [note],
-                                          style={"background": "#082255", "borderRadius": "4px",
+                                          style={"background": "transparent", "borderRadius": "4px",
                                                  "padding": "6px 0", "marginBottom": "8px"})
             except Exception as e:
                 print(f"[seasonal] stats table error: {e}")
@@ -1480,8 +1483,8 @@ def register_callbacks(app) -> None:
 
         if not GRAPHS_AVAILABLE or orig_curves is None:
             empty_figure = go.Figure(data=[], layout=dict(
-                plot_bgcolor=app_color["graph_bg"],
-                paper_bgcolor=app_color["graph_bg"],
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
                 title="Data files not loaded. Please run EOD job to generate data."
             ))
             return empty_figure, "Data Not Available", {"display": "none"}, [], [], "", []
@@ -1493,8 +1496,8 @@ def register_callbacks(app) -> None:
             import traceback
             traceback.print_exc()
             empty_figure = go.Figure(data=[], layout=dict(
-                plot_bgcolor=app_color["graph_bg"],
-                paper_bgcolor=app_color["graph_bg"],
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
                 title=f"Error: {str(e)[:100]}"
             ))
             return empty_figure, "Error Loading Curves", {"display": "none"}, [], [], "", []

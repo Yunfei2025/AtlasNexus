@@ -55,6 +55,61 @@ def register_backtest_hist_callbacks(app):
                 {'marginRight': '25px', 'display': 'block'},  # period container visible
             )
 
+    # 4.3b Populate Strategy card's Factor Pool chip grid from the live factor pool.
+    # backtest-date-mode is just a convenient existing Input to fire this once on page load;
+    # its value isn't used since the chip grid doesn't depend on date mode.
+    @app.callback(
+        Output('backtest-strategy-factor-pool', 'children'),
+        [Input('backtest-date-mode', 'value')],
+        prevent_initial_call=False
+    )
+    def update_strategy_factor_pool_chips(_date_mode):
+        """Render the current SELECTED_FACTOR_POOL (from the Factor tab) as small chip cards."""
+        _CATEGORY_COLOR = {
+            'IR':  THEME['accent'],
+            'SP':  '#9b6dd6',
+            'CR':  '#d6708f',
+            'FX':  '#45b6e6',
+            'CMD': '#e0a23c',
+            'EQ':  '#2f9d6b',
+        }
+        _PREFIX_CATEGORY = {
+            'IRDL': 'IR', 'IRSL': 'IR', 'IRCV': 'IR',
+            'SPDL': 'SP', 'SPSL': 'SP',
+            'CRDL': 'CR', 'CRSL': 'CR', 'CRCV': 'CR',
+            'FXDL': 'FX',
+            'CMDL': 'CMD',
+            'EQDL': 'EQ',
+        }
+
+        all_factors = []
+        all_factors.extend(SELECTED_FACTOR_POOL.get('ir_factors', []))
+        all_factors.extend(SELECTED_FACTOR_POOL.get('sp_factors', []))
+        all_factors.extend(SELECTED_FACTOR_POOL.get('cr_factors', []))
+        all_factors.extend(SELECTED_FACTOR_POOL.get('fx_factors', []))
+        all_factors.extend(SELECTED_FACTOR_POOL.get('cmd_factors', []))
+        all_factors.extend(SELECTED_FACTOR_POOL.get('eq_factors', []))
+
+        if not all_factors:
+            return html.Div("No factors selected", style={'fontSize': '11px', 'color': THEME['text_sub'],
+                                                            'gridColumn': '1 / -1'})
+
+        chips = []
+        for factor in all_factors:
+            prefix = factor.split('.')[0]
+            color = _CATEGORY_COLOR.get(_PREFIX_CATEGORY.get(prefix), THEME['text_sub'])
+            chips.append(html.Div(
+                factor,
+                title=factor,
+                style={
+                    'fontSize': '10px', 'fontWeight': '600', 'color': color,
+                    'background': 'var(--surface-input)', 'border': f'1px solid {color}',
+                    'borderRadius': '4px', 'padding': '3px 5px', 'textAlign': 'center',
+                    'overflow': 'hidden', 'textOverflow': 'ellipsis', 'whiteSpace': 'nowrap',
+                },
+            ))
+        return chips
+
     # 4.4 Update date range based on lookback preset dropdown
     @app.callback(
         [Output('history-date-range', 'start_date'),
@@ -81,25 +136,26 @@ def register_backtest_hist_callbacks(app):
 
         return start_date, end_date
 
-    # 4.5 Backtest Factor Pool Display and Min Date Info
+    # 4.5 Backtest Min Date Info (earliest valid custom-period start date for the selected factor pool)
     @app.callback(
-        [Output('backtest-factor-pool-display', 'children'),
-         Output('backtest-min-date-info', 'children')],
-        [Input('run-history-button', 'n_clicks')],
+        Output('backtest-min-date-info', 'children'),
+        [Input('run-history-button', 'n_clicks'),
+         Input('backtest-date-mode', 'value')],
         [State('backtest-corr-lookback', 'value')],
         prevent_initial_call=False
     )
-    def update_backtest_factor_pool_display(n_clicks, corr_lookback):
-        """Display the current factor pool from Factor tab and calculate minimum supported date."""
+    def update_backtest_min_date_info(n_clicks, date_mode, corr_lookback):
+        """Calculate and display the minimum supported backtest start date for the selected factor pool."""
         all_factors = []
         all_factors.extend(SELECTED_FACTOR_POOL.get('ir_factors', []))
         all_factors.extend(SELECTED_FACTOR_POOL.get('sp_factors', []))
+        all_factors.extend(SELECTED_FACTOR_POOL.get('cr_factors', []))
         all_factors.extend(SELECTED_FACTOR_POOL.get('fx_factors', []))
         all_factors.extend(SELECTED_FACTOR_POOL.get('cmd_factors', []))
-        
+        all_factors.extend(SELECTED_FACTOR_POOL.get('eq_factors', []))
+
         if not all_factors:
-            return ("⚠️ No factors selected. Go to Factor tab to select factors.",
-                    "ℹ️ Select factors first to see minimum supported date.")
+            return "ℹ️ Select factors in the Factor tab first to see minimum supported date."
         
         # Calculate minimum supported date based on selected factors
         try:
@@ -140,9 +196,8 @@ def register_backtest_hist_callbacks(app):
                 min_date_info = "⚠️ Not enough factors available in data."
         except Exception as e:
             min_date_info = f"⚠️ Error calculating date range: {str(e)}"
-        
-        factor_display = f"{len(all_factors)} factors: {', '.join(all_factors)}"
-        return factor_display, min_date_info
+
+        return min_date_info
 
     # 5. Historical Analysis (Backtest Tab) - Correlation-Based Strategy
     @app.callback(
@@ -260,6 +315,7 @@ def register_backtest_hist_callbacks(app):
             selected_factors = []
             selected_factors.extend(SELECTED_FACTOR_POOL.get('ir_factors', []))
             selected_factors.extend(SELECTED_FACTOR_POOL.get('sp_factors', []))
+            selected_factors.extend(SELECTED_FACTOR_POOL.get('cr_factors', []))
             selected_factors.extend(SELECTED_FACTOR_POOL.get('fx_factors', []))
             selected_factors.extend(SELECTED_FACTOR_POOL.get('cmd_factors', []))
             

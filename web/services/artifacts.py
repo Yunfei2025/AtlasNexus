@@ -70,21 +70,25 @@ def find_latest_run(mode: str | None = None) -> RunMeta | None:
     return None
 
 
-def get_data_generation_date() -> str | None:
-    """Get the last date from CBond-cvpx.pkl as the data generation date.
+def get_data_generation_date(bond_type: str = "CBond") -> str | None:
+    """Get the last date from `<bond_type>-cvpx.pkl` as the calibration date.
+
+    This reflects the actual as-of date of the calibrated curve data baked
+    into the pickle (the last index of ``ytm_act``), which can lag behind
+    the EOD run's nominal as-of date if a calibration step used stale data.
 
     Returns ISO format date string (YYYY-MM-DD) or None if file not found.
     """
     try:
         import pandas as pd
-        # input/ is at the same level as bin-v4.0/, not inside it
-        input_dir = project_root().parent / "input"
-        cbond_file = input_dir / "CBond-cvpx.pkl"
+        from settings.paths import DIR_INPUT
 
-        if not cbond_file.exists():
+        cvpx_file = Path(DIR_INPUT) / f"{bond_type}-cvpx.pkl"
+
+        if not cvpx_file.exists():
             return None
 
-        data = pd.read_pickle(cbond_file)
+        data = pd.read_pickle(cvpx_file)
 
         # Extract the index (dates) from ytm_act if it's a dict
         if isinstance(data, dict) and 'ytm_act' in data:

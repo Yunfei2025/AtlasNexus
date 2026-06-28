@@ -408,3 +408,75 @@ class MultiFactorBondAsset(Asset):
         return total_returns
 
 
+class MultiFactorCreditAsset(Asset):
+    """
+    Credit spread instrument with exposure to CRDL/CRSL/(CRCV) factors.
+
+    Mirrors MultiFactorBondAsset, but for credit-spread universes (CDB, LGB,
+    MTN, ICP) whose CRDL/CRSL/CRCV factor levels are weighted averages of the
+    *spread* (own yield - CGB yield), not outright yield levels. Like IRDL,
+    these factor levels are not PCA scores — they are absolute spread levels
+    in percentage points, so returns use the same diff-based treatment.
+    """
+
+    def __init__(self, name: str, universe: str, tenor: str,
+                 duration: Optional[float] = None,
+                 credit_sensitivities: Optional[Dict[str, float]] = None):
+        """
+        Initialize a multi-factor credit asset.
+
+        Args:
+            name: Instrument name (e.g., 'CDB5Y', 'LGB10Y', 'ICP3M')
+            universe: Credit universe code ('CDB', 'LGB', 'MTN', 'ICP')
+            tenor: Tenor identifier (e.g., '1Y', '10Y', '3M')
+            duration: Modified duration proxy (from get_default_sensitivities if not given)
+            credit_sensitivities: Dict of deterministic weights from
+                DeterministicRiskFactorAnalyzer.get_credit_tenor_sensitivities
+                (Format: {'CRDL': level_w, 'CRSL': slope_w, 'CRCV': curv_w}).
+                If not provided, falls back to a Level-only exposure of -duration.
+        """
+        self.universe = universe
+        self.tenor = tenor
+
+        if duration is None:
+            duration = get_default_sensitivities(tenor).get('IRDL', 5.0)
+        self.duration = duration
+
+        factor_map: Dict[str, float] = {}
+        if credit_sensitivities:
+            for cr_factor, weight in credit_sensitivities.items():
+                # Value change = -duration × weight, same convention as
+                # MultiFactorBondAsset's PCA-derived sensitivities.
+                factor_map[f'{cr_factor}.{universe}'] = -duration * weight
+        else:
+            factor_map[f'CRDL.{universe}'] = -duration
+
+        super().__init__(name, factor_map)
+
+    def calculate_returns(self, risk_factors: pd.DataFrame) -> pd.Series:
+        """
+        Calculate credit instrument returns from CRDL/CRSL/CRCV factor changes.
+
+        CRDL/CRSL/CRCV are absolute spread levels (like IRDL), not PCA scores
+        or price ratios — so returns = sensitivity × Δ(factor level), same as
+        MultiFactorBondAsset's IR branch.
+        """
+        total_returns = None
+
+        for factor_name, sensitivity in self.factors.items():
+            if factor_name not in risk_factors.columns:
+                continue
+
+            factor_changes = risk_factors[factor_name].diff()
+            factor_returns = sensitivity * factor_changes
+
+            if total_returns is None:
+                total_returns = factor_returns
+            else:
+                total_returns = total_returns + factor_returns
+
+        if total_returns is None:
+            raise ValueError(f"No valid risk factors found for asset {self.name}")
+
+        return total_returns
+

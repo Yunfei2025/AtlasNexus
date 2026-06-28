@@ -83,6 +83,12 @@
   cursor: pointer;
 }
 
+.risk-panel-flush-tbl {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
 /* ===== Run Center ===== */
 
 .rc-grid {

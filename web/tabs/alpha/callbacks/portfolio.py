@@ -404,17 +404,36 @@ def register_portfolio_callbacks(app) -> None:
                 summary_row['DV01_k'] = round(max(_ss_buy, _ss_sell), 1)
             df_display = pd.concat([df_display, pd.DataFrame([summary_row])], ignore_index=True)
 
-            conditional_style = []
-            if 'direction' in df_display.columns:
-                conditional_style = [
-                    {'if': {'filter_query': '{direction} = "BUY"'},  'backgroundColor': 'rgba(0, 204, 150, 0.10)'},
-                    {'if': {'filter_query': '{direction} = "SELL"'}, 'backgroundColor': 'rgba(239, 85, 59, 0.10)'},
-                    {'if': {'filter_query': '{direction} = "BUY"',  'column_id': 'direction'}, 'backgroundColor': THEME['success'], 'color': '#000', 'fontWeight': 'bold'},
-                    {'if': {'filter_query': '{direction} = "SELL"', 'column_id': 'direction'}, 'backgroundColor': THEME['danger'],  'color': '#fff', 'fontWeight': 'bold'},
-                ]
+            # Colors mirror guide/AlphaPortfolio.jsx STEP3_ROWS table:
+            # translucent pill badges for regime/direction, sign-colored data cells.
+            _GREEN, _RED = '#34d399', '#f87171'
+            conditional_style = [
+                {'if': {'filter_query': '{style} = "momentum"', 'column_id': 'style'},
+                 'backgroundColor': 'rgba(224,162,60,0.15)', 'color': THEME['accent'], 'fontWeight': '600'},
+                {'if': {'filter_query': '{style} = "mean-reverting"', 'column_id': 'style'},
+                 'backgroundColor': 'rgba(34,211,238,0.12)', 'color': THEME['cyan'], 'fontWeight': '600'},
+
+                {'if': {'filter_query': '{direction} = "BUY"', 'column_id': 'direction'},
+                 'backgroundColor': 'rgba(52,211,153,0.18)', 'color': _GREEN, 'fontWeight': '700'},
+                {'if': {'filter_query': '{direction} = "SELL"', 'column_id': 'direction'},
+                 'backgroundColor': 'rgba(239,68,68,0.18)', 'color': _RED, 'fontWeight': '700'},
+
+                {'if': {'filter_query': '{Zscore} > 0', 'column_id': 'Zscore'}, 'color': _GREEN, 'fontWeight': '600'},
+                {'if': {'filter_query': '{Zscore} < 0', 'column_id': 'Zscore'}, 'color': _RED, 'fontWeight': '600'},
+
+                {'if': {'filter_query': '{carry_roll} >= 0', 'column_id': 'carry_roll'}, 'color': _GREEN},
+                {'if': {'filter_query': '{carry_roll} < 0', 'column_id': 'carry_roll'}, 'color': _RED},
+
+                {'if': {'column_id': 'stop_loss'}, 'color': _RED},
+                {'if': {'column_id': 'profit_target'}, 'color': _GREEN},
+                {'if': {'column_id': 'score'}, 'color': THEME['accent'], 'fontWeight': '600'},
+            ]
 
             last_row_idx = len(df_display) - 1
-            conditional_style += [{'if': {'row_index': last_row_idx}, 'fontWeight': 'bold', 'borderTop': f'1px solid {THEME["accent"]}'}]
+            conditional_style += [
+                {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgba(255,255,255,0.015)'},
+                {'if': {'row_index': last_row_idx}, 'fontWeight': 'bold', 'borderTop': f'1px solid {THEME["accent"]}'},
+            ]
 
             _port_col_labels = {
                 'spread_type': 'type', 'Leg1': 'leg 1', 'Leg2': 'leg 2', 'style': 'regime',
@@ -430,9 +449,14 @@ def register_portfolio_callbacks(app) -> None:
                 id='alpha-scored-table',
                 columns=[{'name': _port_col_labels.get(c, c), 'id': c} for c in df_display.columns],
                 data=df_display.to_dict('records'),
-                style_table={'overflowX': 'auto', 'maxHeight': '350px', 'overflowY': 'auto'},
-                style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'], 'fontWeight': 'bold', 'textAlign': 'left'},
-                style_cell={'backgroundColor': THEME['bg_card'], 'color': THEME['text_main'], 'textAlign': 'left', 'padding': '8px', 'fontSize': '12px'},
+                style_table={'overflowX': 'auto', 'maxHeight': '350px', 'overflowY': 'auto', 'backgroundColor': 'transparent'},
+                style_header={'backgroundColor': 'var(--surface-panel)', 'color': THEME['text_sub'],
+                              'fontWeight': '600', 'textAlign': 'left', 'border': 'none',
+                              'borderBottom': '1px solid var(--border-strong)', 'fontSize': '10px',
+                              'textTransform': 'uppercase', 'letterSpacing': '0.05em'},
+                style_cell={'backgroundColor': 'transparent', 'color': THEME['text_main'], 'textAlign': 'left',
+                            'padding': '6px 8px', 'fontSize': '11px', 'border': 'none',
+                            'borderBottom': '1px solid rgba(255,255,255,0.04)'},
                 style_data_conditional=conditional_style,
                 sort_action='native', page_size=15,
             )
@@ -467,7 +491,7 @@ def register_portfolio_callbacks(app) -> None:
                     xaxis={'title': 'Trade ID', 'tickangle': -45, 'color': THEME['text_main']},
                     yaxis={'title': 'Percentage (%)', 'color': THEME['text_main']},
                     barmode='group', template='plotly_dark',
-                    paper_bgcolor=THEME['bg_card'], plot_bgcolor=THEME['bg_card'],
+                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
                     height=400, margin={'l': 60, 'r': 20, 't': 50, 'b': 100},
                     legend={'orientation': 'h', 'y': 1.1, 'x': 0.5, 'xanchor': 'center'},
                 )

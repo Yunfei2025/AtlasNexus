@@ -174,14 +174,13 @@ class IRSGenerator:
                 contracts = IRSConfig.IRS_LIST
                 act_values = self.contracts['value'].loc[contracts, 'Quote']
                 quo_values = self.contracts['value'].loc[contracts, 'FixRate'].values
-                # Only write ytm_act for instruments with a real market quote
+                # Only write ytm_act for instruments with a real market quote; instruments
+                # with no quote today are left out so updatePKL keeps them NaN instead of
+                # carrying forward a stale value.
                 act_instruments = getattr(self, '_available_quote_instruments', contracts)
                 act_instruments_with_data = [c for c in act_instruments if pd.notna(act_values.loc[c])]
                 if act_instruments_with_data:
                     curve_px['ytm_act'].loc[self.pricing_date, act_instruments_with_data] = act_values.loc[act_instruments_with_data].values
-                elif self.pricing_date not in curve_px['ytm_act'].index:
-                    # No quotes available; write NaN placeholder so updatePKL can forward-fill from the prior date
-                    curve_px['ytm_act'].loc[self.pricing_date] = float('nan')
                 curve_px['ytm_quo'].loc[self.pricing_date, contracts] = quo_values
 
             # Update carry3m and roll3m time series so StatGenerator can build CarryRoll3m

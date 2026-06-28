@@ -294,19 +294,17 @@ def dropdown(
     return dcc.Dropdown(style=style, optionHeight=30, **kwargs)
 
 
-def asset_pool_item(name: str, meta: str) -> html.Div:
+def asset_pool_item(name: str, meta: str = "") -> html.Div:
     """Compact tag-style row for an asset pool list (replaces wide colour bars).
 
     Example:
         asset_pool_item("Gold", "(Precious Metals — N/A)")
+        asset_pool_item("Gold")  # meta is optional
     """
-    return html.Div(
-        [
-            html.Span(name, className="asset-pool-item__name"),
-            html.Span(meta, className="asset-pool-item__meta"),
-        ],
-        className="asset-pool-item",
-    )
+    children = [html.Span(name, className="asset-pool-item__name")]
+    if meta:
+        children.append(html.Span(meta, className="asset-pool-item__meta"))
+    return html.Div(children, className="asset-pool-item")
 
 
 def input_number(

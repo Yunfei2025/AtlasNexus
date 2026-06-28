@@ -273,8 +273,8 @@ def build_seasonal_overlay_figure(
     import plotly.graph_objects as go
 
     empty_layout = dict(
-        plot_bgcolor=THEME["bg_main"],
-        paper_bgcolor=THEME["bg_main"],
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
         font=dict(color=THEME["text_main"]),
     )
 
@@ -319,7 +319,7 @@ def build_seasonal_overlay_figure(
             hovertemplate=f"<b>{yr}</b><br>Day-of-year: %{{x}}<br>Δ: %{{y:.2f}}<extra></extra>",
         ))
 
-    # Historical mean (smoothed over completed years) ± 1σ band
+    # Historical mean (smoothed over completed years)
     past_years = [yr for yr in years if yr < current_year]
     if len(past_years) >= 2:
         if raw_series is not None and not raw_series.dropna().empty:
@@ -330,23 +330,7 @@ def build_seasonal_overlay_figure(
             mean_s = mean_raw.rolling(window=7, center=True, min_periods=3).mean()
             mean_s.index = mean_s.index.astype(int)
 
-        # ±1σ band from the past-year pivot (day-by-day std, unsmoothed)
-        past_pivot_std = pivot[[yr for yr in pivot.columns if yr < current_year]]
-        std_s = past_pivot_std.std(axis=1)
-        upper = mean_s + std_s
-        lower = mean_s - std_s
         common_doys = mean_s.dropna().index
-        band_x = common_doys.tolist() + common_doys[::-1].tolist()
-        band_y = upper.reindex(common_doys).values.tolist() + lower.reindex(common_doys).iloc[::-1].values.tolist()
-        traces.append(go.Scatter(
-            x=band_x, y=band_y,
-            fill="toself",
-            fillcolor="rgba(52,152,219,0.10)",
-            line=dict(color="rgba(0,0,0,0)"),
-            hoverinfo="skip",
-            showlegend=False,
-            name="±1σ band",
-        ))
         traces.append(go.Scatter(
             x=common_doys.tolist(),
             y=mean_s.reindex(common_doys).values.tolist(),
@@ -357,8 +341,8 @@ def build_seasonal_overlay_figure(
         ))
 
     layout = go.Layout(
-        plot_bgcolor=THEME["bg_main"],
-        paper_bgcolor=THEME["bg_main"],
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
         font=dict(color=THEME["text_main"], size=11),
         title=dict(text=title, font=dict(size=12, color=THEME["text_sub"])) if title else None,
         xaxis=dict(

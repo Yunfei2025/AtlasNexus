@@ -202,7 +202,7 @@ def _get_tenor_yields_for_spread(instrument: str) -> tuple[Optional[float], Opti
         from curves.utils.loader import loadCNBDTS
         env = loadCNBDTS()
 
-        # Parse tenor spread ID like "CGB-10s30s", "CDB-5s10s", "CDBCGB-10y", "LGBCGB-10y"
+        # Parse tenor spread ID like "CGB-10s30s", "CDB-5s10s", "CDBCGB-10y", "LGBCGB-10y", "MTNCGB-5y"
         if instrument.upper().startswith('LGBCGB-'):
             m3 = re.search(r'-(\d+)y$', instrument, re.IGNORECASE)
             if not m3:
@@ -212,6 +212,23 @@ def _get_tenor_yields_for_spread(instrument: str) -> tuple[Optional[float], Opti
             lgb = env.get('LGB', {})
             short_val = cgb.get(f"中债国债到期收益率:{tenor_str}年")
             long_val = lgb.get(f"中国:地方政府债到期收益率(AAA):{tenor_str}年") if isinstance(lgb, pd.DataFrame) else None
+            if short_val is not None and long_val is not None:
+                if isinstance(short_val, pd.Series):
+                    short_val = float(short_val.iloc[-1])
+                if isinstance(long_val, pd.Series):
+                    long_val = float(long_val.iloc[-1])
+                return float(short_val), float(long_val)
+            return None, None
+
+        if instrument.upper().startswith('MTNCGB-'):
+            m4 = re.search(r'-(\d+)y$', instrument, re.IGNORECASE)
+            if not m4:
+                return None, None
+            tenor_str = m4.group(1)
+            cgb = env.get('CGB', {})
+            mtn = env.get('MTN', {})
+            short_val = cgb.get(f"中债国债到期收益率:{tenor_str}年")
+            long_val = mtn.get(f"中债中短期票据到期收益率(AAA):{tenor_str}年") if isinstance(mtn, pd.DataFrame) else None
             if short_val is not None and long_val is not None:
                 if isinstance(short_val, pd.Series):
                     short_val = float(short_val.iloc[-1])

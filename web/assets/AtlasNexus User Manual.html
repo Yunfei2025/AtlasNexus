@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AtlasNexus — User Manual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  /* ── Reset & base ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ── Brand palette (print-safe light mode) ── */
+  :root {
+    --navy:        #0a1428;
+    --navy-mid:    #122a4c;
+    --navy-light:  #17345c;
+    --cyan:        #45b6e6;
+    --blue:        #3d8bd4;
+    --amber:       #e0a23c;
+    --teal:        #36a6b8;
+    --green:       #2f9d6b;
+    --purple:      #7c70d6;
+    --text:        #1a2030;
+    --text-mid:    #3a4a62;
+    --text-muted:  #677a97;
+    --border:      #dde4ef;
+    --border-mid:  #c4cfe5;
+    --bg-soft:     #f5f7fb;
+    --bg-cyan:     #eef9fe;
+    --bg-blue:     #eef5fc;
+    --bg-amber:    #fdf7ec;
+    --bg-teal:     #edfbfc;
+    --bg-green:    #edf8f3;
+    --bg-purple:   #f3f2fd;
+    --mono:        'IBM Plex Mono', monospace;
+    --sans:        'IBM Plex Sans', sans-serif;
+  }
+
+  body {
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.65;
+    color: var(--text);
+    background: #fff;
+  }
+
+  /* ── Doc layout ── */
+  .doc {
+    max-width: 210mm;
+    margin: 0 auto;
+    background: #fff;
+    padding: 48px 0.75in 96px;
+  }
+  .doc-frame { width: 100%; border-collapse: collapse; }
+  .doc-frame td { padding: 0; }
+  .hdr-space, .ftr-space { display: none; }
+
+  /* ── Cover ── */
+  .cover {
+    display: flex;
+    flex-direction: column;
+    padding: 56px 0 48px;
+    border-bottom: 2px solid var(--navy);
+    margin-bottom: 56px;
+    gap: 0;
+  }
+  .cover-eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--cyan);
+    margin-bottom: 20px;
+  }
+  .cover-logo {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 10px;
+  }
+  .cover-logo svg { flex-shrink: 0; }
+  .cover-wordmark {
+    font-family: var(--sans);
+    font-weight: 300;
+    font-size: 42px;
+    letter-spacing: .06em;
+    color: var(--navy);
+    line-height: 1;
+  }
+  .cover-wordmark strong { font-weight: 700; }
+  .cover-title {
+    font-size: 22px;
+    font-weight: 500;
+    color: var(--text-mid);
+    margin-bottom: 24px;
+    margin-top: 6px;
+    padding-left: 2px;
+  }
+  .cover-meta {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    border-top: 1px solid var(--border);
+    padding-top: 18px;
+    margin-top: 8px;
+  }
+  .cover-meta-item { display: flex; flex-direction: column; gap: 2px; }
+  .cover-meta-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .cover-meta-value {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  /* ── Section headers ── */
+  h2 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--navy);
+    margin-top: 44px;
+    margin-bottom: 14px;
+    padding-bottom: 7px;
+    border-bottom: 1.5px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    break-after: avoid;
+  }
+  h2 .section-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: .06em;
+    flex-shrink: 0;
+  }
+  h3 {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--navy);
+    margin-top: 28px;
+    margin-bottom: 10px;
+    break-after: avoid;
+  }
+  h4 {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-top: 20px;
+    margin-bottom: 8px;
+    break-after: avoid;
+  }
+
+  /* ── Body copy ── */
+  p { margin-bottom: 12px; text-wrap: pretty; }
+  p:last-child { margin-bottom: 0; }
+  strong { font-weight: 600; color: var(--navy); }
+  em { font-style: italic; }
+  code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: var(--navy);
+  }
+
+  /* ── Value prop strip ── */
+  .value-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin: 20px 0 28px;
+  }
+  .value-card {
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-top: 3px solid var(--cyan);
+    border-radius: 6px;
+    padding: 16px 14px;
+    break-inside: avoid;
+  }
+  .value-card.blue { border-top-color: var(--blue); }
+  .value-card.amber { border-top-color: var(--amber); }
+  .value-card.teal { border-top-color: var(--teal); }
+  .value-card.green { border-top-color: var(--green); }
+  .value-card.purple { border-top-color: var(--purple); }
+  .value-card-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--navy);
+    margin-bottom: 5px;
+  }
+  .value-card-body {
+    font-size: 12px;
+    color: var(--text-mid);
+    line-height: 1.5;
+  }
+
+  /* ── Tables ── */
+  .tbl-wrap { overflow-x: auto; margin: 16px 0 24px; break-inside: avoid; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+  }
+  thead tr { background: var(--navy); color: #fff; }
+  thead th {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 7px 10px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:nth-child(even) { background: var(--bg-soft); }
+  tbody td { padding: 7px 10px; vertical-align: top; }
+  .tbl-wrap td:first-child { font-weight: 600; color: var(--navy); white-space: nowrap; }
+  .td-mono { font-family: var(--mono); font-size: 11.5px; }
+
+  /* ── Book badge ── */
+  .book-badge {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+  .badge-cyan   { background: var(--bg-cyan);   color: #1a7fa8; border: 1px solid #b8e5f7; }
+  .badge-blue   { background: var(--bg-blue);   color: #2060a0; border: 1px solid #b8d6f5; }
+  .badge-amber  { background: var(--bg-amber);  color: #a06818; border: 1px solid #f0d8a0; }
+  .badge-teal   { background: var(--bg-teal);   color: #1a7080; border: 1px solid #abe4ec; }
+  .badge-green  { background: var(--bg-green);  color: #1a6844; border: 1px solid #9edcc0; }
+
+  /* ── Book sections ── */
+  .book-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+    padding: 14px 16px;
+    border-radius: 6px;
+    break-inside: avoid;
+    break-after: avoid;
+  }
+  .book-header.cyan  { background: var(--bg-cyan);  border-left: 4px solid var(--cyan); }
+  .book-header.blue  { background: var(--bg-blue);  border-left: 4px solid var(--blue); }
+  .book-header.amber { background: var(--bg-amber); border-left: 4px solid var(--amber); }
+  .book-header.teal  { background: var(--bg-teal);  border-left: 4px solid var(--teal); }
+  .book-header-text h3 { margin: 0 0 3px; font-size: 15px; }
+  .book-header-text p  { font-size: 12px; color: var(--text-mid); margin: 0; }
+
+  /* ── Callout boxes ── */
+  .callout {
+    display: flex;
+    gap: 12px;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin: 16px 0;
+    break-inside: avoid;
+  }
+  .callout-icon {
+    font-size: 15px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .callout-body { flex: 1; }
+  .callout-body strong { display: block; margin-bottom: 4px; font-size: 13px; }
+  .callout-body p { font-size: 12.5px; margin: 0; color: var(--text-mid); }
+  .callout.info  { background: var(--bg-blue);  border: 1px solid #b8d6f5; }
+  .callout.warn  { background: var(--bg-amber); border: 1px solid #f0d8a0; }
+  .callout.tip   { background: var(--bg-green); border: 1px solid #9edcc0; }
+  .callout.note  { background: var(--bg-soft);  border: 1px solid var(--border-mid); }
+
+  /* ── Code blocks ── */
+  pre {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    background: #f0f3f9;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--navy-mid);
+    border-radius: 4px;
+    padding: 14px 16px;
+    margin: 12px 0 20px;
+    overflow-x: auto;
+    line-height: 1.65;
+    break-inside: avoid;
+    color: var(--navy);
+  }
+  pre .comment { color: var(--text-muted); }
+
+  /* ── Workflow diagram ── */
+  .workflow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin: 16px 0 22px;
+    break-inside: avoid;
+    font-size: 11px;
+  }
+  .wf-step {
+    flex: 1;
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 11px 10px;
+    text-align: center;
+    position: relative;
+  }
+  .wf-step-num {
+    font-family: var(--mono);
+    font-size: 8px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 3px;
+  }
+  .wf-step-title {
+    font-weight: 700;
+    font-size: 11px;
+    color: var(--navy);
+    margin-bottom: 3px;
+  }
+  .wf-step-body {
+    font-size: 10px;
+    color: var(--text-mid);
+    line-height: 1.3;
+  }
+  .wf-arrow {
+    font-size: 16px;
+    color: var(--border-mid);
+    padding: 0 6px;
+    flex-shrink: 0;
+  }
+  .wf-step.active { border-top: 3px solid var(--cyan); }
+  .wf-step.blue   { border-top: 3px solid var(--blue); }
+  .wf-step.amber  { border-top: 3px solid var(--amber); }
+  .wf-step.teal   { border-top: 3px solid var(--teal); }
+
+  /* ── Checklist ── */
+  .checklist {
+    list-style: none;
+    margin: 12px 0 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .checklist li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .checklist li::before {
+    content: '';
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid var(--border-mid);
+    border-radius: 3px;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  /* ── Glossary ── */
+  .glossary-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0;
+    margin: 12px 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .glossary-term, .glossary-def {
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11.5px;
+  }
+  .glossary-term {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--navy);
+    background: var(--bg-soft);
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .glossary-def { color: var(--text-mid); }
+  .glossary-term:last-of-type,
+  .glossary-def:last-of-type { border-bottom: none; }
+
+  /* ── Numbered list ── */
+  ol.doc-list {
+    margin: 12px 0 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  ol.doc-list li { font-size: 13px; line-height: 1.55; }
+
+  ul.doc-list {
+    margin: 12px 0 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    list-style: disc;
+  }
+  ul.doc-list li { font-size: 13px; line-height: 1.55; }
+
+  /* ── Divider ── */
+  .doc-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 40px 0;
+  }
+
+  /* ── Screen-only controls ── */
+  .screen-only { }
+
+  /* ── Toolbar ── */
+  .toolbar {
+    position: fixed;
+    top: 16px;
+    right: 20px;
+    display: flex;
+    gap: 8px;
+    z-index: 100;
+  }
+  .btn-pdf {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 8px 16px;
+    background: var(--navy);
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    text-decoration: none;
+  }
+  .btn-pdf:hover { background: var(--navy-mid); }
+
+  /* ── Print ── */
+  @page { size: A4; margin: 0; }
+  @media print {
+    html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    html, body { margin: 0; padding: 0; }
+    .doc {
+      max-width: none !important;
+      margin: 0 !important;
+      padding: 0 0.75in !important;
+      box-shadow: none !important;
+    }
+    .hdr-space, .ftr-space { display: table-cell; height: 0.75in; }
+    h2, h3, h4 { break-after: avoid; }
+    figure, pre, blockquote, img, svg, tr { break-inside: avoid; }
+    p, li { orphans: 3; widows: 3; }
+    .screen-only { display: none !important; }
+    .toolbar { display: none !important; }
+    .cover { break-after: page; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Toolbar (screen only) -->
+<div class="toolbar screen-only">
+  <button class="btn-pdf" onclick="window.print()">⊞ Save as PDF</button>
+</div>
+
+<main class="doc">
+  <table class="doc-frame" role="presentation">
+    <thead><tr><td class="hdr-space"></td></tr></thead>
+    <tbody><tr><td>
+
+      <!-- ══════════════════════════════════════════
+           COVER
+      ══════════════════════════════════════════ -->
+      <div class="cover">
+        <div class="cover-eyebrow">Systematic Investment Platform · User Manual</div>
+        <div class="cover-logo">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" width="52" height="52">
+            <circle cx="24" cy="24" r="22" stroke="#45b6e6" stroke-width="1.4" opacity="0.5"></circle>
+            <path d="M24 6 L40 38 L8 38 Z" stroke="#0a1428" stroke-width="1.6" fill="none"></path>
+            <circle cx="24" cy="6" r="3" fill="#45b6e6"></circle>
+            <circle cx="40" cy="38" r="3" fill="#3d8bd4"></circle>
+            <circle cx="8" cy="38" r="3" fill="#e0a23c"></circle>
+            <circle cx="24" cy="27" r="2.4" fill="#0a1428"></circle>
+          </svg>
+          <div class="cover-wordmark">Atlas<strong>Nexus</strong></div>
+        </div>
+        <div class="cover-title">User Manual — Getting Started &amp; Day-to-Day Operations</div>
+        <div class="cover-meta">
+          <div class="cover-meta-item">
+            <span class="cover-meta-label">Audience</span>
+            <span class="cover-meta-value">Portfolio Managers · Traders · Quant Researchers · Operators</span>
+          </div>
+          <div class="cover-meta-item">
+            <span class="cover-meta-label">Platform</span>
+            <span class="cover-meta-value">FIEngine · Daily &amp; Intraday Console</span>
+          </div>
+          <div class="cover-meta-item">
+            <span class="cover-meta-label">Version</span>
+            <span class="cover-meta-value">2026</span>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- ══════════════════════════════════════════
+           1 — WHAT IS ATLASNEXUS?
+      ══════════════════════════════════════════ -->
+      <h2><span class="section-num">01</span> What is AtlasNexus?</h2>
+
+      <p>AtlasNexus is the front-end and orchestration layer of the <strong>FIEngine</strong> platform — a fixed-income and multi-strategy systematic investment terminal. It turns a library of quant models covering curve calibration, factor (beta) allocation, relative-value (alpha) trading, futures strategies, multi-asset portfolio construction, and derivatives pricing into a unified, professional desk console.</p>
+
+      <p>Rather than requiring you to maintain a constellation of spreadsheets, standalone scripts, and separate risk systems, AtlasNexus integrates the full workflow — from raw market data to executed trade tickets — into a single, consistent environment driven by two browser-based consoles.</p>
+
+      <h3>Why AtlasNexus?</h3>
+      <div class="value-grid">
+        <div class="value-card">
+          <div class="value-card-title">One Source of Truth</div>
+          <div class="value-card-body">Curves, signals, risk, and positions all read from the same set of pre-computed pipeline artifacts — no version drift across tools.</div>
+        </div>
+        <div class="value-card blue">
+          <div class="value-card-title">Systematic, Not Manual</div>
+          <div class="value-card-body">Factor models, RV scanners, and curve fits run on a defined daily schedule. Decisions are informed by reproducible signals, not ad-hoc analysis.</div>
+        </div>
+        <div class="value-card amber">
+          <div class="value-card-title">End-to-End Coverage</div>
+          <div class="value-card-body">From macro factor selection and risk sizing through to instrument-level trade tickets — every step of the workflow is handled in-platform.</div>
+        </div>
+        <div class="value-card teal">
+          <div class="value-card-title">Always Responsive</div>
+          <div class="value-card-body">The UI displays pre-computed results rather than recalculating on every click. Even complex backtests and model outputs load instantly.</div>
+        </div>
+        <div class="value-card green">
+          <div class="value-card-title">Full Auditability</div>
+          <div class="value-card-body">Every EOD pipeline run writes a timestamped folder of JSON artifacts. You can replay and inspect any historical state of the desk.</div>
+        </div>
+        <div class="value-card purple">
+          <div class="value-card-title">CLI + UI Parity</div>
+          <div class="value-card-body">Every action available in the console is also a command-line call — making it easy to automate, schedule, or script any part of the workflow.</div>
+        </div>
+      </div>
+
+      <h3>The Two Consoles</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Console</th>
+              <th>Port</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Daily Console</td>
+              <td class="td-mono">:8080</td>
+              <td>End-of-day reporting, historical analysis, overnight risk, model training, and backtesting. The primary workspace for most users.</td>
+            </tr>
+            <tr>
+              <td>Intraday Console</td>
+              <td class="td-mono">:8081</td>
+              <td>High-frequency monitoring, real-time pricing, and intraday strategy execution during trading hours.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>The Five Books</h3>
+      <p>The terminal is organised into five <strong>Books</strong> — top-level tabs, each with its own accent colour and a workflow of sub-tabs that guide you from data to decision.</p>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Book</th>
+              <th>Accent</th>
+              <th>What it covers</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="book-badge badge-cyan">Market</span></td>
+              <td>Cyan</td>
+              <td>Live/EOD market data, pricer, yield curves, surface, trend and momentum indicators</td>
+            </tr>
+            <tr>
+              <td><span class="book-badge badge-blue">Beta Book</span></td>
+              <td>Blue</td>
+              <td>Factor selection, factor model training, risk allocation, and the beta portfolio</td>
+            </tr>
+            <tr>
+              <td><span class="book-badge badge-amber">Alpha Book</span></td>
+              <td>Amber</td>
+              <td>Relative-value scanner, spreads, pairs, volatility, and the alpha portfolio</td>
+            </tr>
+            <tr>
+              <td><span class="book-badge badge-cyan">Summary</span></td>
+              <td>Cyan</td>
+              <td>Combined book P&amp;L, consolidated positions, risk attribution, and trade tickets</td>
+            </tr>
+            <tr>
+              <td><span class="book-badge badge-teal">Run Center</span></td>
+              <td>Teal</td>
+              <td>Daily pipeline control, data backfill, and run status &amp; logs</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+
+      <!-- ══════════════════════════════════════════
+           2 — GETTING STARTED
+      ══════════════════════════════════════════ -->
+      <h2><span class="section-num">02</span> Getting Started</h2>
+
+      <h3>Requirements</h3>
+      <ul class="doc-list">
+        <li><strong>Python 3.9+</strong> — conda environment <code>dev</code> (macOS/Linux) or <code>prod</code> (Windows).</li>
+        <li>Install dependencies: <code>pip install -r requirements/production.txt</code></li>
+        <li><strong>Optional — live data:</strong> WindPy (Wind terminal SDK) and TA-Lib. Without Wind the platform runs gracefully on cached/historical data.</li>
+      </ul>
+
+      <h3>Launching the Platform</h3>
+
+      <h4>macOS</h4>
+      <pre>./START_mac.command        <span class="comment"># double-click in Finder, or run in Terminal</span></pre>
+
+      <h4>Windows</h4>
+      <pre>START_win.bat</pre>
+
+      <h4>Direct (any OS)</h4>
+      <pre>python main.py             <span class="comment"># Daily Console → http://localhost:8080</span>
+python main.py daily-web   <span class="comment"># Daily Console → http://localhost:8080</span>
+python main.py intraday-web<span class="comment"> # Intraday Console → http://localhost:8081</span></pre>
+
+      <p>On launch the Daily Console opens automatically in your default browser. A small live <strong>log window</strong> appears on macOS and Windows showing startup progress. Suppress it with <code>FI_SHOW_LOG_WINDOW=0</code> if preferred.</p>
+
+      <h3>First-Run Checklist</h3>
+      <ul class="checklist">
+        <li>Activate the conda environment and launch the Daily Console.</li>
+        <li>Open <strong>Run Center</strong> — confirm the latest EOD run status is green.</li>
+        <li>If data is stale, run <strong>Update Data</strong>, then <strong>Run EOD</strong> (see §6).</li>
+        <li>Browse the <strong>Market</strong> book — confirm curves and prices loaded correctly.</li>
+      </ul>
+
+      <div class="callout tip">
+        <span class="callout-icon">💡</span>
+        <div class="callout-body">
+          <strong>Start here every morning.</strong>
+          <p>The standard opening sequence is: <em>Update Data → Run EOD → review the Summary book</em>. Once that cycle is green, all five books are ready to use with today's calibrated state.</p>
+        </div>
+      </div>
+
+
+      <!-- ══════════════════════════════════════════
+           3 — THE MARKET BOOK
+      ══════════════════════════════════════════ -->
+      <h2><span class="section-num">03</span> The Market Book</h2>
+
+      <div class="book-header cyan">
+        <div class="book-header-text">
+          <h3>Market</h3>
+          <p>The analyst's starting point — calibrated state of rates and credit markets, pricing tools, and directional context. Open this book first each morning to confirm data loaded and markets are well-behaved.</p>
+        </div>
+      </div>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Sub-tab</th><th>What it shows</th><th>Typical use</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Data</td>
+              <td>Money-market rates, on-the-run &amp; reference bonds, IRS forward rates with in-cell magnitude bars</td>
+              <td>Sanity-check today's market levels</td>
+            </tr>
+            <tr>
+              <td>Pricer</td>
+              <td>Bid/offer/mid for TBond, CBond, LBond, GBond, FR007 IRS, repo pairs, butterflies, futures basis</td>
+              <td>Quote an instrument; read carry/roll greeks</td>
+            </tr>
+            <tr>
+              <td>Curves</td>
+              <td>Calibrated yield and forward curves (TBond, CBond, IRS, credit) with fits and residuals</td>
+              <td>Inspect curve shape, identify misfits</td>
+            </tr>
+            <tr>
+              <td>Surface</td>
+              <td>Yield surface across tenor × maturity</td>
+              <td>Spot rich/cheap pockets in the matrix</td>
+            </tr>
+            <tr>
+              <td>Trend</td>
+              <td>Momentum and trend indicators, breakout signals</td>
+              <td>Directional context for beta allocation</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Reading the Pricer</h3>
+      <p>The Pricer is the most frequently-used sub-tab. Key columns to understand:</p>
+      <ul class="doc-list">
+        <li><strong>Z-Score</strong> — the rich/cheap measure: standardised deviation of the current yield from its rolling mean. Positive = cheap; negative = rich.</li>
+        <li><strong>Stationarity</strong> — whether the spread/yield series is mean-reverting (required for z-score signals to be actionable).</li>
+        <li><strong>Carry (3M) / Roll (3M) / Total</strong> — return breakdown for holding the instrument three months. Total = Carry + Roll.</li>
+        <li><strong>bp</strong> — all price changes are expressed in basis points.</li>
+      </ul>
+
+      <div class="callout info">
+        <span class="callout-icon">ℹ</span>
+        <div class="callout-body">
+          <strong>Filtering the Pricer</strong>
+          <p>Use the dropdowns for asset type and term range (1–3Y, 3–5Y, 5–7Y, 7–10Y, 10–30Y) to narrow the table. Columns are sortable and filterable — sort by Z-Score descending to surface the richest opportunities immediately.</p>
+        </div>
+      </div>
+
+
+      <!-- ══════════════════════════════════════════
+           4 — THE BETA BOOK
+      ══════════════════════════════════════════ -->
+      <h2><span class="section-num">04</span> The Beta Book</h2>
+
+      <div class="book-header blue">
+        <div class="book-header-text">
+          <h3>Beta Book</h3>
+          <p>Runs the systematic factor allocation workflow — from selecting which macro risk factors to take, to training the model that sizes them, through to the resulting portfolio and its bond/futures expression.</p>
+        </div>
+      </div>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Sub-tab</th><th>What it does</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Candidates</td><td>Factor selection pool across IR / FX / EQ / CM. Pick the universe, then Train or Predict.</td></tr>
+            <tr><td>Factor</td><td>Factor model detail — information coefficients (IC), feature weights, regime analysis.</td></tr>
+            <tr><td>Backtest</td><td>Walk-forward backtest. Two sheets: Individual Factors (single-factor RFBT) and Portfolio (multi-asset).</td></tr>
+            <tr><td>Portfolio</td><td>Factor risk-parity portfolio construction and current beta allocation.</td></tr>
+            <tr><td>Bond / Futures</td><td>Instrument-level expression of the beta book — how allocations translate into bonds and futures.</td></tr>
+            <tr><td>Risk</td><td>DV01 ladders and factor risk attribution.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Running a Factor-Model Backtest</h3>
+      <p>Navigate to <strong>Beta Book → Backtest → Individual Factors</strong>.</p>
+
+      <ol class="doc-list">
+        <li>Select a factor from the dropdown.</li>
+        <li>Set the parameters below, then click <strong>▶ Run Backtest &amp; Save</strong>.</li>
+      </ol>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Parameter</th><th>Default</th><th>What it controls</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Train window (months)</td><td class="td-mono">12</td><td>Rolling training window length</td></tr>
+            <tr><td>IC threshold</td><td class="td-mono">0.05</td><td>Minimum information coefficient to retain a feature</td></tr>
+            <tr><td>Top N features</td><td class="td-mono">8</td><td>Feature cap after IC-based selection</td></tr>
+            <tr><td>Backtest period (years)</td><td class="td-mono">2</td><td>Out-of-sample evaluation window</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Results display as an IC table and a five-panel chart set: signal, predicted vs. realised return, equity curve, drawdown, and exposure. The trained model is persisted to <code>input/models/factor_model_&lt;YYYYMMDD&gt;.joblib</code> for daily signal generation.</p>
+
+      <div class="callout warn">
+        <span class="callout-icon">⚠</span>
+        <div class="callout-body">
+          <strong>Model training is a deliberate, periodic action</strong>
+          <p>The daily EOD pipeline does <em>not</em> retrain the factor model — it only generates signals from the latest saved model. Run Backtest &amp; Save here when you want to update the model with new data or changed parameters.</p>
+        </div>
+      </div>
+
+
+      <!-- ══════════════════════════════════════════
+           5 — THE ALPHA BOOK
+      ══════════════════════════════════════════ -->
+      <h2><span class="section-num">05</span> The Alpha Book</h2>
+
+      <div class="book-header amber">
+        <div class="book-header-text">
+          <h3>Alpha Book</h3>
+          <p>The relative-value (RV) workspace — market-neutral spread, pairs, and volatility trades. Where the Beta Book takes directional macro risk, the Alpha Book targets mean-reverting mispricings that are structurally uncorrelated to those factors.</p>
+        </div>
+      </div>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Sub-tab</th><th>What it does</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Candidates</td><td>RV scanner — z-score slider, signal clusters, rich/cheap ranking across the instrument universe.</td></tr>
+            <tr><td>Spread</td><td>Sector PCA spreads, spread regression, treasury/policy/local/corporate, swap spreads, bond-swap spreads, futures term/net basis.</td></tr>
+            <tr><td>Pairs</td><td>Pairs/spread trading: regression fit, hedge ratio, residual z-score, entry/exit signals.</td></tr>
+            <tr><td>Volatility</td><td>Implied vs. historical vol surfaces, term structure, skew/smile, vega exposure.</td></tr>
+            <tr><td>Portfolio</td><td>Alpha book allocation and current RV positions.</td></tr>
+            <tr><td>Backtest</td><td>Historical RV strategy simulation, equity curves, drawdowns.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Reading a Pairs Signal</h3>
+      <p>The Pairs tab fits a regression of one instrument on another and monitors the <strong>residual z-score</strong> against configurable entry/exit bands:</p>
+      <ul class="doc-list">
+        <li><strong>Entry signal:</strong> residual z-score crosses the entry band (e.g. ±1.5σ) — a candidate is flagged for the alpha book.</li>
+        <li><strong>Exit signal:</strong> residual mean-reverts toward zero — the spread is unwound.</li>
+        <li><strong>Confidence bands</strong> are derived from the residual standard deviation of the regression window.</li>
+      </ul>
+
+      <div class="callout note">
+        <span class="callout-icon">📌</span>
+        <div class="callout-body">
+          <strong>Always check stationarity first</strong>
+          <p>A pairs trade is only statistically valid if the spread series is stationary (mean-reverting). The Pricer and Pairs tabs both surface a Stationarity status — only trade pairs where this is confirmed.</p>
+        </div>
+      </div>
+
+
+      <!-- ══════════════════════════════════════════
+           6 — THE SUMMARY BOOK
+      ══════════════════════════════════════════ -->
+      <h2><span class="section-num">06</span> The Summary Book</h2>
+
+      <p>The Summary book aggregates the Beta and Alpha books into a consolidated desk-level view. Use it at end-of-day to review combined exposure and generate trade tickets.</p>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Sub-tab</th><th>What it shows</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Books</td>
+              <td>Combined portfolio KPIs with beta/alpha allocation tables side by side.</td>
+            </tr>
+            <tr>
+              <td>Risk</td>
+              <td>KPI strip (Total Long / Short / Net Exposure / Total DV01), net position by instrument, DV01 duration ladder (1Y–30Y), factor risk attribution, full position inventory.</td>
+            </tr>
+            <tr>
+              <td>Tickets</td>
+              <td>Trade tickets generated from the delta between current target and actual positions.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>The <strong>Risk</strong> sub-tab shows a DV01 ladder stacked by Bonds / Swaps / Futures, and factor risk attribution on a √-scale so that large rate-level factors do not visually dominate smaller commodity factors.</p>
+
+
+      <!-- ══════════════════════════════════════════
+           7 — RUN CENTER & DAILY OPERATIONS
+      ══════════════════════════════════════════ -->
+      <h2><span class="section-num">07</span> Run Center &amp; Daily Operations</h2>
+
+      <div class="book-header teal">
+        <div class="book-header-text">
+          <h3>Run Center</h3>
+          <p>The operator's control panel — drive the daily pipeline, monitor per-step status, and inspect logs. Most users interact with it once a day at the start of the session.</p>
+        </div>
+      </div>
+
+      <h3>The Standard Daily Flow</h3>
+
+      <div class="workflow">
+        <div class="wf-step active">
+          <div class="wf-step-num">Step 1</div>
+          <div class="wf-step-title">Update Data</div>
+          <div class="wf-step-body">Pull fresh market data via Wind / local providers</div>
+        </div>
+        <div class="wf-arrow">→</div>
+        <div class="wf-step blue">
+          <div class="wf-step-num">Step 2</div>
+          <div class="wf-step-title">Run EOD</div>
+          <div class="wf-step-body">Calibrate curves, generate factor signals, build all books</div>
+        </div>
+        <div class="wf-arrow">→</div>
+        <div class="wf-step amber">
+          <div class="wf-step-num">Step 3</div>
+          <div class="wf-step-title">Review</div>
+          <div class="wf-step-body">Check Summary book and per-step status in Run Center</div>
+        </div>
+        <div class="wf-arrow">→</div>
+        <div class="wf-step teal">
+          <div class="wf-step-num">Step 4</div>
+          <div class="wf-step-title">Analyse</div>
+          <div class="wf-step-body">Explore Market, Beta, and Alpha books for the day's opportunities</div>
+        </div>
+      </div>
+
+      <h3>What the EOD Pipeline Produces</h3>
+      <p>Each run writes a timestamped folder <code>runs/&lt;run_id&gt;/</code> containing one JSON artifact per pipeline step:</p>
+
+      <pre>runs/20260628-eod-083012/
+├── run_meta.json           <span class="comment"># manifest: mode, as-of date, per-step status</span>
+├── curves_result.json      <span class="comment"># curve calibration</span>
+├── factors_result.json     <span class="comment"># factor signal summary + backtest metrics</span>
+├── pairs_result.json       <span class="comment"># pairs count and names</span>
+├── futures_result.json     <span class="comment"># futures strategy metrics + equity curves</span>
+├── multiasset_result.json  <span class="comment"># universe counts and names</span>
+├── derivatives_result.json <span class="comment"># option greeks</span>
+└── factor_signals.json     <span class="comment"># factor signal snapshot</span></pre>
+
+      <p>Each pipeline step is <strong>isolated</strong> — if one step fails it is logged and skipped without aborting the rest. The web tabs read these artifacts directly.</p>
+
+      <h3>CLI Commands Reference</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Command</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="td-mono">python main.py update-data</td><td>Run data retrieval only</td></tr>
+            <tr><td class="td-mono">python main.py update-data --force</td><td>Force refresh even if data is current today</td></tr>
+            <tr><td class="td-mono">python main.py eod</td><td>Run the full daily EOD pipeline</td></tr>
+            <tr><td class="td-mono">python main.py eod --update-data</td><td>Pull fresh data, then run EOD (single command)</td></tr>
+            <tr><td class="td-mono">python main.py intraday</td><td>Run the intraday pipeline</td></tr>
+            <tr><td class="td-mono">python main.py refresh</td><td>Run the intraday refresh chain</td></tr>
+            <tr><td class="td-mono">python main.py refresh --steps rates irs</td><td>Run specific refresh steps only</td></tr>
+            <tr><td class="td-mono">python main.py scheduler --interval 300 --mode refresh</td><td>Periodic refresh during trading hours</td></tr>
+            <tr><td class="td-mono">python main.py curve-backtest --btype IRS --start 2024-01-01</td><td>Run a curve backtest</td></tr>
+            <tr><td class="td-mono">python main.py futures-analytics-backfill --start 2023-01-01</td><td>Rebuild futures analytics history</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+
+      <!-- ══════════════════════════════════════════
+           8 — DATA, DIRECTORIES & CONFIGURATION
+      ══════════════════════════════════════════ -->
+      <h2><span class="section-num">08</span> Data, Directories &amp; Configuration</h2>
+
+      <h3>Data Directories</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="td-mono">DIR_INPUT</td><td class="td-mono">../input/</td><td>Shared artifact store (pickle, JSON)</td></tr>
+            <tr><td class="td-mono">DIR_OUTPUT</td><td class="td-mono">../output/</td><td>Generated reports and exports</td></tr>
+            <tr><td class="td-mono">DIR_DATA</td><td class="td-mono">../database/</td><td>Raw historical market data</td></tr>
+            <tr><td class="td-mono">DIR_MODELS</td><td class="td-mono">../input/models/</td><td>Trained factor models (.joblib)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Environment Variables</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Variable</th><th>Default</th><th>Effect</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="td-mono">FI_SHOW_LOG_WINDOW</td><td class="td-mono">platform</td><td><code>1</code> forces the log window on startup; <code>0</code> suppresses it</td></tr>
+            <tr><td class="td-mono">FI_DISABLE_WINDOWS_CURVE_MP</td><td class="td-mono">0</td><td><code>1</code> forces serial curve backtest mode on Windows (slower but avoids multiprocessing issues)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Standalone Module Testing</h3>
+      <p>Every strategy module can be run independently for development or debugging:</p>
+      <pre>python futures/daily/main.py         <span class="comment"># Futures portfolio strategy</span>
+python derivatives/pricer/main.py    <span class="comment"># Option pricer</span>
+python pairs/main.py                 <span class="comment"># Pairs regression</span>
+python factors/main.py               <span class="comment"># Factor model training</span>
+python multiasset/main.py            <span class="comment"># Multi-asset universe + optimizer</span>
+python utils/dataviewer.py file.pkl  <span class="comment"># Inspect any pickle artifact</span></pre>
+
+
+      <!-- ══════════════════════════════════════════
+           9 — REMOTE ACCESS
+      ══════════════════════════════════════════ -->
+      <h2><span class="section-num">09</span> Remote Access</h2>
+
+      <p><code>server.bat</code> starts a Cloudflare tunnel that exposes the local application publicly — useful for accessing the terminal from outside the office network or sharing a session with a colleague.</p>
+
+      <pre><span class="comment"># Terminal 1 — start the app</span>
+python main.py daily-web
+
+<span class="comment"># Terminal 2 — proxy via cloudflared</span>
+server.bat</pre>
+
+      <div class="callout warn">
+        <span class="callout-icon">⚠</span>
+        <div class="callout-body">
+          <strong>Security note</strong>
+          <p>The Cloudflare tunnel makes the console publicly reachable. Use only on trusted networks and close the tunnel when the session ends. Do not expose the intraday console with live execution capabilities without additional authentication.</p>
+        </div>
+      </div>
+
+
+      <!-- ══════════════════════════════════════════
+           10 — TROUBLESHOOTING
+      ══════════════════════════════════════════ -->
+      <h2><span class="section-num">10</span> Troubleshooting</h2>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Curves/prices empty</td>
+              <td>Data not retrieved — Wind unavailable or outside trading hours</td>
+              <td>Run <strong>Update Data</strong> first, or confirm cached data is present</td>
+            </tr>
+            <tr>
+              <td>EOD step shows failed</td>
+              <td>Single step error (isolated failure)</td>
+              <td>Check Run Center logs; each step is independent — rerun only the failed step</td>
+            </tr>
+            <tr>
+              <td>Browser shows <code>0.0.0.0</code> unreachable</td>
+              <td>Server binds all interfaces; browser rejects 0.0.0.0</td>
+              <td>Use <code>http://localhost:8080</code> directly — the platform resolves a real host automatically</td>
+            </tr>
+            <tr>
+              <td>Backtest slow on Windows</td>
+              <td>Multiprocessing fallback to serial mode</td>
+              <td>Set <code>FI_DISABLE_WINDOWS_CURVE_MP=1</code> to use serial mode explicitly</td>
+            </tr>
+            <tr>
+              <td>Log window not showing</td>
+              <td>Platform default suppresses it</td>
+              <td>Set <code>FI_SHOW_LOG_WINDOW=1</code> and restart</td>
+            </tr>
+            <tr>
+              <td>Factor signals look stale</td>
+              <td>Model not retrained after parameter change</td>
+              <td>Re-run <strong>Beta Book → Backtest → Run Backtest &amp; Save</strong> to update the saved model</td>
+            </tr>
+            <tr>
+              <td>Z-score not actionable</td>
+              <td>Spread is non-stationary</td>
+              <td>Check Stationarity column — only trade instruments where this status is confirmed</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+
+      <!-- ══════════════════════════════════════════
+           11 — GLOSSARY
+      ══════════════════════════════════════════ -->
+      <h2><span class="section-num">11</span> Glossary</h2>
+
+      <div class="glossary-grid">
+        <div class="glossary-term">EOD</div>
+        <div class="glossary-def">End of day — the daily batch calibration and reporting run that produces all platform artifacts.</div>
+
+        <div class="glossary-term">Beta</div>
+        <div class="glossary-def">Systematic exposure to macro risk factors. The Beta Book manages this allocation.</div>
+
+        <div class="glossary-term">Alpha</div>
+        <div class="glossary-def">Market-neutral relative-value return from spread and pairs trading. The Alpha Book manages this.</div>
+
+        <div class="glossary-term">DV01</div>
+        <div class="glossary-def">Dollar value of 1 basis point — the interest-rate sensitivity of a position or portfolio expressed per bp move.</div>
+
+        <div class="glossary-term">IC</div>
+        <div class="glossary-def">Information coefficient — rank correlation between a predictive feature and forward realised return. Higher is better.</div>
+
+        <div class="glossary-term">ICIR</div>
+        <div class="glossary-def">IC information ratio — IC mean divided by IC standard deviation. A signal-quality measure analogous to Sharpe.</div>
+
+        <div class="glossary-term">Carry / Roll</div>
+        <div class="glossary-def">Carry: return from holding a bond at its yield (coupon minus funding). Roll: return from the bond's yield moving down the curve over time. Total = Carry + Roll.</div>
+
+        <div class="glossary-term">Z-score</div>
+        <div class="glossary-def">Standardised deviation of a current value from its rolling mean, expressed in standard deviations. The primary rich/cheap gauge.</div>
+
+        <div class="glossary-term">Stationarity</div>
+        <div class="glossary-def">Statistical property of a time series that mean-reverts — a prerequisite for z-score signals to be actionable as trade candidates.</div>
+
+        <div class="glossary-term">RV</div>
+        <div class="glossary-def">Relative value — market-neutral trading of spread or pairs relationships, targeting mean-reversion of a mispricing.</div>
+
+        <div class="glossary-term">CTD</div>
+        <div class="glossary-def">Cheapest-to-deliver — the bond most economically delivered into a futures contract given current prices and conversion factors.</div>
+
+        <div class="glossary-term">IRR</div>
+        <div class="glossary-def">Implied repo rate — the breakeven financing rate embedded in a futures basis trade.</div>
+
+        <div class="glossary-term">Net basis</div>
+        <div class="glossary-def">Futures basis net of carry (coupon income minus financing cost) — the cleaner measure of futures richness or cheapness.</div>
+
+        <div class="glossary-term">RFBT</div>
+        <div class="glossary-def">Risk Factor BackTest — the single-factor out-of-sample backtest run from Beta Book → Backtest → Individual Factors.</div>
+
+        <div class="glossary-term">bp</div>
+        <div class="glossary-def">Basis point — 0.01% or 0.0001 in yield terms. The standard unit for expressing yield changes and price moves in fixed income.</div>
+      </div>
+
+    </td></tr></tbody>
+    <tfoot><tr><td class="ftr-space"></td></tr></tfoot>
+  </table>
+</main>
+
+</body>
+</html>

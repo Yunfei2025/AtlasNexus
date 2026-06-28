@@ -139,8 +139,7 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
             'CDBCGB-30y': cnbd_data['CDB']['中债国开债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:30年'],
         }
 
-        # LGB (local government bond) vs CGB cross-sector spreads — LGB data not
-        # yet available in database-px.pkl; populated automatically once present.
+        # LGB (local government bond) vs CGB cross-sector spreads.
         lgb = cnbd_data.get('LGB')
         if isinstance(lgb, pd.DataFrame):
             cgb = cnbd_data['CGB']
@@ -150,6 +149,17 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
                 result['LGBCGB-10y'] = lgb['中国:地方政府债到期收益率(AAA):10年'] - cgb['中债国债到期收益率:10年']
             if '中国:地方政府债到期收益率(AAA):30年' in lgb.columns and '中债国债到期收益率:30年' in cgb.columns:
                 result['LGBCGB-30y'] = lgb['中国:地方政府债到期收益率(AAA):30年'] - cgb['中债国债到期收益率:30年']
+
+        # MTN (medium-term note) vs CGB cross-sector spreads.
+        mtn = cnbd_data.get('MTN')
+        if isinstance(mtn, pd.DataFrame):
+            cgb = cnbd_data['CGB']
+            if '中债中短期票据到期收益率(AAA):1年' in mtn.columns and '中债国债到期收益率:1年' in cgb.columns:
+                result['MTNCGB-1y'] = mtn['中债中短期票据到期收益率(AAA):1年'] - cgb['中债国债到期收益率:1年']
+            if '中债中短期票据到期收益率(AAA):3年' in mtn.columns and '中债国债到期收益率:3年' in cgb.columns:
+                result['MTNCGB-3y'] = mtn['中债中短期票据到期收益率(AAA):3年'] - cgb['中债国债到期收益率:3年']
+            if '中债中短期票据到期收益率(AAA):5年' in mtn.columns and '中债国债到期收益率:5年' in cgb.columns:
+                result['MTNCGB-5y'] = mtn['中债中短期票据到期收益率(AAA):5年'] - cgb['中债国债到期收益率:5年']
 
         swap_ts = cnbd_data.get('SwapTS')
         icp = cnbd_data.get('ICP')

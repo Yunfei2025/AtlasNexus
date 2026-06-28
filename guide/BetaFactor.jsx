@@ -53,61 +53,55 @@ function BetaFactor() {
   );
 
   return (
-    <div style={{ display:'flex', gap:'16px', alignItems:'start' }}>
+    <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+      <div>
+        <h1 style={{ margin:'0 0 3px', font:'var(--type-h1)', color:'var(--text-primary)' }}>Factor Explorer</h1>
+        <div style={{ font:'var(--type-meta)', color:'var(--text-muted)' }}>Browse historical factor levels by asset class, region, and type</div>
+      </div>
+    <div style={{ display:'flex', gap:'12px', alignItems:'start' }}>
 
       {/* LEFT SIDEBAR */}
-      <div style={{ width:'200px', flexShrink:0, background:'var(--surface-panel)', border:'1px solid var(--border-strong)', borderRadius:'8px', padding:'14px 14px', display:'flex', flexDirection:'column', gap:'14px' }}>
-        <div style={{ font:'var(--type-label)', color:'var(--text-primary)', fontSize:'11px', fontWeight:700, letterSpacing:'0.08em', textTransform:'uppercase' }}>Factor Explorer</div>
-        <div style={{ font:'var(--type-meta)', color:'var(--text-muted)', fontSize:'10px', lineHeight:'1.5' }}>
-          Browse the historical level of any risk factor. Select asset class → region → factor types.
+      <div style={{ width:'220px', flexShrink:0, border:'1px solid var(--border-strong)', borderRadius:'8px', overflow:'hidden' }}>
+        <div style={{ display:'flex', alignItems:'center', padding:'11px 16px', background:'var(--surface-panel)', borderBottom:'1px solid var(--border-strong)', userSelect:'none' }}>
+          <span style={{ font:'var(--type-h2)', fontSize:'13px', fontWeight:600, color:'var(--text-primary)' }}>Controls</span>
         </div>
+        <div style={{ padding:'12px 14px', display:'flex', flexDirection:'column', gap:'12px' }}>
 
-        <div>
-          <div style={{ font:'var(--type-label)', color:accentBlue, fontSize:'9px', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:'5px' }}>Asset Class</div>
-          <Dropdown value={assetClass} options={ASSET_CLASSES} onChange={setAssetClass} />
-        </div>
-        <div>
-          <div style={{ font:'var(--type-label)', color:accentBlue, fontSize:'9px', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:'5px' }}>Region / Type</div>
-          <Dropdown value={region} options={REGIONS} onChange={setRegion} />
-        </div>
-        <div>
-          <div style={{ font:'var(--type-label)', color:accentBlue, fontSize:'9px', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:'5px' }}>Factor(s)</div>
-          <div style={{ background:'var(--surface-input)', border:'1px solid var(--border-default)', borderRadius:'4px', padding:'6px 8px', font:'var(--type-data)', fontSize:'10px', color:'var(--text-primary)', cursor:'pointer', display:'flex', justifyContent:'space-between' }}>
-            <span>Level (IRDL) - ...</span>
-            <span style={{ color:'var(--text-muted)' }}>{factors.length} selected ×▾</span>
+          <div style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+            <div style={{ font:'var(--type-label)', fontSize:'9px', color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Asset Class</div>
+            <Dropdown value={assetClass} options={ASSET_CLASSES} onChange={setAssetClass} />
           </div>
-        </div>
-
-        <div style={{ borderTop:'1px solid var(--border-default)', paddingTop:'10px' }}>
-          <div style={{ font:'var(--type-meta)', color:'var(--text-muted)', fontSize:'9px', lineHeight:'1.6' }}>
-            Factor naming convention:<br/>
-            IRDL = Level · IRSL = Slope · IRCV = Curvature<br/>
-            FXDL = FX spot · CMDL = Commodity · EQDL = Equity
+          <div style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+            <div style={{ font:'var(--type-label)', fontSize:'9px', color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Region / Type</div>
+            <Dropdown value={region} options={REGIONS} onChange={setRegion} />
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+            <div style={{ font:'var(--type-label)', fontSize:'9px', color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.06em' }}>Factor(s)</div>
+            <div style={{ background:'var(--surface-input)', border:'1px solid var(--border-default)', borderRadius:'4px', padding:'6px 8px', font:'var(--type-data)', fontSize:'10px', color:'var(--text-primary)', cursor:'pointer', display:'flex', justifyContent:'space-between' }}>
+              <span>Level (IRDL) - ...</span>
+              <span style={{ color:'var(--text-muted)' }}>{factors.length} ×▾</span>
+            </div>
+          </div>
+          <div style={{ borderTop:'1px solid var(--border-default)', paddingTop:'10px' }}>
+            <div style={{ font:'var(--type-meta)', color:'var(--text-muted)', fontSize:'9px', lineHeight:'1.6' }}>
+              IRDL = Level · IRSL = Slope · IRCV = Curvature<br/>
+              FXDL = FX spot · CMDL = Commodity · EQDL = Equity
+            </div>
           </div>
         </div>
       </div>
 
       {/* MAIN CHART AREA */}
-      <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:'12px' }}>
-        <div style={{ font:'var(--type-label)', color:'var(--text-muted)', fontSize:'9px', textTransform:'uppercase', letterSpacing:'0.08em' }}>Historical Performance</div>
-
-        {/* Period buttons + toolbar */}
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <div style={{ display:'flex', gap:'4px' }}>
-            {PERIODS.map(p=>(
-              <button key={p} onClick={()=>setPeriod(p)} style={{
-                padding:'4px 10px', font:'var(--type-label)', fontSize:'10px', border:'none', borderRadius:'4px', cursor:'pointer',
-                background: period===p ? accentBlue : 'rgba(255,255,255,0.06)',
-                color: period===p ? '#fff' : 'var(--text-muted)', transition:'all 0.15s',
-              }}>{p}</button>
-            ))}
-          </div>
-          {/* Toolbar icons */}
-          <div style={{ display:'flex', gap:'6px' }}>
-            {['⤡','🔍','+','□','✕','⌂','▦'].map((ic,i)=>(
-              <div key={i} style={{ width:'24px', height:'24px', borderRadius:'3px', background:'rgba(255,255,255,0.06)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize:'11px', color:'var(--text-muted)' }}>{ic}</div>
-            ))}
-          </div>
+      <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:'10px' }}>
+        {/* Period buttons */}
+        <div style={{ display:'flex', gap:'4px' }}>
+          {PERIODS.map(p=>(
+            <button key={p} onClick={()=>setPeriod(p)} style={{
+              padding:'4px 10px', font:'var(--type-label)', fontSize:'9px', border:'none', borderRadius:'4px', cursor:'pointer',
+              background: period===p ? accentBlue : 'rgba(255,255,255,0.06)',
+              color: period===p ? '#fff' : 'var(--text-muted)', transition:'all 0.15s',
+            }}>{p}</button>
+          ))}
         </div>
 
         {/* Legend */}
@@ -121,31 +115,35 @@ function BetaFactor() {
         </div>
 
         {/* Chart */}
-        <div style={{ background:'var(--surface-panel)', border:'1px solid var(--border-strong)', borderRadius:'6px', padding:'10px' }}>
+        <div style={{ border:'1px solid var(--border-strong)', borderRadius:'8px', overflow:'hidden' }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'11px 16px', background:'var(--surface-panel)', borderBottom:'1px solid var(--border-strong)', userSelect:'none' }}>
+            <span style={{ font:'var(--type-h2)', fontSize:'13px', fontWeight:600, color:'var(--text-primary)' }}>Historical Performance</span>
+          </div>
+          <div style={{ padding:'10px 12px' }}>
           <svg viewBox={`0 0 ${W} ${H}`} style={{ width:'100%', height:'auto' }} preserveAspectRatio="xMidYMid meet">
             {/* Grid */}
             {[0,0.2,0.4,0.6,0.8,1.0,1.2,1.4,1.6].map((v,i)=>{
               const yy = H-30-((v-mn)/rng)*(H-50);
               return (
                 <g key={i}>
-                  <line x1="40" y1={yy} x2={W-10} y2={yy} stroke="rgba(100,140,200,0.1)" strokeWidth="0.8"/>
-                  <text x="35" y={yy+4} textAnchor="end" fontSize="9" fill="rgba(150,180,220,0.6)">{v.toFixed(1)}</text>
+                  <line x1="40" y1={yy} x2={W-10} y2={yy} stroke="rgba(255,255,255,0.06)" strokeWidth="1"/>
+                  <text x="35" y={yy+4} textAnchor="end" fontSize="9" fill="rgba(255,255,255,0.35)">{v.toFixed(1)}</text>
                 </g>
               );
             })}
             {/* X labels */}
             {xLabels.map((l,i)=>(
-              <text key={i} x={40+(i/(xLabels.length-1))*(W-50)} y={H-8} textAnchor="middle" fontSize="9" fill="rgba(150,180,220,0.6)">{l}</text>
+              <text key={i} x={40+(i/(xLabels.length-1))*(W-50)} y={H-8} textAnchor="middle" fontSize="9" fill="rgba(255,255,255,0.3)">{l}</text>
             ))}
-            <text x={W/2} y={H+2} textAnchor="middle" fontSize="9" fill="rgba(150,180,220,0.5)">Date</text>
-            <text x="12" y={H/2} textAnchor="middle" fontSize="9" fill="rgba(150,180,220,0.5)" transform={`rotate(-90,12,${H/2})`}>Value</text>
             {/* Lines */}
             {LINES.map(l=>(
               <path key={l.label} d={path(l.data)} stroke={l.color} strokeWidth="1.5" fill="none" opacity="0.9"/>
             ))}
           </svg>
+          </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }

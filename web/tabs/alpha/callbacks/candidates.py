@@ -28,6 +28,15 @@ from ..scoring import (
 
 _ALPHA_BOOK_POSITIONS_PARQUET = _get_input_dir() / 'alpha_book_positions.parquet'
 _REGIME_LOOKUP_CACHE: dict[str, dict[str, str]] = {}
+
+# Custom colorscale matching guide/AlphaCandidates.jsx corrCell():
+# navy-blue (rgb(30,80,160)) for positive, brick-red (rgb(200,60,40))
+# for negative, fading to a near-transparent center at 0.
+_ALPHA_CORR_COLORSCALE = [
+    [0.0, 'rgb(200,60,40)'],
+    [0.5, 'rgb(20,35,60)'],
+    [1.0, 'rgb(30,80,160)'],
+]
 _REGIME_CACHE_MTIME: float = 0.0   # mtime of Alpha-spreadsrt.pkl when cache was last built
 
 
@@ -811,12 +820,12 @@ def register_candidate_callbacks(app) -> None:
         if len(heatmap_assets) >= 2:
             sub_corr = corr_matrix.loc[heatmap_assets, heatmap_assets]
             corr_vals = sub_corr.values.copy()
-            mask_upper = np.triu(np.ones(corr_vals.shape), k=1).astype(bool)
+            mask_upper = np.triu(np.ones(corr_vals.shape), k=0).astype(bool)
             corr_vals[mask_upper] = np.nan
 
             heatmap = go.Figure(data=go.Heatmap(
                 z=corr_vals, x=sub_corr.columns, y=sub_corr.index,
-                colorscale='RdBu', zmin=-1, zmax=1,
+                colorscale=_ALPHA_CORR_COLORSCALE, zmin=-1, zmax=1,
                 hovertemplate='%{y} vs %{x}<br>Corr: %{z:.3f}<extra></extra>',
             ))
             _hm_height = max(350, 28 * len(heatmap_assets) + 100)
@@ -1342,7 +1351,7 @@ def register_candidate_callbacks(app) -> None:
                 ], style={'marginBottom': '8px', 'paddingBottom': '5px',
                           'borderBottom': f"1px solid {THEME['accent']}33"}),
                 grid_a,
-            ], style={'flex': '1', 'minWidth': '0'}),
+            ]),
 
             html.Div([
                 html.Div([
@@ -1353,8 +1362,8 @@ def register_candidate_callbacks(app) -> None:
                 ], style={'marginBottom': '8px', 'paddingBottom': '5px',
                           'borderBottom': f"1px solid {THEME['warning']}33"}),
                 grid_b,
-            ], style={'flex': '2', 'minWidth': '0', 'borderLeft': f"1px solid {THEME['border']}", 'paddingLeft': '18px'}),
-        ], style={'display': 'flex', 'alignItems': 'flex-start', 'gap': '18px'})
+            ]),
+        ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px'})
 
         # ── Combined correlation matrix (all instruments from both tables) ──
         all_instruments = instruments + [p for p in positions
@@ -1372,12 +1381,12 @@ def register_candidate_callbacks(app) -> None:
             sub_matrix = pd.DataFrame(sub_dict).reindex(index=valid_ids, columns=valid_ids)
 
             corr_vals = sub_matrix.values.copy()
-            mask_upper = np.triu(np.ones(corr_vals.shape), k=1).astype(bool)
+            mask_upper = np.triu(np.ones(corr_vals.shape), k=0).astype(bool)
             corr_vals[mask_upper] = np.nan
 
             hm = go.Figure(data=go.Heatmap(
                 z=corr_vals, x=sub_matrix.columns.tolist(), y=sub_matrix.index.tolist(),
-                colorscale='RdBu', zmin=-1, zmax=1,
+                colorscale=_ALPHA_CORR_COLORSCALE, zmin=-1, zmax=1,
                 hovertemplate='%{y} vs %{x}<br>Corr: %{z:.3f}<extra></extra>',
             ))
             hm.update_layout(

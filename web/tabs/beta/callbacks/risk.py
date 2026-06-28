@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import dash
 from dash import dcc, html, dash_table
-from dash.dependencies import Input, Output, State
+from dash.dependencies import Input, Output, State, ALL
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
@@ -28,6 +28,14 @@ from ._common import (
     _ALPHA_POSITIONS_PARQUET,
     _get_beta_close_prices,
     _load_cr_ts,
+    _allocation_bar,
+    _price_progress_bar,
+    _dir_badge,
+    _style_badge,
+    _signed_value_style,
+    _zscore_cell_style,
+    _sortable_header,
+    _apply_sort,
 )
 from ._risk_charts import (
     build_net_position_fig,
@@ -255,14 +263,17 @@ def register_risk_callbacks(app):
 
     @app.callback(
         [Output('summary-beta-table-container', 'children'),
-         Output('summary-refresh-status', 'children')],
+         Output('summary-refresh-status', 'children'),
+         Output('summary-beta-rows-store', 'data')],
         [Input('summary-refresh-btn', 'n_clicks'),
-         Input('summary-col-visibility', 'data')],
+         Input('summary-col-visibility', 'data'),
+         Input('summary-beta-sort', 'data')],
         prevent_initial_call=False,
     )
-    def update_summary_book_table(_n_clicks, col_vis):
+    def update_summary_book_table(_n_clicks, col_vis, sort_state):
         """Render Beta Book allocation table."""
         col_vis = col_vis or {}
+        sort_state = sort_state or {'col': None, 'dir': 'asc'}
         import os as _os
         from dash import ctx as _ctx
 
@@ -273,6 +284,7 @@ def register_risk_callbacks(app):
                     'padding': '30px', 'textAlign': 'center', 'fontSize': '13px',
                 }),
                 "",
+                [],
             )
 
         # ─── helpers ──────────────────────────────────────────────────────────
@@ -367,8 +379,29 @@ def register_risk_callbacks(app):
 
             close_prices = _get_beta_close_prices()
             _RATES_TYPE = 'Rates'
+            _ASSET_TYPE_COLOR = {
+                'FX':           'rgba(34,211,238,0.55)',
+                'Rates':        'rgba(61,139,212,0.55)',
+                'Commodities':  'rgba(224,162,60,0.55)',
+                'Equities':     'rgba(168,107,214,0.55)',
+                'Credit':       'rgba(52,211,153,0.55)',
+            }
+            _ASSET_TYPE_BADGE_BG = {
+                'FX':           'rgba(34,211,238,0.15)',
+                'Rates':        'rgba(61,139,212,0.15)',
+                'Commodities':  'rgba(224,162,60,0.15)',
+                'Equities':     'rgba(168,107,214,0.15)',
+                'Credit':       'rgba(52,211,153,0.15)',
+            }
+            _ASSET_TYPE_TEXT = {
+                'FX':           '#22d3ee',
+                'Rates':        '#3d8bd4',
+                'Commodities':  '#e0a23c',
+                'Equities':     '#a86bd6',
+                'Credit':       '#34d399',
+            }
             display_rows = []
-            for _, row in df.iterrows():
+            for _row_idx, (_, row) in enumerate(df.iterrows()):
                 asset_type = str(row.get('Asset Type', ''))
                 if asset_type == 'TOTAL':
                     continue
@@ -421,6 +454,7 @@ def register_risk_callbacks(app):
                         pass
 
                 display_rows.append({
+                    '__row_key':        str(_row_idx),
                     'Asset Type':       asset_type,
                     'Universe':         str(row.get('Universe', '')),
                     'Asset Name':       asset_name,
@@ -428,11 +462,15 @@ def register_risk_callbacks(app):
                     'Duration':         duration_str,
                     'Capital (MM CNY)': cap_mm_str,
                     'Weight (%)':       weight_str,
+                    'Allocation':       weight_str,
                     'Open Price':       open_price_str,
                     'Open Date':        open_date_str,
                     'Volume (MM)':      volume_str,
                     'Close Price':      close_price_str,
                     'MtM (MM CNY)':     mtm_str,
+                    '_asset_color':     _ASSET_TYPE_COLOR.get(asset_type, 'rgba(61,139,212,0.55)'),
+                    '_asset_badge_bg':  _ASSET_TYPE_BADGE_BG.get(asset_type, 'rgba(61,139,212,0.15)'),
+                    '_asset_text':      _ASSET_TYPE_TEXT.get(asset_type, '#3d8bd4'),
                 })
 
             if not display_rows:
@@ -462,74 +500,117 @@ def register_risk_callbacks(app):
                 total_row['MtM (MM CNY)'] = f"{_s_mtm:+.4f}"
             display_rows.append(total_row)
 
-            _editable_cols = {'Open Price', 'Open Date', 'Volume (MM)'}
-            _hidden_cols = []
-            if not col_vis.get('open_date'):
-                _hidden_cols.append('Open Date')
-            if not col_vis.get('volume'):
-                _hidden_cols.append('Volume (MM)')
-            _display_col_ids = [c for c in display_rows[0].keys() if c != 'Asset Name']
-            columns = [
-                {
-                    'name': c,
-                    'id': c,
-                    'editable': c in _editable_cols,
-                    **({'type': 'datetime'} if c == 'Open Date' else {}),
-                }
-                for c in _display_col_ids
-            ]
+            _visible_cols = []
+            if col_vis.get('open_date'):
+                _visible_cols.append('Open Date')
+            if col_vis.get('volume'):
+                _visible_cols.append('Volume (MM)')
 
-            _editable_style = [
-                {'if': {'column_id': c},
-                 'border': f'1px solid {THEME["accent"]}',
-                 'backgroundColor': 'rgba(99,179,237,0.08)'}
-                for c in _editable_cols
-            ]
-            _mtm_styles = [
-                {'if': {'filter_query': '{MtM (MM CNY)} contains "+"', 'column_id': 'MtM (MM CNY)'},
-                 'color': THEME.get('success', '#27ae60')},
-                {'if': {'filter_query': '{MtM (MM CNY)} contains "-"', 'column_id': 'MtM (MM CNY)'},
-                 'color': THEME.get('danger', '#e74c3c')},
-            ]
+            body_rows  = [r for r in display_rows if r.get('Asset Type') != 'TOTAL']
+            total_rows = [r for r in display_rows if r.get('Asset Type') == 'TOTAL']
+            _numeric_cols = {'Duration', 'Capital (MM CNY)', 'Weight (%)', 'Allocation',
+                              'Open Price', 'Volume (MM)', 'Close Price', 'MtM (MM CNY)'}
+            body_rows = _apply_sort(body_rows, sort_state, _numeric_cols)
 
-            table = dash_table.DataTable(
-                id='summary-beta-table',
-                data=display_rows,
-                columns=columns,
-                hidden_columns=_hidden_cols,
-                editable=True,
-                style_cell={
-                    'textAlign': 'center', 'padding': '6px 8px',
-                    'backgroundColor': THEME['table_row_odd'],
-                    'color': THEME['text_main'], 'border': 'none',
-                    'fontSize': '12px',
-                },
-                style_header={
-                    'backgroundColor': THEME['table_header'],
-                    'color': THEME['text_main'],
-                    'fontWeight': 'bold', 'border': 'none',
-                    'whiteSpace': 'normal', 'height': 'auto',
-                },
-                style_data_conditional=[
-                    {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
-                    {'if': {'filter_query': '{Asset Type} = "TOTAL"'},
-                     'backgroundColor': THEME['table_header'], 'fontWeight': 'bold',
-                     'borderTop': f"1px solid {THEME['accent']}"},
-                    *_editable_style,
-                    *_mtm_styles,
-                ],
-                style_table={'overflowX': 'auto'},
-                sort_action='native',
-                page_size=30,
-                tooltip_header={
-                    'Open Price':   'User-editable: entry yield (%) for Rates, price for others',
-                    'Open Date':    'User-editable: trade open date (YYYY-MM-DD)',
-                    'Volume (MM)':  'User-editable: position size in MM CNY',
-                    'Close Price':  'Latest yield (%) from factor levels — Rates only',
-                    'MtM (MM CNY)': 'Rates only: Volume × Duration × (Close − Open) / 10000',
-                },
-                tooltip_delay=0,
-                tooltip_duration=None,
+            _ALL_COLS = [
+                ('Asset Type', 'left'), ('Universe', 'left'), ('Instrument', 'left'),
+                ('Duration', 'right'), ('Capital (MM CNY)', 'right'), ('Weight (%)', 'right'),
+                ('Allocation', 'left'), ('Open Price', 'right'), ('Open Date', 'right'),
+                ('Volume (MM)', 'right'), ('Close Price', 'right'), ('MtM (MM CNY)', 'right'),
+            ]
+            _cols = [(c, a) for c, a in _ALL_COLS
+                     if c not in ('Open Date', 'Volume (MM)') or c in _visible_cols]
+
+            header_row = html.Tr([
+                _sortable_header(c, c, 'beta', sort_state, align=a) for c, a in _cols
+            ], style={'background': THEME['table_header'], 'borderBottom': f"1px solid {THEME['accent']}"})
+
+            def _editable_cell(row_idx: int, col: str, value: str, kind: str = 'text'):
+                if kind == 'date':
+                    return html.Td([
+                        html.Button(
+                            value or '—',
+                            id={'type': 'beta-date-trigger', 'row': row_idx},
+                            n_clicks=0,
+                            className='an-date-trigger-btn',
+                            style={
+                                'background': 'rgba(99,179,237,0.08)',
+                                'border': f'1px solid {THEME["accent"]}', 'borderRadius': '3px',
+                                'color': THEME['text_main'], 'fontSize': '11px', 'padding': '3px 6px',
+                                'cursor': 'pointer', 'width': '100%',
+                            },
+                        ),
+                    ], style={'padding': '5px 10px', 'textAlign': 'right'})
+                return html.Td(
+                    dcc.Input(
+                        id={'type': 'beta-cell-input', 'row': row_idx, 'col': col},
+                        type='text', value=value, debounce=True,
+                        style={
+                            'background': 'rgba(99,179,237,0.08)', 'border': f'1px solid {THEME["accent"]}',
+                            'borderRadius': '3px', 'color': THEME['text_main'], 'fontSize': '11px',
+                            'padding': '3px 6px', 'width': '64px', 'textAlign': 'right',
+                        },
+                    ),
+                    style={'padding': '5px 10px', 'textAlign': 'right'},
+                )
+
+            def _cell(row_idx: int, col: str, row: dict, align: str):
+                val = row.get(col, '')
+                base_style = {'padding': '5px 10px', 'textAlign': align, 'color': THEME['text_main']}
+                if col == 'Asset Type':
+                    return html.Td(html.Span(val, style={
+                        'padding': '2px 6px', 'borderRadius': '3px', 'fontSize': '9px', 'fontWeight': '600',
+                        'background': row.get('_asset_badge_bg', 'rgba(61,139,212,0.15)'),
+                        'color': row.get('_asset_text', '#3d8bd4'),
+                    }), style=base_style)
+                if col == 'Universe':
+                    return html.Td(val, style={**base_style, 'color': THEME['text_sub'], 'fontSize': '11px'})
+                if col == 'Instrument':
+                    return html.Td(val, style={**base_style, 'fontWeight': '500'})
+                if col == 'Open Price':
+                    return _editable_cell(row_idx, col, val, 'text')
+                if col == 'Volume (MM)':
+                    return _editable_cell(row_idx, col, val, 'text')
+                if col == 'Open Date':
+                    return _editable_cell(row_idx, col, val, 'date')
+                if col == 'MtM (MM CNY)':
+                    try:
+                        signed = float(str(val).replace(',', '').replace('+', '')) if val else None
+                    except (TypeError, ValueError):
+                        signed = None
+                    return html.Td(val, style={**base_style, **_signed_value_style(signed)})
+                if col == 'Allocation':
+                    try:
+                        pct = float(str(val).replace('%', '').replace(',', '')) if val else 0.0
+                    except (TypeError, ValueError):
+                        pct = 0.0
+                    color = row.get('_asset_color', 'rgba(61,139,212,0.55)')
+                    return html.Td(_allocation_bar(pct, color), style={**base_style, 'minWidth': '100px'})
+                return html.Td(val, style=base_style)
+
+            body_trs = []
+            for i, row in enumerate(body_rows):
+                row_idx = int(row.get('__row_key', i))
+                row_bg = THEME['bg_card'] if i % 2 == 1 else 'transparent'
+                body_trs.append(html.Tr(
+                    [_cell(row_idx, c, row, a) for c, a in _cols],
+                    style={'background': row_bg, 'borderBottom': '1px solid rgba(255,255,255,0.04)'},
+                ))
+            for trow in total_rows:
+                body_trs.append(html.Tr(
+                    [html.Td(trow.get(c, ''), style={
+                        'padding': '5px 10px', 'textAlign': a, 'fontWeight': 'bold',
+                        'color': THEME['text_main'],
+                    }) for c, a in _cols],
+                    style={'background': THEME['table_header'], 'borderTop': f"1px solid {THEME['accent']}"},
+                ))
+
+            table = html.Div(
+                html.Table([
+                    html.Thead(header_row),
+                    html.Tbody(body_trs),
+                ], style={'width': '100%', 'borderCollapse': 'collapse', 'fontSize': '11px'}),
+                style={'overflowX': 'auto'},
             )
 
             content = html.Div([
@@ -556,7 +637,7 @@ def register_risk_callbacks(app):
                 table,
             ])
             status = f"Beta snapshot from {ts[:19]}"
-            return content, status
+            return content, status, display_rows
 
         except Exception as exc:
             return _no_data(f"Error loading Beta snapshot: {exc}")
@@ -564,14 +645,17 @@ def register_risk_callbacks(app):
     # ── Alpha Book table ──────────────────────────────────────────────────────
     @app.callback(
         [Output('summary-alpha-table-container', 'children'),
-         Output('summary-refresh-status', 'children', allow_duplicate=True)],
+         Output('summary-refresh-status', 'children', allow_duplicate=True),
+         Output('summary-alpha-rows-store', 'data')],
         [Input('summary-refresh-btn', 'n_clicks'),
-         Input('summary-col-visibility', 'data')],
+         Input('summary-col-visibility', 'data'),
+         Input('summary-alpha-sort', 'data')],
         prevent_initial_call='initial_duplicate',
     )
-    def update_summary_alpha_table(_n_clicks, col_vis):
+    def update_summary_alpha_table(_n_clicks, col_vis, sort_state):
         """Render Alpha Book allocation table."""
         import os as _os
+        sort_state = sort_state or {'col': None, 'dir': 'asc'}
         from dash import ctx as _ctx
         col_vis = col_vis or {}
 
@@ -582,6 +666,7 @@ def register_risk_callbacks(app):
                     'padding': '30px', 'textAlign': 'center', 'fontSize': '13px',
                 }),
                 "",
+                [],
             )
 
         def _load_positions() -> dict:
@@ -649,7 +734,7 @@ def register_risk_callbacks(app):
                     return ''
 
             display_rows = []
-            for _, row in df.iterrows():
+            for _row_idx, (_, row) in enumerate(df.iterrows()):
                 trade_id = str(row.get('ID', ''))
                 if trade_id in ('TOTAL', ''):
                     continue
@@ -696,7 +781,25 @@ def register_risk_callbacks(app):
                 except (ValueError, TypeError):
                     pass
 
+                # Stop/Target are stored as bp *distances* from entry, signed by
+                # direction (BUY: stop below entry, target above; SELL: reversed).
+                _direction_u = str(row.get('direction', '')).strip().upper()
+                _stop_mag   = row.get('stop_loss')
+                _target_mag = row.get('profit_target')
+                stop_level = target_level = None
+                try:
+                    _sl_mag = float(_stop_mag) if _stop_mag not in (None, '') else None
+                    _tp_mag = float(_target_mag) if _target_mag not in (None, '') else None
+                    if open_price_bp is not None:
+                        if _sl_mag is not None:
+                            stop_level = open_price_bp - _sl_mag if _direction_u == 'BUY' else open_price_bp + _sl_mag
+                        if _tp_mag is not None:
+                            target_level = open_price_bp + _tp_mag if _direction_u == 'BUY' else open_price_bp - _tp_mag
+                except (ValueError, TypeError):
+                    pass
+
                 display_rows.append({
+                    '__row_key':              str(_row_idx),
                     'ID':                     trade_id,
                     'Leg 1':                  leg1,
                     'Leg 2':                  leg2,
@@ -709,6 +812,7 @@ def register_risk_callbacks(app):
                     'Open date':              open_date_str,
                     'Z-Score':                f"{float(row.get('Zscore', 0) or 0):.2f}",
                     'Close Price (bp)':       f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
+                    'Progress':               '',
                     'Target Volume (MM CNY)': f"{notional:,.1f}",
                     'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",
                     'Carry+Roll (3m,bp)':     _fmt1(-float(row.get('carry_roll', 0) or 0) if str(row.get('direction', '')).strip().upper() == 'SELL' else row.get('carry_roll')),
@@ -720,6 +824,10 @@ def register_risk_callbacks(app):
                     'MtM Value (MM CNY)':     f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
                     'Target Weight (%)':      f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
                     'Weight (%)':             '',
+                    '_entry_level':           open_price_str,
+                    '_current_level':         f"{cp_bp:.4f}" if cp_bp is not None else '',
+                    '_stop_level':            f"{stop_level:.4f}" if stop_level is not None else '',
+                    '_target_level':          f"{target_level:.4f}" if target_level is not None else '',
                 })
 
             total_vol = 0.0
@@ -772,32 +880,13 @@ def register_risk_callbacks(app):
             total_row['Weight (%)']             = f"{_s_wt:.2f}%"     if _s_wt     is not None else ''
             display_rows.append(total_row)
 
-            _editable_cols = {'Open price (bp)', 'Volume (mm)', 'Open date'}
-            _hidden_cols = []
-            if not col_vis.get('open_date'):
-                _hidden_cols.append('Open date')
-            if not col_vis.get('volume'):
-                _hidden_cols.append('Volume (mm)')
-            if not col_vis.get('score'):
-                _hidden_cols.append('Z-Score')
-            columns = [
-                {'name': c, 'id': c, 'editable': c in _editable_cols,
-                 **({'type': 'datetime'} if c == 'Open date' else {})}
-                for c in display_rows[0].keys()
-            ]
-
-            dir_styles = [
-                {'if': {'filter_query': '{Direction} = "BUY"'},  'backgroundColor': 'rgba(0, 204, 150, 0.12)'},
-                {'if': {'filter_query': '{Direction} = "SELL"'}, 'backgroundColor': 'rgba(239, 85, 59, 0.12)'},
-                {'if': {'filter_query': '{ID} = "TOTAL"'},
-                 'backgroundColor': THEME['table_header'], 'fontWeight': 'bold',
-                 'borderTop': f"1px solid {THEME['accent']}"},
-            ]
-            editable_style = [
-                {'if': {'column_id': c}, 'border': f'1px solid {THEME["accent"]}',
-                 'backgroundColor': 'rgba(99,179,237,0.08)'}
-                for c in _editable_cols
-            ]
+            _visible_cols = []
+            if col_vis.get('open_date'):
+                _visible_cols.append('Open date')
+            if col_vis.get('volume'):
+                _visible_cols.append('Volume (mm)')
+            if col_vis.get('score'):
+                _visible_cols.append('Z-Score')
 
             _today = pd.Timestamp.today().normalize()
             _alert_rows: list = []
@@ -840,42 +929,159 @@ def register_risk_callbacks(app):
                     _alert_rows.append((_tid, f"Long hold: {_days}d — review if signal or carry has changed", 'hold'))
                     _alert_ids['hold'].add(_tid)
 
+            _alert_severity = {}
             for _tid in _alert_ids['stop']:
-                dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(239,85,59,0.22)'})
+                _alert_severity[_tid] = 'stop'
             for _tid in _alert_ids['target']:
-                dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(0,204,150,0.22)'})
+                _alert_severity[_tid] = 'target'
             for _tid in _alert_ids['hold']:
-                dir_styles.append({'if': {'filter_query': f'{{ID}} = "{_tid}"'}, 'backgroundColor': 'rgba(255,165,0,0.14)'})
+                _alert_severity[_tid] = 'hold'
+            _row_alert_bg = {
+                'stop':   'rgba(239,85,59,0.22)',
+                'target': 'rgba(0,204,150,0.22)',
+                'hold':   'rgba(255,165,0,0.14)',
+            }
 
-            table = dash_table.DataTable(
-                id='summary-alpha-table',
-                data=display_rows,
-                columns=columns,
-                hidden_columns=_hidden_cols,
-                editable=True,
-                row_deletable=True,
-                style_cell={'textAlign': 'center', 'padding': '6px 8px',
-                            'backgroundColor': THEME['table_row_odd'],
-                            'color': THEME['text_main'], 'border': 'none', 'fontSize': '12px'},
-                style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'],
-                              'fontWeight': 'bold', 'border': 'none', 'whiteSpace': 'normal', 'height': 'auto'},
-                style_data_conditional=[
-                    {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
-                    *dir_styles, *editable_style,
-                ],
-                style_table={'overflowX': 'auto'},
-                sort_action='native',
-                page_size=30,
-                tooltip_header={
-                    'Open price (bp)':    'User-editable: entry spread in bp',
-                    'Volume (mm)':        'User-editable: position size in MM CNY',
-                    'Open date':          'User-editable: trade open date (YYYY-MM-DD)',
-                    'MTM spd (bp)':       'User-entered open spread shown in bp',
-                    'MtM Carry (MM CNY)': 'Volume × cumulative carry+roll since open date',
-                    'MtM Value (MM CNY)': 'MtM Price + MtM Carry',
-                },
-                tooltip_delay=0,
-                tooltip_duration=None,
+            body_rows  = [r for r in display_rows if r.get('ID') != 'TOTAL']
+            total_rows = [r for r in display_rows if r.get('ID') == 'TOTAL']
+            _numeric_cols = {
+                'Duration', 'Open price (bp)', 'Volume (mm)', 'Z-Score', 'Close Price (bp)',
+                'Target Volume (MM CNY)', 'DV01 (k CNY/bp)', 'Carry+Roll (3m,bp)',
+                'Breakeven (3m,bp)', 'Stop (bp)', 'Target (bp)', 'MTM spd (bp)',
+                'MtM Carry (MM CNY)', 'MtM Value (MM CNY)', 'Target Weight (%)', 'Weight (%)',
+            }
+            body_rows = _apply_sort(body_rows, sort_state, _numeric_cols)
+
+            _ALL_COLS = [
+                ('ID', 'left'), ('Leg 1', 'left'), ('Leg 2', 'left'),
+                ('Style', 'left'), ('Direction', 'center'), ('Duration', 'right'),
+                ('Open price (bp)', 'right'), ('Volume (mm)', 'right'), ('Open date', 'right'),
+                ('Z-Score', 'right'), ('Close Price (bp)', 'right'), ('Progress', 'left'),
+                ('Target Volume (MM CNY)', 'right'), ('DV01 (k CNY/bp)', 'right'),
+                ('Carry+Roll (3m,bp)', 'right'), ('Breakeven (3m,bp)', 'right'),
+                ('Stop (bp)', 'right'), ('Target (bp)', 'right'), ('MTM spd (bp)', 'right'),
+                ('MtM Carry (MM CNY)', 'right'), ('MtM Value (MM CNY)', 'right'),
+                ('Target Weight (%)', 'right'), ('Weight (%)', 'right'),
+            ]
+            _cols = [(c, a) for c, a in _ALL_COLS
+                     if c not in ('Open date', 'Volume (mm)', 'Z-Score') or c in _visible_cols]
+            _cols = _cols + [('__delete', 'center')]
+
+            header_row = html.Tr([
+                (html.Th('', style={'padding': '7px 6px', 'width': '24px'}) if c == '__delete'
+                 else _sortable_header(c, c, 'alpha', sort_state, align=a))
+                for c, a in _cols
+            ], style={'background': THEME['table_header'], 'borderBottom': f"1px solid {THEME['accent']}"})
+
+            def _editable_cell(row_idx: int, col: str, value: str, kind: str = 'text'):
+                input_id = {'type': 'alpha-cell-input', 'row': row_idx, 'col': col}
+                if kind == 'date':
+                    return html.Td([
+                        html.Button(
+                            value or '—',
+                            id={'type': 'alpha-date-trigger', 'row': row_idx},
+                            n_clicks=0,
+                            className='an-date-trigger-btn',
+                            style={
+                                'background': 'rgba(99,179,237,0.08)',
+                                'border': f'1px solid {THEME["accent"]}', 'borderRadius': '3px',
+                                'color': THEME['text_main'], 'fontSize': '9px', 'padding': '3px 6px',
+                                'cursor': 'pointer', 'width': '100%',
+                            },
+                        ),
+                    ], style={'padding': '5px 10px', 'textAlign': 'right'})
+                return html.Td(
+                    dcc.Input(
+                        id=input_id, type='text', value=value, debounce=True,
+                        style={
+                            'background': 'rgba(99,179,237,0.08)', 'border': f'1px solid {THEME["accent"]}',
+                            'borderRadius': '3px', 'color': THEME['text_main'], 'fontSize': '9px',
+                            'padding': '3px 6px', 'width': '64px', 'textAlign': 'right',
+                        },
+                    ),
+                    style={'padding': '5px 10px', 'textAlign': 'right'},
+                )
+
+            def _cell(row_idx: int, col: str, row: dict, align: str):
+                val = row.get(col, '')
+                base_style = {'padding': '5px 10px', 'textAlign': align, 'color': THEME['text_main']}
+                if col == 'ID':
+                    return html.Td(val, style={**base_style, 'fontWeight': '600', 'whiteSpace': 'nowrap'})
+                if col in ('Leg 1', 'Leg 2'):
+                    return html.Td(val, style={**base_style, 'color': THEME['text_sub'], 'fontSize': '9px'})
+                if col == 'Style':
+                    return html.Td(_style_badge(val) if val else '', style=base_style)
+                if col == 'Direction':
+                    return html.Td(_dir_badge(val) if val else '', style=base_style)
+                if col == 'Open price (bp)':
+                    return _editable_cell(row_idx, col, val, 'text')
+                if col == 'Volume (mm)':
+                    return _editable_cell(row_idx, col, val, 'text')
+                if col == 'Open date':
+                    return _editable_cell(row_idx, col, val, 'date')
+                if col == 'Z-Score':
+                    try:
+                        z = float(val) if val not in ('', 'N/A') else None
+                    except (TypeError, ValueError):
+                        z = None
+                    return html.Td(val, style={**base_style, **_zscore_cell_style(z)})
+                if col in ('MTM spd (bp)', 'MtM Value (MM CNY)'):
+                    try:
+                        signed = float(str(val).replace(',', '')) if val else None
+                    except (TypeError, ValueError):
+                        signed = None
+                    return html.Td(val, style={**base_style, **_signed_value_style(signed)})
+                if col == 'Target (bp)':
+                    return html.Td(val, style={**base_style, 'color': '#34d399'})
+                if col == 'Stop (bp)':
+                    return html.Td(val, style={**base_style, 'color': '#f87171'})
+                if col == 'Progress':
+                    try:
+                        entry  = float(row.get('_entry_level', '') or '')
+                        cur    = float(row.get('_current_level', '') or '')
+                        target = float(row.get('_target_level', '') or '')
+                        stop   = float(row.get('_stop_level', '') or '')
+                    except (TypeError, ValueError):
+                        return html.Td('', style=base_style)
+                    direction = str(row.get('Direction', '')).strip().upper()
+                    return html.Td(_price_progress_bar(entry, cur, target, stop, direction),
+                                    style={**base_style, 'minWidth': '90px'})
+                if col == '__delete':
+                    return html.Td(
+                        html.Button('×', id={'type': 'alpha-row-delete', 'row': row_idx}, n_clicks=0, style={
+                            'background': 'none', 'border': 'none', 'color': THEME['text_sub'],
+                            'cursor': 'pointer', 'fontSize': '14px', 'padding': '0 4px',
+                        }),
+                        style={'padding': '5px 6px', 'textAlign': 'center'},
+                    )
+                return html.Td(val, style=base_style)
+
+            body_trs = []
+            for i, row in enumerate(body_rows):
+                tid = row.get('ID', '')
+                sev = _alert_severity.get(tid)
+                row_bg = _row_alert_bg.get(sev) if sev else (
+                    THEME['bg_card'] if i % 2 == 1 else 'transparent')
+                row_idx = int(row.get('__row_key', i))
+                body_trs.append(html.Tr(
+                    [_cell(row_idx, c, row, a) for c, a in _cols],
+                    style={'background': row_bg, 'borderBottom': '1px solid rgba(255,255,255,0.04)'},
+                ))
+            for trow in total_rows:
+                body_trs.append(html.Tr(
+                    [html.Td(trow.get(c, '') if c != '__delete' else '', style={
+                        'padding': '5px 10px', 'textAlign': a, 'fontWeight': 'bold',
+                        'color': THEME['text_main'],
+                    }) for c, a in _cols],
+                    style={'background': THEME['table_header'], 'borderTop': f"1px solid {THEME['accent']}"},
+                ))
+
+            table = html.Div(
+                html.Table([
+                    html.Thead(header_row),
+                    html.Tbody(body_trs),
+                ], style={'width': '100%', 'borderCollapse': 'collapse', 'fontSize': '9px'}),
+                style={'overflowX': 'auto'},
             )
 
             _reminder_banner = None
@@ -921,30 +1127,318 @@ def register_risk_callbacks(app):
                           'marginBottom': '10px', 'flexWrap': 'wrap', 'position': 'relative', 'zIndex': '1001'}),
                 *([_reminder_banner] if _reminder_banner else []),
                 table,
-            ])
+            ], id='summary-alpha-table-wrapper')
             status = f"Alpha snapshot from {ts[:19]}" + (" — saved" if is_refresh else "")
-            return content, status
+            return content, status, display_rows
 
         except Exception as exc:
             return _no_data(f"Error loading Alpha snapshot: {exc}")
 
-    # ── Auto-save edits on the Alpha positions table ──────────────────────────
-    # Fires whenever the user edits a cell in the summary-alpha-table.
-    # Persists the editable columns (Open price / Volume / Open date) to parquet.
+    # ── Tickets subtab: derive opening tickets from Beta/Alpha positions ───────
+    # There is no order/fill pipeline in this engine — a "ticket" here is the
+    # opening trade implied by a position's Open Date/Price/Volume fields.
+    # FILLED  = open_date + volume both set
+    # PENDING = volume set but open_date missing (sized, not yet booked)
+    # OPEN    = neither set (candidate in the book, no trade yet) — excluded
+    _TICKET_STATUS_STYLE = {
+        'FILLED':  {'bg': 'rgba(52,211,153,0.12)', 'color': '#34d399'},
+        'PENDING': {'bg': 'rgba(224,162,60,0.15)', 'color': THEME['warning']},
+    }
+
+    def _build_tickets() -> list[dict]:
+        import os as _os
+        tickets: list[dict] = []
+
+        # ── Beta book: positions + user-entered open price/date/volume ────────
+        if _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
+            try:
+                bdf = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
+                user_data: dict = {}
+                if os.path.exists(_BETA_BOOK_USER_PARQUET):
+                    udf = pd.read_parquet(_BETA_BOOK_USER_PARQUET)
+                    for _, r in udf.iterrows():
+                        key = (str(r.get('asset_name', '')), str(r.get('instrument', '')))
+                        user_data[key] = {
+                            'open_price': str(r.get('open_price', '')).strip(),
+                            'open_date':  str(r.get('open_date', '')).strip(),
+                            'volume':     str(r.get('volume', '')).strip(),
+                        }
+
+                for _, row in bdf.iterrows():
+                    if str(row.get('Asset Type', '')) == 'TOTAL':
+                        continue
+                    asset_name = str(row.get('Asset Name', ''))
+                    instrument = str(row.get('Instrument', ''))
+                    saved = user_data.get((asset_name, instrument), {})
+                    volume_str = saved.get('volume', '')
+                    open_date_str = saved.get('open_date', '')
+                    if not volume_str:
+                        continue  # no sized trade — nothing to ticket yet
+                    try:
+                        qty = float(volume_str)
+                    except (TypeError, ValueError):
+                        continue
+                    status = 'FILLED' if open_date_str else 'PENDING'
+                    try:
+                        price = float(saved.get('open_price', '') or 0) or None
+                    except (TypeError, ValueError):
+                        price = None
+                    tickets.append({
+                        'id': f"BETA-{instrument}",
+                        'date': open_date_str or '—',
+                        'book': 'Beta',
+                        'spread': instrument or asset_name,
+                        'action': 'BUY',
+                        'qty': qty,
+                        'price': price,
+                        'status': status,
+                    })
+            except Exception:
+                pass
+
+        # ── Alpha book: positions + open price/volume/date ─────────────────────
+        if _os.path.exists(_ALPHA_POSITIONS_PARQUET):
+            try:
+                adf = pd.read_parquet(_ALPHA_POSITIONS_PARQUET)
+                for _, row in adf.iterrows():
+                    trade_id = str(row.get('ID', ''))
+                    if trade_id in ('', 'TOTAL'):
+                        continue
+                    volume_str = str(row.get('volume_mm', '') or '').strip()
+                    open_date_str = str(row.get('open_date', '') or '').strip()
+                    if not volume_str:
+                        continue
+                    try:
+                        qty = float(volume_str)
+                    except (TypeError, ValueError):
+                        continue
+                    status = 'FILLED' if open_date_str else 'PENDING'
+                    try:
+                        price = float(row.get('open_price_bp', '') or 0) or None
+                    except (TypeError, ValueError):
+                        price = None
+                    tickets.append({
+                        'id': f"ALPHA-{trade_id}",
+                        'date': open_date_str or '—',
+                        'book': 'Alpha',
+                        'spread': trade_id,
+                        'action': str(row.get('direction', 'BUY')).upper() or 'BUY',
+                        'qty': qty,
+                        'price': price,
+                        'status': status,
+                    })
+            except Exception:
+                pass
+
+        tickets.sort(key=lambda t: t['date'], reverse=True)
+        return tickets
+
+    def _tickets_filter_pills(active: str) -> list:
+        def _pill_style(is_active: bool):
+            style = {
+                'padding': '5px 10px', 'fontSize': '10px', 'fontWeight': '600',
+                'border': 'none', 'borderRadius': '3px', 'cursor': 'pointer',
+                'fontFamily': 'var(--font-mono)', 'transition': 'all 100ms',
+            }
+            if is_active:
+                style.update({'backgroundColor': THEME['accent'], 'color': '#ffffff'})
+            else:
+                style.update({'backgroundColor': 'transparent', 'color': THEME['text_sub']})
+            return style
+        return [
+            html.Button(label, id=f'tickets-filter-{label}', n_clicks=0, style=_pill_style(active == label))
+            for label in ('All', 'FILLED', 'PENDING')
+        ]
+
     @app.callback(
-        Output('summary-refresh-status', 'children', allow_duplicate=True),
-        Input('summary-alpha-table', 'data_timestamp'),
-        State('summary-alpha-table', 'data'),
+        Output('tickets-filter-row', 'children'),
+        Input('tickets-filter', 'data'),
+    )
+    def _render_tickets_filter_pills(active):
+        return _tickets_filter_pills(active or 'All')
+
+    @app.callback(
+        Output('tickets-filter', 'data'),
+        [Input('tickets-filter-All', 'n_clicks'),
+         Input('tickets-filter-FILLED', 'n_clicks'),
+         Input('tickets-filter-PENDING', 'n_clicks')],
         prevent_initial_call=True,
     )
-    def _autosave_alpha_table(_ts, rows):
-        if rows is None:
+    def _set_tickets_filter(_n_all, _n_filled, _n_pending):
+        triggered = dash.ctx.triggered_id
+        return {
+            'tickets-filter-All': 'All',
+            'tickets-filter-FILLED': 'FILLED',
+            'tickets-filter-PENDING': 'PENDING',
+        }.get(triggered, 'All')
+
+    @app.callback(
+        [Output('tickets-kpi-container', 'children'),
+         Output('tickets-table-container', 'children'),
+         Output('tickets-subtitle', 'children')],
+        [Input('an-summary-subtabs', 'value'),
+         Input('tickets-filter', 'data'),
+         Input('summary-refresh-btn', 'n_clicks')],
+        prevent_initial_call=False,
+    )
+    def update_tickets(tab_value, ticket_filter, _n_refresh):
+        if tab_value != 'tickets':
             raise dash.exceptions.PreventUpdate
+
+        all_tickets = _build_tickets()
+        filled = [t for t in all_tickets if t['status'] == 'FILLED']
+        pending = [t for t in all_tickets if t['status'] == 'PENDING']
+
+        subtitle = f"{len(all_tickets)} opening tickets · derived from Beta + Alpha book positions"
+
+        kpis = [
+            ("Total Tickets", str(len(all_tickets)), THEME['text_main']),
+            ("Filled", str(len(filled)), THEME['success']),
+            ("Pending", str(len(pending)), THEME['warning']),
+            ("Fill Rate", f"{(len(filled) / len(all_tickets) * 100):.0f}%" if all_tickets else "—", THEME['accent']),
+        ]
+        kpi_strip = html.Div([
+            html.Div([
+                html.Div(label, className='risk-kpi-label'),
+                html.Div(value, className='risk-kpi-value', style={'color': color}),
+            ], className='risk-kpi-card')
+            for label, value, color in kpis
+        ], className='risk-kpi-strip')
+
+        ticket_filter = ticket_filter or 'All'
+        rows = all_tickets if ticket_filter == 'All' else [t for t in all_tickets if t['status'] == ticket_filter]
+
+        if not rows:
+            table = html.Div(
+                "No tickets yet — set Open Date and Volume on a Beta/Alpha position to create one.",
+                style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'textAlign': 'center', 'padding': '30px'},
+            )
+            return kpi_strip, table, subtitle
+
+        status_styles = [
+            {'if': {'filter_query': f'{{Status}} = "{status}"', 'column_id': 'Status'},
+             'backgroundColor': style['bg'], 'color': style['color'], 'fontWeight': 'bold'}
+            for status, style in _TICKET_STATUS_STYLE.items()
+        ]
+        book_styles = [
+            {'if': {'filter_query': '{Book} = "Beta"', 'column_id': 'Book'}, 'color': THEME['accent'], 'fontWeight': 'bold'},
+            {'if': {'filter_query': '{Book} = "Alpha"', 'column_id': 'Book'}, 'color': THEME['warning'], 'fontWeight': 'bold'},
+        ]
+        action_styles = [
+            {'if': {'filter_query': '{Action} = "BUY"', 'column_id': 'Action'}, 'color': THEME['success']},
+            {'if': {'filter_query': '{Action} = "SELL"', 'column_id': 'Action'}, 'color': THEME['danger']},
+        ]
+
+        table_data = [{
+            'Ticket ID': t['id'],
+            'Open Date': t['date'],
+            'Book': t['book'],
+            'Spread / Instrument': t['spread'],
+            'Action': t['action'],
+            'Qty (MM)': f"{t['qty']:,.1f}",
+            'Price': f"{t['price']:,.4f}" if t['price'] is not None else '—',
+            'Status': t['status'],
+        } for t in rows]
+
+        table = dash_table.DataTable(
+            data=table_data,
+            columns=[{'name': c, 'id': c} for c in
+                     ['Ticket ID', 'Open Date', 'Book', 'Spread / Instrument', 'Action', 'Qty (MM)', 'Price', 'Status']],
+            style_cell={'textAlign': 'center', 'padding': '6px 10px', 'fontSize': '12px',
+                        'backgroundColor': THEME['table_row_odd'], 'color': THEME['text_main'], 'border': 'none'},
+            style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'],
+                          'fontWeight': 'bold', 'border': 'none'},
+            style_data_conditional=[
+                {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+                *status_styles, *book_styles, *action_styles,
+            ],
+            style_table={'overflowX': 'auto'},
+            sort_action='native',
+            page_size=30,
+        )
+        return kpi_strip, table, subtitle
+
+    # ── Alpha Book: header sort clicks ─────────────────────────────────────────
+    @app.callback(
+        Output('summary-alpha-sort', 'data'),
+        Input({'type': 'alpha-sort-th', 'col': ALL}, 'n_clicks'),
+        State('summary-alpha-sort', 'data'),
+        prevent_initial_call=True,
+    )
+    def _sort_alpha_table(_n_clicks_list, sort_state):
+        triggered = dash.ctx.triggered_id
+        if not triggered or not any(_n_clicks_list):
+            raise dash.exceptions.PreventUpdate
+        col = triggered['col']
+        sort_state = sort_state or {'col': None, 'dir': 'asc'}
+        if sort_state.get('col') == col:
+            return {'col': col, 'dir': 'desc' if sort_state.get('dir') == 'asc' else 'asc'}
+        return {'col': col, 'dir': 'asc'}
+
+    # ── Alpha Book: inline edits on Open price (bp) / Volume (mm) ─────────────
+    @app.callback(
+        Output('summary-refresh-status', 'children', allow_duplicate=True),
+        Input({'type': 'alpha-cell-input', 'row': ALL, 'col': ALL}, 'value'),
+        State({'type': 'alpha-cell-input', 'row': ALL, 'col': ALL}, 'id'),
+        State('summary-alpha-rows-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def _edit_alpha_cell(values, ids, rows):
+        triggered = dash.ctx.triggered_id
+        if not triggered or not rows:
+            raise dash.exceptions.PreventUpdate
+        row_idx, col = triggered['row'], triggered['col']
+        updated_rows = [dict(r) for r in rows]
+        target = next((r for r in updated_rows if int(r.get('__row_key', -1)) == row_idx), None)
+        if target is None:
+            raise dash.exceptions.PreventUpdate
+        new_value = next((v for v, i in zip(values, ids) if i['row'] == row_idx and i['col'] == col), None)
+        target[col] = new_value or ''
+        target.update(_refresh_alpha_display_row(target))
         try:
-            _persist_alpha_summary_rows(rows)
+            _persist_alpha_summary_rows(updated_rows)
             return f"Edits saved at {datetime.now().strftime('%H:%M:%S')}"
         except Exception as exc:
             return f"Save failed: {exc}"
+
+    # ── Alpha Book: delete a row from the positions table ─────────────────────
+    @app.callback(
+        [
+            Output('summary-refresh-status', 'children', allow_duplicate=True),
+            Output('summary-refresh-btn', 'n_clicks', allow_duplicate=True),
+        ],
+        Input({'type': 'alpha-row-delete', 'row': ALL}, 'n_clicks'),
+        State('summary-alpha-rows-store', 'data'),
+        State('summary-refresh-btn', 'n_clicks'),
+        prevent_initial_call=True,
+    )
+    def _delete_alpha_row(_n_clicks_list, rows, refresh_clicks):
+        triggered = dash.ctx.triggered_id
+        if not triggered or not any(_n_clicks_list) or not rows:
+            raise dash.exceptions.PreventUpdate
+        row_idx = triggered['row']
+        updated_rows = [r for r in rows if int(r.get('__row_key', -1)) != row_idx]
+        try:
+            _persist_alpha_summary_rows(updated_rows)
+            return (f"Position removed at {datetime.now().strftime('%H:%M:%S')}",
+                    (refresh_clicks or 0) + 1)
+        except Exception as exc:
+            return f"Delete failed: {exc}", dash.no_update
+
+    # ── Alpha Book: Open date — click cell to open calendar, pick to apply ────
+    # The highlight on the clicked date button is pure CSS (className toggle,
+    # see assets/an_date_trigger_highlight.js), so this callback only updates
+    # the store that drives the calendar picker — it does not re-render the table.
+    @app.callback(
+        Output('summary-alpha-active-date-row', 'data'),
+        Input({'type': 'alpha-date-trigger', 'row': ALL}, 'n_clicks'),
+        prevent_initial_call=True,
+    )
+    def _activate_alpha_date_row(_n_clicks_list):
+        triggered = dash.ctx.triggered_id
+        if not triggered or not any(_n_clicks_list):
+            raise dash.exceptions.PreventUpdate
+        return triggered['row']
 
     @app.callback(
         [
@@ -952,21 +1446,18 @@ def register_risk_callbacks(app):
             Output('summary-alpha-open-date-picker', 'disabled'),
             Output('summary-alpha-open-date-target', 'children'),
         ],
-        Input('summary-alpha-table', 'active_cell'),
-        State('summary-alpha-table', 'data'),
+        Input('summary-alpha-active-date-row', 'data'),
+        State('summary-alpha-rows-store', 'data'),
         prevent_initial_call=False,
     )
-    def _sync_alpha_open_date_picker(active_cell, rows):
-        if not rows or not active_cell or active_cell.get('column_id') != 'Open date':
+    def _sync_alpha_open_date_picker(active_row, rows):
+        if active_row is None or not rows:
             return None, True, 'Click an Open date cell to edit with the calendar.'
-
-        row_index = active_cell.get('row')
-        if row_index is None or row_index >= len(rows):
+        target = next((r for r in rows if int(r.get('__row_key', -1)) == active_row), None)
+        if target is None:
             return None, True, 'Click an Open date cell to edit with the calendar.'
-
-        current_value = rows[row_index].get('Open date', '')
-        parsed = pd.to_datetime(current_value, errors='coerce')
-        label = f"Editing {rows[row_index].get('ID', '')}"
+        parsed = pd.to_datetime(target.get('Open date', ''), errors='coerce')
+        label = f"Editing {target.get('ID', '')}"
         return (
             parsed.date().isoformat() if pd.notna(parsed) else None,
             False,
@@ -975,28 +1466,28 @@ def register_risk_callbacks(app):
 
     @app.callback(
         [
-            Output('summary-alpha-table', 'data', allow_duplicate=True),
             Output('summary-refresh-status', 'children', allow_duplicate=True),
+            Output('summary-alpha-active-date-row', 'data', allow_duplicate=True),
         ],
         Input('summary-alpha-open-date-picker', 'date'),
-        State('summary-alpha-table', 'active_cell'),
-        State('summary-alpha-table', 'data'),
+        State('summary-alpha-active-date-row', 'data'),
+        State('summary-alpha-rows-store', 'data'),
         prevent_initial_call=True,
     )
-    def _apply_alpha_open_date(date_value, active_cell, rows):
-        if not rows or not active_cell or active_cell.get('column_id') != 'Open date':
+    def _apply_alpha_open_date(date_value, active_row, rows):
+        if active_row is None or not rows:
             raise dash.exceptions.PreventUpdate
 
-        row_index = active_cell.get('row')
-        if row_index is None or row_index >= len(rows):
+        updated_rows = [dict(r) for r in rows]
+        target = next((r for r in updated_rows if int(r.get('__row_key', -1)) == active_row), None)
+        if target is None:
             raise dash.exceptions.PreventUpdate
 
-        updated_rows = [dict(row) for row in rows]
-        updated_rows[row_index]['Open date'] = date_value or ''
-        updated_rows[row_index] = _refresh_alpha_display_row(updated_rows[row_index])
+        target['Open date'] = date_value or ''
+        target.update(_refresh_alpha_display_row(target))
 
         _persist_alpha_summary_rows(updated_rows)
-        return updated_rows, f"Open date saved at {datetime.now().strftime('%H:%M:%S')}"
+        return f"Open date saved at {datetime.now().strftime('%H:%M:%S')}", None
 
     # ── Auto-save edits on the Beta positions table ───────────────────────────
     def _persist_beta_user_rows(rows: list[dict]) -> None:
@@ -1019,20 +1510,59 @@ def register_risk_callbacks(app):
         except Exception:
             pass
 
+    # ── Beta Book: header sort clicks ──────────────────────────────────────────
     @app.callback(
-        Output('summary-refresh-status', 'children', allow_duplicate=True),
-        Input('summary-beta-table', 'data_timestamp'),
-        State('summary-beta-table', 'data'),
+        Output('summary-beta-sort', 'data'),
+        Input({'type': 'beta-sort-th', 'col': ALL}, 'n_clicks'),
+        State('summary-beta-sort', 'data'),
         prevent_initial_call=True,
     )
-    def _autosave_beta_table(_ts, rows):
-        if rows is None:
+    def _sort_beta_table(_n_clicks_list, sort_state):
+        triggered = dash.ctx.triggered_id
+        if not triggered or not any(_n_clicks_list):
             raise dash.exceptions.PreventUpdate
+        col = triggered['col']
+        sort_state = sort_state or {'col': None, 'dir': 'asc'}
+        if sort_state.get('col') == col:
+            return {'col': col, 'dir': 'desc' if sort_state.get('dir') == 'asc' else 'asc'}
+        return {'col': col, 'dir': 'asc'}
+
+    # ── Beta Book: inline edits on Open Price / Volume (MM) ───────────────────
+    @app.callback(
+        Output('summary-refresh-status', 'children', allow_duplicate=True),
+        Input({'type': 'beta-cell-input', 'row': ALL, 'col': ALL}, 'value'),
+        State({'type': 'beta-cell-input', 'row': ALL, 'col': ALL}, 'id'),
+        State('summary-beta-rows-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def _edit_beta_cell(values, ids, rows):
+        triggered = dash.ctx.triggered_id
+        if not triggered or not rows:
+            raise dash.exceptions.PreventUpdate
+        row_idx, col = triggered['row'], triggered['col']
+        updated_rows = [dict(r) for r in rows]
+        target = next((r for r in updated_rows if int(r.get('__row_key', -1)) == row_idx), None)
+        if target is None:
+            raise dash.exceptions.PreventUpdate
+        new_value = next((v for v, i in zip(values, ids) if i['row'] == row_idx and i['col'] == col), None)
+        target[col] = new_value or ''
         try:
-            _persist_beta_user_rows(rows)
+            _persist_beta_user_rows(updated_rows)
             return f"Beta edits saved at {datetime.now().strftime('%H:%M:%S')}"
         except Exception as exc:
             return f"Save failed: {exc}"
+
+    # ── Beta Book: Open Date — click cell to open calendar, pick to apply ─────
+    @app.callback(
+        Output('summary-beta-active-date-row', 'data'),
+        Input({'type': 'beta-date-trigger', 'row': ALL}, 'n_clicks'),
+        prevent_initial_call=True,
+    )
+    def _activate_beta_date_row(_n_clicks_list):
+        triggered = dash.ctx.triggered_id
+        if not triggered or not any(_n_clicks_list):
+            raise dash.exceptions.PreventUpdate
+        return triggered['row']
 
     @app.callback(
         [
@@ -1040,19 +1570,18 @@ def register_risk_callbacks(app):
             Output('summary-beta-open-date-picker', 'disabled'),
             Output('summary-beta-open-date-target', 'children'),
         ],
-        Input('summary-beta-table', 'active_cell'),
-        State('summary-beta-table', 'data'),
+        Input('summary-beta-active-date-row', 'data'),
+        State('summary-beta-rows-store', 'data'),
         prevent_initial_call=False,
     )
-    def _sync_beta_open_date_picker(active_cell, rows):
-        if not rows or not active_cell or active_cell.get('column_id') != 'Open Date':
+    def _sync_beta_open_date_picker(active_row, rows):
+        if active_row is None or not rows:
             return None, True, 'Click an Open Date cell to edit with the calendar.'
-        row_index = active_cell.get('row')
-        if row_index is None or row_index >= len(rows):
+        target = next((r for r in rows if int(r.get('__row_key', -1)) == active_row), None)
+        if target is None:
             return None, True, 'Click an Open Date cell to edit with the calendar.'
-        current_value = rows[row_index].get('Open Date', '')
-        parsed = pd.to_datetime(current_value, errors='coerce')
-        label = f"Editing {rows[row_index].get('Asset Name', '')}"
+        parsed = pd.to_datetime(target.get('Open Date', ''), errors='coerce')
+        label = f"Editing {target.get('Asset Name', '')}"
         return (
             parsed.date().isoformat() if pd.notna(parsed) else None,
             False,
@@ -1061,24 +1590,24 @@ def register_risk_callbacks(app):
 
     @app.callback(
         [
-            Output('summary-beta-table', 'data', allow_duplicate=True),
             Output('summary-refresh-status', 'children', allow_duplicate=True),
+            Output('summary-beta-active-date-row', 'data', allow_duplicate=True),
         ],
         Input('summary-beta-open-date-picker', 'date'),
-        State('summary-beta-table', 'active_cell'),
-        State('summary-beta-table', 'data'),
+        State('summary-beta-active-date-row', 'data'),
+        State('summary-beta-rows-store', 'data'),
         prevent_initial_call=True,
     )
-    def _apply_beta_open_date(date_value, active_cell, rows):
-        if not rows or not active_cell or active_cell.get('column_id') != 'Open Date':
+    def _apply_beta_open_date(date_value, active_row, rows):
+        if active_row is None or not rows:
             raise dash.exceptions.PreventUpdate
-        row_index = active_cell.get('row')
-        if row_index is None or row_index >= len(rows):
+        updated_rows = [dict(r) for r in rows]
+        target = next((r for r in updated_rows if int(r.get('__row_key', -1)) == active_row), None)
+        if target is None:
             raise dash.exceptions.PreventUpdate
-        updated_rows = [dict(row) for row in rows]
-        updated_rows[row_index]['Open Date'] = date_value or ''
+        target['Open Date'] = date_value or ''
         _persist_beta_user_rows(updated_rows)
-        return updated_rows, f"Open date saved at {datetime.now().strftime('%H:%M:%S')}"
+        return f"Open date saved at {datetime.now().strftime('%H:%M:%S')}", None
 
     # ── Helper: duration → tenor mapping ────────────────────────────────────────
     def _dur_to_tenor_label(dur: float) -> str:

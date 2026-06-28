@@ -162,12 +162,13 @@ body, .app__container {
   background: transparent !important;
   border-bottom: none !important;
   display: flex !important;
-  align-items: flex-start !important;
+  align-items: center !important;
   justify-content: space-between !important;
   max-width: var(--app-max-w) !important;
   margin: 0 auto !important;
   padding: 26px var(--app-pad-x) 0 !important;
   box-sizing: border-box !important;
+  gap: 16px !important;
 }
 
 /* Display-weight app title */
@@ -195,6 +196,80 @@ body, .app__container {
   line-height: var(--type-meta-lh) !important;
   color: var(--an-muted) !important;
   letter-spacing: 0 !important;
+}
+
+/* Right side of header: AS OF / STATUS chips + clock + status pills */
+.app__header__right {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+.an-meta-chip {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  background: var(--surface-panel) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: 4px !important;
+  padding: 5px 11px !important;
+  user-select: none !important;
+}
+.an-meta-chip__label {
+  font-family: var(--type-th-family) !important;
+  font-weight: var(--type-th-weight) !important;
+  font-size: var(--type-th-size) !important;
+  line-height: var(--type-th-lh) !important;
+  color: var(--text-faint) !important;
+}
+.an-meta-chip__value {
+  font-family: var(--type-meta-family) !important;
+  font-weight: var(--type-meta-weight) !important;
+  font-size: var(--type-meta-size) !important;
+  line-height: var(--type-meta-lh) !important;
+  color: var(--text-secondary) !important;
+}
+
+.an-header-divider {
+  width: 1px !important;
+  height: 34px !important;
+  background: var(--border-default) !important;
+  flex-shrink: 0 !important;
+}
+
+.an-live-clock {
+  font-family: var(--type-meta-family) !important;
+  font-weight: var(--type-meta-weight) !important;
+  font-size: var(--type-meta-size) !important;
+  line-height: var(--type-meta-lh) !important;
+  color: var(--text-secondary) !important;
+  letter-spacing: 0.04em !important;
+  min-width: 68px !important;
+  text-align: center !important;
+}
+
+.an-manual-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  font-family: var(--type-th-family) !important;
+  font-weight: 600 !important;
+  font-size: 11px !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  color: var(--an-text) !important;
+  background: var(--surface-panel) !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: 4px !important;
+  padding: 6px 12px !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  transition: border-color var(--an-t), color var(--an-t) !important;
+}
+.an-manual-btn:hover {
+  border-color: var(--an-cyan) !important;
+  color: var(--an-cyan) !important;
 }
 
 .app__content {
@@ -353,9 +428,12 @@ input[type="email"] {
   color: var(--an-text) !important;
   border: 1px solid var(--an-border) !important;
   border-radius: var(--an-r) !important;
-  padding: 5px 8px !important;
+  padding: 10px 10px !important;
   font-family: inherit !important;
   font-size: 13px !important;
+  line-height: normal !important;
+  box-sizing: border-box !important;
+  min-height: 36px !important;
   transition: border-color var(--an-t), box-shadow var(--an-t) !important;
 }
 input[type="text"]:focus,
@@ -394,7 +472,7 @@ input.no-spinner[type="number"] {
   border-color: var(--an-cyan) !important;
   box-shadow: 0 0 0 2px rgba(69,182,230,.18) !important;
 }
-.DateInput { 
+.DateInput {
   background: transparent !important;
 }
 .DateInput_input {
@@ -746,14 +824,13 @@ div[role="tablist"]:has(> .tab.an-subtab) {
   background-color: var(--an-navy-900) !important;
 }
 
-/* ── Curves tab: right-rail "Curve Snapshot" panel (mirrors docs/dev/bond-curves-restyle.html) ── */
+/* ── Curves tab: right-rail "Curve Snapshot" panel (mirrors guide/MarketCurves.jsx) ── */
 .curve-snapshot {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 16px 16px 16px 18px;
-  background-color: var(--an-navy-900);
-  border-left: 1px solid var(--an-border2);
+  padding: 14px 14px;
+  background-color: var(--surface-panel);
 }
 .curve-snapshot__title {
   margin: 0;
@@ -1103,6 +1180,20 @@ textarea {
 }
 .dash-datepicker {
   overflow: visible !important;
+}
+/* The component sets an inline px width on the <input> itself (sized to fit
+   the placeholder text) — override it so the input fills its wrapper, which
+   already gets width:100% from the dcc.DatePickerSingle style prop. */
+.dash-datepicker-input-wrapper {
+  display: block !important;
+}
+.dash-datepicker-input-wrapper > div {
+  display: block !important;
+  width: 100% !important;
+}
+.dash-datepicker-input {
+  width: 100% !important;
+  box-sizing: border-box !important;
 }
 .dash-datepicker-content {
   position: absolute !important;

@@ -53,25 +53,59 @@ _IR_WEIGHTS = {
 }
 
 
-def get_factor_weighted_duration(factor_code: str) -> float:
-    """Tenor-weighted modified duration of an IR factor portfolio.
+_CR_FACTOR_TO_LEVEL_NAME = {'CRDL': 'Level', 'CRSL': 'Slope', 'CRCV': 'Curvature'}
+
+
+def _credit_weighted_duration(factor_code: str) -> Optional[float]:
+    """Tenor-weighted modified duration for a CRDL/CRSL/CRCV credit factor.
+
+    Mirrors get_factor_weighted_duration's IR logic, but uses each credit
+    universe's own (uneven) tenor grid and log-tenor-space weights from
+    multiasset.config.get_credit_weights, with approximate modified
+    durations from multiasset.utils.get_default_sensitivities.
+    """
+    from multiasset.config import CREDIT_CONFIG, get_credit_weights, CREDIT_NO_CURVATURE
+    from multiasset.utils import get_default_sensitivities
+
+    prefix, _, universe = factor_code.partition('.')
+    level_name = _CR_FACTOR_TO_LEVEL_NAME.get(prefix)
+    if level_name is None or universe not in CREDIT_CONFIG:
+        return None
+
+    tenor_cols = CREDIT_CONFIG[universe][2]
+    tenor_years = [t for _, _, t in tenor_cols]
+    include_curvature = universe not in CREDIT_NO_CURVATURE
+    weights_by_factor = get_credit_weights(tenor_years, include_curvature=include_curvature)
+    weights = weights_by_factor.get(level_name)
+    if weights is None:
+        return None
+
+    durations = [get_default_sensitivities(f"{t:g}Y" if t >= 1 else f"{int(t * 12)}M").get('IRDL', 0.0)
+                 for t in tenor_years]
+    return sum(w * d for w, d in zip(weights, durations))
+
+
+def get_factor_weighted_duration(factor_code: str) -> Optional[float]:
+    """Tenor-weighted modified duration of an IR or credit factor portfolio.
 
     Computed as ``Σ w_i × D_i`` where ``w_i`` are the deterministic factor
     weights and ``D_i`` are approximate modified durations for each tenor.
 
-    Returns ``None`` for non-IR factors (FX, commodity, spread).
+    Returns ``None`` for non-yield factors (FX, commodity).
     """
     prefix = factor_code.split('.')[0]
     weights = _IR_WEIGHTS.get(prefix)
-    if weights is None:
-        return None
-    return sum(w * _TENOR_MOD_DUR[t] for w, t in zip(weights, _TENOR_YEARS))
+    if weights is not None:
+        return sum(w * _TENOR_MOD_DUR[t] for w, t in zip(weights, _TENOR_YEARS))
+    if prefix in _CR_FACTOR_TO_LEVEL_NAME:
+        return _credit_weighted_duration(factor_code)
+    return None
 
 
 def _is_yield_factor(factor_code: str) -> bool:
     """Return True if this factor is yield/spread-based (needs duration conversion)."""
     prefix = factor_code.split('.')[0]
-    return prefix in ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL', 'SPCV')
+    return prefix in ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL', 'SPCV', 'CRDL', 'CRSL', 'CRCV')
 
 
 def factor_level_to_price_return(
@@ -240,7 +274,16 @@ def update_factor_rates(
     new_rows = fresh[fresh.index > last_saved]
     n_new = len(new_rows)
 
-    if n_new == 0:
+    # Backfill any columns that exist in fresh but not in existing (e.g. a new
+    # factor was added to RiskFactorLoader since the pkl was last fully
+    # regenerated) using fresh's full history — otherwise those columns would
+    # be all-NaN for every pre-existing row and only populated for new_rows.
+    new_cols = [c for c in fresh.columns if c not in existing.columns]
+    if new_cols:
+        existing = existing.join(fresh.loc[existing.index.intersection(fresh.index), new_cols], how='left')
+        print(f"factor-rates.pkl: backfilling {len(new_cols)} new column(s) across history: {new_cols}")
+
+    if n_new == 0 and not new_cols:
         print(f"factor-rates.pkl already up to date (last date: {last_saved.date()})")
         return existing, 0
 
@@ -250,6 +293,107 @@ def update_factor_rates(
     merged = merged[~merged.index.duplicated(keep='last')].sort_index()
     merged.to_pickle(pkl_path)
     print(f"factor-rates.pkl updated: +{n_new} days (now {len(merged)} days total, "
+          f"through {merged.index.max().date()})")
+    return merged, n_new
+
+
+def _compute_credit_factor_levels(input_dir: Union[str, Path]) -> pd.DataFrame:
+    """Compute CRDL/CRSL/CRCV columns directly via the analyzer (bypasses the
+    full RiskFactorLoader so refreshing credit doesn't recompute IR/FX/commodity)."""
+    analyzer = DeterministicRiskFactorAnalyzer(str(input_dir))
+    det_scores = analyzer.calculate_full_history_deterministic_credit_scores()
+    if det_scores.empty:
+        return det_scores
+
+    factor_to_cr_map = {'Level': 'CRDL', 'Slope': 'CRSL', 'Curvature': 'CRCV'}
+    out = pd.DataFrame(index=det_scores.index)
+    for col in det_scores.columns:
+        factor_name, universe = col.split('.')
+        if factor_name in factor_to_cr_map:
+            out[f"{factor_to_cr_map[factor_name]}.{universe}"] = det_scores[col]
+
+    if not isinstance(out.index, pd.DatetimeIndex):
+        out.index = pd.to_datetime(out.index)
+    return out.sort_index()
+
+
+def generate_factor_credit(
+    input_dir: Union[str, Path] = DIR_INPUT,
+    save: bool = True,
+) -> pd.DataFrame:
+    """Generate and optionally save the credit spread factor level series.
+
+    Produces a DataFrame indexed by date with columns ``CRDL.CDB``, ``CRSL.LGB``,
+    ``CRCV.MTN``, ``CRDL.ICP``/``CRSL.ICP`` (no curvature for ICP — see
+    ``CREDIT_NO_CURVATURE``), etc.
+
+    Saves to ``<input_dir>/factor-credit.pkl``, kept separate from
+    ``factor-rates.pkl`` so credit can be refreshed on its own cadence.
+    """
+    factor_levels = _compute_credit_factor_levels(input_dir)
+    if factor_levels is None or factor_levels.empty:
+        raise ValueError("No credit factor levels computed")
+
+    if save:
+        out_path = os.path.join(str(input_dir), 'factor-credit.pkl')
+        factor_levels.to_pickle(out_path)
+        print(f"Saved factor-credit.pkl  ({factor_levels.shape[1]} factors, "
+              f"{len(factor_levels)} days)")
+
+    return factor_levels
+
+
+def load_factor_credit(input_dir: Union[str, Path] = DIR_INPUT) -> pd.DataFrame:
+    """Load factor-credit.pkl; regenerate if missing."""
+    pkl_path = os.path.join(str(input_dir), 'factor-credit.pkl')
+    if os.path.exists(pkl_path):
+        return pd.read_pickle(pkl_path)
+    return generate_factor_credit(input_dir, save=True)
+
+
+def update_factor_credit(
+    input_dir: Union[str, Path] = DIR_INPUT,
+) -> Tuple[pd.DataFrame, int]:
+    """Incrementally append new daily rows to factor-credit.pkl.
+
+    Mirrors ``update_factor_rates``: merges freshly computed credit factor
+    levels with any existing pkl, appending only dates newer than the last
+    saved date. Falls back to a full regenerate when the pkl does not exist.
+    """
+    pkl_path = os.path.join(str(input_dir), 'factor-credit.pkl')
+
+    fresh = _compute_credit_factor_levels(input_dir)
+    if fresh is None or fresh.empty:
+        raise ValueError("No credit factor levels computed")
+
+    if not os.path.exists(pkl_path):
+        fresh.to_pickle(pkl_path)
+        print(f"factor-credit.pkl created ({fresh.shape[1]} factors, {len(fresh)} days)")
+        return fresh, len(fresh)
+
+    existing = pd.read_pickle(pkl_path)
+    if not isinstance(existing.index, pd.DatetimeIndex):
+        existing.index = pd.to_datetime(existing.index)
+
+    last_saved = existing.index.max()
+    new_rows = fresh[fresh.index > last_saved]
+    n_new = len(new_rows)
+
+    # Backfill any columns that exist in fresh but not in existing (e.g. a new
+    # credit universe was added since the pkl was last fully regenerated).
+    new_cols = [c for c in fresh.columns if c not in existing.columns]
+    if new_cols:
+        existing = existing.join(fresh.loc[existing.index.intersection(fresh.index), new_cols], how='left')
+        print(f"factor-credit.pkl: backfilling {len(new_cols)} new column(s) across history: {new_cols}")
+
+    if n_new == 0 and not new_cols:
+        print(f"factor-credit.pkl already up to date (last date: {last_saved.date()})")
+        return existing, 0
+
+    merged = pd.concat([existing, new_rows])
+    merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+    merged.to_pickle(pkl_path)
+    print(f"factor-credit.pkl updated: +{n_new} days (now {len(merged)} days total, "
           f"through {merged.index.max().date()})")
     return merged, n_new
 

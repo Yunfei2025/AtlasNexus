@@ -277,8 +277,8 @@ def _base_layout(title: Union[str, None] = None, height: Union[int, None] = None
     """Common base layout shared by all figures."""
     base = dict(
         font={"color": WHITE},
-        plot_bgcolor=app_color["graph_bg"],
-        paper_bgcolor=app_color["graph_bg"],
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
     )
     if title is not None:
         base["title"] = title

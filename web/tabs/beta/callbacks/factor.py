@@ -36,7 +36,7 @@ def register_factor_callbacks(app):
     def update_region_options(asset_class):
         if not asset_class:
             return [], None
-        
+
         if asset_class == 'Rates':
             options = [
                 {'label': 'China', 'value': 'CN'},
@@ -44,6 +44,12 @@ def register_factor_callbacks(app):
                 {'label': 'Eurozone', 'value': 'EU'},
                 {'label': 'United Kingdom', 'value': 'UK'},
                 {'label': 'Japan', 'value': 'JP'},
+            ]
+        elif asset_class == 'Credit':
+            options = [
+                {'label': 'China', 'value': 'CN'},
+                {'label': 'United States', 'value': 'US'},
+                {'label': 'Eurozone', 'value': 'EU'},
             ]
         elif asset_class == 'Spread':
             options = [
@@ -97,7 +103,12 @@ def register_factor_callbacks(app):
         if asset_class == 'Rates':
             factor_codes = ['IRDL', 'IRSL', 'IRCV']
             factor_names = ['Level (IRDL)', 'Slope (IRSL)', 'Curvature (IRCV)']
-            options = [{'label': f'{name} - {region}', 'value': f'{code}.{region}'} 
+            options = [{'label': f'{name} - {region}', 'value': f'{code}.{region}'}
+                    for code, name in zip(factor_codes, factor_names)]
+        elif asset_class == 'Credit':
+            factor_codes = ['CRDL', 'CRSL', 'CRCV']
+            factor_names = ['Level (CRDL)', 'Slope (CRSL)', 'Curvature (CRCV)']
+            options = [{'label': f'{name} - {region}', 'value': f'{code}.{region}'}
                     for code, name in zip(factor_codes, factor_names)]
         elif asset_class == 'Spread':
             if region == 'ICP':
@@ -169,7 +180,7 @@ def register_factor_callbacks(app):
                         dict(count=5, label="5Y", step="year", stepmode="backward"),
                         dict(step="all", label="All")
                     ],
-                    bgcolor=THEME['bg_card'], activecolor=THEME['accent'], font=dict(size=11, color='#000'), x=0, y=1.15
+                    bgcolor=THEME['bg_card'], activecolor=THEME['accent'], font=dict(size=11, color='#000'), x=0, y=1.02
                 ),
                 type="date",
                 gridcolor=THEME['table_header']
@@ -201,9 +212,10 @@ def register_factor_callbacks(app):
 
             fig.update_layout(
                 xaxis_title="Date", yaxis_title="Value", hovermode='x unified',
-                template=THEME['chart_template'], height=500,
+                template=THEME['chart_template'], height=520,
                 paper_bgcolor=THEME['bg_main'], plot_bgcolor=THEME['bg_main'],
                 font={'color': THEME['text_main']},
+                margin=dict(t=60, b=50, l=60, r=30),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font={'color': THEME['text_main']}),
                 xaxis=default_xaxis,
                 yaxis=yaxis_config,
@@ -225,17 +237,25 @@ def register_factor_callbacks(app):
         if not relayout_data or not figure:
             raise dash.exceptions.PreventUpdate
 
-        x_start = relayout_data.get('xaxis.range[0]')
-        x_end   = relayout_data.get('xaxis.range[1]')
-
-        # Also handle autorange reset ("All" button)
+        # Handle autorange reset ("All" button)
         if relayout_data.get('xaxis.autorange') is True:
             patched = Patch()
             patched['layout']['yaxis']['autorange'] = True
             return patched
 
+        # Get x-axis range from layout (set by rangeselector or manual drag)
+        x_start = relayout_data.get('xaxis.range[0]')
+        x_end   = relayout_data.get('xaxis.range[1]')
+
+        # Fallback: if figure layout has xaxis.range, use that (for initial 3M range)
         if x_start is None or x_end is None:
-            raise dash.exceptions.PreventUpdate
+            fig_layout = figure.get('layout', {})
+            fig_xaxis = fig_layout.get('xaxis', {})
+            x_range = fig_xaxis.get('range', [])
+            if x_range and len(x_range) == 2:
+                x_start, x_end = x_range
+            else:
+                raise dash.exceptions.PreventUpdate
 
         try:
             t_start = pd.Timestamp(x_start)
@@ -278,16 +298,24 @@ def register_factor_callbacks(app):
          Input('factor-selection-ir-eu', 'value'),
          Input('factor-selection-ir-jp', 'value'),
          Input('factor-selection-ir-uk', 'value'),
+         Input('factor-selection-cr-cdb', 'value'),
+         Input('factor-selection-cr-lgb', 'value'),
+         Input('factor-selection-cr-mtn', 'value'),
+         Input('factor-selection-cr-icp', 'value'),
          Input('factor-selection-fx', 'value'),
          Input('factor-selection-eq', 'value'),
          Input('factor-selection-cmd', 'value')],
         prevent_initial_call=True
     )
-    def update_factor_pool_count(ir_cn, ir_us, ir_eu, ir_jp, ir_uk, fx_factors, eq_factors, cmd_factors):
+    def update_factor_pool_count(ir_cn, ir_us, ir_eu, ir_jp, ir_uk, cr_cdb, cr_lgb, cr_mtn, cr_icp,
+                                  fx_factors, eq_factors, cmd_factors):
         # Merge all domicile IR selections into one list
         ir_factors = (ir_cn or []) + (ir_us or []) + (ir_eu or []) + (ir_jp or []) + (ir_uk or [])
+        # Merge all credit universe selections into one list
+        cr_factors = (cr_cdb or []) + (cr_lgb or []) + (cr_mtn or []) + (cr_icp or [])
         # Store selected factors in global state for cross-tab access
         SELECTED_FACTOR_POOL['ir_factors'] = ir_factors
+        SELECTED_FACTOR_POOL['cr_factors'] = cr_factors
         SELECTED_FACTOR_POOL['fx_factors'] = fx_factors or []
         SELECTED_FACTOR_POOL['eq_factors'] = eq_factors or []
         SELECTED_FACTOR_POOL['cmd_factors'] = cmd_factors or []
@@ -296,12 +324,13 @@ def register_factor_callbacks(app):
         # Prepare data for store
         store_data = {
             'ir': ir_factors,
+            'cr': cr_factors,
             'fx': fx_factors or [],
             'eq': eq_factors or [],
             'cmd': cmd_factors or [],
         }
 
-        total = (len(ir_factors) + len(fx_factors or [])
+        total = (len(ir_factors) + len(cr_factors) + len(fx_factors or [])
                  + len(eq_factors or []) + len(cmd_factors or []))
         if total == 0:
             message = "⚠️ No factors selected. Please select at least 2 factors for correlation analysis."
@@ -314,7 +343,9 @@ def register_factor_callbacks(app):
     
     # 3.6 Correlation Rank Callback
     @app.callback(
-        [Output('correlation-results-container', 'children'),
+        [Output('correlation-heatmap-container', 'children'),
+         Output('correlation-table-container', 'children'),
+         Output('diversified-recommendation-container', 'children'),
          Output('low-corr-factors-store', 'data')],
         Input('rank-correlations-btn', 'n_clicks'),
         [State('correlation-period-selector', 'value'),
@@ -324,6 +355,10 @@ def register_factor_callbacks(app):
          State('factor-selection-ir-eu', 'value'),
          State('factor-selection-ir-jp', 'value'),
          State('factor-selection-ir-uk', 'value'),
+         State('factor-selection-cr-cdb', 'value'),
+         State('factor-selection-cr-lgb', 'value'),
+         State('factor-selection-cr-mtn', 'value'),
+         State('factor-selection-cr-icp', 'value'),
          State('factor-selection-fx', 'value'),
          State('factor-selection-eq', 'value'),
          State('factor-selection-cmd', 'value')],
@@ -331,15 +366,19 @@ def register_factor_callbacks(app):
     )
     def update_correlation_ranks(n_clicks, period, top_pairs,
                                  ir_cn, ir_us, ir_eu, ir_jp, ir_uk,
+                                 cr_cdb, cr_lgb, cr_mtn, cr_icp,
                                  fx_factors, eq_factors, cmd_factors):
         if not n_clicks:
-            return html.Div(), []
+            return html.Div(), html.Div(), []
 
-        # Merge domicile IR selections and combine with FX/EQ/CMD
+        # Merge domicile IR selections and combine with Credit/FX/EQ/CMD
         ir_factors = (ir_cn or []) + (ir_us or []) + (ir_eu or []) + (ir_jp or []) + (ir_uk or [])
+        cr_factors = (cr_cdb or []) + (cr_lgb or []) + (cr_mtn or []) + (cr_icp or [])
         selected_factors = []
         if ir_factors:
             selected_factors.extend(ir_factors)
+        if cr_factors:
+            selected_factors.extend(cr_factors)
         if fx_factors:
             selected_factors.extend(fx_factors)
         if eq_factors:
@@ -348,23 +387,23 @@ def register_factor_callbacks(app):
             selected_factors.extend(cmd_factors)
         
         if len(selected_factors) < 2:
-            return html.Div("⚠️ Please select at least 2 factors for correlation analysis.", 
+            return html.Div(), html.Div("⚠️ Please select at least 2 factors for correlation analysis.",
                           style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}), []
-        
+
         try:
             loader = RiskFactorLoader(DIR_INPUT)
             # Use cached load - this pulls the wide DF of all factors
             factor_levels = loader.load_risk_factors(use_cache=True)
-            
+
             if factor_levels is None or factor_levels.empty:
-                return html.Div("No factor data available.", style={'color': THEME['warning']}), []
-            
+                return html.Div(), html.Div("No factor data available.", style={'color': THEME['warning']}), []
+
             # Filter to only selected factors
             available_factors = [f for f in selected_factors if f in factor_levels.columns]
             if len(available_factors) < 2:
-                return html.Div(f"⚠️ Only {len(available_factors)} of selected factors have data. Need at least 2.", 
+                return html.Div(), html.Div(f"⚠️ Only {len(available_factors)} of selected factors have data. Need at least 2.",
                               style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}), []
-            
+
             factor_levels = factor_levels[available_factors]
 
             # Determine start date based on period
@@ -381,7 +420,7 @@ def register_factor_callbacks(app):
             # Filter data
             df_subset = factor_levels.loc[start_date:end_date]
             if df_subset.empty:
-                 return html.Div(f"No data for period {period}", style={'color': THEME['warning']}), []
+                 return html.Div(), html.Div(f"No data for period {period}", style={'color': THEME['warning']}), []
             
             # Calculate returns for correlation (levels might be non-stationary, but request asked for factors correlation. 
             # Usually we corr changes, but let's stick to simple Correlation of the daily prices/levels if that's what "Factors" implies, 
@@ -395,7 +434,7 @@ def register_factor_callbacks(app):
             df_changes = df_subset.diff().dropna()
             
             if df_changes.empty:
-                 return html.Div("Insufficient data points for correlation.", style={'color': THEME['warning']}), []
+                 return html.Div(), html.Div("Insufficient data points for correlation.", style={'color': THEME['warning']}), []
 
             corr_matrix = df_changes.corr()
 
@@ -456,9 +495,10 @@ def register_factor_callbacks(app):
             # ── Heatmap: show ALL selected factors (not just low-corr pairs) ────
             all_factors_list = list(corr_matrix.columns)
 
-            # Mask upper triangle for the full matrix
+            # Mask upper triangle AND diagonal (self-correlation = 1.00 is not
+            # shown, matching the guide's lower-triangle-only matrix).
             corr_values = corr_matrix.values.copy()
-            mask_upper = np.triu(np.ones(corr_values.shape), k=1).astype(bool)
+            mask_upper = np.triu(np.ones(corr_values.shape), k=0).astype(bool)
             corr_values[mask_upper] = np.nan
 
             n_factors = len(all_factors_list)
@@ -466,11 +506,19 @@ def register_factor_callbacks(app):
             heatmap_height = max(500, min(900, 80 + n_factors * 40))
 
             # --- Heatmap Plot ---
+            # Custom colorscale matching guide/BetaCandidates.jsx betaCorrBg():
+            # navy-blue (rgba(30,80,160)) for positive, brick-red (rgba(200,60,40))
+            # for negative, fading to a near-transparent center at 0.
+            _BETA_CORR_COLORSCALE = [
+                [0.0, 'rgb(200,60,40)'],
+                [0.5, 'rgb(20,35,60)'],
+                [1.0, 'rgb(30,80,160)'],
+            ]
             heatmap_fig = go.Figure(data=go.Heatmap(
                 z=corr_values,
                 x=all_factors_list,
                 y=all_factors_list,
-                colorscale='RdBu',
+                colorscale=_BETA_CORR_COLORSCALE,
                 zmin=-1, zmax=1,
                 hovertemplate='%{y} / %{x}<br>Correlation: %{z:.3f}<extra></extra>',
                 xgap=1, ygap=1,
@@ -482,9 +530,9 @@ def register_factor_callbacks(app):
                 title=f"Rank Correlation Matrix — {n_factors} factors · {period}",
                 height=heatmap_height,
                 template=THEME['chart_template'],
-                paper_bgcolor=THEME['bg_card'],
-                plot_bgcolor=THEME['bg_card'],
-                font={'color': THEME['text_main'], 'size': 11},
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font={'color': '#e9eef8', 'size': 11},
                 margin=dict(l=160, r=50, t=70, b=120),
                 xaxis={'side': 'bottom', 'tickangle': -45},
                 yaxis={'autorange': 'reversed'},
@@ -515,36 +563,38 @@ def register_factor_callbacks(app):
                 
                 # Create display for each type
                 type_colors = {
-                    'Rates': '#2c5e40',
-                    'Spread': '#2c5e40',
-                    'Commodities': '#b48b32',
-                    'FX': '#6b4b8a',
-                    'Equities': '#1a5276',
+                    'Rates': '#1f5c45',
+                    'Spread': '#1f5c45',
+                    'Commodities': '#8a661f',
+                    'FX': '#5a3d80',
+                    'Equities': '#1a4d75',
                 }
-                
+
                 for a_type, assets_list in assets_by_type.items():
-                    bg_col = type_colors.get(a_type, '#2c5e40')
+                    bg_col = type_colors.get(a_type, '#1f5c45')
                     asset_names = [a['name'] for a in assets_list]
                     asset_display_items.append(
                         html.Div([
-                            html.Span(f"{a_type}: ", style={'fontWeight': 'bold', 'color': '#fff', 'marginRight': '5px'}),
-                            html.Span(", ".join(asset_names), style={'color': '#ddd'})
+                            html.Span(f"{a_type}: ", style={'fontWeight': '700', 'color': '#fff', 'marginRight': '5px'}),
+                            html.Span(", ".join(asset_names), style={'color': 'rgba(255,255,255,0.85)'})
                         ], style={
-                            'padding': '8px 12px', 
-                            'marginBottom': '5px', 
-                            'backgroundColor': bg_col, 
+                            'padding': '7px 12px',
+                            'marginBottom': '5px',
+                            'background': bg_col,
                             'borderRadius': '4px',
-                            'fontSize': '12px'
+                            'fontSize': '11px',
                         })
                     )
-            
-            # Format display
-            return html.Div([
-                html.Div([
-                    dcc.Graph(figure=heatmap_fig)
-                ], style={'marginBottom': '30px'}),
 
-                html.H6(f"Lowest Absolute Correlations (Diversification Opportunities) - Top {top_pairs} Pairs", style={'color': THEME['text_main']}),
+            # Format display — heatmap goes to the right column, table +
+            # diversification recommendation go to the left column under the
+            # signal cards (matches the guide's side-by-side layout).
+            heatmap_div = html.Div(dcc.Graph(figure=heatmap_fig))
+
+            table_div = html.Div([
+                html.Div(f"Lowest Absolute Correlations (Diversification Opportunities) — Top {top_pairs} Pairs",
+                         style={'fontSize': '12px', 'fontWeight': '600', 'color': 'var(--text-primary)',
+                                'marginBottom': '8px'}),
                 dash_table.DataTable(
                     data=bottom_pairs.drop(columns=['AbsCorrelation']).to_dict('records'),
                     columns=[
@@ -553,69 +603,78 @@ def register_factor_callbacks(app):
                         {'name': 'Correlation', 'id': 'Correlation', 'type': 'numeric', 'format': {'specifier': '.3f'}},
                     ],
                     style_cell={
-                        'textAlign': 'left', 
-                        'padding': '10px', 
-                        'fontFamily': 'Arial, sans-serif',
-                        'backgroundColor': THEME['table_row_odd'],
-                        'color': THEME['text_main'],
-                        'border': 'none'
+                        'textAlign': 'left',
+                        'padding': '8px 10px',
+                        'fontFamily': 'inherit',
+                        'fontSize': '11px',
+                        'backgroundColor': '#122a4c',
+                        'color': '#e9eef8',
+                        'border': 'none',
                     },
                     style_header={
-                        'backgroundColor': THEME['table_header'], 
-                        'color': THEME['text_main'], 
-                        'fontWeight': 'bold', 
+                        'backgroundColor': '#0e1d3a',
+                        'color': '#a4b6d2',
+                        'fontWeight': '600',
+                        'fontSize': '9px',
+                        'textTransform': 'uppercase',
+                        'letterSpacing': '0.05em',
                         'textAlign': 'left',
-                        'border': 'none'
+                        'border': 'none',
                     },
                     style_data_conditional=[
-                         {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']}
+                         {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgba(255,255,255,0.015)'}
                     ]
                 ),
-                
-                # Add to Asset Pool Section
-                html.Div([
-                    html.Hr(style={'borderColor': THEME['text_sub'], 'margin': '20px 0'}),
-                    html.H6("📊 Diversified Asset Recommendation", style={'color': THEME['success'], 'marginBottom': '10px'}),
-                    html.P(
-                        f"Based on {len(top_factors_list)} low-correlation factors, {len(diversified_assets)} assets are recommended:",
-                        style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '10px'}
-                    ),
-                    # Complete asset list display
-                    html.Div(
-                        asset_display_items if asset_display_items else html.Div("No mappable assets found.", style={'color': THEME['warning']}),
-                        style={
-                            'backgroundColor': THEME['bg_input'], 
-                            'padding': '10px', 
-                            'borderRadius': '4px',
-                            'marginBottom': '15px',
-                            'maxHeight': '200px',
-                            'overflowY': 'auto'
-                        }
-                    ),
-                    html.Button(
-                        f"🔄 Replace Asset Pool with {len(diversified_assets)} Recommended Assets",
-                        id='add-diversified-assets-btn',
-                        n_clicks=0,
-                        disabled=len(diversified_assets) == 0,
-                        style={
-                            'backgroundColor': THEME['success'] if diversified_assets else THEME['text_sub'],
-                            'color': 'white', 
-                            'padding': '10px 25px', 
-                            'border': 'none', 
-                            'borderRadius': '5px', 
-                            'cursor': 'pointer' if diversified_assets else 'not-allowed',
-                            'fontWeight': 'bold',
-                            'fontSize': '14px'
-                        }
-                    ),
-                    html.Span(
-                        id='add-diversified-status',
-                        style={'marginLeft': '15px', 'color': THEME['text_sub'], 'fontSize': '12px'}
-                    )
-                ], style={'marginTop': '15px'})
-            ]), top_factors_list
-            
+            ])
+
+            # Add to Asset Pool Section — relocated to its own full-width row
+            # below the table/matrix (matches the guide's layout).
+            recommendation_div = html.Div([
+                html.Div("Diversified Asset Recommendation",
+                         style={'fontSize': '13px', 'fontWeight': '600', 'color': '#34d399', 'marginBottom': '8px'}),
+                html.Div(
+                    f"Based on {len(top_factors_list)} low-correlation factors, {len(diversified_assets)} assets are recommended:",
+                    style={'color': 'var(--text-muted)', 'fontSize': '11px', 'marginBottom': '10px'}
+                ),
+                # Complete asset list display
+                html.Div(
+                    asset_display_items if asset_display_items else html.Div(
+                        "No mappable assets found.", style={'color': 'var(--accent-amber)', 'fontSize': '11px'}),
+                    style={
+                        'background': 'var(--surface-input)',
+                        'padding': '10px',
+                        'borderRadius': '4px',
+                        'marginBottom': '12px',
+                        'maxHeight': '200px',
+                        'overflowY': 'auto',
+                    }
+                ),
+                html.Button(
+                    f"Replace Asset Pool with {len(diversified_assets)} Recommended Assets",
+                    id='add-diversified-assets-btn',
+                    n_clicks=0,
+                    disabled=len(diversified_assets) == 0,
+                    style={
+                        'background': '#34d399' if diversified_assets else 'var(--text-muted)',
+                        'color': '#06281c',
+                        'padding': '8px 18px',
+                        'border': 'none',
+                        'borderRadius': '5px',
+                        'cursor': 'pointer' if diversified_assets else 'not-allowed',
+                        'fontWeight': '700',
+                        'fontSize': '11px',
+                    }
+                ),
+                html.Span(
+                    id='add-diversified-status',
+                    style={'marginLeft': '12px', 'color': 'var(--text-muted)', 'fontSize': '11px'}
+                )
+            ])
+
+            return heatmap_div, table_div, recommendation_div, top_factors_list
+
         except Exception as e:
-            return html.Div(f"Error calculating correlations: {str(e)}", style={'color': THEME['danger']}), []
+            return (html.Div(), html.Div(f"Error calculating correlations: {str(e)}",
+                                          style={'color': THEME['danger']}), html.Div(), [])
 
 

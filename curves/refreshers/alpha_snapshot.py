@@ -225,36 +225,7 @@ def _append_snapshot_spread_to_series(
 	return out.sort_index()
 
 
-def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
-	"""Build tenor spread time series from CNBD key-rate history."""
-	if not isinstance(cnbd_data, dict) or "CGB" not in cnbd_data or "CDB" not in cnbd_data:
-		return {}
-	try:
-		result = {
-			"CGB-5s10s": cnbd_data["CGB"]["中债国债到期收益率:10年"] - cnbd_data["CGB"]["中债国债到期收益率:5年"],
-			"CGB-10s30s": cnbd_data["CGB"]["中债国债到期收益率:30年"] - cnbd_data["CGB"]["中债国债到期收益率:10年"],
-			"CDB-5s10s": cnbd_data["CDB"]["中债国开债到期收益率:10年"] - cnbd_data["CDB"]["中债国开债到期收益率:5年"],
-			"CDB-10s30s": cnbd_data["CDB"]["中债国开债到期收益率:30年"] - cnbd_data["CDB"]["中债国开债到期收益率:10年"],
-			"CDBCGB-5y": cnbd_data["CDB"]["中债国开债到期收益率:5年"] - cnbd_data["CGB"]["中债国债到期收益率:5年"],
-			"CDBCGB-10y": cnbd_data["CDB"]["中债国开债到期收益率:10年"] - cnbd_data["CGB"]["中债国债到期收益率:10年"],
-			"CDBCGB-30y": cnbd_data["CDB"]["中债国开债到期收益率:30年"] - cnbd_data["CGB"]["中债国债到期收益率:30年"],
-		}
-
-		# LGB (local government bond) vs CGB cross-sector spreads — LGB data not
-		# yet available in database-px.pkl; populated automatically once present.
-		lgb = cnbd_data.get("LGB")
-		if isinstance(lgb, pd.DataFrame):
-			cgb = cnbd_data["CGB"]
-			if "中国:地方政府债到期收益率(AAA):5年" in lgb.columns and "中债国债到期收益率:5年" in cgb.columns:
-				result["LGBCGB-5y"] = lgb["中国:地方政府债到期收益率(AAA):5年"] - cgb["中债国债到期收益率:5年"]
-			if "中国:地方政府债到期收益率(AAA):10年" in lgb.columns and "中债国债到期收益率:10年" in cgb.columns:
-				result["LGBCGB-10y"] = lgb["中国:地方政府债到期收益率(AAA):10年"] - cgb["中债国债到期收益率:10年"]
-			if "中国:地方政府债到期收益率(AAA):30年" in lgb.columns and "中债国债到期收益率:30年" in cgb.columns:
-				result["LGBCGB-30y"] = lgb["中国:地方政府债到期收益率(AAA):30年"] - cgb["中债国债到期收益率:30年"]
-
-		return result
-	except Exception:
-		return {}
+from web.tabs.alpha.data.constants import _build_tenor_spread_timeseries
 
 
 def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str, pd.DataFrame]:

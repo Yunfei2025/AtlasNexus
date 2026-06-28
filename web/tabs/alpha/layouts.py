@@ -97,197 +97,242 @@ def build_diversified_trades_display(trades: List[Dict]) -> html.Div:
     ])
 
 
+def _alpha_card_header(title: str, badge_text: str | None = None, action=None) -> html.Div:
+    """Card header row — title + optional meta badge + optional right-aligned action."""
+    children_left = [
+        html.Span(title, style={'fontSize': '13px', 'fontWeight': '600', 'color': 'var(--text-primary)'}),
+    ]
+    if badge_text:
+        children_left.append(html.Span(badge_text, style={
+            'fontSize': '9px', 'color': 'var(--text-muted)', 'background': 'var(--surface-input)',
+            'padding': '2px 7px', 'borderRadius': '3px', 'border': '1px solid var(--border-default)',
+        }))
+    return html.Div([
+        html.Div(children_left, style={'display': 'flex', 'alignItems': 'center', 'gap': '10px'}),
+        html.Div(action or [], style={'display': 'flex', 'alignItems': 'center', 'gap': '12px'}),
+    ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between',
+              'padding': '11px 16px', 'background': 'var(--surface-panel)',
+              'borderBottom': '1px solid var(--border-strong)'})
+
+
 def build_candidates_layout() -> html.Div:
     """Build the CANDIDATES subtab layout."""
     _label_style = {
-        'color': THEME['text_sub'], 'fontSize': '11px', 'fontWeight': '600',
+        'color': THEME['text_sub'], 'fontSize': '10px', 'fontWeight': '600',
         'textTransform': 'uppercase', 'letterSpacing': '0.06em',
         'marginBottom': '8px', 'display': 'block',
     }
+    _filter_panel = {
+        'background': 'var(--surface-raised)', 'border': '1px solid var(--border-strong)',
+        'borderRadius': '6px', 'padding': '12px 14px',
+    }
+
     return html.Div([
-        html.H6("Alpha Candidates Scanner", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
-        html.P(
-            "Scan for relative value opportunities across spread types. "
-            "Filter by z-score deviation and check correlations before sizing.",
-            style={'color': THEME['text_sub'], 'fontSize': '13px', 'marginBottom': '20px'}
-        ),
-
-        # ── 2a: Spread Categories panel — surface-raised ──────────────────
         html.Div([
-            html.Div([
-                html.Label("Spread Categories", style=_label_style),
-                dcc.Checklist(
-                    id='alpha-spread-categories',
-                    options=[
-                        {'label': ' Bond-Curve', 'value': 'Bond-Curve'},
-                        {'label': ' Bond-Swap', 'value': 'Bond-Swap'},
-                        {'label': ' Swap Spreads', 'value': 'Swap-Spread'},
-                        {'label': ' Curve & Cross-Asset', 'value': 'Tenor-Spread'},
-                        {'label': ' Bond-Futures', 'value': 'Bond-Futures'},
-                        {'label': ' Calendar Spreads', 'value': 'Futures-Term'},
-                        {'label': ' Futures-Swap', 'value': 'Futures-Swap'},
-                    ],
-                    value=['Bond-Curve', 'Bond-Swap', 'Swap-Spread', 'Tenor-Spread'],
-                    inline=True,
-                    inputStyle={'marginRight': '7px', 'accentColor': THEME['purple']},
-                    labelStyle={'color': THEME['text_main'], 'marginRight': '22px', 'fontSize': '13px', 'cursor': 'pointer'},
-                ),
-            ], style={'flex': '1'}),
-        ], style={'background': THEME['bg_raised'], 'border': f"1px solid {THEME['border']}",
-                  'borderRadius': '8px', 'padding': '12px 22px', 'marginBottom': '15px'}),
+            html.H1("Alpha Candidates Scanner", style={
+                'margin': '0 0 3px', 'fontSize': '20px', 'fontWeight': '600',
+                'color': 'var(--text-primary)',
+            }),
+            html.Div(
+                "Scan for relative value opportunities · filter by z-score · check correlation before sizing",
+                style={'fontSize': '11px', 'color': 'var(--text-muted)'},
+            ),
+        ], style={'marginBottom': '4px'}),
 
-        # ── 2b: Z-Score + Direction — unified panel ────────────────────────
+        # ── Card 1: Filters ─────────────────────────────────────────────────
         html.Div([
+            _alpha_card_header(
+                "Filters", badge_text="Spread Categories · Direction · Z-Score",
+                action=html.Button(
+                    "🔍 Scan Candidates", id='alpha-scan-btn', n_clicks=0,
+                    style={'padding': '5px 14px', 'background': 'var(--accent-amber)', 'color': 'var(--navy-950)',
+                           'border': 'none', 'borderRadius': '4px', 'fontSize': '10px', 'fontWeight': '700',
+                           'letterSpacing': '0.05em', 'cursor': 'pointer'},
+                ),
+            ),
             html.Div([
-                html.Label("Z-Score Threshold (MR candidates only)", style=_label_style),
-                dcc.Slider(
-                    id='alpha-zscore-threshold',
-                    min=1.0, max=3.5, step=0.25, value=2.0,
-                    marks={i: f'{i:.1f}σ' for i in [1.0, 1.5, 2.0, 2.5, 3.0, 3.5]},
-                    tooltip={'placement': 'bottom', 'always_visible': False},
-                ),
-            ], style={'flex': '1', 'paddingRight': '22px', 'borderRight': f"1px solid {THEME['border']}"}),
+                # Spread Categories
+                html.Div([
+                    html.Label("Spread Categories", style={**_label_style, 'fontSize': '11px', 'marginBottom': '10px'}),
+                    dcc.Checklist(
+                        id='alpha-spread-categories',
+                        options=[
+                            {'label': ' Bond-Curve', 'value': 'Bond-Curve'},
+                            {'label': ' Bond-Swap', 'value': 'Bond-Swap'},
+                            {'label': ' Swap Spreads', 'value': 'Swap-Spread'},
+                            {'label': ' Curve & Cross-Asset', 'value': 'Tenor-Spread'},
+                            {'label': ' Bond-Futures', 'value': 'Bond-Futures'},
+                            {'label': ' Calendar Spreads', 'value': 'Futures-Term'},
+                            {'label': ' Futures-Swap', 'value': 'Futures-Swap'},
+                        ],
+                        value=['Bond-Curve', 'Bond-Swap', 'Swap-Spread', 'Tenor-Spread'],
+                        inputStyle={'marginRight': '7px', 'accentColor': THEME['accent']},
+                        labelStyle={'color': 'var(--text-primary)', 'fontSize': '13px', 'cursor': 'pointer'},
+                        style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '6px 16px'},
+                    ),
+                ], style=_filter_panel),
 
-            html.Div([
-                html.Label("Direction", style=_label_style),
-                dcc.RadioItems(
-                    id='alpha-direction-filter',
-                    options=[
-                        {'label': ' All', 'value': 'all'},
-                        {'label': ' BUY (z < -thd)', 'value': 'buy'},
-                        {'label': ' SELL (z > +thd)', 'value': 'sell'},
-                    ],
-                    value='all',
-                    inputStyle={'marginRight': '7px', 'accentColor': THEME['purple']},
-                    labelStyle={'color': THEME['text_main'], 'display': 'block', 'marginBottom': '5px', 'fontSize': '13px', 'cursor': 'pointer'},
-                ),
-                html.P(
-                    "BUY: spread is WIDE (cheap) → expect to narrow. SELL: spread is TIGHT (expensive) → expect to widen.",
-                    style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic', 'marginTop': '6px'},
-                ),
-            ], style={'width': '260px', 'paddingLeft': '22px', 'flexShrink': '0'}),
-        ], style={'display': 'flex', 'alignItems': 'flex-start', 'background': THEME['bg_raised'],
-                  'border': f"1px solid {THEME['border']}", 'borderRadius': '8px',
-                  'padding': '12px 22px', 'marginBottom': '15px'}),
-
-        # ── 2c: Seasonal Gate — collapsible <details> ──────────────────────
-        html.Details([
-            html.Summary([
-                dcc.Checklist(
-                    id='seasonal-prefilter-toggle',
-                    options=[{'label': ' Apply seasonal gate before scan (exclude noise months)', 'value': 'on'}],
-                    value=[],
-                    inputStyle={'marginRight': '6px', 'accentColor': THEME['purple']},
-                    labelStyle={'color': THEME['text_main'], 'fontSize': '14px', 'fontWeight': '600', 'cursor': 'pointer'},
-                ),
-                html.Span("▾ expand", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginLeft': 'auto'}),
-            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px', 'listStyle': 'none',
-                      'padding': '11px 22px', 'cursor': 'pointer'}),
-
-            html.Div([
-                html.P(
-                    "When ON: instruments whose current-month seasonality is statistically weak "
-                    "(low consistency or high p-value) are excluded from scan results.",
-                    style={'fontStyle': 'italic', 'fontSize': '12px', 'color': THEME['text_sub'], 'marginTop': '4px'},
-                ),
+                # Direction + Z-Score side by side
                 html.Div([
                     html.Div([
-                        html.Label("Min consistency (%)", style=_label_style),
+                        html.Label("Direction", style=_label_style),
+                        dcc.RadioItems(
+                            id='alpha-direction-filter',
+                            options=[
+                                {'label': ' All', 'value': 'all'},
+                                {'label': ' BUY (z < -thd)', 'value': 'buy'},
+                                {'label': ' SELL (z > +thd)', 'value': 'sell'},
+                            ],
+                            value='all',
+                            inputStyle={'marginRight': '7px', 'accentColor': THEME['accent']},
+                            labelStyle={'color': 'var(--text-primary)', 'display': 'block', 'marginBottom': '6px',
+                                        'fontSize': '11px', 'cursor': 'pointer'},
+                        ),
+                    ], style={'flex': '1', 'paddingRight': '20px', 'borderRight': '1px solid var(--border-strong)'}),
+
+                    html.Div([
+                        html.Label("Z-Score Threshold (MR candidates only)", style=_label_style),
                         dcc.Slider(
-                            id='seasonal-prefilter-min-consistency',
-                            min=50, max=100, step=5, value=75,
-                            marks={v: f'{v}%' for v in [50, 60, 70, 80, 90, 100]},
+                            id='alpha-zscore-threshold',
+                            min=1.0, max=3.5, step=0.25, value=2.0,
+                            marks={i: f'{i:.1f}' for i in [1.0, 1.5, 2.0, 2.5, 3.0, 3.5]},
                             tooltip={'placement': 'bottom', 'always_visible': False},
                         ),
-                    ], style={'flex': '1'}),
-                    html.Div([
-                        html.Label("p-value threshold", style=_label_style),
-                        dcc.Dropdown(
-                            id='seasonal-prefilter-p-thresh',
-                            options=[
-                                {'label': '0.05 (strict)', 'value': 0.05},
-                                {'label': '0.10',           'value': 0.10},
-                                {'label': '0.20 (loose)',   'value': 0.20},
-                            ],
-                            value=0.10,
-                            clearable=False,
-                            style={'width': '150px', 'fontSize': '12px'},
+                        html.P(
+                            "BUY: spread is WIDE (cheap) → expect to narrow. SELL: spread is TIGHT (expensive) → expect to widen.",
+                            style={'color': THEME['text_sub'], 'fontSize': '10px', 'fontStyle': 'italic', 'marginTop': '8px'},
                         ),
-                    ], style={'flexShrink': '0', 'width': '150px'}),
-                ], style={'display': 'flex', 'gap': '20px', 'alignItems': 'flex-end'}),
-            ], style={'padding': '4px 22px 14px', 'borderTop': f"1px solid {THEME['border_sub']}"}),
-        ], className='seasonal-gate', style={
-            'background': THEME['bg_raised'], 'border': f"1px solid {THEME['border']}",
-            'borderRadius': '8px', 'overflow': 'hidden', 'marginBottom': '15px',
-        }),
+                    ], style={'flex': '1', 'paddingLeft': '20px'}),
+                ], style={'display': 'flex', 'alignItems': 'flex-start', **_filter_panel}),
+            ], style={'padding': '14px 16px', 'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '14px'}),
 
-        # ── 2d: Scan button — amber accent ─────────────────────────────────
+            # ── Seasonal Gate — collapsible <details> ──────────────────────
+            html.Details([
+                html.Summary([
+                    dcc.Checklist(
+                        id='seasonal-prefilter-toggle',
+                        options=[{'label': ' Apply seasonal gate before scan (exclude noise months)', 'value': 'on'}],
+                        value=[],
+                        inputStyle={'marginRight': '6px', 'accentColor': THEME['accent']},
+                        labelStyle={'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600', 'cursor': 'pointer'},
+                    ),
+                    html.Span("▾ expand", style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginLeft': 'auto'}),
+                ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px', 'listStyle': 'none',
+                          'padding': '10px 16px', 'cursor': 'pointer'}),
+
+                html.Div([
+                    html.P(
+                        "When ON: instruments whose current-month seasonality is statistically weak "
+                        "(low consistency or high p-value) are excluded from scan results.",
+                        style={'fontStyle': 'italic', 'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '4px'},
+                    ),
+                    html.Div([
+                        html.Div([
+                            html.Label("Min consistency (%)", style=_label_style),
+                            dcc.Slider(
+                                id='seasonal-prefilter-min-consistency',
+                                min=50, max=100, step=5, value=75,
+                                marks={v: f'{v}%' for v in [50, 60, 70, 80, 90, 100]},
+                                tooltip={'placement': 'bottom', 'always_visible': False},
+                            ),
+                        ], style={'flex': '1'}),
+                        html.Div([
+                            html.Label("p-value threshold", style=_label_style),
+                            dcc.Dropdown(
+                                id='seasonal-prefilter-p-thresh',
+                                options=[
+                                    {'label': '0.05 (strict)', 'value': 0.05},
+                                    {'label': '0.10',           'value': 0.10},
+                                    {'label': '0.20 (loose)',   'value': 0.20},
+                                ],
+                                value=0.10,
+                                clearable=False,
+                                style={'width': '150px', 'fontSize': '12px'},
+                            ),
+                        ], style={'flexShrink': '0', 'width': '150px'}),
+                    ], style={'display': 'flex', 'gap': '20px', 'alignItems': 'flex-end'}),
+                ], style={'padding': '4px 16px 14px', 'borderTop': '1px solid var(--border-default)'}),
+            ], className='seasonal-gate', style={'borderTop': '1px solid var(--border-strong)'}),
+        ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden',
+                  'marginBottom': '10px'}),
+
+        html.Div(id='alpha-scan-status', style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '4px'}),
+
+        # ── Card 2: Candidates & Correlation Check ──────────────────────────
         html.Div([
-            html.Button(
-                "🔍 SCAN CANDIDATES",
-                id='alpha-scan-btn', n_clicks=0,
-                style={'background': THEME['accent'], 'color': '#0c0c00', 'padding': '10px 20px',
-                       'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer',
-                       'fontWeight': '700', 'fontSize': '12px', 'letterSpacing': '0.05em',
-                       'marginRight': '15px'}
-            ),
-            html.Span(id='alpha-scan-status', style={'color': THEME['text_sub'], 'fontSize': '12px'}),
-        ], style={'marginBottom': '20px'}),
-
-        html.Div([
-            html.H6("Candidates", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
-            dcc.Loading(
-                id='loading-candidates', type='circle',
-                color=THEME['accent'],
-                style={'minHeight': '60px'},
-                children=html.Div(id='alpha-candidates-table-container'),
-            ),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px', 'marginBottom': '20px'}),
-
-        html.Div([
-            html.H6("Correlation Check", style={'color': THEME['text_main'], 'marginBottom': '10px'}),
-            html.P("Verify selected candidates have low correlation before adding to basket.", style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginBottom': '15px'}),
-
+            _alpha_card_header("Candidates & Correlation Check"),
             html.Div([
-                html.Label("Lookback:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                dcc.Dropdown(
-                    id='alpha-corr-lookback',
-                    options=[
-                        {'label': '3 Months', 'value': 63},
-                        {'label': '6 Months', 'value': 126},
-                        {'label': '1 Year', 'value': 252},
-                        {'label': '2 Years', 'value': 504},
-                    ],
-                    value=252, clearable=False,
-                    style={'width': '140px', 'marginRight': '20px'},
-                ),
-                html.Label("Max |Corr|:", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'marginRight': '10px'}),
-                dcc.Dropdown(
-                    id='alpha-max-corr',
-                    options=[
-                        {'label': '0.3', 'value': 0.3},
-                        {'label': '0.4', 'value': 0.4},
-                        {'label': '0.5', 'value': 0.5},
-                        {'label': '0.6', 'value': 0.6},
-                        {'label': '0.7', 'value': 0.7},
-                    ],
-                    value=0.5, clearable=False,
-                    style={'width': '100px', 'marginRight': '20px'},
-                ),
-                html.Button(
-                    "📊 Check Correlation",
-                    id='alpha-corr-btn', n_clicks=0,
-                    style={'backgroundColor': THEME['warning'], 'color': 'white', 'padding': '8px 15px', 'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontWeight': 'bold'}
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px'}),
+                # Left: Candidates signals
+                html.Div([
+                    dcc.Loading(
+                        id='loading-candidates', type='circle',
+                        color=THEME['accent'],
+                        style={'minHeight': '60px'},
+                        children=html.Div(id='alpha-candidates-table-container'),
+                    ),
+                ], style={'flex': '1', 'minWidth': '0', 'padding': '14px 16px',
+                          'borderRight': '1px solid var(--border-strong)'}),
 
-            dcc.Loading(
-                id='loading-corr', type='circle',
-                color=THEME['accent'],
-                style={'minHeight': '60px'},
-                children=html.Div(id='alpha-corr-results'),
-            ),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'}),
+                # Right: Correlation Check
+                html.Div([
+                    html.Div([
+                        html.Div(
+                            "Verify low correlation before sizing.",
+                            style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginBottom': '8px'},
+                        ),
+                        html.Div([
+                            html.Div([
+                                html.Span("Lookback:", style={'fontSize': '9px', 'color': THEME['text_sub'],
+                                                               'whiteSpace': 'nowrap'}),
+                                dcc.Dropdown(
+                                    id='alpha-corr-lookback',
+                                    options=[
+                                        {'label': '3 Months', 'value': 63},
+                                        {'label': '6 Months', 'value': 126},
+                                        {'label': '1 Year', 'value': 252},
+                                        {'label': '2 Years', 'value': 504},
+                                    ],
+                                    value=252, clearable=False,
+                                    style={'width': '120px', 'fontSize': '11px'},
+                                ),
+                            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '6px'}),
+                            html.Div([
+                                html.Span("Max |Corr|:", style={'fontSize': '9px', 'color': THEME['text_sub'],
+                                                                 'whiteSpace': 'nowrap'}),
+                                dcc.Dropdown(
+                                    id='alpha-max-corr',
+                                    options=[
+                                        {'label': '0.3', 'value': 0.3},
+                                        {'label': '0.4', 'value': 0.4},
+                                        {'label': '0.5', 'value': 0.5},
+                                        {'label': '0.6', 'value': 0.6},
+                                        {'label': '0.7', 'value': 0.7},
+                                    ],
+                                    value=0.5, clearable=False,
+                                    style={'width': '80px', 'fontSize': '11px'},
+                                ),
+                            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '6px'}),
+                            html.Button(
+                                "📊 Check Correlation",
+                                id='alpha-corr-btn', n_clicks=0,
+                                style={'background': 'rgba(224,162,60,0.15)', 'color': THEME['accent'],
+                                       'border': f"1px solid {THEME['accent']}", 'borderRadius': '4px',
+                                       'fontSize': '10px', 'fontWeight': '700', 'padding': '5px 14px',
+                                       'cursor': 'pointer'},
+                            ),
+                        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px', 'flexWrap': 'wrap'}),
+                    ], style={'padding': '10px 14px', 'background': 'rgba(255,255,255,0.02)',
+                              'borderBottom': '1px solid var(--border-strong)'}),
+
+                    dcc.Loading(
+                        id='loading-corr', type='circle',
+                        color=THEME['accent'],
+                        style={'minHeight': '60px'},
+                        children=html.Div(id='alpha-corr-results', style={'padding': '10px 14px'}),
+                    ),
+                ], style={'flex': '1', 'minWidth': '0', 'display': 'flex', 'flexDirection': 'column'}),
+            ], style={'display': 'flex', 'alignItems': 'flex-start'}),
+        ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden'}),
 
         dcc.Store(id='alpha-corr-pairs-store', data=[]),
         dcc.Store(id='alpha-corr-matrix-store', storage_type='memory', data={}),
@@ -295,11 +340,17 @@ def build_candidates_layout() -> html.Div:
         dcc.Store(id='alpha-book-positions-store', storage_type='session', data=[]),
         dcc.Store(id='alpha-regime-store', storage_type='session', data={}),
 
-    ], style={'padding': '10px'})
+    ], style={'padding': '10px', 'display': 'flex', 'flexDirection': 'column', 'gap': '4px'})
 
 
 def build_portfolio_layout() -> html.Div:
     """Build the PORTFOLIO subtab layout."""
+    _label_style = {
+        'color': THEME['text_sub'], 'fontSize': '9px', 'fontWeight': '600',
+        'textTransform': 'uppercase', 'letterSpacing': '0.06em',
+        'marginBottom': '4px', 'display': 'block',
+    }
+
     return html.Div([
         html.Div([
             dcc.Input(id='alpha-mom-k', type='number', value=1.0, style={'display': 'none'}),
@@ -309,113 +360,144 @@ def build_portfolio_layout() -> html.Div:
         ], style={'display': 'none'}),
 
         html.Div([
-            html.H5("Step 1 — Instrument Selection & Correlation", style={'color': THEME['text_main'], 'marginBottom': '6px'}),
-            html.P(
-                "Run Check Correlation in the Candidates subtab first to populate the candidate list. "
-                "Saved positions from alpha_book_positions.parquet are shown separately below. "
-                "Both tables feed into the correlation matrix and portfolio optimisation.",
-                style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '14px'},
+            html.H1("Alpha Book Portfolio", style={
+                'margin': '0 0 3px', 'fontSize': '20px', 'fontWeight': '600',
+                'color': 'var(--text-primary)',
+            }),
+            html.Div(
+                "Instrument selection · portfolio configuration · optimised allocation",
+                style={'fontSize': '11px', 'color': 'var(--text-muted)'},
             ),
+        ], style={'marginBottom': '4px'}),
 
-            html.Div([
-                html.Div([
-                    html.Label("Spread Type", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '4px', 'display': 'block'}),
-                    dcc.Dropdown(
-                        id='alpha-add-spread-type',
-                        options=[
-                            {'label': stype, 'value': stype}
-                            for cat_info in SPREAD_CATEGORIES.values()
-                            for stype in cat_info['types']
-                        ],
-                        placeholder='Select type…', clearable=False,
-                        style={'width': '170px', 'fontSize': '13px'},
-                    ),
-                ]),
-                html.Div([
-                    html.Label("Instrument", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '4px', 'display': 'block'}),
-                    dcc.Dropdown(
-                        id='alpha-add-instrument',
-                        options=[], placeholder='Select instrument…', clearable=False,
-                        style={'width': '210px', 'fontSize': '13px'},
-                    ),
-                ]),
-                html.Button(
-                    "+ Add Trade", id='alpha-add-trade-btn', n_clicks=0,
-                    style={'backgroundColor': THEME['success'], 'color': 'white', 'border': 'none', 'borderRadius': '4px', 'padding': '6px 16px', 'cursor': 'pointer', 'fontWeight': '600', 'fontSize': '13px', 'alignSelf': 'flex-end'},
-                ),
-            ], style={'display': 'flex', 'gap': '12px', 'alignItems': 'flex-end', 'marginBottom': '14px', 'flexWrap': 'wrap'}),
-
-            html.Div(id='alpha-curated-table-div'),
-            html.Div(id='alpha-curated-corr-div', style={'marginTop': '16px'}),
-
-            html.Div([
-                html.Button(
-                    "↻ Recalculate Correlation", id='alpha-curated-recalc-btn', n_clicks=0,
-                    style={'backgroundColor': THEME['warning'], 'color': 'white', 'border': 'none', 'borderRadius': '4px', 'padding': '6px 16px', 'cursor': 'pointer', 'fontWeight': '600', 'fontSize': '13px'},
-                ),
-                html.Span(id='alpha-curated-recalc-status', style={'color': THEME['text_sub'], 'fontSize': '12px', 'marginLeft': '12px'}),
-            ], style={'marginTop': '14px', 'display': 'flex', 'alignItems': 'center'}),
-
-        ], id='alpha-curated-panel',
-           style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'marginBottom': '20px', 'borderRadius': '5px'}),
-
+        # ── Card 1: Selection ────────────────────────────────────────────────
         html.Div([
+            _alpha_card_header("Selection"),
             html.Div([
-                html.H5("Step 2 — Configuration", style={'margin': '0', 'color': THEME['text_main']}),
-            ], style={'flex': '1'}),
-
-            html.Div([
-                html.Label("Total Capital:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
-                dcc.Input(
-                    id='alpha-total-capital', type='number', value=10, min=1,
-                    style={'width': '100px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': f"1px solid {THEME['border']}", 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
+                html.P(
+                    "Run Check Correlation in the Candidates subtab first to populate the candidate list. "
+                    "Saved positions from alpha_book_positions.parquet are shown separately below. "
+                    "Both tables feed into the correlation matrix and portfolio optimisation.",
+                    style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '0'},
                 ),
-                html.Span("Billion CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
 
-                html.Label("Total Single Side DV01:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
-                dcc.Input(
-                    id='alpha-dv01-budget', type='number', value=5, min=0,
-                    style={'width': '80px', 'marginRight': '5px', 'padding': '5px', 'borderRadius': '4px', 'border': f"1px solid {THEME['border']}", 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main']}
-                ),
-                html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '14px', 'marginRight': '20px'}),
+                # Add trade row
+                html.Div([
+                    html.Div([
+                        html.Label("Spread Type", style=_label_style),
+                        dcc.Dropdown(
+                            id='alpha-add-spread-type',
+                            options=[
+                                {'label': stype, 'value': stype}
+                                for cat_info in SPREAD_CATEGORIES.values()
+                                for stype in cat_info['types']
+                            ],
+                            placeholder='Select type…', clearable=False,
+                            style={'width': '180px', 'fontSize': '11px'},
+                        ),
+                    ]),
+                    html.Div([
+                        html.Label("Instrument", style=_label_style),
+                        dcc.Dropdown(
+                            id='alpha-add-instrument',
+                            options=[], placeholder='Select instrument…', clearable=False,
+                            style={'width': '210px', 'fontSize': '11px'},
+                        ),
+                    ]),
+                    html.Button(
+                        "+ Add Trade", id='alpha-add-trade-btn', n_clicks=0,
+                        style={'padding': '7px 14px', 'background': 'var(--accent-green)', 'color': 'var(--navy-950)',
+                               'border': 'none', 'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700',
+                               'cursor': 'pointer', 'alignSelf': 'flex-end'},
+                    ),
+                ], style={'display': 'flex', 'gap': '10px', 'alignItems': 'flex-end', 'flexWrap': 'wrap'}),
 
-                html.Label("Method:", style={'fontWeight': 'bold', 'marginRight': '10px', 'fontSize': '14px', 'color': THEME['text_main']}),
-                html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '14px', 'fontWeight': 'bold'}),
-            ], style={'display': 'flex', 'alignItems': 'center'}),
-        ], style={'display': 'flex', 'alignItems': 'center', 'padding': '15px 20px',
-                  'backgroundColor': THEME['bg_input'],
-                  'borderBottom': f'1px solid {THEME["table_header"]}',
-                  'borderRadius': '8px 8px 0 0', 'marginBottom': '20px'}),
+                # Candidates + Saved (left, stacked) | Correlation matrix (right)
+                html.Div([
+                    html.Div(id='alpha-curated-table-div', style={'flex': '1', 'minWidth': '0'}),
+                    html.Div(id='alpha-curated-corr-div', style={'flexShrink': '0'}),
+                ], style={'display': 'flex', 'alignItems': 'flex-start', 'gap': '18px'}),
 
-        html.Div([
-            html.Div([
-                html.H5("Step 3 — Portfolio Allocation Results", style={'color': THEME['text_main'], 'marginBottom': '15px', 'flex': '1'}),
                 html.Div([
                     html.Button(
-                        'RUN OPTIMIZATION', id='alpha-score-btn', n_clicks=0,
-                        style={'backgroundColor': THEME['accent'], 'color': '#0c0c00', 'padding': '8px 20px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '13px', 'fontWeight': '700', 'letterSpacing': '0.05em'}
+                        "↻ Recalculate Correlation", id='alpha-curated-recalc-btn', n_clicks=0,
+                        style={'padding': '7px 16px', 'background': THEME['accent'], 'color': 'var(--navy-950)',
+                               'border': 'none', 'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700',
+                               'cursor': 'pointer'},
                     ),
-                ], style={'marginLeft': '20px'})
-            ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between'}),
+                    html.Span(id='alpha-curated-recalc-status', style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '14px'}),
+                ], style={'display': 'flex', 'alignItems': 'center'}),
+            ], id='alpha-curated-panel', style={'padding': '14px 16px', 'display': 'flex', 'flexDirection': 'column', 'gap': '14px'}),
+        ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden'}),
+
+        # ── Card 2: Portfolio Allocation Results ─────────────────────────────
+        html.Div([
+            _alpha_card_header(
+                "Portfolio Allocation Results",
+                action=html.Button(
+                    "RUN OPTIMIZATION", id='alpha-score-btn', n_clicks=0,
+                    style={'padding': '6px 16px', 'background': THEME['accent'], 'color': 'var(--navy-950)',
+                           'border': 'none', 'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700',
+                           'letterSpacing': '0.04em', 'cursor': 'pointer'},
+                ),
+            ),
+
+            # Configuration (was its own card) — now the top section of this card
+            html.Div([
+                html.Div([
+                    html.Label("Total Capital", style=_label_style),
+                    html.Div([
+                        dcc.Input(
+                            id='alpha-total-capital', type='number', value=10, min=1,
+                            style={'width': '70px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
+                                   'border': '1px solid var(--border-default)', 'borderRadius': '4px',
+                                   'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
+                                   'textAlign': 'right'},
+                        ),
+                        html.Span("Billion CNY", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+                ]),
+                html.Div([
+                    html.Label("Total Single Side DV01", style=_label_style),
+                    html.Div([
+                        dcc.Input(
+                            id='alpha-dv01-budget', type='number', value=5, min=0,
+                            style={'width': '70px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
+                                   'border': '1px solid var(--border-default)', 'borderRadius': '4px',
+                                   'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
+                                   'textAlign': 'right'},
+                        ),
+                        html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+                ]),
+                html.Div([
+                    html.Label("Method", style=_label_style),
+                    html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '12px', 'fontWeight': '700'}),
+                ]),
+            ], style={'padding': '14px 16px', 'display': 'flex', 'flexWrap': 'wrap', 'gap': '24px',
+                      'alignItems': 'flex-end', 'borderBottom': '1px solid var(--border-strong)'}),
 
             dcc.Store(id='alpha-optimized-weights', storage_type='session'),
 
-            html.Div([
-                html.Div(id='alpha-portfolio-summary', style={'color': THEME['text_sub'], 'fontSize': '11px'})
-            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px', 'justifyContent': 'flex-end'}),
+            html.Div(
+                id='alpha-portfolio-summary',
+                style={'padding': '10px 16px', 'background': 'rgba(255,255,255,0.02)',
+                       'borderBottom': '1px solid var(--border-strong)',
+                       'color': THEME['text_sub'], 'fontSize': '11px'},
+            ),
 
             dcc.Loading(
                 id='loading-portfolio', type='circle',
                 color=THEME['accent'],
                 style={'minHeight': '80px'},
                 children=[
-                    html.Div(id='alpha-scored-table-container'),
-                    html.Div(id='alpha-risk-chart-container', style={'marginTop': '20px'}),
+                    html.Div(id='alpha-scored-table-container', style={'overflowX': 'auto', 'overflowY': 'auto', 'maxHeight': '400px'}),
+                    html.Div(id='alpha-risk-chart-container'),
                 ]
-            )
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'marginBottom': '20px', 'borderRadius': '5px'}),
+            ),
+        ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden'}),
 
-    ], style={'padding': '10px'})
+    ], style={'padding': '10px', 'display': 'flex', 'flexDirection': 'column', 'gap': '10px'})
 
 
 def build_basket_layout() -> html.Div:

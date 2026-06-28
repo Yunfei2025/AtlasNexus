@@ -177,7 +177,7 @@ def register_portfolio_run_callbacks(app):
     )
     def update_risk_budget_inputs(asset_pool, rp_budgets, snapshot_data, allocation_mode, capital, capital_unit):
         if not asset_pool:
-             return [html.Div("Add assets to see risk factors", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'fontSize': '12px', 'textAlign': 'center'})]
+             return [html.Div("Add assets to see risk factors", style={'color': 'var(--text-muted)', 'fontStyle': 'italic', 'fontSize': '11px', 'textAlign': 'center'})]
 
         active_factors = set()
         
@@ -202,15 +202,24 @@ def register_portfolio_run_callbacks(app):
             
             elif a_type == 'Spread':
                  asset_name = asset.get('name', '')
-                 if asset_name.startswith('IRS'): code = 'IRS'
-                 elif asset_name.startswith('CDB'): code = 'CDB'
+                 code = 'IRS' if asset_name.startswith('IRS') else None
+                 if code:
+                     active_factors.add(f"SPDL.{code}")
+                     active_factors.add(f"SPSL.{code}")
+
+            elif a_type == 'Credit':
+                 asset_name = asset.get('name', '')
+                 if asset_name.startswith('CDB'): code = 'CDB'
+                 elif asset_name.startswith('LGB'): code = 'LGB'
+                 elif asset_name.startswith('MTN'): code = 'MTN'
                  elif asset_name.startswith('ICP'): code = 'ICP'
                  else: code = None
                  if code:
-                     active_factors.add(f"SPDL.{code}")
+                     active_factors.add(f"CRDL.{code}")
+                     active_factors.add(f"CRSL.{code}")
                      if code != 'ICP':
-                         active_factors.add(f"SPSL.{code}")
-            
+                         active_factors.add(f"CRCV.{code}")
+
             elif a_type == 'Commodities':
                  asset_name = asset.get('name', '')
                  code = comm_map.get(asset_name)
@@ -230,7 +239,7 @@ def register_portfolio_run_callbacks(app):
                      active_factors.add(f"EQDL.{eq_map[asset_name]}")
 
         if not active_factors:
-             return [html.Div("No risk factors identified.", style={'color': THEME['text_sub'], 'fontSize': '12px'})]
+             return [html.Div("No risk factors identified.", style={'color': 'var(--text-muted)', 'fontSize': '11px'})]
 
         sorted_factors = sorted(list(active_factors))
         n_factors = len(sorted_factors)
@@ -276,7 +285,9 @@ def register_portfolio_run_callbacks(app):
 
         # ── Vol^0.5 budgets — IR factors only ────────────────────────────────
         # IRDL/IRSL/IRCV capital is constrained to be ∝ √vol.
-        # CMDL/FXDL/SPDL are free in the min-vol optimizer — display equal share.
+        # CMDL/FXDL/SPDL/CRDL/CRSL/CRCV are free in the min-vol optimizer —
+        # display equal share (credit spreads get the same treatment as the
+        # existing SPDL/SPSL spread factors, not IR's duration-scaled budget).
         _IR_PREFIXES = ('IRDL', 'IRSL', 'IRCV')
         ir_factors = [f for f in sorted_factors if f.split('.')[0] in _IR_PREFIXES]
         non_ir_factors = [f for f in sorted_factors if f.split('.')[0] not in _IR_PREFIXES]
@@ -330,10 +341,10 @@ def register_portfolio_run_callbacks(app):
                 vol_str = f"{vol_val:.2f}%"
                 vol_color = THEME['text_main']
 
-            # Compute DV01 for IR factors (IRDL, IRSL, IRCV, SPDL, SPSL)
+            # Compute DV01 for IR/credit factors (IRDL, IRSL, IRCV, SPDL, SPSL, CRDL, CRSL, CRCV)
             dv01_str = ""
             factor_prefix = factor.split('.')[0]
-            if factor_prefix in ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL'):
+            if factor_prefix in ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL', 'CRDL', 'CRSL', 'CRCV'):
                 dur = get_factor_weighted_duration(factor)
                 if dur is not None and dur > 0:
                     dv01 = round(rp_max * dur / 10_000, 2)
@@ -342,22 +353,22 @@ def register_portfolio_run_callbacks(app):
             # Build row content — coeff column only shown in factor_scaling mode
             row_content = [
                 html.Span(factor, style={
-                    'color': THEME['text_main'], 'fontSize': '12px',
-                    'width': '130px', 'fontWeight': 'bold', 'flexShrink': '0',
+                    'color': 'var(--accent-blue)', 'fontSize': '11px',
+                    'width': '130px', 'fontWeight': '600', 'flexShrink': '0',
                 }),
                 html.Span(vol_str, style={
-                    'color': vol_color, 'fontSize': '12px',
+                    'color': vol_color if has_missing_vol else 'var(--text-secondary)', 'fontSize': '11px',
                     'width': '80px', 'textAlign': 'right', 'flexShrink': '0',
                     'fontFamily': 'monospace',
-                    'fontWeight': 'bold' if has_missing_vol else 'normal',
+                    'fontWeight': '700' if has_missing_vol else '400',
                 }, title='Volatility: if missing data, estimated at 15% (typical commodity vol)'),
                 html.Span(f"{round(rp_max)}", style={
-                    'color': THEME['text_sub'], 'fontSize': '12px',
+                    'color': 'var(--text-primary)', 'fontSize': '11px',
                     'width': '100px', 'textAlign': 'right', 'flexShrink': '0',
                     'fontFamily': 'monospace',
                 }, title='Vol√ allocation: from factor volatility weighted by sqrt(vol)'),
                 html.Span(dv01_str, style={
-                    'color': THEME['text_sub'], 'fontSize': '12px',
+                    'color': 'var(--text-muted)', 'fontSize': '11px',
                     'width': '90px', 'textAlign': 'right', 'flexShrink': '0',
                     'fontFamily': 'monospace',
                 }),
@@ -370,9 +381,9 @@ def register_portfolio_run_callbacks(app):
                         f"×{coeff:+.1f}",
                         title=f"{label}{' (default)' if is_default_coeff else ''}",
                         style={
-                            'color': THEME.get('text_sub', '#aaa') if is_default_coeff else color,
-                            'fontSize': '12px', 'width': '70px', 'textAlign': 'center',
-                            'flexShrink': '0', 'fontWeight': 'bold',
+                            'color': 'var(--text-muted)' if is_default_coeff else color,
+                            'fontSize': '11px', 'width': '70px', 'textAlign': 'center',
+                            'flexShrink': '0', 'fontWeight': '700',
                             'fontStyle': 'italic' if is_default_coeff else 'normal',
                         }
                     )
@@ -389,11 +400,11 @@ def register_portfolio_run_callbacks(app):
                     disabled=is_disabled,
                     className='no-spinner',
                     style={
-                        'width': '110px', 'flexShrink': '0', 'fontSize': '13px', 'padding': '5px 8px',
-                        'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
-                        'border': '1px solid #2a517f',
+                        'width': '110px', 'flexShrink': '0', 'fontSize': '12px', 'padding': '5px 8px',
+                        'background': 'var(--surface-panel)', 'color': 'var(--text-primary)',
+                        'border': '1px solid var(--border-strong)',
                         'borderRadius': '3px', 'textAlign': 'right',
-                        'fontFamily': 'monospace', 'fontWeight': 'normal',
+                        'fontFamily': 'monospace', 'fontWeight': '400',
                         'opacity': '0.6' if is_disabled else '1.0',
                         'cursor': 'not-allowed' if is_disabled else 'text',
                     }
@@ -414,23 +425,25 @@ def register_portfolio_run_callbacks(app):
     )
     def render_risk_budget_header(allocation_mode):
         """Render column headers; conditionally show Coeff only in factor_scaling mode."""
+        _hdr = {'color': 'var(--text-muted)', 'fontSize': '9px', 'fontWeight': '600',
+                'textTransform': 'uppercase', 'letterSpacing': '0.05em', 'flexShrink': '0'}
         header_items = [
-            html.Span("Factor",          style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '130px', 'fontWeight': 'bold', 'flexShrink': '0'}),
-            html.Span("Vol %ann",        style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '80px', 'textAlign': 'right', 'flexShrink': '0'}),
-            html.Span("RP Max (MM CNY)", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '100px', 'textAlign': 'right', 'flexShrink': '0'},
+            html.Span("Factor",          style={**_hdr, 'width': '130px'}),
+            html.Span("Vol %ann",        style={**_hdr, 'width': '80px', 'textAlign': 'right'}),
+            html.Span("RP Max (MM CNY)", style={**_hdr, 'width': '100px', 'textAlign': 'right'},
                       title='Risk Parity Max allocation in millions CNY'),
-            html.Span("DV01 (MM/bp)",    style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '90px', 'textAlign': 'right', 'flexShrink': '0'},
+            html.Span("DV01 (MM/bp)",    style={**_hdr, 'width': '90px', 'textAlign': 'right'},
                       title='Duration risk in MM CNY per basis point (IR factors only; blank for commodities/FX)'),
         ]
 
         # Add Coeff column only in factor_scaling mode
         if allocation_mode == 'factor_scaling':
             header_items.append(
-                html.Span("Coeff", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '70px', 'textAlign': 'center', 'flexShrink': '0'})
+                html.Span("Coeff", style={**_hdr, 'width': '70px', 'textAlign': 'center'})
             )
 
         header_items.append(
-            html.Span("Exposure (MM CNY)", style={'color': THEME['text_sub'], 'fontSize': '11px', 'width': '110px', 'flexShrink': '0', 'textAlign': 'right'})
+            html.Span("Exposure (MM CNY)", style={**_hdr, 'width': '110px', 'textAlign': 'right'})
         )
 
         return header_items
@@ -627,7 +640,7 @@ def register_portfolio_run_callbacks(app):
 
             if not portfolio_df.empty:
                 _units = np.where(
-                    portfolio_df['Asset Type'].isin(('Rates', 'Spread')),
+                    portfolio_df['Asset Type'].isin(('Rates', 'Spread', 'Credit')),
                     10_000_000.0,
                     1_000_000.0,
                 )
@@ -708,35 +721,48 @@ def register_portfolio_run_callbacks(app):
                     {'name': 'Weight',                'id': 'Weight (%)'},
                 ],
                 style_cell={
-                    'textAlign': 'center',
-                    'padding': '10px',
-                    'fontFamily': 'Arial, sans-serif',
-                    'backgroundColor': THEME['table_row_odd'],
-                    'color': THEME['text_main'],
-                    'border': 'none'
+                    'textAlign': 'right',
+                    'padding': '5px 10px',
+                    'fontFamily': 'inherit',
+                    'fontSize': '11px',
+                    'backgroundColor': '#122a4c',
+                    'color': '#e9eef8',
+                    'border': 'none',
                 },
+                style_cell_conditional=[
+                    {'if': {'column_id': c}, 'textAlign': 'left'}
+                    for c in ('Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument')
+                ],
                 style_header={
-                    'backgroundColor': THEME['table_header'],
-                    'color': THEME['text_main'],
-                    'fontWeight': 'bold',
-                    'textAlign': 'center',
-                    'border': 'none'
+                    'backgroundColor': '#0e1d3a',
+                    'color': '#a4b6d2',
+                    'fontWeight': '600',
+                    'fontSize': '9px',
+                    'textTransform': 'uppercase',
+                    'letterSpacing': '0.05em',
+                    'textAlign': 'right',
+                    'border': 'none',
                 },
+                style_header_conditional=[
+                    {'if': {'column_id': c}, 'textAlign': 'left'}
+                    for c in ('Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument')
+                ],
                 style_data_conditional=[
-                    {'if': {'filter_query': '{Asset Type} = "TOTAL"'}, 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'fontWeight': 'bold'},
-                    {'if': {'row_index': 'even'}, 'backgroundColor': THEME['table_row_even']}
+                    {'if': {'filter_query': '{Asset Type} = "TOTAL"'},
+                     'backgroundColor': 'rgba(255,255,255,0.03)', 'color': '#e9eef8', 'fontWeight': '700'},
+                    {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgba(255,255,255,0.015)'},
                 ],
                 style_table={'overflowX': 'auto'}
             )
 
             portfolio_table = html.Div([positions_table])
-            
+
             _dv01_info = f"  ·  DV01 {total_dv01:.2f} MM / max {total_capital_cny * float(max_duration or 5) / 1e10:.2f} MM{dv01_cap_msg}"
-            _status_children = [html.Span(f"✓ Analysis completed!{_dv01_info}", style={'color': THEME['success'], 'fontWeight': 'bold'})]
+            _status_children = [html.Span(f"✓ Analysis completed!{_dv01_info}", style={'color': '#34d399', 'fontWeight': '700'})]
             for _ow in _opt_warnings:
                 _status_children.append(html.Span(
                     f"  ⚠ Optimizer: {_ow[:120]}",
-                    style={'color': THEME.get('danger', '#ef553b'), 'fontSize': '11px', 'marginLeft': '12px'},
+                    style={'color': '#f87171', 'fontSize': '10px', 'marginLeft': '12px'},
                 ))
             status_msg = html.Div(_status_children, style={'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '4px'})
             timestamp_msg = f"Last updated: {_run_timestamp.strftime('%Y-%m-%d %H:%M:%S')}"

@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple, Union
 from pathlib import Path
 from sklearn.decomposition import PCA
 
-from .config import CURVE_CONFIG, SPREAD_CONFIG
+from .config import CURVE_CONFIG, SPREAD_CONFIG, CREDIT_CONFIG, CREDIT_NO_CURVATURE, get_credit_weights
 
 
 def _load_fx_curve_artifact(input_dir: str) -> dict:
@@ -265,9 +265,118 @@ class DeterministicRiskFactorAnalyzer:
                 # Store with naming convention: Factor.SpreadType
                 col_name = f"{factor_name}.{spread_type}"
                 all_scores[col_name] = factor_level
-        
+
         return all_scores
-    
+
+    def _load_credit_spread_data(self, universe: str) -> Optional[pd.DataFrame]:
+        """
+        Load the credit spread curve (own yield - CGB yield, by matching tenor)
+        for a credit universe (CDB, LGB, MTN, ICP).
+
+        Returns None if either leg's data is unavailable.
+        """
+        if universe not in CREDIT_CONFIG:
+            return None
+        try:
+            pkl_file, pkl_key, tenor_cols = CREDIT_CONFIG[universe]
+            data = pd.read_pickle(os.path.join(self.input_dir, pkl_file))
+            own_data = data[pkl_key]
+            cgb_data = data['CGB']
+
+            spread_cols = {}
+            for own_col, cgb_col, tenor_years in tenor_cols:
+                if own_col not in own_data.columns or cgb_col not in cgb_data.columns:
+                    continue
+                label = f"{tenor_years:g}Y"
+                spread_cols[label] = own_data[own_col] - cgb_data[cgb_col]
+
+            if not spread_cols:
+                return None
+            return pd.DataFrame(spread_cols)
+        except Exception as e:
+            print(f"Warning: Could not load credit spread data for {universe}: {e}")
+            return None
+
+    def calculate_full_history_deterministic_credit_scores(
+        self,
+        universes: Optional[List[str]] = None
+    ) -> pd.DataFrame:
+        """
+        Calculate deterministic credit spread factor scores (Level/Slope/Curvature)
+        over full available history, for each credit universe (CDB, LGB, MTN, ICP).
+
+        Each universe's spread curve (own yield - CGB yield at matching tenor) uses
+        its own log-tenor-space weights, since CDB/LGB/MTN/ICP have different and
+        unevenly-spaced tenor grids (see config.get_credit_weights).
+
+        Returns:
+            DataFrame with columns like 'Level.CDB', 'Slope.LGB', 'Curvature.MTN'.
+        """
+        if universes is None:
+            universes = list(CREDIT_CONFIG.keys())
+
+        all_scores = pd.DataFrame()
+
+        for universe in universes:
+            spread_data = self._load_credit_spread_data(universe)
+            if spread_data is None or spread_data.empty:
+                print(f"Skipping credit universe {universe}: no spread data")
+                continue
+
+            tenor_years = [t for _, _, t in CREDIT_CONFIG[universe][2]][:len(spread_data.columns)]
+            include_curvature = universe not in CREDIT_NO_CURVATURE
+            weights_by_factor = get_credit_weights(tenor_years, include_curvature=include_curvature)
+
+            for factor_name, w in weights_by_factor.items():
+                n_tenors = min(len(w), len(spread_data.columns))
+                tenor_levels = spread_data.iloc[:, :n_tenors]
+                factor_level = (tenor_levels * w[:n_tenors]).sum(axis=1)
+                col_name = f"{factor_name}.{universe}"
+                all_scores[col_name] = factor_level
+
+        return all_scores
+
+    def get_credit_tenor_sensitivities(self, universe: str, tenor: str) -> Dict[str, float]:
+        """
+        Get deterministic sensitivities for a specific credit-universe tenor.
+
+        Mirrors get_tenor_sensitivities, but for credit spread universes
+        (CDB/LGB/MTN/ICP) whose tenor grids and weights differ per universe
+        (see CREDIT_CONFIG / get_credit_weights), unlike IR's fixed 5-tenor grid.
+
+        Args:
+            universe: Credit universe code (e.g. 'CDB', 'LGB', 'MTN', 'ICP')
+            tenor: Tenor string (e.g. '1Y', '10Y', '3M')
+
+        Returns:
+            Dict with CRDL, CRSL, and (where applicable) CRCV sensitivities
+            (value change per 1-unit factor change).
+        """
+        if universe not in CREDIT_CONFIG:
+            return {}
+
+        tenor_cols = CREDIT_CONFIG[universe][2]
+        tenor_years = [t for _, _, t in tenor_cols]
+        tenor_labels = [f"{t:g}Y" for t in tenor_years]
+        if tenor not in tenor_labels:
+            # Allow sub-year sector strings like '3M' to match their 'X.XXY' label.
+            sector_to_label = {'3M': '0.25Y', '6M': '0.5Y', '9M': '0.75Y'}
+            tenor = sector_to_label.get(tenor, tenor)
+            if tenor not in tenor_labels:
+                return {}
+        tenor_idx = tenor_labels.index(tenor)
+
+        include_curvature = universe not in CREDIT_NO_CURVATURE
+        weights_by_factor = get_credit_weights(tenor_years, include_curvature=include_curvature)
+
+        factor_map = {'Level': 'CRDL', 'Slope': 'CRSL', 'Curvature': 'CRCV'}
+        sensitivities = {}
+        for factor_name, cr_factor in factor_map.items():
+            weights = weights_by_factor.get(factor_name)
+            if weights is not None and tenor_idx < len(weights):
+                sensitivities[cr_factor] = float(weights[tenor_idx])
+        return sensitivities
+
     def get_weights_dataframe(self) -> pd.DataFrame:
         """
         Return the deterministic weights as a DataFrame for inspection.

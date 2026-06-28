@@ -112,6 +112,7 @@ class StatGenerator:
             '中债国债到期收益率:',
             '中债国开债到期收益率:',
             '中国:地方政府债到期收益率(AAA):',
+            '中债中短期票据到期收益率(AAA):',
         ]
 
         column_map: dict[int, str] = {}
@@ -140,6 +141,8 @@ class StatGenerator:
                     env_ts['ICP'] = db['ICP']
                 if 'LGB' in db and 'LGB' not in env_ts:
                     env_ts['LGB'] = db['LGB']
+                if 'MTN' in db and 'MTN' not in env_ts:
+                    env_ts['MTN'] = db['MTN']
                 if 'IRS' in db and 'SwapTS' not in env_ts:
                     env_ts['SwapTS'] = db['IRS']
                 self.env_ts = env_ts
@@ -714,7 +717,8 @@ class StatGenerator:
         cdb = env_ts['CDB']
         icp = env_ts.get('ICP')
         swap_ts = env_ts.get('SwapTS')
-        lgb = env_ts.get('LGB')  # local government bonds; not yet populated in database-px.pkl
+        lgb = env_ts.get('LGB')  # local government bonds
+        mtn = env_ts.get('MTN')  # medium-term notes
 
         # Column name helpers — allow the function to work even if a key is missing.
         def _series(src: dict, key: Optional[str]):
@@ -739,12 +743,14 @@ class StatGenerator:
             col = f'FR007S{tag}.IR'
             return col if col in swap_ts.columns else None
 
-        cgb_cols = self._resolve_curve_column_map(cgb, [1, 2, 5, 10, 20, 30])
+        cgb_cols = self._resolve_curve_column_map(cgb, [1, 2, 3, 5, 10, 20, 30])
         cdb_cols = self._resolve_curve_column_map(cdb, [5, 10])
         lgb_cols = self._resolve_curve_column_map(lgb, [5, 10, 30]) if lgb is not None else {}
+        mtn_cols = self._resolve_curve_column_map(mtn, [1, 3, 5]) if mtn is not None else {}
 
         cgb1  = _series(cgb, cgb_cols.get(1))
         cgb2  = _series(cgb, cgb_cols.get(2))
+        cgb3  = _series(cgb, cgb_cols.get(3))
         cgb5  = _series(cgb, cgb_cols.get(5))
         cgb10 = _series(cgb, cgb_cols.get(10))
         cgb20 = _series(cgb, cgb_cols.get(20))
@@ -754,6 +760,9 @@ class StatGenerator:
         lgb5  = _series(lgb, lgb_cols.get(5))  if lgb is not None else None
         lgb10 = _series(lgb, lgb_cols.get(10)) if lgb is not None else None
         lgb30 = _series(lgb, lgb_cols.get(30)) if lgb is not None else None
+        mtn1  = _series(mtn, mtn_cols.get(1))  if mtn is not None else None
+        mtn3  = _series(mtn, mtn_cols.get(3))  if mtn is not None else None
+        mtn5  = _series(mtn, mtn_cols.get(5))  if mtn is not None else None
 
         icp3m  = _series(icp, _icp_col(3))  if icp is not None else None
         icp6m  = _series(icp, _icp_col(6))  if icp is not None else None
@@ -776,11 +785,15 @@ class StatGenerator:
         if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5   - cgb5
         if cdb10 is not None and cgb10 is not None: instruments['CDBCGB-10y'] = cdb10  - cgb10
 
-        # LGB (local government bond) vs CGB cross-sector spreads — LGB data not
-        # yet available in database-px.pkl; populated automatically once present.
+        # LGB (local government bond) vs CGB cross-sector spreads.
         if lgb5  is not None and cgb5  is not None: instruments['LGBCGB-5y']  = lgb5   - cgb5
         if lgb10 is not None and cgb10 is not None: instruments['LGBCGB-10y'] = lgb10  - cgb10
         if lgb30 is not None and cgb30 is not None: instruments['LGBCGB-30y'] = lgb30  - cgb30
+
+        # MTN (medium-term note) vs CGB cross-sector spreads.
+        if mtn1 is not None and cgb1 is not None: instruments['MTNCGB-1y'] = mtn1 - cgb1
+        if mtn3 is not None and cgb3 is not None: instruments['MTNCGB-3y'] = mtn3 - cgb3
+        if mtn5 is not None and cgb5 is not None: instruments['MTNCGB-5y'] = mtn5 - cgb5
 
         # Bond-vs-Repo cross-curve: CGB key-rate yield minus matched-tenor FR007 IRS rate
         if cgb1  is not None and repo1y  is not None: instruments['CGBRepo7d-1y']  = cgb1  - repo1y

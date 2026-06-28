@@ -1,194 +1,256 @@
 # -*- coding: utf-8 -*-
-"""Factor (Regime) tab layout."""
+"""Candidates (Factor Selection Pool) tab layout."""
 
 from __future__ import annotations
 
 from dash import dcc, html
 
-from ..data import THEME, SELECTED_FACTOR_POOL
-from ...atlas_components import card
+from ..data import SELECTED_FACTOR_POOL
+
+
+_LBL = {
+    'color': 'var(--text-muted)',
+    'fontSize': '9px',
+    'fontWeight': '600',
+    'textTransform': 'uppercase',
+    'letterSpacing': '0.08em',
+    'marginBottom': '8px',
+    'display': 'block',
+}
+
+_CARD_HEADER = {
+    'padding': '11px 16px',
+    'background': 'var(--surface-panel)',
+    'borderBottom': '1px solid var(--border-strong)',
+}
+
+_CARD_TITLE = {
+    'fontSize': '13px',
+    'fontWeight': '600',
+    'color': 'var(--text-primary)',
+}
+
+_CARD_WRAP = {
+    'border': '1px solid var(--border-strong)',
+    'borderRadius': '8px',
+    'overflow': 'hidden',
+}
+
+
+def _section_label(text):
+    return html.Div(text, style=_LBL)
+
+
+def _short_sep():
+    return html.Div(style={
+        'width': '1px', 'background': 'var(--border-default)',
+        'alignSelf': 'center', 'height': '75%', 'flexShrink': '0',
+        'margin': '0 16px',
+    })
 
 
 def build_multiasset_factor_layout():
-    """Build the layout for the Factor (Regime) tab."""
-    return html.Div([
+    """Build the layout for the Candidates (Factor Selection) tab."""
+    domiciles = ['CN', 'US', 'EU', 'JP', 'UK']
+    domicile_flags = {'CN': '🇨🇳', 'US': '🇺🇸', 'EU': '🇪🇺', 'JP': '🇯🇵', 'UK': '🇬🇧'}
+    ir_kinds = ['IRDL', 'IRSL', 'IRCV']
 
-        # Hidden store to persist factor selections across tab switches
-        dcc.Store(id='factor-selection-store', storage_type='session', data={
-            'ir': SELECTED_FACTOR_POOL['ir_factors'],
-            'fx': SELECTED_FACTOR_POOL['fx_factors'],
-            'cmd': SELECTED_FACTOR_POOL['cmd_factors'],
-            'eq': SELECTED_FACTOR_POOL['eq_factors'],
-        }),
-
-        # Factor Selection Panel at the top
+    # ── Selection card: IR grid | FX | Equities | Commodities | Train Params ──
+    # One Checklist per domicile (preserves factor-selection-ir-{code} IDs used
+    # by the pool-counter and correlation-rank callbacks). Each option's own
+    # label carries the IRDL/IRSL/IRCV text so rows can never drift out of
+    # sync with a separately-laid-out label column.
+    ir_grid = html.Div([
+        _section_label("Interest Rates"),
         html.Div([
-            html.H5("🎯 Factor Selection Pool", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
-            html.P("Select factors to include in correlation analysis:", style={'color': THEME['text_sub'], 'fontSize': '13px', 'marginBottom': '10px'}),
-
-            # Interest Rate Factors — grouped by domicile
             html.Div([
-                html.H6("📊 Interest Rates (IR)", className='factor-pool-section__heading'),
-                  html.P("Each domicile covers: IRDL (Level · Bullish/Bearish), IRSL (Slope · Steepener/Flattener), IRCV (Curvature · Concave/Convex)",
-                       className='factor-pool-section__note'),
-                html.Div([
-                    html.Div([
-                        html.Div([
-                            html.Span(code, className=f'country-chip country-chip--{code.lower()}'),
-                        ], className='ir-country-grid__col-head'),
-                        dcc.Checklist(
-                            id=f'factor-selection-ir-{code.lower()}',
-                            options=[{'label': ' IRDL', 'value': f'IRDL.{code}'},
-                                     {'label': ' IRSL', 'value': f'IRSL.{code}'},
-                                     {'label': ' IRCV', 'value': f'IRCV.{code}'}],
-                            value=[v for v in SELECTED_FACTOR_POOL['ir_factors'] if v.endswith(f'.{code}')],
-                            labelStyle={'display': 'block', 'color': THEME['text_main'],
-                                        'fontSize': '12px', 'marginBottom': '3px'},
-                            inputStyle={'marginRight': '5px'},
-                        ),
-                    ]) for code in ['CN', 'US', 'EU', 'JP', 'UK']
-                ], className='ir-country-grid'),
-            ], className='factor-pool-section'),
-
-            # FX Factors
-            html.Div([
-                html.H6("💱 Foreign Exchange (FX)", className='factor-pool-section__heading'),
+                html.Div(domicile_flags[d], style={'fontSize': '16px', 'lineHeight': '1', 'textAlign': 'center'}),
+                html.Div(d, style={'fontSize': '9px', 'color': 'var(--text-muted)', 'fontWeight': '500',
+                                    'marginTop': '2px', 'textAlign': 'center', 'marginBottom': '6px'}),
                 dcc.Checklist(
-                    id='factor-selection-fx',
-                    options=[
-                        {'label': ' FXDL.USDCNY', 'value': 'FXDL.USDCNY'},
-                        {'label': ' FXDL.EURCNY', 'value': 'FXDL.EURCNY'},
-                        {'label': ' FXDL.JPYCNY', 'value': 'FXDL.JPYCNY'},
-                        {'label': ' FXDL.GBPCNY', 'value': 'FXDL.GBPCNY'},
-                    ],
-                    value=SELECTED_FACTOR_POOL['fx_factors'],
-                    labelStyle={'color': THEME['text_main'], 'fontSize': '12px'},
+                    id=f'factor-selection-ir-{d.lower()}',
+                    options=[{'label': f' {k}', 'value': f'{k}.{d}'} for k in ir_kinds],
+                    value=[v for v in SELECTED_FACTOR_POOL['ir_factors'] if v.endswith(f'.{d}')],
                     inputStyle={'marginRight': '5px'},
-                    className='factor-inline-row',
+                    labelStyle={'display': 'flex', 'alignItems': 'center', 'color': 'var(--text-secondary)',
+                                'fontSize': '10px', 'padding': '3px 0', 'whiteSpace': 'nowrap'},
                 ),
-            ], className='factor-pool-section'),
+            ], style={'width': '64px', 'flexShrink': '0'})
+            for d in domiciles
+        ], style={'display': 'flex', 'gap': '10px'}),
+    ], style={'flexShrink': '0'})
 
-            # Equity Factors
-            html.Div([
-                html.H6("📈 Equities (EQ)", className='factor-pool-section__heading'),
-                html.P("CSI equity index futures — price return factors",
-                       className='factor-pool-section__note'),
-                dcc.Checklist(
-                    id='factor-selection-eq',
-                    options=[
-                        {'label': ' EQDL.IF (CSI 300)', 'value': 'EQDL.IF'},
-                        {'label': ' EQDL.IC (CSI 500)', 'value': 'EQDL.IC'},
-                        {'label': ' EQDL.IH (SSE 50)',  'value': 'EQDL.IH'},
-                        {'label': ' EQDL.IM (CSI 1000)', 'value': 'EQDL.IM'},
-                    ],
-                    value=SELECTED_FACTOR_POOL['eq_factors'],
-                    labelStyle={'color': THEME['text_main'], 'fontSize': '12px'},
-                    inputStyle={'marginRight': '5px'},
-                    className='factor-inline-row',
-                ),
-            ], className='factor-pool-section'),
-
-            # Commodity Factors
-            html.Div([
-                html.H6("🪙 Commodities (CM)", className='factor-pool-section__heading'),
-                dcc.Checklist(
-                    id='factor-selection-cmd',
-                    options=[
-                        {'label': ' CMDL.AU (Gold)',        'value': 'CMDL.AU'},
-                        {'label': ' CMDL.AG (Silver)',      'value': 'CMDL.AG'},
-                        {'label': ' CMDL.AL (Aluminium)',   'value': 'CMDL.AL'},
-                        {'label': ' CMDL.CU (Copper)',      'value': 'CMDL.CU'},
-                        {'label': ' CMDL.ZN (Zinc)',        'value': 'CMDL.ZN'},
-                        {'label': ' CMDL.SC (Crude Oil)',   'value': 'CMDL.SC'},
-                        {'label': ' CMDL.RB (Rebar)',       'value': 'CMDL.RB'},
-                        {'label': ' CMDL.LC (Live Hog)',    'value': 'CMDL.LC'},
-                        {'label': ' CMDL.SA (Soda Ash)',    'value': 'CMDL.SA'},
-                        {'label': ' CMDL.JM (Coking Coal)', 'value': 'CMDL.JM'},
-                        {'label': ' CMDL.EC (Euro Gas)',    'value': 'CMDL.EC'},
-                    ],
-                    value=SELECTED_FACTOR_POOL['cmd_factors'],
-                    labelStyle={'color': THEME['text_main'], 'fontSize': '12px',
-                                'display': 'flex', 'alignItems': 'center'},
-                    inputStyle={'marginRight': '5px'},
-                    className='cmd-grid',
-                ),
-            ], className='factor-pool-section'),
-
-            html.Div([
-                html.Span(id='factor-pool-count', style={'color': THEME['text_sub'], 'fontSize': '12px', 'fontStyle': 'italic'}),
-            ]),
-
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px', 'border': f'1px solid {THEME["table_header"]}', 'marginBottom': '20px'}),
-
-        # ── Train Model & Predict ─────────────────────────────────────────
+    # ── Credit grid: CRDL/CRSL/CRCV rows × LGB/MTN/ICP columns ──
+    # Same shape as the IR grid above (one Checklist per column, kind options
+    # as rows) so factor-selection-cr-{universe} IDs slot into the pool
+    # counter / correlation callbacks the same way factor-selection-ir-{d} do.
+    credit_universes = ['CDB', 'LGB', 'MTN', 'ICP']
+    credit_icons = {'CDB': '🏦', 'LGB': '🏛️', 'MTN': '🏢', 'ICP': '🏭'}
+    cr_kinds = ['CRDL', 'CRSL', 'CRCV']
+    cr_grid = html.Div([
+        _section_label("Credit"),
         html.Div([
-            html.H5("🤖 Train Model & Predict", style={'color': THEME['text_main'], 'marginBottom': '6px'}),
-            html.P(
-                "Train the factor model on data up to the first day of the current month "
-                "(no recent daily data — reduces overfitting). "
-                "Outputs the latest signal state and top driving indicators.",
-                style={'color': THEME['text_sub'], 'fontSize': '12px',
-                       'marginBottom': '12px', 'fontStyle': 'italic'},
-            ),
             html.Div([
-                html.Label("Train (months):", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                                     'color': THEME['text_main'], 'fontSize': '12px'}),
+                html.Div(credit_icons[u], style={'fontSize': '16px', 'lineHeight': '1', 'textAlign': 'center'}),
+                html.Div(u, style={'fontSize': '9px', 'color': 'var(--text-muted)', 'fontWeight': '500',
+                                    'marginTop': '2px', 'textAlign': 'center', 'marginBottom': '6px'}),
+                dcc.Checklist(
+                    id=f'factor-selection-cr-{u.lower()}',
+                    options=[{'label': f' {k}', 'value': f'{k}.{u}'} for k in cr_kinds],
+                    value=[v for v in SELECTED_FACTOR_POOL.get('cr_factors', []) if v.endswith(f'.{u}')],
+                    inputStyle={'marginRight': '5px'},
+                    labelStyle={'display': 'flex', 'alignItems': 'center', 'color': 'var(--text-secondary)',
+                                'fontSize': '10px', 'padding': '3px 0', 'whiteSpace': 'nowrap'},
+                ),
+            ], style={'width': '64px', 'flexShrink': '0'})
+            for u in credit_universes
+        ], style={'display': 'flex', 'gap': '10px'}),
+    ], style={'flexShrink': '0'})
+
+    fx = ['FXDL.USDCNY', 'FXDL.EURCNY', 'FXDL.JPYCNY', 'FXDL.GBPCNY']
+    fx_col = html.Div([
+        _section_label("FX"),
+        dcc.Checklist(
+            id='factor-selection-fx',
+            options=[{'label': f' {f.replace("FXDL.", "")}', 'value': f} for f in fx],
+            value=SELECTED_FACTOR_POOL['fx_factors'],
+            labelStyle={'display': 'flex', 'alignItems': 'center', 'color': 'var(--text-primary)',
+                        'fontSize': '11px', 'padding': '3px 0'},
+            inputStyle={'marginRight': '7px'},
+        ),
+    ], style={'flexShrink': '0'})
+
+    eq = [('EQDL.IF', 'CSI300'), ('EQDL.IC', 'CSI 500'), ('EQDL.IH', 'SSE 50'), ('EQDL.IM', 'CSI 1000')]
+    eq_col = html.Div([
+        _section_label("Equities"),
+        dcc.Checklist(
+            id='factor-selection-eq',
+            options=[{'label': f' {k.replace("EQDL.", "")} · {desc}', 'value': k} for k, desc in eq],
+            value=SELECTED_FACTOR_POOL['eq_factors'],
+            labelStyle={'display': 'flex', 'alignItems': 'center', 'color': 'var(--text-primary)',
+                        'fontSize': '11px', 'padding': '3px 0'},
+            inputStyle={'marginRight': '7px'},
+        ),
+    ], style={'flexShrink': '0'})
+
+    cm = [
+        ('CMDL.AU', 'Gold'), ('CMDL.AG', 'Silver'), ('CMDL.AL', 'Aluminum'), ('CMDL.CU', 'Copper'),
+        ('CMDL.ZN', 'Zinc'), ('CMDL.SC', 'Crude Oil'), ('CMDL.RB', 'Rebar'), ('CMDL.LC', 'Live Hog'),
+        ('CMDL.SA', 'Soda Ash'), ('CMDL.JM', 'Coking Coal'), ('CMDL.EC', 'Exch. Code'),
+    ]
+    cm_col = html.Div([
+        _section_label("Commodities"),
+        dcc.Checklist(
+            id='factor-selection-cmd',
+            options=[{'label': f' {k.replace("CMDL.", "")} · {desc}', 'value': k} for k, desc in cm],
+            value=SELECTED_FACTOR_POOL['cmd_factors'],
+            labelStyle={'display': 'flex', 'alignItems': 'center', 'color': 'var(--text-primary)',
+                        'fontSize': '11px', 'padding': '3px 0'},
+            inputStyle={'marginRight': '7px'},
+            style={'display': 'grid', 'gridTemplateColumns': '94px 94px 94px', 'columnGap': '4px'},
+        ),
+    ], style={'width': '286px', 'flexShrink': '0'})
+
+    train_params = html.Div([
+        _section_label("Train Params"),
+        html.Div([
+            html.Div([
+                html.Div("Months", style={'fontSize': '9px', 'fontWeight': '600',
+                                           'color': 'var(--text-muted)', 'marginBottom': '4px'}),
                 dcc.Input(id='factor-fm-train', type='number', value=12, min=3,
-                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': f'1px solid {THEME["bg_input"]}',
-                                 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
-                                 'MozAppearance': 'textfield', 'appearance': 'textfield'}),
-                html.Label("IC thr:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                             'color': THEME['text_main'], 'fontSize': '12px'}),
+                          style={'width': '100%', 'background': 'var(--surface-input)',
+                                 'border': '1px solid var(--border-default)', 'borderRadius': '4px',
+                                 'padding': '5px 4px', 'fontSize': '11px', 'color': 'var(--text-primary)',
+                                 'textAlign': 'center', 'boxSizing': 'border-box'}),
+            ]),
+            html.Div([
+                html.Div("IC Thr", style={'fontSize': '9px', 'fontWeight': '600',
+                                           'color': 'var(--text-muted)', 'marginBottom': '4px'}),
                 dcc.Input(id='factor-fm-ic', type='number', value=0.05, step=0.01, min=0.01,
-                          style={'width': '60px', 'marginRight': '10px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': f'1px solid {THEME["bg_input"]}',
-                                 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
-                                 'MozAppearance': 'textfield', 'appearance': 'textfield'}),
-                html.Label("Top N:", style={'fontWeight': 'bold', 'marginRight': '4px',
-                                            'color': THEME['text_main'], 'fontSize': '12px'}),
+                          style={'width': '100%', 'background': 'var(--surface-input)',
+                                 'border': '1px solid var(--border-default)', 'borderRadius': '4px',
+                                 'padding': '5px 4px', 'fontSize': '11px', 'color': 'var(--text-primary)',
+                                 'textAlign': 'center', 'boxSizing': 'border-box'}),
+            ]),
+            html.Div([
+                html.Div("Top N", style={'fontSize': '9px', 'fontWeight': '600',
+                                          'color': 'var(--text-muted)', 'marginBottom': '4px'}),
                 dcc.Input(id='factor-fm-topn', type='number', value=8, min=1,
-                          style={'width': '55px', 'marginRight': '10px', 'padding': '4px',
-                                 'borderRadius': '4px', 'border': f'1px solid {THEME["bg_input"]}',
-                                 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
-                                 'MozAppearance': 'textfield', 'appearance': 'textfield'}),
-                    html.Button(
-                      "Train Model", id='factor-train-btn', n_clicks=0,
-                      title="Train model using data up to the first day of the current month. "
-                          "No recent daily data — reduces overfitting.",
-                      style={'backgroundColor': '#7c70d6', 'color': 'white',
-                           'padding': '7px 14px', 'border': 'none', 'borderRadius': '5px',
-                           'cursor': 'pointer', 'fontSize': '12px', 'fontWeight': 'bold',
-                           'marginRight': '8px'}),
-                    html.Button(
-                      "Predict", id='factor-predict-btn', n_clicks=0,
-                      title="Use the latest saved model to refresh the current signal view. "
-                          "If parameters changed, retrain first.",
-                      style={'backgroundColor': THEME['accent'], 'color': 'white',
-                           'padding': '7px 14px', 'border': 'none', 'borderRadius': '5px',
-                           'cursor': 'pointer', 'fontSize': '12px', 'fontWeight': 'bold',
-                           'marginRight': '10px'}),
-            ], style={'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap',
-                      'gap': '4px', 'marginBottom': '12px'}),
-            dcc.Loading(
-                type='circle',
-                color=THEME['accent'],
-                style={'minHeight': '80px'},
-                children=html.Div([
-                    html.Div(id='factor-train-status',
-                             style={'color': THEME['text_sub'], 'fontSize': '12px',
-                                    'marginBottom': '8px'}),
-                    html.Div(id='factor-signal-container', style={'minHeight': '80px'}),
-                ]),
-            ),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px',
-                  'border': f'1px solid {THEME["table_header"]}', 'marginBottom': '20px'}),
-
-                # Correlation Analysis Section
+                          style={'width': '100%', 'background': 'var(--surface-input)',
+                                 'border': '1px solid var(--border-default)', 'borderRadius': '4px',
+                                 'padding': '5px 4px', 'fontSize': '11px', 'color': 'var(--text-primary)',
+                                 'textAlign': 'center', 'boxSizing': 'border-box'}),
+            ]),
+        ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr 1fr', 'gap': '6px'}),
         html.Div([
-             html.H5("Cross-Asset Correlation Analysis", style={'color': THEME['text_main'], 'marginBottom': '15px'}),
-             html.Div([
-                html.Label("Lookback Period:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
+            html.Button("Train Model", id='factor-train-btn', n_clicks=0,
+                        title="Train model using data up to the first day of the current month. "
+                              "No recent daily data — reduces overfitting.",
+                        style={'flex': '1', 'padding': '7px 0', 'background': 'var(--accent-purple, #7c70d6)',
+                               'color': '#fff', 'border': 'none', 'borderRadius': '5px',
+                               'fontSize': '11px', 'fontWeight': '700', 'cursor': 'pointer'}),
+            html.Button("Predict", id='factor-predict-btn', n_clicks=0,
+                        title="Use the latest saved model to refresh the current signal view. "
+                              "If parameters changed, retrain first.",
+                        style={'flex': '1', 'padding': '7px 0', 'background': 'var(--accent-blue)',
+                               'color': '#fff', 'border': 'none', 'borderRadius': '5px',
+                               'fontSize': '11px', 'fontWeight': '700', 'cursor': 'pointer'}),
+        ], style={'display': 'flex', 'gap': '6px'}),
+        html.Div(
+            "Train the factor model on data up to the first day of the current month "
+            "(no recent daily data — reduces overfitting). Outputs the latest signal "
+            "state and top driving indicators.",
+            style={'borderTop': '1px solid var(--border-default)', 'paddingTop': '8px',
+                   'fontSize': '9px', 'color': 'var(--text-muted)', 'lineHeight': '1.55'},
+        ),
+    ], style={'width': '270px', 'flexShrink': '0', 'display': 'flex',
+              'flexDirection': 'column', 'gap': '10px'})
+
+    selection_card = html.Div([
+        html.Div(html.Span("Selection", style=_CARD_TITLE), style=_CARD_HEADER),
+        html.Div([
+            ir_grid, _short_sep(),
+            cr_grid, _short_sep(),
+            fx_col, _short_sep(),
+            eq_col, _short_sep(),
+            cm_col,
+            html.Div(style={'width': '1px', 'background': 'var(--border-strong)',
+                             'margin': '0 20px', 'flexShrink': '0'}),
+            train_params,
+        ], style={'padding': '14px 18px', 'display': 'flex', 'alignItems': 'stretch',
+                   'flexWrap': 'wrap'}),
+    ], style=_CARD_WRAP)
+
+    # ── Left column: signal cards + status, then lowest-correlations table ──
+    signal_state_left = html.Div([
+        dcc.Loading(
+            type='circle',
+            color='var(--accent-blue)',
+            style={'minHeight': '80px'},
+            children=html.Div([
+                html.Div(id='factor-train-status',
+                         style={'color': 'var(--text-muted)', 'fontSize': '12px', 'marginBottom': '8px'}),
+                html.Div(id='factor-signal-container', style={'minHeight': '80px'}),
+            ]),
+        ),
+        dcc.Loading(
+            id="loading-correlation-table",
+            type="circle",
+            color='var(--accent-blue)',
+            style={'minHeight': '40px'},
+            children=html.Div(id='correlation-table-container',
+                               style={'borderTop': '1px solid var(--border-strong)',
+                                      'marginTop': '12px', 'paddingTop': '12px'}),
+        ),
+    ], style={'flex': '1', 'minWidth': '0', 'borderRight': '1px solid var(--border-strong)',
+              'padding': '14px 16px'})
+
+    # ── Right column: correlation matrix controls + heatmap ──
+    signal_state_right = html.Div([
+        html.Div([
+            html.Div([
+                html.Label("Lookback Period:", style={'fontSize': '11px', 'color': 'var(--text-secondary)',
+                                                        'marginRight': '8px'}),
                 dcc.Dropdown(
                     id='correlation-period-selector',
                     options=[
@@ -196,41 +258,72 @@ def build_multiasset_factor_layout():
                         {'label': '6 Months', 'value': '6M'},
                         {'label': '1 Year', 'value': '1Y'},
                     ],
-                    value='1Y',
-                    clearable=False,
-                    style={'width': '150px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'marginRight': '20px'}
+                    value='1Y', clearable=False,
+                    style={'width': '140px', 'fontSize': '11px'},
                 ),
-                html.Label("Top Pairs:", style={'fontWeight': 'bold', 'marginRight': '10px', 'color': THEME['text_main']}),
+            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '4px'}),
+            html.Div([
+                html.Label("Top Pairs:", style={'fontSize': '11px', 'color': 'var(--text-secondary)',
+                                                 'marginRight': '8px'}),
                 dcc.Dropdown(
                     id='correlation-top-pairs-selector',
-                    options=[
-                        {'label': '5', 'value': 5},
-                        {'label': '10', 'value': 10},
-                        {'label': '15', 'value': 15},
-                        {'label': '20', 'value': 20},
-                    ],
-                    value=10,
-                    clearable=False,
-                    style={'width': '100px', 'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'marginRight': '20px'}
+                    options=[{'label': str(n), 'value': n} for n in (5, 10, 15, 20)],
+                    value=10, clearable=False,
+                    style={'width': '90px', 'fontSize': '11px'},
                 ),
-                html.Button(
-                    "Rank Correlations",
-                    id='rank-correlations-btn',
-                    n_clicks=0,
-                    style={'backgroundColor': THEME['accent'], 'color': 'white', 'padding': '5px 15px', 'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontWeight': 'bold'}
-                ),
-             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '15px'}),
+            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '4px'}),
+            html.Button(
+                "Rank Correlations", id='rank-correlations-btn', n_clicks=0,
+                style={'padding': '6px 16px', 'background': 'var(--accent-blue)', 'color': '#fff',
+                       'border': 'none', 'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700',
+                       'cursor': 'pointer', 'marginLeft': 'auto'},
+            ),
+        ], style={'padding': '10px 16px', 'background': 'rgba(255,255,255,0.02)',
+                   'borderBottom': '1px solid var(--border-strong)', 'display': 'flex',
+                   'alignItems': 'center', 'gap': '20px', 'flexWrap': 'wrap'}),
 
-             # Store for tracking the lowest correlation factors
-             dcc.Store(id='low-corr-factors-store', data=[]),
+        dcc.Store(id='low-corr-factors-store', data=[]),
 
-             dcc.Loading(
-                 id="loading-correlations",
-                 type="circle",
-                 color=THEME['accent'],
-                 style={'minHeight': '60px'},
-                 children=html.Div(id='correlation-results-container'),
-             )
-        ], style={'margin': '0 0 20px 0', 'padding': '15px', 'backgroundColor': THEME['bg_card'], 'borderRadius': '5px', 'border': f'1px solid {THEME["table_header"]}'}),
+        dcc.Loading(
+            id="loading-correlations",
+            type="circle",
+            color='var(--accent-blue)',
+            style={'minHeight': '60px'},
+            children=html.Div(id='correlation-heatmap-container', style={'padding': '14px 16px'}),
+        ),
 
-    ], style={'backgroundColor': THEME['bg_main'], 'padding': '20px', 'borderRadius': '5px', 'margin': '10px'})
+        html.Div(id='diversified-recommendation-container',
+                 style={'borderTop': '1px solid var(--border-strong)', 'padding': '14px 16px'}),
+    ], style={'flexShrink': '0', 'minWidth': '520px', 'display': 'flex', 'flexDirection': 'column'})
+
+    # ── Combined "Current Signal State" card: signal cards + low-corr table
+    #    on the left, correlation matrix on the right (matches guide layout).
+    signal_state_card = html.Div([
+        html.Div(html.Span("Current Signal State", style=_CARD_TITLE), style=_CARD_HEADER),
+        html.Div([signal_state_left, signal_state_right],
+                 style={'display': 'flex', 'alignItems': 'flex-start'}),
+    ], style=_CARD_WRAP)
+
+    return html.Div([
+
+        dcc.Store(id='factor-selection-store', storage_type='session', data={
+            'ir': SELECTED_FACTOR_POOL['ir_factors'],
+            'cr': SELECTED_FACTOR_POOL.get('cr_factors', []),
+            'fx': SELECTED_FACTOR_POOL['fx_factors'],
+            'cmd': SELECTED_FACTOR_POOL['cmd_factors'],
+            'eq': SELECTED_FACTOR_POOL['eq_factors'],
+        }),
+        html.Div([
+            html.H1("Beta Candidates", style={'margin': '0 0 3px', 'fontSize': '20px',
+                                               'fontWeight': '600', 'color': 'var(--text-primary)'}),
+            html.Div("Factor selection, signal state, drivers, and correlations",
+                     style={'fontSize': '11px', 'color': 'var(--text-muted)'}),
+        ]),
+
+        selection_card,
+
+        signal_state_card,
+
+        html.Div(id='factor-pool-count', style={'display': 'none'}),
+
+    ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px', 'padding': '16px', 'margin': '10px'})

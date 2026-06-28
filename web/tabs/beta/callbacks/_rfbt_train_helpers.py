@@ -84,84 +84,122 @@ def _compute_factor_stats(results: Dict) -> Dict:
 # Signal cards
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _render_signal_cards(factor_stats: Dict) -> html.Div:
-    """Render a row of signal-state cards for *factor_stats*."""
+def _render_signal_cards(factor_stats: Dict, artifact=None) -> html.Div:
+    """Render a grid of signal-state cards for *factor_stats*.
+
+    Each card embeds its own Top-Drivers chart inside a native
+    ``<details>``/``<summary>`` element so it expands in place on click
+    (matches the guide's BetaCandidates.jsx interaction) without needing a
+    server round-trip or clientside callback.
+    """
     _IR_PREFIXES = ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL', 'SPCV')
+    _POS = '#34d399'
+    _NEG = '#f87171'
+    _NEUTRAL = 'var(--text-muted)'
 
     def _sc(factor, stats):
         ls = stats['last_signal']            # quantised target in [-1,1]; sign = direction
-        _strong = '⬆⬆ ' if ls >= 0.8 else ('⬇⬇ ' if ls <= -0.8 else '')
+        strong = ls >= 0.8 or ls <= -0.8
+        arrow_prefix = '↑↑' if ls >= 0.8 else ('↓↓' if ls <= -0.8 else '')
         prefix = factor.split('.')[0]
         is_yield = prefix in _IR_PREFIXES
         is_slope = prefix == 'IRSL'
         is_curv = prefix == 'IRCV'
         if ls > 0:
             if is_slope:
-                dir_label, sub_label = '⬆ Steepener', 'curve expected to steepen'
+                arrow, dir_label = '↑', 'Steepener'
             elif is_curv:
-                dir_label, sub_label = '⬆ Concave', 'curvature expected ↓'
+                arrow, dir_label = '↑', 'Concave'
             elif is_yield:
-                dir_label, sub_label = '⬆ Bullish', 'rate expected ↓'
+                arrow, dir_label = '↑', 'Bullish'
             else:
-                dir_label, sub_label = '⬆ LONG', ''
-            dir_label = _strong + dir_label
-            dir_color = THEME['success']
+                arrow, dir_label = '↑', 'Long'
+            dir_color = _POS
         elif ls < 0:
             if is_slope:
-                dir_label, sub_label = '⬇ Flattener', 'curve expected to flatten'
+                arrow, dir_label = '↓', 'Flattener'
             elif is_curv:
-                dir_label, sub_label = '⬇ Convex', 'curvature expected ↑'
+                arrow, dir_label = '↓', 'Convex'
             elif is_yield:
-                dir_label, sub_label = '⬇ Bearish', 'rate expected ↑'
+                arrow, dir_label = '↓', 'Bearish'
             else:
-                dir_label, sub_label = '⬇ SHORT', ''
-            dir_label = _strong + dir_label
-            dir_color = THEME['danger']
+                arrow, dir_label = '↓', 'Short'
+            dir_color = _NEG
         else:
-            dir_label, sub_label, dir_color = '⏸ NEUTRAL', '', THEME['text_sub']
+            arrow, dir_label, dir_color = '‖', 'Neutral', _NEUTRAL
+
         icir_val = stats['icir']
         if abs(icir_val) >= 0.50:
-            conf, conf_color = 'HIGH', THEME['success']
+            conf, conf_color = 'HIGH', _POS
         elif abs(icir_val) >= 0.25:
-            conf, conf_color = 'MEDIUM', THEME['warning']
+            conf, conf_color = 'MEDIUM', 'var(--accent-amber)'
         else:
-            conf, conf_color = 'LOW', THEME['danger']
-        return html.Div([
-            html.Div(factor, style={'fontSize': '11px', 'color': THEME['text_sub'],
-                                    'marginBottom': '4px'}),
-            html.Div(dir_label, style={'fontSize': '15px', 'fontWeight': 'bold',
-                                       'color': dir_color, 'marginBottom': '2px'}),
-            *([html.Div(sub_label, style={'fontSize': '10px', 'color': dir_color,
-                                          'marginBottom': '4px', 'fontStyle': 'italic'})]
-              if sub_label else [html.Div(style={'marginBottom': '4px'})]),
+            conf, conf_color = 'LOW', _NEG
+
+        driver_chart = _build_single_driver_chart(factor, (artifact or {}).get(factor))
+
+        card_body = html.Div([
             html.Div([
-                html.Span('Signal Z ', style={'color': THEME['text_sub']}),
-                html.Span(f"{stats['z_score']:+.2f}", style={'color': THEME['text_main']}),
-            ], style={'fontSize': '12px'}),
+                html.Span(factor, style={'fontSize': '9px', 'color': 'var(--text-muted)',
+                                          'textTransform': 'uppercase', 'letterSpacing': '0.04em'}),
+            ], style={'display': 'flex', 'justifyContent': 'space-between',
+                       'alignItems': 'center', 'marginBottom': '4px'}),
+            html.Div(
+                f"{(arrow_prefix + ' ') if strong else ''}{arrow} {dir_label}",
+                style={'fontSize': '13px', 'fontWeight': '700', 'color': dir_color,
+                       'marginBottom': '6px'},
+            ),
             html.Div([
-                html.Span('Scale ', style={'color': THEME['text_sub']}),
-                html.Span(f"{stats['scalar']:.1f}×", style={'color': THEME['accent']}),
-            ], style={'fontSize': '12px'}),
-            html.Div([
-                html.Span('ICIR ', style={'color': THEME['text_sub']}),
-                html.Span(f'{icir_val:.2f}', style={'color': conf_color}),
-            ], style={'fontSize': '12px'}),
-            html.Div(f'Conf: {conf}',
-                     style={'fontSize': '10px', 'color': conf_color,
-                            'fontWeight': 'bold', 'marginTop': '4px'}),
+                html.Div([
+                    html.Span('Signal Z', style={'color': 'var(--text-muted)'}),
+                    html.Span(f"{stats['z_score']:+.2f}", style={'color': 'var(--text-secondary)'}),
+                ], style={'display': 'flex', 'justifyContent': 'space-between', 'fontSize': '9px'}),
+                html.Div([
+                    html.Span('Scale', style={'color': 'var(--text-muted)'}),
+                    html.Span(f"{stats['scalar']:.1f}×", style={'color': 'var(--text-secondary)'}),
+                ], style={'display': 'flex', 'justifyContent': 'space-between', 'fontSize': '9px'}),
+                html.Div([
+                    html.Span('ICIR', style={'color': 'var(--text-muted)'}),
+                    html.Span(f'{icir_val:.2f}', style={'color': 'var(--text-secondary)'}),
+                ], style={'display': 'flex', 'justifyContent': 'space-between', 'fontSize': '9px'}),
+                html.Div([
+                    html.Span('Conf', style={'color': 'var(--text-muted)'}),
+                    html.Span(conf, style={'color': conf_color, 'fontWeight': '700'}),
+                ], style={'display': 'flex', 'justifyContent': 'space-between', 'fontSize': '9px',
+                          'marginTop': '2px'}),
+            ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '2px'}),
+        ], style={'padding': '10px 12px'})
+
+        if driver_chart is None:
+            return html.Div(card_body, style={
+                'border': f'2px solid {dir_color}',
+                'borderRadius': '6px',
+                'background': 'var(--surface-input)',
+                'minWidth': '130px',
+                'flex': '1',
+            })
+
+        return html.Details([
+            html.Summary(card_body, style={
+                'listStyle': 'none', 'cursor': 'pointer', 'display': 'block',
+            }),
+            html.Div(driver_chart, style={
+                'borderTop': '1px solid var(--border-strong)',
+                'padding': '8px 12px 10px', 'background': 'var(--surface-panel)',
+            }),
         ], style={
-            'backgroundColor': THEME['bg_card'],
             'border': f'2px solid {dir_color}',
             'borderRadius': '6px',
-            'padding': '12px 14px',
-            'minWidth': '115px',
-            'textAlign': 'center',
+            'background': 'var(--surface-input)',
+            'minWidth': '130px',
+            'flex': '1',
+            'overflow': 'hidden',
         })
 
     return html.Div(
         [_sc(f, s) for f, s in factor_stats.items()],
-        style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '12px',
-               'marginBottom': '20px'},
+        style={'display': 'grid', 'gridTemplateColumns': 'repeat(3, 1fr)',
+               'gap': '8px', 'marginBottom': '12px', 'alignItems': 'start'},
     )
 
 
@@ -260,215 +298,120 @@ def _build_results_from_saved_artifact(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Top-drivers chart
+# Top-drivers chart (per-factor, embedded inline inside each signal card)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _build_top_drivers(artifact, factors: List[str]) -> html.Div:
-    """Return a horizontal bar-chart panel showing ALL selected drivers per
-    risk factor.  Bar length = IC-weighted contribution share (sums to 100 %).
-    Green = positive IC (pro-factor); Red = negative IC (contra-factor).
-    Feature category codes are shown in the y-axis labels.
+def _classify_driver_feature(fn: str):
+    """Classify a feature name into (category label, short code) for display."""
+    if '_vs_' in fn:
+        return 'Cross-Market', 'XMK'
+    if fn.startswith('MACRO_'):
+        return 'Macro', 'MACRO'
+    for kw in ('_Slope', '_Curv', '_Carry_', '_SlopeMom', '_SlopeZ', '_CurvZ'):
+        if kw in fn:
+            return 'Carry / Curve', 'CARRY'
+    for kw in ('_Vol', '_VolRatio'):
+        if kw in fn:
+            return 'Volatility', 'VOL'
+    for kw in ('_ZScore', '_PctRank', '_ValueMom'):
+        if kw in fn:
+            return 'Value / Mean-Rev', 'VAL'
+    for kw in ('_Mom', '_EMACross'):
+        if kw in fn:
+            return 'Momentum', 'MOM'
+    return 'Other', '?'
 
-    Parameters
-    ----------
-    artifact:
-        Loaded model artifact dict.
-    factors:
-        Currently selected list of risk factors.
+
+def _shorten_driver_feature(fn: str, risk_factor: str) -> str:
+    prefix = risk_factor + '_'
+    if fn.startswith(prefix):
+        fn = fn[len(prefix):]
+    return fn[:32]
+
+
+_DRIVER_LEGEND = html.Div([
+    html.Div([
+        html.Span("■ Green bar  ", style={'color': '#34d399', 'fontWeight': 'bold'}),
+        html.Span("Positive IC — feature rises → factor return ↑  (pro-factor / trend-following)"),
+        html.Span("     ■ Red bar  ", style={'color': '#f87171', 'fontWeight': 'bold'}),
+        html.Span("Negative IC — feature rises → factor return ↓  (contra-factor / mean-reversion)"),
+    ], style={'marginBottom': '5px'}),
+    html.Div(
+        "Feature categories:  MOM = Momentum  ·  VAL = Value / Mean-Rev  ·  "
+        "CARRY = Carry / Curve  ·  XMK = Cross-Market  ·  MACRO = Macro  ·  VOL = Volatility",
+    ),
+], style={
+    'fontSize': '9px', 'color': 'var(--text-muted)', 'lineHeight': '1.5',
+})
+
+
+def _build_single_driver_chart(risk_factor: str, fa) -> Optional[html.Div]:
+    """Return a compact Plotly bar chart (+ legend) of ALL drivers for one
+    risk factor, for embedding inside that factor's signal card.  Bar length
+    = IC-weighted contribution share (sums to 100%). Returns ``None`` if no
+    trained-model data is available for *risk_factor*.
     """
+    if not fa:
+        return None
+    tm = fa.get('trained_model', {})
+    feats = tm.get('feature_names', [])
+    coefs = tm.get('coefficients', [])
+    if isinstance(coefs, pd.Series):
+        coefs = coefs.tolist()
+    if not feats or not coefs or len(feats) != len(coefs):
+        return None
 
-    # ── feature classifier ─────────────────────────────────────────────────
-    def _classify(fn: str):
-        if '_vs_' in fn:
-            return 'Cross-Market', 'XMK'
-        if fn.startswith('MACRO_'):
-            return 'Macro', 'MACRO'
-        for kw in ('_Slope', '_Curv', '_Carry_', '_SlopeMom', '_SlopeZ', '_CurvZ'):
-            if kw in fn:
-                return 'Carry / Curve', 'CARRY'
-        for kw in ('_Vol', '_VolRatio'):
-            if kw in fn:
-                return 'Volatility', 'VOL'
-        for kw in ('_ZScore', '_PctRank', '_ValueMom'):
-            if kw in fn:
-                return 'Value / Mean-Rev', 'VAL'
-        for kw in ('_Mom', '_EMACross'):
-            if kw in fn:
-                return 'Momentum', 'MOM'
-        return 'Other', '?'
+    total_abs = sum(abs(c) for c in coefs) or 1.0
+    ranked = sorted(zip(feats, coefs), key=lambda x: abs(x[1]), reverse=True)
+    feats_all = [x[0] for x in ranked]
+    coefs_all = [x[1] for x in ranked]
+    contribs = [abs(c) / total_abs * 100 for c in coefs_all]
+    cats = [_classify_driver_feature(f) for f in feats_all]
 
-    def _shorten(fn: str, risk_factor: str) -> str:
-        prefix = risk_factor + '_'
-        if fn.startswith(prefix):
-            fn = fn[len(prefix):]
-        return fn[:32]
+    bar_colors = ['#34d399' if c > 0 else '#f87171' for c in coefs_all]
+    hover_texts = [
+        (f"<b>{f}</b><br>"
+         f"IC (Spearman): {c:+.4f}<br>"
+         f"Contribution: {p:.1f}% of total |IC|<br>"
+         f"Feature type: {cat[0]}<br>"
+         f"{'↑ Pro-factor — feature moves with target' if c > 0 else '↓ Contra-factor — feature moves against target'}")
+        for f, c, p, cat in zip(feats_all, coefs_all, contribs, cats)
+    ]
+    y_labels = [f"{_shorten_driver_feature(f, risk_factor)} [{cats[i][1]}]" for i, f in enumerate(feats_all)]
 
-    # ── collect per-factor data ────────────────────────────────────────────
-    rows_data = []
-    for risk_factor in factors:
-        fa = (artifact or {}).get(risk_factor)
-        if not fa:
-            continue
-        tm = fa.get('trained_model', {})
-        feats = tm.get('feature_names', [])
-        coefs = tm.get('coefficients', [])
-        if isinstance(coefs, pd.Series):
-            coefs = coefs.tolist()
-        if not feats or not coefs or len(feats) != len(coefs):
-            continue
-        total_abs = sum(abs(c) for c in coefs) or 1.0
-        ranked = sorted(zip(feats, coefs), key=lambda x: abs(x[1]), reverse=True)
-        rows_data.append({
-            'factor': risk_factor,
-            'ranked': ranked,
-            'total_abs': total_abs,
-        })
+    n_bars = len(feats_all)
+    fig_h = max(120, n_bars * 24 + 40)
 
-    if not rows_data:
-        if artifact:
-            akeys = [k for k in artifact if k != 'metadata']
-            msg = (f"⚠️ Artifact has keys {akeys} but none matched selected "
-                   f"factors {factors}, or all coefficients were zero.")
-        else:
-            msg = "⚠️ No model artifact available. Click Train Model first."
-        return html.Div(
-            msg,
-            style={'color': THEME['warning'], 'fontSize': '11px',
-                   'fontStyle': 'italic', 'padding': '10px 14px',
-                   'backgroundColor': THEME['bg_input'],
-                   'border': f'1px dashed {THEME["table_header"]}',
-                   'borderRadius': '6px', 'marginTop': '16px'},
-        )
-
-    # ── build one compact Plotly bar chart per risk factor ─────────────────
-    charts = []
-    for rd in rows_data:
-        rf = rd['factor']
-        ranked = rd['ranked']
-        total_abs = rd['total_abs']
-
-        feats_all = [x[0] for x in ranked]
-        coefs_all = [x[1] for x in ranked]
-        contribs = [abs(c) / total_abs * 100 for c in coefs_all]
-        cats = [_classify(f) for f in feats_all]
-
-        bar_colors = [
-            THEME['success'] if c > 0 else THEME['danger']
-            for c in coefs_all
-        ]
-        hover_texts = [
-            (f"<b>{f}</b><br>"
-             f"IC (Spearman): {c:+.4f}<br>"
-             f"Contribution: {p:.1f}% of total |IC|<br>"
-             f"Feature type: {cat[0]}<br>"
-             f"{'↑ Pro-factor — feature moves with target' if c > 0 else '↓ Contra-factor — feature moves against target'}")
-            for f, c, p, cat in zip(feats_all, coefs_all, contribs, cats)
-        ]
-        y_labels = [
-            f"{_shorten(f, rf)} [{cats[i][1]}]"
-            for i, f in enumerate(feats_all)
-        ]
-
-        n_bars = len(feats_all)
-        fig_h = max(140, n_bars * 26 + 55)
-
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=contribs[::-1],
-            y=y_labels[::-1],
-            orientation='h',
-            marker_color=bar_colors[::-1],
-            marker_line_width=0,
-            text=[f"IC {c:+.3f}" for c in coefs_all[::-1]],
-            textposition='outside',
-            textfont={'size': 9, 'color': THEME['text_sub']},
-            hovertext=hover_texts[::-1],
-            hoverinfo='text',
-            cliponaxis=False,
-        ))
-        fig.update_layout(
-            title=dict(
-                text=rf,
-                font={'color': THEME['accent'], 'size': 12},
-                x=0.01, y=0.99, xanchor='left', yanchor='top',
-            ),
-            height=fig_h,
-            template=THEME['chart_template'],
-            paper_bgcolor=THEME['bg_card'],
-            plot_bgcolor=THEME['bg_card'],
-            font={'color': THEME['text_main'], 'size': 10},
-            margin=dict(l=8, r=70, t=28, b=22),
-            xaxis=dict(
-                range=[0, 115],
-                gridcolor=THEME['table_header'],
-                ticksuffix='%',
-                title=dict(text='Contribution (%)', font={'size': 9}),
-            ),
-            yaxis=dict(
-                gridcolor='rgba(0,0,0,0)',
-                automargin=True,
-                tickfont={'size': 9},
-            ),
-            showlegend=False,
-        )
-        charts.append(
-            html.Div(
-                dcc.Graph(
-                    figure=fig,
-                    config={'displayModeBar': False},
-                    style={'height': f'{fig_h}px'},
-                ),
-                style={'flex': '1', 'minWidth': '360px'},
-            )
-        )
-
-    # ── legend ────────────────────────────────────────────────────────────
-    legend = html.Div([
-        html.Div([
-            html.Span("■ Green bar  ",
-                      style={'color': THEME['success'], 'fontWeight': 'bold'}),
-            html.Span("Positive IC — feature rises → factor return ↑  "
-                      "(pro-factor / trend-following)"),
-            html.Span("     ■ Red bar  ",
-                      style={'color': THEME['danger'], 'fontWeight': 'bold'}),
-            html.Span("Negative IC — feature rises → factor return ↓  "
-                      "(contra-factor / mean-reversion)"),
-        ], style={'marginBottom': '5px'}),
-        html.Div(
-            "Feature categories in labels:  "
-            "MOM = Momentum (trend)  ·  "
-            "VAL = Value / Mean-Rev (z-score, percentile)  ·  "
-            "CARRY = Carry / Curve structure  ·  "
-            "XMK = Cross-Market spillover  ·  "
-            "MACRO = Macro indicator  ·  "
-            "VOL = Volatility",
-        ),
-    ], style={
-        'fontSize': '11px', 'color': THEME['text_sub'],
-        'lineHeight': '1.6', 'marginBottom': '10px',
-        'padding': '7px 10px',
-        'backgroundColor': THEME['bg_input'],
-        'borderRadius': '4px',
-        'border': f'1px solid {THEME["table_header"]}',
-    })
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=contribs[::-1],
+        y=y_labels[::-1],
+        orientation='h',
+        marker_color=bar_colors[::-1],
+        marker_line_width=0,
+        text=[f"IC {c:+.3f}" for c in coefs_all[::-1]],
+        textposition='outside',
+        textfont={'size': 9, 'color': THEME['text_sub']},
+        hovertext=hover_texts[::-1],
+        hoverinfo='text',
+        cliponaxis=False,
+    ))
+    fig.update_layout(
+        title=dict(text='Top Drivers', font={'color': 'var(--accent-blue)', 'size': 11},
+                    x=0.01, y=0.98, xanchor='left', yanchor='top'),
+        height=fig_h,
+        template=THEME['chart_template'],
+        paper_bgcolor='#122a4c',
+        plot_bgcolor='#122a4c',
+        font={'color': '#e9eef8', 'size': 9},
+        margin=dict(l=8, r=60, t=24, b=20),
+        xaxis=dict(range=[0, 115], gridcolor='#0e1d3a', ticksuffix='%',
+                    title=dict(text='Contribution (%)', font={'size': 8})),
+        yaxis=dict(gridcolor='rgba(0,0,0,0)', automargin=True, tickfont={'size': 8}),
+        showlegend=False,
+    )
 
     return html.Div([
-        html.H6("Top Drivers per Risk Factor",
-                style={'color': THEME['accent'], 'marginBottom': '4px'}),
-        html.P(
-            "Bar length = contribution share = |IC_i| / Σ|IC| across ALL selected features. "
-            "If top 3 bars fill ~100% the remaining features have near-zero IC — "
-            "they were selected but contribute little to the model.",
-            style={'color': THEME['text_sub'], 'fontSize': '11px',
-                   'marginBottom': '8px', 'fontStyle': 'italic'},
-        ),
-        legend,
-        html.Div(charts,
-                 style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '12px'}),
-    ], style={
-        'backgroundColor': THEME['bg_card'],
-        'border': f'1px solid {THEME["table_header"]}',
-        'borderRadius': '8px',
-        'padding': '14px 16px',
-        'marginTop': '16px',
-    })
+        dcc.Graph(figure=fig, config={'displayModeBar': False}, style={'height': f'{fig_h}px'}),
+        _DRIVER_LEGEND,
+    ])

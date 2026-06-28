@@ -272,101 +272,146 @@ def backtest_strategy(df: pd.DataFrame, signals: pd.Series, transaction_cost: fl
 # Layout Builders
 # ---------------------------------------------------------------------------
 
+def _vol_card_header(title: str, badge_text: str | None = None) -> html.Div:
+    """Card header row — title + optional meta badge. Matches the Alpha Book card pattern."""
+    children_left = [
+        html.Span(title, style={'fontSize': '13px', 'fontWeight': '600', 'color': 'var(--text-primary)'}),
+    ]
+    if badge_text:
+        children_left.append(html.Span(badge_text, style={
+            'fontSize': '9px', 'color': 'var(--text-muted)', 'background': 'var(--surface-input)',
+            'padding': '2px 7px', 'borderRadius': '3px', 'border': '1px solid var(--border-default)',
+        }))
+    return html.Div(
+        children_left,
+        style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
+               'padding': '11px 16px', 'background': 'var(--surface-panel)',
+               'borderBottom': '1px solid var(--border-strong)'},
+    )
+
+
+_VOL_EMPTY_MSG = html.Div(
+    "Click \"Run\" to start...",
+    style={'color': 'var(--text-muted)', 'fontSize': '11px', 'fontStyle': 'italic', 'padding': '20px 16px'},
+)
+
+
 def build_volatility_layout() -> html.Div:
     """Build the main Volatility Analysis layout."""
     _label_style = {
-        'color': THEME['text_sub'], 'fontSize': '10px', 'fontWeight': '600',
+        'color': THEME['text_sub'], 'fontSize': '9px', 'fontWeight': '600',
         'textTransform': 'uppercase', 'letterSpacing': '0.06em',
         'marginBottom': '4px', 'display': 'block',
     }
     _input_style = {
         'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
         'border': f"1px solid {THEME['border']}", 'borderRadius': '4px',
-        'padding': '6px', 'width': '70px', 'textAlign': 'center', 'fontSize': '13px',
+        'padding': '6px 8px', 'width': '100%', 'textAlign': 'right', 'fontSize': '11px',
+        'boxSizing': 'border-box',
     }
+
     return html.Div([
-        # Header with inline controls — single row
         html.Div([
-            html.Span("📊 Volatility Trading Strategy Analysis",
-                      style={'color': THEME['text_main'], 'fontSize': '15px', 'fontWeight': '500', 'whiteSpace': 'nowrap'}),
-
-            html.Div(style={'width': '1px', 'height': '20px', 'background': THEME['border'], 'flexShrink': '0'}),
-
-            html.Div([
-                html.Label("Ticker", style=_label_style),
-                dcc.Dropdown(
-                    id='vol-ticker-dropdown',
-                    options=VOL_TICKER_OPTIONS,
-                    value=DEFAULT_TICKER,
-                    style={'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'], 'minWidth': '180px'},
-                    clearable=False,
-                ),
-            ]),
-
-            html.Div([
-                html.Label("Lookback", style=_label_style),
-                dcc.Input(
-                    id='vol-lookback-input', type='number', value=DEFAULT_LOOKBACK,
-                    min=5, max=60, step=1, style=_input_style,
-                ),
-            ]),
-
-            html.Div([
-                html.Label("Std Dev ×", style=_label_style),
-                dcc.Input(
-                    id='vol-numstd-input', type='number', value=DEFAULT_NUM_STD,
-                    min=1.0, max=3.0, step=0.1, style=_input_style,
-                ),
-            ]),
-
-            html.Button(
-                "▶ Run Analysis", id='vol-run-analysis-btn', n_clicks=0,
-                style={
-                    'backgroundColor': THEME['accent'], 'color': '#0c0c00',
-                    'border': 'none', 'borderRadius': '4px', 'padding': '8px 16px',
-                    'cursor': 'pointer', 'fontWeight': '700', 'fontSize': '12px', 'whiteSpace': 'nowrap',
-                },
+            html.H1("Volatility Analysis", style={
+                'margin': '0 0 3px', 'fontSize': '20px', 'fontWeight': '600',
+                'color': 'var(--text-primary)',
+            }),
+            html.Div(
+                "IV term structure, Bollinger bands strategy, and performance",
+                style={'fontSize': '11px', 'color': 'var(--text-muted)'},
             ),
+        ], style={'marginBottom': '4px'}),
 
-            html.Button(
-                "↻ Refresh Data", id='vol-refresh-data-btn', n_clicks=0,
-                style={
-                    'backgroundColor': 'transparent', 'color': THEME['text_main'],
-                    'border': f"1px solid {THEME['border']}", 'borderRadius': '4px',
-                    'padding': '8px 16px', 'cursor': 'pointer', 'fontSize': '12px', 'whiteSpace': 'nowrap',
-                },
-            ),
+        # ── Main layout: Controls (left) + Charts (right) ──────────────────────
+        html.Div([
+            # Controls card — narrow, fixed width
+            html.Div([
+                _vol_card_header("Controls"),
+                html.Div([
+                    html.Div([
+                        html.Label("Ticker", style=_label_style),
+                        dcc.Dropdown(
+                            id='vol-ticker-dropdown',
+                            options=VOL_TICKER_OPTIONS,
+                            value=DEFAULT_TICKER,
+                            clearable=False,
+                            style={'fontSize': '11px'},
+                        ),
+                    ]),
+                    html.Div([
+                        html.Label("Lookback", style=_label_style),
+                        dcc.Input(
+                            id='vol-lookback-input', type='number', value=DEFAULT_LOOKBACK,
+                            min=5, max=60, step=1, style=_input_style,
+                        ),
+                    ]),
+                    html.Div([
+                        html.Label("Std Dev ×", style=_label_style),
+                        dcc.Input(
+                            id='vol-numstd-input', type='number', value=DEFAULT_NUM_STD,
+                            min=1.0, max=3.0, step=0.1, style=_input_style,
+                        ),
+                    ]),
+                    html.Button(
+                        "▶ Run", id='vol-run-analysis-btn', n_clicks=0,
+                        style={'padding': '6px 12px', 'background': 'var(--positive)', 'color': 'var(--navy-950)',
+                               'border': 'none', 'borderRadius': '4px', 'fontSize': '10px', 'fontWeight': '700',
+                               'cursor': 'pointer', 'width': '100%'},
+                    ),
+                    html.Button(
+                        "↻ Refresh", id='vol-refresh-data-btn', n_clicks=0,
+                        style={'padding': '6px 12px', 'background': 'transparent', 'color': 'var(--text-muted)',
+                               'border': '1px solid var(--border-default)', 'borderRadius': '4px', 'fontSize': '10px',
+                               'cursor': 'pointer', 'width': '100%'},
+                    ),
+                    html.Div(id='vol-status-line', children="Ready",
+                             style={'color': THEME['text_sub'], 'fontSize': '8px'}),
 
-            html.Div(id='vol-status-line', children="Ready",
-                     style={'color': THEME['text_sub'], 'fontSize': '12px', 'fontStyle': 'italic', 'marginLeft': 'auto'}),
+                    # ── Performance (moved to bottom of controls) ────────────────
+                    html.Div([
+                        html.Div("Performance", style={'fontSize': '10px', 'fontWeight': '600', 'color': THEME['text_sub'], 'marginBottom': '8px'}),
+                        dcc.Loading(
+                            id='vol-loading',
+                            type='circle',
+                            color=THEME['accent'],
+                            style={'minHeight': '60px'},
+                            children=html.Div(id='vol-performance-container', children=_VOL_EMPTY_MSG),
+                        ),
+                    ], style={'padding': '10px', 'background': THEME['bg_input'], 'borderRadius': '4px',
+                              'border': f"1px solid {THEME['border_sub']}", 'fontSize': '9px'}),
+                ], style={'padding': '12px 14px', 'display': 'flex', 'flexDirection': 'column', 'gap': '12px'}),
+            ], style={'width': '220px', 'flexShrink': '0', 'border': '1px solid var(--border-strong)',
+                      'borderRadius': '8px', 'overflow': 'hidden'}),
 
-        ], style={
-            'display': 'flex', 'alignItems': 'flex-end', 'flexWrap': 'wrap', 'gap': '14px',
-            'backgroundColor': THEME['bg_card'],
-            'padding': '11px 18px',
-            'borderRadius': '5px',
-            'marginBottom': '15px',
-        }),
-        
-        # Loading indicator
-        dcc.Loading(
-            id='vol-loading',
-            type='circle',
-            color=THEME['accent'],
-            style={'minHeight': '80px'},
-            children=[
-                # Results container
-                html.Div(id='vol-results-container', children=[
-                    html.Div("Click \"Run Analysis\" to start...",
-                             style={'color': THEME['text_sub'], 'textAlign': 'center', 'padding': '50px'})
-                ]),
-            ],
-        ),
-        
+            # ── Chart cards (populated after Run) — right side ────────────────
+            html.Div(id='vol-results-container', children=[], style={'flex': '1', 'minWidth': '0'}),
+        ], style={'display': 'flex', 'gap': '12px', 'alignItems': 'flex-start'}),
+
         # Store for data
         dcc.Store(id='vol-data-store', data=None),
-        
-    ], style={'padding': '10px'})
+
+    ], style={'padding': '10px', 'display': 'flex', 'flexDirection': 'column', 'gap': '10px'})
+
+
+def _vol_chart_card(title: str, graph: dcc.Graph, legend_items: list[tuple[str, str]] | None = None) -> html.Div:
+    """Wrap a Plotly graph in the Alpha Book card pattern, with an optional colour-key legend row."""
+    children = [_vol_card_header(title)]
+    if legend_items:
+        children.append(html.Div(
+            [
+                html.Span([
+                    html.Span(style={'width': '12px', 'height': '2px', 'background': color,
+                                      'display': 'inline-block', 'borderRadius': '1px'}),
+                    label,
+                ], style={'display': 'flex', 'alignItems': 'center', 'gap': '4px'})
+                for color, label in legend_items
+            ],
+            style={'display': 'flex', 'gap': '12px', 'padding': '8px 16px 0', 'fontSize': '8px',
+                   'color': 'var(--text-muted)', 'borderBottom': '1px solid var(--border-strong)'},
+        ))
+    children.append(html.Div(graph, style={'padding': '12px 16px'}))
+    return html.Div(children, style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px',
+                                      'overflow': 'hidden'})
 
 
 def build_vol_results_display(
@@ -374,37 +419,17 @@ def build_vol_results_display(
     signals: pd.Series,
     backtest_results: Dict[str, Any],
     ticker: str
-) -> html.Div:
-    """Build the results display with charts and metrics."""
+) -> tuple[html.Div, html.Div]:
+    """Build the Performance table and the chart cards.
+
+    Returns:
+        (performance_table, charts_div) — performance_table renders inside the
+        Controls-row "Performance" card; charts_div is the full-width chart stack.
+    """
     metrics = backtest_results['metrics']
     cumulative_return = backtest_results['cumulative_return']
-    
-    # Unified KPI strip — ticker/IV/signal, divider, then performance stats
+
     latest = df.iloc[-1]
-
-    def kpi_cell(label, value, color=None, first=False, last=False):
-        radius = '5px 0 0 5px' if first else ('0 5px 5px 0' if last else '0')
-        return html.Div([
-            html.Div(label, style={
-                'fontSize': '10px', 'fontWeight': '700', 'letterSpacing': '0.07em',
-                'textTransform': 'uppercase', 'color': THEME['text_sub'], 'marginBottom': '5px',
-            }),
-            html.Div(value, style={
-                'fontSize': '16px', 'fontWeight': '600',
-                'color': color or THEME['text_main'], 'lineHeight': '1',
-            }),
-        ], style={
-            'background': THEME['bg_card'], 'border': f"1px solid {THEME['border']}",
-            'borderLeft': 'none' if not first else f"1px solid {THEME['border']}",
-            'borderRadius': radius, 'padding': '10px 14px', 'flexShrink': '0',
-        })
-
-    kpi_items = [kpi_cell('Ticker', ticker, first=True)]
-
-    for col in ['IV_1M', 'IV_2M', 'IV_3M']:
-        if col in latest.index:
-            kpi_items.append(kpi_cell(col.replace('IV_', '') + ' IV', f"{latest[col]:.4f}"))
-
     latest_signal = int(signals.iloc[-1]) if len(signals) > 0 else 0
     if latest_signal == 1:
         signal_text, signal_color = "Long Vol", THEME['success']
@@ -412,24 +437,39 @@ def build_vol_results_display(
         signal_text, signal_color = "Short Vol", THEME['danger']
     else:
         signal_text, signal_color = "Neutral", THEME['text_sub']
-    kpi_items.append(kpi_cell('Signal', signal_text, color=signal_color))
 
-    kpi_items.append(html.Div(style={'width': '1px', 'background': THEME['border'], 'margin': '6px 4px', 'flexShrink': '0'}))
-
-    metrics_items = [
+    _kpi_rows = [('Ticker', ticker, None)]
+    for col in ['IV_1M', 'IV_2M', 'IV_3M']:
+        if col in latest.index:
+            _kpi_rows.append((col.replace('IV_', '') + ' IV', f"{latest[col]:.4f}", None))
+    _kpi_rows.append(('Signal', signal_text, signal_color))
+    _kpi_rows += [
         ('Total Return', f"{metrics['total_return']:.2%}", THEME['success']),
-        ('Ann. Return', f"{metrics['annualized_return']:.2%}", THEME['success']),
+        ('Annualized Return', f"{metrics['annualized_return']:.2%}", THEME['success']),
         ('Volatility', f"{metrics['volatility']:.2%}", None),
-        ('Sharpe', f"{metrics['sharpe_ratio']:.2f}", None),
-        ('Win Rate', f"{metrics['win_rate']:.2%}", None),
+        ('Sharpe Ratio', f"{metrics['sharpe_ratio']:.2f}", None),
+        ('Win Rate', f"{metrics['win_rate']:.2%}", THEME['success']),
         ('Max Drawdown', f"{metrics['max_drawdown']:.2%}", THEME['danger']),
+        ('Total Trades', str(metrics['num_trades']), None),
     ]
-    for name, value, color in metrics_items:
-        kpi_items.append(kpi_cell(name, value, color=color))
-    kpi_items.append(kpi_cell('Num Trades', str(metrics['num_trades']), last=True))
 
-    kpi_strip = html.Div(kpi_items, style={'display': 'flex', 'overflowX': 'auto', 'marginBottom': '15px'})
-    
+    performance_table = html.Div(
+        html.Table(
+            html.Tbody([
+                html.Tr([
+                    html.Td(label, style={'padding': '6px 12px', 'color': 'var(--text-secondary)', 'fontSize': '10px'}),
+                    html.Td(value, style={'padding': '6px 12px', 'textAlign': 'right', 'fontSize': '10px',
+                                           'fontWeight': '600',
+                                           'color': color or 'var(--text-secondary)'}),
+                ], style={'borderBottom': '1px solid rgba(255,255,255,0.04)',
+                          'background': 'transparent' if i % 2 == 0 else 'rgba(255,255,255,0.015)'})
+                for i, (label, value, color) in enumerate(_kpi_rows)
+            ]),
+            style={'width': '100%', 'borderCollapse': 'collapse'},
+        ),
+        style={'overflowX': 'auto'},
+    )
+
     # Chart 1: Term Structure
     fig_ts = go.Figure()
     fig_ts.add_trace(go.Scatter(x=df.index, y=df['IV_1M'], name='1M IV', mode='lines', line=dict(color='#3498db', width=2)))
@@ -437,15 +477,14 @@ def build_vol_results_display(
     fig_ts.add_trace(go.Scatter(x=df.index, y=df['IV_3M'], name='3M IV', mode='lines', line=dict(color='#e74c3c', width=2)))
     
     fig_ts.update_layout(
-        title='Implied Volatility Term Structure',
         height=300,
-        margin=dict(l=50, r=20, t=40, b=40),
+        margin=dict(l=50, r=20, t=20, b=40),
         plot_bgcolor=THEME['bg_main'],
         paper_bgcolor=THEME['bg_main'],
         font=dict(color=THEME['text_main']),
         xaxis=dict(gridcolor=THEME['bg_card']),
         yaxis=dict(title='IV', gridcolor=THEME['bg_card']),
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        showlegend=False,
         hovermode='x unified',
     )
     
@@ -479,9 +518,8 @@ def build_vol_results_display(
         ))
     
     fig_bb.update_layout(
-        title='Mean Reversion Strategy - Bollinger Bands',
         height=350,
-        margin=dict(l=50, r=20, t=40, b=40),
+        margin=dict(l=50, r=20, t=20, b=40),
         plot_bgcolor=THEME['bg_main'],
         paper_bgcolor=THEME['bg_main'],
         font=dict(color=THEME['text_main']),
@@ -501,14 +539,14 @@ def build_vol_results_display(
     fig_cum.add_hline(y=1, line_dash='dash', line_color=THEME['text_sub'])
     
     fig_cum.update_layout(
-        title='Strategy Cumulative Return Curve',
         height=250,
-        margin=dict(l=50, r=20, t=40, b=40),
+        margin=dict(l=50, r=20, t=20, b=40),
         plot_bgcolor=THEME['bg_main'],
         paper_bgcolor=THEME['bg_main'],
         font=dict(color=THEME['text_main']),
         xaxis=dict(gridcolor=THEME['bg_card']),
-        yaxis=dict(title='累计收益', gridcolor=THEME['bg_card']),
+        yaxis=dict(title='Cumulative Return', gridcolor=THEME['bg_card']),
+        showlegend=False,
         hovermode='x unified',
     )
     
@@ -527,9 +565,8 @@ def build_vol_results_display(
         fig_slope.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
     
     fig_slope.update_layout(
-        title='Term Structure Slope Z-Score (1M-3M)',
         height=200,
-        margin=dict(l=50, r=20, t=40, b=40),
+        margin=dict(l=50, r=20, t=20, b=40),
         plot_bgcolor=THEME['bg_main'],
         paper_bgcolor=THEME['bg_main'],
         font=dict(color=THEME['text_main']),
@@ -537,14 +574,28 @@ def build_vol_results_display(
         yaxis=dict(title='Z-Score', gridcolor=THEME['bg_card']),
         showlegend=False,
     )
-    
-    return html.Div([
-        kpi_strip,
-        html.Div([dcc.Graph(figure=fig_ts, style={'height': '300px'})], style={'marginBottom': '15px'}),
-        html.Div([dcc.Graph(figure=fig_bb, style={'height': '350px'})], style={'marginBottom': '15px'}),
-        html.Div([dcc.Graph(figure=fig_cum, style={'height': '250px'})], style={'marginBottom': '15px'}),
-        html.Div([dcc.Graph(figure=fig_slope, style={'height': '200px'})], style={'marginBottom': '15px'}),
-    ])
+
+    charts_div = html.Div([
+        _vol_chart_card(
+            "Implied Volatility Term Structure",
+            dcc.Graph(figure=fig_ts, style={'height': '300px'}),
+            legend_items=[('#3498db', '1M IV'), ('#f39c12', '2M IV'), ('#e74c3c', '3M IV')],
+        ),
+        _vol_chart_card(
+            "Mean Reversion: Bollinger Bands",
+            dcc.Graph(figure=fig_bb, style={'height': '350px'}),
+        ),
+        _vol_chart_card(
+            "Strategy Cumulative Return",
+            dcc.Graph(figure=fig_cum, style={'height': '250px'}),
+        ),
+        _vol_chart_card(
+            "Term Structure Slope Z-Score (1M-3M)",
+            dcc.Graph(figure=fig_slope, style={'height': '200px'}),
+        ),
+    ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'})
+
+    return performance_table, charts_div
 
 
 # ---------------------------------------------------------------------------
@@ -555,7 +606,8 @@ def register_volatility_callbacks(app) -> None:
     """Register all callbacks for the Volatility tab."""
     
     @app.callback(
-        [Output('vol-results-container', 'children'),
+        [Output('vol-performance-container', 'children'),
+         Output('vol-results-container', 'children'),
          Output('vol-status-line', 'children')],
         [Input('vol-run-analysis-btn', 'n_clicks'),
          Input('vol-refresh-data-btn', 'n_clicks')],
@@ -568,34 +620,32 @@ def register_volatility_callbacks(app) -> None:
         """Run volatility analysis or refresh data."""
         ctx = callback_context
         if not ctx.triggered:
-            return html.Div("Click \"Run Analysis\" to start...", 
-                           style={'color': THEME['text_sub'], 'textAlign': 'center', 'padding': '50px'}), "Ready"
-        
+            return _VOL_EMPTY_MSG, [], "Ready"
+
         triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
-        
+
         # Handle refresh data button
         if triggered_id == 'vol-refresh-data-btn':
             try:
                 success = retrieve_vol_data()
                 if success:
                     return (
-                        html.Div("Data updated, please click \"Run Analysis\" to see results", 
-                                style={'color': THEME['success'], 'textAlign': 'center', 'padding': '50px'}),
-                        f"Data update completed @ {datetime.now().strftime('%H:%M:%S')}"
+                        _VOL_EMPTY_MSG, [],
+                        f"Data updated @ {datetime.now().strftime('%H:%M:%S')} — click Run"
                     )
                 else:
                     return (
-                        html.Div("Data update failed, please check network connection", 
-                                style={'color': THEME['danger'], 'textAlign': 'center', 'padding': '50px'}),
-                        "Data update failed"
+                        html.Div("Data update failed, please check network connection",
+                                 style={'color': THEME['danger'], 'fontSize': '11px', 'padding': '20px 16px'}),
+                        [], "Data update failed"
                     )
             except Exception as e:
                 return (
-                    html.Div(f"Data update error: {str(e)}", 
-                            style={'color': THEME['danger'], 'textAlign': 'center', 'padding': '50px'}),
-                    f"Error: {str(e)[:50]}"
+                    html.Div(f"Data update error: {str(e)}",
+                             style={'color': THEME['danger'], 'fontSize': '11px', 'padding': '20px 16px'}),
+                    [], f"Error: {str(e)[:50]}"
                 )
-        
+
         # Handle run analysis button
         if triggered_id == 'vol-run-analysis-btn':
             try:
@@ -604,43 +654,39 @@ def register_volatility_callbacks(app) -> None:
                 if df is None:
                     return (
                         html.Div([
-                            html.P(f"Unable to load data for {ticker}", style={'color': THEME['danger']}),
-                            html.P("Please click \"Refresh Data\" to get the latest data first", style={'color': THEME['text_sub']}),
-                        ], style={'textAlign': 'center', 'padding': '50px'}),
-                        f"Data loading failed - {ticker}"
+                            html.P(f"Unable to load data for {ticker}", style={'color': THEME['danger'], 'fontSize': '11px'}),
+                            html.P("Please click \"Refresh\" to get the latest data first", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                        ], style={'padding': '20px 16px'}),
+                        [], f"Data loading failed - {ticker}"
                     )
-                
+
                 # Validate parameters
                 lookback = int(lookback) if lookback else DEFAULT_LOOKBACK
                 num_std = float(num_std) if num_std else DEFAULT_NUM_STD
-                
+
                 # Compute features
                 df = compute_mean_reversion_features(df, lookback=lookback, num_std=num_std)
-                
+
                 # Generate signals
                 signals = generate_mean_reversion_signals(df)
-                
+
                 # Run backtest
                 backtest_results = backtest_strategy(df, signals)
-                
+
                 # Build results display
-                results_div = build_vol_results_display(df, signals, backtest_results, ticker)
-                
-                status = f"Analysis completed @ {datetime.now().strftime('%H:%M:%S')} | {ticker} | Lookback: {lookback} days | σ multiplier: {num_std}"
-                
-                return results_div, status
-                
+                performance_table, charts_div = build_vol_results_display(df, signals, backtest_results, ticker)
+
+                status = f"Done @ {datetime.now().strftime('%H:%M:%S')} | {ticker} | LB {lookback}d | {num_std}σ"
+
+                return performance_table, charts_div, status
+
             except Exception as e:
                 import traceback
                 traceback.print_exc()
                 return (
-                    html.Div(f"Analysis error: {str(e)}", 
-                            style={'color': THEME['danger'], 'textAlign': 'center', 'padding': '50px'}),
-                    f"Error: {str(e)[:50]}"
+                    html.Div(f"Analysis error: {str(e)}",
+                             style={'color': THEME['danger'], 'fontSize': '11px', 'padding': '20px 16px'}),
+                    [], f"Error: {str(e)[:50]}"
                 )
-        
-        return (
-            html.Div("Click \"Run Analysis\" to start...", 
-                    style={'color': THEME['text_sub'], 'textAlign': 'center', 'padding': '50px'}),
-            "Ready"
-        )
+
+        return _VOL_EMPTY_MSG, [], "Ready"

@@ -264,6 +264,12 @@ def build_multiasset_risk_layout():
             # Column-visibility pills — track via dcc.Store, options depend on active book
             dcc.Store(id='summary-book-active', data='beta'),
             dcc.Store(id='summary-col-visibility', data={'open_date': False, 'volume': False, 'score': False}),
+            dcc.Store(id='summary-beta-sort', data={'col': None, 'dir': 'asc'}),
+            dcc.Store(id='summary-alpha-sort', data={'col': None, 'dir': 'asc'}),
+            dcc.Store(id='summary-beta-active-date-row', data=None),
+            dcc.Store(id='summary-alpha-active-date-row', data=None),
+            dcc.Store(id='summary-beta-rows-store', data=[]),
+            dcc.Store(id='summary-alpha-rows-store', data=[]),
             html.Div([
                 html.Span("Columns", style={
                     'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.07em',
@@ -367,10 +373,29 @@ def build_multiasset_risk_layout():
         # ── Tickets subtab ───────────────────────────────────────────────────
         html.Div(id='summary-tab-tickets', children=[
 
-        html.H4("Trade Tickets", style={'color': THEME['text_main'], 'marginBottom': '15px', 'borderBottom': f'2px solid {THEME["success"]}', 'paddingBottom': '5px'}),
-        html.Div([
-            html.Div("Ticket implementation pending...", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'textAlign': 'center', 'padding': '30px'})
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '20px', 'borderRadius': '5px'}),
+            html.Div([
+                html.Div([
+                    html.Div("Trade Tickets", style={
+                        'color': THEME['text_main'], 'fontWeight': '600', 'fontSize': '16px',
+                    }),
+                    html.Div(id='tickets-subtitle', style={
+                        'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '3px',
+                    }),
+                ]),
+                html.Div(id='tickets-filter-row', style={
+                    'display': 'flex', 'gap': '4px', 'backgroundColor': THEME['bg_input'],
+                    'padding': '3px', 'borderRadius': '5px', 'border': f'1px solid {THEME["table_header"]}',
+                }),
+            ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between',
+                      'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '14px'}),
+
+            dcc.Store(id='tickets-filter', data='All'),
+
+            # Summary metrics strip
+            html.Div(id='tickets-kpi-container'),
+
+            # Tickets table
+            html.Div(id='tickets-table-container', className='risk-panel-flush-tbl'),
 
         ]),
 

@@ -140,92 +140,96 @@ function AlphaPortfolio() {
               </div>
             </div>
 
-            {/* Candidate + Saved panels */}
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
-              <div>
-                <div style={{ font:'var(--type-label)', fontSize:'10px', color:accentAmber, marginBottom:'8px', display:'flex', alignItems:'center', gap:'8px' }}>
-                  <span style={{ width:'3px', height:'14px', background:accentAmber, borderRadius:'1px', display:'inline-block' }}></span>
-                  Candidate Instruments <span style={{ color:'var(--text-muted)', fontWeight:400 }}>6 trades</span>
+            {/* Candidates + Saved (left) | Correlation matrix (right) */}
+            <div style={{ display:'flex', gap:'14px', alignItems:'flex-start' }}>
+              {/* Left: candidates + saved stacked */}
+              <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:'12px' }}>
+                <div>
+                  <div style={{ font:'var(--type-label)', fontSize:'10px', color:accentAmber, marginBottom:'8px', display:'flex', alignItems:'center', gap:'8px' }}>
+                    <span style={{ width:'3px', height:'14px', background:accentAmber, borderRadius:'1px', display:'inline-block' }}></span>
+                    Candidate Instruments <span style={{ color:'var(--text-muted)', fontWeight:400 }}>6 trades</span>
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'6px' }}>
+                    {CANDIDATES.map((c,i) => (
+                      <div key={i} style={{ background:'var(--surface-raised)', border:'1px solid var(--border-strong)', borderRadius:'5px', padding:'8px 10px' }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'4px' }}>
+                          <span style={{ font:'var(--type-data)', fontSize:'10px', color:'var(--text-primary)', fontWeight:600 }}>{c.id}</span>
+                          <span style={{ font:'var(--type-meta)', fontSize:'8px', color:'var(--text-muted)', cursor:'pointer' }}>✕</span>
+                        </div>
+                        <div style={{ font:'var(--type-meta)', fontSize:'8px', color:'var(--text-muted)', marginBottom:'5px' }}>{c.type}</div>
+                        <div style={{ display:'flex', gap:'3px', alignItems:'center' }}>
+                          <RegimeBadge r={c.regime} />
+                          <DirBadge d={c.dir} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'6px' }}>
-                  {CANDIDATES.map((c,i) => (
-                    <div key={i} style={{ background:'var(--surface-raised)', border:'1px solid var(--border-strong)', borderRadius:'5px', padding:'8px 10px' }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'4px' }}>
-                        <span style={{ font:'var(--type-data)', fontSize:'10px', color:'var(--text-primary)', fontWeight:600 }}>{c.id}</span>
-                        <span style={{ font:'var(--type-meta)', fontSize:'8px', color:'var(--text-muted)', cursor:'pointer' }}>✕</span>
+                <div>
+                  <div style={{ font:'var(--type-label)', fontSize:'10px', color:'var(--accent-cyan)', marginBottom:'8px', display:'flex', alignItems:'center', gap:'8px' }}>
+                    <span style={{ width:'3px', height:'14px', background:'var(--accent-cyan)', borderRadius:'1px', display:'inline-block' }}></span>
+                    Saved Positions <span style={{ color:'var(--text-muted)', fontWeight:400 }}>16 trades · read-only</span>
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'6px' }}>
+                    {SAVED_POS.map((c,i) => (
+                      <div key={i} style={{ background:'var(--surface-raised)', border:'1px solid var(--border-strong)', borderRadius:'5px', padding:'8px 10px' }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'4px' }}>
+                          <span style={{ font:'var(--type-data)', fontSize:'10px', color:'var(--text-primary)', fontWeight:600 }}>{c.id}</span>
+                          <span style={{ font:'var(--type-meta)', fontSize:'9px', color:'var(--text-muted)' }}>{c.dir !== '—' ? '●' : '○'}</span>
+                        </div>
+                        <div style={{ font:'var(--type-meta)', fontSize:'8px', color:'var(--text-muted)', marginBottom:'5px' }}>{c.type}</div>
+                        <div style={{ display:'flex', gap:'3px', alignItems:'center' }}>
+                          {c.regime !== '—' && <RegimeBadge r={c.regime} />}
+                          {c.dir !== '—' && <DirBadge d={c.dir} />}
+                        </div>
                       </div>
-                      <div style={{ font:'var(--type-meta)', fontSize:'8px', color:'var(--text-muted)', marginBottom:'5px' }}>{c.type}</div>
-                      <div style={{ display:'flex', gap:'3px', alignItems:'center' }}>
-                        <RegimeBadge r={c.regime} />
-                        <DirBadge d={c.dir} />
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div>
-                <div style={{ font:'var(--type-label)', fontSize:'10px', color:'var(--accent-cyan)', marginBottom:'8px', display:'flex', alignItems:'center', gap:'8px' }}>
-                  <span style={{ width:'3px', height:'14px', background:'var(--accent-cyan)', borderRadius:'1px', display:'inline-block' }}></span>
-                  Saved Positions <span style={{ color:'var(--text-muted)', fontWeight:400 }}>16 trades · read-only</span>
+
+              {/* Right: Correlation matrix — natural width */}
+              <div style={{ flexShrink:0 }}>
+                <div style={{ font:'var(--type-label)', fontSize:'11px', color:'var(--text-secondary)', marginBottom:'8px' }}>Curated Correlation Matrix</div>
+                <div style={{ overflowX:'auto', border:'1px solid var(--border-strong)', borderRadius:'6px' }}>
+                  <table style={{ borderCollapse:'collapse', font:'var(--type-data)', fontSize:'9px', width:'auto' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ padding:'6px 8px', minWidth:'80px', font:'var(--type-label)', fontSize:'8px', color:'var(--text-muted)' }}></th>
+                        {CORR_LABELS.slice(0,-1).map(l => (
+                          <th key={l} style={{ padding:'4px 6px', font:'var(--type-label)', fontSize:'7px', color:'var(--text-muted)',
+                            writingMode:'vertical-rl', transform:'rotate(180deg)', whiteSpace:'nowrap', maxHeight:'70px' }}>{l}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {CORR_LABELS.slice(1).map((row, ri) => (
+                        <tr key={row}>
+                          <td style={{ padding:'4px 8px', font:'var(--type-label)', fontSize:'8px', color:'var(--text-muted)', whiteSpace:'nowrap', borderRight:'1px solid var(--border-strong)' }}>{row}</td>
+                          {CORR_LABELS.slice(0, ri+1).map(col => {
+                            const key1 = `${row},${col}`, key2 = `${col},${row}`;
+                            const v = CORR_VALS[key1] ?? CORR_VALS[key2];
+                            return (
+                              <td key={col} style={{ padding:'4px 6px', textAlign:'center', background:corrColor(v),
+                                color: v !== undefined ? 'rgba(255,255,255,0.85)' : 'transparent', fontSize:'8px', fontWeight:600, minWidth:'32px' }}>
+                                {v !== undefined ? v.toFixed(2) : ''}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'6px' }}>
-                  {SAVED_POS.map((c,i) => (
-                    <div key={i} style={{ background:'var(--surface-raised)', border:'1px solid var(--border-strong)', borderRadius:'5px', padding:'8px 10px' }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'4px' }}>
-                        <span style={{ font:'var(--type-data)', fontSize:'10px', color:'var(--text-primary)', fontWeight:600 }}>{c.id}</span>
-                        <span style={{ font:'var(--type-meta)', fontSize:'9px', color:'var(--text-muted)' }}>{c.dir !== '—' ? '●' : '○'}</span>
-                      </div>
-                      <div style={{ font:'var(--type-meta)', fontSize:'8px', color:'var(--text-muted)', marginBottom:'5px' }}>{c.type}</div>
-                      <div style={{ display:'flex', gap:'3px', alignItems:'center' }}>
-                        {c.regime !== '—' && <RegimeBadge r={c.regime} />}
-                        {c.dir !== '—' && <DirBadge d={c.dir} />}
-                      </div>
-                    </div>
-                  ))}
+                {/* Legend */}
+                <div style={{ display:'flex', alignItems:'center', gap:'8px', marginTop:'8px', font:'var(--type-meta)', fontSize:'8px', color:'var(--text-muted)' }}>
+                  <span>-1</span>
+                  <div style={{ width:'120px', height:'5px', borderRadius:'3px', background:'linear-gradient(90deg,rgba(200,60,40,0.85),rgba(255,255,255,0.08),rgba(30,80,160,0.85))' }}></div>
+                  <span>+1</span>
                 </div>
               </div>
             </div>
 
-            {/* Correlation matrix */}
-            <div>
-              <div style={{ font:'var(--type-label)', fontSize:'11px', color:'var(--text-secondary)', marginBottom:'8px' }}>Curated Correlation Matrix</div>
-              <div style={{ overflowX:'auto', border:'1px solid var(--border-strong)', borderRadius:'6px' }}>
-                <table style={{ borderCollapse:'collapse', font:'var(--type-data)', fontSize:'9px' }}>
-                  <thead>
-                    <tr>
-                      <th style={{ padding:'6px 8px', minWidth:'80px', font:'var(--type-label)', fontSize:'8px', color:'var(--text-muted)' }}></th>
-                      {CORR_LABELS.slice(0,-1).map(l => (
-                        <th key={l} style={{ padding:'4px 6px', font:'var(--type-label)', fontSize:'7px', color:'var(--text-muted)',
-                          writingMode:'vertical-rl', transform:'rotate(180deg)', whiteSpace:'nowrap', maxHeight:'70px' }}>{l}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {CORR_LABELS.slice(1).map((row, ri) => (
-                      <tr key={row}>
-                        <td style={{ padding:'4px 8px', font:'var(--type-label)', fontSize:'8px', color:'var(--text-muted)', whiteSpace:'nowrap', borderRight:'1px solid var(--border-strong)' }}>{row}</td>
-                        {CORR_LABELS.slice(0, ri+1).map(col => {
-                          const key1 = `${row},${col}`, key2 = `${col},${row}`;
-                          const v = CORR_VALS[key1] ?? CORR_VALS[key2];
-                          return (
-                            <td key={col} style={{ padding:'4px 6px', textAlign:'center', background:corrColor(v),
-                              color: v !== undefined ? 'rgba(255,255,255,0.85)' : 'transparent', fontSize:'8px', fontWeight:600, minWidth:'32px' }}>
-                              {v !== undefined ? v.toFixed(2) : ''}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {/* Legend */}
-              <div style={{ display:'flex', alignItems:'center', gap:'8px', marginTop:'8px', font:'var(--type-meta)', fontSize:'8px', color:'var(--text-muted)' }}>
-                <span>-1</span>
-                <div style={{ flex:1, maxWidth:'120px', height:'5px', borderRadius:'3px', background:'linear-gradient(90deg,rgba(200,60,40,0.85),rgba(255,255,255,0.08),rgba(30,80,160,0.85))' }}></div>
-                <span>+1</span>
-              </div>
-            </div>
 
             <div style={{ display:'flex', alignItems:'center', gap:'14px' }}>
               <button style={{ padding:'7px 16px', background:accentAmber, color:'var(--navy-950)', border:'none', borderRadius:'4px', font:'var(--type-label)', fontSize:'11px', fontWeight:700, cursor:'pointer' }}>

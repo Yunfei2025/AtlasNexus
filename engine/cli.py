@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from datetime import date, datetime
 from pathlib import Path
 
@@ -82,6 +83,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None, *, project_root: Path | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if os.environ.get("FI_FORCE_NONTRADING", "0").strip().lower() in {"1", "true", "yes"}:
+        # Manual runs from the Execution Center should work regardless of
+        # trading hours / weekday — bypass the Wind connectivity window.
+        from data.providers.retrieve import set_allow_nontrading_retrieval
+        set_allow_nontrading_retrieval(True)
 
     project_root = project_root or Path(__file__).resolve().parents[1]
 

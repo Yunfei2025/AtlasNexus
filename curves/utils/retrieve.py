@@ -274,7 +274,13 @@ def updateInstrumentDef(asof=None, on_demand=False):
                 print(f"⚠️ Failed to update {btype}-InstrumentInfo.pkl (Wind API: {ex})")
             else:
                 print('Check if Wind data quota exceeded. ',ex,btype)
-            
+
+def retrieveInstrumentDefinitions():
+    """Auto-registered retriever wrapper so 'update-data' also refreshes
+    *-InstrumentInfo.pkl (engine/data_update.py only discovers functions
+    named 'retrieve*'; updateInstrumentDef itself does not match)."""
+    updateInstrumentDef(on_demand=True)
+
 def retrieveCNBDTS():
     print("Updating irs and china bond time series...")
     ds = _date_strs['d']

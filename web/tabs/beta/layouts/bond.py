@@ -33,8 +33,8 @@ def build_multiasset_bond_layout():
                 html.H4("Bond Trading Signals (Z-Score)", style={
                     'margin': '0 0 4px',
                     'color': 'var(--text-primary)',
-                    'fontSize': '16px',
-                    'fontWeight': '700',
+                    'fontSize': '20px',
+                    'fontWeight': '600',
                 }),
                 html.Div(
                     "Realtime relative-value signals by maturity bucket. "

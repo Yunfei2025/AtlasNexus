@@ -471,26 +471,81 @@ function BacktestBeta() {
 
       {/* Chart Card */}
       <div style={{
-        background: 'var(--surface-panel)',
         border: '1px solid var(--border-strong)',
         borderRadius: '8px',
-        padding: '16px',
-        minHeight: '320px',
-        display: 'flex',
-        flexDirection: 'column',
+        overflow: 'hidden',
       }}>
-        <div style={{ font: 'var(--type-label)', color: 'var(--text-muted)', marginBottom: '16px' }}>
-          {mode === 'individual' ? 'P&L Over Time — Individual Factors' : 'Allocation Over Time — Portfolio'}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 16px', background: 'var(--surface-panel)', borderBottom: '1px solid var(--border-strong)', userSelect: 'none' }}>
+          <span style={{ font: 'var(--type-h2)', fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+            {mode === 'individual' ? 'P&L Over Time — Individual Factors' : 'Portfolio Value Over Time'}
+          </span>
         </div>
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', font: 'var(--type-meta)' }}>
-          <div style={{ textAlign: 'center' }}>
-            <svg width="240" height="140" viewBox="0 0 240 140" fill="none" style={{ opacity: 0.4, marginBottom: '12px' }}>
-              <path d="M20 120 Q60 100 100 80 T180 40" stroke="var(--accent-cyan)" strokeWidth="2" fill="none" />
-              <circle cx="100" cy="80" r="3" fill="var(--accent-cyan)" />
-              <circle cx="180" cy="40" r="3" fill="var(--accent-cyan)" />
-            </svg>
-            <div>Chart — connect to your data source</div>
-          </div>
+        <div style={{ padding: '12px 16px', display: 'flex', gap: '12px', font: 'var(--type-meta)', fontSize: '8px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-strong)' }}>
+          {mode === 'individual' ? (
+            <>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ width: '12px', height: '2px', background: '#38bdf8', display: 'inline-block', borderRadius: '1px' }}></span>Cumulative P&L
+              </span>
+            </>
+          ) : (
+            <>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ width: '12px', height: '2px', background: '#38bdf8', display: 'inline-block', borderRadius: '1px' }}></span>Portfolio Value
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ width: '12px', height: '2px', background: 'var(--accent-amber)', display: 'inline-block', borderRadius: '1px', opacity: 0.7 }}></span>Benchmark
+              </span>
+            </>
+          )}
+        </div>
+        <div style={{ padding: '12px 16px', minHeight: '260px' }}>
+          {(() => {
+            const W = 900, H = 180, pad = { t: 12, b: 24, l: 36, r: 12 };
+            const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+            
+            // Generate synthetic P&L or portfolio data
+            const N = 80;
+            let mainLine = [];
+            let benchmarkLine = mode === 'portfolio' ? [] : null;
+            let v = mode === 'individual' ? 0 : 100;
+            
+            for (let i = 0; i < N; i++) {
+              const change = (Math.random() - 0.45) * (mode === 'individual' ? 150 : 2) + (mode === 'individual' ? 50 : 0.5);
+              v += change;
+              mainLine.push(v);
+              if (mode === 'portfolio') {
+                benchmarkLine.push(100 + i * 0.3 + Math.random() * 2);
+              }
+            }
+            
+            const allVals = mode === 'portfolio' ? [...mainLine, ...benchmarkLine] : mainLine;
+            const mn = Math.min(...allVals) - (mode === 'individual' ? 200 : 5);
+            const mx = Math.max(...allVals) + (mode === 'individual' ? 200 : 5);
+            const rng = mx - mn || 1;
+            
+            const px = i => pad.l + i * (iw / (N - 1));
+            const py = v => pad.t + ih - (((v - mn) / rng) * ih);
+            const months = ['Aug 25', 'Oct 25', 'Dec 25', 'Feb 26', 'Apr 26', 'Jun 26'];
+            const step = Math.floor(N / 5);
+            const makePath = data => data.map((v, i) => `${i === 0 ? 'M' : 'L'}${px(i)},${py(v)}`).join(' ');
+            
+            return (
+              <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+                {[0, 0.25, 0.5, 0.75, 1].map(t => (
+                  <line key={t} x1={pad.l} x2={W - pad.r} y1={pad.t + ih * t} y2={pad.t + ih * t} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+                ))}
+                {mode === 'portfolio' && <path d={makePath(benchmarkLine)} fill="none" stroke="var(--accent-amber)" strokeWidth="1.2" strokeDasharray="5,3" opacity="0.7" />}
+                <path d={makePath(mainLine)} fill="none" stroke="#38bdf8" strokeWidth="2" opacity="0.9" />
+                {[0, 0.25, 0.5, 0.75, 1].map(t => {
+                  const v = (mn + rng * t).toFixed(mode === 'individual' ? 0 : 1);
+                  return <text key={t} x={pad.l - 4} y={pad.t + ih * (1 - t) + 3} textAnchor="end" fill="rgba(255,255,255,0.35)" fontSize="8">{v}</text>;
+                })}
+                {months.map((l, i) => (
+                  <text key={i} x={px(i * step)} y={H - 6} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="8">{l}</text>
+                ))}
+              </svg>
+            );
+          })()}
         </div>
       </div>
     </div>

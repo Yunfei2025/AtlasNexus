@@ -21,7 +21,11 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from multiasset.retrieve import retrieveFXIRCurves
-from multiasset.assets import BondAsset, CommodityAsset, FXAsset, MultiFactorBondAsset, SlopeSensitiveBondAsset, Asset
+from multiasset.assets import (
+    BondAsset, CommodityAsset, FXAsset, MultiFactorBondAsset, SlopeSensitiveBondAsset,
+    MultiFactorCreditAsset, Asset,
+)
+from multiasset.config import CREDIT_CONFIG
 from multiasset.portfolio import Portfolio
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
@@ -114,63 +118,94 @@ def create_bond_universe(analyzer=None) -> List[MultiFactorBondAsset]:
 
 def create_spread_universe(analyzer=None) -> List[Asset]:
     """
-    Create spread universe (IRS, CDB, ICP).
-    
+    Create spread universe (IRS only).
+
+    CDB and ICP tenor instruments moved to create_credit_universe(), which
+    exposes them to the correct CRDL/CRSL/CRCV spread-vs-CGB factors instead
+    of the outright-yield-level SPDL/SPSL factors this function used to build
+    them against. SPDL.CDB/SPDL.ICP remain selectable as standalone factors
+    (e.g. for training/vol) but no longer back a tradable instrument here.
+
     Args:
         analyzer: Optional risk factor analyzer (PCA or deterministic) for computing sensitivities.
-    
+
     Returns:
         List of Asset objects for spread instruments
     """
-    spread_types = {
-        'IRS': 'IRS',    # Interest Rate Swap
-        'CDB': 'CDB',    # China Development Bond
-        'ICP': 'ICP'     # Interbank Commercial Paper
-    }
-    
     tenors = ['1Y', '2Y', '5Y', '10Y', '30Y']
-    
+
     spreads: List[Asset] = []
-    for spread_code, spread_name in spread_types.items():
-        for tenor in tenors:
-            name = f"{spread_code}{tenor}"
+    for tenor in tenors:
+        name = f"IRS{tenor}"
+        duration = float(tenor.replace('Y', ''))
 
-            duration = float(tenor.replace('Y', ''))
+        # Spread instruments use SPDL (level) and SPSL (slope).
+        # Model them like bonds: price return ≈ -duration × Δ(spread).
+        level_factor = 'SPDL.IRS'
+        slope_factor = 'SPSL.IRS'
+        # SPSL sign convention matches IRSL: short-end positive, belly zero, long-end negative
+        # (spread slope factor rises → short-end spreads widen, long-end spreads tighten)
+        slope_mag = max(duration * 0.5, 0.5)
+        if duration <= 2.0:
+            signed_slope = slope_mag            # short-end: positive
+        elif duration <= 5.0:
+            signed_slope = 0.0                  # belly: neutral
+        else:
+            signed_slope = -min(slope_mag, 3.0) # long-end: negative, capped
+        spreads.append(
+            SlopeSensitiveBondAsset(
+                name=name,
+                level_factor=level_factor,
+                slope_factor=slope_factor,
+                duration=duration,
+                slope_sensitivity=signed_slope,
+            )
+        )
 
-            # Spread instruments use SPDL (level) and optionally SPSL (slope).
-            # Model them like bonds: price return ≈ -duration × Δ(spread).
-            level_factor = f'SPDL.{spread_code}'
-
-            if spread_code != 'ICP':
-                slope_factor = f'SPSL.{spread_code}'
-                # SPSL sign convention matches IRSL: short-end positive, belly zero, long-end negative
-                # (spread slope factor rises → short-end spreads widen, long-end spreads tighten)
-                slope_mag = max(duration * 0.5, 0.5)
-                if duration <= 2.0:
-                    signed_slope = slope_mag            # short-end: positive
-                elif duration <= 5.0:
-                    signed_slope = 0.0                  # belly: neutral
-                else:
-                    signed_slope = -min(slope_mag, 3.0) # long-end: negative, capped
-                spreads.append(
-                    SlopeSensitiveBondAsset(
-                        name=name,
-                        level_factor=level_factor,
-                        slope_factor=slope_factor,
-                        duration=duration,
-                        slope_sensitivity=signed_slope,
-                    )
-                )
-            else:
-                spreads.append(
-                    BondAsset(
-                        name=name,
-                        factor=level_factor,
-                        duration=duration,
-                    )
-                )
-    
     return spreads
+
+
+def create_credit_universe(analyzer=None) -> List[MultiFactorCreditAsset]:
+    """
+    Create credit spread universe (CDB, LGB, MTN, ICP).
+
+    Each instrument is the own-yield-minus-CGB spread at a given tenor
+    (see multiasset.config.CREDIT_CONFIG), with CRDL/CRSL/CRCV exposure
+    derived from the same tenor-aware weights the factor levels are
+    computed from (multiasset.pca_analyzer.get_credit_weights), unlike
+    the IR universe's fixed 5-tenor grid.
+
+    Args:
+        analyzer: Optional DeterministicRiskFactorAnalyzer for computing
+                  CRDL/CRSL/CRCV sensitivities. If not provided, instruments
+                  fall back to a Level-only exposure of -duration.
+
+    Returns:
+        List of MultiFactorCreditAsset objects for all credit universes and tenors.
+    """
+    credit: List[MultiFactorCreditAsset] = []
+    for universe, (_, _, tenor_cols) in CREDIT_CONFIG.items():
+        for _, _, tenor_years in tenor_cols:
+            tenor = f"{tenor_years:g}Y"
+            sector = {'0.25Y': '3M', '0.5Y': '6M', '0.75Y': '9M'}.get(tenor, tenor)
+            name = f"{universe}{sector}"
+
+            duration = get_default_sensitivities(sector).get('IRDL', 5.0)
+            sensitivities = None
+            if analyzer is not None:
+                sensitivities = analyzer.get_credit_tenor_sensitivities(universe, tenor)
+
+            credit.append(
+                MultiFactorCreditAsset(
+                    name=name,
+                    universe=universe,
+                    tenor=sector,
+                    duration=duration,
+                    credit_sensitivities=sensitivities,
+                )
+            )
+
+    return credit
 
 
 def create_hedge_instruments(hedge_names: List[str], analyzer=None) -> List[Asset]:
@@ -286,15 +321,18 @@ def create_default_portfolio(use_cache: bool = True, use_deterministic: bool = T
     
     # Create comprehensive bond universe with derived sensitivities
     bonds = create_bond_universe(analyzer=analyzer)
-    
+
     # Create spread universe
     spreads = create_spread_universe(analyzer=analyzer)
-    
+
+    # Create credit spread universe (CDB/LGB/MTN/ICP vs CGB)
+    credit = create_credit_universe(analyzer=analyzer)
+
     # Create commodity universe
     commodities = create_commodity_universe()
-    
+
     # Combine all assets
-    assets: List[Asset] = bonds + spreads + commodities  # type: ignore
+    assets: List[Asset] = bonds + spreads + credit + commodities  # type: ignore
     
     # Create portfolio
     portfolio = Portfolio(assets, loader)
@@ -323,9 +361,10 @@ def create_custom_portfolio(selected_asset_names: List[str], use_cache: bool = T
 
     all_bonds = create_bond_universe(analyzer=analyzer)
     all_spreads = create_spread_universe(analyzer=analyzer)
+    all_credit = create_credit_universe(analyzer=analyzer)
     all_commodities = create_commodity_universe()
     all_fx = create_fx_universe()
-    all_possible_assets = all_bonds + all_spreads + all_commodities + all_fx  # type: ignore
+    all_possible_assets = all_bonds + all_spreads + all_credit + all_commodities + all_fx  # type: ignore
 
     _seen: set = set()
     selected_assets = []

@@ -118,6 +118,7 @@ DIVERSIFICATION_RECOMMENDATIONS = {
 SELECTED_FACTOR_POOL = {
     'ir_factors': ['IRDL.CN', 'IRSL.CN', 'IRCV.CN'],  # Default: CN Level/Slope/Curvature
     'sp_factors': [],
+    'cr_factors': [],  # Credit: CRDL/CRSL/CRCV x LGB/MTN/ICP
     'fx_factors': ['FXDL.USDCNY'],
     'cmd_factors': ['CMDL.AU', 'CMDL.AL'],  # Gold + Aluminium
     'eq_factors': [],
@@ -286,23 +287,102 @@ FACTOR_TO_ASSET_MAP = {
         {'name': 'IRS10Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '10Y'},
     ],
 
-    # China Development Bond
+    # ==================== Credit Spreads (own yield - CGB, by tenor) ==========
+    # China Development Bond — legacy SPDL.CDB/SPSL.CDB (outright CDB level/slope,
+    # not a spread vs CGB) are kept for backward compatibility; CRDL/CRSL/CRCV.CDB
+    # below are the correct CDB-vs-CGB credit spread factors (see CREDIT_CONFIG).
     'SPDL.CDB': [
-        {'name': 'CDB1Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '1Y'},
-        {'name': 'CDB2Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '2Y'},
-        {'name': 'CDB5Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '5Y'},
-        {'name': 'CDB10Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '10Y'},
+        {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
+        {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
+        {'name': 'CDB5Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '5Y'},
+        {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
     ],
     'SPSL.CDB': [
-        {'name': 'CDB2Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '2Y'},
-        {'name': 'CDB10Y', 'type': 'Spread', 'universe': 'China Development Bond', 'sector': '10Y'},
+        {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
+        {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
+    ],
+    'CRDL.CDB': [
+        {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
+        {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
+        {'name': 'CDB5Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '5Y'},
+        {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
+    ],
+    'CRSL.CDB': [
+        {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
+        {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
+        {'name': 'CDB5Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '5Y'},
+        {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
+    ],
+    'CRCV.CDB': [
+        {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
+        {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
+        {'name': 'CDB5Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '5Y'},
+        {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
     ],
 
-    # Interbank Commercial Paper (only Level, no Slope)
+    # Local Government Bond
+    'CRDL.LGB': [
+        {'name': 'LGB1Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '1Y'},
+        {'name': 'LGB3Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '3Y'},
+        {'name': 'LGB5Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '5Y'},
+        {'name': 'LGB10Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '10Y'},
+        {'name': 'LGB30Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '30Y'},
+    ],
+    'CRSL.LGB': [
+        {'name': 'LGB1Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '1Y'},
+        {'name': 'LGB3Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '3Y'},
+        {'name': 'LGB5Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '5Y'},
+        {'name': 'LGB10Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '10Y'},
+        {'name': 'LGB30Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '30Y'},
+    ],
+    'CRCV.LGB': [
+        {'name': 'LGB1Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '1Y'},
+        {'name': 'LGB3Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '3Y'},
+        {'name': 'LGB5Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '5Y'},
+        {'name': 'LGB10Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '10Y'},
+        {'name': 'LGB30Y', 'type': 'Credit', 'universe': 'Local Government Bond', 'sector': '30Y'},
+    ],
+
+    # Medium Term Note
+    'CRDL.MTN': [
+        {'name': 'MTN1Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '1Y'},
+        {'name': 'MTN2Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '2Y'},
+        {'name': 'MTN3Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '3Y'},
+        {'name': 'MTN4Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '4Y'},
+        {'name': 'MTN5Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '5Y'},
+    ],
+    'CRSL.MTN': [
+        {'name': 'MTN1Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '1Y'},
+        {'name': 'MTN2Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '2Y'},
+        {'name': 'MTN3Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '3Y'},
+        {'name': 'MTN4Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '4Y'},
+        {'name': 'MTN5Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '5Y'},
+    ],
+    'CRCV.MTN': [
+        {'name': 'MTN1Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '1Y'},
+        {'name': 'MTN2Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '2Y'},
+        {'name': 'MTN3Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '3Y'},
+        {'name': 'MTN4Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '4Y'},
+        {'name': 'MTN5Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '5Y'},
+    ],
+
+    # Interbank Commercial Paper (Level + Slope only — too few tenors for curvature)
     'SPDL.ICP': [
-        {'name': 'ICP3M', 'type': 'Spread', 'universe': 'Interbank Commercial Paper', 'sector': '3M'},
-        {'name': 'ICP6M', 'type': 'Spread', 'universe': 'Interbank Commercial Paper', 'sector': '6M'},
-        {'name': 'ICP1Y', 'type': 'Spread', 'universe': 'Interbank Commercial Paper', 'sector': '1Y'},
+        {'name': 'ICP3M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '3M'},
+        {'name': 'ICP6M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '6M'},
+        {'name': 'ICP1Y', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '1Y'},
+    ],
+    'CRDL.ICP': [
+        {'name': 'ICP3M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '3M'},
+        {'name': 'ICP6M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '6M'},
+        {'name': 'ICP9M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '9M'},
+        {'name': 'ICP1Y', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '1Y'},
+    ],
+    'CRSL.ICP': [
+        {'name': 'ICP3M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '3M'},
+        {'name': 'ICP6M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '6M'},
+        {'name': 'ICP9M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '9M'},
+        {'name': 'ICP1Y', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '1Y'},
     ],
 
     # ==================== FX (Foreign Exchange) ====================

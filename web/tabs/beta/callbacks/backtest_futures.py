@@ -86,7 +86,8 @@ def register_backtest_futures_callbacks(app):
              return [], None
 
     @app.callback(
-        Output('bf-results-container', 'children'),
+        [Output('bf-results-container', 'children'),
+         Output('bf-perf-results-container', 'children')],
         [Input('bf-run-button', 'n_clicks'),
          Input('bf-local-symbol', 'value')],
         [State('bf-data-source', 'value'),
@@ -117,7 +118,7 @@ def register_backtest_futures_callbacks(app):
         run_strategies = not is_default_load
         
         if not FUTURES_AVAILABLE:
-            return html.Div("Modules not loaded.", style={'color': THEME['danger']})
+            return html.Div("Modules not loaded.", style={'color': THEME['danger']}), None
 
         selected_strategies = selected_strategies or []
         effective_tf = '1D' if trading_mode == 'daily' else tf
@@ -128,27 +129,27 @@ def register_backtest_futures_callbacks(app):
 
         try:
             if source == 'wind':
-                if not wind_code: return html.Div("Please enter Wind symbol", style={'color': THEME['danger']})
+                if not wind_code: return html.Div("Please enter Wind symbol", style={'color': THEME['danger']}), None
                 s_str = f"{start_date} 00:00:00"
                 e_str = f"{end_date} 23:59:59"
                 df, err_msg = load_wind_data(wind_code, s_str, e_str)
             else:
-                if not local_symbol: return html.Div("Please select a symbol", style={'color': THEME['text_sub'], 'textAlign': 'center', 'marginTop': '50px'})
+                if not local_symbol: return html.Div("Please select a symbol", style={'color': THEME['text_sub'], 'textAlign': 'center', 'marginTop': '50px'}), None
                 file_path = get_local_file_path(local_symbol, effective_tf)
                 if not file_path:
-                    return html.Div("Unable to construct file path", style={'color': THEME['danger']})
-                
+                    return html.Div("Unable to construct file path", style={'color': THEME['danger']}), None
+
                 contract_key = local_symbol if trading_mode == 'daily' else None
                 df, err_msg = load_local_data_processed(file_path, contract_key)
                 if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
                     s_ts = pd.to_datetime(start_date)
                     e_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
                     df = df[(df.index >= s_ts) & (df.index <= e_ts)]
-                
+
             if err_msg:
-                return html.Div(f"Data loading error: {err_msg}", style={'color': THEME['danger']})
+                return html.Div(f"Data loading error: {err_msg}", style={'color': THEME['danger']}), None
             if df is None or (isinstance(df, pd.DataFrame) and df.empty):
-                return html.Div("Data is empty (please check date range)", style={'color': THEME['danger']})
+                return html.Div("Data is empty (please check date range)", style={'color': THEME['danger']}), None
 
             # Resample
             if effective_tf == '1D':
@@ -160,7 +161,7 @@ def register_backtest_futures_callbacks(app):
                 df_resampled = resample_data(df, effective_tf)
                 
             if df_resampled.empty:
-                return html.Div("Data is empty after resampling", style={'color': THEME['danger']})
+                return html.Div("Data is empty after resampling", style={'color': THEME['danger']}), None
                 
             # Run strategies (only on explicit button click, not on default load)
             results = {}
@@ -236,47 +237,71 @@ def register_backtest_futures_callbacks(app):
                     mode='lines', name=f'{name} Equity'
                 ), row=2, col=1)
 
-            chart_title = f"{local_symbol or wind_code} — Price" if is_default_load else "Backtest Results"
             fig.update_layout(
-                height=600,
-                title=chart_title,
+                height=560,
                 template=THEME['chart_template'],
-                paper_bgcolor=THEME['bg_card'],
-                plot_bgcolor=THEME['bg_card'],
-                font={'color': THEME['text_main']},
-                margin=dict(l=50, r=50, t=50, b=50),
-                legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center"),
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font={'color': '#e9eef8'},
+                margin=dict(l=50, r=20, t=30, b=40),
+                legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center"),
                 xaxis_rangeslider_visible=False
             )
-            fig.update_xaxes(gridcolor=THEME['table_header'])
-            fig.update_yaxes(gridcolor=THEME['table_header'])
+            fig.update_xaxes(gridcolor='rgba(100,140,200,0.12)')
+            fig.update_yaxes(gridcolor='rgba(100,140,200,0.12)')
 
-            # Helper for local Metric Card (redefined here or duplicated logic)
-            def create_metric_card_local(title, metrics):
-                return html.Div([
-                    html.H6(title, style={'color': THEME['text_sub'], 'marginBottom': '5px', 'fontSize': '14px'}),
-                    html.Div([
-                        html.Div(f"Ret: {metrics.get('Total Return', 'N/A')}", style={'fontWeight': 'bold', 'color': THEME['success'] if str(metrics.get('Total Return')).startswith('+') else THEME['text_main']}),
-                        html.Div(f"DD: {metrics.get('Max Drawdown', 'N/A')}", style={'color': THEME['danger']}),
-                        html.Div(f"Sharpe: {metrics.get('Sharpe Ratio', 'N/A')}"),
-                        html.Div(f"Trades: {metrics.get('Trades', 'N/A')}"),
-                    ], style={'fontSize': '12px', 'lineHeight': '1.5', 'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '5px'})
-                ], style={'backgroundColor': THEME['bg_input'], 'padding': '10px', 'borderRadius': '4px', 'marginBottom': '10px', 'flex': '1', 'minWidth': '150px'})
+            # ── Strategy Performance table (matches BetaFutures.jsx METRIC rows) ──
+            strategy_metrics = {name: calculate_metrics(res) for name, res in results.items()}
 
-            # Card Display
-            cards = []
-            
-            for name, res in results.items():
-                m = calculate_metrics(res)
-                cards.append(create_metric_card_local(name, m))
-                
-            return html.Div([
-                html.Div(cards, style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '15px'}),
-                dcc.Graph(figure=fig)
-            ])
+            def _is_positive(v):
+                return not str(v).strip().startswith('-')
+
+            _th_style = {
+                'padding': '7px 12px', 'textAlign': 'right', 'fontSize': '8px',
+                'color': 'var(--text-muted)', 'letterSpacing': '0.05em', 'textTransform': 'uppercase',
+            }
+            _td_label_style = {'padding': '7px 12px', 'color': 'var(--text-secondary)', 'fontSize': '10px'}
+
+            def _metric_row(label, key, color_fn=None, fmt=None):
+                cells = [html.Td(label, style=_td_label_style)]
+                for name in strategy_metrics:
+                    val = strategy_metrics[name].get(key, 'N/A')
+                    display_val = fmt(val) if fmt else val
+                    color = color_fn(val) if color_fn else 'var(--text-secondary)'
+                    cells.append(html.Td(display_val, style={
+                        'padding': '7px 12px', 'textAlign': 'right', 'fontWeight': '600',
+                        'fontSize': '10px', 'color': color,
+                    }))
+                return html.Tr(cells, style={'borderBottom': '1px solid rgba(255,255,255,0.04)'})
+
+            if strategy_metrics:
+                strategy_table = html.Div(style={'overflowX': 'auto'}, children=[
+                    html.Table([
+                        html.Thead(html.Tr(
+                            [html.Th("METRIC", style={**_th_style, 'textAlign': 'left'})] +
+                            [html.Th(name.upper(), style=_th_style) for name in strategy_metrics]
+                        , style={'background': 'var(--surface-panel)', 'borderBottom': '1px solid var(--border-strong)'})),
+                        html.Tbody([
+                            _metric_row("Return", "Total Return",
+                                        color_fn=lambda v: '#34d399' if _is_positive(v) else '#f87171'),
+                            _metric_row("Max DD", "Max Drawdown",
+                                        color_fn=lambda v: '#f87171'),
+                            _metric_row("Sharpe", "Sharpe Ratio",
+                                        color_fn=lambda v: '#34d399' if not str(v).strip().startswith('-') else '#f87171'),
+                            _metric_row("Trades", "Trades"),
+                        ]),
+                    ], style={'width': '100%', 'borderCollapse': 'collapse'}),
+                ])
+            else:
+                strategy_table = html.Div(
+                    "No results. Click ▶ Run Backtest to start.",
+                    style={'color': 'var(--text-muted)', 'fontSize': '10px', 'padding': '4px 0'},
+                )
+
+            return dcc.Graph(figure=fig), strategy_table
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            return html.Div(f"Error running backtest: {str(e)}", style={'color': THEME['danger']})
+            return html.Div(f"Error running backtest: {str(e)}", style={'color': THEME['danger']}), None
 

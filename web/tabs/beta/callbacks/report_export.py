@@ -31,6 +31,7 @@ REPORT_PDF_PATH = REPORT_DIR / "CMBC_FICC_Allocation_index.pdf"
 _ASSET_CLASS_GROUP = {
     'Rates': '固定收益',
     'Spread': '固定收益',
+    'Credit': '固定收益',
     'FX': '外汇',
     'Commodities': '大宗商品',
     'Equities': '权益',
@@ -56,7 +57,7 @@ def build_allocation_panel(weights_final: dict, weights_prev: dict | None,
     for name, weight in sorted(weights_final.items(), key=lambda kv: -kv[1]):
         prev_w = weights_prev.get(name, 0.0)
         asset_type = get_asset_type(name)
-        price_label = "Yield (%)" if asset_type in ('Rates', 'Spread') else "Price"
+        price_label = "Yield (%)" if asset_type in ('Rates', 'Spread', 'Credit') else "Price"
 
         try:
             series, *_ = get_asset_yield_series(name, market_data)
@@ -203,7 +204,7 @@ def _returns_table_groups(weights: dict, month_start: pd.Timestamp, month_end: p
         max_abs_ret = max(max_abs_ret, abs(ret))
 
         asset_type = get_asset_type(name)
-        is_yield = asset_type in ('Rates', 'Spread')
+        is_yield = asset_type in ('Rates', 'Spread', 'Credit')
         try:
             series, *_ = get_asset_yield_series(name, market_data)
         except Exception:

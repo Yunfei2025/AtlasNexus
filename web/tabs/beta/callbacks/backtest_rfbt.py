@@ -19,7 +19,6 @@ from ._rfbt_train_helpers import (
     _compute_factor_stats,
     _render_signal_cards,
     _build_results_from_saved_artifact,
-    _build_top_drivers,
 )
 
 
@@ -454,9 +453,20 @@ def register_backtest_rfbt_callbacks(app):
         except Exception as _ufr_exc:
             print(f"Warning: factor-rates incremental update failed: {_ufr_exc}")
 
+        # Keep factor-credit.pkl in sync too (separate file/cadence, same
+        # underlying credit calculation — see multiasset/factor_backtest.py).
+        try:
+            from multiasset.factor_backtest import update_factor_credit
+            _, n_new_cr = update_factor_credit(DIR_INPUT)
+            if n_new_cr:
+                print(f"factor-credit.pkl: +{n_new_cr} new day(s) appended before predict/train")
+        except Exception as _ufc_exc:
+            print(f"Warning: factor-credit incremental update failed: {_ufc_exc}")
+
         store_data = store_data or {}
         factors = list(dict.fromkeys(
             store_data.get('ir', []) +
+            store_data.get('cr', []) +
             store_data.get('fx', []) +
             store_data.get('eq', []) +
             store_data.get('cmd', [])
@@ -684,34 +694,33 @@ def register_backtest_rfbt_callbacks(app):
                 )
 
             factor_stats = _compute_factor_stats(results)
-            signal_status_row = _render_signal_cards(factor_stats)
-            top_alpha_div = _build_top_drivers(latest_artifact, factors)
+            signal_status_row = _render_signal_cards(factor_stats, artifact=latest_artifact)
 
             signal_notes = html.Div(
                 [
                     html.Div([
-                        html.Span('Signal Z: ', style={'color': THEME['text_sub']}),
+                        html.Span('Signal Z: ', style={'color': 'var(--text-muted)'}),
                         html.Span('latest prediction vs trailing 252d mean/std',
-                                  style={'color': THEME['text_main']}),
+                                  style={'color': 'var(--text-secondary)'}),
                     ]),
                     html.Div([
-                        html.Span('Scale: ', style={'color': THEME['text_sub']}),
+                        html.Span('Scale: ', style={'color': 'var(--text-muted)'}),
                         html.Span('clipped |Z| used for sizing',
-                                  style={'color': THEME['text_main']}),
+                                  style={'color': 'var(--text-secondary)'}),
                     ]),
                     html.Div([
-                        html.Span('ICIR: ', style={'color': THEME['text_sub']}),
+                        html.Span('ICIR: ', style={'color': 'var(--text-muted)'}),
                         html.Span('mean rolling IC / IC std',
-                                  style={'color': THEME['text_main']}),
+                                  style={'color': 'var(--text-secondary)'}),
                     ]),
                     html.Div([
-                        html.Span('Conf: ', style={'color': THEME['text_sub']}),
+                        html.Span('Conf: ', style={'color': 'var(--text-muted)'}),
                         html.Span('ICIR bucket: low / medium / high',
-                                  style={'color': THEME['text_main']}),
+                                  style={'color': 'var(--text-secondary)'}),
                     ]),
                 ],
-                style={'marginTop': '10px', 'fontSize': '11px',
-                       'color': THEME['text_sub'], 'lineHeight': '1.4'},
+                style={'marginTop': '10px', 'fontSize': '9px',
+                       'color': 'var(--text-muted)', 'lineHeight': '1.5'},
             )
 
             mean_icir = (sum(s['icir'] for s in factor_stats.values()) /
@@ -719,17 +728,21 @@ def register_backtest_rfbt_callbacks(app):
             train_children = [
                 html.Div(
                     header_note,
-                    style={'color': THEME['accent'], 'fontSize': '11px',
+                    style={'color': 'var(--accent-purple, #9b8cf0)', 'fontSize': '11px',
                            'fontStyle': 'italic', 'padding': '8px 12px',
-                           'backgroundColor': THEME['bg_input'],
-                           'border': '1px solid #7B68EE',
+                           'background': 'var(--surface-input)',
+                           'border': '1px solid var(--accent-purple, #7c70d6)',
                            'borderRadius': '6px', 'marginBottom': '12px'},
                 ),
-                html.H6("Current Signal State",
-                        style={'color': THEME['accent'], 'marginBottom': '10px'}),
+                html.Div([
+                    html.Span(f"Mean ICIR: {mean_icir:.2f}", style={
+                        'fontSize': '9px', 'color': 'var(--text-muted)',
+                        'background': 'var(--surface-input)', 'padding': '2px 7px',
+                        'borderRadius': '3px', 'border': '1px solid var(--border-default)',
+                    }),
+                ], style={'marginBottom': '10px'}),
                 signal_status_row,
                 signal_notes,
-                top_alpha_div,
             ]
             status_prefix = "🔮 Model predicted" if action == 'predict' else "⚡ Model trained"
             status_msg = (f"{status_prefix} · {persist_note} · Mean ICIR: {mean_icir:.2f}")

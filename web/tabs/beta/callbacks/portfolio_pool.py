@@ -52,7 +52,18 @@ def register_portfolio_pool_callbacks(app):
         elif asset_type == 'Spread':
             universe_options = [
                 {'label': 'Interest Rate Swap', 'value': 'Interest Rate Swap'},
+            ]
+            return (
+                {'display': 'flex', 'alignItems': 'center', 'marginBottom': '12px'},
+                {'display': 'none'},
+                {'display': 'none'},
+                universe_options, None, [], []
+            )
+        elif asset_type == 'Credit':
+            universe_options = [
                 {'label': 'China Development Bond', 'value': 'China Development Bond'},
+                {'label': 'Local Government Bond', 'value': 'Local Government Bond'},
+                {'label': 'Medium Term Note', 'value': 'Medium Term Note'},
                 {'label': 'Interbank Commercial Paper', 'value': 'Interbank Commercial Paper'},
             ]
             return (
@@ -76,15 +87,28 @@ def register_portfolio_pool_callbacks(app):
                 [], None, [], []
             )
 
+    # Tenors available per credit universe — matches CREDIT_CONFIG in
+    # multiasset/config.py (the same grids CRDL/CRSL/CRCV are computed from).
+    _CREDIT_UNIVERSE_TENORS = {
+        'China Development Bond': ['1Y', '2Y', '5Y', '10Y'],
+        'Local Government Bond': ['1Y', '3Y', '5Y', '10Y', '30Y'],
+        'Medium Term Note': ['1Y', '2Y', '3Y', '4Y', '5Y'],
+        'Interbank Commercial Paper': ['3M', '6M', '9M', '1Y'],
+    }
+    _RATES_TENORS = ['1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
+
     @app.callback(
-        Output('sector-selection-row', 'style', allow_duplicate=True),
+        [Output('sector-selection-row', 'style', allow_duplicate=True),
+         Output('sector-selector', 'options')],
         [Input('universe-selector', 'value')],
         prevent_initial_call=True
     )
     def show_sector_selection(universe):
-        if universe:
-            return {'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '12px'}
-        return {'display': 'none'}
+        if not universe:
+            return {'display': 'none'}, []
+        tenors = _CREDIT_UNIVERSE_TENORS.get(universe, _RATES_TENORS)
+        options = [{'label': f' {s}', 'value': s} for s in tenors]
+        return {'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '12px'}, options
 
     # 2. Asset Pool Management
     @app.callback(
@@ -114,14 +138,19 @@ def register_portfolio_pool_callbacks(app):
         if current_pool is None:
             current_pool = []
         
-        if button_id == 'add-to-pool-btn' and asset_type in ['Rates', 'Spread']:
+        if button_id == 'add-to-pool-btn' and asset_type in ['Rates', 'Spread', 'Credit']:
             if not universe or not sectors:
                 return current_pool, dash.no_update, dash.no_update
-            
+
             universe_code_map = {
                 'China Gov Bond': 'CN', 'US Gov Bond': 'US', 'DE Gov Bond': 'EU',
                 'UK Gov Bond': 'UK', 'Japan Gov Bond': 'JP',
-                'China Credit': 'CN-Credit', 'China Urban': 'CN-Urban'
+                'China Credit': 'CN-Credit', 'China Urban': 'CN-Urban',
+                'Interest Rate Swap': 'IRS',
+                'China Development Bond': 'CDB',
+                'Local Government Bond': 'LGB',
+                'Medium Term Note': 'MTN',
+                'Interbank Commercial Paper': 'ICP',
             }
             universe_code = universe_code_map.get(universe, 'XX')
             

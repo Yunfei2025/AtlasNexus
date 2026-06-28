@@ -11,8 +11,9 @@ from __future__ import annotations
 import sys
 import os
 import re
-from dash import dcc, html
-from dash.dependencies import Input, Output, State
+from dash import dcc, html, dash_table, callback_context, no_update
+from dash.dependencies import Input, Output, State, ALL
+from dash.exceptions import PreventUpdate
 
 from pathlib import Path
 # Add project root to Python path
@@ -35,7 +36,7 @@ _pio.templates.default = "plotly_dark+atlas"
 from dash import Dash as _Dash
 import pathlib
 
-from web.services.artifacts import find_latest_run, format_run_meta
+from web.services.artifacts import find_latest_run, format_run_meta, get_data_generation_date
 from web.services.jobs import (
     start_engine_job, tail_log, get_job_status,
     list_running_jobs, finalize_job_if_done, _cmd_type,
@@ -151,6 +152,17 @@ def _serve_pairs_regression():
         return send_file(str(pairs_file))
     abort(404)
 
+
+# Serve the user manual for new users (linked from the header "Manual" button).
+@app.server.route("/user-manual")
+def _serve_user_manual():
+    from flask import send_file, abort
+
+    manual_file = project_root / "web" / "assets" / "AtlasNexus User Manual.html"
+    if manual_file.exists():
+        return send_file(str(manual_file))
+    abort(404)
+
 # Register callbacks for migrated legacy FI layouts (Pairs tab refresh callback).
 register_fi_callbacks(app)
 register_multiasset_callbacks(app)
@@ -165,7 +177,7 @@ register_pricer_callbacks(app)
 def build_header():
     return html.Div(
         [
-            # ---- Left: title + timestamps ----
+            # ---- Left: title ----
             html.Div(
                 [
                     html.H4([
@@ -173,21 +185,28 @@ def build_header():
                         html.Span("·", className="sep"),
                         " Daily",
                     ], className="app__header__title"),
-                    html.P(id="an-latest-run",
-                           style={"fontSize": "12px", "margin": "0", "color": "#ffffff", "fontWeight": "500"}),
-                    html.P(id="an-refresh-time", className="app__header__title--grey",
-                           style={"fontSize": "10px", "margin": "0", "opacity": "0.6"}),
                 ],
                 className="app__header__desc",
             ),
-            # ---- Right: live status strip ----
+            # ---- Right: as-of/status chips, live clock, status pill strip ----
             html.Div(
                 [
                     dcc.Store(id="an-job-id", storage_type="memory"),
+                    html.Div(id="an-header-chips"),
+                    html.Div(className="an-header-divider"),
+                    html.Div(id="an-header-clock", className="an-live-clock"),
+                    html.Div(className="an-header-divider"),
                     html.Div(id="an-header-status", className="an-header-status"),
+                    html.Div(className="an-header-divider"),
+                    html.A(
+                        "Manual",
+                        href="/user-manual",
+                        target="_blank",
+                        className="an-manual-btn",
+                        title="Open the AtlasNexus user manual",
+                    ),
                 ],
-                style={"display": "flex", "flexDirection": "column",
-                       "alignItems": "flex-end", "justifyContent": "center", "gap": "6px"},
+                className="app__header__right",
             ),
         ],
         className="app__header",
@@ -362,9 +381,58 @@ def build_tabs_panel():
                         ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
                     ], className="rc-panel"),
 
+                    # Data Viewer panel
+                    html.Div([
+                        html.Div("Data Viewer", className="rc-section-label"),
+                        html.Div([
+                            html.Label("File Path (relative to input/ or database/)", style=_lbl_style),
+                            dcc.Input(
+                                id="an-dv-filepath",
+                                type="text",
+                                placeholder="e.g. futures-InstrumentInfo.pkl or pool/CBondPool20260416.pkl",
+                                style=_input_style,
+                            ),
+                        ], style={'marginBottom': '10px'}),
+                        html.Button(
+                            "Load",
+                            id="an-dv-load-btn",
+                            n_clicks=0,
+                            style={**_btn_style, 'width': '100%', 'marginBottom': '10px'},
+                        ),
+                        html.Div([
+                            html.Div([
+                                html.Label("Preview", style=_lbl_style),
+                                dcc.RadioItems(
+                                    id="an-dv-mode",
+                                    options=[
+                                        {'label': ' Head', 'value': 'head'},
+                                        {'label': ' Tail', 'value': 'tail'},
+                                        {'label': ' Row #', 'value': 'row'},
+                                    ],
+                                    value='head',
+                                    inline=True,
+                                    style={'color': '#aab0c0', 'fontSize': '12px'},
+                                    labelStyle={'marginRight': '12px'},
+                                ),
+                            ], style={'flex': '1'}),
+                            html.Div([
+                                html.Label("N", style=_lbl_style),
+                                dcc.Input(
+                                    id="an-dv-n",
+                                    type="number",
+                                    value=10,
+                                    min=0,
+                                    step=1,
+                                    style=_input_style,
+                                ),
+                            ], style={'width': '64px'}),
+                        ], style={'display': 'flex', 'gap': '10px', 'alignItems': 'flex-end'}),
+                        html.Div(id="an-dv-error", style={'color': '#e06c75', 'fontSize': '12px', 'marginTop': '8px'}),
+                    ], className="rc-panel"),
+
                 ], className="rc-left-col"),
 
-                # ── RIGHT COLUMN: Status bar + Log viewer ────────────────────
+                # ── RIGHT COLUMN: Status bar + Log viewer + Data Viewer ──────
                 html.Div([
                     html.Div(
                         id="an-job-status",
@@ -372,10 +440,18 @@ def build_tabs_panel():
                         style={'fontStyle': 'italic', 'color': '#aab0c0', 'fontSize': '12px'},
                     ),
                     html.Div(id="an-run-center-content"),
+
+                    html.Div([
+                        html.Div("Data Viewer Preview", className="rc-section-label"),
+                        html.Div(id="an-dv-breadcrumb", style={'marginBottom': '10px'}),
+                        html.Div(id="an-dv-tree", style={'marginBottom': '10px'}),
+                        html.Div(id="an-dv-preview"),
+                    ], className="rc-panel"),
                 ], className="rc-right-col"),
 
             ], className="rc-grid", style={'marginTop': '28px'}),
 
+            dcc.Store(id="an-dv-state", storage_type="memory"),
             dcc.Interval(id="an-run-center-interval", interval=_INTERVAL_RUN_CTR_MS, n_intervals=0),
         ]
     )
@@ -504,11 +580,11 @@ def build_tabs_panel():
                         value="market",
                         className="an-tabs",
                         children=[
-                            dcc.Tab(label="Market",     value="market",     className="an-tab", selected_className="an-tab--selected"),
-                            dcc.Tab(label="Beta Book",  value="beta",       className="an-tab", selected_className="an-tab--selected"),
-                            dcc.Tab(label="Alpha Book", value="alpha",      className="an-tab", selected_className="an-tab--selected"),
-                            dcc.Tab(label="Summary",    value="risk",       className="an-tab", selected_className="an-tab--selected"),
-                            dcc.Tab(label="Run Center", value="run-center", className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Market Monitor",     value="market",     className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Beta Portfolio",  value="beta",       className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Alpha Portfolio", value="alpha",      className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Portfolio Summary",    value="risk",       className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Execution Center", value="run-center", className="an-tab", selected_className="an-tab--selected"),
                         ],
                     ),
                     # Pre-render all main tabs with absolute positioning to preserve state
@@ -577,18 +653,40 @@ def _set_book_accent(tab):
 
 
 @app.callback(
-    Output("an-refresh-time", "children"),
-    Output("an-latest-run", "children"),
+    Output("an-header-clock", "children"),
+    Output("an-header-chips", "children"),
     Input("an-interval", "n_intervals"),
 )
 def _tick(n):
     import datetime
     now = datetime.datetime.now().strftime("%H:%M:%S")
     meta = find_latest_run(mode="eod")
-    return (
-        f"Updated {now}",
-        f"Latest EOD: {format_run_meta(meta)}",
+
+    # AS OF reflects the calibration date baked into TBond-cvpx.pkl (the
+    # actual curve data date), not the EOD run's nominal as-of date — these
+    # can diverge if a calibration step ran on stale/cached data.
+    asof_value = get_data_generation_date("TBond") or (meta.asof if meta and meta.asof else "—")
+    status_raw = (meta.status if meta and meta.status else "unknown")
+    status_ok = status_raw.lower() == "completed"
+    status_value = f"✓  {status_raw.upper()}" if status_ok else status_raw.upper()
+    status_color = "var(--accent-green)" if status_ok else "var(--text-secondary)"
+
+    chips = html.Div(
+        [
+            html.Div([
+                html.Span("AS OF", className="an-meta-chip__label"),
+                html.Span(asof_value, className="an-meta-chip__value"),
+            ], className="an-meta-chip"),
+            html.Div([
+                html.Span("STATUS", className="an-meta-chip__label"),
+                html.Span(status_value, className="an-meta-chip__value",
+                           style={"color": status_color}),
+            ], className="an-meta-chip"),
+        ],
+        style={"display": "flex", "alignItems": "center", "gap": "10px"},
     )
+
+    return now, chips
 
 
 @app.callback(
@@ -690,7 +788,9 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt, n_refresh_instruments,
     trig = ctx.triggered[0]["prop_id"].split(".")[0]
 
     if trig == "an-btn-update":
-        job = start_engine_job(argv=["update-data", "--force"])
+        # FI_FORCE_NONTRADING=1: bypass the Wind trading-hours/weekday window
+        # so manual "Update Data" runs always attempt live retrieval.
+        job = start_engine_job(argv=["update-data", "--force"], extra_env={"FI_FORCE_NONTRADING": "1"})
         return job.job_id, f"Started job {job.job_id}: update-data --force"
 
     if trig == "an-btn-refresh-instruments":
@@ -713,7 +813,9 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt, n_refresh_instruments,
     if trig == "an-btn-eod-update":
         asof = (eod_asof or "").strip()
         argv = ["eod", "--asof", asof, "--update-data"] if asof else ["eod", "--update-data"]
-        job = start_engine_job(argv=argv, extra_env={"FI_FORCE_RERUN": "1"})
+        # FI_FORCE_NONTRADING=1: bypass the Wind trading-hours/weekday window
+        # so manual "Run EOD + Update Data" runs always attempt live retrieval.
+        job = start_engine_job(argv=argv, extra_env={"FI_FORCE_RERUN": "1", "FI_FORCE_NONTRADING": "1"})
         label = f"eod --update-data --asof {asof}" if asof else "eod --update-data"
         return job.job_id, f"Started job {job.job_id}: {label}"
 
@@ -748,20 +850,209 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt, n_refresh_instruments,
     raise __import__("dash").exceptions.PreventUpdate
 
 
+# ---------------------------------------------------------------------------
+# Data Viewer (pkl drill-down browser)
+# ---------------------------------------------------------------------------
+
+def _dv_resolve_file(rel_path: str):
+    """Resolve a user-entered relative path against input/ or database/."""
+    from settings.paths import DIR_INPUT, DIR_DATA
+
+    rel_path = (rel_path or "").strip().lstrip("/\\")
+    if not rel_path:
+        raise ValueError("Enter a file path.")
+    for base in (DIR_INPUT, DIR_DATA):
+        candidate = (base / rel_path).resolve()
+        if str(candidate).startswith(str(base.resolve())) and candidate.is_file():
+            return candidate
+    raise ValueError(f"File not found under input/ or database/: {rel_path}")
+
+
+def _dv_load_node(file_path, key_path: list):
+    """Load the pickle and walk key_path (list of dict keys / column names / list indices)."""
+    import pandas as pd
+
+    with open(file_path, "rb") as f:
+        obj = pd.read_pickle(f)
+
+    node = obj
+    for key in key_path:
+        if isinstance(node, dict):
+            node = node[key]
+        elif isinstance(node, pd.DataFrame):
+            node = node[key]
+        elif isinstance(node, (list, tuple)):
+            node = node[int(key)]
+        else:
+            raise ValueError(f"Cannot descend into key {key!r} on {type(node).__name__}")
+    return node
+
+
+def _dv_child_keys(node) -> list:
+    """Return the list of drill-down-able child keys for a node, or [] if it's a leaf."""
+    import pandas as pd
+
+    if isinstance(node, dict):
+        return list(node.keys())
+    if isinstance(node, pd.DataFrame):
+        return list(node.columns)
+    if isinstance(node, (list, tuple)) and node and isinstance(node[0], (dict, list, tuple)):
+        return list(range(len(node)))
+    return []
+
+
+def _dv_render_tree(node) -> "html.Div":
+    keys = _dv_child_keys(node)
+    if not keys:
+        return html.Div("(leaf node — see preview below)", style={'color': '#6b7280', 'fontSize': '12px'})
+    items = [
+        html.Button(
+            str(k),
+            id={'type': 'an-dv-node', 'key': str(k)},
+            n_clicks=0,
+            style={
+                'background': '#112e66', 'color': '#cdd6f4', 'border': '1px solid #2a5298',
+                'borderRadius': '4px', 'padding': '4px 10px', 'fontSize': '12px', 'cursor': 'pointer',
+                'margin': '0 6px 6px 0',
+            },
+        )
+        for k in keys
+    ]
+    return html.Div(items, style={'display': 'flex', 'flexWrap': 'wrap'})
+
+
+def _dv_render_breadcrumb(file_label: str, key_path: list) -> "html.Div":
+    crumbs = [html.Button(
+        file_label,
+        id={'type': 'an-dv-crumb', 'index': 0},
+        n_clicks=0,
+        style={'background': 'transparent', 'color': '#45b6e6', 'border': 'none',
+               'cursor': 'pointer', 'fontSize': '12px', 'padding': '0', 'textDecoration': 'underline'},
+    )]
+    for i, key in enumerate(key_path, start=1):
+        crumbs.append(html.Span(" / ", style={'color': '#6b7280', 'fontSize': '12px'}))
+        crumbs.append(html.Button(
+            str(key),
+            id={'type': 'an-dv-crumb', 'index': i},
+            n_clicks=0,
+            style={'background': 'transparent', 'color': '#45b6e6', 'border': 'none',
+                   'cursor': 'pointer', 'fontSize': '12px', 'padding': '0', 'textDecoration': 'underline'},
+        ))
+    return html.Div(crumbs, style={'display': 'flex', 'flexWrap': 'wrap', 'alignItems': 'center'})
+
+
+def _dv_render_preview(node, mode: str, n) -> "html.Div":
+    import pandas as pd
+
+    if isinstance(node, (pd.DataFrame, pd.Series)):
+        df = node.to_frame() if isinstance(node, pd.Series) else node
+        n = int(n) if n is not None else 10
+        if mode == "head":
+            view = df.head(n)
+        elif mode == "tail":
+            view = df.tail(n)
+        else:  # row
+            view = df.iloc[[n]] if 0 <= n < len(df) else df.iloc[0:0]
+        view = view.reset_index()
+        return html.Div([
+            html.Div(f"shape: {df.shape[0]} rows x {df.shape[1]} cols", style={'color': '#aab0c0', 'fontSize': '11px', 'marginBottom': '6px'}),
+            dash_table.DataTable(
+                columns=[{'name': str(c), 'id': str(c)} for c in view.columns],
+                data=view.astype(object).where(pd.notnull(view), None).to_dict('records'),
+                style_table={'overflowX': 'auto'},
+                style_cell={'textAlign': 'center', 'fontSize': '12px', 'padding': '4px 8px',
+                            'backgroundColor': '#0d1b3d', 'color': '#cdd6f4', 'border': '1px solid #2a5298'},
+                style_header={'backgroundColor': '#112e66', 'fontWeight': '600'},
+                page_size=50,
+            ),
+        ])
+
+    # Non-tabular leaf (scalar, array, nested without further drill-down, etc.)
+    from utils.dataviewer import preview_object
+    return html.Pre(preview_object(node), className="rc-log-viewer", style={'maxHeight': '480px'})
+
+
+@app.callback(
+    Output("an-dv-state", "data"),
+    Output("an-dv-error", "children"),
+    Input("an-dv-load-btn", "n_clicks"),
+    Input({'type': 'an-dv-crumb', 'index': ALL}, "n_clicks"),
+    Input({'type': 'an-dv-node', 'key': ALL}, "n_clicks"),
+    State("an-dv-filepath", "value"),
+    State("an-dv-state", "data"),
+    prevent_initial_call=True,
+)
+def _dv_update_state(load_clicks, crumb_clicks, node_clicks, filepath, state):
+    ctx = callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
+    trig = ctx.triggered_id
+
+    if trig == "an-dv-load-btn":
+        try:
+            resolved = _dv_resolve_file(filepath)
+        except ValueError as exc:
+            return None, str(exc)
+        return {"file": str(resolved), "label": (filepath or "").strip(), "path": []}, ""
+
+    if not state or not state.get("file"):
+        raise PreventUpdate
+
+    if isinstance(trig, dict) and trig.get("type") == "an-dv-crumb":
+        new_path = state["path"][: trig["index"]]
+        return {**state, "path": new_path}, ""
+
+    if isinstance(trig, dict) and trig.get("type") == "an-dv-node":
+        new_path = state["path"] + [trig["key"]]
+        return {**state, "path": new_path}, ""
+
+    raise PreventUpdate
+
+
+@app.callback(
+    Output("an-dv-breadcrumb", "children"),
+    Output("an-dv-tree", "children"),
+    Output("an-dv-preview", "children"),
+    Output("an-dv-error", "children", allow_duplicate=True),
+    Input("an-dv-state", "data"),
+    Input("an-dv-mode", "value"),
+    Input("an-dv-n", "value"),
+    prevent_initial_call=True,
+)
+def _dv_render(state, mode, n):
+    if not state or not state.get("file"):
+        # Leave an-dv-error untouched: _dv_update_state may have just set an
+        # error message (e.g. file-not-found) and cleared state in the same tick.
+        return None, None, None, no_update
+    try:
+        node = _dv_load_node(state["file"], state["path"])
+    except Exception as exc:
+        return _dv_render_breadcrumb(state.get("label", state["file"]), state["path"]), None, None, f"Failed to load: {exc}"
+
+    breadcrumb = _dv_render_breadcrumb(state.get("label", state["file"]), state["path"])
+    tree = _dv_render_tree(node)
+    try:
+        preview = _dv_render_preview(node, mode or "head", n)
+    except Exception as exc:
+        return breadcrumb, tree, None, f"Failed to render preview: {exc}"
+    return breadcrumb, tree, preview, ""
+
+
 @app.callback(
     Output("an-gen-factor-series-status", "children"),
     Input("an-btn-gen-factor-series", "n_clicks"),
     prevent_initial_call=True,
 )
 def _gen_factor_series(n_clicks):
-    """Full rebuild of factor-rates.pkl on demand."""
+    """Full rebuild of factor-rates.pkl (and factor-credit.pkl) on demand."""
     if not n_clicks:
         raise __import__("dash").exceptions.PreventUpdate
     try:
-        from multiasset.factor_backtest import generate_factor_rates
+        from multiasset.factor_backtest import generate_factor_rates, generate_factor_credit
         from settings.paths import DIR_INPUT
         df = generate_factor_rates(DIR_INPUT, save=True)
-        return f"✅ Saved ({df.shape[1]} factors, {len(df)} days)"
+        df_cr = generate_factor_credit(DIR_INPUT, save=True)
+        return f"✅ Saved ({df.shape[1]} factors, {len(df)} days; credit: {df_cr.shape[1]} factors, {len(df_cr)} days)"
     except Exception as exc:
         return f"❌ {exc}"
 

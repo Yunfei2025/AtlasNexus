@@ -62,8 +62,13 @@ def get_default_sensitivities(tenor: str) -> dict:
     #
     # IRDL: ALL bonds lose when yields rise → positive beta for all tenors (no change)
     defaults = {
+        '3M':  {'IRDL': 0.25,  'IRSL':  0.50, 'IRCV':  0.0,  'FXDL': 1.0},
+        '6M':  {'IRDL': 0.49,  'IRSL':  0.50, 'IRCV':  0.0,  'FXDL': 1.0},
+        '9M':  {'IRDL': 0.73,  'IRSL':  0.50, 'IRCV':  0.0,  'FXDL': 1.0},
         '1Y':  {'IRDL': 0.95,  'IRSL':  0.50, 'IRCV':  0.0,  'FXDL': 1.0},
         '2Y':  {'IRDL': 1.90,  'IRSL':  0.30, 'IRCV': -0.50, 'FXDL': 1.0},
+        '3Y':  {'IRDL': 2.80,  'IRSL':  0.15, 'IRCV':  0.50, 'FXDL': 1.0},
+        '4Y':  {'IRDL': 3.65,  'IRSL':  0.0,  'IRCV':  0.75, 'FXDL': 1.0},
         '5Y':  {'IRDL': 4.50,  'IRSL':  0.0,  'IRCV':  1.0,  'FXDL': 1.0},
         '10Y': {'IRDL': 8.50,  'IRSL': -0.50, 'IRCV': -0.50, 'FXDL': 1.0},
         '20Y': {'IRDL': 13.0,  'IRSL': -0.75, 'IRCV':  0.0,  'FXDL': 1.0},

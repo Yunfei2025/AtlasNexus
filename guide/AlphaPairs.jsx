@@ -1,4 +1,4 @@
-// Alpha Book > Pairs — redesigned with 2x2 chart grid
+// Alpha Book > Pairs — consistent with Candidates/Portfolio pattern
 const _ns_apairs = window.AtlasNexusDesignSystem_988df3;
 
 const PAIRS_DATA = [
@@ -17,14 +17,13 @@ function genPairData(n, start, trend, noise) {
 function AlphaPairs() {
   const { useState } = React;
   const [lookback, setLookback] = useState(91);
-  const cyan = 'var(--accent-cyan)';
   const amber = 'var(--accent-amber)';
 
   function PairChart({ pair }) {
     const N = 28;
     const spread = genPairData(N, pair.last+(pair.yMax-pair.yMin)*0.4, pair.trend==='down'?-0.05:0.03, (pair.yMax-pair.yMin)*0.08);
     const mn=pair.yMin, mx=pair.yMax, rng=mx-mn||1;
-    const W=500, H=160, pad={t:12,b:24,l:36,r:12};
+    const W=700, H=160, pad={t:12,b:24,l:36,r:12};
     const iw=W-pad.l-pad.r, ih=H-pad.t-pad.b;
     const px=i=>pad.l+i*(iw/(N-1));
     const py=v=>pad.t+ih-(((v-mn)/rng)*ih);
@@ -42,60 +41,46 @@ function AlphaPairs() {
     const upBand=spread.map((_,i)=>trendY(i)+sig);
     const loBand=spread.map((_,i)=>trendY(i)-sig);
 
-    const spreadPath=spread.map((v,i)=>`${i===0?'M':'L'}${px(i)},${py(v)}`).join(' ');
-    const trendPath=`M${px(0)},${py(trendY(0))} L${px(N-1)},${py(trendY(N-1))}`;
     const bandPts=[...upBand.map((v,i)=>`${px(i)},${py(v)}`), ...[...loBand].reverse().map((v,i,a)=>`${px(a.length-1-i)},${py(v)}`)].join(' ');
-
-    // X axis labels (monthly)
     const monthLabels=['May 17','May 24','May 31','Jun 7','Jun 14','Jun 21'];
 
     const zAbs=Math.abs(pair.z);
     const zColor=zAbs>=2?'#f87171':zAbs>=1.5?amber:'#6b7280';
 
     return (
-      <div style={{border:'1px solid var(--border-strong)',borderRadius:'6px',overflow:'hidden',background:'var(--surface-panel)'}}>
-        {/* Header */}
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 12px',borderBottom:'1px solid var(--border-strong)'}}>
-          <span style={{font:'var(--type-data)',fontSize:'12px',fontWeight:700,color:'var(--text-primary)'}}>
-            {pair.a} <span style={{color:'var(--text-muted)',fontWeight:400,fontSize:'10px'}}>VS</span> {pair.b}
-          </span>
+      <div style={{border:'1px solid var(--border-strong)',borderRadius:'8px',overflow:'hidden'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'11px 16px',background:'var(--surface-panel)',borderBottom:'1px solid var(--border-strong)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+            <span style={{font:'var(--type-h2)',fontSize:'13px',fontWeight:600,color:'var(--text-primary)'}}>
+              {pair.a} <span style={{color:'var(--text-muted)',fontWeight:400,fontSize:'11px'}}>vs</span> {pair.b}
+            </span>
+          </div>
           <div style={{display:'flex',gap:'12px',alignItems:'center',font:'var(--type-meta)',fontSize:'10px'}}>
             <span style={{color:'var(--text-muted)'}}>last <span style={{color:'var(--text-primary)',fontWeight:600}}>{pair.last.toFixed(1)} bp</span></span>
-            <span style={{color:'var(--text-muted)'}}>β <span style={{color:'var(--text-secondary)'}}>{pair.beta>=0?'+':''}{pair.beta.toFixed(3)}/d</span></span>
+            <span style={{color:'var(--text-muted)'}}>β <span style={{color:'var(--text-secondary)'}}>{pair.beta>=0?'+':''}{pair.beta.toFixed(3)}</span></span>
             <span style={{color:'var(--text-muted)'}}>z <span style={{color:zColor,fontWeight:700}}>{pair.z>=0?'+':''}{pair.z.toFixed(1)}σ</span></span>
           </div>
         </div>
-        {/* Legend */}
-        <div style={{display:'flex',gap:'12px',padding:'6px 12px 0',font:'var(--type-meta)',fontSize:'8px',color:'var(--text-muted)'}}>
-          {[['#38bdf8','Trend (OLS)'],['#9ca3af','• Spread'],['rgba(100,160,220,0.3)','±1σ confidence']].map(([c,l])=>(
+        <div style={{display:'flex',gap:'12px',padding:'8px 16px 0',font:'var(--type-meta)',fontSize:'8px',color:'var(--text-muted)',borderBottom:'1px solid var(--border-strong)'}}>
+          {[['#38bdf8','OLS Trend'],['#9ca3af','• Spread'],['rgba(100,160,220,0.3)','±1σ Confidence Band']].map(([c,l])=>(
             <span key={l} style={{display:'flex',alignItems:'center',gap:'4px'}}>
-              <span style={{width:'14px',height:'2px',background:c,display:'inline-block',borderRadius:'1px'}}></span>{l}
+              <span style={{width:'12px',height:'2px',background:c,display:'inline-block',borderRadius:'1px'}}></span>{l}
             </span>
           ))}
         </div>
-        {/* Chart */}
-        <div style={{padding:'4px 8px 8px'}}>
+        <div style={{padding:'12px 16px'}}>
           <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{display:'block'}}>
-            {/* grid */}
             {[0,0.33,0.67,1].map(t=>(
               <line key={t} x1={pad.l} x2={W-pad.r} y1={pad.t+ih*t} y2={pad.t+ih*t} stroke="rgba(255,255,255,0.05)" strokeWidth="1"/>
             ))}
-            {/* confidence band */}
             <polygon points={bandPts} fill="rgba(100,160,220,0.18)"/>
-            {/* spread dots */}
             {spread.map((v,i)=>(
               <circle key={i} cx={px(i)} cy={py(v)} r="2.5" fill="#94a3b8" opacity="0.7"/>
             ))}
-            {/* trend line */}
-            <path d={trendPath} fill="none" stroke="#38bdf8" strokeWidth="1.5" opacity="0.9"/>
-            {/* y axis labels */}
+            <path d={`M${px(0)},${py(trendY(0))} L${px(N-1)},${py(trendY(N-1))}`} fill="none" stroke="#38bdf8" strokeWidth="1.5" opacity="0.9"/>
             {[mn, (mn+mx)/2, mx].map((v,i)=>(
               <text key={i} x={pad.l-4} y={py(v)+3} textAnchor="end" fill="rgba(255,255,255,0.35)" fontSize="8">{v.toFixed(0)}</text>
             ))}
-            {/* y axis title */}
-            <text x={8} y={H/2} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="8"
-              transform={`rotate(-90,8,${H/2})`}>Spread (bp)</text>
-            {/* x axis labels */}
             {monthLabels.map((l,i)=>(
               <text key={i} x={pad.l+i*(iw/5)} y={H-6} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="8">{l}</text>
             ))}
@@ -105,42 +90,60 @@ function AlphaPairs() {
     );
   }
 
-  return (
-    <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
-      {/* Controls */}
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'10px'}}>
-        <div>
-          <h1 style={{margin:'0 0 3px',font:'var(--type-h1)',color:'var(--text-primary)'}}>Pairs Analysis</h1>
-          <div style={{font:'var(--type-meta)',color:'var(--text-muted)'}}>Interactive spread analysis with confidence bands (in basis points)</div>
-        </div>
+  function CardHeader({ title, badge }) {
+    return (
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'11px 16px',background:'var(--surface-panel)',borderBottom:'1px solid var(--border-strong)',userSelect:'none'}}>
         <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
-          <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
-            <span style={{font:'var(--type-label)',fontSize:'9px',color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Lookback Days:</span>
-            <input type="number" value={lookback} min={10} max={365} onChange={e=>setLookback(+e.target.value)}
-              style={{width:'56px',padding:'5px 8px',background:'var(--surface-input)',border:'1px solid var(--border-default)',
-                borderRadius:'4px',color:'var(--text-primary)',font:'var(--type-data)',fontSize:'11px',textAlign:'right'}}/>
+          <span style={{font:'var(--type-h2)',fontSize:'13px',fontWeight:600,color:'var(--text-primary)'}}>{title}</span>
+          {badge && <span style={{font:'var(--type-meta)',fontSize:'9px',color:'var(--text-muted)',background:'var(--surface-input)',padding:'2px 7px',borderRadius:'3px',border:'1px solid var(--border-default)'}}>{badge}</span>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+      <div>
+        <h1 style={{margin:'0 0 3px',font:'var(--type-h1)',color:'var(--text-primary)'}}>Pairs Analysis</h1>
+        <div style={{font:'var(--type-meta)',color:'var(--text-muted)'}}>Relative value spreads with OLS trends and confidence bands</div>
+      </div>
+
+      {/* Top row: Controls (left) + Z-Score Thresholds (right) */}
+      <div style={{display:'flex',gap:'12px',alignItems:'flex-start'}}>
+        {/* Controls card — narrow, fixed width */}
+        <div style={{width:'220px',flexShrink:0,border:'1px solid var(--border-strong)',borderRadius:'8px',overflow:'hidden'}}>
+          <CardHeader title="Controls" />
+          <div style={{padding:'12px 14px',display:'flex',flexDirection:'column',gap:'12px'}}>
+            <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
+              <div style={{font:'var(--type-label)',fontSize:'9px',color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Lookback Days</div>
+              <input type="number" value={lookback} min={10} max={365} onChange={e=>setLookback(+e.target.value)}
+                style={{padding:'6px 8px',background:'var(--surface-input)',border:'1px solid var(--border-default)',borderRadius:'4px',color:'var(--text-primary)',font:'var(--type-data)',fontSize:'10px',textAlign:'right'}}/>
+            </div>
+            <button style={{padding:'6px 12px',background:'var(--surface-panel)',color:'var(--text-secondary)',border:'1px solid var(--border-default)',borderRadius:'4px',font:'var(--type-label)',fontSize:'10px',cursor:'pointer',width:'100%'}}>⚙ Configure</button>
+            <button style={{padding:'6px 12px',background:amber,color:'var(--navy-950)',border:'none',borderRadius:'4px',font:'var(--type-label)',fontSize:'10px',fontWeight:700,cursor:'pointer',width:'100%'}}>↻ Refresh</button>
+            <div style={{font:'var(--type-meta)',fontSize:'8px',color:'var(--text-muted)',marginTop:'4px'}}>Last: 07:46:05</div>
           </div>
-          <button style={{padding:'6px 12px',background:'var(--surface-panel)',color:'var(--text-secondary)',border:'1px solid var(--border-default)',
-            borderRadius:'4px',font:'var(--type-label)',fontSize:'10px',cursor:'pointer'}}>⚙ Configure Pairs</button>
-          <button style={{padding:'6px 12px',background:amber,color:'var(--navy-950)',border:'none',
-            borderRadius:'4px',font:'var(--type-label)',fontSize:'10px',fontWeight:700,cursor:'pointer'}}>↻ Refresh</button>
-          <span style={{font:'var(--type-meta)',fontSize:'9px',color:'var(--text-muted)'}}>Last updated: 2026-06-26 07:46:05</span>
+        </div>
+
+        {/* Z-Score Thresholds — flex 1 */}
+        <div style={{flex:1,minWidth:0,border:'1px solid var(--border-strong)',borderRadius:'8px',overflow:'hidden'}}>
+          <CardHeader title="Z-Score Thresholds" badge="Color-coded signal levels" />
+          <div style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'20px',font:'var(--type-meta)',fontSize:'10px'}}>
+            {[['#6b7280','|z| < 1.5','Neutral'],[amber,'1.5 ≤ |z| < 2.0','Watch'],['#f87171','|z| ≥ 2.0','Signal']].map(([c,range,label])=>(
+              <div key={label} style={{display:'flex',alignItems:'center',gap:'8px',flex:1}}>
+                <span style={{width:'12px',height:'12px',borderRadius:'50%',background:c,display:'inline-block',flexShrink:0}}></span>
+                <div style={{display:'flex',flexDirection:'column',gap:'1px',minWidth:0}}>
+                  <span style={{color:'var(--text-secondary)',fontWeight:600}}>{label}</span>
+                  <span style={{color:'var(--text-muted)',fontSize:'9px'}}>{range}</span>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Z-score legend */}
-      <div style={{display:'flex',alignItems:'center',gap:'16px',padding:'8px 12px',background:'var(--surface-panel)',
-        border:'1px solid var(--border-strong)',borderRadius:'6px',font:'var(--type-meta)',fontSize:'10px'}}>
-        <span style={{font:'var(--type-label)',fontSize:'9px',color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.06em'}}>Z-Score Colour Thresholds</span>
-        {[['#6b7280','Neutral: |z| < 1.5'],[amber,'Watch: 1.5 ≤ |z| < 2.0'],['#f87171','Signal: |z| ≥ 2.0']].map(([c,l])=>(
-          <span key={l} style={{display:'flex',alignItems:'center',gap:'5px',color:'var(--text-secondary)'}}>
-            <span style={{width:'8px',height:'8px',borderRadius:'50%',background:c,display:'inline-block'}}></span>{l}
-          </span>
-        ))}
-      </div>
-
-      {/* 2x2 chart grid */}
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px'}}>
+      {/* Chart grid */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
         {PAIRS_DATA.map((p,i)=><PairChart key={i} pair={p}/>)}
       </div>
     </div>

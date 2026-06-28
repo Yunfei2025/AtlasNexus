@@ -66,7 +66,10 @@ class RiskFactorLoader:
         
         # Curve spread factors
         risk_factors = self._load_sp_factors(risk_factors)
-        
+
+        # Credit spread factors (CDB/LGB/MTN/ICP vs CGB)
+        risk_factors = self._load_cr_factors(risk_factors)
+
         # FX factors
         risk_factors = self._load_fx_factors(risk_factors, macro_data)
         
@@ -216,7 +219,42 @@ class RiskFactorLoader:
         
         return risk_factors
     
-    def _load_fx_factors(self, risk_factors: pd.DataFrame, 
+    def _load_cr_factors(self, risk_factors: pd.DataFrame) -> pd.DataFrame:
+        """
+        Load credit spread level, slope, and curvature factors (CDB/LGB/MTN/ICP).
+
+        Each universe's spread (own yield - CGB yield at matching tenor) uses its
+        own tenor-aware weights (see DeterministicRiskFactorAnalyzer). Deterministic
+        only — no PCA-mode credit factors are computed.
+        """
+        if not self.use_deterministic:
+            return risk_factors
+
+        det_scores = self.det_analyzer.calculate_full_history_deterministic_credit_scores()
+        if det_scores.empty:
+            print("Warning: No deterministic scores computed for credit factors")
+            return risk_factors
+
+        # Map deterministic factor names to credit factor codes:
+        # Level -> CRDL, Slope -> CRSL, Curvature -> CRCV
+        factor_to_cr_map = {
+            'Level': 'CRDL',
+            'Slope': 'CRSL',
+            'Curvature': 'CRCV',
+        }
+
+        for col in det_scores.columns:
+            # Column format: Level.CDB, Slope.LGB, etc.
+            parts = col.split('.')
+            if len(parts) == 2:
+                factor_name, universe = parts
+                if factor_name in factor_to_cr_map:
+                    cr_name = f"{factor_to_cr_map[factor_name]}.{universe}"
+                    risk_factors[cr_name] = det_scores[col]
+
+        return risk_factors
+
+    def _load_fx_factors(self, risk_factors: pd.DataFrame,
                          macro_data: Dict) -> pd.DataFrame:
         """Load FX factors."""
         fx_data = macro_data.get("fx") if isinstance(macro_data, dict) else None

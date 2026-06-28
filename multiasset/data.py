@@ -52,7 +52,7 @@ def load_raw_market_data():
     # Load China Yields
     cn_data_ts = pd.read_pickle(os.path.join(DIR_INPUT, "database-px.pkl"))
     cn_data = {}
-    for k in ["CDB","CGB","IRS","ICP"]:
+    for k in ["CDB","CGB","IRS","ICP","LGB","MTN"]:
         cn_data[k] = cn_data_ts[k]
     
     # Load Macro Data (FX and Commodities)
@@ -89,7 +89,9 @@ def get_asset_type(asset_name):
         return 'Equities'
     if asset_name in ['USDCNY', 'EURCNY', 'JPYCNY', 'GBPCNY']:
         return 'FX'
-    if any(x in asset_name for x in ['IRS', 'CDB', 'ICP']):
+    if any(x in asset_name for x in ['CDB', 'LGB', 'MTN', 'ICP']):
+        return 'Credit'
+    if 'IRS' in asset_name:
         return 'Spread'
     if any(x in asset_name for x in ['US', 'EU', 'UK', 'JP', 'CN']):
         return 'Rates'
@@ -109,11 +111,15 @@ def get_universe(asset_name):
     # FX assets — exact match before substring checks
     if asset_name in ('USDCNY', 'EURCNY', 'GBPCNY', 'JPYCNY'):
         return 'FX Universe'
-    # Spread assets — must check before 'CN' substring to avoid misclassification
+    # Spread/Credit assets — must check before 'CN' substring to avoid misclassification
     if 'IRS' in asset_name:
         return 'Interest Rate Swap'
     if 'CDB' in asset_name:
         return 'China Development Bond'
+    if 'LGB' in asset_name:
+        return 'Local Government Bond'
+    if 'MTN' in asset_name:
+        return 'Medium Term Note'
     if 'ICP' in asset_name:
         return 'Interbank Commercial Paper'
     if 'US' in asset_name:
@@ -134,7 +140,8 @@ def get_sector(asset_name):
     """Get the sector/tenor for the asset."""
     if asset_name in _COMMODITY_ASSETS or asset_name in _EQUITY_ASSETS:
         return 'N/A'
-    for tenor in ['30Y', '20Y', '10Y', '5Y', '2Y', '1Y']:  # longest first to avoid partial matches
+    # Longest first to avoid partial matches (e.g. '10Y' before '1Y').
+    for tenor in ['30Y', '20Y', '10Y', '9M', '6M', '5Y', '4Y', '3M', '3Y', '2Y', '1Y']:
         if tenor in asset_name:
             return tenor
     return 'N/A'
@@ -218,31 +225,14 @@ def get_asset_yield_series(asset_name, market_data):
     elif asset_type == 'Spread':
         spread_type = {
             'Interest Rate Swap': 'IRS',
-            'China Development Bond': 'CDB',
-            'Interbank Commercial Paper': 'ICP',
-            #'Local Treasury': 'LGB',
         }
         spread = spread_type.get(universe)
         if not spread:
             return None, 0, None, True
-            
+
         duration = float(sector.replace('Y', ''))
-        
-        if spread == 'CDB':
-            tenor_map = {
-                '1Y': '中债国开债到期收益率:1年',
-                '2Y': '中债国开债到期收益率:2年',
-                '5Y': '中债国开债到期收益率:5年',
-                '10Y': '中债国开债到期收益率:10年',
-                '20Y': '中债国开债到期收益率:20年',
-                '30Y': '中债国开债到期收益率:30年'
-            }
-            col = tenor_map.get(sector)
-            if col is None:
-                return None, duration, spread, True
-            spread_ts = cn_data["CDB"][col] - cn_data["CGB"][col]
-            return spread_ts, duration, spread, True
-        elif spread == 'IRS':
+
+        if spread == 'IRS':
             tenor_map = {
                 '1Y': 'FR007S1Y.IR',
                 '2Y': 'FR007S2Y.IR',
@@ -253,20 +243,48 @@ def get_asset_yield_series(asset_name, market_data):
                 return None, duration, spread, True
             spread_ts = cn_data["IRS"][col] - cn_data["CGB"][col]
             return spread_ts, duration, spread, True
-        elif spread == 'ICP':
-            tenor_map = {
-                '1Y': '中债商业银行同业存单到期收益率(AAA):1年',
-            }
-            col = tenor_map.get(sector)
-            if col is None:
-                return None, duration, spread, True
-            spread_ts = cn_data["ICP"][col] - cn_data["CGB"][col]
-            return spread_ts, duration, spread, True
         else:
             key = f"{spread}{sector}"
             if key in fx_curves[spread].columns:
                 return fx_curves[spread][key], duration, spread, True
             return None, duration, spread, True
+
+    elif asset_type == 'Credit':
+        # Credit spread instruments (own yield - CGB yield at matching tenor).
+        # Tenor->column mapping is the single source of truth shared with the
+        # CRDL/CRSL/CRCV factor calculation (multiasset/pca_analyzer.py).
+        from multiasset.config import CREDIT_CONFIG
+
+        universe_to_code = {
+            'China Development Bond': 'CDB',
+            'Local Government Bond': 'LGB',
+            'Medium Term Note': 'MTN',
+            'Interbank Commercial Paper': 'ICP',
+        }
+        code = universe_to_code.get(universe)
+        if not code or code not in CREDIT_CONFIG:
+            return None, 0, None, True
+
+        duration = 0.0 if sector.endswith('M') else float(sector.replace('Y', ''))
+
+        _, pkl_key, tenor_cols = CREDIT_CONFIG[code]
+        tenor_to_cols = {f"{t:g}Y": (own_col, cgb_col) for own_col, cgb_col, t in tenor_cols}
+        # ICP's sub-year tenors are keyed like '0.25Y' in CREDIT_CONFIG but sector
+        # is '3M' etc — map sector to the same tenor-year label used there.
+        sector_to_tenor_label = {
+            '3M': '0.25Y', '6M': '0.5Y', '9M': '0.75Y',
+            '1Y': '1Y', '2Y': '2Y', '3Y': '3Y', '4Y': '4Y',
+            '5Y': '5Y', '10Y': '10Y', '20Y': '20Y', '30Y': '30Y',
+        }
+        tenor_label = sector_to_tenor_label.get(sector)
+        cols = tenor_to_cols.get(tenor_label) if tenor_label else None
+        if cols is None:
+            return None, duration, code, True
+        own_col, cgb_col = cols
+        if own_col not in cn_data[pkl_key].columns or cgb_col not in cn_data["CGB"].columns:
+            return None, duration, code, True
+        spread_ts = cn_data[pkl_key][own_col] - cn_data["CGB"][cgb_col]
+        return spread_ts, duration, code, True
 
     elif asset_type == 'FX':
         # FX spot rates from macro data

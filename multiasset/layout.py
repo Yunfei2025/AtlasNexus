@@ -126,13 +126,13 @@ def prepare_portfolio_table(summary_df, factor_exposures_df, portfolio=None):
     )
 
     # Duration: IRDL value from get_default_sensitivities (modified duration proxy).
-    # Only Rates / Spread assets carry interest-rate duration; commodities and FX
-    # have zero duration (their Sector is 'N/A', which would otherwise pick up the
-    # generic 5.0 IRDL fallback and wrongly mark them as DV01-bearing).
+    # Only Rates / Spread / Credit assets carry interest-rate duration; commodities
+    # and FX have zero duration (their Sector is 'N/A', which would otherwise pick
+    # up the generic 5.0 IRDL fallback and wrongly mark them as DV01-bearing).
     from multiasset.utils import get_default_sensitivities
     filtered['Duration'] = [
         (get_default_sensitivities(sector).get('IRDL', 0.0)
-         if isinstance(sector, str) and asset_type in ('Rates', 'Spread')
+         if isinstance(sector, str) and asset_type in ('Rates', 'Spread', 'Credit')
          else 0.0)
         for sector, asset_type in zip(filtered['Sector'], filtered['Asset Type'])
     ]

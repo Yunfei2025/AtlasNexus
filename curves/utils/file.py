@@ -116,6 +116,12 @@ def loadPKL(file_path: str) -> dict:
     return {}
 
 
+#: Dict keys holding actually-observed (not model-derived) data. Forward-filling
+#: these would fabricate quotes on dates where no real observation exists, so
+#: updatePKL must leave gaps as NaN instead of carrying the last value forward.
+_NO_FFILL_KEYS = {'ytm_act'}
+
+
 def updatePKL(dictn, file_path, rewrite=False):
     if rewrite:
         with open(file_path, 'wb') as file:
@@ -130,7 +136,7 @@ def updatePKL(dictn, file_path, rewrite=False):
                 dict_ = {}
 
             # Helper updaters to avoid per-date loops
-            def _update_dataframe(target_df, new_df):
+            def _update_dataframe(target_df, new_df, ffill=True):
                 if target_df is None or not isinstance(target_df, pd.DataFrame):
                     target_df = pd.DataFrame()
                 target_df = target_df.copy()
@@ -157,7 +163,10 @@ def updatePKL(dictn, file_path, rewrite=False):
                         target_df[col] = target_df.get(col, pd.Series(index=target_df.index, dtype=object)).astype(object)
 
                 combined = new_df.combine_first(target_df)
-                combined = combined.sort_index().ffill().dropna(axis=0, how="all")
+                combined = combined.sort_index()
+                if ffill:
+                    combined = combined.ffill()
+                combined = combined.dropna(axis=0, how="all")
                 return combined
 
             def _update_series(target_ser, new_ser):
@@ -183,7 +192,7 @@ def updatePKL(dictn, file_path, rewrite=False):
                 for sub_key, sub_new in new_dict.items():
                     sub_old = target_dict.get(sub_key)
                     if isinstance(sub_new, pd.DataFrame):
-                        target_dict[sub_key] = _update_dataframe(sub_old, sub_new)
+                        target_dict[sub_key] = _update_dataframe(sub_old, sub_new, ffill=sub_key not in _NO_FFILL_KEYS)
                     elif isinstance(sub_new, pd.Series):
                         target_dict[sub_key] = _update_series(sub_old, sub_new)
                     elif isinstance(sub_new, dict):
@@ -194,7 +203,7 @@ def updatePKL(dictn, file_path, rewrite=False):
 
             for k, v in dictn.items():
                 if isinstance(v, pd.DataFrame):
-                    dict_[k] = _update_dataframe(dict_.get(k), v)
+                    dict_[k] = _update_dataframe(dict_.get(k), v, ffill=k not in _NO_FFILL_KEYS)
                 elif isinstance(v, pd.Series):
                     dict_[k] = _update_series(dict_.get(k), v)
                 elif isinstance(v, dict):

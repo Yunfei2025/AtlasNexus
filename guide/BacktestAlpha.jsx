@@ -216,41 +216,88 @@ function BacktestAlpha() {
           {/* Results */}
           {showResults && (
             <>
-              {/* Summary Stats */}
-              <div style={{ background: 'var(--surface-panel)', border: '1px solid var(--border-strong)', borderRadius: '6px', padding: '12px 16px' }}>
-                <div style={{ font: 'var(--type-meta)', color: 'var(--text-muted)', marginBottom: '8px' }}>Backtest: {instrument} (TBondCurve)</div>
-                <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
-                  {[
-                    { label: 'Total Trades', value: MOCK_INDIVIDUAL.totalTrades, color: 'var(--text-primary)' },
-                    { label: 'Win Rate', value: MOCK_INDIVIDUAL.winRate + '%', color: 'var(--negative)' },
-                    { label: 'Total PnL', value: MOCK_INDIVIDUAL.totalPnl + ' bp', color: 'var(--negative)' },
-                    { label: 'Avg PnL', value: MOCK_INDIVIDUAL.avgPnl + ' bp', color: 'var(--negative)' },
-                    { label: 'Avg Hold', value: MOCK_INDIVIDUAL.avgHold + ' days', color: 'var(--text-primary)' },
-                    { label: 'Sharpe', value: MOCK_INDIVIDUAL.sharpe, color: 'var(--negative)' },
-                    { label: 'Max DD', value: MOCK_INDIVIDUAL.maxDD + ' bp', color: accentAmber },
-                  ].map((s, i) => (
-                    <div key={i}>
-                      <span style={{ font: 'var(--type-label)', color: 'var(--text-muted)' }}>{s.label}: </span>
-                      <span style={{ font: 'var(--type-data)', color: s.color, fontWeight: 600 }}>{s.value}</span>
+              {/* Performance KPI Cards Grid — Enlarged Separate Boxes */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '12px' }}>
+                {[
+                  { label: 'Total Trades', value: MOCK_INDIVIDUAL.totalTrades, color: 'var(--text-primary)' },
+                  { label: 'Win Rate', value: MOCK_INDIVIDUAL.winRate + '%', color: 'var(--negative)' },
+                  { label: 'Total PnL', value: MOCK_INDIVIDUAL.totalPnl + ' bp', color: 'var(--negative)' },
+                  { label: 'Avg PnL', value: MOCK_INDIVIDUAL.avgPnl + ' bp', color: 'var(--negative)' },
+                  { label: 'Avg Hold', value: MOCK_INDIVIDUAL.avgHold + ' days', color: 'var(--text-primary)' },
+                  { label: 'Sharpe', value: MOCK_INDIVIDUAL.sharpe, color: 'var(--negative)' },
+                  { label: 'Max DD', value: MOCK_INDIVIDUAL.maxDD + ' bp', color: accentAmber },
+                ].map((kpi, i) => (
+                  <div key={i} style={{
+                    background: 'var(--surface-panel)',
+                    border: '1px solid var(--border-strong)',
+                    borderRadius: '8px',
+                    padding: '12px 8px',
+                    textAlign: 'center',
+                  }}>
+                    <div style={{ font: 'var(--type-label)', color: 'var(--text-muted)', marginBottom: '6px', fontSize: '10px' }}>
+                      {kpi.label}
                     </div>
-                  ))}
-                </div>
+                    <div style={{ font: 'var(--type-data)', color: kpi.color, lineHeight: 1.2, fontWeight: 600, fontSize: '12px' }}>
+                      {kpi.value}
+                    </div>
+                  </div>
+                ))}
               </div>
 
-              {/* Chart Placeholder */}
-              <div style={{ background: 'var(--surface-panel)', border: '1px solid var(--border-strong)', borderRadius: '6px', padding: '16px', minHeight: '260px', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ font: 'var(--type-h3)', color: 'var(--text-primary)', marginBottom: '16px' }}>Instrument History</div>
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', font: 'var(--type-meta)', textAlign: 'center' }}>
-                  <div>
-                    <svg width="260" height="120" viewBox="0 0 260 120" fill="none" style={{ opacity: 0.45, marginBottom: '10px' }}>
-                      <polyline points="10,60 30,55 50,70 70,40 90,50 110,30 130,45 150,20 170,35 190,15 210,28 230,10 250,20" stroke={accentAmber} strokeWidth="1.5" fill="none" />
-                      <circle cx="70" cy="40" r="4" fill="none" stroke="#f87171" strokeWidth="1.5" />
-                      <circle cx="110" cy="30" r="4" fill="#34d399" fillOpacity="0.8" stroke="none" />
-                      <circle cx="150" cy="20" r="4" fill="none" stroke="#f87171" strokeWidth="1.5" />
-                      <circle cx="190" cy="15" r="4" fill="#34d399" fillOpacity="0.8" stroke="none" />
-                    </svg>
-                    <div>Instrument History — connect to your data source</div>
+              {/* Instrument History Chart */}
+              <div style={{border:'1px solid var(--border-strong)',borderRadius:'8px',overflow:'hidden'}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'11px 16px',background:'var(--surface-panel)',borderBottom:'1px solid var(--border-strong)',userSelect:'none'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+                    <span style={{font:'var(--type-h2)',fontSize:'13px',fontWeight:600,color:'var(--text-primary)'}}>Instrument History</span>
                   </div>
+                </div>
+                <div style={{padding:'12px 16px',display:'flex',gap:'12px',font:'var(--type-meta)',fontSize:'8px',color:'var(--text-muted)',borderBottom:'1px solid var(--border-strong)'}}>
+                  {[['#38bdf8','Spread Price'],[accentAmber,'CRR Level'],[' #34d399','Exit (Profit)'],['#f87171','Entry (Loss)']].map(([c,l])=>(
+                    <span key={l} style={{display:'flex',alignItems:'center',gap:'4px'}}>
+                      <span style={{width:'12px',height:'2px',background:c,display:'inline-block',borderRadius:'1px'}}></span>{l}
+                    </span>
+                  ))}
+                </div>
+                <div style={{padding:'12px 16px'}}>
+                  {(() => {
+                    const W=900,H=180,pad={t:12,b:24,l:36,r:12};
+                    const iw=W-pad.l-pad.r,ih=H-pad.t-pad.b;
+                    // Generate synthetic instrument history data
+                    const N=80;
+                    let instrumentTS=[];
+                    let v=22;
+                    for(let i=0;i<N;i++){v+=(Math.random()-0.5)*1.2+0.05;instrumentTS.push(Math.max(10,v));}
+                    const crrLevel=instrumentTS.map(()=>18);
+                    const allVals=[...instrumentTS,...crrLevel];
+                    const mn=Math.min(...allVals)-1,mx=Math.max(...allVals)+1,rng=mx-mn||1;
+                    const px=i=>pad.l+i*(iw/(N-1));
+                    const py=v=>pad.t+ih-(((v-mn)/rng)*ih);
+                    const months=['Aug 25','Oct 25','Dec 25','Feb 26','Apr 26','Jun 26'];
+                    const step=Math.floor(N/5);
+                    const makePath=data=>data.map((v,i)=>`${i===0?'M':'L'}${px(i)},${py(v)}`).join(' ');
+                    
+                    return (
+                      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{display:'block'}}>
+                        {[0,0.25,0.5,0.75,1].map(t=>(
+                          <line key={t} x1={pad.l} x2={W-pad.r} y1={pad.t+ih*t} y2={pad.t+ih*t} stroke="rgba(255,255,255,0.06)" strokeWidth="1"/>
+                        ))}
+                        <path d={makePath(crrLevel)} fill="none" stroke={accentAmber} strokeWidth="1.2" strokeDasharray="5,3" opacity="0.7"/>
+                        <path d={makePath(instrumentTS)} fill="none" stroke="#38bdf8" strokeWidth="2" opacity="0.9"/>
+                        {/* Entry/Exit markers */}
+                        <circle cx={px(12)} cy={py(instrumentTS[12])} r="4" fill="none" stroke="#f87171" strokeWidth="1.5"/>
+                        <circle cx={px(28)} cy={py(instrumentTS[28])} r="4" fill="#34d399"/>
+                        <circle cx={px(52)} cy={py(instrumentTS[52])} r="4" fill="none" stroke="#f87171" strokeWidth="1.5"/>
+                        <circle cx={px(68)} cy={py(instrumentTS[68])} r="4" fill="#34d399"/>
+                        {[0,0.25,0.5,0.75,1].map(t=>{
+                          const v=(mn+rng*t).toFixed(0);
+                          return <text key={t} x={pad.l-4} y={pad.t+ih*(1-t)+3} textAnchor="end" fill="rgba(255,255,255,0.35)" fontSize="8">{v}</text>;
+                        })}
+                        {months.map((l,i)=>(
+                          <text key={i} x={px(i*step)} y={H-6} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="8">{l}</text>
+                        ))}
+                      </svg>
+                    );
+                  })()}
                 </div>
               </div>
             </>
