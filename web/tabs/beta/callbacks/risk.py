@@ -56,6 +56,15 @@ def _coerce_float(value) -> float | None:
         return None
 
 
+def _row_key(row: dict, default: int = -1) -> int:
+    """Parse a row's `__row_key` as int, falling back on non-numeric values
+    (e.g. the synthetic TOTAL row, whose `__row_key` is '')."""
+    try:
+        return int(row.get('__row_key', default))
+    except (TypeError, ValueError):
+        return default
+
+
 def _compute_alpha_carry_mtm(
     spread_type: str,
     instrument_id: str,
@@ -199,13 +208,17 @@ def register_risk_callbacks(app):
             'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.07em',
             'textTransform': 'uppercase', 'color': THEME['text_sub'], 'marginRight': '4px',
         })
-        keys = ['open_date', 'volume'] if book == 'beta' else ['open_date', 'volume', 'score']
         names = {'open_date': 'Open Date', 'volume': 'Volume', 'score': 'Score'}
-        pills = [
-            html.Button(names[k], id=f'summary-col-pill-{k}', n_clicks=0,
-                        style=_col_pill_style(bool(col_vis.get(k))))
-            for k in keys
-        ]
+        # Always render all three pills (even 'score' on the Beta book) and hide
+        # the irrelevant one via style instead of omitting it — a static-id pill
+        # missing from the live layout breaks its callback's Input resolution
+        # client-side, which silently disables the other pills sharing that callback.
+        pills = []
+        for k in ('open_date', 'volume', 'score'):
+            style = _col_pill_style(bool(col_vis.get(k)))
+            if k == 'score' and book == 'beta':
+                style = {**style, 'display': 'none'}
+            pills.append(html.Button(names[k], id=f'summary-col-pill-{k}', n_clicks=0, style=style))
         return [label, *pills]
 
     @app.callback(
@@ -268,9 +281,10 @@ def register_risk_callbacks(app):
         [Input('summary-refresh-btn', 'n_clicks'),
          Input('summary-col-visibility', 'data'),
          Input('summary-beta-sort', 'data')],
+        State('summary-beta-active-date-row', 'data'),
         prevent_initial_call=False,
     )
-    def update_summary_book_table(_n_clicks, col_vis, sort_state):
+    def update_summary_book_table(_n_clicks, col_vis, sort_state, active_date_row):
         """Render Beta Book allocation table."""
         col_vis = col_vis or {}
         sort_state = sort_state or {'col': None, 'dir': 'asc'}
@@ -536,11 +550,12 @@ def register_risk_callbacks(app):
                             style={
                                 'background': 'rgba(99,179,237,0.08)',
                                 'border': f'1px solid {THEME["accent"]}', 'borderRadius': '3px',
-                                'color': THEME['text_main'], 'fontSize': '11px', 'padding': '3px 6px',
-                                'cursor': 'pointer', 'width': '100%',
+                                'color': THEME['text_main'], 'fontSize': '13px', 'padding': '5px 8px',
+                                'cursor': 'pointer', 'width': '100%', 'minWidth': '92px',
+                                'whiteSpace': 'nowrap',
                             },
                         ),
-                    ], style={'padding': '5px 10px', 'textAlign': 'right'})
+                    ], style={'padding': '5px 10px', 'textAlign': 'right', 'minWidth': '92px'})
                 return html.Td(
                     dcc.Input(
                         id={'type': 'beta-cell-input', 'row': row_idx, 'col': col},
@@ -590,7 +605,7 @@ def register_risk_callbacks(app):
 
             body_trs = []
             for i, row in enumerate(body_rows):
-                row_idx = int(row.get('__row_key', i))
+                row_idx = _row_key(row, i)
                 row_bg = THEME['bg_card'] if i % 2 == 1 else 'transparent'
                 body_trs.append(html.Tr(
                     [_cell(row_idx, c, row, a) for c, a in _cols],
@@ -613,22 +628,34 @@ def register_risk_callbacks(app):
                 style={'overflowX': 'auto'},
             )
 
+            _active_target = next((r for r in display_rows if _row_key(r, -1) == active_date_row), None) \
+                if active_date_row is not None else None
+            if _active_target is not None:
+                _parsed_active = pd.to_datetime(_active_target.get('Open Date', ''), errors='coerce')
+                _picker_date = _parsed_active.date().isoformat() if pd.notna(_parsed_active) else None
+                _picker_disabled = False
+                _picker_label = f"Editing {_active_target.get('Asset Name', '')}"
+            else:
+                _picker_date = None
+                _picker_disabled = True
+                _picker_label = 'Click an Open Date cell to edit with the calendar.'
+
             content = html.Div([
                 html.Div([
                     html.Span('Open Date calendar:',
                               style={'color': THEME['text_sub'], 'fontSize': '11px'}),
                     dcc.DatePickerSingle(
                         id='summary-beta-open-date-picker',
-                        date=None,
+                        date=_picker_date,
                         display_format='YYYY-MM-DD',
                         clearable=True,
-                        disabled=True,
+                        disabled=_picker_disabled,
                         placeholder='Select an Open Date cell',
                         style={'backgroundColor': THEME['bg_input']},
                     ),
                     html.Span(
                         id='summary-beta-open-date-target',
-                        children='Click an Open Date cell to edit with the calendar.',
+                        children=_picker_label,
                         style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'},
                     ),
                 ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
@@ -650,9 +677,10 @@ def register_risk_callbacks(app):
         [Input('summary-refresh-btn', 'n_clicks'),
          Input('summary-col-visibility', 'data'),
          Input('summary-alpha-sort', 'data')],
+        State('summary-alpha-active-date-row', 'data'),
         prevent_initial_call='initial_duplicate',
     )
-    def update_summary_alpha_table(_n_clicks, col_vis, sort_state):
+    def update_summary_alpha_table(_n_clicks, col_vis, sort_state, active_date_row):
         """Render Alpha Book allocation table."""
         import os as _os
         sort_state = sort_state or {'col': None, 'dir': 'asc'}
@@ -965,7 +993,7 @@ def register_risk_callbacks(app):
             ]
             _cols = [(c, a) for c, a in _ALL_COLS
                      if c not in ('Open date', 'Volume (mm)', 'Z-Score') or c in _visible_cols]
-            _cols = _cols + [('__delete', 'center')]
+            _cols = [('__delete', 'center')] + _cols
 
             header_row = html.Tr([
                 (html.Th('', style={'padding': '7px 6px', 'width': '24px'}) if c == '__delete'
@@ -985,11 +1013,12 @@ def register_risk_callbacks(app):
                             style={
                                 'background': 'rgba(99,179,237,0.08)',
                                 'border': f'1px solid {THEME["accent"]}', 'borderRadius': '3px',
-                                'color': THEME['text_main'], 'fontSize': '9px', 'padding': '3px 6px',
-                                'cursor': 'pointer', 'width': '100%',
+                                'color': THEME['text_main'], 'fontSize': '13px', 'padding': '5px 8px',
+                                'cursor': 'pointer', 'width': '100%', 'minWidth': '92px',
+                                'whiteSpace': 'nowrap',
                             },
                         ),
-                    ], style={'padding': '5px 10px', 'textAlign': 'right'})
+                    ], style={'padding': '5px 10px', 'textAlign': 'right', 'minWidth': '92px'})
                 return html.Td(
                     dcc.Input(
                         id=input_id, type='text', value=value, debounce=True,
@@ -1062,7 +1091,7 @@ def register_risk_callbacks(app):
                 sev = _alert_severity.get(tid)
                 row_bg = _row_alert_bg.get(sev) if sev else (
                     THEME['bg_card'] if i % 2 == 1 else 'transparent')
-                row_idx = int(row.get('__row_key', i))
+                row_idx = _row_key(row, i)
                 body_trs.append(html.Tr(
                     [_cell(row_idx, c, row, a) for c, a in _cols],
                     style={'background': row_bg, 'borderBottom': '1px solid rgba(255,255,255,0.04)'},
@@ -1109,18 +1138,31 @@ def register_risk_callbacks(app):
                 ], style={'backgroundColor': 'rgba(239,85,59,0.08)', 'border': f"1px solid {THEME['danger']}",
                           'borderRadius': '5px', 'padding': '10px 14px', 'marginBottom': '12px'})
 
+            _active_target = next((r for r in display_rows if _row_key(r, -1) == active_date_row), None) \
+                if active_date_row is not None else None
+            if _active_target is not None:
+                _parsed_active = pd.to_datetime(_active_target.get('Open date', ''), errors='coerce')
+                _picker_date = _parsed_active.date().isoformat() if pd.notna(_parsed_active) else None
+                _picker_disabled = False
+                _picker_label = f"Editing {_active_target.get('ID', '')}"
+            else:
+                _picker_date = None
+                _picker_disabled = True
+                _picker_label = 'Click an Open date cell to edit with the calendar.'
+
             content = html.Div([
                 html.Div([
                     html.Span('Open date calendar:', style={'color': THEME['text_sub'], 'fontSize': '11px'}),
                     dcc.DatePickerSingle(
                         id='summary-alpha-open-date-picker',
-                        date=None, display_format='YYYY-MM-DD', clearable=True, disabled=True,
+                        date=_picker_date, display_format='YYYY-MM-DD', clearable=True,
+                        disabled=_picker_disabled,
                         placeholder='Select an Open date cell',
                         style={'backgroundColor': THEME['bg_input']},
                     ),
                     html.Span(
                         id='summary-alpha-open-date-target',
-                        children='Click an Open date cell to edit with the calendar.',
+                        children=_picker_label,
                         style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic'},
                     ),
                 ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
@@ -1389,7 +1431,7 @@ def register_risk_callbacks(app):
             raise dash.exceptions.PreventUpdate
         row_idx, col = triggered['row'], triggered['col']
         updated_rows = [dict(r) for r in rows]
-        target = next((r for r in updated_rows if int(r.get('__row_key', -1)) == row_idx), None)
+        target = next((r for r in updated_rows if _row_key(r, -1) == row_idx), None)
         if target is None:
             raise dash.exceptions.PreventUpdate
         new_value = next((v for v, i in zip(values, ids) if i['row'] == row_idx and i['col'] == col), None)
@@ -1417,7 +1459,7 @@ def register_risk_callbacks(app):
         if not triggered or not any(_n_clicks_list) or not rows:
             raise dash.exceptions.PreventUpdate
         row_idx = triggered['row']
-        updated_rows = [r for r in rows if int(r.get('__row_key', -1)) != row_idx]
+        updated_rows = [r for r in rows if _row_key(r, -1) != row_idx]
         try:
             _persist_alpha_summary_rows(updated_rows)
             return (f"Position removed at {datetime.now().strftime('%H:%M:%S')}",
@@ -1453,7 +1495,7 @@ def register_risk_callbacks(app):
     def _sync_alpha_open_date_picker(active_row, rows):
         if active_row is None or not rows:
             return None, True, 'Click an Open date cell to edit with the calendar.'
-        target = next((r for r in rows if int(r.get('__row_key', -1)) == active_row), None)
+        target = next((r for r in rows if _row_key(r, -1) == active_row), None)
         if target is None:
             return None, True, 'Click an Open date cell to edit with the calendar.'
         parsed = pd.to_datetime(target.get('Open date', ''), errors='coerce')
@@ -1468,18 +1510,21 @@ def register_risk_callbacks(app):
         [
             Output('summary-refresh-status', 'children', allow_duplicate=True),
             Output('summary-alpha-active-date-row', 'data', allow_duplicate=True),
+            Output('summary-alpha-rows-store', 'data', allow_duplicate=True),
+            Output('summary-refresh-btn', 'n_clicks', allow_duplicate=True),
         ],
         Input('summary-alpha-open-date-picker', 'date'),
         State('summary-alpha-active-date-row', 'data'),
         State('summary-alpha-rows-store', 'data'),
+        State('summary-refresh-btn', 'n_clicks'),
         prevent_initial_call=True,
     )
-    def _apply_alpha_open_date(date_value, active_row, rows):
+    def _apply_alpha_open_date(date_value, active_row, rows, refresh_clicks):
         if active_row is None or not rows:
             raise dash.exceptions.PreventUpdate
 
         updated_rows = [dict(r) for r in rows]
-        target = next((r for r in updated_rows if int(r.get('__row_key', -1)) == active_row), None)
+        target = next((r for r in updated_rows if _row_key(r, -1) == active_row), None)
         if target is None:
             raise dash.exceptions.PreventUpdate
 
@@ -1487,7 +1532,12 @@ def register_risk_callbacks(app):
         target.update(_refresh_alpha_display_row(target))
 
         _persist_alpha_summary_rows(updated_rows)
-        return f"Open date saved at {datetime.now().strftime('%H:%M:%S')}", None
+        return (
+            f"Open date saved at {datetime.now().strftime('%H:%M:%S')}",
+            active_row,
+            updated_rows,
+            (refresh_clicks or 0) + 1,
+        )
 
     # ── Auto-save edits on the Beta positions table ───────────────────────────
     def _persist_beta_user_rows(rows: list[dict]) -> None:
@@ -1541,7 +1591,7 @@ def register_risk_callbacks(app):
             raise dash.exceptions.PreventUpdate
         row_idx, col = triggered['row'], triggered['col']
         updated_rows = [dict(r) for r in rows]
-        target = next((r for r in updated_rows if int(r.get('__row_key', -1)) == row_idx), None)
+        target = next((r for r in updated_rows if _row_key(r, -1) == row_idx), None)
         if target is None:
             raise dash.exceptions.PreventUpdate
         new_value = next((v for v, i in zip(values, ids) if i['row'] == row_idx and i['col'] == col), None)
@@ -1577,7 +1627,7 @@ def register_risk_callbacks(app):
     def _sync_beta_open_date_picker(active_row, rows):
         if active_row is None or not rows:
             return None, True, 'Click an Open Date cell to edit with the calendar.'
-        target = next((r for r in rows if int(r.get('__row_key', -1)) == active_row), None)
+        target = next((r for r in rows if _row_key(r, -1) == active_row), None)
         if target is None:
             return None, True, 'Click an Open Date cell to edit with the calendar.'
         parsed = pd.to_datetime(target.get('Open Date', ''), errors='coerce')
@@ -1592,22 +1642,30 @@ def register_risk_callbacks(app):
         [
             Output('summary-refresh-status', 'children', allow_duplicate=True),
             Output('summary-beta-active-date-row', 'data', allow_duplicate=True),
+            Output('summary-beta-rows-store', 'data', allow_duplicate=True),
+            Output('summary-refresh-btn', 'n_clicks', allow_duplicate=True),
         ],
         Input('summary-beta-open-date-picker', 'date'),
         State('summary-beta-active-date-row', 'data'),
         State('summary-beta-rows-store', 'data'),
+        State('summary-refresh-btn', 'n_clicks'),
         prevent_initial_call=True,
     )
-    def _apply_beta_open_date(date_value, active_row, rows):
+    def _apply_beta_open_date(date_value, active_row, rows, refresh_clicks):
         if active_row is None or not rows:
             raise dash.exceptions.PreventUpdate
         updated_rows = [dict(r) for r in rows]
-        target = next((r for r in updated_rows if int(r.get('__row_key', -1)) == active_row), None)
+        target = next((r for r in updated_rows if _row_key(r, -1) == active_row), None)
         if target is None:
             raise dash.exceptions.PreventUpdate
         target['Open Date'] = date_value or ''
         _persist_beta_user_rows(updated_rows)
-        return f"Open date saved at {datetime.now().strftime('%H:%M:%S')}", None
+        return (
+            f"Open date saved at {datetime.now().strftime('%H:%M:%S')}",
+            active_row,
+            updated_rows,
+            (refresh_clicks or 0) + 1,
+        )
 
     # ── Helper: duration → tenor mapping ────────────────────────────────────────
     def _dur_to_tenor_label(dur: float) -> str:
@@ -1620,20 +1678,27 @@ def register_risk_callbacks(app):
         return '30Y'
 
     def _parse_repo_spread_legs(spread_id: str) -> tuple[str, str]:
-        """Parse 'Repo7d-6m1y' → ('FR007S6M.IR', 'FR007S1Y.IR')."""
+        """Parse 'Repo7d-1y2y' → ('FR007S2Y.IR', 'FR007S1Y.IR') or
+        'Shi3M-1y4y' → ('SHI3MS4Y.IR', 'SHI3MS1Y.IR').
+
+        Leg1 is the longer (second) tenor, leg2 the shorter (first) tenor —
+        matches the +1/-1 quote weights in irs._irs_quote_spread_weights.
+        """
         import re
         _TENOR_MAP = {'3m': '3M', '6m': '6M', '9m': '9M', '1y': '1Y',
                       '2y': '2Y', '3y': '3Y', '5y': '5Y', '10y': '10Y'}
-        m = re.match(r'repo7d-(.+)', spread_id.lower())
-        if not m:
-            return ('', '')
-        remainder = m.group(1)
-        pairs = re.findall(r'(\d+[a-z])', remainder)
-        if len(pairs) < 2:
-            return ('', '')
-        t1 = _TENOR_MAP.get(pairs[0], pairs[0].upper())
-        t2 = _TENOR_MAP.get(pairs[1], pairs[1].upper())
-        return (f'FR007S{t1}.IR', f'FR007S{t2}.IR')
+
+        for prefix, ir_prefix in [('repo7d', 'FR007S'), ('shi3m', 'SHI3MS')]:
+            m = re.match(rf'{prefix}-(.+)', spread_id.lower())
+            if m:
+                remainder = m.group(1)
+                pairs = re.findall(r'(\d+[a-z])', remainder)
+                if len(pairs) >= 2:
+                    t1 = _TENOR_MAP.get(pairs[0], pairs[0].upper())
+                    t2 = _TENOR_MAP.get(pairs[1], pairs[1].upper())
+                    return (f'{ir_prefix}{t2}.IR', f'{ir_prefix}{t1}.IR')
+
+        return ('', '')
 
     def _tenor_str_to_years(tenor: str) -> float:
         """Convert tenor string like '1Y', '6M', '10Y' to fractional years."""
@@ -1648,7 +1713,6 @@ def register_risk_callbacks(app):
         """Load instrument data needed for alpha position leg resolution (called once per refresh)."""
         ld: dict = {
             'otr_cgb': {}, 'otr_cdb': {},
-            'ref_cgb': pd.Series(dtype=object), 'ref_cdb': pd.Series(dtype=object),
             'nb': {}, 'tb_stat': None, 'futs_def': pd.DataFrame(),
             'fs_irs': {'TS': 'FR007S2Y.IR', 'TF': 'FR007S5Y.IR',
                        'T': 'FR007S10Y.IR', 'TL': 'FR007S10Y.IR'},
@@ -1688,16 +1752,6 @@ def register_risk_callbacks(app):
         ld['otr_cgb'] = _pick_otr('TBond')
         ld['otr_cdb'] = _pick_otr('CBond')
 
-        for key, fname in [('ref_cgb', 'TBond-cvref.pkl'), ('ref_cdb', 'CBond-cvref.pkl')]:
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    cv = pd.read_pickle(str(DIR_INPUT / fname))
-                rb = cv.get('RefBond', pd.DataFrame()) if isinstance(cv, dict) else pd.DataFrame()
-                ld[key] = rb.iloc[-1] if not rb.empty else pd.Series(dtype=object)
-            except Exception:
-                pass
-
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -1723,8 +1777,6 @@ def register_risk_callbacks(app):
 
         otr_cgb  = ld.get('otr_cgb', {})
         otr_cdb  = ld.get('otr_cdb', {})
-        ref_cgb  = ld.get('ref_cgb', pd.Series(dtype=object))
-        ref_cdb  = ld.get('ref_cdb', pd.Series(dtype=object))
         nb       = ld.get('nb', {})
         futs_def = ld.get('futs_def', pd.DataFrame())
         fs_irs   = ld.get('fs_irs', {})
@@ -1737,14 +1789,23 @@ def register_risk_callbacks(app):
                 return _T_MAP[ni]
             return min(_T_MAP.values(), key=lambda v: abs(int(v[:-1]) - n))
 
-        # Duration → nearest reference bond from cvref series
-        _REF_TENORS = [(0.3,'0.3Y'),(0.5,'0.5Y'),(0.7,'0.7Y'),(1.0,'1Y'),(1.5,'1.5Y'),
-                       (2.0,'2Y'),(3.0,'3Y'),(5.0,'5Y'),(7.0,'7Y'),(10.0,'10Y'),
-                       (20.0,'20Y'),(30.0,'30Y')]
-        def _nearest_ref(dur: float, ref_s: pd.Series) -> str:
-            best = min(_REF_TENORS, key=lambda x: abs(x[0] - dur))
-            v = ref_s.get(f'Term near {best[1]}', '')
-            return str(v) if v and str(v) not in ('nan', 'None', '—') else ''
+        # Duration → nearest on-the-run bond (same selection as the Market
+        # Monitor "ON-THE-RUN BONDS" card: highest-turnover bond per tenor band).
+        def _nearest_otr(dur: float, otr: dict) -> str:
+            return otr.get(_t_label(dur), '')
+
+        # Duration → FR007 IRS tenor code (for Bond-Swap trades)
+        def _duration_to_fr007_tenor(dur: float) -> str:
+            if dur <= 1.5:
+                return 'FR007S1Y.IR'
+            elif dur <= 2.0:
+                return 'FR007S2Y.IR'
+            elif dur <= 3.0:
+                return 'FR007S3Y.IR'
+            elif dur <= 4.0:
+                return 'FR007S4Y.IR'
+            else:
+                return 'FR007S5Y.IR'
 
         # Front and next futures contract codes for a given contract type
         def _futs_front_next(ctype: str) -> tuple:
@@ -1772,20 +1833,26 @@ def register_risk_callbacks(app):
             elif upper.startswith('CGB-'):
                 m = _re.search(r'(\d+)S(\d+)S', upper)
                 if m:
-                    return (otr_cgb.get(_t_label(float(m.group(1))), ''),
-                            otr_cgb.get(_t_label(float(m.group(2))), ''))
+                    return (otr_cgb.get(_t_label(float(m.group(2))), ''),
+                            otr_cgb.get(_t_label(float(m.group(1))), ''))
             elif upper.startswith('CDB-'):
                 m = _re.search(r'(\d+)S(\d+)S', upper)
                 if m:
-                    return (otr_cdb.get(_t_label(float(m.group(1))), ''),
-                            otr_cdb.get(_t_label(float(m.group(2))), ''))
+                    return (otr_cdb.get(_t_label(float(m.group(2))), ''),
+                            otr_cdb.get(_t_label(float(m.group(1))), ''))
             return ('', '')
 
-        elif stype in ('TBondCurve', 'TBondSwap'):
-            return (tid, _nearest_ref(duration, ref_cgb))
+        elif stype == 'TBondCurve':
+            return (tid, _nearest_otr(duration, otr_cgb))
 
-        elif stype in ('CBondCurve', 'CBondSwap'):
-            return (tid, _nearest_ref(duration, ref_cdb))
+        elif stype == 'CBondCurve':
+            return (tid, _nearest_otr(duration, otr_cdb))
+
+        elif stype == 'TBondSwap':
+            return (tid, _duration_to_fr007_tenor(duration))
+
+        elif stype == 'CBondSwap':
+            return (tid, _duration_to_fr007_tenor(duration))
 
         elif stype == 'NetBasis':
             ctype = tid.split('-')[0]
@@ -1962,7 +2029,7 @@ def register_risk_callbacks(app):
                         _m1 = re.search(r'FR007S([^.]+)\.IR', _l1)
                         _m2 = re.search(r'FR007S([^.]+)\.IR', _l2)
                         if _m1 and _m2:
-                            # Two-leg IRS: +DV01 at short-tenor leg, −DV01 at long-tenor leg
+                            # Two-leg IRS: +DV01 at long-tenor leg, −DV01 at short-tenor leg
                             tenor1 = _dur_to_tenor(_tenor_str_to_years(_m1.group(1)))
                             tenor2 = _dur_to_tenor(_tenor_str_to_years(_m2.group(1)))
                             kt_grid[tenor1][col] = round(kt_grid[tenor1][col] + dv01_mm * dir_sign, 4)

@@ -398,7 +398,9 @@ def register_candidate_callbacks(app) -> None:
                         _bc_annual = _bc_s * 0.5
                     _bc_adj.at[_bidx] = _bc_annual / 4.0
 
-                _cr_annual_adjusted = -_cr_ts_annual + _fin_adj - _bc_adj * 4.0
+                # All TenorSpread rows are YTM-based: BUY = expecting the spread to
+                # fall/narrow (long the higher-yielding leg's price) → carry = +spread.
+                _cr_annual_adjusted = _cr_ts_annual + _fin_adj - _bc_adj * 4.0
                 _cr_3m = _cr_annual_adjusted * (90.0 / 360.0)
                 df_all.loc[_ts_mask, 'carry_roll'] = _cr_3m.round(4)
 
@@ -932,7 +934,7 @@ def register_candidate_callbacks(app) -> None:
     @app.callback(
         Output('alpha-curated-instruments-store', 'data'),
         [Input('alpha-add-trade-btn', 'n_clicks'),
-         Input({'type': 'curated-del', 'index': ALL}, 'n_clicks')],
+         Input({'type': 'curated-del', 'stype': ALL, 'inst': ALL}, 'n_clicks')],
         [State('alpha-curated-instruments-store', 'data'),
          State('alpha-add-spread-type', 'value'),
          State('alpha-add-instrument', 'value')],

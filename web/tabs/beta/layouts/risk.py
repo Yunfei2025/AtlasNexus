@@ -243,9 +243,9 @@ def build_multiasset_risk_layout():
                 html.Div([
                     # Book toggle pills
                     html.Div([
-                        html.Button("Beta Book", id='summary-book-beta-btn', n_clicks=0,
+                        html.Button("Beta", id='summary-book-beta-btn', n_clicks=0,
                                      style=book_btn_style(True, THEME['accent'])),
-                        html.Button("Alpha Book", id='summary-book-alpha-btn', n_clicks=0,
+                        html.Button("Alpha", id='summary-book-alpha-btn', n_clicks=0,
                                      style=book_btn_style(False, THEME['warning'])),
                     ], style={'display': 'flex'}),
                     html.Button("Refresh", id='summary-refresh-btn', n_clicks=0,
@@ -277,6 +277,13 @@ def build_multiasset_risk_layout():
                 }),
                 html.Button("Open Date", id='summary-col-pill-open_date', n_clicks=0, style=col_pill_style(False)),
                 html.Button("Volume", id='summary-col-pill-volume', n_clicks=0, style=col_pill_style(False)),
+                # Always present (even on the Beta book, where it's unused) so the
+                # column-visibility callback's Input always resolves — Dash's
+                # client-side renderer throws if a static-id Input is ever absent
+                # from the live layout, which silently breaks the Open Date/Volume
+                # pills too since they share the same callback.
+                html.Button("Score", id='summary-col-pill-score', n_clicks=0,
+                            style={**col_pill_style(False), 'display': 'none'}),
             ], id='summary-col-pills-row', style={'display': 'flex', 'alignItems': 'center', 'gap': '6px', 'marginBottom': '10px', 'flexWrap': 'wrap'}),
 
             # Single full-width table container — content swapped by book toggle

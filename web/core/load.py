@@ -270,7 +270,6 @@ def _build_tenor_spread_fallback() -> dict:
 
         instruments = {}
         if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10 - cgb5
-        if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30 - cgb10
         if cgb10 is not None and cgb20 is not None: instruments['CGB-10s20s'] = cgb20 - cgb10
         if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10 - cdb5
         if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5  - cgb5

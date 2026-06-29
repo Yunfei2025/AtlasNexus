@@ -780,7 +780,6 @@ class StatGenerator:
         instruments = {}
         if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10  - cgb5
         if cgb10 is not None and cgb20 is not None: instruments['CGB-10s20s'] = cgb20  - cgb10
-        if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30  - cgb10
         if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10  - cdb5
         if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5   - cgb5
         if cdb10 is not None and cgb10 is not None: instruments['CDBCGB-10y'] = cdb10  - cgb10
@@ -817,7 +816,7 @@ class StatGenerator:
         df_spread_stats = df_spread_full.loc[self.start:self.da]  # rolling window for OU calibration
 
         # Carry+Roll (3m) in %:
-        #   XsYs (CGB-10s30s etc.)        BUY = long short-tenor, short long-tenor
+        #   XsYs (CGB-5s10s, CDB-5s10s)  BUY = long short-tenor, short long-tenor
         #     → carry = Y_short − Y_long = −spread  → CR3m = −spread × 0.25
         #   Cross-curve (CDBCGB, *Repo7d-*) BUY = long the bond/CD leg, short the swap/CGB leg
         #     → carry = Y_leg1 − Y_leg2 = +spread   → CR3m = +spread × 0.25

@@ -456,7 +456,7 @@ def build_pairs_layout():
                         }),
                         html.Div([
                             _pair_config_cell("Pair 1", 'pairs-leg1-1', '260010.IB', 'pairs-leg2-1', '260008.IB', "CGB-5s10s"),
-                            _pair_config_cell("Pair 2", 'pairs-leg1-2', '2600002.IB', 'pairs-leg2-2', '260010.IB', "CGB-10s30s"),
+                            _pair_config_cell("Pair 2", 'pairs-leg1-2', '2600002.IB', 'pairs-leg2-2', '260010.IB', "CGB-10s20s"),
                             _pair_config_cell("Pair 3", 'pairs-leg1-3', '260205.IB', 'pairs-leg2-3', '260010.IB', "CDBCGB-10y"),
                             _pair_config_cell("Pair 4", 'pairs-leg1-4', '260008.IB', 'pairs-leg2-4', 'FR007S5Y.IR', "CGBRepo7d-5y"),
                         ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "10px",

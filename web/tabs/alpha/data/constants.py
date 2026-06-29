@@ -102,6 +102,18 @@ for _cat, _info in SPREAD_CATEGORIES.items():
             'category': _cat,
         })
 
+# Spread types whose value is a yield/rate difference (YTM-based), as opposed to a
+# price difference (e.g. TermBasis = front-minus-next futures close, in price points).
+# For YTM-based spreads, LONG = expecting the spread to fall/narrow (you're
+# economically long the richer/higher-yielding leg's price, i.e. short its yield).
+# For price-based spreads, LONG keeps the default convention: profit when the
+# spread (price difference) rises/widens.
+YIELD_BASED_SPREAD_TYPES = {
+    'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap',
+    'SwapSpread', 'TenorSpread', 'NetBasis', 'FuturesSwap',
+    'PCASpread', 'BinarySpread',
+}
+
 # Default z-score thresholds
 ZSCORE_ENTRY_THRESHOLD = 2.0
 ZSCORE_EXIT_THRESHOLD = 0.5
@@ -131,12 +143,9 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
     try:
         result = {
             'CGB-5s10s': cnbd_data['CGB']['中债国债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
-            'CGB-10s30s': cnbd_data['CGB']['中债国债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
             'CDB-5s10s': cnbd_data['CDB']['中债国开债到期收益率:10年'] - cnbd_data['CDB']['中债国开债到期收益率:5年'],
-            'CDB-10s30s': cnbd_data['CDB']['中债国开债到期收益率:30年'] - cnbd_data['CDB']['中债国开债到期收益率:10年'],
             'CDBCGB-5y': cnbd_data['CDB']['中债国开债到期收益率:5年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
             'CDBCGB-10y': cnbd_data['CDB']['中债国开债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
-            'CDBCGB-30y': cnbd_data['CDB']['中债国开债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:30年'],
         }
 
         # LGB (local government bond) vs CGB cross-sector spreads.

@@ -174,7 +174,7 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         # and the final *100 in run_spread_backtest converts to bp.
         #
         # Annual carry for each structure:
-        #   XsYs (CGB-10s30s etc.)  BUY=steepener: carry = Y_short - Y_long = -spread_%
+        #   XsYs (CGB-5s10s, CDB-5s10s)  BUY=steepener: carry = Y_short - Y_long = -spread_%
         #   CDBCGB cross-sector      BUY=long CDB : carry = Y_CDB - Y_CGB   = +spread_%
         # Convert annual % → 3m %: multiply by 90/360.
         # Negate XsYs (\d+s\d+) columns; CDBCGB stays positive.
@@ -290,7 +290,15 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         return None
 
     elif spread_type == 'TenorSpread':
-        # Primary: compute from database-px.pkl via loadCNBDTS for full historical data.
+        # Primary: pre-computed Tenor-spds.pkl is the canonical source of truth
+        # (same source as the Spread sub-tab / dropdown via load_spread_data).
+        tenor_spds = _load_pickle_safe(dir_input / 'Tenor-spds.pkl')
+        if isinstance(tenor_spds, dict):
+            spd = tenor_spds.get('TenorSpread', {}).get('Spread')
+            if isinstance(spd, pd.DataFrame) and not spd.empty:
+                return spd.apply(pd.to_numeric, errors='coerce')
+
+        # Fallback: rebuild from database-px.pkl via loadCNBDTS if the pkl is unavailable.
         try:
             from curves.utils.loader import loadCNBDTS
             env = loadCNBDTS()
@@ -300,13 +308,6 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                 return df.apply(pd.to_numeric, errors='coerce')
         except Exception:
             pass
-
-        # Fallback: read from pre-computed Tenor-spds.pkl (limited to ~1 year).
-        tenor_spds = _load_pickle_safe(dir_input / 'Tenor-spds.pkl')
-        if isinstance(tenor_spds, dict):
-            spd = tenor_spds.get('TenorSpread', {}).get('Spread')
-            if isinstance(spd, pd.DataFrame) and not spd.empty:
-                return spd.apply(pd.to_numeric, errors='coerce')
 
         return None
 

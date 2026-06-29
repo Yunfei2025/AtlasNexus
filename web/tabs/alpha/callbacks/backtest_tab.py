@@ -15,7 +15,7 @@ from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 
 from ..data import (
-    THEME, SPREAD_CATEGORIES, MACRO_PREFIX,
+    THEME, SPREAD_CATEGORIES, MACRO_PREFIX, YIELD_BASED_SPREAD_TYPES,
     load_spread_data, load_spread_timeseries, load_carry_roll_timeseries,
     load_macro_series, _get_duration_mult, _get_borrow_cost_annual_bp,
 )
@@ -335,6 +335,8 @@ def register_backtest_callbacks(app) -> None:
         if ts is None or len(ts.dropna()) < 60:
             return html.Div("Insufficient data for backtest.", style={'color': THEME['warning']}), ""
 
+        is_yield_based = spread_type in YIELD_BASED_SPREAD_TYPES
+
         carry_roll_ts_instrument: Optional[pd.Series] = None
         carry_roll_bp = 0.0
         if not (isinstance(instrument, str) and instrument.startswith(MACRO_PREFIX)):
@@ -369,6 +371,14 @@ def register_backtest_callbacks(app) -> None:
             except Exception:
                 carry_roll_ts_instrument = None
                 carry_roll_bp = 0.0
+
+            # YTM-based spreads: stored carry/snapshot carry is computed on the raw
+            # spread value. Flip so LONG = expecting the spread to fall/narrow
+            # (economically long the higher-yielding leg's price).
+            if is_yield_based:
+                if carry_roll_ts_instrument is not None:
+                    carry_roll_ts_instrument = -carry_roll_ts_instrument
+                carry_roll_bp = -carry_roll_bp
 
         style = style or 'mr'
         try:
@@ -428,11 +438,11 @@ def register_backtest_callbacks(app) -> None:
                 except Exception:
                     pass
 
-            is_bondswap = spread_type in ('TBondSwap', 'CBondSwap')
+            _negate_ts = is_yield_based
 
             if style == 'trend':
                 results = run_trend_backtest_dc(
-                    spread_ts=-ts if is_bondswap else ts,
+                    spread_ts=-ts if _negate_ts else ts,
                     theta=float(theta) if theta is not None else 0.02,
                     mom_window=int(mom_window) if mom_window is not None else 20,
                     vol_window=int(vol_window) if vol_window is not None else 60,
@@ -451,7 +461,7 @@ def register_backtest_callbacks(app) -> None:
                 )
             else:
                 results = run_spread_backtest(
-                    spread_ts=-ts if is_bondswap else ts,
+                    spread_ts=-ts if _negate_ts else ts,
                     entry_z=entry_z or 2.0,
                     exit_z=exit_z or 0.5,
                     stop_z=stop_z or 4.0,
@@ -467,8 +477,8 @@ def register_backtest_callbacks(app) -> None:
                     carry_roll_sell_ts=_cr_sell_for_backtest,
                 )
 
-            # For BondSwap: restore original display signs after internal inversion.
-            if is_bondswap and isinstance(results, dict):
+            # For YTM-based spreads: restore original display signs after internal inversion.
+            if _negate_ts and isinstance(results, dict):
                 results['spread_ts'] = ts
                 for key in ('zscore_ts', 'composite_signal_ts', 'norm_mom_ts', 'trend_state_ts'):
                     series = results.get(key)
@@ -659,8 +669,8 @@ def register_backtest_callbacks(app) -> None:
                 run_trend = 'trend' in str(_item.get('style', '')).lower()
 
                 ts = df_prices[asset]
-                is_bondswap = spread_type in ('TBondSwap', 'CBondSwap')
-                ts_bt = -ts if is_bondswap else ts
+                is_yield_based = spread_type in YIELD_BASED_SPREAD_TYPES
+                ts_bt = -ts if is_yield_based else ts
 
                 _cr_ts, _cr_bp = None, 0.0
                 try:
@@ -678,6 +688,13 @@ def register_backtest_callbacks(app) -> None:
                                     break
                 except Exception:
                     pass
+
+                # YTM-based spreads: flip stored carry to match the price-series
+                # inversion above (LONG = expecting the spread to fall/narrow).
+                if is_yield_based:
+                    if _cr_ts is not None:
+                        _cr_ts = -_cr_ts
+                    _cr_bp = -_cr_bp
 
                 dur = _get_duration_mult(asset, spread_type)
                 _bc_long, _bc_short = _get_borrow_cost_annual_bp(spread_type, asset)

@@ -83,7 +83,7 @@ def _get_duration_mult(
 
     if spread_type == 'TenorSpread':
         # TenorSpread: PnL ≈ duration_first_leg × Δspread (DV01-hedged position)
-        # e.g. CGB-10s30s → first leg = 10y → use duration of shorter tenor
+        # e.g. CGB-5s10s → first leg = 5y → use duration of shorter tenor
         # The 's' suffix is used for years in tenor spread IDs (e.g. 10s = 10 years)
         dash_pos = instrument.find('-')
         tenor_part = instrument[dash_pos + 1:] if dash_pos != -1 else instrument
@@ -124,9 +124,9 @@ def _get_duration_mult(
 def _get_borrow_cost_annual_bp(spread_type: str, instrument: str) -> tuple[float, float]:
     """Return (long_borrow_bp, short_borrow_bp) annual repo/borrow cost in bp.
 
-    TenorSpread (e.g. CGB-10s30s, CDB-5s10s):
-        LONG  the spread = short the LONGER-tenor bond  → long_borrow_bp  = BORROW_COST[longer]
-        SHORT the spread = short the SHORTER-tenor bond → short_borrow_bp = BORROW_COST[shorter]
+    TenorSpread XsYs (e.g. CGB-5s10s, CDB-5s10s) — flattener convention:
+        LONG  the spread = short the SHORTER-tenor bond → long_borrow_bp  = BORROW_COST[shorter]
+        SHORT the spread = short the LONGER-tenor bond  → short_borrow_bp = BORROW_COST[longer]
     BondCurve / BondSwap:
         Symmetric — same cost for both directions based on the bond's ttm bucket.
     Others:
@@ -149,13 +149,13 @@ def _get_borrow_cost_annual_bp(spread_type: str, instrument: str) -> tuple[float
             return float(bc.get(30, 120))
 
     if spread_type == 'TenorSpread':
-        # 'CGB-10s30s' → shorter=10, longer=30
+        # 'CGB-5s10s' → shorter=5, longer=10
         m = re.search(r'(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
         if m:
             shorter = float(m.group(1))
             longer  = float(m.group(2))
-            return _bucket(longer), _bucket(shorter)
-        # 'CDBCGB-30y' → single tenor, symmetric
+            return _bucket(shorter), _bucket(longer)
+        # CDBCGB spreads (5y, 10y) → single tenor, symmetric
         m2 = re.search(r'-(\d+)y$', instrument, re.IGNORECASE)
         if m2:
             cost = _bucket(float(m2.group(1)))
@@ -196,13 +196,13 @@ def _get_tenor_yields_for_spread(instrument: str) -> tuple[Optional[float], Opti
     """Extract short-tenor and long-tenor yields (in %) for a TenorSpread instrument.
 
     Returns: (short_tenor_yield, long_tenor_yield) or (None, None) if not available.
-    Example: CGB-10s30s → (y_10y, y_30y)
+    Example: CGB-5s10s → (y_5y, y_10y)
     """
     try:
         from curves.utils.loader import loadCNBDTS
         env = loadCNBDTS()
 
-        # Parse tenor spread ID like "CGB-10s30s", "CDB-5s10s", "CDBCGB-10y", "LGBCGB-10y", "MTNCGB-5y"
+        # Parse tenor spread ID like "CGB-5s10s", "CDB-5s10s", "CDBCGB-10y", "LGBCGB-10y", "MTNCGB-5y"
         if instrument.upper().startswith('LGBCGB-'):
             m3 = re.search(r'-(\d+)y$', instrument, re.IGNORECASE)
             if not m3:
@@ -298,7 +298,7 @@ def _get_ttm_display(spread_type: str, instrument: str) -> Optional[float]:
     """Return TTM (years) for the Candidates table TTM column.
 
     BondCurve / BondSwap : bond TTM from snapshot.
-    TenorSpread           : first-leg tenor (e.g. 10 for CGB-10s30s, 10 for CDBCGB-10y).
+    TenorSpread           : first-leg tenor (e.g. 5 for CGB-5s10s, 10 for CDBCGB-10y).
     SwapSpread            : second-leg tenor for pairs and flies (e.g. 2 for Repo7d-1y2y,
                             2 for Repo7d-1y2y, 0.75 for Shi3M-6m9m).
     All other types       : None.
@@ -323,7 +323,7 @@ def _get_ttm_display(spread_type: str, instrument: str) -> Optional[float]:
         return None
 
     if spread_type == 'TenorSpread':
-        # CGB-10s30s → first leg = 10
+        # CGB-5s10s → first leg = 5
         m = re.search(r'(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
         if m:
             return float(m.group(1))

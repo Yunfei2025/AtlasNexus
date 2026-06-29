@@ -13,29 +13,35 @@ import pandas as pd
 
 
 def _parse_repo_spread_legs(spread_id: str) -> tuple[str, str]:
-    """Parse 'Repo7d-6m1y' or 'Basis-5y' → ('FR007S6M.IR', 'FR007S1Y.IR') or other legs."""
+    """Parse 'Repo7d-1y2y' → ('FR007S2Y.IR', 'FR007S1Y.IR') or
+    'Shi3M-1y4y' → ('SHI3MS4Y.IR', 'SHI3MS1Y.IR') or
+    'Basis-5y' → ('SHI3MS5Y.IR', 'FR007S5Y.IR').
+
+    For spreads: leg1 is the longer/paid tenor, leg2 the shorter/received tenor.
+    """
     _TENOR_MAP = {
         '3m': '3M', '6m': '6M', '9m': '9M', '1y': '1Y',
         '2y': '2Y', '3y': '3Y', '5y': '5Y', '10y': '10Y'
     }
 
-    # Handle Basis spreads (e.g., "Basis-5y" → SHI3MS5Y.IR (higher-yield) vs FR007S5Y.IR)
+    # Handle Basis spreads (e.g., "Basis-5y" → (SHI3MS5Y.IR, FR007S5Y.IR))
     m = re.match(r'basis-(\d+)y$', spread_id.lower())
     if m:
-        tenor = _TENOR_MAP.get(f"{m.group(1)}y", f"FR007S{m.group(1).upper()}Y.IR")
+        tenor = _TENOR_MAP.get(f"{m.group(1)}y", f"{m.group(1).upper()}Y")
         return (f'SHI3MS{tenor}.IR', f'FR007S{tenor}.IR')
 
-    # Handle Repo7d spreads (e.g., "Repo7d-6m1y" → FR007S6M.IR vs FR007S1Y.IR)
-    m = re.match(r'repo7d-(.+)', spread_id.lower())
-    if not m:
-        return ('', '')
-    remainder = m.group(1)
-    pairs = re.findall(r'(\d+[a-z])', remainder)
-    if len(pairs) < 2:
-        return ('', '')
-    t1 = _TENOR_MAP.get(pairs[0], pairs[0].upper())
-    t2 = _TENOR_MAP.get(pairs[1], pairs[1].upper())
-    return (f'FR007S{t2}.IR', f'FR007S{t1}.IR')
+    # Handle Repo7d and Shi3M spreads (both long the longer tenor, short the shorter)
+    for prefix, ir_prefix in [('repo7d', 'FR007S'), ('shi3m', 'SHI3MS')]:
+        m = re.match(rf'{prefix}-(.+)', spread_id.lower())
+        if m:
+            remainder = m.group(1)
+            pairs = re.findall(r'(\d+[a-z])', remainder)
+            if len(pairs) >= 2:
+                t1 = _TENOR_MAP.get(pairs[0], pairs[0].upper())
+                t2 = _TENOR_MAP.get(pairs[1], pairs[1].upper())
+                return (f'{ir_prefix}{t2}.IR', f'{ir_prefix}{t1}.IR')
+
+    return ('', '')
 
 
 def _tenor_str_to_years(tenor: str) -> float:
@@ -137,7 +143,7 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
 
     Args:
         stype: Spread type (e.g., 'TenorSpread', 'SwapSpread', 'NetBasis', etc.)
-        tid: Trade ID / instrument name (e.g., 'CGB-10s30s', 'Repo7d-6m1y', 'T')
+        tid: Trade ID / instrument name (e.g., 'CGB-5s10s', 'Repo7d-6m1y', 'T')
         duration: Duration in years (used for bond trades to determine reference tenor)
         ld: Leg data dictionary from _load_leg_data() (lazy-loaded if None)
 
@@ -204,7 +210,7 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
         nxt = str(sub_s.index[1]).replace('.CFE', '') if len(sub_s) >= 2 else ''
         return (front, nxt)
 
-    # TenorSpread: CGB-10s30s, CDB-5s10s, CDBCGB-10y
+    # TenorSpread: CGB-5s10s, CDB-5s10s, CDBCGB-10y
     if stype == 'TenorSpread':
         upper = tid.upper()
         if upper.startswith('CDBCGB-'):

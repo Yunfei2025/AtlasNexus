@@ -43,7 +43,7 @@ def preview_object(obj, *, max_rows: int = 20, max_cols: int = 12) -> str:
 if __name__ == "__main__":
     # Example usage when run directly
     # TBond prices demo
-    file_path = os.path.join(DIR_INPUT, 'TBond-cvpx.pkl')
+    file_path = os.path.join(DIR_INPUT, 'Tenor-spds.pkl')
     key = 'IRS'
     dps = '2025-08-01'
     ds = '2025-10-15'
@@ -63,7 +63,7 @@ if __name__ == "__main__":
 
 
     # TBond cvpx demo
-    file_path = os.path.join(DIR_DATA, 'CNDBCurve-px.pkl')
+    file_path = os.path.join(DIR_DATA, 'TBond-px.pkl')
     key = 'Close'
     date_str = '2025-09-25'
     bond = ['240019.IB','240011.IB']
