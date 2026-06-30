@@ -10,19 +10,19 @@
 @REM -- 1. Conda environment -------------------------------------
 @echo [1/3] Activating conda environment 'prod'...
 
-set CONDA_BAT=
-if exist "%USERPROFILE%\anaconda3\condabin\conda.bat"   set CONDA_BAT=%USERPROFILE%\anaconda3\condabin\conda.bat
-if exist "%USERPROFILE%\miniconda3\condabin\conda.bat"  set CONDA_BAT=%USERPROFILE%\miniconda3\condabin\conda.bat
-if exist "C:\ProgramData\anaconda3\condabin\conda.bat"  set CONDA_BAT=C:\ProgramData\anaconda3\condabin\conda.bat
-if exist "C:\ProgramData\miniconda3\condabin\conda.bat" set CONDA_BAT=C:\ProgramData\miniconda3\condabin\conda.bat
-if exist "D:\ProgramData\miniconda3\condabin\conda.bat" set CONDA_BAT=D:\ProgramData\miniconda3\condabin\conda.bat
+set "CONDA_BAT="
+@if exist "%USERPROFILE%\anaconda3\condabin\conda.bat"   set "CONDA_BAT=%USERPROFILE%\anaconda3\condabin\conda.bat"
+@if exist "%USERPROFILE%\miniconda3\condabin\conda.bat"  set "CONDA_BAT=%USERPROFILE%\miniconda3\condabin\conda.bat"
+@if exist "C:\ProgramData\anaconda3\condabin\conda.bat"  set "CONDA_BAT=C:\ProgramData\anaconda3\condabin\conda.bat"
+@if exist "C:\ProgramData\miniconda3\condabin\conda.bat" set "CONDA_BAT=C:\ProgramData\miniconda3\condabin\conda.bat"
+@if exist "D:\ProgramData\miniconda3\condabin\conda.bat" set "CONDA_BAT=D:\ProgramData\miniconda3\condabin\conda.bat"
 
-if "%CONDA_BAT%"=="" (
+@if "%CONDA_BAT%"=="" (
     echo ERROR: Could not find conda. Check your Anaconda/Miniconda installation.
     pause & exit /b 1
 )
 
-call "%CONDA_BAT%" activate prod
+@call "%CONDA_BAT%" activate prod >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Could not activate conda env 'prod'.
     echo        Run: conda create -n prod python=3.13

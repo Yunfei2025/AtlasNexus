@@ -277,7 +277,7 @@ def updateInstrumentDef(asof=None, on_demand=False):
 
 def retrieveInstrumentDefinitions():
     """Auto-registered retriever wrapper so 'update-data' also refreshes
-    *-InstrumentInfo.pkl (engine/data_update.py only discovers functions
+    *-InstrumentInfo.pkl (engine/data_updatdae.py only discovers functions
     named 'retrieve*'; updateInstrumentDef itself does not match)."""
     updateInstrumentDef(on_demand=True)
 
