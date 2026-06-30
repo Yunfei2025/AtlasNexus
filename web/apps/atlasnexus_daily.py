@@ -314,10 +314,10 @@ def build_tabs_panel():
                                     dcc.Dropdown(
                                         id="an-bt-update-list",
                                         options=[
-                                            {'label': 'pool',    'value': 'pool'},
-                                            {'label': 'bonds',   'value': 'bonds'},
-                                            {'label': 'cbts',    'value': 'cbts'},
-                                            {'label': 'rewrite', 'value': 'rewrite'},
+                                            {'label': 'pool',             'value': 'pool'},
+                                            {'label': 'bonds',            'value': 'bonds'},
+                                            {'label': 'cbts',             'value': 'cbts'},
+                                            {'label': 'rewrite analytics', 'value': 'rewrite'},
                                         ],
                                         value=['pool'],
                                         multi=True,
@@ -822,8 +822,8 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt, n_refresh_instruments,
     if trig == "an-btn-backtest":
         btype = bt_btype or "IRS"
         ul = bt_update_list or ["pool"]
-        start = (bt_start or "").strip()
-        end = (bt_end or "").strip()
+        start = (bt_start or "").strip()[:10]
+        end = (bt_end or "").strip()[:10]
 
         if btype == "Futures":
             argv = ["futures-analytics-backfill"]
@@ -1207,9 +1207,9 @@ def _adapt_backfill_form(btype: str):
 
     if btype == "Futures":
         return (
-            {**_dd, "display": "none"},           # hide Update Steps
-            [],                                    # clear options (avoid stale state)
-            ["rewrite"],                           # default
+            {**_dd, "display": "block"},
+            [{"label": "rewrite analytics", "value": "rewrite"}],
+            [],                                    # not selected by default
             True,                                  # Workers disabled
             _inp_disabled,
         )
