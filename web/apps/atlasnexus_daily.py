@@ -366,6 +366,14 @@ def build_tabs_panel():
                                        'fontWeight': '600', 'width': '100%'},
                             ),
                             html.Button(
+                                "▶  Futures Stats Update",
+                                id="an-btn-futures-stats-update",
+                                n_clicks=0,
+                                title="Compute Bond-Futures/TermBasis/FuturesSwap spreads → futures-spds.pkl",
+                                style={**_btn_style, 'background': '#0e3a3f', 'borderColor': '#36a6b8',
+                                       'fontWeight': '600', 'width': '100%'},
+                            ),
+                            html.Button(
                                 "Generate Factor Series",
                                 id="an-btn-gen-factor-series",
                                 n_clicks=0,
@@ -769,6 +777,7 @@ def _run_core_autoruns(n_intervals):
     Input("an-btn-eod", "n_clicks"),
     Input("an-btn-eod-update", "n_clicks"),
     Input("an-btn-backtest", "n_clicks"),
+    Input("an-btn-futures-stats-update", "n_clicks"),
     Input("an-btn-refresh-instruments", "n_clicks"),
     State("an-eod-asof", "date"),
     State("an-bt-btype", "value"),
@@ -778,7 +787,7 @@ def _run_core_autoruns(n_intervals):
     State("an-bt-processes", "value"),
     prevent_initial_call=True,
 )
-def _start_jobs(n_update, n_eod, n_eod_update, n_bt, n_refresh_instruments,
+def _start_jobs(n_update, n_eod, n_eod_update, n_bt, n_futures_stats, n_refresh_instruments,
                 eod_asof,
                 bt_btype, bt_update_list, bt_start, bt_end, bt_processes):
     ctx = __import__("dash").callback_context
@@ -817,6 +826,13 @@ def _start_jobs(n_update, n_eod, n_eod_update, n_bt, n_refresh_instruments,
         # so manual "Run EOD + Update Data" runs always attempt live retrieval.
         job = start_engine_job(argv=argv, extra_env={"FI_FORCE_RERUN": "1", "FI_FORCE_NONTRADING": "1"})
         label = f"eod --update-data --asof {asof}" if asof else "eod --update-data"
+        return job.job_id, f"Started job {job.job_id}: {label}"
+
+    if trig == "an-btn-futures-stats-update":
+        asof = (eod_asof or "").strip()[:10]
+        argv = ["futures-stats-update", "--asof", asof] if asof else ["futures-stats-update"]
+        job = start_engine_job(argv=argv)
+        label = f"futures-stats-update --asof {asof}" if asof else "futures-stats-update"
         return job.job_id, f"Started job {job.job_id}: {label}"
 
     if trig == "an-btn-backtest":

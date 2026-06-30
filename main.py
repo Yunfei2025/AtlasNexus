@@ -142,6 +142,11 @@ def _build_parser() -> argparse.ArgumentParser:
     fa.add_argument("--rewrite", action="store_true",
                     help="Rewrite from scratch instead of incrementally appending")
 
+    fs = sub.add_parser("futures-stats-update",
+                        help="Compute Bond-Futures/TermBasis/FuturesSwap spreads → futures-spds.pkl")
+    fs.add_argument("--asof", type=_parse_date, default=None, dest="fs_asof",
+                    help="As-of date YYYY-MM-DD (default: today)")
+
     return p
 
 def run_atlasnexus_daily_app():
@@ -325,6 +330,22 @@ def main():
         gen = FuturesAnalyticsGenerator(asof=end_str, start=start_str)
         gen.run(rewrite=rewrite)
         logger.info("futures-analytics-backfill: done.")
+        return
+
+    if args.cmd == "futures-stats-update":
+        import datetime as _dt
+        from curves.generators.stat import StatGenerator
+        # fs_asof arrives as 'YYYY-MM-DD' string (or None).
+        asof = _dt.datetime.strptime(args.fs_asof, "%Y-%m-%d").date() if args.fs_asof else _dt.date.today()
+        asof_str = asof.strftime('%Y%m%d')
+        logger.info(f"futures-stats-update: computing futures spreads for {asof}...")
+        try:
+            gen = StatGenerator(date=asof_str)
+            gen.compute_futures_stats()
+            logger.info("futures-stats-update: done.")
+        except Exception as exc:
+            logger.error(f"futures-stats-update: failed ({exc})")
+            raise
         return
 
     raise ValueError(f"Unknown command: {args.cmd}")

@@ -981,7 +981,9 @@ class StatGenerator:
         self.compute_spread_regression()
         self.compute_pca_spreads()
         self.compute_tenor_spreads()
-        self.compute_futures_stats()
+        # Futures stats (futures-spds.pkl) is now updated independently via
+        # futures-stats-update command; skip it here to decouple from EOD pipeline.
+        # self.compute_futures_stats()
         self.compute_seasonal_screener()
         print('\nFinish initialising statistics at：', datetime.datetime.now().strftime('%H:%M:%S'))
 
