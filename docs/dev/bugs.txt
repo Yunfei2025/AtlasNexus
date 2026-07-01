@@ -1,5 +1,7 @@
-250208 - 240203£¨should be 260205£©
-repo7d-6m1y
-MTNCGB-5y seasonal pattern too short
 reduce the width of train params
-failed to enter values
+report: add correlation matrix
+alpha portfolio -> portfolio, Portfolio Allocation Results, some columns like B/E, STOP, TARGET are not filled for certain trades like  CGB-10s30s£¬250208.IB (BondCurve type,  (should be renamed as 250208.IB-OTR in the table). why? also new trades added by user like 260008.IB
+ (should be renamed as 260008.IB-Swp in the table)
+also, i want to add TenorSpread -> CGB-10s30s, but cannot find it, why?
+Portfolio Allocation Snapshot, for 260008.IB-Swp, close price(bp) should be -7.95. You used a % unit.
+alpha portfolio -> pairs, cannot see pair 2 and 4, hidden

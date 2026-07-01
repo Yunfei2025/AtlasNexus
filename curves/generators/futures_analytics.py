@@ -123,6 +123,17 @@ class FuturesAnalyticsGenerator:
 
     CTYPES = ('T', 'TF', 'TL', 'TS')
 
+    @staticmethod
+    def _to_timestamp(value):
+        if value is None:
+            return None
+        if isinstance(value, pd.Timestamp):
+            return value
+        try:
+            return pd.Timestamp(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
     def __init__(self, asof: Optional[str] = None, start: Optional[str] = None) -> None:
         self.asof  = pd.Timestamp(asof)  if asof  else pd.Timestamp.today()
         self.start = pd.Timestamp(start) if start else None
@@ -172,8 +183,9 @@ class FuturesAnalyticsGenerator:
         for ctype in self.CTYPES:
             df = existing.get(ctype)
             if isinstance(df, pd.DataFrame) and not df.empty:
-                ctype_max = df.index.max()
-                last_analytics_date = ctype_max if last_analytics_date is None else max(last_analytics_date, ctype_max)
+                ctype_max = self._to_timestamp(df.index.max())
+                if ctype_max is not None:
+                    last_analytics_date = ctype_max if last_analytics_date is None else max(last_analytics_date, ctype_max)
 
         # If analytics are current for today, skip fetch
         if last_analytics_date is not None and last_analytics_date.date() == self.asof.date():
@@ -194,8 +206,9 @@ class FuturesAnalyticsGenerator:
             frames = val.values() if isinstance(val, dict) else [val]
             for df in frames:
                 if isinstance(df, pd.DataFrame) and not df.empty:
-                    df_max = df.index.max()
-                    futures_max_date = df_max if futures_max_date is None else max(futures_max_date, df_max)
+                    df_max = self._to_timestamp(df.index.max())
+                    if df_max is not None:
+                        futures_max_date = df_max if futures_max_date is None else max(futures_max_date, df_max)
 
         if futures_max_date is None:
             print(f'FuturesAnalyticsGenerator: futures-px.pkl has no data — skipping fetch')
@@ -237,7 +250,9 @@ class FuturesAnalyticsGenerator:
         for ctype in self.CTYPES:
             df = existing.get(ctype)
             if isinstance(df, pd.DataFrame) and not df.empty:
-                last = df.index.max() if last is None else max(last, df.index.max())
+                ctype_last = self._to_timestamp(df.index.max())
+                if ctype_last is not None:
+                    last = ctype_last if last is None else max(last, ctype_last)
 
         if last is not None:
             start = last - relativedelta(days=_INCREMENTAL_LOOKBACK_DAYS)
