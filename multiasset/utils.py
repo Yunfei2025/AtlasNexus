@@ -8,7 +8,7 @@ import os
 import pandas as pd
 import pickle
 
-tenorlist = ["1Y","2M","5Y","10Y", "30Y"]
+tenorlist = ["1Y","2Y","5Y","10Y", "30Y"]
 countrylist = ["US","JP","DE","UK"]
 
 wdstring = "G0000886,G0000887,G0000889,G0000891,G0000893,\

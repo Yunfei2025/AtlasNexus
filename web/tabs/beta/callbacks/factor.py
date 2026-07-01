@@ -313,7 +313,7 @@ def register_factor_callbacks(app):
         ir_factors = (ir_cn or []) + (ir_us or []) + (ir_eu or []) + (ir_jp or []) + (ir_uk or [])
         # Merge all credit universe selections into one list
         cr_factors = (cr_cdb or []) + (cr_lgb or []) + (cr_mtn or []) + (cr_icp or [])
-        # Store selected factors in global state for cross-tab access
+
         SELECTED_FACTOR_POOL['ir_factors'] = ir_factors
         SELECTED_FACTOR_POOL['cr_factors'] = cr_factors
         SELECTED_FACTOR_POOL['fx_factors'] = fx_factors or []
@@ -321,7 +321,6 @@ def register_factor_callbacks(app):
         SELECTED_FACTOR_POOL['cmd_factors'] = cmd_factors or []
         SELECTED_FACTOR_POOL['timestamp'] = datetime.now()
 
-        # Prepare data for store
         store_data = {
             'ir': ir_factors,
             'cr': cr_factors,

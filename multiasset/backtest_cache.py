@@ -129,7 +129,8 @@ def load_rp(input_dir, params: RPCacheParams) -> Optional[dict]:
 
 
 def save_rp(input_dir, params: RPCacheParams, weights_by_date: pd.DataFrame,
-            asset_pools_by_date: dict, screened_factors_by_date: dict) -> str:
+            asset_pools_by_date: dict, screened_factors_by_date: dict,
+            last_corr_matrix=None) -> str:
     h = rp_hash(params)
     path = _pkl_path(input_dir, 'beta_rp_cache.pkl')
     cache = _load_pkl(path)
@@ -139,6 +140,7 @@ def save_rp(input_dir, params: RPCacheParams, weights_by_date: pd.DataFrame,
         'weights_by_date': weights_by_date,
         'asset_pools_by_date': asset_pools_by_date,
         'screened_factors_by_date': screened_factors_by_date,
+        'last_corr_matrix': last_corr_matrix,
     }
     cache = _prune_lru(cache, key_fn=lambda k: True, max_versions=_MAX_VERSIONS_PER_FAMILY)
     pd.to_pickle(cache, path)

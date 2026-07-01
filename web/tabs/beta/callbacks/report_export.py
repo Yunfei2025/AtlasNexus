@@ -275,7 +275,8 @@ def _cum_return_points(*series_list: pd.Series) -> list[list[tuple[float, float]
 def build_report_data(*, weights_final: dict, weights_prev: dict | None,
                        nav_gross: pd.Series, nav_net: pd.Series,
                        start_date: str, end_date: str, rebalance_date: str,
-                       alloc_mode: str, commentary_lines: list[str]) -> dict:
+                       alloc_mode: str, commentary_lines: list[str],
+                       corr_matrix: dict | None = None) -> dict:
     """Assemble a report-data.json-shaped dict from cached backtest results.
 
     The "period" reviewed by the KPIs and returns table is the backtest's own
@@ -284,37 +285,50 @@ def build_report_data(*, weights_final: dict, weights_prev: dict | None,
     report show real daily-data-driven PnL between period start and end.
     """
     weights_prev = weights_prev or {}
-    period_gross = nav_gross[(nav_gross.index >= pd.Timestamp(start_date)) &
-                              (nav_gross.index <= pd.Timestamp(end_date))]
-    period_net = nav_net[(nav_net.index >= pd.Timestamp(start_date)) &
-                          (nav_net.index <= pd.Timestamp(end_date))]
-    _, trailing_gross = _last_month_slice(
-        list(map(str, nav_gross.index)), list(nav_gross.values))
+    end_ts = pd.Timestamp(end_date)
 
-    perf_period = compute_portfolio_metrics(period_gross) if len(period_gross) > 1 else {}
-    perf_12m = compute_portfolio_metrics(trailing_gross) if len(trailing_gross) > 1 else {}
+    # Report month: the last complete calendar month before (or ending on) end_date.
+    # If end_date falls on the 1st (a rebalance date), the report covers the prior month.
+    if end_ts.day == 1:
+        report_month_end = end_ts - pd.Timedelta(days=1)
+    else:
+        report_month_end = end_ts
+    month_start = report_month_end.replace(day=1)
+    month_gross = nav_gross[(nav_gross.index >= month_start) & (nav_gross.index <= report_month_end)]
+    month_net   = nav_net[(nav_net.index >= month_start) & (nav_net.index <= report_month_end)]
 
-    month_ret_gross = (period_gross.iloc[-1] / period_gross.iloc[0] - 1) if len(period_gross) > 1 else 0.0
-    month_ret_net = (period_net.iloc[-1] / period_net.iloc[0] - 1) if len(period_net) > 1 else 0.0
-    max_dd_month = perf_period.get('Max Drawdown', 0.0) or 0.0
-    sharpe_12m = perf_12m.get('Sharpe', 0.0) or 0.0
-    report_period_label = f"{pd.Timestamp(start_date).strftime('%Y-%m-%d')} 至 {pd.Timestamp(end_date).strftime('%Y-%m-%d')}"
-    ts = pd.Timestamp(start_date)
-    report_month_label = f"{ts.year} 年 {ts.month} 月"
+    # Full backtest window — used for the nav chart and returns table
+    period_gross = nav_gross[(nav_gross.index >= pd.Timestamp(start_date)) & (nav_gross.index <= end_ts)]
+    period_net   = nav_net[(nav_net.index >= pd.Timestamp(start_date)) & (nav_net.index <= end_ts)]
+
+    # YTD: Jan 1 of end year through end_date — requires backtest to start from Jan 1
+    ytd_start = end_ts.replace(month=1, day=1)
+    ytd_gross = nav_gross[(nav_gross.index >= ytd_start) & (nav_gross.index <= end_ts)]
+
+    perf_month = compute_portfolio_metrics(month_gross) if len(month_gross) > 1 else {}
+    perf_ytd   = compute_portfolio_metrics(ytd_gross) if len(ytd_gross) > 1 else {}
+
+    month_ret   = (month_gross.iloc[-1] / month_gross.iloc[0] - 1) if len(month_gross) > 1 else 0.0
+    max_dd_month = perf_month.get('Max Drawdown', 0.0) or 0.0
+    ytd_ann_ret  = perf_ytd.get('Ann. Return', 0.0) or 0.0
+    ytd_sharpe   = perf_ytd.get('Sharpe', float('nan'))
+
+    report_period_label = f"{pd.Timestamp(start_date).strftime('%Y-%m-%d')} 至 {end_ts.strftime('%Y-%m-%d')}"
+    report_month_label  = f"{report_month_end.year} 年 {report_month_end.month} 月"
+    ytd_label = f"{ytd_start.strftime('%Y-%m-%d')} 至今"
 
     kpis = [
-        {"label": "FICC-RP 月度收益", "value": f"{month_ret_gross:+.2%}",
-         "valueClass": "pos" if month_ret_gross >= 0 else "neg",
-         "delta": "基准指数（纯风险预算）", "accent": False},
-        {"label": "FICC-RP 净收益（扣除交易成本）", "value": f"{month_ret_net:+.2%}",
-         "valueClass": "pos" if month_ret_net >= 0 else "neg",
-         "delta": "扣除交易成本后", "accent": True},
+        {"label": "FICC-RP 月度收益", "value": f"{month_ret:+.2%}",
+         "valueClass": "pos" if month_ret >= 0 else "neg",
+         "delta": f"{month_start.strftime('%Y-%m-%d')} ~ {report_month_end.strftime('%Y-%m-%d')}", "accent": False},
         {"label": "月内最大回撤", "value": f"{max_dd_month:.2%}",
-         "valueClass": "neg", "delta": "本期回测窗口内"},
-        {"label": "滚动 12 月夏普比率", "value": f"{sharpe_12m:.2f}",
-         "valueClass": "", "delta": "FICC-RP"},
-        {"label": "本月再平衡", "value": pd.Timestamp(rebalance_date).strftime('%Y-%m-%d'),
-         "valueClass": "", "delta": "常规月度再平衡"},
+         "valueClass": "neg", "delta": "报告月区间内"},
+        {"label": "YTD 年化收益", "value": f"{ytd_ann_ret:+.2%}",
+         "valueClass": "pos" if ytd_ann_ret >= 0 else "neg",
+         "delta": ytd_label, "accent": True},
+        {"label": "YTD 夏普比率",
+         "value": f"{ytd_sharpe:.2f}" if ytd_sharpe == ytd_sharpe else "N/A",
+         "valueClass": "", "delta": ytd_label},
     ]
 
     color_map = _asset_color_map(weights_final, weights_prev)
@@ -333,16 +347,14 @@ def build_report_data(*, weights_final: dict, weights_prev: dict | None,
         for g, w in sorted(by_group_weight.items(), key=lambda kv: -kv[1])
     ]
 
-    start_ts = pd.Timestamp(start_date)
-    end_ts = pd.Timestamp(end_date)
-    if start_ts < end_ts:
-        returns_table = _returns_table_groups(weights_final, start_ts, end_ts)
-        returns_period_label = f"{start_ts.strftime('%Y-%m-%d')} ~ {end_ts.strftime('%Y-%m-%d')}"
+    if month_start < report_month_end:
+        returns_table = _returns_table_groups(weights_final, month_start, report_month_end)
+        returns_period_label = f"{month_start.strftime('%Y-%m-%d')} ~ {report_month_end.strftime('%Y-%m-%d')}"
     else:
         returns_table = []
         returns_period_label = report_period_label
 
-    rp_points, net_points = _cum_return_points(period_gross, period_net)
+    rp_points, net_points = _cum_return_points(month_gross, month_net)
     nav_chart = {"rp": rp_points, "net": net_points}
 
     markers = ["①", "②", "③", "④"]
@@ -360,6 +372,7 @@ def build_report_data(*, weights_final: dict, weights_prev: dict | None,
         "kpis": kpis,
         "allocation": {
             "effectiveDate": pd.Timestamp(rebalance_date).strftime('%Y-%m-%d'),
+            "prevEffectiveDate": (pd.Timestamp(rebalance_date) - pd.DateOffset(months=1)).strftime('%Y-%m-%d'),
             "segments": segments,
             "segmentsPrev": segments_prev,
             "changes": allocation_changes,
@@ -367,6 +380,7 @@ def build_report_data(*, weights_final: dict, weights_prev: dict | None,
         "returns": returns_table,
         "riskContribution": risk_contribution,
         "navChart": nav_chart,
+        "corrMatrix": corr_matrix,
         "commentary": commentary,
         "footer": "本报告基于民生FICC配置指数规则化编制流程自动生成（回测数据），数据来源：中债登、CFETS、上期所/INE、LME。历史表现不代表未来收益，不构成投资建议。",
     }
@@ -432,6 +446,7 @@ def register_report_export_callbacks(app):
                 rebalance_date=results['rebalance_date'],
                 alloc_mode=results.get('alloc_mode', 'risk_parity'),
                 commentary_lines=commentary_lines,
+                corr_matrix=results.get('corr_matrix'),
             )
 
             REPORT_DIR.mkdir(parents=True, exist_ok=True)

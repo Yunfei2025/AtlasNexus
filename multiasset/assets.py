@@ -189,6 +189,10 @@ class CommodityAsset(Asset):
         return returns
 
 
+class EquityAsset(CommodityAsset):
+    """Equity index futures asset — same price-return logic as CommodityAsset."""
+
+
 class FXAsset(Asset):
     """FX spot rate asset with direct exchange rate exposure."""
 

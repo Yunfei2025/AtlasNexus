@@ -95,6 +95,7 @@ def _reshape_db(db: Optional[dict]) -> dict:
             'next_close':    _col('contract1_cls', col),
             'irr':           _col('irr', col),
             'fytm':          _col('ytm', col),
+            'next_fytm':     _col('next_ytm', col),
         })
         frame.index = pd.DatetimeIndex(frame.index)
         frame.index.name = 'date'

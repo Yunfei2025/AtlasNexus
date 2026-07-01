@@ -60,10 +60,11 @@ def register_backtest_hist_callbacks(app):
     # its value isn't used since the chip grid doesn't depend on date mode.
     @app.callback(
         Output('backtest-strategy-factor-pool', 'children'),
-        [Input('backtest-date-mode', 'value')],
+        [Input('backtest-date-mode', 'value'),
+         Input('factor-selection-store', 'data')],
         prevent_initial_call=False
     )
-    def update_strategy_factor_pool_chips(_date_mode):
+    def update_strategy_factor_pool_chips(_date_mode, _factor_store):
         """Render the current SELECTED_FACTOR_POOL (from the Factor tab) as small chip cards."""
         _CATEGORY_COLOR = {
             'IR':  THEME['accent'],
@@ -444,11 +445,13 @@ def register_backtest_hist_callbacks(app):
                 bounds_version="RiskModelConfig.v1",
             )
             rp_h = None
+            _last_corr_matrix = None
             cached_rp = load_rp(DIR_INPUT, rp_params)
             if cached_rp is not None:
                 rp_weights_by_date = cached_rp['weights_by_date']
                 asset_pools_by_date = cached_rp['asset_pools_by_date']
                 screened_factors_by_date = cached_rp['screened_factors_by_date']
+                _last_corr_matrix = cached_rp.get('last_corr_matrix')
                 rp_h = rp_hash(rp_params)
                 print(f"  RP base: cache hit ({rp_h})")
             else:
@@ -477,6 +480,7 @@ def register_backtest_hist_callbacks(app):
                         continue
 
                     corr_matrix = df_changes.corr()
+                    _last_corr_matrix = corr_matrix
 
                     # Find the `top_pairs` lowest-correlation factor pairs in this window
                     mask = np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
@@ -553,7 +557,7 @@ def register_backtest_hist_callbacks(app):
 
                     print(f"  {rebalance_date.date()}: {len(selected_asset_names)} assets, {len(low_corr_factors_list)} screened factors (of {len(available_factors)} total)")
 
-                rp_h = save_rp(DIR_INPUT, rp_params, rp_weights_by_date, asset_pools_by_date, screened_factors_by_date)
+                rp_h = save_rp(DIR_INPUT, rp_params, rp_weights_by_date, asset_pools_by_date, screened_factors_by_date, _last_corr_matrix)
                 print(f"  RP base: computed and cached ({rp_h})")
 
             # ── Step B: factor-scaling tilts — cached per factor, each keyed on
@@ -945,6 +949,14 @@ def register_backtest_hist_callbacks(app):
 
             sorted_rb = sorted(final_weights_by_date.keys())
             if sorted_rb:
+                # Serialize the last rebalance corr_matrix (factor-level) for the report
+                _corr_payload = None
+                if _last_corr_matrix is not None and not _last_corr_matrix.empty:
+                    labels = list(_last_corr_matrix.columns)
+                    values = [[round(float(v), 4) for v in row]
+                              for row in _last_corr_matrix.values]
+                    _corr_payload = {'labels': labels, 'values': values}
+
                 results_payload = {
                     'weights_final': final_weights_by_date[sorted_rb[-1]],
                     'weights_prev': final_weights_by_date[sorted_rb[-2]] if len(sorted_rb) > 1 else {},
@@ -955,6 +967,7 @@ def register_backtest_hist_callbacks(app):
                     'start_date': start_date.strftime('%Y-%m-%d'),
                     'end_date': end_date.strftime('%Y-%m-%d'),
                     'alloc_mode': alloc_mode,
+                    'corr_matrix': _corr_payload,
                 }
             else:
                 results_payload = None

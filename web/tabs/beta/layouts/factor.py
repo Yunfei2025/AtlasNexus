@@ -78,6 +78,13 @@ def build_multiasset_factor_layout():
             ], style={'width': '64px', 'flexShrink': '0'})
             for d in domiciles
         ], style={'display': 'flex', 'gap': '10px'}),
+        html.Div(
+            "* FX bonds require CNY-hedged.",
+            style={
+                'fontSize': '8.5px', 'color': 'var(--text-muted)', 'marginTop': '6px',
+                'lineHeight': '1.5', 'fontStyle': 'italic',
+            }
+        ),
     ], style={'flexShrink': '0'})
 
     # ── Credit grid: CRDL/CRSL/CRCV rows × LGB/MTN/ICP columns ──

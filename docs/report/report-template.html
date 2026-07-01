@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <title>民生FICC配置指数 · 月度报告</title>
 <style>
-  @page { size: A4 landscape; margin: 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
@@ -22,7 +21,6 @@
 
   html, body {
     width: 297mm;
-    height: 210mm;
     font-family: "Source Han Sans SC", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
     background: var(--paper);
     color: var(--ink);
@@ -31,9 +29,8 @@
 
   .page {
     width: 297mm;
-    height: 210mm;
     display: grid;
-    grid-template-rows: 15mm 21mm 1fr 7mm;
+    grid-template-rows: auto auto 1fr auto;
     grid-template-columns: 1fr;
     padding: 6mm 8mm 4mm 8mm;
     gap: 2.6mm;
@@ -74,7 +71,7 @@
   /* ---------- KPI 行 ---------- */
   .kpi-row {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 2.6mm;
   }
   .kpi {
@@ -113,8 +110,7 @@
     display: grid;
     grid-template-columns: 1.05fr 1.25fr 1fr;
     gap: 3mm;
-    min-height: 0;
-    height: 100%;
+    align-items: start;
   }
   .panel {
     background: white;
@@ -123,8 +119,6 @@
     padding: 3mm 3.4mm 2.6mm;
     display: flex;
     flex-direction: column;
-    min-height: 0;
-    height: 100%;
   }
   .panel h3 {
     font-size: 8.6pt;
@@ -147,7 +141,7 @@
     border-radius: 6px;
   }
 
-  /* ---- 配置面板（上期 / 本期 环形图 + 本期变动） ---- */
+  /* ---- 配置面板（紧凑对比表 + 本期变动） ---- */
   .alloc-body {
     display: flex;
     flex-direction: column;
@@ -155,76 +149,63 @@
     flex: 1;
     min-height: 0;
   }
-  .alloc-period {
-    display: flex;
-    align-items: center;
-    gap: 2.2mm;
-  }
-  .alloc-period .period-tag {
-    flex: 0 0 9mm;
-    font-size: 6.8pt;
-    font-weight: 700;
-    color: var(--steel);
-    writing-mode: horizontal-tb;
-  }
-  .donut-wrap {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .donut-wrap svg { width: 70px; height: 70px; }
-  .legend {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 0.6mm;
-    font-size: 6.6pt;
-  }
-  .legend .row {
-    display: grid;
-    grid-template-columns: 7px 1fr auto;
-    align-items: center;
-    gap: 1.4mm;
-  }
-  .legend .dot { width: 6px; height: 6px; border-radius: 50%; }
-  .legend .nm { color: var(--ink); }
-  .legend .pct { font-weight: 700; color: var(--navy); text-align: right; }
-  .legend .grp-label {
-    font-size: 6pt; color: var(--ink-soft); font-weight: 700;
-    margin-top: 0.6mm; letter-spacing: 0.3px; text-transform: uppercase;
-  }
   .alloc-divider {
     border-top: 0.6pt dashed var(--line);
     margin: 0.4mm 0;
   }
 
+  /* compact comparison table */
+  .alloc-cmp-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 6.6pt;
+  }
+  .alloc-cmp-table thead tr th {
+    font-size: 6pt; font-weight: 700; color: var(--ink-soft);
+    text-align: right; padding: 0 1.2mm 1mm;
+    border-bottom: 0.6pt solid var(--line);
+  }
+  .alloc-cmp-table thead tr th:first-child { text-align: left; padding-left: 0; }
+  .alloc-cmp-table tbody tr td {
+    padding: 0.7mm 1.2mm;
+    color: var(--ink);
+    border-bottom: 0.4pt solid #F0F3F8;
+  }
+  .alloc-cmp-table tbody tr td:first-child { padding-left: 0; }
+  .alloc-cmp-table .grp-row td {
+    font-size: 6pt; font-weight: 700; color: var(--steel);
+    background: #F0F3F8; padding: 0.6mm 1.2mm;
+  }
+  .alloc-cmp-table .dot-cell { width: 7px; }
+  .alloc-cmp-table .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .alloc-cmp-table .nm { color: var(--ink); }
+  .alloc-cmp-table .pct { text-align: right; font-weight: 700; color: var(--navy); }
+  .alloc-cmp-table .pct.added { color: #1A8F6B; }
+  .alloc-cmp-table .pct.removed { color: var(--red); }
+  .alloc-cmp-table .dash { text-align: right; color: var(--ink-soft); }
+
   /* ---- 本期变动（条形图） ---- */
   .alloc-change {
-    flex: 1;
-    min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.9mm;
-    overflow-y: auto;
-    padding-top: 0.8mm;
+    gap: 0.8mm;
+    padding-top: 0.6mm;
   }
   .alloc-change .chg-title {
     font-size: 6.6pt; font-weight: 700; color: var(--steel);
-    letter-spacing: 0.3px; margin-bottom: 0.4mm;
+    letter-spacing: 0.3px; margin-bottom: 0.3mm;
   }
   .chg-row {
     display: grid;
-    grid-template-columns: 14mm 1fr 10mm;
+    grid-template-columns: 13mm 1fr 9mm;
     align-items: center;
-    gap: 1.4mm;
-    font-size: 6.4pt;
+    gap: 1.2mm;
+    font-size: 6.2pt;
   }
   .chg-row .chg-name { color: var(--ink); }
   .chg-row .chg-bar-track {
     position: relative;
-    height: 2.4mm;
+    height: 2.2mm;
     background: #EDEFF3;
     border-radius: 1px;
   }
@@ -279,24 +260,52 @@
   .bar-fill.neg { background: var(--red); right: 50%; }
   .bar-mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 0.4pt; background: var(--ink-soft); opacity: 0.4; }
 
-  /* ---- 右栏：净值曲线 + 风险贡献 + 解读 ---- */
-  .right-col { display: flex; flex-direction: column; gap: 3mm; min-height: 0; height: 100%; }
+  /* ---- 右栏：净值曲线 + 风险贡献 + 相关性矩阵 + 解读 ---- */
+  .right-col { display: flex; flex-direction: column; gap: 2.4mm; }
   .mini-chart {
     height: 26mm;
     display: flex;
     align-items: flex-end;
   }
   .commentary {
-    font-size: 7.3pt;
-    line-height: 1.55;
+    font-size: 7pt;
+    line-height: 1.5;
     color: var(--ink);
     flex: 1;
   }
-  .commentary .dot-item { display: flex; gap: 1.4mm; margin-bottom: 1.6mm; }
+  .commentary .dot-item { display: flex; gap: 1.4mm; margin-bottom: 1.4mm; }
   .commentary .dot-item .marker { color: var(--accent); font-weight: 700; flex: 0 0 auto; }
-  .riskbar-row { display: grid; grid-template-columns: 16mm 1fr 9mm; align-items: center; gap: 1.6mm; font-size: 6.8pt; margin-bottom: 1.4mm; }
+  .riskbar-row { display: grid; grid-template-columns: 16mm 1fr 9mm; align-items: center; gap: 1.6mm; font-size: 6.8pt; margin-bottom: 1.2mm; }
   .riskbar-track { background: #EDEFF3; height: 2.8mm; border-radius: 1px; overflow: hidden; }
   .riskbar-fill { height: 100%; }
+
+  /* ---- 相关性矩阵 ---- */
+  .corr-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 5.4pt;
+    table-layout: fixed;
+  }
+  .corr-table th {
+    font-size: 5.2pt; font-weight: 600; color: var(--ink-soft);
+    text-align: center; padding: 0.4mm 0.5mm;
+    border-bottom: 0.6pt solid var(--navy);
+    white-space: nowrap; overflow: hidden;
+  }
+  .corr-table th:first-child { text-align: left; width: 18mm; }
+  .corr-table td {
+    text-align: center; padding: 0.4mm 0.5mm;
+    border-bottom: 0.3pt solid #F0F3F8;
+    font-weight: 600; line-height: 1.2;
+  }
+  .corr-table td:first-child { text-align: left; color: var(--ink-soft); font-weight: 500; overflow: hidden; white-space: nowrap; }
+  .corr-table .c-high-pos { background: #0B2447; color: #fff; }
+  .corr-table .c-mid-pos  { background: #2E4D7B; color: #fff; }
+  .corr-table .c-low-pos  { background: #A8C4E0; color: var(--ink); }
+  .corr-table .c-zero     { background: #F7F8FA; color: var(--ink-soft); }
+  .corr-table .c-low-neg  { background: #F4C4C4; color: var(--ink); }
+  .corr-table .c-mid-neg  { background: #D7595B; color: #fff; }
+  .corr-table .c-diag     { background: var(--line); color: var(--ink-soft); }
 
   /* ---------- 底部 ---------- */
   .footer {
@@ -334,40 +343,16 @@
   <!-- 主体三栏 -->
   <div class="main">
 
-    <!-- 左栏：资产配置（上期 / 本期 + 变动） -->
+    <!-- 左栏：资产配置（紧凑对比表 + 变动条形图） -->
     <div class="panel">
       <h3>资产配置（风险预算权重）<span class="tag">{{allocationEffectiveDate}} 生效</span></h3>
       <div class="alloc-body">
-        <div class="alloc-period">
-          <span class="period-tag">上期</span>
-          <div class="donut-wrap">
-            <svg viewBox="0 0 42 42">
-              {{donutSVGPrev}}
-            </svg>
-          </div>
-          <div class="legend">
-            {{allocationLegendPrev}}
-          </div>
-        </div>
-
-        <div class="alloc-divider"></div>
-
-        <div class="alloc-period">
-          <span class="period-tag">本期</span>
-          <div class="donut-wrap">
-            <svg viewBox="0 0 42 42">
-              {{donutSVG}}
-            </svg>
-          </div>
-          <div class="legend">
-            {{allocationLegend}}
-          </div>
-        </div>
+        {{allocationCompactTable}}
 
         <div class="alloc-divider"></div>
 
         <div class="alloc-change">
-          <div class="chg-title">本期变动 (pp)</div>
+          <div class="chg-title">本期变动 <span style="font-weight:400;color:var(--ink-soft);">风险预算权重变动 (pp)</span></div>
           {{allocationChangeBars}}
         </div>
       </div>
@@ -383,9 +368,9 @@
 
     <!-- 右栏：净值曲线 + 风险贡献 + 月度解读 -->
     <div class="right-col">
-      <div class="panel" style="flex: 0 0 32mm;">
+      <div class="panel">
         <h3>本期累计收益走势<span class="tag">{{returnsPeriod}}</span></h3>
-        <div class="mini-chart" style="height: 100%;">
+        <div class="mini-chart">
           <svg width="100%" height="100%" viewBox="0 0 300 90" preserveAspectRatio="none">
             {{navChartSVG}}
           </svg>
@@ -396,14 +381,19 @@
         </div>
       </div>
 
-      <div class="panel" style="flex: 0 0 26mm;">
+      <div class="panel">
         <h3>风险贡献分布<span class="tag">本期</span></h3>
-        <div style="flex:1; display:flex; flex-direction:column; justify-content:center;">
+        <div>
           {{riskContribution}}
         </div>
       </div>
 
-      <div class="panel" style="flex: 1;">
+      <div class="panel">
+        <h3>资产相关性矩阵<span class="tag">滚动60日</span></h3>
+        {{corrMatrixTable}}
+      </div>
+
+      <div class="panel">
         <h3>本月要点</h3>
         <div class="commentary">
           {{commentary}}

@@ -428,6 +428,20 @@ def fetchFuturesDatabaseWindow(prange, on_demand=False):
     database_update['irr'] = _wsd(flist, "tbf_irr02", dps, ds, "futurePriceType=1;bondTradingVenue=1;", on_demand=on_demand)
     database_update['ytm'] = _wsd(flist, "tbf_fytm02", dps, ds, "futurePriceType=1;bondTradingVenue=1;", on_demand=on_demand)
     database_update['ctd'] = _wsd(flist, "tbf_ctd02", dps, ds, "futurePriceType=1;bondTradingVenue=1;", on_demand=on_demand)
+
+    # Fetch tbf_fytm02 for each specific next-quarter contract code so we can
+    # compute the FYTM spread (fytm - next_fytm) as the TermBasis series.
+    # contract1 cells hold the actual contract codes (e.g. T2609.CFE); we
+    # collect the unique codes and call _wsd once, then align per (date, ctype).
+    c1_df = database_update['contract1']
+    next_codes = [c for c in pd.unique(c1_df.values.ravel()) if isinstance(c, str) and c]
+    if next_codes:
+        next_ytm_wide = _wsd(next_codes, "tbf_fytm02", dps, ds,
+                             "futurePriceType=1;bondTradingVenue=1;", on_demand=on_demand)
+        database_update['next_ytm'] = _extract_contract_close(c1_df, next_ytm_wide)
+    else:
+        database_update['next_ytm'] = pd.DataFrame(index=c1_df.index, columns=c1_df.columns, dtype='float64')
+
     return database_update
 
 

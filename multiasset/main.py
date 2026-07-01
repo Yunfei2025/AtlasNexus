@@ -22,7 +22,7 @@ if str(project_root) not in sys.path:
 
 from multiasset.retrieve import retrieveFXIRCurves
 from multiasset.assets import (
-    BondAsset, CommodityAsset, FXAsset, MultiFactorBondAsset, SlopeSensitiveBondAsset,
+    BondAsset, CommodityAsset, FXAsset, EquityAsset, MultiFactorBondAsset, SlopeSensitiveBondAsset,
     MultiFactorCreditAsset, Asset,
 )
 from multiasset.config import CREDIT_CONFIG
@@ -294,6 +294,15 @@ def create_fx_universe() -> List[FXAsset]:
     return fx_pairs
 
 
+def create_equity_universe() -> List[EquityAsset]:
+    return [
+        EquityAsset(name='IF', factor='EQDL.IF'),
+        EquityAsset(name='IC', factor='EQDL.IC'),
+        EquityAsset(name='IH', factor='EQDL.IH'),
+        EquityAsset(name='IM', factor='EQDL.IM'),
+    ]
+
+
 def create_default_portfolio(use_cache: bool = True, use_deterministic: bool = True) -> Portfolio:
     """
     Create the default multi-asset portfolio with comprehensive bond universe.
@@ -364,7 +373,8 @@ def create_custom_portfolio(selected_asset_names: List[str], use_cache: bool = T
     all_credit = create_credit_universe(analyzer=analyzer)
     all_commodities = create_commodity_universe()
     all_fx = create_fx_universe()
-    all_possible_assets = all_bonds + all_spreads + all_credit + all_commodities + all_fx  # type: ignore
+    all_equities = create_equity_universe()
+    all_possible_assets = all_bonds + all_spreads + all_credit + all_commodities + all_fx + all_equities  # type: ignore
 
     _seen: set = set()
     selected_assets = []

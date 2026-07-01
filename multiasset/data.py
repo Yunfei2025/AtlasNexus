@@ -250,9 +250,9 @@ def get_asset_yield_series(asset_name, market_data):
             return None, duration, spread, True
 
     elif asset_type == 'Credit':
-        # Credit spread instruments (own yield - CGB yield at matching tenor).
-        # Tenor->column mapping is the single source of truth shared with the
-        # CRDL/CRSL/CRCV factor calculation (multiasset/pca_analyzer.py).
+        # Outright bond holding — use the full own yield for both carry and capital.
+        # The CRDL/CRSL/CRCV factor model uses spread internally, but PnL here
+        # reflects holding the bond outright with no CGB hedge.
         from multiasset.config import CREDIT_CONFIG
 
         universe_to_code = {
@@ -269,8 +269,6 @@ def get_asset_yield_series(asset_name, market_data):
 
         _, pkl_key, tenor_cols = CREDIT_CONFIG[code]
         tenor_to_cols = {f"{t:g}Y": (own_col, cgb_col) for own_col, cgb_col, t in tenor_cols}
-        # ICP's sub-year tenors are keyed like '0.25Y' in CREDIT_CONFIG but sector
-        # is '3M' etc — map sector to the same tenor-year label used there.
         sector_to_tenor_label = {
             '3M': '0.25Y', '6M': '0.5Y', '9M': '0.75Y',
             '1Y': '1Y', '2Y': '2Y', '3Y': '3Y', '4Y': '4Y',
@@ -281,10 +279,9 @@ def get_asset_yield_series(asset_name, market_data):
         if cols is None:
             return None, duration, code, True
         own_col, cgb_col = cols
-        if own_col not in cn_data[pkl_key].columns or cgb_col not in cn_data["CGB"].columns:
+        if own_col not in cn_data[pkl_key].columns:
             return None, duration, code, True
-        spread_ts = cn_data[pkl_key][own_col] - cn_data["CGB"][cgb_col]
-        return spread_ts, duration, code, True
+        return cn_data[pkl_key][own_col], duration, code, True
 
     elif asset_type == 'FX':
         # FX spot rates from macro data
@@ -324,12 +321,12 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
     """
     Calculate daily return series for an asset.
     Returns DataFrame with columns: ['Date', 'carry', 'capital', 'fx', 'total']
-    
+
     For bonds:
     - Carry = daily yield / 365 (actual daily accrual)
     - Capital = -Duration * daily yield change
     - FX = daily FX return (for foreign bonds)
-    
+
     For commodities:
     - total = daily price return
     """
@@ -362,39 +359,35 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
         # Bond returns: carry + yield-change capital gain
         # (No roll-down: we track key tenor yields, not aging bonds)
 
-        # Carry: daily coupon accrual based on key tenor yield
+        # Carry: daily coupon accrual on the full yield.
         result['carry'] = series / 100.0 / 365
 
-        # Capital gain from yield changes: -ModifiedDuration * ΔYield
-        # Using proper modified duration (not tenor), which adjusts with yield level
+        # Capital gain: -ModifiedDuration * Δyield
         n = duration
-        y = (series / 100.0).clip(lower=0.001)  # avoid division by zero
+        y = (series / 100.0).clip(lower=0.001)
         modified_duration = (1 - (1 + y) ** (-n)) / (y * (1 + y))
-        yield_change = series.diff() / 100.0  # Convert from % to decimal
+        yield_change = series.diff() / 100.0
         result['capital'] = -modified_duration * yield_change
 
-        # FX return (for foreign bonds)
+        # Foreign bonds are CNY-hedged via a rolling FX forward (interest rate
+        # parity cost).  The hedge P&L offsets the spot FX move exactly at the
+        # forward rate, leaving only local carry + capital.  result['fx'] records
+        # the unhedged spot return for transparency but is excluded from total.
         if country and country != 'CN':
             fx_series = get_fx_series(country, market_data)
             if fx_series is not None:
-                # Ensure index is DatetimeIndex
                 if not isinstance(fx_series.index, pd.DatetimeIndex):
                     fx_series.index = pd.to_datetime(fx_series.index)
-                
-                # Filter FX series by date range (create new mask for fx_series index)
                 fx_mask = (fx_series.index >= start_ts) & (fx_series.index <= end_ts)
                 fx_filtered = fx_series.loc[fx_mask].dropna()
-                fx_ret = fx_filtered.pct_change()
-                # Align with result index
-                result['fx'] = fx_ret.reindex(result.index).fillna(0)
+                result['fx'] = fx_filtered.pct_change().reindex(result.index).fillna(0)
             else:
                 result['fx'] = 0.0
         else:
             result['fx'] = 0.0
 
-        # Total return (local + FX)
-        # R_total = carry + capital + fx
-        result['total'] = result['carry'] + result['capital'] + result['fx']
+        # Total = carry + capital only (FX-hedged; spot move in result['fx'] for reference)
+        result['total'] = result['carry'] + result['capital']
 
     elif asset_type == 'FX':
         # FX returns: spot pct_change + interest rate differential carry
@@ -408,16 +401,14 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
         foreign_rate_col = _fx_to_rate.get(asset_name)
         currency_df = _get_macro_frame(market_data[2], "currency")
         if foreign_rate_col and not currency_df.empty and \
-                foreign_rate_col in currency_df.columns and 'DR001.IB' in currency_df.columns:
+                foreign_rate_col in currency_df.columns:
             currency_df = currency_df.copy()
             if not isinstance(currency_df.index, pd.DatetimeIndex):
                 currency_df.index = pd.to_datetime(currency_df.index)
             cur_mask = (currency_df.index >= start_ts) & (currency_df.index <= end_ts)
-            cur_slice = currency_df.loc[cur_mask, [foreign_rate_col, 'DR001.IB']].ffill()
-            # rate differential in decimal per day (rates stored as %, divide by 100)
-            # Floor foreign rate at 0: negative deposit rates are avoidable in practice
-            floored = cur_slice[foreign_rate_col].clip(lower=0)
-            daily_carry = (floored - cur_slice['DR001.IB']) / 100.0 / 365
+            cur_slice = currency_df.loc[cur_mask, [foreign_rate_col]].ffill()
+            # Gross carry: full foreign overnight rate accrual (no CNY funding deduction)
+            daily_carry = cur_slice[foreign_rate_col].clip(lower=0) / 100.0 / 365
             result['carry'] = daily_carry.reindex(result.index).fillna(0)
         else:
             result['carry'] = 0.0

@@ -189,39 +189,6 @@ def risk_parity_weights(
     return pd.Series(w, index=assets)
 
 
-def _termbasis_price_to_ytm_factor(trade_id: str) -> Optional[float]:
-    """Approximate price-spread → yield-spread (decimal %) conversion factor for
-    a TermBasis (futures calendar spread) trade, using the front contract's CTD
-    modified duration: Δyield ≈ Δprice / (duration × price / 100).
-
-    Uses today's duration/price as a static scaling factor applied across the
-    whole historical series — not exact (duration drifts over time) but turns
-    the series into yield-comparable units using only data already loaded
-    elsewhere in the app, with no new historical data source required.
-    """
-    try:
-        from settings.paths import DIR_INPUT
-        from pathlib import Path
-        from .data.legs import _load_leg_data
-
-        ld = _load_leg_data()
-        nb = ld.get('nb', {})
-        si = nb.get(trade_id, {}).get('StatInfo')
-        if si is None or si.empty or 'ctd_code' not in si.columns:
-            return None
-        ctd_code = str(si['ctd_code'].iloc[0])
-
-        bi = pd.read_pickle(str(Path(DIR_INPUT) / 'TBond-InstrumentInfo.pkl'))
-        if ctd_code not in bi.index:
-            return None
-        duration = pd.to_numeric(bi.loc[ctd_code, '修正久期'], errors='coerce')
-        price = pd.to_numeric(bi.loc[ctd_code, '收盘价:元（全价）'], errors='coerce')
-        if not (pd.notna(duration) and pd.notna(price) and duration > 0 and price > 0):
-            return None
-        return 1.0 / (float(duration) * float(price) / 100.0)
-    except Exception:
-        return None
-
 
 def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str, float], np.ndarray, Dict[str, float]]:
     """Compute risk parity weights for alpha candidates using historical spread data.
@@ -250,14 +217,6 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
             ts = ts_cache[spread_type]
             if ts is not None and isinstance(ts, pd.DataFrame) and trade_id in ts.columns:
                 series = ts[trade_id].dropna().tail(252)
-                # TermBasis is a futures price spread (calendar roll), not a yield
-                # spread — convert to yield-equivalent (decimal %) via the front
-                # CTD's duration so its vol is comparable to yield-based spreads
-                # (TenorSpread, SwapSpread, etc.) in the same covariance matrix.
-                if spread_type == 'TermBasis':
-                    factor = _termbasis_price_to_ytm_factor(trade_id)
-                    if factor is not None:
-                        series = series * factor
                 spread_series[trade_id] = series
         except Exception as e:
             print(f"Warning: Could not load spread time-series for {trade_id}: {e}")

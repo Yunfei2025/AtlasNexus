@@ -589,30 +589,16 @@ class StatGenerator:
             irr_stats  = irr_stats.where(~_irr_bad_stats)
             fytm_stats = fytm_stats.where(~_irr_bad_stats)
 
-            # ── Term Basis: front − next-season close (price points) ──────────
-            # Use full history for Spread, rolling window for stats
-            _fc_full = pd.to_numeric(df_full['futures_close'], errors='coerce')
-            _nc_full = pd.to_numeric(df_full['next_close'],   errors='coerce')
-            _fc_stats = pd.to_numeric(df_stats['futures_close'], errors='coerce')
-            _nc_stats = pd.to_numeric(df_stats['next_close'],   errors='coerce')
-            # Null out rows where either price is frozen for >= 3 consecutive days
-            # (stale close artifact after contract roll).
-            _STALE_W = 3
-            _fc_stale_full = _fc_full.rolling(_STALE_W).apply(
-                lambda x: (x.max() - x.min()) < 1e-8, raw=True
-            ).fillna(0).astype(bool)
-            _nc_stale_full = _nc_full.rolling(_STALE_W).apply(
-                lambda x: (x.max() - x.min()) < 1e-8, raw=True
-            ).fillna(0).astype(bool)
-            term_full = (_fc_full - _nc_full).where(~(_fc_stale_full | _nc_stale_full))
+            # ── Term Basis: front − next-season FYTM spread (bp) ─────────────
+            # Use full history for Spread, rolling window for stats.
+            # FYTM spread is stationary (no delivery-drift) and directly
+            # comparable to other yield-based spreads in the same portfolio.
+            _nf_full  = pd.to_numeric(df_full.get('next_fytm',  pd.Series(dtype=float)), errors='coerce').reindex(df_full.index)
+            _nf_stats = pd.to_numeric(df_stats.get('next_fytm', pd.Series(dtype=float)), errors='coerce').reindex(df_stats.index)
 
-            _fc_stale_stats = _fc_stats.rolling(_STALE_W).apply(
-                lambda x: (x.max() - x.min()) < 1e-8, raw=True
-            ).fillna(0).astype(bool)
-            _nc_stale_stats = _nc_stats.rolling(_STALE_W).apply(
-                lambda x: (x.max() - x.min()) < 1e-8, raw=True
-            ).fillna(0).astype(bool)
-            term_stats = (_fc_stats - _nc_stats).where(~(_fc_stale_stats | _nc_stale_stats))
+            # fytm_full/fytm_stats already computed above; apply bad-IRR mask
+            term_full  = ((fytm_full  - _nf_full)  * 100).where(~_irr_bad_full)
+            term_stats = ((fytm_stats - _nf_stats) * 100).where(~_irr_bad_stats)
 
             if term_full.notna().sum() > 20:
                 tb_cols[ctype] = term_full

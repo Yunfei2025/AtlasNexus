@@ -36,7 +36,7 @@ def _should_show_log_window(argv: list[str]) -> bool:
     cmd = argv[0] if argv else None
     if sys.platform.startswith("win") and cmd in {None, "daily-web", "intraday-web"}:
         return False
-    return cmd in {None, "daily-web", "intraday-web"}
+    return True
 
 
 _configure_stdio()
