@@ -135,18 +135,38 @@ def register_portfolio_callbacks(app) -> None:
             return html.Div(), html.Div(), html.Div(), []
 
         if not candidates:
-            return (
-                html.Div("No candidates. Run scan in Candidates tab first.", style={'color': THEME['warning']}),
-                html.Div(), html.Div(), []
-            )
+            # Fall back to saved positions instead of blocking
+            saved = list(book_positions or []) + list(curated_instruments or [])
+            if not saved:
+                return (
+                    html.Div("No candidates or saved positions. Run scan in Candidates tab first.", style={'color': THEME['warning']}),
+                    html.Div(), html.Div(), []
+                )
+            # Build minimal candidate rows from saved positions so the rest of the
+            # pipeline can proceed without a prior scan.
+            _seen: set = set()
+            candidates = []
+            for _e in saved:
+                _inst = _e.get('instrument', '')
+                if not _inst or _inst in _seen:
+                    continue
+                _seen.add(_inst)
+                candidates.append({
+                    'ID': _inst,
+                    'spread_type': _e.get('spread_type', ''),
+                    'direction': _e.get('direction', 'BUY'),
+                    'style': _e.get('regime', _e.get('style', '')),
+                    'score': float(_e.get('score', 0.01)),
+                })
 
         try:
             total_capital = float(total_capital) if total_capital is not None else 10.0
             total_capital_mm = total_capital * 1000
             total_dv01_budget = float(total_dv01_budget) if total_dv01_budget is not None else 5.0
 
-            # Merge candidate instruments (Table A) and saved positions (Table B),
-            # deduplicating by instrument name (Table A takes precedence for metadata).
+            # Merge all instruments from correlation matrix (curated_instruments) with saved positions (book_positions).
+            # Combine both: curated from correlation check (new candidates) + book_positions (saved old trades).
+            # When overlapping, curated takes precedence for updated metadata.
             _seen_insts: set = set()
             _merged_curated: list = []
             for _e in list(curated_instruments or []) + list(book_positions or []):
@@ -235,6 +255,13 @@ def register_portfolio_callbacks(app) -> None:
             if not curated_instruments:
                 df_scored = df_scored[df_scored['score'] > 0.001].copy()
 
+            # df can be either a fresh pd.DataFrame(candidates) (default RangeIndex)
+            # or df_curated (rebuilt via pd.concat(..., ignore_index=True) at the
+            # extra_rows step above) — both start their own index at 0, so after
+            # sort_values() the index may contain duplicate labels. A unique
+            # RangeIndex here keeps every later .loc/.reindex by index safe.
+            df_scored = df_scored.reset_index(drop=True)
+
             n_trades = len(df_scored)
             if n_trades == 0:
                 return (
@@ -257,10 +284,27 @@ def register_portfolio_callbacks(app) -> None:
                     df_scored['weight'] = 1 / n_trades
             else:  # risk_parity
                 try:
-                    weights_dict, risk_contrib = _compute_risk_parity_weights(df_scored)
+                    weights_dict, risk_contrib, vol_computed = _compute_risk_parity_weights(df_scored)
                     df_scored['weight'] = df_scored['ID'].map(weights_dict).fillna(1 / n_trades)
                     rc_map = dict(zip(weights_dict.keys(), risk_contrib))
                     df_scored['risk_contribution'] = df_scored['ID'].map(rc_map).fillna(df_scored['weight'])
+
+                    # Override vol with computed value from same 252-day window —
+                    # but only for spread types whose native (or converted) units
+                    # are yield-% decimals (TenorSpread, SwapSpread, and now
+                    # TermBasis, which _compute_risk_parity_weights converts to a
+                    # yield-equivalent via CTD duration). NetBasis/FuturesSwap stay
+                    # in raw CNY price-point units, so their annualized std here is
+                    # a meaningless huge number (e.g. 16000%+); keep their original
+                    # snapshot-sourced vol (already in sensible bp units).
+                    _RAW_UNIT_TYPES = {'NetBasis', 'FuturesSwap'}
+                    _is_raw_unit = (
+                        df_scored['spread_type'].isin(_RAW_UNIT_TYPES)
+                        if 'spread_type' in df_scored.columns
+                        else pd.Series(False, index=df_scored.index)
+                    )
+                    _new_vol = df_scored['ID'].map(vol_computed)
+                    df_scored['vol'] = _new_vol.where(~_is_raw_unit, df_scored.get('vol')).fillna(df_scored.get('vol', np.nan))
                 except Exception as e:
                     print(f"⚠ Risk parity failed: {e}, falling back to equal weights")
                     df_scored['weight'] = 1 / n_trades
@@ -357,14 +401,36 @@ def register_portfolio_callbacks(app) -> None:
                 df_scored['Leg2'] = ''
 
             display_cols = [
-                'ID', 'spread_type', 'Leg1', 'Leg2', 'style', 'direction',
-                'Zscore', 'spread', 'mean', 'vol', 'halflife',
+                'ID', 'Leg1', 'Leg2', 'style', 'direction',
+                'Zscore', 'spread', 'mean', 'vol',
                 'carry_roll', 'breakeven_3m', 'stop_loss', 'profit_target',
                 'seasonal_edge_bps', 'score',
                 'weight', 'risk_contribution', 'notional_mm', 'DV01_k',
             ]
             available_cols = [c for c in display_cols if c in df_scored.columns]
             df_display = df_scored[available_cols].copy()
+
+            # Display-only ID rename:
+            #   NetBasis  → "<code>-CTD"  (long CTD bond, short futures)
+            #   TermBasis → "<code>-Cal"  (front/next calendar spread)
+            #   FuturesSwap keeps its raw code (T / TL / TF / TS)
+            # df_scored['ID'] stays raw throughout — renaming it in place would
+            # break risk-parity lookups and snapshot persistence.
+            _FUTURES_CODES = {'T', 'TL', 'TF', 'TS'}
+
+            def _display_trade_id(row):
+                trade_id = str(row.get('ID', ''))
+                spread_type = str(df_scored.loc[row.name, 'spread_type']) if 'spread_type' in df_scored.columns else ''
+                if trade_id in _FUTURES_CODES and 'NetBasis' in spread_type:
+                    return f'{trade_id}-CTD'
+                elif trade_id in _FUTURES_CODES and 'TermBasis' in spread_type:
+                    return f'{trade_id}-Cal'
+                elif trade_id in _FUTURES_CODES and 'FuturesSwap' in spread_type:
+                    return f'{trade_id}-FtSwp'
+                return trade_id
+
+            if 'ID' in df_display.columns:
+                df_display['ID'] = df_display.apply(_display_trade_id, axis=1)
 
             if 'style' in df_display.columns:
                 def _style_to_regime_label(value):
@@ -436,27 +502,28 @@ def register_portfolio_callbacks(app) -> None:
             ]
 
             _port_col_labels = {
-                'spread_type': 'type', 'Leg1': 'leg 1', 'Leg2': 'leg 2', 'style': 'regime',
+                'Leg1': 'leg 1', 'Leg2': 'leg 2', 'style': 'style',
                 'Zscore': 'z-score', 'spread': 'spread(bp)', 'mean': 'mean(bp)',
-                'vol': 'vol(bp)', 'halflife': 'hl(d)',
-                'carry_roll': 'carry+roll(3m)', 'breakeven_3m': 'b/e(3m)',
+                'vol': 'vol(bp)',
+                'carry_roll': 'CR(3m)', 'breakeven_3m': 'b/e(3m)',
                 'stop_loss': 'stop(bp)', 'profit_target': 'target(bp)',
                 'seasonal_edge_bps': 'seas.edge', 'score': 'score',
-                'weight': 'weight', 'risk_contribution': 'risk%',
+                'weight': 'weight', 'risk_contribution': 'RC%',
                 'notional_mm': 'notional(MM)', 'DV01_k': 'DV01(k)',
+                'direction': 'DIR',
             }
             table = dash_table.DataTable(
                 id='alpha-scored-table',
                 columns=[{'name': _port_col_labels.get(c, c), 'id': c} for c in df_display.columns],
                 data=df_display.to_dict('records'),
-                style_table={'overflowX': 'auto', 'maxHeight': '350px', 'overflowY': 'auto', 'backgroundColor': 'transparent'},
+                style_table={'overflowX': 'auto', 'overflowY': 'auto', 'maxHeight': '400px', 'backgroundColor': 'transparent', 'minWidth': '100%'},
                 style_header={'backgroundColor': 'var(--surface-panel)', 'color': THEME['text_sub'],
                               'fontWeight': '600', 'textAlign': 'left', 'border': 'none',
                               'borderBottom': '1px solid var(--border-strong)', 'fontSize': '10px',
-                              'textTransform': 'uppercase', 'letterSpacing': '0.05em'},
+                              'textTransform': 'uppercase', 'letterSpacing': '0.05em', 'position': 'sticky', 'top': '0'},
                 style_cell={'backgroundColor': 'transparent', 'color': THEME['text_main'], 'textAlign': 'left',
                             'padding': '6px 8px', 'fontSize': '11px', 'border': 'none',
-                            'borderBottom': '1px solid rgba(255,255,255,0.04)'},
+                            'borderBottom': '1px solid rgba(255,255,255,0.04)', 'minWidth': '80px'},
                 style_data_conditional=conditional_style,
                 sort_action='native', page_size=15,
             )
@@ -483,7 +550,11 @@ def register_portfolio_callbacks(app) -> None:
             risk_chart = html.Div()
             if 'risk_contribution' in df_scored.columns and 'weight' in df_scored.columns:
                 fig = go.Figure()
+                # df_display['ID'] (display alias) shares df_scored's unique
+                # RangeIndex (reset above), so a plain index lookup is safe here.
+                _chart_ids = df_display['ID'] if 'ID' in df_display.columns else df_scored['ID']
                 df_chart = df_scored.nlargest(15, 'weight')[['ID', 'weight', 'risk_contribution']].copy()
+                df_chart['ID'] = _chart_ids.reindex(df_chart.index)
                 fig.add_trace(go.Bar(x=df_chart['ID'], y=df_chart['weight'] * 100, name='Weight (%)', marker_color=THEME['accent'], yaxis='y'))
                 fig.add_trace(go.Bar(x=df_chart['ID'], y=df_chart['risk_contribution'] * 100, name='Risk Contribution (%)', marker_color=THEME['success'], yaxis='y'))
                 fig.update_layout(

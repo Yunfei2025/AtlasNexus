@@ -186,12 +186,16 @@ class FuturesAnalyticsGenerator:
             print(f'FuturesAnalyticsGenerator: futures-px.pkl missing/empty — skipping fetch (run with --update-data to retrieve)')
             return
 
-        # Find latest date in futures-px.pkl
+        # Find latest date in futures-px.pkl.
+        # The file is a two-level nested dict {field: {NQ1/NQ2/...: DataFrame}},
+        # so we need to recurse one level to find the actual DataFrames.
         futures_max_date = None
-        for key, df in futures_db.items():
-            if isinstance(df, pd.DataFrame) and not df.empty:
-                df_max = df.index.max()
-                futures_max_date = df_max if futures_max_date is None else max(futures_max_date, df_max)
+        for key, val in futures_db.items():
+            frames = val.values() if isinstance(val, dict) else [val]
+            for df in frames:
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    df_max = df.index.max()
+                    futures_max_date = df_max if futures_max_date is None else max(futures_max_date, df_max)
 
         if futures_max_date is None:
             print(f'FuturesAnalyticsGenerator: futures-px.pkl has no data — skipping fetch')

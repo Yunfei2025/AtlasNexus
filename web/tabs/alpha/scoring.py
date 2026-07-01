@@ -189,8 +189,53 @@ def risk_parity_weights(
     return pd.Series(w, index=assets)
 
 
-def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str, float], np.ndarray]:
-    """Compute risk parity weights for alpha candidates using historical spread data."""
+def _termbasis_price_to_ytm_factor(trade_id: str) -> Optional[float]:
+    """Approximate price-spread → yield-spread (decimal %) conversion factor for
+    a TermBasis (futures calendar spread) trade, using the front contract's CTD
+    modified duration: Δyield ≈ Δprice / (duration × price / 100).
+
+    Uses today's duration/price as a static scaling factor applied across the
+    whole historical series — not exact (duration drifts over time) but turns
+    the series into yield-comparable units using only data already loaded
+    elsewhere in the app, with no new historical data source required.
+    """
+    try:
+        from settings.paths import DIR_INPUT
+        from pathlib import Path
+        from .data.legs import _load_leg_data
+
+        ld = _load_leg_data()
+        nb = ld.get('nb', {})
+        si = nb.get(trade_id, {}).get('StatInfo')
+        if si is None or si.empty or 'ctd_code' not in si.columns:
+            return None
+        ctd_code = str(si['ctd_code'].iloc[0])
+
+        bi = pd.read_pickle(str(Path(DIR_INPUT) / 'TBond-InstrumentInfo.pkl'))
+        if ctd_code not in bi.index:
+            return None
+        duration = pd.to_numeric(bi.loc[ctd_code, '修正久期'], errors='coerce')
+        price = pd.to_numeric(bi.loc[ctd_code, '收盘价:元（全价）'], errors='coerce')
+        if not (pd.notna(duration) and pd.notna(price) and duration > 0 and price > 0):
+            return None
+        return 1.0 / (float(duration) * float(price) / 100.0)
+    except Exception:
+        return None
+
+
+def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str, float], np.ndarray, Dict[str, float]]:
+    """Compute risk parity weights for alpha candidates using historical spread data.
+
+    Returns
+    -------
+    weights_dict : Dict[str, float]
+        Trade ID → weight (sums to 1.0)
+    risk_contrib : np.ndarray
+        Risk contribution per asset
+    vol_computed : Dict[str, float]
+        Trade ID → annualized volatility (%) computed from 252-day return window.
+        Matches the volatility window used for weight optimization.
+    """
     from scipy.optimize import minimize
 
     spread_series: Dict[str, pd.Series] = {}
@@ -204,7 +249,16 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
                 ts_cache[spread_type] = load_spread_timeseries(spread_type)
             ts = ts_cache[spread_type]
             if ts is not None and isinstance(ts, pd.DataFrame) and trade_id in ts.columns:
-                spread_series[trade_id] = ts[trade_id].dropna().tail(252)
+                series = ts[trade_id].dropna().tail(252)
+                # TermBasis is a futures price spread (calendar roll), not a yield
+                # spread — convert to yield-equivalent (decimal %) via the front
+                # CTD's duration so its vol is comparable to yield-based spreads
+                # (TenorSpread, SwapSpread, etc.) in the same covariance matrix.
+                if spread_type == 'TermBasis':
+                    factor = _termbasis_price_to_ytm_factor(trade_id)
+                    if factor is not None:
+                        series = series * factor
+                spread_series[trade_id] = series
         except Exception as e:
             print(f"Warning: Could not load spread time-series for {trade_id}: {e}")
 
@@ -213,7 +267,8 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
         n = len(df_candidates)
         weights = dict(zip(df_candidates['ID'], [1/n] * n))
         risk_contrib = np.ones(n) / n
-        return weights, risk_contrib
+        vol_fallback = {trade_id: np.nan for trade_id in df_candidates['ID']}
+        return weights, risk_contrib, vol_fallback
 
     # Normalise index types (datetime.date vs str mismatch causes all rows to be NaN
     # after DataFrame alignment, triggering the equal-weight fallback).
@@ -226,7 +281,8 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
         n = len(df_candidates)
         weights = dict(zip(df_candidates['ID'], [1/n] * n))
         risk_contrib = np.ones(n) / n
-        return weights, risk_contrib
+        vol_fallback = {trade_id: np.nan for trade_id in df_candidates['ID']}
+        return weights, risk_contrib, vol_fallback
 
     returns = spread_df.diff().dropna()
     # Winsorise each column using Tukey fences (IQR-based) to remove bad-tick
@@ -238,7 +294,75 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
         _iqr = _q3 - _q1
         if _iqr > 0:
             returns[col] = returns[col].clip(lower=_q1 - 5 * _iqr, upper=_q3 + 5 * _iqr)
-    cov_matrix = returns.cov()
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # NEW: Compute volatility from same 252-day return window
+    # This ensures table display vol matches the vol used in optimization
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    daily_vols = returns.std()  # std of daily changes
+    vol_computed = (daily_vols * np.sqrt(252) * 100).to_dict()  # annualize to %
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # DIAGNOSTICS: Risk parity input statistics (set _DEBUG_RP = True to enable)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    _DEBUG_RP = False  # Set to True to enable detailed diagnostics
+    if _DEBUG_RP:
+        print("\n" + "="*75)
+        print("RISK PARITY DIAGNOSTICS: Input Statistics & Correlations")
+        print("="*75)
+        print(f"Portfolio size: {len(spread_df.columns)} trades")
+        print(f"Common observation dates: {len(spread_df)} (from {len(returns)+1} initial)")
+        print(f"Optimization target: Equal Risk Contribution (ERC) per asset")
+        print(f"Weight bounds: [min_w={1.0 / (3 * len(spread_df.columns)):.4f}, max_w=0.5000]")
+        print(f"\nNote: High standalone vol + low correlation → lower weight (diversifier)")
+        print(f"      High standalone vol + high correlation → much lower weight (redundant)")
+        print("")
+
+        for col in returns.columns:
+            n_obs = len(returns[col].dropna())
+            daily_vol = returns[col].std()
+            annual_vol_pct = vol_computed.get(col, np.nan)
+            print(f"{col:30s}: N={n_obs:3d}, daily_std={daily_vol:.8f}, ann_vol={annual_vol_pct:7.2f}%")
+
+        # Check for FuturesSwap / TL specifically
+        futures_cols = [c for c in returns.columns if 'FuturesSwap' in str(c) or 'TL' in str(c)]
+        if futures_cols:
+            print("\n" + "-"*75)
+            print("FUTURES/TL CORRELATION ANALYSIS:")
+            print("-"*75)
+            print("(Negative correlation = diversifying; High positive = redundant)")
+            print("")
+            for futures_col in futures_cols:
+                print(f"{futures_col}:")
+                if futures_col in returns.columns:
+                    std_futures = returns[futures_col].std()
+                    if std_futures > 1e-8:
+                        corrs_list = []
+                        for other_col in returns.columns:
+                            if other_col != futures_col and other_col in returns.columns:
+                                std_other = returns[other_col].std()
+                                if std_other > 1e-8:
+                                    corr = returns[[futures_col, other_col]].corr().iloc[0, 1]
+                                    corrs_list.append((other_col, corr))
+                        corrs_list.sort(key=lambda x: abs(x[1]), reverse=True)
+                        for peer, corr_val in corrs_list:
+                            interpretation = "diversifying" if corr_val < -0.05 else ("redundant" if corr_val > 0.30 else "independent")
+                            print(f"  vs {peer:28s}: corr={corr_val:7.4f} ({interpretation})")
+        print("="*75 + "\n")
+
+    # Standardise each column by its own std before computing covariance.
+    # Spread series live in wildly different native units (e.g. TenorSpread/
+    # SwapSpread are yield-% decimals like 0.01-0.3, while NetBasis/FuturesSwap/
+    # TermBasis are raw CNY price points like 10-40) — a raw covariance matrix
+    # would let the largest-unit series dominate risk contribution purely from
+    # unit scale, not genuine relative risk, starving every other trade's RC to
+    # ~0. Dividing by std turns this into a correlation-structure-driven ERC
+    # optimization: each asset contributes risk based on its diversification
+    # value, not its arbitrary measurement unit.
+    col_std = returns.std().replace(0, np.nan)
+    returns_normalized = (returns / col_std).fillna(0.0)
+
+    cov_matrix = returns_normalized.cov()
     cov = cov_matrix.values
     n = len(cov)
 
@@ -284,7 +408,7 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     print(f"✓ Risk parity optimised: weight std={weights_array.std():.4f}, "
           f"RC std={risk_contrib.std():.4f}, min_w={weights_array.min():.4f}")
 
-    return weights_dict, risk_contrib
+    return weights_dict, risk_contrib, vol_computed
 
 
 def compute_candidate_scores(

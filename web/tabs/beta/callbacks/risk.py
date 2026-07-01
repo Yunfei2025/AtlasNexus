@@ -1840,6 +1840,18 @@ def register_risk_callbacks(app):
                 if m:
                     return (otr_cdb.get(_t_label(float(m.group(2))), ''),
                             otr_cdb.get(_t_label(float(m.group(1))), ''))
+            elif upper.startswith('LGBCGB-'):
+                # Curve-level yield spread (中债 AAA local-gov-bond yield vs CGB
+                # yield) — no tradable bond pair, so legs are curve/tenor labels.
+                m = _re.match(r'LGBCGB-(\d+)Y$', upper)
+                if m:
+                    t = m.group(1) + 'Y'
+                    return (f'LGB-{t}', f'CGB-{t}')
+            elif upper.startswith('MTNCGB-'):
+                m = _re.match(r'MTNCGB-(\d+)Y$', upper)
+                if m:
+                    t = m.group(1) + 'Y'
+                    return (f'MTN-{t}', f'CGB-{t}')
             return ('', '')
 
         elif stype == 'TBondCurve':

@@ -116,6 +116,20 @@ def _load_alpha_book_positions() -> list[dict]:
     if not isinstance(df, pd.DataFrame) or df.empty:
         return []
 
+    # Normalise back to raw trade-code IDs. Display aliases that may have been
+    # persisted previously don't exist in spread time-series columns, which would
+    # silently zero out risk-parity weights when fed back into optimization.
+    #   NetBasis  display alias: "<code>-CTD"  → raw code
+    #   TermBasis display alias: "<code>-Cal"  → raw code
+    #   Legacy aliases from older saves also handled.
+    if 'ID' in df.columns and 'spread_type' in df.columns:
+        _FUTURES_CODES = ('T', 'TL', 'TF', 'TS')
+        _raw_id_map = {f'{c}-CTD': c for c in _FUTURES_CODES}    # NetBasis
+        _raw_id_map.update({f'{c}-Cal': c for c in _FUTURES_CODES})   # TermBasis
+        _raw_id_map.update({f'{c}-FtSwp': c for c in _FUTURES_CODES}) # FuturesSwap
+        _raw_id_map['TL-Cal'] = 'TL'   # legacy alias
+        df['ID'] = df['ID'].map(lambda v: _raw_id_map.get(str(v), v))
+
     # Deduplicate by (spread_type, ID) — keep first occurrence.
     _id_cols = [c for c in ('spread_type', 'ID') if c in df.columns]
     if _id_cols:
@@ -1410,7 +1424,6 @@ def register_candidate_callbacks(app) -> None:
             )
 
             corr_div = html.Div([
-                html.H6("Curated Correlation Matrix", style={'color': THEME['text_main'], 'marginBottom': '8px'}),
                 dcc.Graph(figure=hm),
                 notice,
             ])

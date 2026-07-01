@@ -412,10 +412,10 @@ def build_portfolio_layout() -> html.Div:
                     ),
                 ], style={'display': 'flex', 'gap': '10px', 'alignItems': 'flex-end', 'flexWrap': 'wrap'}),
 
-                # Candidates + Saved (left, stacked) | Correlation matrix (right)
+                # Candidates + Saved (left, stacked) | Correlation matrix (right, fixed ~1/2 width)
                 html.Div([
                     html.Div(id='alpha-curated-table-div', style={'flex': '1', 'minWidth': '0'}),
-                    html.Div(id='alpha-curated-corr-div', style={'flexShrink': '0'}),
+                    html.Div(id='alpha-curated-corr-div', style={'flex': '0 0 50%', 'minWidth': '300px'}),
                 ], style={'display': 'flex', 'alignItems': 'flex-start', 'gap': '18px'}),
 
                 html.Div([
@@ -435,7 +435,7 @@ def build_portfolio_layout() -> html.Div:
             _alpha_card_header(
                 "Portfolio Allocation Results",
                 action=html.Button(
-                    "RUN OPTIMIZATION", id='alpha-score-btn', n_clicks=0,
+                    "GENERATE PORTFOLIO", id='alpha-score-btn', n_clicks=0,
                     style={'padding': '6px 16px', 'background': THEME['accent'], 'color': 'var(--navy-950)',
                            'border': 'none', 'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700',
                            'letterSpacing': '0.04em', 'cursor': 'pointer'},

@@ -230,6 +230,20 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
                 t1 = _t_label(float(m.group(1)))
                 t2 = _t_label(float(m.group(2)))
                 return (otr_cdb.get(t2, ''), otr_cdb.get(t1, ''))
+        elif upper.startswith('LGBCGB-'):
+            # LGBCGB is a curve-level yield spread (中债 AAA local-gov-bond yield
+            # vs CGB yield) rather than a pair of tradable bonds — there's no OTR
+            # pick possible, so legs are the curve/tenor labels themselves.
+            m = re.match(r'LGBCGB-(\d+)Y$', upper)
+            if m:
+                t = m.group(1) + 'Y'
+                return (f'LGB-{t}', f'CGB-{t}')
+        elif upper.startswith('MTNCGB-'):
+            # Same idea as LGBCGB: 中债 AAA MTN yield curve vs CGB yield curve.
+            m = re.match(r'MTNCGB-(\d+)Y$', upper)
+            if m:
+                t = m.group(1) + 'Y'
+                return (f'MTN-{t}', f'CGB-{t}')
         return ('', '')
 
     # Bond-Curve: leg1 is the bond, leg2 is nearest duration reference bond
