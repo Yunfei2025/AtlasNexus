@@ -319,6 +319,7 @@ def register_backtest_hist_callbacks(app):
             selected_factors.extend(SELECTED_FACTOR_POOL.get('cr_factors', []))
             selected_factors.extend(SELECTED_FACTOR_POOL.get('fx_factors', []))
             selected_factors.extend(SELECTED_FACTOR_POOL.get('cmd_factors', []))
+            selected_factors.extend(SELECTED_FACTOR_POOL.get('eq_factors', []))
             
             if len(selected_factors) < 2:
                 err_fig = go.Figure().update_layout(

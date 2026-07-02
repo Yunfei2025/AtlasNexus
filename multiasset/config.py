@@ -24,32 +24,38 @@ class RiskModelConfig:
     #   cap   = min(abs_cap,   equal_share × CAP_RATIO)
     #
     # Ratios are class-specific; absolute limits are hard safety rails.
-    FLOOR_RATIO_BOND: float = 0.30   # bond floor = 30% of equal share
-    FLOOR_RATIO_COMM: float = 0.20   # commodity/FX floor = 20% of equal share
-    FLOOR_RATIO_FX:   float = 0.20
-    CAP_RATIO_BOND:   float = 3.0    # bond cap = 3× equal share
-    CAP_RATIO_COMM:   float = 2.0    # commodity cap = 2× equal share
-    CAP_RATIO_FX:     float = 2.0
+    FLOOR_RATIO_BOND:   float = 0.30   # bond floor = 30% of equal share
+    FLOOR_RATIO_CREDIT: float = 0.10   # credit floor = 10% of equal share (DV01 already controls long-end)
+    FLOOR_RATIO_COMM:   float = 0.20   # commodity/FX floor = 20% of equal share
+    FLOOR_RATIO_FX:     float = 0.20
+    CAP_RATIO_BOND:     float = 3.0    # bond cap = 3× equal share
+    CAP_RATIO_CREDIT:   float = 4.0    # credit cap = 4× equal share (short tenors can dominate DV01-weighted)
+    CAP_RATIO_COMM:     float = 2.0    # commodity cap = 2× equal share
+    CAP_RATIO_FX:       float = 2.0
 
     # Hard absolute limits (override ratios when pool is very small/large)
-    ABS_FLOOR_BOND: float = 0.01
-    ABS_FLOOR_COMM: float = 0.02
-    ABS_FLOOR_FX:   float = 0.02
-    ABS_CAP_BOND:   float = 0.40
-    ABS_CAP_COMM:   float = 0.30
-    ABS_CAP_FX:     float = 0.30
+    ABS_FLOOR_BOND:   float = 0.01
+    ABS_FLOOR_CREDIT: float = 0.01
+    ABS_FLOOR_COMM:   float = 0.02
+    ABS_FLOOR_FX:     float = 0.02
+    ABS_CAP_BOND:     float = 0.40
+    ABS_CAP_CREDIT:   float = 0.65   # short tenors (1Y) can legitimately be 60%+ DV01-weighted
+    ABS_CAP_COMM:     float = 0.30
+    ABS_CAP_FX:       float = 0.30
 
     @classmethod
     def scaled_bounds(cls, n_assets: int) -> dict:
         """Return floor/cap per asset class scaled to pool size."""
         eq = 1.0 / max(n_assets, 1)
         return {
-            'floor_bond': max(cls.ABS_FLOOR_BOND, eq * cls.FLOOR_RATIO_BOND),
-            'floor_comm': max(cls.ABS_FLOOR_COMM, eq * cls.FLOOR_RATIO_COMM),
-            'floor_fx':   max(cls.ABS_FLOOR_FX,   eq * cls.FLOOR_RATIO_FX),
-            'cap_bond':   min(cls.ABS_CAP_BOND,   eq * cls.CAP_RATIO_BOND),
-            'cap_comm':   min(cls.ABS_CAP_COMM,   eq * cls.CAP_RATIO_COMM),
-            'cap_fx':     min(cls.ABS_CAP_FX,     eq * cls.CAP_RATIO_FX),
+            'floor_bond':   max(cls.ABS_FLOOR_BOND,   eq * cls.FLOOR_RATIO_BOND),
+            'floor_credit': max(cls.ABS_FLOOR_CREDIT, eq * cls.FLOOR_RATIO_CREDIT),
+            'floor_comm':   max(cls.ABS_FLOOR_COMM,   eq * cls.FLOOR_RATIO_COMM),
+            'floor_fx':     max(cls.ABS_FLOOR_FX,     eq * cls.FLOOR_RATIO_FX),
+            'cap_bond':     min(cls.ABS_CAP_BOND,     eq * cls.CAP_RATIO_BOND),
+            'cap_credit':   min(cls.ABS_CAP_CREDIT,   eq * cls.CAP_RATIO_CREDIT),
+            'cap_comm':     min(cls.ABS_CAP_COMM,     eq * cls.CAP_RATIO_COMM),
+            'cap_fx':       min(cls.ABS_CAP_FX,       eq * cls.CAP_RATIO_FX),
         }
 
     # Legacy flat constants kept for back-compat with any direct references

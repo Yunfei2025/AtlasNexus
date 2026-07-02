@@ -209,30 +209,74 @@ class FactorRiskParityOptimizer:
         factor_budget = {factor_names[k]: float(e_star[k]) for k in range(n_factors)}
 
         # ── Stage 2: distribute factor budgets to tenors via DV01 equalisation ──
-        # For each factor, find the assets that load on it (|B[i,k]| > 0).
-        # Within an IR factor group, split the budget ∝ 1/|B[i,k]| (= 1/duration).
-        # Aggregate across factors: each asset may appear in multiple factor groups
-        # (e.g. CN10Y loads on IRDL.CN, IRSL.CN, IRCV.CN); sum contributions.
+        #
+        # IR and Credit factors come in triplets (IRDL/IRSL/IRCV or CRDL/CRSL/CRCV)
+        # that all drive the same set of tenors within a country/universe group.
+        # The SLOPE and CURVATURE columns have sensitivities that reflect relative
+        # directional exposure, NOT capital sizing — using 1/|slope_exposure| to size
+        # tenors would be economically wrong (it would over-weight the belly for a
+        # curvature factor, for example).
+        #
+        # Correct approach: pool the total budget for the whole IR/Credit group (all
+        # three factors that share the same suffix), then apply DV01 equalisation
+        # ONCE using only the LEVEL factor column (IRDL or CRDL), which holds pure
+        # duration sensitivities.  Non-rate assets (commodities, FX, equity) are
+        # distributed equally as before.
         asset_weight = np.zeros(n_assets)
 
-        for k, fname in enumerate(factor_names):
-            col = B[:, k]
-            active = np.abs(col) > 1e-6
-            if not active.any():
-                continue
-            idxs = np.where(active)[0]
-            budget_k = factor_budget[fname]
+        # Identify which factor names belong to IR/Credit triplet groups.
+        # Key: group suffix (e.g. 'CN', 'LGB'); value: accumulated budget
+        _LEVEL_PREFIXES = ('IRDL.', 'CRDL.')
+        _SLOPE_PREFIXES = ('IRSL.', 'CRSL.')
+        _CURVE_PREFIXES = ('IRCV.', 'CRCV.')
+        _RATE_PREFIXES  = _LEVEL_PREFIXES + _SLOPE_PREFIXES + _CURVE_PREFIXES
 
-            if fname.startswith(('IRDL.', 'IRSL.', 'IRCV.')):
-                # DV01 equalisation: w_i ∝ 1/|col_i|
+        # Accumulate total budget per group suffix, record the level-factor column index
+        _group_budget: dict = {}   # suffix -> total budget
+        _group_level_col: dict = {}  # suffix -> col index of the LEVEL factor
+        for k, fname in enumerate(factor_names):
+            if fname.startswith(_LEVEL_PREFIXES):
+                suffix = fname.split('.', 1)[1]   # e.g. 'CN', 'LGB', 'US'
+                _group_budget[suffix] = _group_budget.get(suffix, 0.0) + factor_budget[fname]
+                _group_level_col[suffix] = k
+            elif fname.startswith(_SLOPE_PREFIXES) or fname.startswith(_CURVE_PREFIXES):
+                suffix = fname.split('.', 1)[1]
+                _group_budget[suffix] = _group_budget.get(suffix, 0.0) + factor_budget[fname]
+                # Do NOT record a level column for slope/curve — level col already set
+
+        # Distribute each group's pooled budget using 1/duration (level-factor column)
+        _handled_suffixes: set = set()
+        for k, fname in enumerate(factor_names):
+            if fname.startswith(_RATE_PREFIXES):
+                suffix = fname.split('.', 1)[1]
+                if suffix in _handled_suffixes:
+                    continue
+                _handled_suffixes.add(suffix)
+                if suffix not in _group_level_col:
+                    continue   # no level factor present — skip
+                lk = _group_level_col[suffix]
+                col = B[:, lk]            # use LEVEL column for duration sizing
+                active = np.abs(col) > 1e-6
+                if not active.any():
+                    continue
+                idxs = np.where(active)[0]
+                budget_group = _group_budget[suffix]
+                # DV01 equalisation: each tenor gets capital ∝ 1/|duration|
                 inv_dur = 1.0 / np.abs(col[idxs])
                 shares = inv_dur / inv_dur.sum()
+                for j, ix in enumerate(idxs):
+                    asset_weight[ix] += budget_group * shares[j]
             else:
-                # Commodities/FX/spread: equal split among assets in group
+                # Commodities / FX / equity: equal split among active assets
+                col = B[:, k]
+                active = np.abs(col) > 1e-6
+                if not active.any():
+                    continue
+                idxs = np.where(active)[0]
+                budget_k = factor_budget[fname]
                 shares = np.ones(len(idxs)) / len(idxs)
-
-            for j, ix in enumerate(idxs):
-                asset_weight[ix] += budget_k * shares[j]
+                for j, ix in enumerate(idxs):
+                    asset_weight[ix] += budget_k * shares[j]
 
         # Normalise
         total = asset_weight.sum()
@@ -244,9 +288,10 @@ class FactorRiskParityOptimizer:
         # ── Apply per-asset-class floors and caps scaled to pool size ─────────
         # Floors/caps are proportional to equal share (1/n_assets) so they
         # remain sensible whether the pool has 3 or 15+ assets.
-        from multiasset.assets import CommodityAsset, FXAsset
-        _comm_set = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), CommodityAsset)}
-        _fx_set   = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), FXAsset)}
+        from multiasset.assets import CommodityAsset, FXAsset, MultiFactorCreditAsset
+        _comm_set   = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), CommodityAsset)}
+        _fx_set     = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), FXAsset)}
+        _credit_set = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), MultiFactorCreditAsset)}
         _b = RiskModelConfig.scaled_bounds(n_assets)
 
         def _clip(i, name):
@@ -254,12 +299,15 @@ class FactorRiskParityOptimizer:
                 return np.clip(w[i], _b['floor_comm'], _b['cap_comm'])
             if name in _fx_set:
                 return np.clip(w[i], _b['floor_fx'], _b['cap_fx'])
+            if name in _credit_set:
+                return np.clip(w[i], _b['floor_credit'], _b['cap_credit'])
             return np.clip(w[i], _b['floor_bond'], _b['cap_bond'])
 
         # ── Feasibility guard: check floors don't exceed 1 before clipping ──
         _floor_sum = sum(
             _b['floor_comm'] if name in _comm_set
             else _b['floor_fx'] if name in _fx_set
+            else _b['floor_credit'] if name in _credit_set
             else _b['floor_bond']
             for name in asset_names
         )
@@ -286,11 +334,13 @@ class FactorRiskParityOptimizer:
         _TOL = 1e-4
         violations = []
         for i, name in enumerate(asset_names):
-            lo = (_b['floor_comm'] if name in _comm_set
-                  else _b['floor_fx'] if name in _fx_set
+            lo = (_b['floor_comm']   if name in _comm_set
+                  else _b['floor_fx']     if name in _fx_set
+                  else _b['floor_credit'] if name in _credit_set
                   else _b['floor_bond'])
-            hi = (_b['cap_comm'] if name in _comm_set
-                  else _b['cap_fx'] if name in _fx_set
+            hi = (_b['cap_comm']   if name in _comm_set
+                  else _b['cap_fx']     if name in _fx_set
+                  else _b['cap_credit'] if name in _credit_set
                   else _b['cap_bond'])
             if w[i] < lo - _TOL or w[i] > hi + _TOL:
                 violations.append(f"{name}: w={w[i]:.4f} ∉ [{lo:.4f}, {hi:.4f}]")
