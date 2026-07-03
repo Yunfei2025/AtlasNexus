@@ -48,10 +48,11 @@ class RPCacheParams:
     ewma_lambda: float = 0.94
     use_vol_sqrt_budgets: bool = True
     use_dv01_shape: bool = True
+    tilt_lambda: Optional[float] = None
     risk_budgets_repr: Optional[str] = None
     hedge_asset_names: tuple = field(default_factory=tuple)
     neutral_asset_names: tuple = field(default_factory=tuple)
-    bounds_version: str = "RiskModelConfig.v1"
+    bounds_version: str = "RiskModelConfig.v3"
 
 
 @dataclass(frozen=True)

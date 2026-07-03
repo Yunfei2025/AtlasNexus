@@ -303,16 +303,19 @@ def register_factor_callbacks(app):
          Input('factor-selection-cr-mtn', 'value'),
          Input('factor-selection-cr-icp', 'value'),
          Input('factor-selection-fx', 'value'),
+         Input('factor-selection-fx-cross', 'value'),
          Input('factor-selection-eq', 'value'),
          Input('factor-selection-cmd', 'value')],
         prevent_initial_call=True
     )
     def update_factor_pool_count(ir_cn, ir_us, ir_eu, ir_jp, ir_uk, cr_cdb, cr_lgb, cr_mtn, cr_icp,
-                                  fx_factors, eq_factors, cmd_factors):
+                                  fx_outright, fx_cross, eq_factors, cmd_factors):
         # Merge all domicile IR selections into one list
         ir_factors = (ir_cn or []) + (ir_us or []) + (ir_eu or []) + (ir_jp or []) + (ir_uk or [])
         # Merge all credit universe selections into one list
         cr_factors = (cr_cdb or []) + (cr_lgb or []) + (cr_mtn or []) + (cr_icp or [])
+        # Merge outright FX pairs + synthetic CNY-neutral crosses into one list
+        fx_factors = (fx_outright or []) + (fx_cross or [])
 
         SELECTED_FACTOR_POOL['ir_factors'] = ir_factors
         SELECTED_FACTOR_POOL['cr_factors'] = cr_factors
@@ -359,6 +362,7 @@ def register_factor_callbacks(app):
          State('factor-selection-cr-mtn', 'value'),
          State('factor-selection-cr-icp', 'value'),
          State('factor-selection-fx', 'value'),
+         State('factor-selection-fx-cross', 'value'),
          State('factor-selection-eq', 'value'),
          State('factor-selection-cmd', 'value')],
         prevent_initial_call=True
@@ -366,13 +370,14 @@ def register_factor_callbacks(app):
     def update_correlation_ranks(n_clicks, period, top_pairs,
                                  ir_cn, ir_us, ir_eu, ir_jp, ir_uk,
                                  cr_cdb, cr_lgb, cr_mtn, cr_icp,
-                                 fx_factors, eq_factors, cmd_factors):
+                                 fx_outright, fx_cross, eq_factors, cmd_factors):
         if not n_clicks:
             return html.Div(), html.Div(), []
 
         # Merge domicile IR selections and combine with Credit/FX/EQ/CMD
         ir_factors = (ir_cn or []) + (ir_us or []) + (ir_eu or []) + (ir_jp or []) + (ir_uk or [])
         cr_factors = (cr_cdb or []) + (cr_lgb or []) + (cr_mtn or []) + (cr_icp or [])
+        fx_factors = (fx_outright or []) + (fx_cross or [])
         selected_factors = []
         if ir_factors:
             selected_factors.extend(ir_factors)

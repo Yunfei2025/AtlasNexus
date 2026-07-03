@@ -230,6 +230,37 @@ class FXAsset(Asset):
         return returns
 
 
+class FXCrossAsset(Asset):
+    """Synthetic CNY-neutral FX cross: long the non-USD leg vs CNY, short
+    USDCNY (e.g. 'EURUSD_SYN' ~= long EURCNY / short USDCNY). Nets out the
+    common CNY beta that outright USDCNY/EURCNY/GBPCNY/JPYCNY all carry, so
+    the risk-parity optimizer can hold pure cross-currency risk without an
+    unconditional CNY view. The factor level (FXDL.<ccy>USD) is precomputed
+    in RiskFactorLoader as XXXCNY / USDCNY.
+    """
+
+    def __init__(self, name: str, factor: str):
+        """
+        Args:
+            name: Cross name (e.g., 'EURUSD_SYN')
+            factor: Cross level risk factor (e.g., 'FXDL.EURUSD')
+        """
+        super().__init__(name, factor, sensitivity=1.0)
+
+    def calculate_returns(self, risk_factors: pd.DataFrame) -> pd.Series:
+        if self.factor not in risk_factors.columns:
+            raise ValueError(f"Risk factor '{self.factor}' not found in data")
+
+        prices = risk_factors[self.factor]
+        returns = prices.pct_change() * 100
+
+        if isinstance(prices.index, pd.DatetimeIndex):
+            day_gaps = prices.index.to_series().diff().dt.days
+            returns[day_gaps > 15] = float('nan')
+
+        return returns
+
+
 class SlopeSensitiveBondAsset(BondAsset):
     """
     Bond asset with sensitivity to both level and slope.

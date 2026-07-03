@@ -224,7 +224,7 @@ def _returns_table_groups(weights: dict, month_start: pd.Timestamp, month_end: p
         }
     max_abs_ret = max(max_abs_ret, 1e-6)
 
-    for name, w in sorted(weights.items(), key=lambda kv: -kv[1]):
+    for name, w in sorted(weights.items(), key=lambda kv: -asset_rets.get(kv[0], 0.0)):
         group = _ASSET_CLASS_GROUP.get(get_asset_type(name), '其他')
         ret = asset_rets.get(name, 0.0)
         px = asset_px.get(name, {'start': 'N/A', 'end': 'N/A'})
@@ -272,6 +272,20 @@ def _cum_return_points(*series_list: pd.Series) -> list[list[tuple[float, float]
     return result
 
 
+def _ytd_risk_free_rate(ytd_start: pd.Timestamp, end_ts: pd.Timestamp) -> float:
+    """Average FR007.IR (repo fixing, quoted in %) over [ytd_start, end_ts], as a decimal rate."""
+    try:
+        _, cn_data, _ = load_raw_market_data()
+        fr007 = cn_data['IRS']['FR007.IR']
+        fr007.index = pd.to_datetime(fr007.index)
+        window = fr007[(fr007.index >= ytd_start) & (fr007.index <= end_ts)].dropna()
+        if window.empty:
+            return 0.0
+        return float(window.mean()) / 100.0
+    except Exception:
+        return 0.0
+
+
 def build_report_data(*, weights_final: dict, weights_prev: dict | None,
                        nav_gross: pd.Series, nav_net: pd.Series,
                        start_date: str, end_date: str, rebalance_date: str,
@@ -305,8 +319,14 @@ def build_report_data(*, weights_final: dict, weights_prev: dict | None,
     ytd_start = end_ts.replace(month=1, day=1)
     ytd_gross = nav_gross[(nav_gross.index >= ytd_start) & (nav_gross.index <= end_ts)]
 
-    perf_month = compute_portfolio_metrics(month_gross) if len(month_gross) > 1 else {}
-    perf_ytd   = compute_portfolio_metrics(ytd_gross) if len(ytd_gross) > 1 else {}
+    # Risk-free rate: average FR007.IR over the YTD window, matching the Backtest panel's
+    # Sharpe convention but sourced from the actual repo fixing rather than a static config value.
+    risk_free_rate = _ytd_risk_free_rate(ytd_start, end_ts)
+
+    perf_month = compute_portfolio_metrics(
+        month_gross, risk_free_rate=risk_free_rate) if len(month_gross) > 1 else {}
+    perf_ytd = compute_portfolio_metrics(
+        ytd_gross, risk_free_rate=risk_free_rate) if len(ytd_gross) > 1 else {}
 
     month_ret   = (month_gross.iloc[-1] / month_gross.iloc[0] - 1) if len(month_gross) > 1 else 0.0
     max_dd_month = perf_month.get('Max Drawdown', 0.0) or 0.0

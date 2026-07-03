@@ -66,6 +66,15 @@ _COMMODITY_ASSETS = {
     'Rebar', 'Live_Hog', 'Soda_Ash', 'Coking_Coal', 'Containerized_Freight'
 }
 _EQUITY_ASSETS = {'IF', 'IC', 'IH', 'IM'}
+# Synthetic CNY-neutral FX crosses: long the non-USD leg vs CNY, short USDCNY,
+# netting out the common CNY-appreciation/depreciation beta that a long-only
+# outright FX book cannot avoid (e.g. EURUSD_SYN = long EURCNY / short USDCNY
+# ~= synthetic EURUSD). Each entry maps the synthetic name to its non-USD leg.
+_FX_CROSS_ASSETS = {
+    'EURUSD_SYN': 'EURCNY',
+    'GBPUSD_SYN': 'GBPCNY',
+    'JPYUSD_SYN': 'JPYCNY',
+}
 _COMMODITY_UNIVERSE = {
     'Gold': 'Precious Metals', 'Silver': 'Precious Metals',
     'Aluminium': 'Base Metals', 'Copper': 'Base Metals', 'Zinc': 'Base Metals',
@@ -87,6 +96,8 @@ def get_asset_type(asset_name):
         return 'Commodities'
     if asset_name in _EQUITY_ASSETS:
         return 'Equities'
+    if asset_name in _FX_CROSS_ASSETS:
+        return 'FX'
     if asset_name in ['USDCNY', 'EURCNY', 'JPYCNY', 'GBPCNY']:
         return 'FX'
     if any(x in asset_name for x in ['CDB', 'LGB', 'MTN', 'ICP']):
@@ -108,6 +119,9 @@ def get_universe(asset_name):
     # Commodities — exact match before substring checks
     if asset_name in _COMMODITY_UNIVERSE:
         return _COMMODITY_UNIVERSE[asset_name]
+    # FX crosses — exact match before substring checks
+    if asset_name in _FX_CROSS_ASSETS:
+        return 'FX Cross (CNY-neutral)'
     # FX assets — exact match before substring checks
     if asset_name in ('USDCNY', 'EURCNY', 'GBPCNY', 'JPYCNY'):
         return 'FX Universe'
@@ -138,7 +152,7 @@ def get_universe(asset_name):
 
 def get_sector(asset_name):
     """Get the sector/tenor for the asset."""
-    if asset_name in _COMMODITY_ASSETS or asset_name in _EQUITY_ASSETS:
+    if asset_name in _COMMODITY_ASSETS or asset_name in _EQUITY_ASSETS or asset_name in _FX_CROSS_ASSETS:
         return 'N/A'
     # Longest first to avoid partial matches (e.g. '10Y' before '1Y').
     for tenor in ['30Y', '20Y', '10Y', '9M', '6M', '5Y', '4Y', '3M', '3Y', '2Y', '1Y']:
@@ -317,6 +331,88 @@ def get_fx_series(country, market_data):
     return None
 
 
+# Non-USD leg -> (spot ticker, foreign overnight rate col); the short leg is
+# always USDCNY.IB / SOFR.IR.
+_FX_CROSS_LEG_MAP = {
+    'EURCNY': ('EURCNY.IB', 'ESTR.IR'),
+    'GBPCNY': ('GBPCNY.IB', 'SONIA.IR'),
+    'JPYCNY': ('JPYCNY.IB', 'TONAR.IR'),
+}
+
+
+def _calculate_fx_cross_returns_series(asset_name, market_data, start_date, end_date):
+    """Daily returns for a synthetic CNY-neutral FX cross (e.g. 'EURUSD_SYN').
+
+    Long the non-USD leg vs CNY, short USDCNY, in equal notional — the CNY
+    exposure of the two legs cancels, leaving a pure non-USD-vs-USD cross
+    (e.g. long EURCNY / short USDCNY ~= synthetic EURUSD) without taking any
+    view on CNY itself.
+
+    Return = (non-USD leg spot return) - (USDCNY spot return)
+             + (non-USD leg carry) - (USDCNY carry)
+    where each leg's carry is its own (foreign_overnight - DR001)/365, so the
+    DR001 (CNY funding) terms cancel and what remains is the foreign-foreign
+    rate differential (e.g. ESTR - SOFR) — the economically correct carry for
+    a USD-funded, CNY-neutral cross.
+    """
+    non_usd_name = _FX_CROSS_ASSETS.get(asset_name)
+    leg = _FX_CROSS_LEG_MAP.get(non_usd_name)
+    if leg is None:
+        return pd.DataFrame()
+    non_usd_ticker, non_usd_rate_col = leg
+
+    start_ts = pd.to_datetime(start_date)
+    end_ts = pd.to_datetime(end_date)
+
+    fx_data = _get_macro_frame(market_data[2], "fx")
+    if non_usd_ticker not in fx_data.columns or 'USDCNY.IB' not in fx_data.columns:
+        return pd.DataFrame()
+
+    fx_data = fx_data.copy()
+    if not isinstance(fx_data.index, pd.DatetimeIndex):
+        fx_data.index = pd.to_datetime(fx_data.index)
+    fx_mask = (fx_data.index >= start_ts) & (fx_data.index <= end_ts)
+    non_usd_leg = fx_data.loc[fx_mask, non_usd_ticker].dropna()
+    usd_leg = fx_data.loc[fx_mask, 'USDCNY.IB'].dropna()
+
+    if non_usd_leg.empty or usd_leg.empty or len(non_usd_leg) < 2 or len(usd_leg) < 2:
+        return pd.DataFrame()
+
+    common_idx = non_usd_leg.index.intersection(usd_leg.index)
+    if len(common_idx) < 2:
+        return pd.DataFrame()
+
+    result = pd.DataFrame(index=common_idx)
+    result['Date'] = result.index
+
+    spot_return = (
+        non_usd_leg.reindex(common_idx).pct_change()
+        - usd_leg.reindex(common_idx).pct_change()
+    )
+
+    currency_df = _get_macro_frame(market_data[2], "currency")
+    if not currency_df.empty and non_usd_rate_col in currency_df.columns \
+            and 'SOFR.IR' in currency_df.columns:
+        currency_df = currency_df.copy()
+        if not isinstance(currency_df.index, pd.DatetimeIndex):
+            currency_df.index = pd.to_datetime(currency_df.index)
+        cur_mask = (currency_df.index >= start_ts) & (currency_df.index <= end_ts)
+        cur_slice = currency_df.loc[cur_mask, [non_usd_rate_col, 'SOFR.IR']].ffill()
+        # DR001 (CNY funding) cancels between the two legs' carry, leaving the
+        # foreign-foreign rate differential (e.g. ESTR - SOFR).
+        daily_carry = (cur_slice[non_usd_rate_col] - cur_slice['SOFR.IR']) / 100.0 / 365
+        result['carry'] = daily_carry.reindex(common_idx).fillna(0)
+    else:
+        result['carry'] = 0.0
+
+    result['capital'] = 0.0
+    result['fx'] = 0.0
+    result['total'] = spot_return.reindex(common_idx).fillna(0) + result['carry']
+
+    result = result.iloc[1:]
+    return result.reset_index(drop=True)
+
+
 def calculate_daily_returns_series(asset_name, market_data, start_date, end_date):
     """
     Calculate daily return series for an asset.
@@ -329,9 +425,15 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
 
     For commodities:
     - total = daily price return
+
+    For synthetic CNY-neutral FX crosses (e.g. 'EURUSD_SYN' = long EURCNY /
+    short USDCNY): total = leg return spread + net (foreign - USD) carry.
     """
+    if asset_name in _FX_CROSS_ASSETS:
+        return _calculate_fx_cross_returns_series(asset_name, market_data, start_date, end_date)
+
     series, duration, country, is_bond = get_asset_yield_series(asset_name, market_data)
-    
+
     if series is None:
         return pd.DataFrame()
     
@@ -401,14 +503,19 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
         foreign_rate_col = _fx_to_rate.get(asset_name)
         currency_df = _get_macro_frame(market_data[2], "currency")
         if foreign_rate_col and not currency_df.empty and \
-                foreign_rate_col in currency_df.columns:
+                foreign_rate_col in currency_df.columns and \
+                'DR001.IB' in currency_df.columns:
             currency_df = currency_df.copy()
             if not isinstance(currency_df.index, pd.DatetimeIndex):
                 currency_df.index = pd.to_datetime(currency_df.index)
             cur_mask = (currency_df.index >= start_ts) & (currency_df.index <= end_ts)
-            cur_slice = currency_df.loc[cur_mask, [foreign_rate_col]].ffill()
-            # Gross carry: full foreign overnight rate accrual (no CNY funding deduction)
-            daily_carry = cur_slice[foreign_rate_col].clip(lower=0) / 100.0 / 365
+            cur_slice = currency_df.loc[cur_mask, [foreign_rate_col, 'DR001.IB']].ffill()
+            # Net carry: foreign overnight rate minus CNY funding cost (DR001),
+            # i.e. what a long-foreign-currency position actually earns/pays once
+            # funded in CNY. A long-only FX book previously credited the full
+            # gross foreign rate with no funding charge, overstating carry by
+            # the CNY-foreign rate differential (~2-3%/yr recently).
+            daily_carry = (cur_slice[foreign_rate_col] - cur_slice['DR001.IB']) / 100.0 / 365
             result['carry'] = daily_carry.reindex(result.index).fillna(0)
         else:
             result['carry'] = 0.0

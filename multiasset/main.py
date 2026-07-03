@@ -282,13 +282,16 @@ def create_fx_universe() -> List[FXAsset]:
     Returns:
         List of FXAsset objects
     """
-    from multiasset.assets import FXAsset
+    from multiasset.assets import FXAsset, FXCrossAsset
 
     fx_pairs: List[FXAsset] = [
         FXAsset(name='USDCNY', factor='FXDL.USDCNY'),
         FXAsset(name='EURCNY', factor='FXDL.EURCNY'),
         FXAsset(name='JPYCNY', factor='FXDL.JPYCNY'),
         FXAsset(name='GBPCNY', factor='FXDL.GBPCNY'),
+        FXCrossAsset(name='EURUSD_SYN', factor='FXDL.EURUSD'),
+        FXCrossAsset(name='GBPUSD_SYN', factor='FXDL.GBPUSD'),
+        FXCrossAsset(name='JPYUSD_SYN', factor='FXDL.JPYUSD'),
     ]
 
     return fx_pairs

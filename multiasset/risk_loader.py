@@ -268,7 +268,18 @@ class RiskFactorLoader:
                 risk_factors[f"FXDL.{currency}CNY"] = fx_data[column_name]
             else:
                 print(f"Warning: FX column {column_name} missing; skipping FXDL.{currency}CNY")
-        
+
+        # Synthetic CNY-neutral cross levels: XXXCNY / USDCNY approximates the
+        # XXXUSD cross rate (both legs are quoted per-CNY, so CNY cancels in
+        # the ratio). Used by FXCrossAsset so the optimizer can risk-parity
+        # the cross directly instead of only via outright USDCNY/XXXCNY legs.
+        if 'FXDL.USDCNY' in risk_factors.columns:
+            usd_cny = risk_factors['FXDL.USDCNY']
+            for currency in ["EUR", "JPY", "GBP"]:
+                level_col = f"FXDL.{currency}CNY"
+                if level_col in risk_factors.columns:
+                    risk_factors[f"FXDL.{currency}USD"] = risk_factors[level_col] / usd_cny
+
         return risk_factors
     
     def _load_commodity_factors(self, risk_factors: pd.DataFrame,

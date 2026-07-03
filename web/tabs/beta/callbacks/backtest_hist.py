@@ -296,6 +296,37 @@ def register_backtest_hist_callbacks(app):
             s = s.loc[s.index <= asof_date]
             return float(s.iloc[-1]) if len(s) else None
 
+        # ── Pure-RP trend filter (FX + commodities only) ───────────────────────
+        # Pure Risk Parity has no directional signal, so it holds every FX pair
+        # and commodity long unconditionally — for FX this means an unconditional
+        # long-foreign-currency book that bleeds during a sustained CNY
+        # appreciation trend (the opposite of what a trend-following overlay
+        # would do). Multiply each FX/commodity asset's RP weight by the sign of
+        # its own 3-month price momentum: a confirmed downtrend zeroes the
+        # position instead of holding it long into the trend. Rates/credit/
+        # spread assets are untouched — RP's job there is duration risk parity,
+        # not direction.
+        _TREND_LOOKBACK_DAYS = 63  # ~3 trading months
+        _TREND_FACTOR_BY_ASSET: dict = {}
+        for _fcode, _passets in FACTOR_TO_ASSET_MAP.items():
+            if _fcode.startswith('FXDL.') or _fcode.startswith('CMDL.'):
+                for _a in _passets:
+                    _TREND_FACTOR_BY_ASSET[_a['name']] = _fcode
+
+        def _trend_sign_asof(asset_name, asof_date):
+            """Sign of trailing 3M change in `asset_name`'s FXDL/CMDL factor level
+            as of `asof_date`; +1/-1, or +1 (long, i.e. no-op) if undetermined."""
+            factor_code = _TREND_FACTOR_BY_ASSET.get(asset_name)
+            if factor_code is None or factor_code not in risk_factors.columns:
+                return 1.0
+            s = risk_factors[factor_code].loc[risk_factors.index <= asof_date].dropna()
+            if len(s) < _TREND_LOOKBACK_DAYS + 1:
+                return 1.0
+            change = float(s.iloc[-1] - s.iloc[-(_TREND_LOOKBACK_DAYS + 1)])
+            if change == 0.0:
+                return 1.0
+            return 1.0 if change > 0 else -1.0
+
         try:
             # Parse dates
             start_date = pd.to_datetime(start_date) if start_date else None
@@ -443,7 +474,7 @@ def register_backtest_hist_callbacks(app):
                 ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA,
                 use_vol_sqrt_budgets=True,
                 use_dv01_shape=True,
-                bounds_version="RiskModelConfig.v1",
+                bounds_version="RiskModelConfig.v3",
             )
             rp_h = None
             _last_corr_matrix = None
@@ -529,8 +560,11 @@ def register_backtest_hist_callbacks(app):
                             pd.Timestamp(rebalance_date),
                             use_vol_sqrt_budgets=True,
                             # use_dv01_shape=True (default): two-stage — ERC across factors
-                            # (stage 1, rolling covariance) then DV01 split within each
-                            # factor group (stage 2, analytic inverse-duration).
+                            # (stage 1, rolling covariance) then a DV01-anchored, ridge-
+                            # regularised tilt within each factor group (stage 2) that lets
+                            # the tenor split respond to how slope/curvature budgets move
+                            # relative to level, controlled by tilt_lambda (default from
+                            # RiskModelConfig.TENOR_TILT_LAMBDA).
                         )
                         weights = weights_series.to_dict()
                     except Exception as e:
@@ -640,6 +674,24 @@ def register_backtest_hist_callbacks(app):
                     else:
                         print(f"  {rebalance_date.date()}: All signals zero, using RP weights")
                         # weights already set from RP optimizer above, leave unchanged
+                else:
+                    # Pure Risk Parity: no directional signal drives this mode, so it
+                    # otherwise holds every FX pair and commodity long unconditionally.
+                    # Zero out (long-only, so "short" isn't representable) any FX/
+                    # commodity asset whose 3M momentum is negative, then redistribute
+                    # the freed capital across the remaining assets. Factor Model
+                    # Scaling is untouched — it already gets FX/commodity direction
+                    # from the FactorModel signal via scalar_to_coeff.
+                    trended = {
+                        k: v for k, v in weights.items()
+                        if _trend_sign_asof(k, pd.Timestamp(rebalance_date)) > 0
+                    }
+                    trended_sum = sum(trended.values())
+                    if trended_sum > 1e-9:
+                        weights = {k: v / trended_sum for k, v in trended.items()}
+                    # else: every trend-filtered asset was vetoed (all momentum
+                    # negative) — keep the unfiltered RP weights rather than
+                    # producing an empty allocation for this rebalance.
 
                 all_assets_ever.update(weights.keys())
 

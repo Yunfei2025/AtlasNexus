@@ -398,6 +398,20 @@ FACTOR_TO_ASSET_MAP = {
         {'name': 'GBPCNY', 'type': 'FX', 'universe': 'GBP/CNY', 'sector': 'Spot'},
     ],
 
+    # Synthetic CNY-neutral crosses: long the non-USD leg vs CNY, short
+    # USDCNY, netting out the common CNY beta (e.g. EURUSD_SYN ~= long
+    # EURCNY / short USDCNY, a synthetic EURUSD). Level = XXXCNY / USDCNY,
+    # derived in RiskFactorLoader._load_fx_factors.
+    'FXDL.EURUSD': [
+        {'name': 'EURUSD_SYN', 'type': 'FX', 'universe': 'EUR/USD (CNY-neutral)', 'sector': 'Synthetic'},
+    ],
+    'FXDL.GBPUSD': [
+        {'name': 'GBPUSD_SYN', 'type': 'FX', 'universe': 'GBP/USD (CNY-neutral)', 'sector': 'Synthetic'},
+    ],
+    'FXDL.JPYUSD': [
+        {'name': 'JPYUSD_SYN', 'type': 'FX', 'universe': 'JPY/USD (CNY-neutral)', 'sector': 'Synthetic'},
+    ],
+
     # ==================== Commodities (CM) ====================
     'CMDL.AU': [
         {'name': 'Gold', 'type': 'Commodities', 'universe': 'Precious Metals', 'sector': 'N/A'},

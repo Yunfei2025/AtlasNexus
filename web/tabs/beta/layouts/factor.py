@@ -115,12 +115,25 @@ def build_multiasset_factor_layout():
     ], style={'flexShrink': '0'})
 
     fx = ['FXDL.USDCNY', 'FXDL.EURCNY', 'FXDL.JPYCNY', 'FXDL.GBPCNY']
+    # Synthetic CNY-neutral crosses: long non-USD leg / short USDCNY, so the
+    # book can take a directional cross view without an implicit CNY bet.
+    fx_cross = ['FXDL.EURUSD', 'FXDL.GBPUSD', 'FXDL.JPYUSD']
     fx_col = html.Div([
         _section_label("FX"),
         dcc.Checklist(
             id='factor-selection-fx',
             options=[{'label': f' {f.replace("FXDL.", "")}', 'value': f} for f in fx],
             value=SELECTED_FACTOR_POOL['fx_factors'],
+            labelStyle={'display': 'flex', 'alignItems': 'center', 'color': 'var(--text-primary)',
+                        'fontSize': '11px', 'padding': '3px 0'},
+            inputStyle={'marginRight': '7px'},
+        ),
+        html.Div(' CNY-neutral', style={'color': 'var(--text-secondary)', 'fontSize': '9px',
+                                         'padding': '4px 0 2px 0'}),
+        dcc.Checklist(
+            id='factor-selection-fx-cross',
+            options=[{'label': f' {f.replace("FXDL.", "")}', 'value': f} for f in fx_cross],
+            value=SELECTED_FACTOR_POOL.get('fx_cross_factors', []),
             labelStyle={'display': 'flex', 'alignItems': 'center', 'color': 'var(--text-primary)',
                         'fontSize': '11px', 'padding': '3px 0'},
             inputStyle={'marginRight': '7px'},

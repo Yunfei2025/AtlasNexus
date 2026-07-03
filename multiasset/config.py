@@ -44,16 +44,56 @@ class RiskModelConfig:
     ABS_CAP_FX:       float = 0.30
 
     @classmethod
-    def scaled_bounds(cls, n_assets: int) -> dict:
-        """Return floor/cap per asset class scaled to pool size."""
+    def scaled_bounds(cls, n_assets: int, n_bond_groups: Optional[int] = None,
+                       n_credit_groups: Optional[int] = None) -> dict:
+        """Return floor/cap per asset class scaled to pool size.
+
+        Bond/credit CAPS scale off the number of independent RATE GROUPS
+        (e.g. all 6 CN tenors sharing IRDL.CN/IRSL.CN/IRCV.CN count as ONE
+        group), not the number of individual tenor assets. A per-tenor cap
+        sized off `1/n_assets` is too tight whenever a group has more than
+        one tenor: e.g. for a 10-asset pool with one 6-tenor CN group, the
+        old `eq = 1/10` gave every tenor the same 0.30 cap as a single
+        commodity, so short-duration tenors (which legitimately want a large
+        DV01-weighted share) were pinned at that cap regardless of the
+        risk-parity signal. Sizing the cap off `n_bond_groups` (here 1, plus
+        any ungrouped single-tenor bonds) instead gives the group as a whole
+        the concentration allowance of one bond *position* — the group's
+        internal DV01/tilt split (`_two_stage_weights`) still determines each
+        tenor's individual share, so no single tenor can actually consume the
+        whole widened cap unless the shape genuinely puts most of the DV01
+        there.
+
+        Bond/credit FLOORS intentionally keep scaling off `n_assets` (not
+        `n_bond_groups`): floors exist to stop the optimizer from zeroing out
+        an individual instrument, which is still a per-tenor concern — e.g. a
+        6-tenor group with `n_bond_groups=1` should not force every tenor to
+        hold >=30%, that would sum to >100%. Only the ceiling scales with
+        grouping.
+
+        Commodity/FX bounds are unaffected (no multi-instrument grouping there)
+        and continue to scale off `n_assets` for both floor and cap.
+
+        Args:
+            n_assets: total individual assets in the pool (drives comm/FX
+                bounds and both bond/credit floors).
+            n_bond_groups: number of independent rate-bounding units for bond
+                CAPS (each multi-tenor country group counts as 1; each
+                ungrouped single-tenor bond counts as 1). Defaults to
+                `n_assets` (no grouping benefit) when not supplied, preserving
+                old behaviour for callers that haven't been updated.
+            n_credit_groups: same, for credit caps (universe groups).
+        """
         eq = 1.0 / max(n_assets, 1)
+        eq_bond_cap = 1.0 / max(n_bond_groups if n_bond_groups is not None else n_assets, 1)
+        eq_credit_cap = 1.0 / max(n_credit_groups if n_credit_groups is not None else n_assets, 1)
         return {
             'floor_bond':   max(cls.ABS_FLOOR_BOND,   eq * cls.FLOOR_RATIO_BOND),
             'floor_credit': max(cls.ABS_FLOOR_CREDIT, eq * cls.FLOOR_RATIO_CREDIT),
             'floor_comm':   max(cls.ABS_FLOOR_COMM,   eq * cls.FLOOR_RATIO_COMM),
             'floor_fx':     max(cls.ABS_FLOOR_FX,     eq * cls.FLOOR_RATIO_FX),
-            'cap_bond':     min(cls.ABS_CAP_BOND,     eq * cls.CAP_RATIO_BOND),
-            'cap_credit':   min(cls.ABS_CAP_CREDIT,   eq * cls.CAP_RATIO_CREDIT),
+            'cap_bond':     min(cls.ABS_CAP_BOND,     eq_bond_cap * cls.CAP_RATIO_BOND),
+            'cap_credit':   min(cls.ABS_CAP_CREDIT,   eq_credit_cap * cls.CAP_RATIO_CREDIT),
             'cap_comm':     min(cls.ABS_CAP_COMM,     eq * cls.CAP_RATIO_COMM),
             'cap_fx':       min(cls.ABS_CAP_FX,       eq * cls.CAP_RATIO_FX),
         }
@@ -65,6 +105,14 @@ class RiskModelConfig:
     CAP_FX:   float = 0.30
     MIN_WEIGHT_COMM: float = 0.02
     MIN_WEIGHT_FX:   float = 0.02
+
+    # ── Stage-2 tenor tilt (factor risk-parity optimizer) ─────────────────────
+    # Ridge weight (lambda) pulling the intra-group tenor split back toward the
+    # DV01-equalised prior (1/duration).  Larger => closer to pure DV01 (flatter,
+    # more stable); smaller => tenor shares chase the group's realised
+    # level/slope/curvature budget split more aggressively (more responsive,
+    # noisier). See FactorRiskParityOptimizer._tilt_group_shape.
+    TENOR_TILT_LAMBDA: float = 4.0
 
     # ── Vol^0.5 budget fallback ───────────────────────────────────────────────
     # Estimated annual volatility (%) for assets with missing factor-vol data

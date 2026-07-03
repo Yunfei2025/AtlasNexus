@@ -64,7 +64,8 @@ class FactorRiskParityOptimizer:
                           hedge_asset_names: Optional[list] = None,
                           neutral_asset_names: Optional[list] = None,
                           use_vol_sqrt_budgets: bool = False,
-                          use_dv01_shape: bool = True) -> Tuple[pd.Series, pd.Series]:
+                          use_dv01_shape: bool = True,
+                          tilt_lambda: Optional[float] = None) -> Tuple[pd.Series, pd.Series]:
         """
         Calculate optimal weights for a given rebalance date.
 
@@ -78,11 +79,17 @@ class FactorRiskParityOptimizer:
             use_vol_sqrt_budgets: Kept for API compatibility. IR √vol ratio
                 constraints are now always applied when risk_budgets is None,
                 so this flag has no additional effect.
-            use_dv01_shape: When True (default), intra-group bond weights are
-                fixed to inverse-duration ratios via equality constraints so
-                every bond contributes equal DV01.  Set False in backtest mode
-                so that time-varying EWMA covariance drives bond allocation
-                within each country group, producing visible monthly rebalancing.
+            use_dv01_shape: When True (default), intra-group bond weights start
+                from the DV01-equalised (inverse-duration) shape and are tilted
+                toward the group's realised level/slope/curvature budget split
+                (see ``_two_stage_weights`` / ``_tilt_group_shape``).  Set False
+                in backtest mode to instead let unconstrained min-variance drive
+                bond allocation directly from the rolling covariance (only
+                recommended when the group has at least as many independent
+                rate factors as tenors — otherwise the solve is rank-deficient).
+            tilt_lambda: Ridge weight (λ) for the Stage-2 tenor tilt; only used
+                when ``use_dv01_shape=True``. ``None`` uses
+                ``RiskModelConfig.TENOR_TILT_LAMBDA``.
 
         Returns:
             Tuple of (weights Series, factor volatilities Series)
@@ -116,6 +123,7 @@ class FactorRiskParityOptimizer:
                 factor_vols, factor_cov=factor_cov,
                 total_capital=total_capital,
                 hedge_asset_names=hedge_asset_names,
+                tilt_lambda=tilt_lambda,
             )
         else:
             weights = self._optimize_weights(
@@ -133,7 +141,8 @@ class FactorRiskParityOptimizer:
                            factor_vols: pd.Series,
                            factor_cov: Optional[pd.DataFrame] = None,
                            total_capital: float = 1.0,
-                           hedge_asset_names: Optional[list] = None) -> pd.Series:
+                           hedge_asset_names: Optional[list] = None,
+                           tilt_lambda: Optional[float] = None) -> pd.Series:
         """
         True two-stage allocation:
 
@@ -142,10 +151,18 @@ class FactorRiskParityOptimizer:
                    per factor (e.g. IRDL.CN gets X%, CMDL.AU gets Y%).
 
         Stage 2 — Within each IR factor group (IRDL.XX, IRSL.XX, IRCV.XX),
-                   distribute the factor's capital across the tenors it drives
-                   proportional to 1/duration (= equal DV01 per tenor).
-                   Non-IR assets (commodities, FX, single-tenor bonds) receive
-                   their stage-1 budget directly.
+                   start from the DV01-equalised shape (proportional to
+                   1/duration) and apply a ridge-regularised tilt so the
+                   intra-group tenor split also reflects how the slope/
+                   curvature budgets moved relative to level (see
+                   ``_tilt_group_shape``).  Non-IR assets (commodities, FX,
+                   single-tenor bonds) receive their stage-1 budget directly.
+
+        Args:
+            tilt_lambda: Ridge weight (λ) pulling the tilted shape back toward
+                the DV01 prior. ``None`` uses ``RiskModelConfig.TENOR_TILT_LAMBDA``.
+                Larger λ → closer to pure DV01; λ → 0 → shape matches the
+                group's (level, slope, curvature) budget exactly (least-norm).
         """
         exposure_matrix, asset_names, factor_names = self._build_exposure_matrix(factor_vols)
         if exposure_matrix.empty:
@@ -208,20 +225,27 @@ class FactorRiskParityOptimizer:
         # factor_budget[k] = fraction of total capital allocated to factor k
         factor_budget = {factor_names[k]: float(e_star[k]) for k in range(n_factors)}
 
-        # ── Stage 2: distribute factor budgets to tenors via DV01 equalisation ──
+        # ── Stage 2: distribute factor budgets to tenors via a DV01-anchored,
+        #    ridge-regularised tilt ──────────────────────────────────────────
         #
         # IR and Credit factors come in triplets (IRDL/IRSL/IRCV or CRDL/CRSL/CRCV)
         # that all drive the same set of tenors within a country/universe group.
-        # The SLOPE and CURVATURE columns have sensitivities that reflect relative
-        # directional exposure, NOT capital sizing — using 1/|slope_exposure| to size
-        # tenors would be economically wrong (it would over-weight the belly for a
-        # curvature factor, for example).
+        # Pool the total budget for the whole group, then split it across tenors
+        # by solving:
         #
-        # Correct approach: pool the total budget for the whole IR/Credit group (all
-        # three factors that share the same suffix), then apply DV01 equalisation
-        # ONCE using only the LEVEL factor column (IRDL or CRDL), which holds pure
-        # duration sensitivities.  Non-rate assets (commodities, FX, equity) are
-        # distributed equally as before.
+        #   min_w   || w - w_dv01 ||^2                      (ridge to DV01 prior)
+        #   s.t.    B_g^T w = target_g                       (match the group's
+        #                                                      realised level/slope/
+        #                                                      curvature budget split)
+        #           sum(w) = budget_group
+        #
+        # w_dv01 is the existing 1/duration shape (equal DV01 per tenor); target_g
+        # is the group's Stage-1 budget re-expressed per factor (level/slope/
+        # curvature), scaled by tilt_lambda (see ``_tilt_group_shape``).  This
+        # keeps the DV01 shape as the base case (tilt_lambda large) while letting
+        # a shift in IRSL/IRCV relative to IRDL bend the tenor curve — the
+        # question the flat static 1/duration-only split could not answer.
+        # Non-rate assets (commodities, FX, equity) are distributed equally.
         asset_weight = np.zeros(n_assets)
 
         # Identify which factor names belong to IR/Credit triplet groups.
@@ -231,21 +255,33 @@ class FactorRiskParityOptimizer:
         _CURVE_PREFIXES = ('IRCV.', 'CRCV.')
         _RATE_PREFIXES  = _LEVEL_PREFIXES + _SLOPE_PREFIXES + _CURVE_PREFIXES
 
-        # Accumulate total budget per group suffix, record the level-factor column index
-        _group_budget: dict = {}   # suffix -> total budget
-        _group_level_col: dict = {}  # suffix -> col index of the LEVEL factor
+        # Accumulate total budget per group suffix, record each triplet member's
+        # column index (level/slope/curvature) so Stage 2 can tilt on all three.
+        _group_budget: dict = {}       # suffix -> total budget
+        _group_level_col: dict = {}    # suffix -> col index of the LEVEL factor
+        _group_slope_col: dict = {}    # suffix -> col index of the SLOPE factor
+        _group_curve_col: dict = {}    # suffix -> col index of the CURVATURE factor
         for k, fname in enumerate(factor_names):
             if fname.startswith(_LEVEL_PREFIXES):
                 suffix = fname.split('.', 1)[1]   # e.g. 'CN', 'LGB', 'US'
                 _group_budget[suffix] = _group_budget.get(suffix, 0.0) + factor_budget[fname]
                 _group_level_col[suffix] = k
-            elif fname.startswith(_SLOPE_PREFIXES) or fname.startswith(_CURVE_PREFIXES):
+            elif fname.startswith(_SLOPE_PREFIXES):
                 suffix = fname.split('.', 1)[1]
                 _group_budget[suffix] = _group_budget.get(suffix, 0.0) + factor_budget[fname]
-                # Do NOT record a level column for slope/curve — level col already set
+                _group_slope_col[suffix] = k
+            elif fname.startswith(_CURVE_PREFIXES):
+                suffix = fname.split('.', 1)[1]
+                _group_budget[suffix] = _group_budget.get(suffix, 0.0) + factor_budget[fname]
+                _group_curve_col[suffix] = k
 
-        # Distribute each group's pooled budget using 1/duration (level-factor column)
+        # Distribute each group's pooled budget via the DV01-anchored tilt.
+        # Also record, per asset index, which bounding "unit" it belongs to —
+        # a multi-tenor rate group counts as ONE unit for cap-scaling purposes
+        # (see RiskModelConfig.scaled_bounds), not one unit per tenor.
         _handled_suffixes: set = set()
+        _bond_group_of_idx: dict = {}     # asset idx -> group suffix (IRDL groups)
+        _credit_group_of_idx: dict = {}   # asset idx -> group suffix (CRDL groups)
         for k, fname in enumerate(factor_names):
             if fname.startswith(_RATE_PREFIXES):
                 suffix = fname.split('.', 1)[1]
@@ -255,15 +291,30 @@ class FactorRiskParityOptimizer:
                 if suffix not in _group_level_col:
                     continue   # no level factor present — skip
                 lk = _group_level_col[suffix]
-                col = B[:, lk]            # use LEVEL column for duration sizing
+                col = B[:, lk]            # LEVEL column — defines duration sizing
                 active = np.abs(col) > 1e-6
                 if not active.any():
                     continue
                 idxs = np.where(active)[0]
                 budget_group = _group_budget[suffix]
-                # DV01 equalisation: each tenor gets capital ∝ 1/|duration|
-                inv_dur = 1.0 / np.abs(col[idxs])
-                shares = inv_dur / inv_dur.sum()
+                is_credit = fname.startswith(_LEVEL_PREFIXES[1])  # 'CRDL.'
+                for ix in idxs:
+                    (_credit_group_of_idx if is_credit else _bond_group_of_idx)[int(ix)] = suffix
+
+                sk = _group_slope_col.get(suffix)
+                ck = _group_curve_col.get(suffix)
+                loadings = np.column_stack([
+                    col[idxs],
+                    B[idxs, sk] if sk is not None else np.zeros(len(idxs)),
+                    B[idxs, ck] if ck is not None else np.zeros(len(idxs)),
+                ])  # (n_tenors_in_group, 3) = [IRDL, IRSL, IRCV] loadings
+                group_sub_budget = np.array([
+                    factor_budget.get(fname, 0.0),
+                    factor_budget.get(factor_names[sk], 0.0) if sk is not None else 0.0,
+                    factor_budget.get(factor_names[ck], 0.0) if ck is not None else 0.0,
+                ])
+
+                shares = self._tilt_group_shape(loadings, group_sub_budget, tilt_lambda)
                 for j, ix in enumerate(idxs):
                     asset_weight[ix] += budget_group * shares[j]
             else:
@@ -286,13 +337,31 @@ class FactorRiskParityOptimizer:
             asset_weight = np.ones(n_assets) / n_assets
 
         # ── Apply per-asset-class floors and caps scaled to pool size ─────────
-        # Floors/caps are proportional to equal share (1/n_assets) so they
-        # remain sensible whether the pool has 3 or 15+ assets.
-        from multiasset.assets import CommodityAsset, FXAsset, MultiFactorCreditAsset
+        # Floors are proportional to equal share (1/n_assets); bond/credit CAPS
+        # are proportional to equal share among independent rate GROUPS (a
+        # multi-tenor country group counts as one unit, not one per tenor) so a
+        # 6-tenor CN group gets the concentration room of one bond position,
+        # with the DV01/tilt shape (above) still setting each tenor's share
+        # within it. See RiskModelConfig.scaled_bounds docstring.
+        from multiasset.assets import CommodityAsset, FXAsset, FXCrossAsset, MultiFactorCreditAsset
         _comm_set   = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), CommodityAsset)}
-        _fx_set     = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), FXAsset)}
+        _fx_set     = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), (FXAsset, FXCrossAsset))}
         _credit_set = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), MultiFactorCreditAsset)}
-        _b = RiskModelConfig.scaled_bounds(n_assets)
+
+        _bond_units = len(set(_bond_group_of_idx.values())) + sum(
+            1 for i, name in enumerate(asset_names)
+            if name not in _comm_set and name not in _fx_set and name not in _credit_set
+            and i not in _bond_group_of_idx and i not in _credit_group_of_idx
+        )
+        _credit_units = len(set(_credit_group_of_idx.values())) + sum(
+            1 for i, name in enumerate(asset_names)
+            if name in _credit_set and i not in _credit_group_of_idx
+        )
+        _b = RiskModelConfig.scaled_bounds(
+            n_assets,
+            n_bond_groups=_bond_units if _bond_units > 0 else None,
+            n_credit_groups=_credit_units if _credit_units > 0 else None,
+        )
 
         def _clip(i, name):
             if name in _comm_set:
@@ -353,7 +422,87 @@ class FactorRiskParityOptimizer:
             )
 
         return pd.Series(w, index=asset_names)
-    
+
+    @staticmethod
+    def _tilt_group_shape(loadings: np.ndarray,
+                          group_sub_budget: np.ndarray,
+                          tilt_lambda: Optional[float] = None) -> np.ndarray:
+        """
+        Split one IR/Credit group's pooled budget across its tenors.
+
+        Starts from the DV01-equalised shape (```w_dv01 ∝ 1/|IRDL|```, i.e. equal
+        DV01 per tenor) and tilts it toward matching the group's actual
+        (level, slope, curvature) budget split, via a ridge-regularised
+        least-squares solve:
+
+            min_w   || w - w_dv01 ||^2
+            s.t.    loadings^T w = target      (match group's factor budget)
+                    sum(w) = 1                 (shares, scaled by caller)
+
+        ``target`` is ``group_sub_budget`` rescaled by ``1 / tilt_lambda`` so
+        that ``tilt_lambda`` trades off "stay at DV01" (large λ) against
+        "fully match the realised level/slope/curvature split" (λ → 0). Both
+        constraints are linear, so this has a unique closed-form solution
+        (Lagrange multipliers) — no risk of the multi-corner degeneracy that
+        plain unconstrained min-variance hits when a group has more tenors
+        than independent rate factors (see ``_optimize_weights`` docstring).
+
+        Args:
+            loadings: (n_tenors, 3) array of [IRDL, IRSL, IRCV] loadings for
+                the tenors in this group.
+            group_sub_budget: (3,) array — Stage-1 budget for
+                [IRDL.<suffix>, IRSL.<suffix>, IRCV.<suffix>] (0.0 if absent).
+            tilt_lambda: Ridge weight. ``None`` uses
+                ``RiskModelConfig.TENOR_TILT_LAMBDA``. Larger => closer to
+                pure DV01 shape; smaller => shape chases the factor budget
+                split more aggressively.
+
+        Returns:
+            (n_tenors,) array of shares summing to 1.
+        """
+        n = loadings.shape[0]
+        col_level = loadings[:, 0]
+        inv_dur = 1.0 / np.abs(col_level)
+        w_dv01 = inv_dur / inv_dur.sum()
+
+        if tilt_lambda is None:
+            tilt_lambda = RiskModelConfig.TENOR_TILT_LAMBDA
+        if tilt_lambda <= 0 or n < 2:
+            return w_dv01
+
+        # Only tilt on factors actually present for this group (slope/curve may
+        # be absent, e.g. single-tenor "groups"); level is always present.
+        active_cols = [0]
+        if abs(group_sub_budget[1]) > 1e-12 and np.any(np.abs(loadings[:, 1]) > 1e-9):
+            active_cols.append(1)
+        if abs(group_sub_budget[2]) > 1e-12 and np.any(np.abs(loadings[:, 2]) > 1e-9):
+            active_cols.append(2)
+
+        A = loadings[:, active_cols]                          # (n, m)
+        target = (A.T @ w_dv01) + group_sub_budget[active_cols] / tilt_lambda
+        # target = current DV01-shape exposure + a budget-driven nudge; as
+        # tilt_lambda -> inf the nudge vanishes and w == w_dv01 exactly.
+
+        # Add the sum-to-one constraint as an extra row so both constraints are
+        # solved jointly: [A | 1]^T w = [target | 1].
+        A_full = np.column_stack([A, np.ones(n)])              # (n, m+1)
+        b_full = np.append(target, 1.0)                        # (m+1,)
+
+        # Ridge-regularised least-norm equality solve:
+        #   w = w_dv01 + A_full (A_full^T A_full)^-1 (b_full - A_full^T w_dv01)
+        try:
+            AtA = A_full.T @ A_full
+            rhs = b_full - A_full.T @ w_dv01
+            correction = A_full @ np.linalg.solve(AtA + 1e-10 * np.eye(AtA.shape[0]), rhs)
+        except np.linalg.LinAlgError:
+            return w_dv01
+
+        w = w_dv01 + correction
+        # Long-only floor within the group; renormalise to sum back to 1.
+        w = np.maximum(w, 0.0)
+        s = w.sum()
+        return w / s if s > 1e-9 else w_dv01
+
     def _calculate_ewma_volatilities(self, factor_returns: pd.DataFrame) -> pd.Series:
         """
         Calculate EWMA volatilities for factor return series.
@@ -593,9 +742,9 @@ class FactorRiskParityOptimizer:
                     if _asset_budget_exposure[_ai] < 1e-9 * _total_budget:
                         _neutral_set.add(_aname)
 
-        from multiasset.assets import CommodityAsset, FXAsset
+        from multiasset.assets import CommodityAsset, FXAsset, FXCrossAsset
         _commodity_set = {name for name in asset_names if isinstance(self.portfolio.assets.get(name), CommodityAsset)}
-        _fx_set = {name for name in asset_names if isinstance(self.portfolio.assets.get(name), FXAsset)}
+        _fx_set = {name for name in asset_names if isinstance(self.portfolio.assets.get(name), (FXAsset, FXCrossAsset))}
 
         # Floors and caps scale with pool size: floor = eq_share × ratio, cap = eq_share × ratio
         _sb = RiskModelConfig.scaled_bounds(n_assets)

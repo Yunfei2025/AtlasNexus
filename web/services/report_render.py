@@ -239,7 +239,9 @@ def _render_corr_matrix_table(corr_data: dict[str, Any] | None) -> str:
     for r, row_lbl in enumerate(labels):
         html += f'<tr><td>{row_lbl}</td>'
         for c, _ in enumerate(labels):
-            if r == c:
+            if c > r:
+                html += '<td class="c-blank"></td>'
+            elif r == c:
                 html += f'<td class="c-diag">1</td>'
             else:
                 v = float(values[r][c]) if r < len(values) and c < len(values[r]) else 0.0
@@ -253,9 +255,8 @@ def _render_corr_matrix_table(corr_data: dict[str, Any] | None) -> str:
 
 def _render_nav_chart_svg(nav_points: dict[str, Any]) -> str:
     """nav_points: {'rp': [(x,y), ...], 'net': [(x,y), ...]} in the 300x90 viewBox.
-    Plots cumulative-return curves for total return (RP) and net-of-cost (net)."""
+    Plots the cumulative total-return curve (RP); net-of-cost is not displayed."""
     rp_points = nav_points.get("rp", [])
-    net_points = nav_points.get("net", [])
 
     def _fmt(points: list[tuple[float, float]]) -> str:
         return " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
@@ -267,16 +268,8 @@ def _render_nav_chart_svg(nav_points: dict[str, Any]) -> str:
         parts.append(
             f'<polyline fill="none" stroke="#2E4D7B" stroke-width="1.6" points="{_fmt(rp_points)}" />'
         )
-    if net_points:
-        parts.append(
-            f'<polyline fill="none" stroke="#2EC4B6" stroke-width="1.8" points="{_fmt(net_points)}" />'
-        )
-    if rp_points:
         x, y = rp_points[-1]
         parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.2" fill="#2E4D7B" />')
-    if net_points:
-        x, y = net_points[-1]
-        parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.4" fill="#2EC4B6" />')
     return "".join(parts)
 
 

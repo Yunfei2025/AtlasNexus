@@ -284,6 +284,145 @@ PCA risk-factor analysis (`pca_analyzer.py`) supports the factor decomposition.
 > the level→return-space conversion for yield factors; and whether the √-vol budget
 > is the intended risk philosophy vs. strict equal risk.
 
+#### 6.3.1 Two-stage allocation and the Stage-2 tenor tilt (`_two_stage_weights`)
+
+The default backtest/live path (`use_dv01_shape=True`, `risk_budgets=None`) solves
+in two stages rather than one joint optimization, because a single min-variance
+solve is **rank-deficient** for bond groups: *N* tenors in one country/universe
+group (e.g. CN's 1Y/2Y/5Y/10Y/20Y/30Y) all load on only 3 rate factors
+(`IRDL.xx`, `IRSL.xx`, `IRCV.xx` — level, slope, curvature), so the asset
+covariance `Σ = B·C_f·Bᵀ` has rank 3 and an (N−3)-dimensional null space. An
+unconstrained min-variance solve over that null space has no unique optimum —
+empirically it lands on an arbitrary bound corner and can jump between
+unrelated corners from one rebalance to the next as the covariance estimate
+moves by noise (verified by disabling the shape lock: `CN1Y`/`CN2Y` stayed
+pinned at a corner in 6 of 7 monthly rebalances, then jumped to a different
+corner for one month and back — not usable as a live/backtest allocation).
+
+**Stage 1 — factor-level ERC.** Solve for a per-factor capital budget `e` (one
+weight per risk factor, e.g. `IRDL.CN`, `IRSL.CN`, `IRCV.CN`, `CMDL.AU`, ...)
+that equalises each factor's contribution to portfolio variance under the
+rolling EWMA factor covariance `C_f`:
+
+```
+minimize   Σ_k ( e_k·(C_f e)_k / sqrt(eᵀC_f e)  −  mean(·) )²
+subject to Σ_k e_k = 1,  e_k ≥ 0
+```
+
+This budget is genuinely time-varying: over a 6-month sample the `IRCV.CN`
+budget alone was observed to move `0.022 → 0.108` across monthly rebalances,
+several-fold, tracking real shifts in the rolling covariance.
+
+**Stage 2 — DV01-anchored ridge tilt to tenors (`_tilt_group_shape`).** Each
+rate group's pooled Stage-1 budget (level + slope + curvature budgets summed)
+must be split across its tenors. The prior implementation used a purely
+static split, `w_i ∝ 1/|IRDL_i|` (equal DV01 per tenor, from the modified
+durations in `multiasset/utils.py::get_default_sensitivities`) — mechanically
+well-posed (breaks the null space by construction) but **insensitive to
+Stage 1**: since duration doesn't change month to month, the tenor *shape*
+within a group was frozen regardless of how the level/slope/curvature budgets
+moved, which is what produced a near-flat allocation chart across monthly
+backtest rebalances even though Stage 1 was moving underneath it.
+
+The current implementation keeps the DV01 shape as the base case but tilts it
+toward the group's realised (level, slope, curvature) budget split via a
+ridge-regularised, equality-constrained least-squares solve:
+
+```
+minimize   ‖ w − w_dv01 ‖²
+subject to  loadings_g ᵀ w = target_g       (match the group's factor budget)
+            Σ w = 1
+```
+
+where `w_dv01` is the existing inverse-duration shape, `loadings_g` is the
+group's tenor × {level, slope, curvature} loading sub-matrix, and `target_g`
+is `w_dv01`'s own exposure plus a nudge of size `group_sub_budget / λ` (so as
+`λ → ∞` the nudge vanishes and `w → w_dv01` exactly; smaller `λ` pulls the
+shape further toward matching the realised budget split). Both constraints
+are linear in `w`, so — unlike the unconstrained min-variance case — this has
+a **unique closed-form solution** (solved via the normal equations,
+`multiasset/factor_optimizer.py::_tilt_group_shape`), with no null-space
+degeneracy or corner-jumping.
+
+`λ` is `RiskModelConfig.TENOR_TILT_LAMBDA` (default **4.0**), overridable via
+`fit_and_calculate(..., tilt_lambda=...)`. Empirically (7 monthly rebalances,
+CN 1Y–30Y curve): `λ=4` keeps tenor weights close to DV01 with modest
+month-to-month movement (~1pp range on mid-tenors); `λ≈0.5` produces clearly
+visible, still-smooth monthly reshaping (~2–3pp range); `λ→0` approaches the
+least-squares-exact factor-budget match (largest reshaping, still smooth — no
+NaNs or corner jumps observed down to `λ=0.05`). No repo test suite exercises
+this path yet; validate numerically per §6.3 review focus before relying on
+values below the shipped default.
+
+Non-rate assets (commodities, FX, single-tenor instruments) still receive
+their Stage-1 budget directly with an equal split, unaffected by the tilt.
+
+> **Review focus:** appropriateness of a single scalar `λ` vs. a
+> per-group/per-tenor schedule; whether the ridge-to-DV01 prior should also
+> penalize roughness of the *shape* of the deviation (a second-difference /
+> curve-smoothness term in log-tenor space, consistent with
+> `multiasset/config.py::get_credit_weights`) rather than only its magnitude —
+> deferred as unnecessary complexity for the initial fix, since the target
+> exposure vector is itself smooth and no roughness was observed empirically.
+
+#### 6.3.2 Group-aware bond/credit caps (`RiskModelConfig.scaled_bounds`)
+
+Even with the Stage-2 tilt (§6.3.1) able to respond to Stage-1's budget, the
+tenor weights in a multi-tenor group were still separately clipped by
+`RiskModelConfig.scaled_bounds`, which sized every asset-class cap off
+`eq = 1/n_assets` — i.e. treating **each individual tenor** as one
+independent bounding unit. For a pool with one 6-tenor CN group among 10
+total assets, that gave every CN tenor the same `cap_bond = min(0.40, (1/10)
+× 3.0) = 0.30` as a single unrelated commodity position. Because DV01
+equalisation (`w ∝ 1/duration`) inherently concentrates weight in the
+shortest tenor — confirmed empirically, the *unclipped* Stage-2 output wanted
+`CN1Y ≈ 0.52` for this pool — CN1Y (and to a lesser extent CN2Y) hit that cap
+in all 7 of 7 monthly rebalances tested, regardless of what Stage 1/Stage 2
+computed. This, not covariance stability, was the dominant reason the
+backtest allocation chart looked flat: 8 of 10 assets (2 pinned at the bond
+cap, 4 pinned at the commodity/FX floor) were saturated most months, leaving
+only the untouched mid-tenors visibly free to move.
+
+`scaled_bounds` now takes optional `n_bond_groups` / `n_credit_groups`
+arguments and uses them **only for the cap**, not the floor:
+
+```
+cap_bond   = min(ABS_CAP_BOND,   (1 / n_bond_groups)   × CAP_RATIO_BOND)
+floor_bond = max(ABS_FLOOR_BOND, (1 / n_assets)        × FLOOR_RATIO_BOND)   # unchanged
+```
+
+`n_bond_groups` counts one unit per multi-tenor rate group (e.g. the whole CN
+curve = 1, computed in `_two_stage_weights` from the same factor-suffix
+grouping used for the Stage-2 tilt) plus one unit per ungrouped single-tenor
+bond — so a 6-tenor group gets the concentration allowance of **one bond
+position**, not six. The floor deliberately keeps scaling off `n_assets`
+(individual tenors): a floor exists to stop the optimizer from zeroing out a
+specific instrument, and scaling it off `n_bond_groups` would force every
+tenor in a group to individually hold the floor share, which can sum to more
+than 100% for large groups. `n_bond_groups=None` (the default) reproduces the
+old per-asset behaviour, so any caller not yet passing group counts is
+unaffected. `_optimize_weights` (the `use_dv01_shape=False` / risk-budget
+path) has **not** been updated to pass group counts — its intra-group
+shape-locked bonds already bypass the per-tenor cap by construction (relaxed
+to `(0, 1)`), so the fix was scoped to `_two_stage_weights` only.
+
+With the wider group cap (`ABS_CAP_BOND = 0.40` is the binding ceiling for a
+single-group 10-asset pool), CN1Y still sits at ~0.40 in the same 7-date
+test — that is the economically correct DV01 answer for a bond with ~1-year
+duration, not an artifact of the bound, and is a risk-policy choice (how much
+single-tenor concentration to allow) rather than something the math alone
+determines. CN2Y through CN30Y, and the commodity/FX floor-pinned assets, are
+now free to move with Stage 1 rather than being frozen at the old, tighter
+per-tenor bound.
+
+> **Review focus:** whether `ABS_CAP_BOND = 0.40` remains the right risk
+> ceiling for a single dominant short-tenor position now that the group cap
+> can actually reach it (previously masked by the tighter per-asset cap); and
+> whether `_optimize_weights`'s `use_dv01_shape=False` path — already flagged
+> in §6.3.1 as numerically unstable (rank-deficient, corner-jumping) — should
+> be retired or fixed rather than left as a documented-but-unrecommended
+> option, since it does not benefit from this grouping fix.
+
 ---
 
 ## 7. Derivatives (`derivatives/`)
