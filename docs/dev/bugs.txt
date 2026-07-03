@@ -5,3 +5,4 @@ alpha portfolio -> portfolio, Portfolio Allocation Results, some columns like B/
 also, i want to add TenorSpread -> CGB-10s30s, but cannot find it, why?
 Portfolio Allocation Snapshot, for 260008.IB-Swp, close price(bp) should be -7.95. You used a % unit.
 alpha portfolio -> pairs, cannot see pair 2 and 4, hidden
+portfolio summary -> books, when the target volume is updated in alpha portfolio -> portfolio, Portfolio Allocation Results, the target volume  in should also be updated in Portfolio Allocation Results.
