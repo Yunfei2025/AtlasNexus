@@ -83,17 +83,23 @@ def scalar_to_coeff(scalar: float, factor_name: str) -> float:
     """
     Convert a factor signal scalar into an asset allocation coefficient.
 
-    Long-only factors (IRDL, CMDL, FXDL, EQDL, SPDL, SPSL):
+    Long-only factors (IRDL, CMDL, EQDL, SPDL, SPSL):
       coeff = max(0, min(2.0, 1 + scalar))
-    Directional factors (IRSL, IRCV):
+    Directional factors (IRSL, IRCV, FXDL):
       coeff = max(-1.5, min(1.5, scalar))
+
+    FXDL is directional (not long-only) because a currency view is inherently
+    two-sided: a bearish FactorModel signal on USDCNY should be expressible as
+    a short, not just a shrink-to-zero long. Direction and size both come from
+    the signal — a Pure Risk Parity base has no signal, so it stays long-only/
+    flat via the trend-veto in backtest_hist.py instead of this function.
 
     Bump FactorTiltCacheParams.scalar_to_coeff_version whenever the clip
     bounds below change, so cached tilts computed under the old bounds are
     never reused.
     """
     factor_prefix = factor_name.split('.')[0] if '.' in factor_name else factor_name
-    if factor_prefix in ('IRSL', 'IRCV'):
+    if factor_prefix in ('IRSL', 'IRCV', 'FXDL'):
         return max(-1.5, min(1.5, scalar))
     return max(0.0, min(2.0, 1.0 + scalar))
 

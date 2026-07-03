@@ -608,7 +608,7 @@ def register_backtest_hist_callbacks(app):
                 for f_code in sorted(factor_signal_series.keys()):
                     tilt_params = FactorTiltCacheParams(
                         factor_code=f_code,
-                        scalar_to_coeff_version="v1",
+                        scalar_to_coeff_version="v2",  # v2: FXDL is now directional (can short)
                         factor_to_asset_map_version="v1",
                         signal_pkl_mtime=_signal_pkl_mtime,
                         class_caps_version="RiskModelConfig.v1",
@@ -660,15 +660,27 @@ def register_backtest_hist_callbacks(app):
                                     tilted_vals.append(float(v))
                         blended[name] = float(np.mean(tilted_vals)) if tilted_vals else rp_weight
 
-                    total_scaled = sum(blended.values())
+                    # FXDL is directional (scalar_to_coeff can return a negative
+                    # coefficient), so a bearish tilt can leave `blended[name]`
+                    # negative for an FX asset. Normalise by GROSS exposure
+                    # (sum of |v|), not net sum — net-sum normalisation would
+                    # distort every other asset's weight whenever a short
+                    # partially offsets the book's net total, and could blow up
+                    # if the net total crosses zero.
+                    total_scaled = sum(abs(v) for v in blended.values())
                     if total_scaled > 1e-9:
                         weights = {k: v / total_scaled for k, v in blended.items()}
                         # Apply per-class caps then renormalise (iterate to spread
-                        # any excess evenly across uncapped assets).
+                        # any excess evenly across uncapped assets). FX keeps a
+                        # signed cap [-cap, +cap] since it's directional; every
+                        # other class stays long-only clamped to [0, cap].
                         for _ in range(3):
-                            capped = {k: max(0, min(v, _CLASS_CAPS.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT)))
-                                      for k, v in weights.items()}
-                            cap_total = sum(capped.values())
+                            capped = {}
+                            for k, v in weights.items():
+                                cap = _CLASS_CAPS.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT)
+                                lo = -cap if get_asset_type(k) == 'FX' else 0.0
+                                capped[k] = max(lo, min(v, cap))
+                            cap_total = sum(abs(v) for v in capped.values())
                             if cap_total > 1e-9:
                                 weights = {k: v / cap_total for k, v in capped.items()}
                     else:
