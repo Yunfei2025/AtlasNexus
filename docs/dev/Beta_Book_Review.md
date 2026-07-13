@@ -352,6 +352,33 @@ proper factor-level RC attribution for reporting; two-stage path separates the
     `_model_month_key` (YYYY-MM), `_factor_pool` (comma-separated sorted list),
     `_max_duration`.  The Summary tab can now show which config produced each snapshot.
 
+### Phase 5 — Allocation-chain methodology (added 2026-07-03, see §10)
+25. **Move factor-model scaling from asset space to factor-budget space** —
+    scale Stage-1 `factor_budget` by the band coefficient and re-run Stage 2,
+    instead of post-hoc `weight × coeff` tilts (§10.3; fixes F1/F2/F4 together).
+26. Until §25 lands: fix the neutral-point mismatch in the coefficient blend —
+    every factor family must be a multiplier with neutral = 1 before averaging
+    (§10.2 F2). This is a live mis-allocation, not a refactor.
+27. Add signed per-asset weights to the factor→asset mapping (or derive it from
+    the asset registry's signed loadings) so slope/curvature tilts go long-short
+    across the curve (§10.2 F1, F9).
+28. Decide and document the net-exposure policy: preserve aggregate signal
+    scaling as a cash buffer vs always fully invested; stop silently
+    renormalising away de-risking (§10.2 F3).
+29. Render the Risk Budget panel from the optimizer's actual Stage-1 budgets;
+    retire the parallel √vol display derivation or make it an explicit
+    budget-prior option alongside ERC and explained-variance (§10.2 F4, F5).
+30. Add hysteresis (or N-day confirmation) to `discrete_target_level` band
+    transitions (§10.2 F7).
+31. Move per-family scaling ranges/neutral points into `RiskModelConfig`;
+    calibrate ranges against the DV01 cap (§10.2 F8).
+32. Reformulate the Stage-2 tilt target in risk-relative terms so
+    `TENOR_TILT_LAMBDA` is scale-invariant; log the constraint residual after
+    the non-negativity clip (§10.2 F6).
+33. Slower EWMA decay (or short/long blend) for the Stage-1 allocation
+    covariance (§10.2 F10); share one `clip_and_renormalise` helper across the
+    RP and factor-scaling cap loops (§10.2 F11).
+
 ---
 
 ## 9. Quick Reference — Files Cited
@@ -367,3 +394,153 @@ proper factor-level RC attribution for reporting; two-stage path separates the
 | Factor returns / vols / strategies | `multiasset/factor_backtest.py` |
 | Asset return data layer | `multiasset/data.py` |
 | Portfolio construction / hedge defs | `multiasset/main.py` |
+| Signal banding / coeff ranges | `multiasset/backtest_cache.py::scalar_to_coeff`, `multiasset/factor_model.py::discrete_target_level` |
+| Budget derivation (√vol) | `multiasset/budget.py` |
+
+---
+
+## 10. Allocation-Chain Model Review (added 2026-07-03)
+
+*Scope: the full budget-to-ticket chain — Stage-1 risk parity across the three curve risk
+factors → Stage-2 tenor allocation → factor-model scaling (per-factor-type bands) →
+factor→asset mapping → banded capital allocation. This section reviews the models
+themselves, not code hygiene (covered in §2–§5).*
+
+### 10.1 The chain as implemented
+
+| Stage | Model | Where |
+|---|---|---|
+| 1. Factor risk budgets | SLSQP ERC across IRDL/IRSL/IRCV (+ non-IR factors) in factor space, EWMA cov (λ=0.94, 3M window) | `factor_optimizer.py::_two_stage_weights` Stage 1 |
+| 2. Tenor allocation | DV01-equalised prior (w ∝ 1/duration) + ridge-style tilt toward the group's level/slope/curvature budget split | `_tilt_group_shape`, `TENOR_TILT_LAMBDA=4.0` |
+| 3. Signal banding | z-score → discrete level ∈ {0, ±0.2 … ±1} (deadzone \|z\|≤0.5, saturation \|z\|>1.3), ICIR confidence ramp | `factor_model.py::discrete_target_level` |
+| 4. Scaling range per factor type | long-only (IRDL/CMDL/EQDL/SPDL/SPSL): coeff = clip(1+s, 0, 2); directional (IRSL/IRCV/FXDL): coeff = clip(s, −1.5, 1.5) | `backtest_cache.py::scalar_to_coeff` |
+| 5. Budget→asset mapping | `FACTOR_TO_ASSET_MAP` (factor → list of asset names); asset weight × mean(coeffs of its factors); renorm; class caps; lot rounding; DV01 cap | `web/tabs/beta/data.py`, `portfolio_run.py`, `backtest_hist.py` |
+
+### 10.2 Findings
+
+**F1 — Slope/curvature signals are applied signlessly, so a slope view never
+expresses a slope trade.** `FACTOR_TO_ASSET_MAP['IRSL.CN']` is a plain list
+(CN2Y, CN10Y, CN20Y) with no per-asset sign, and both the live tilt
+(`portfolio_run.py`, `wt × coeff`) and the backtest tilt (`backtest_hist.py`,
+`weight * coeff`) multiply **every** mapped asset by the **same** coefficient. A
+steepener signal therefore scales the 2Y and the 20Y **up together** instead of
+long-short across the curve. The signed key-rate structure exists — the asset
+objects carry signed IRSL/IRCV sensitivities (`MultiFactorBondAsset.factor_map`)
+and Stage-2 `_tilt_group_shape` respects them — but the scaling stage bypasses it
+entirely. This is the single largest gap in the chain: two of the three curve
+factors cannot be monetised as designed in factor-scaling mode.
+
+**F2 — Mixed neutral conventions in the coefficient blend distort weights even
+with no view.** Long-only coeffs are neutral at **1.0** (multiplier semantics);
+directional coeffs are neutral at **0.0** (position semantics). The blend is a
+plain mean, so a CN10Y with all-neutral signals gets mean(1, 0, 0) = **1/3** —
+its RP weight is cut to a third purely for being mapped to three factors, while
+CN1Y (IRDL only) keeps coeff 1. After renormalisation this is a large,
+signal-free relative tilt toward tenors with fewer factor memberships. Neutral
+must mean "no change from RP" for every factor type before any blending.
+
+**F3 — Renormalisation undoes aggregate de-risking.** Both paths rescale the
+tilted weights back to a fully-invested book (live: `v/_total_scaled`; backtest:
+gross-sum normalisation). A uniformly bearish signal set (e.g. IRDL at 0.2×)
+therefore only *redistributes* capital — the book's total exposure never falls.
+If factor scaling is meant to vary conviction, the aggregate scale
+(≈ budget-weighted mean coeff) should be preserved as a cash buffer, with only
+the *relative* tilts renormalised. If fully-invested is intended, state it in
+the mode hint — users reading "×0.2" will assume de-risking happens.
+
+**F4 — The displayed budget model is not the executed model.** The Risk Budget
+panel derives "RP Max" from **√vol budgets** (IR factors, `derive_vol_sqrt_budgets`)
+and shows Exposure = RP Max × coeff; the run itself executes **Stage-1 ERC** +
+post-hoc asset-space tilt. These are different allocation philosophies with
+different answers: √vol gives *more* capital to higher-vol factors (risk ∝
+vol^1.5, concentrated in Level), ERC equalises risk contributions. The numbers
+in the panel are not what runs. Pick one budget model per mode and render the
+panel from the optimizer's actual Stage-1 output (`factor_budget`), not a
+parallel derivation.
+
+**F5 — Equal risk to curvature is a strong, unexamined prior.** Stage-1 ERC
+targets equal RC across Level/Slope/Curvature. Curvature carries far less
+explained variance and capacity; equalising its risk contribution forces large
+butterfly notionals for the same risk, magnifying transaction costs and model
+error in the weakest factor. Consider budget priors ∝ explained variance (PCA
+eigenvalues) or a configurable prior (e.g. 60/25/15) with ERC as one option —
+the current √vol display heuristic is implicitly making a similar
+anti-equal-risk argument already, in the opposite direction.
+
+**F6 — Stage-2 tilt target mixes units and the λ semantics are misleading.**
+`_tilt_group_shape` builds `target = Aᵀw_dv01 + budget/λ`: a **budget fraction**
+(capital share) is added to a **factor exposure** (price-beta·weight units) —
+the tilt magnitude therefore depends on the loading scale, not on any risk
+quantity, and λ=4.0 is calibrated to whatever the current PCA loading scale
+happens to be. The solve is also an exact least-norm equality projection (1e-10
+jitter), not the ridge the docstring advertises; λ enters only through target
+scaling. Reformulate the constraint in relative terms — e.g. match the *ratio*
+of slope/curvature RC to level RC inside the group — so λ has stable meaning
+across re-estimated loadings. Note also the post-solve `max(w,0)` + renorm can
+silently break the just-imposed equality constraints; log the residual.
+
+**F7 — Discrete bands have no hysteresis.** `discrete_target_level` re-buckets
+the z-score each day with hard edges (0.5/0.7/0.9/…). A signal oscillating near
+a boundary flips a whole 0.2 tick back and forth — worst exactly where
+conviction is weakest (the deadzone edge, flat↔±0.2). Add enter/exit hysteresis
+(e.g. enter a band at z=0.5, exit at z=0.4) or require N consecutive days in
+the new band before moving. This preserves the banding intent (fewer, coarser
+moves) while removing the boundary churn the bands were meant to prevent.
+
+**F8 — The per-type clip ranges are dead code and hard-coded.** Since the
+scalar is already quantised into [−1, 1], `clip(s, −1.5, 1.5)` never binds and
+`clip(1+s, 0, 2)` binds only at the endpoints it already reaches — the
+*effective* directional range is ±1, not ±1.5 as documented. Move the per-family
+(range, neutral-point, long-only flag) triple into `RiskModelConfig` /the asset
+registry (§4) so ranges are auditable, and keep the existing
+`scalar_to_coeff_version` cache-bump discipline when they change. When choosing
+ranges, note the interaction with the DV01 cap: a 2× level coefficient on an
+already-DV01-tight book is silently rescaled back down by the cap, so the real
+usable upside range is narrower than [0, 2] — calibrate ranges against the cap,
+or apply the cap before displaying the implied exposure.
+
+**F9 — Two sources of truth for factor→asset structure.** `FACTOR_TO_ASSET_MAP`
+(UI layer, unsigned name lists) duplicates what the portfolio's asset objects
+already encode with signs (`asset.factors` / exposure matrix B). Deriving the
+map from the asset registry (§4 item 11) fixes F1's missing signs for free and
+removes the `factor_to_asset_map_version` cache key as a manual burden.
+
+**F10 — Covariance memory is short for a strategic book.** EWMA λ=0.94 has a
+~11-day half-life; the 3-month window is mostly ignored. Monthly-rebalanced
+Stage-1 budgets are therefore driven by the last two weeks of factor moves —
+noisy budgets, avoidable turnover. Use a slower decay (λ≈0.97–0.99) or a
+short/long blend for the *allocation* covariance; keep fast EWMA for
+display/monitoring vols.
+
+**F11 — Cap-renorm loops differ between stages and are unverified.** The
+factor-scaling class-cap loop runs a fixed 3 iterations with no convergence
+check (live and backtest), while the RP path runs 10 with a feasibility guard
+and post-solve assertion (§7.3). Extract one shared
+`clip_and_renormalise(weights, caps, floors)` with the guard/assert, used by
+both.
+
+### 10.3 Recommended redesign — scale the budgets, not the weights
+
+Most of F1–F4 stem from one architectural choice: scaling is applied **post-hoc
+in asset space** after the optimizer has run. The user-facing description of the
+system ("factor model scaling adjusts the *risk budgets*") is actually the right
+design, and the code already has the pieces:
+
+1. Run Stage-1 ERC → `factor_budget[k]` (as today).
+2. Apply the band coefficient **to the factor budget**:
+   `scaled_budget[k] = factor_budget[k] × coeff_k`, where every factor family
+   uses multiplier semantics around neutral = 1 (directional families map
+   s ∈ [−1,1] → multiplier, sign expressed in step 3).
+3. Re-run Stage 2 (`_tilt_group_shape`) with the scaled level/slope/curvature
+   budgets — the signed key-rate loadings then translate a slope view into an
+   actual steepener/flattener across tenors, automatically fixing F1.
+4. Keep `Σ scaled_budget < Σ factor_budget` as a cash buffer instead of
+   renormalising (fixes F3), or renormalise explicitly behind a
+   "fully-invested" toggle.
+5. The Risk Budget panel then displays exactly the numbers the run uses
+   (fixes F4), and the RC-attribution panel stays consistent with the executed
+   portfolio.
+
+This removes the parallel asset-space tilt code in both `portfolio_run.py` and
+`backtest_hist.py` (one engine, one truth — same spirit as §8 Phase 2) and
+reduces `FACTOR_TO_ASSET_MAP` to a display-only concern.

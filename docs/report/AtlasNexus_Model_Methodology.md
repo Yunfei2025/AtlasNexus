@@ -207,7 +207,7 @@ path. Key questions a validator should confirm:
 - **Sizing robustness:** sensitivity of Sharpe to `signal_smooth_days`, the
   `tanh(ICIR/0.25)` shape, `target_vol`, and `max_leverage`.
 
-> Related roadmap: `docs/dev/factor-model-improvement-plan.md`.
+> Related roadmap: `docs/dev/factors-package-improvement-plan.md` (§7 covers this model).
 
 ---
 

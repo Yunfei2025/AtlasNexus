@@ -6,8 +6,8 @@ maps the end-to-end execution path, then audits it for the kinds of bias and ove
 that inflate a backtested Sharpe ratio. A separate improvement plan to *raise* the Sharpe
 follows in [§5](#5-plan-to-increase-the-sharpe-ratio).
 
-> Companion docs: [`factor-model-improvement-plan.md`](factor-model-improvement-plan.md)
-> (the existing roadmap, with §-references that the code comments point to). This file is
+> Companion docs: [`factors-package-improvement-plan.md`](factors-package-improvement-plan.md)
+> (the merged roadmap; the multiasset combiner backlog is its §7). This file is
 > the **workflow + risk** view; that file is the **feature/architecture** roadmap.
 
 ---
