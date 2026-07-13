@@ -1,28 +1,29 @@
 ﻿@echo off
-@REM AtlasNexus - Windows Launcher
-@REM Starts the Dash server and Cloudflare tunnel in one window.
+REM AtlasNexus Daily Console Launcher
+REM This script activates the conda environment and starts the Dash app
 
-@echo ============================================================
-@echo   AtlasNexus Daily Console
-@echo ============================================================
-@echo.
+echo ============================================================
+echo AtlasNexus Daily Console Launcher
+echo ============================================================
+echo.
 
-@REM -- 1. Conda environment -------------------------------------
-@echo [1/3] Activating conda environment 'prod'...
+REM Activate conda environment
+echo [1/3] Activating conda environment 'prod'...
 
-set "CONDA_BAT="
-@if exist "%USERPROFILE%\anaconda3\condabin\conda.bat"   set "CONDA_BAT=%USERPROFILE%\anaconda3\condabin\conda.bat"
-@if exist "%USERPROFILE%\miniconda3\condabin\conda.bat"  set "CONDA_BAT=%USERPROFILE%\miniconda3\condabin\conda.bat"
-@if exist "C:\ProgramData\anaconda3\condabin\conda.bat"  set "CONDA_BAT=C:\ProgramData\anaconda3\condabin\conda.bat"
-@if exist "C:\ProgramData\miniconda3\condabin\conda.bat" set "CONDA_BAT=C:\ProgramData\miniconda3\condabin\conda.bat"
-@if exist "D:\ProgramData\miniconda3\condabin\conda.bat" set "CONDA_BAT=D:\ProgramData\miniconda3\condabin\conda.bat"
+set CONDA_BAT=
+if exist "%USERPROFILE%\anaconda3\condabin\conda.bat"   set CONDA_BAT=%USERPROFILE%\anaconda3\condabin\conda.bat
+if exist "%USERPROFILE%\miniconda3\condabin\conda.bat"  set CONDA_BAT=%USERPROFILE%\miniconda3\condabin\conda.bat
+if exist "C:\ProgramData\anaconda3\condabin\conda.bat"  set CONDA_BAT=C:\ProgramData\anaconda3\condabin\conda.bat
+if exist "C:\ProgramData\miniconda3\condabin\conda.bat" set CONDA_BAT=C:\ProgramData\miniconda3\condabin\conda.bat
+if exist "D:\ProgramData\Miniconda3\condabin\conda.bat" set CONDA_BAT=D:\ProgramData\Miniconda3\condabin\conda.bat
 
-@if "%CONDA_BAT%"=="" (
-    echo ERROR: Could not find conda. Check your Anaconda/Miniconda installation.
-    pause & exit /b 1
+if "%CONDA_BAT%"=="" (
+    echo ERROR: Could not find conda.bat. Please check your Anaconda/Miniconda installation.
+    pause
+    exit /b 1
 )
 
-@call "%CONDA_BAT%" activate prod >nul 2>&1
+call "%CONDA_BAT%" activate prod >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Could not activate conda env 'prod'.
     echo        Run: conda create -n prod python=3.13
@@ -31,19 +32,19 @@ if errorlevel 1 (
 echo       OK
 echo.
 
-@REM -- 2. Dash server (separate window, auto-closes on exit) ------
-@echo [2/3] Starting Dash server on port 8080...
+REM -- 2. Dash server (separate window, auto-closes on exit) ------
+echo [2/3] Starting Dash server on port 8080...
 set FI_SHOW_LOG_WINDOW=0
 cd /d "%~dp0"
 start "AtlasNexus Server" /min cmd /c "python main.py daily-web & pause"
 echo       Started in background window.
 echo.
 
-@REM Give the server a moment to bind the port
+REM Give the server a moment to bind the port
 timeout /t 4 /nobreak >nul
 
-@REM -- 3. Cloudflare tunnel (this window) ------------------------
-@echo [3/3] Starting Cloudflare tunnel (anwin ^> anwin.mayunfei.org)...
+REM -- 3. Cloudflare tunnel (this window) ------------------------
+echo [3/3] Starting Cloudflare tunnel (anwin ^> anwin.mayunfei.org)...
 echo.
 echo   Local:   http://127.0.0.1:8080
 echo   Public:  https://anwin.mayunfei.org
