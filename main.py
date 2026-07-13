@@ -13,6 +13,8 @@ import multiprocessing as mp
 from datetime import datetime
 from pathlib import Path
 
+from curves.backtest.selection import expand_backfill_btypes
+
 def _configure_stdio() -> None:
     """Best-effort unbuffered text stdio for immediate log output."""
     for name in ("stdout", "stderr"):
@@ -125,8 +127,12 @@ def _build_parser() -> argparse.ArgumentParser:
     ri.add_argument("--asof", type=_parse_date, default=None, help="As-of date YYYY-MM-DD (defaults to previous working day)")
 
     cb = sub.add_parser("curve-backtest", help="Run curve backtest (curves/backtest)")
-    cb.add_argument("--btype", choices=["TBond", "CBond", "IRS"], default="IRS",
-                    help="Instrument type (default: IRS)")
+    cb.add_argument(
+        "--btype",
+        choices=["TBond", "CBond", "IRS", "OBond"],
+        default="IRS",
+        help="Instrument type (default: IRS). OBond expands to LBond/BBond/GBond/MNote.",
+    )
     cb.add_argument("--update-list", nargs="*", default=["pool"], dest="update_list",
                     help="Update steps: pool, bonds, cbts (default: pool)")
     cb.add_argument("--start", type=_parse_date, required=True, help="Backtest start date YYYY-MM-DD")
@@ -289,15 +295,21 @@ def main():
                 "Curve backtest multiprocessing was disabled explicitly on Windows; "
                 "falling back to serial execution because FI_DISABLE_WINDOWS_CURVE_MP=1."
             )
-        bt = Backtestor(
-            btype=args.btype,
-            start=args.start,
-            end=args.end,
-            update_list=args.update_list or ["pool"],
-            processes=args.processes,
-            serial=force_serial,
-        )
-        bt.run()
+        for btype in expand_backfill_btypes(args.btype):
+            logger.info(f"Running curve backfill for {btype}...")
+            try:
+                bt = Backtestor(
+                    btype=btype,
+                    start=args.start,
+                    end=args.end,
+                    update_list=args.update_list or ["pool"],
+                    processes=args.processes,
+                    serial=force_serial,
+                )
+                bt.run()
+            except Exception as exc:
+                logger.exception(f"Curve backfill failed for {btype}: {exc}")
+                logger.warning(f"Continuing with the next requested backfill type after {btype} failure.")
         return
 
     if args.cmd == "futures-analytics-backfill":

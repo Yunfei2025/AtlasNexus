@@ -302,6 +302,7 @@ def build_tabs_panel():
                                             {'label': 'IRS',             'value': 'IRS'},
                                             {'label': 'TBond',           'value': 'TBond'},
                                             {'label': 'CBond',           'value': 'CBond'},
+                                            {'label': 'OBond',           'value': 'OBond'},
                                             {'label': 'Futures Analytics', 'value': 'Futures'},
                                         ],
                                         value='IRS',
