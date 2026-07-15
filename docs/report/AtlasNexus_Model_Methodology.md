@@ -234,6 +234,173 @@ are only flagged when the relationship is statistically stable.
 > **Review focus:** stationarity/cointegration testing rigor, lookback choice for the
 > regression window, and stability of the hedge ratio through regime shifts.
 
+### 4.3 Alpha Portfolio → Backtest: style-routed spread strategies
+
+The Alpha Book backtest in `web/tabs/alpha/` evaluates individual relative-value
+spreads and combines the current Portfolio allocation into an indicative book
+equity curve. It has two distinct strategy types, selected from the candidate's
+stored `style` field in portfolio mode or selected/auto-suggested from the latest
+60-day regime snapshot in individual mode:
+
+| Strategy type | Engine | Economic hypothesis | Core entry confirmation |
+|---------------|--------|---------------------|-------------------------|
+| **Mean-reverting (MR)** | `backtest/engine_mr.py::run_spread_backtest` | A statistically rich/cheap spread will revert toward its local equilibrium. | A 120-day rolling z-score, adjusted by a bounded 30-day carry/volatility term. |
+| **Trending / momentum** | `backtest/engine_trend.py::run_trend_backtest_dc` | A confirmed directional move, supported by momentum, will persist long enough to exceed a volatility-scaled trailing stop. | Directional-change state, 20-day momentum normalized by 60-day daily-change volatility, and a carry-level gate. |
+
+#### 4.3.1 Regime selection and scope
+
+`curves/calibration/regime.py::compute_regime_features` computes four rolling,
+60-day indicators on first differences: Kaufman efficiency ratio, a single-scale
+R/S Hurst estimate, a variance-ratio proxy, and lag-1 autocorrelation. Each casts a
+trend / mean-reversion / neutral vote. A net vote of at least $+2$ selects
+`trending`; at most $-2$ selects `mean_reverting`; otherwise the result is
+`uncertain`. In the individual UI, a certain result locks the matching style. For
+an uncertain result, the sign of the latest carry/roll edge is a tiebreaker
+(positive selects MR; non-positive selects trend when available).
+
+This is a **point-in-time routing aid**, not a rolling adaptive backtest: portfolio
+mode reads each candidate's current stored `style` and applies that one engine over
+the whole selected historical period. Its results therefore answer, “how would the
+current book's style assignment have behaved?”, rather than “how would a
+historically available regime classifier have switched styles each day?”
+
+#### 4.3.2 Mean-reversion model and defaults
+
+For a spread level $s_t$, the MR engine uses a fixed internal lookback of 120
+observations:
+
+$$
+z_t = \frac{s_t - \operatorname{mean}_{120}(s)}
+                 {\operatorname{sd}_{120}(s)}, \qquad
+CS_t = z_t - \operatorname{clip}\left(
+  \frac{CR_t\,(30/90)}{\operatorname{sd}_{120}(s)}, -1.5, 1.5
+\right).
+$$
+
+Here $CR_t$ is the aligned carry/roll series (or a snapshot fallback); the 30/90
+scaling translates the stored three-month convention into the scoring horizon. The
+engine enters long when $CS_t \leq -z_{entry}$ and short when
+$CS_t \geq z_{entry}$. A signal exit is allowed only after `min_hold`; it occurs
+when the composite score has reverted inside the exit band. A $z$-score stop is
+always active, including during the minimum holding period. Closed-trade PnL is
+spread change times the duration multiplier plus accrued carry/roll; the latter
+includes direction-aware borrow adjustments for the supported spread families.
+
+| Parameter | Standard default | Tenor-spread preset | Role |
+|-----------|------------------|---------------------|------|
+| Internal z-score lookback | 120 observations | 120 observations | Local equilibrium and dispersion; not UI-configurable. |
+| `entry_z` | 2.0 | 2.5 | Absolute composite-score entry threshold. |
+| `exit_z` | 0.5 | 0.25 | Reversion band used after the minimum hold. |
+| `stop_z` | 4.0 | 5.0 | Adverse z-score stop. |
+| `min_hold` | 7 calendar days | 10 calendar days | Minimum holding period for signal exits; stop remains active. |
+| Carry score horizon | 30 days | 30 days | Fixed carry-adjustment horizon. |
+
+The `trade_style` argument currently has identical entry logic for its non-MR
+branch; the UI routes trend selections to the separate trend engine. It should not
+be interpreted as a third hybrid signal.
+
+#### 4.3.3 Trending / momentum model and defaults
+
+The trend engine derives a persistent directional-change state
+$D_t \in \{-1,0,1\}$, then requires it to agree with normalized momentum:
+
+$$
+m_t = s_t-s_{t-20}, \qquad
+m_t^{norm} = \frac{m_t}{\operatorname{sd}_{60}(\Delta s)}, \qquad
+D_t m_t^{norm} > 0, \quad |m_t^{norm}| \geq 0.5.
+$$
+
+`D_t` is obtained from the relative directional-change generator using `theta`.
+Long entry also requires the spread level to meet `carry_buffer`; short entry is
+permitted when `allow_short` is enabled. An open position exits on a directional
+state flip or carry-gate failure after `min_hold`, or immediately on a trailing
+stop of `trailing_mult × sd_60(Δs)` from the best favourable level. As in MR,
+closed PnL combines duration-scaled spread movement and carry accrual.
+
+| Parameter | Standard default | Tenor-spread preset | Role |
+|-----------|------------------|---------------------|------|
+| `theta` | 0.02 | 0.03 | Relative directional-change threshold in the backtest engine. |
+| `mom_window` | 20 observations | 30 observations | Momentum lookback. |
+| `vol_window` | 60 observations | 90 observations | Daily-change volatility lookback. |
+| Momentum threshold | 0.5 | 0.5 | Fixed internal threshold for $|m_t^{norm}|$; not UI-configurable. |
+| `trailing_mult` | 1.5 | 2.0 | Favourable-excursion trailing-stop multiple. |
+| `carry_buffer` | 0.0 | 0.0 | Spread-level gate for long entries. |
+| `min_hold` | 7 calendar days | 10 calendar days | Minimum hold before flip/carry exits. |
+| `allow_short` | enabled | enabled | Allows short-spread entries. |
+
+For yield-based spread families, the callback negates the series before passing it
+to both engines so a positive internal PnL direction corresponds to an economic
+narrowing/price-long trade; display signs are restored afterwards. This convention
+must be retained when reviewing direction, carry, and threshold settings.
+
+#### 4.3.4 Portfolio aggregation and measurement limitations
+
+Portfolio mode loads the persisted current Alpha snapshot, normalizes the positive
+candidate weights across instruments with available overlapping history, and sums
+their weighted daily mark-to-market PnL in basis points. It forwards the MR
+entry/exit/stop/minimum-hold controls, but trend assets use the trend engine's
+function defaults rather than the individual-screen trend controls. The resulting
+book is a useful **current-book sanity view**, not a fully parameterized historical
+simulation.
+
+The portfolio screen accepts initial capital and a transaction-cost input (default
+100 MM and 0.5 bp), but these values are parsed and are not applied to PnL in the
+current callback. Likewise, the trend path in portfolio mode does not receive its
+spread-type/borrow-cost arguments. Reported portfolio return is consequently
+weighted cumulative PnL in bp, rather than capital-normalized net return. The
+individual engines report a trade-PnL Sharpe,
+$\operatorname{mean}(pnl)/\operatorname{sd}(pnl)\times\sqrt{\min(N_{trades},20)}$,
+whereas the portfolio screen reports a daily-PnL Sharpe annualized by
+$\sqrt{252}$. These are not comparable with each other or directly with the
+platform-wide return-based convention in §1.
+
+#### 4.3.5 Performance-improvement plan — documentation only
+
+No implementation is made by this document. The following sequence is recommended
+before interpreting optimization results or increasing risk:
+
+1. **Make performance measurement investable first.** Apply instrument- and
+direction-specific bid/ask, fees, financing, borrow, and conservative next-bar
+execution assumptions on every entry, exit, reversal, and portfolio rebalance;
+then make capital and the configured transaction cost operational. Report gross
+and net results, turnover, capacity/DV01, and return-based daily Sharpe using one
+shared convention.
+2. **Validate both models with a genuinely walk-forward design.** Freeze all
+parameters and style/routing decisions using only information available at each
+date; refit/reselect on rolling training windows; reserve a final untouched period.
+Use purged, embargoed or anchored walk-forward folds where overlapping holding
+periods make ordinary splits optimistic. Compare against always-MR, always-trend,
+and no-trade baselines.
+3. **Repair and calibrate regime routing before relying on it.** The current
+variance-ratio calculation compares variances estimated over unequal samples and
+scales the short-window variance by the window ratio; it is not a Lo--MacKinlay
+multi-period variance ratio and is biased toward a trend vote. The single-scale
+60-day R/S Hurst estimate also has finite-sample bias. Calibrate all thresholds to
+simulated/random-walk and instrument-family null distributions, add regime
+hysteresis/confidence gating, and demonstrate that conditional engine performance
+beats the static baselines.
+4. **Align parameter units with the traded object.** The trend backtest currently
+uses the relative DC generator while the live snapshot trend signal uses an
+absolute generator. Relative thresholds are unstable for inverted or near-zero
+spreads, and `theta=0.02` therefore has a different meaning from a 2 bp absolute
+threshold. Use one causal, spread-unit-consistent definition, preferably a
+volatility-scaled absolute threshold; normalize momentum over its horizon (or
+calibrate the existing statistic) and replace the spread-level `carry_buffer` with
+direction-aware carry/roll expected edge.
+5. **Estimate parameters by spread family and reversion speed, not global UI
+presets.** Estimate an out-of-sample OU half-life/stationarity diagnostic per
+instrument; trade MR only when its half-life fits the intended 1-week to 1-month
+holding horizon and set the z-score lookback from that estimate. For trend, select
+DC, momentum, volatility, and stop horizons by robust family-level grids or
+Bayesian/regularized selection, scoring stability across folds rather than the
+single best historical Sharpe.
+6. **Improve portfolio construction after signals are credible.** Preserve the
+historically available allocation at each rebalance; volatility-target gross DV01;
+cap key-rate/issuer/leg and correlated-family exposure; net shared legs; and apply
+drawdown, liquidity, and event-risk overlays. Add cross-sectional rich/cheap
+signals within a spread family to reduce common level-factor risk that a collection
+of independent time-series signals cannot diversify away.
+
 ---
 
 ## 5. Futures Strategies (`futures/`)

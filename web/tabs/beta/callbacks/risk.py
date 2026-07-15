@@ -714,6 +714,41 @@ def register_risk_callbacks(app):
                     pass
             return {}
 
+        _alpha_spread_cache: dict[str, pd.DataFrame | None] = {}
+
+        def _resolve_alpha_metric(
+            spread_type: str,
+            trade_id: str,
+            metric: str,
+            fallback: float | None = None,
+            *,
+            scale_to_bp: bool = False,
+        ) -> float | None:
+            if not spread_type or not trade_id:
+                return fallback
+            if spread_type not in _alpha_spread_cache:
+                try:
+                    _alpha_spread_cache[spread_type] = _load_alpha_spread_data(spread_type)
+                except Exception:
+                    _alpha_spread_cache[spread_type] = None
+            df = _alpha_spread_cache.get(spread_type)
+            if df is None or trade_id not in df.index:
+                return fallback
+            try:
+                if metric not in df.columns:
+                    return fallback
+                raw_value = df.loc[trade_id, metric]
+                if raw_value is None or pd.isna(raw_value):
+                    return fallback
+                value = float(raw_value)
+                if scale_to_bp and spread_type in {
+                    'TBondCurve', 'CBondCurve', 'SwapSpread', 'TenorSpread', 'TermBasis'
+                }:
+                    value *= 100.0
+                return round(value, 4)
+            except (TypeError, ValueError, KeyError):
+                return fallback
+
         def _compute_carry_mtm(spread_type: str, instrument_id: str,
                                open_date_str: str, volume_mm: float) -> float | None:
             if _load_cr_ts is None or not open_date_str or not volume_mm:
@@ -774,7 +809,14 @@ def register_risk_callbacks(app):
                 open_date_str  = str(saved.get('open_date', ''))
 
                 spread_val = row.get('spread', None)
-                cp_bp      = round(float(spread_val), 4) if pd.notna(spread_val) else None
+                cp_bp = _resolve_alpha_metric(
+                    spread_type, trade_id, 'spread',
+                    fallback=round(float(spread_val), 4) if pd.notna(spread_val) else None,
+                    scale_to_bp=True,
+                )
+                zscore_val = _resolve_alpha_metric(spread_type, trade_id, 'Zscore', fallback=_coerce_float(row.get('Zscore')))
+                carry_roll_val = _resolve_alpha_metric(spread_type, trade_id, 'carry_roll', fallback=_coerce_float(row.get('carry_roll')))
+                breakeven_val = _resolve_alpha_metric(spread_type, trade_id, 'breakeven_3m', fallback=_coerce_float(row.get('breakeven_3m')))
                 notional   = float(row.get('notional_mm', 0) or 0)
                 dv01_k     = float(row.get('DV01_k', 0) or 0)
                 _dur_raw   = row.get('_duration', None)
@@ -838,13 +880,13 @@ def register_risk_callbacks(app):
                     'Open price (bp)':        open_price_str,
                     'Volume (mm)':            volume_str,
                     'Open date':              open_date_str,
-                    'Z-Score':                f"{float(row.get('Zscore', 0) or 0):.2f}",
+                    'Z-Score':                f"{zscore_val:.2f}" if zscore_val is not None else '',
                     'Close Price (bp)':       f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
                     'Progress':               '',
                     'Target Volume (MM CNY)': f"{notional:,.1f}",
                     'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",
-                    'Carry+Roll (3m,bp)':     _fmt1(-float(row.get('carry_roll', 0) or 0) if str(row.get('direction', '')).strip().upper() == 'SELL' else row.get('carry_roll')),
-                    'Breakeven (3m,bp)':      _fmt1(row.get('breakeven_3m')),
+                    'Carry+Roll (3m,bp)':     _fmt1(-carry_roll_val if str(row.get('direction', '')).strip().upper() == 'SELL' else carry_roll_val),
+                    'Breakeven (3m,bp)':      _fmt1(breakeven_val),
                     'Stop (bp)':              _fmt1(row.get('stop_loss')),
                     'Target (bp)':            _fmt1(row.get('profit_target')),
                     'MTM spd (bp)':           f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else '',
