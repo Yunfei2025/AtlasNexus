@@ -715,6 +715,7 @@ def register_risk_callbacks(app):
             return {}
 
         _alpha_spread_cache: dict[str, pd.DataFrame | None] = {}
+        _irs_close_yield_df: pd.DataFrame | None = None
 
         def _resolve_alpha_metric(
             spread_type: str,
@@ -748,6 +749,50 @@ def register_risk_callbacks(app):
                 return round(value, 4)
             except (TypeError, ValueError, KeyError):
                 return fallback
+
+        def _resolve_alpha_close_price_bp(
+            spread_type: str,
+            trade_id: str,
+            leg1: str,
+            leg2: str,
+            fallback: float | None,
+        ) -> float | None:
+            nonlocal _irs_close_yield_df
+
+            # BondCurve close price should be the live leg1-leg2 close yield spread in bp.
+            if spread_type in {'TBondCurve', 'CBondCurve'} and leg1 and leg2:
+                if spread_type not in _alpha_spread_cache:
+                    try:
+                        _alpha_spread_cache[spread_type] = _load_alpha_spread_data(spread_type)
+                    except Exception:
+                        _alpha_spread_cache[spread_type] = None
+                _df = _alpha_spread_cache.get(spread_type)
+                if isinstance(_df, pd.DataFrame) and 'CloseYield' in _df.columns and leg1 in _df.index and leg2 in _df.index:
+                    try:
+                        y1 = float(_df.loc[leg1, 'CloseYield'])
+                        y2 = float(_df.loc[leg2, 'CloseYield'])
+                        return round((y1 - y2) * 100.0, 4)
+                    except (TypeError, ValueError, KeyError):
+                        pass
+
+            # Repo swap spreads should use latest daily IRS leg close yields when available.
+            if spread_type == 'SwapSpread' and leg1.endswith('.IR') and leg2.endswith('.IR'):
+                if _irs_close_yield_df is None:
+                    try:
+                        _irs_px = pd.read_pickle(str(DIR_INPUT / 'IRS-pxspds.pkl'))
+                        _cy = _irs_px.get('CloseYield') if isinstance(_irs_px, dict) else None
+                        _irs_close_yield_df = _cy if isinstance(_cy, pd.DataFrame) else pd.DataFrame()
+                    except Exception:
+                        _irs_close_yield_df = pd.DataFrame()
+                if not _irs_close_yield_df.empty and leg1 in _irs_close_yield_df.columns and leg2 in _irs_close_yield_df.columns:
+                    try:
+                        y1 = float(_irs_close_yield_df[leg1].dropna().iloc[-1])
+                        y2 = float(_irs_close_yield_df[leg2].dropna().iloc[-1])
+                        return round((y1 - y2) * 100.0, 4)
+                    except (TypeError, ValueError, IndexError):
+                        pass
+
+            return fallback
 
         def _compute_carry_mtm(spread_type: str, instrument_id: str,
                                open_date_str: str, volume_mm: float) -> float | None:
@@ -809,11 +854,6 @@ def register_risk_callbacks(app):
                 open_date_str  = str(saved.get('open_date', ''))
 
                 spread_val = row.get('spread', None)
-                cp_bp = _resolve_alpha_metric(
-                    spread_type, trade_id, 'spread',
-                    fallback=round(float(spread_val), 4) if pd.notna(spread_val) else None,
-                    scale_to_bp=True,
-                )
                 zscore_val = _resolve_alpha_metric(spread_type, trade_id, 'Zscore', fallback=_coerce_float(row.get('Zscore')))
                 carry_roll_val = _resolve_alpha_metric(spread_type, trade_id, 'carry_roll', fallback=_coerce_float(row.get('carry_roll')))
                 breakeven_val = _resolve_alpha_metric(spread_type, trade_id, 'breakeven_3m', fallback=_coerce_float(row.get('breakeven_3m')))
@@ -829,6 +869,27 @@ def register_risk_callbacks(app):
 
                 # Resolve leg1/leg2 for all spread types
                 leg1, leg2 = _resolve_bondcurve_legs(spread_type, trade_id, duration)
+
+                cp_fallback_bp = _resolve_alpha_metric(
+                    spread_type, trade_id, 'spread',
+                    fallback=round(float(spread_val), 4) if pd.notna(spread_val) else None,
+                    scale_to_bp=True,
+                )
+                cp_bp = _resolve_alpha_close_price_bp(
+                    spread_type,
+                    trade_id,
+                    leg1,
+                    leg2,
+                    cp_fallback_bp,
+                )
+
+                # Carry+Roll is shown as a 3m value in the table.
+                # Use the live spread-based annual proxy when available and convert annual -> quarterly.
+                # This keeps borrow-cost drag out of the displayed carry for bond shorts.
+                carry_roll_3m_val = None
+                base_annual_bp = cp_bp if cp_bp is not None else carry_roll_val
+                if base_annual_bp is not None:
+                    carry_roll_3m_val = base_annual_bp / 4.0
 
                 mtm_price_mm = mtm_spd_bp = mtm_carry_mm = mtm_total_mm = None
                 try:
@@ -885,7 +946,7 @@ def register_risk_callbacks(app):
                     'Progress':               '',
                     'Target Volume (MM CNY)': f"{notional:,.1f}",
                     'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",
-                    'Carry+Roll (3m,bp)':     _fmt1(-carry_roll_val if str(row.get('direction', '')).strip().upper() == 'SELL' else carry_roll_val),
+                    'Carry+Roll (3m,bp)':     _fmt1(-carry_roll_3m_val if str(row.get('direction', '')).strip().upper() == 'SELL' else carry_roll_3m_val),
                     'Breakeven (3m,bp)':      _fmt1(breakeven_val),
                     'Stop (bp)':              _fmt1(row.get('stop_loss')),
                     'Target (bp)':            _fmt1(row.get('profit_target')),

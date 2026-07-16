@@ -40,6 +40,84 @@ _ALPHA_CORR_COLORSCALE = [
 _REGIME_CACHE_MTIME: float = 0.0   # mtime of Alpha-spreadsrt.pkl when cache was last built
 
 
+def _load_seasonal_screener() -> dict | None:
+    """Load the precomputed monthly seasonal statistics, when available."""
+    try:
+        import pickle as _pkl
+
+        path = _get_input_dir() / 'seasonal-spds.pkl'
+        if path.exists():
+            with open(path, 'rb') as file:
+                data = _pkl.load(file)
+            return data if isinstance(data, dict) else None
+    except Exception:
+        pass
+    return None
+
+
+def _apply_seasonal_quality_gate(
+    candidates: pd.DataFrame,
+    seasonal_data: dict | None,
+    *,
+    min_consistency: float,
+    p_value_threshold: float,
+    month: int | None = None,
+) -> tuple[pd.DataFrame, int, int]:
+    """Keep candidates with reliable current-month seasonality.
+
+    Candidates without an available seasonal observation are retained, so missing
+    history is not treated as a negative signal.  Returns the filtered frame,
+    number excluded, and number evaluated against the gate.
+    """
+    if not isinstance(seasonal_data, dict):
+        return candidates, 0, 0
+    if not {'spread_type', 'ID'}.issubset(candidates.columns):
+        return candidates, 0, 0
+
+    month_key = f'm{month or datetime.now().month}'
+    keep_mask = pd.Series(True, index=candidates.index)
+    excluded = 0
+    evaluated = 0
+
+    def _is_mean_reverting_row(row: pd.Series) -> bool:
+        style = str(row.get('style', '') or '').strip().lower()
+        regime = str(row.get('regime', '') or '').strip().lower()
+        return (
+            style in {'meanreversion', 'mean_reverting', 'mean-reverting'}
+            or regime in {'meanreversion', 'mean_reverting', 'mean-reverting'}
+        )
+
+    for index, row in candidates.iterrows():
+        # Seasonal gate is optional confirmation for trend/uncertain setups only.
+        if _is_mean_reverting_row(row):
+            continue
+
+        seasonal_frame = seasonal_data.get(str(row['spread_type']))
+        instrument = str(row['ID'])
+        if (
+            not isinstance(seasonal_frame, pd.DataFrame)
+            or instrument not in seasonal_frame.index
+            or month_key not in seasonal_frame.columns
+        ):
+            continue
+
+        cell = seasonal_frame.at[instrument, month_key]
+        if not isinstance(cell, dict):
+            continue
+        try:
+            p_value = float(cell.get('p_value', 1.0))
+            consistency = float(cell.get('consistency', 0.0))
+        except (TypeError, ValueError):
+            continue
+
+        evaluated += 1
+        if p_value >= p_value_threshold or consistency < min_consistency:
+            keep_mask.at[index] = False
+            excluded += 1
+
+    return candidates.loc[keep_mask].copy(), excluded, evaluated
+
+
 def _invalidate_regime_cache_if_stale() -> None:
     """Clear _REGIME_LOOKUP_CACHE if the snapshot pickle has been updated since last build."""
     global _REGIME_CACHE_MTIME
@@ -306,62 +384,34 @@ def register_candidate_callbacks(app) -> None:
             df_all = df_all.copy()
             df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) < 0 else 'SELL')
 
+        # Load seasonal data regardless of whether the upstream pipeline has
+        # already populated `score`.  The pipeline does populate it, which used
+        # to leave the optional gate unreachable.
+        _seasonal_data = _load_seasonal_screener()
+        if use_seasonal_gate:
+            df_all, excluded_count, evaluated_count = _apply_seasonal_quality_gate(
+                df_all,
+                _seasonal_data,
+                min_consistency=min_consistency,
+                p_value_threshold=seas_p_thresh,
+            )
+            if excluded_count:
+                scanned_time += f' · seasonal gate excluded {excluded_count}'
+            elif not evaluated_count:
+                scanned_time += ' · seasonal gate: no current-month data'
+
+        if df_all.empty:
+            return (
+                html.Div(
+                    f"No candidates passed the seasonal gate "
+                    f"(consistency≥{min_consistency:.0%}, p<{seas_p_thresh}). "
+                    "Relax the filter or turn it off.",
+                    style={'color': THEME['warning']},
+                ),
+                f"Scanned at {scanned_time}", [], {},
+            )
+
         if 'score' not in df_all.columns:
-            # Load seasonal-spds.pkl (for edge term + optional pre-filter gate).
-            _seasonal_data = None
-            try:
-                import pickle as _pkl
-                _seas_path = _get_input_dir() / 'seasonal-spds.pkl'
-                if _seas_path.exists():
-                    with open(_seas_path, 'rb') as _f:
-                        _seasonal_data = _pkl.load(_f)
-            except Exception:
-                _seasonal_data = None
-
-            # ── Seasonal pre-filter gate ───────────────────────────────────────
-            # Exclude instruments whose current-month seasonality is too weak
-            # (p_value >= threshold or consistency < min_consistency).
-            # Only applied when the toggle is ON and seasonal-spds.pkl is available.
-            if use_seasonal_gate and _seasonal_data and isinstance(_seasonal_data, dict):
-                import datetime as _dt
-                _cur_month = _dt.date.today().month
-                _month_key = f'm{_cur_month}'
-                _has_stype = 'spread_type' in df_all.columns
-                _has_id    = 'ID' in df_all.columns
-                if _has_stype and _has_id:
-                    _keep_mask = pd.Series(True, index=df_all.index)
-                    _excluded_count = 0
-                    for _idx in df_all.index:
-                        _stype = str(df_all.at[_idx, 'spread_type'])
-                        _inst  = str(df_all.at[_idx, 'ID'])
-                        _sdf   = _seasonal_data.get(_stype)
-                        if not isinstance(_sdf, pd.DataFrame) or _inst not in _sdf.index:
-                            continue  # no data → don't exclude (benefit of the doubt)
-                        if _month_key not in _sdf.columns:
-                            continue
-                        _cell = _sdf.at[_inst, _month_key]
-                        if not isinstance(_cell, dict):
-                            continue
-                        _p    = float(_cell.get('p_value', 1.0))
-                        _cons = float(_cell.get('consistency', 0.0))
-                        if _p >= seas_p_thresh or _cons < min_consistency:
-                            _keep_mask.at[_idx] = False
-                            _excluded_count += 1
-                    df_all = df_all.loc[_keep_mask].copy()
-                    if _excluded_count:
-                        scanned_time += f' · seasonal gate excluded {_excluded_count}'
-
-            if df_all.empty:
-                return (
-                    html.Div(
-                        f"No candidates passed the seasonal gate "
-                        f"(consistency≥{min_consistency:.0%}, p<{seas_p_thresh}). "
-                        "Relax the filter or turn it off.",
-                        style={'color': THEME['warning']},
-                    ),
-                    f"Scanned at {scanned_time}", [], {},
-                )
-
             df_all = compute_scan_score(df_all, seasonal_data=_seasonal_data)
             if 'composite_score_preview' in df_all.columns:
                 df_all = df_all.copy()

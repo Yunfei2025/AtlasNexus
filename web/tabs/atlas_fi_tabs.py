@@ -417,7 +417,12 @@ def build_pairs_layout():
                 dcc.Input(id=leg2_id, type='text', value=leg2_val, style={**_pair_input_style, "marginTop": "3px"}),
                 html.Div(hint, style={"fontSize": "10px", "color": THEME["text_sub"], "marginTop": "4px", "fontStyle": "italic"}),
             ]),
-        ])
+        ], style={
+            "padding": "8px",
+            "backgroundColor": "var(--surface-panel)",
+            "border": f"1px solid {THEME['border_sub']}",
+            "borderRadius": "4px",
+        })
 
     return html.Div([
         html.Div([
@@ -459,8 +464,9 @@ def build_pairs_layout():
                             _pair_config_cell("Pair 2", 'pairs-leg1-2', '2600002.IB', 'pairs-leg2-2', '260010.IB', "CGB-10s20s"),
                             _pair_config_cell("Pair 3", 'pairs-leg1-3', '260205.IB', 'pairs-leg2-3', '260010.IB', "CDBCGB-10y"),
                             _pair_config_cell("Pair 4", 'pairs-leg1-4', '260008.IB', 'pairs-leg2-4', 'FR007S5Y.IR', "CGBRepo7d-5y"),
-                        ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "10px",
+                        ], style={"display": "grid", "gridTemplateColumns": "minmax(0, 1fr)", "gap": "10px",
                                   "padding": "10px", "marginTop": "6px",
+                                  "maxHeight": "360px", "overflowY": "auto",
                                   "backgroundColor": THEME["bg_input"], "borderRadius": "4px",
                                   "border": f"1px solid {THEME['border']}"}),
                     ]),
@@ -497,13 +503,13 @@ def build_pairs_layout():
                     ], style={'padding': '10px', 'background': THEME['bg_input'], 'borderRadius': '4px',
                               'border': f"1px solid {THEME['border_sub']}"}),
                 ], style={'padding': '12px 14px', 'display': 'flex', 'flexDirection': 'column', 'gap': '12px'}),
-            ], style={'width': '220px', 'flexShrink': '0', 'border': '1px solid var(--border-strong)',
-                      'borderRadius': '8px', 'overflow': 'hidden'}),
+            ], style={'width': '280px', 'minWidth': '280px', 'flexShrink': '0', 'border': '1px solid var(--border-strong)',
+                      'borderRadius': '8px', 'overflow': 'visible'}),
 
             # ── Results panel: 2x2 grid for pair cards (right side) ──────────
             html.Div(
                 id="pairs-plots-container",
-                style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "10px", "flex": "1", "minWidth": "0"},
+                style={"display": "grid", "gridTemplateColumns": "minmax(0, 1fr)", "gap": "10px", "flex": "1", "minWidth": "0"},
                 children=[
                     html.Div([
                         html.Div(
@@ -1133,9 +1139,9 @@ def register_callbacks(app) -> None:
             last_updated = "Last updated: Loading..."
 
         # Return cards or placeholder. NOTE: pairs-plots-container is a CSS
-        # grid (2x2); the children list must be the cards themselves, not a
-        # single wrapper html.Div, otherwise the grid only has one child and
-        # the 4 cards stack 4x1 inside it instead of tiling 2x2.
+        # grid (single column); the children list must be the cards themselves,
+        # not a single wrapper html.Div, otherwise spacing/scroll behavior is
+        # harder to control from CSS.
         if not cards:
             content = [html.Div(
                 "Click 'Refresh' to generate pair analysis",

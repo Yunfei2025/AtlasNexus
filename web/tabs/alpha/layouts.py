@@ -222,18 +222,22 @@ def build_candidates_layout() -> html.Div:
 
                 html.Div([
                     html.P(
-                        "When ON: instruments whose current-month seasonality is statistically weak "
-                        "(low consistency or high p-value) are excluded from scan results.",
+                        "When ON: only trend/uncertain trades are pre-filtered. "
+                        "Mean-reversion trades are not blocked by this seasonal gate.",
                         style={'fontStyle': 'italic', 'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '4px'},
                     ),
                     html.Div([
                         html.Div([
                             html.Label("Min consistency (%)", style=_label_style),
-                            dcc.Slider(
+                            dcc.Dropdown(
                                 id='seasonal-prefilter-min-consistency',
-                                min=50, max=100, step=5, value=75,
-                                marks={v: f'{v}%' for v in [50, 60, 70, 80, 90, 100]},
-                                tooltip={'placement': 'bottom', 'always_visible': False},
+                                options=[
+                                    {'label': f'{v}%', 'value': v}
+                                    for v in [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]
+                                ],
+                                value=75,
+                                clearable=False,
+                                style={'minWidth': '180px', 'fontSize': '12px'},
                             ),
                         ], style={'flex': '1'}),
                         html.Div([

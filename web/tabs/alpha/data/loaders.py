@@ -14,6 +14,7 @@ from .io import _get_input_dir, _load_pickle_safe, _normalize_repo_frame
 def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
     """Load spread data for a given type and return DataFrame with required columns."""
     dir_input = _get_input_dir()
+    loaded_snap_df = None
 
     try:
         from curves.refreshers.alpha import get_alpha_spread_table
@@ -24,7 +25,9 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
             if spread_type == 'SwapSpread':
                 snap_df = snap_df[~snap_df.index.astype(str).str.endswith('.IR')].copy()
                 snap_df = snap_df[_exclude_swapspread_butterflies(snap_df.index)].copy()
-            return snap_df
+            if spread_type != 'TenorSpread':
+                return snap_df
+            loaded_snap_df = snap_df
     except Exception:
         pass
 
@@ -54,19 +57,23 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
         return None
 
     elif spread_type == 'TenorSpread':
+        loaded_df = loaded_snap_df
         try:
             from curves.utils.loader import loadCNBDTS
             tenor_ts = _build_tenor_spread_timeseries(loadCNBDTS())
             if tenor_ts:
-                df = pd.DataFrame({
+                fallback_df = pd.DataFrame({
                     'spread': {name: pd.to_numeric(series, errors='coerce').dropna().iloc[-1]
                                for name, series in tenor_ts.items()
                                if isinstance(series, pd.Series) and not pd.to_numeric(series, errors='coerce').dropna().empty}
                 })
-                if not df.empty:
-                    return df
+                if loaded_df is not None and not loaded_df.empty:
+                    return loaded_df.reindex(columns=loaded_df.columns.union(fallback_df.columns)).combine_first(fallback_df)
+                loaded_df = fallback_df
         except Exception:
             pass
+        if loaded_df is not None and not loaded_df.empty:
+            return loaded_df
         return None
 
     elif spread_type == 'NetBasis':
@@ -292,11 +299,12 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
     elif spread_type == 'TenorSpread':
         # Primary: pre-computed Tenor-spds.pkl is the canonical source of truth
         # (same source as the Spread sub-tab / dropdown via load_spread_data).
+        loaded_df = None
         tenor_spds = _load_pickle_safe(dir_input / 'Tenor-spds.pkl')
         if isinstance(tenor_spds, dict):
             spd = tenor_spds.get('TenorSpread', {}).get('Spread')
             if isinstance(spd, pd.DataFrame) and not spd.empty:
-                return spd.apply(pd.to_numeric, errors='coerce')
+                loaded_df = spd.apply(pd.to_numeric, errors='coerce')
 
         # Fallback: rebuild from database-px.pkl via loadCNBDTS if the pkl is unavailable.
         try:
@@ -305,9 +313,15 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
             tenor_ts = _build_tenor_spread_timeseries(env)
             if tenor_ts:
                 df = pd.DataFrame(tenor_ts)
-                return df.apply(pd.to_numeric, errors='coerce')
+                df = df.apply(pd.to_numeric, errors='coerce')
+                if loaded_df is not None and not loaded_df.empty:
+                    return loaded_df.reindex(columns=loaded_df.columns.union(df.columns)).combine_first(df)
+                return df
         except Exception:
             pass
+
+        if loaded_df is not None and not loaded_df.empty:
+            return loaded_df
 
         return None
 

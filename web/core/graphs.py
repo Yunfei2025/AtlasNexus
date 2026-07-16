@@ -104,9 +104,9 @@ def _sector_pca_sort_key(ticker: str) -> tuple:
 # Explicit display order for TenorSpread (curve & cross-asset spreads).
 # Unrecognised tickers sort after all listed ones, alphabetically.
 _TENOR_SPREAD_ORDER = [
-    'CGB-5s10s', 'CGB-10s20s',
-    'CDB-5s10s',
-    'CDBCGB-5y', 'CDBCGB-10y',
+    'CGB-5s10s', 'CGB-10s20s', 'CGB-10s30s',
+    'CDB-5s10s', 'CDB-10s30s',
+    'CDBCGB-5y', 'CDBCGB-10y', 'CDBCGB-30y',
     'LGBCGB-5y', 'LGBCGB-10y', 'LGBCGB-30y',
     'CGBRepo7d-1y', 'CGBRepo7d-2y', 'CGBRepo7d-5y', 'CGBRepo7d-10y',
     'ICPRepo7d-3m', 'ICPRepo7d-6m', 'ICPRepo7d-9m', 'ICPRepo7d-1y',

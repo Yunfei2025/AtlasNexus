@@ -143,9 +143,12 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
     try:
         result = {
             'CGB-5s10s': cnbd_data['CGB']['中债国债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
+            'CGB-10s30s': cnbd_data['CGB']['中债国债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
             'CDB-5s10s': cnbd_data['CDB']['中债国开债到期收益率:10年'] - cnbd_data['CDB']['中债国开债到期收益率:5年'],
+            'CDB-10s30s': cnbd_data['CDB']['中债国开债到期收益率:30年'] - cnbd_data['CDB']['中债国开债到期收益率:10年'],
             'CDBCGB-5y': cnbd_data['CDB']['中债国开债到期收益率:5年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
             'CDBCGB-10y': cnbd_data['CDB']['中债国开债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
+            'CDBCGB-30y': cnbd_data['CDB']['中债国开债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:30年'],
         }
 
         # LGB (local government bond) vs CGB cross-sector spreads.

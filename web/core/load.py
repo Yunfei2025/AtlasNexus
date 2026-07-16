@@ -270,10 +270,13 @@ def _build_tenor_spread_fallback() -> dict:
 
         instruments = {}
         if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10 - cgb5
+        if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30 - cgb10
         if cgb10 is not None and cgb20 is not None: instruments['CGB-10s20s'] = cgb20 - cgb10
         if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10 - cdb5
+        if cdb10 is not None and cdb30 is not None: instruments['CDB-10s30s'] = cdb30 - cdb10
         if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5  - cgb5
         if cdb10 is not None and cgb10 is not None: instruments['CDBCGB-10y'] = cdb10 - cgb10
+        if cdb30 is not None and cgb30 is not None: instruments['CDBCGB-30y'] = cdb30 - cgb30
         # LGB (local government bond) vs CGB cross-sector spreads — LGB data not
         # yet available in database-px.pkl; populated automatically once present.
         if lgb5  is not None and cgb5  is not None: instruments['LGBCGB-5y']  = lgb5  - cgb5
@@ -333,16 +336,37 @@ def _build_spread_ts() -> dict:
     out["AssetPCASpread"] = portspds
 
     # Tenor spreads (CGB/CDB slope + CDBCGB cross-sector)
+    tenor_loaded = None
     try:
         tenor_path = pathlib.Path(DIR_INPUT) / 'Tenor-spds.pkl'
         tenor_spds = _load_pickle_optional(tenor_path)
         if isinstance(tenor_spds, dict) and "TenorSpread" in tenor_spds:
-            out["TenorSpread"] = tenor_spds["TenorSpread"]
+            tenor_loaded = tenor_spds["TenorSpread"]
+            out["TenorSpread"] = tenor_loaded
         else:
             raise FileNotFoundError(str(tenor_path))
     except Exception:
-        fb = _build_tenor_spread_fallback()
-        if fb:
+        pass
+
+    fb = _build_tenor_spread_fallback()
+    if not fb:
+        try:
+            from curves.utils.loader import loadCNBDTS
+            from web.tabs.alpha.data.constants import _build_tenor_spread_timeseries
+
+            tenor_ts = _build_tenor_spread_timeseries(loadCNBDTS())
+            if tenor_ts:
+                fb = pd.DataFrame(tenor_ts).apply(pd.to_numeric, errors='coerce') * (90.0 / 360.0)
+                for col in fb.columns:
+                    if re.search(r'\d+s\d+', col, re.IGNORECASE):
+                        fb[col] = -fb[col]
+        except Exception:
+            pass
+    if fb is not None and not fb.empty:
+        if "TenorSpread" in out and isinstance(out["TenorSpread"], pd.DataFrame):
+            current = out["TenorSpread"]
+            out["TenorSpread"] = current.reindex(columns=current.columns.union(fb.columns)).combine_first(fb)
+        else:
             out["TenorSpread"] = fb
 
     # futures

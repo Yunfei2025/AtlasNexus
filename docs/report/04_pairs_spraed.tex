@@ -1,6 +1,6 @@
-\section{Relative Value: Pairs \& Spreads (\texttt{pairs/})}
+\chapter{Relative Value: (Alpha Book)}
 
-\subsection{Regression (\texttt{pairs/stats.py})}
+\section{Regression (\texttt{pairs/stats.py})}
 
 A pair is modeled by OLS (via \texttt{statsmodels}) of one leg on another, encapsulated in
 \texttt{RegressionResults}:
@@ -11,7 +11,7 @@ A pair is modeled by OLS (via \texttt{statsmodels}) of one leg on another, encap
 \item Signals are driven by the \textbf{residual z-score} vs. configurable entry/exit bands; mean-reversion of the residual is the exit.
 \end{itemize}
 
-\subsection{Spread Families (Alpha Book $\rightarrow$ Spread)}
+\section{Spread Families (Alpha Book $\rightarrow$ Spread)}
 
 Sector PCA spreads, spread regression, treasury/policy/local/corporate spreads, swap
 spreads, bond-swap spreads, and futures term/net basis. The statistical layer
@@ -22,7 +22,7 @@ are only flagged when the relationship is statistically stable.
 Stationarity/cointegration testing rigor, lookback choice for the regression window,
 and stability of the hedge ratio through regime shifts.
 
-\subsection{Alpha Portfolio $\rightarrow$ Backtest: Style-routed Spread Strategies}
+\section{Alpha Portfolio $\rightarrow$ Backtest: Style-routed Spread Strategies}
 
 The Alpha Book backtest in \texttt{web/tabs/alpha/} evaluates individual relative-value
 spreads and combines the current Portfolio allocation into an indicative book
@@ -30,24 +30,33 @@ equity curve. It has two distinct strategy types, selected from the candidate's
 stored \texttt{style} field in portfolio mode or selected/auto-suggested from the latest
 60-day regime snapshot in individual mode:
 
-\begin{table}[htbp]
-\centering
-\small
-\setlength{\tabcolsep}{6pt}
-\renewcommand{\arraystretch}{1.2}
-\begin{tabular}{p{0.16\textwidth} p{0.24\textwidth} p{0.28\textwidth} p{0.24\textwidth}}
-\hline
+{\small
+\setlength{\LTleft}{0pt}
+\setlength{\LTright}{0pt}
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{longtable}{p{0.16\textwidth} p{0.24\textwidth} p{0.29\textwidth} p{0.25\textwidth}}
+\caption{Style-routed spread strategy types.}\label{tab:pairs-strategy-types-overleaf} \\
+\toprule
 \textbf{Strategy type} & \textbf{Engine} & \textbf{Economic hypothesis} & \textbf{Core entry confirmation} \\
-\hline
+\midrule
+\endfirsthead
+\toprule
+\textbf{Strategy type} & \textbf{Engine} & \textbf{Economic hypothesis} & \textbf{Core entry confirmation} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{\textit{Continued on next page}} \\
+\midrule
+\endfoot
+\bottomrule
+\endlastfoot
 Mean-reverting (MR) & \texttt{backtest/engine\_mr.py::run\_spread\_backtest} & A statistically rich/cheap spread will revert toward its local equilibrium. & A 120-day rolling z-score, adjusted by a bounded 30-day carry/volatility term. \\
 Trending / momentum & \texttt{backtest/engine\_trend.py::run\_trend\_backtest\_dc} & A confirmed directional move, supported by momentum, will persist long enough to exceed a volatility-scaled trailing stop. & Directional-change state, 20-day momentum normalized by 60-day daily-change volatility, and a carry-level gate. \\
-\hline
-\end{tabular}
-\caption{Style-routed spread strategy types.}
-\label{tab:pairs-strategy-types}
-\end{table}
+\end{longtable}
+}
 
-\subsubsection{Regime Selection and Scope}
+\subsection{Regime Selection and Scope}
 
 \texttt{curves/calibration/regime.py::compute\_regime\_features} computes four rolling,
 60-day indicators on first differences: Kaufman efficiency ratio, a single-scale
@@ -64,7 +73,7 @@ the whole selected historical period. Its results therefore answer, ``how would 
 current book's style assignment have behaved?'', rather than ``how would a
 historically available regime classifier have switched styles each day?''
 
-\subsubsection{Mean-reversion Model and Defaults}
+\subsection{Mean-reversion Model and Defaults}
 
 For a spread level $s_t$, the MR engine uses a fixed internal lookback of 120
 observations:
@@ -85,32 +94,41 @@ always active, including during the minimum holding period. Closed-trade PnL is
 spread change times the duration multiplier plus accrued carry/roll; the latter
 includes direction-aware borrow adjustments for the supported spread families.
 
-\begin{table}[htbp]
-\centering
-\small
-\setlength{\tabcolsep}{6pt}
-\renewcommand{\arraystretch}{1.2}
-\begin{tabular}{p{0.30\textwidth} p{0.16\textwidth} p{0.18\textwidth} p{0.28\textwidth}}
-\hline
+{\small
+\setlength{\LTleft}{0pt}
+\setlength{\LTright}{0pt}
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{longtable}{p{0.30\textwidth} p{0.16\textwidth} p{0.18\textwidth} p{0.28\textwidth}}
+\caption{Mean-reversion strategy defaults.}\label{tab:pairs-mr-defaults-overleaf} \\
+\toprule
 \textbf{Parameter} & \textbf{Standard default} & \textbf{Tenor-spread preset} & \textbf{Role} \\
-\hline
+\midrule
+\endfirsthead
+\toprule
+\textbf{Parameter} & \textbf{Standard default} & \textbf{Tenor-spread preset} & \textbf{Role} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{\textit{Continued on next page}} \\
+\midrule
+\endfoot
+\bottomrule
+\endlastfoot
 Internal z-score lookback & 120 observations & 120 observations & Local equilibrium and dispersion; not UI-configurable. \\
 \texttt{entry\_z} & 2.0 & 2.5 & Absolute composite-score entry threshold. \\
 \texttt{exit\_z} & 0.5 & 0.25 & Reversion band used after the minimum hold. \\
 \texttt{stop\_z} & 4.0 & 5.0 & Adverse z-score stop. \\
 \texttt{min\_hold} & 7 calendar days & 10 calendar days & Minimum holding period for signal exits; stop remains active. \\
 Carry score horizon & 30 days & 30 days & Fixed carry-adjustment horizon. \\
-\hline
-\end{tabular}
-\caption{Mean-reversion strategy defaults.}
-\label{tab:pairs-mr-defaults}
-\end{table}
+\end{longtable}
+}
 
 The \texttt{trade\_style} argument currently has identical entry logic for its non-MR
 branch; the UI routes trend selections to the separate trend engine. It should not
 be interpreted as a third hybrid signal.
 
-\subsubsection{Trending / Momentum Model and Defaults}
+\subsection{Trending / Momentum Model and Defaults}
 
 The trend engine derives a persistent directional-change state
 $D_t \in \{-1,0,1\}$, then requires it to agree with normalized momentum:
@@ -130,15 +148,27 @@ state flip or carry-gate failure after \texttt{min\_hold}, or immediately on a t
 stop of \texttt{trailing\_mult} $\times\, \operatorname{sd}_{60}(\Delta s)$ from the best favorable level.
 As in MR, closed PnL combines duration-scaled spread movement and carry accrual.
 
-\begin{table}[htbp]
-\centering
-\small
-\setlength{\tabcolsep}{6pt}
-\renewcommand{\arraystretch}{1.2}
-\begin{tabular}{p{0.24\textwidth} p{0.17\textwidth} p{0.19\textwidth} p{0.32\textwidth}}
-\hline
+{\small
+\setlength{\LTleft}{0pt}
+\setlength{\LTright}{0pt}
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{longtable}{p{0.24\textwidth} p{0.17\textwidth} p{0.19\textwidth} p{0.32\textwidth}}
+\caption{Trending/momentum strategy defaults.}\label{tab:pairs-trend-defaults-overleaf} \\
+\toprule
 \textbf{Parameter} & \textbf{Standard default} & \textbf{Tenor-spread preset} & \textbf{Role} \\
-\hline
+\midrule
+\endfirsthead
+\toprule
+\textbf{Parameter} & \textbf{Standard default} & \textbf{Tenor-spread preset} & \textbf{Role} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{\textit{Continued on next page}} \\
+\midrule
+\endfoot
+\bottomrule
+\endlastfoot
 \texttt{theta} & 0.02 & 0.03 & Relative directional-change threshold in the backtest engine. \\
 \texttt{mom\_window} & 20 observations & 30 observations & Momentum lookback. \\
 \texttt{vol\_window} & 60 observations & 90 observations & Daily-change volatility lookback. \\
@@ -147,18 +177,15 @@ Momentum threshold & 0.5 & 0.5 & Fixed internal threshold for $\left|m_t^{\mathr
 \texttt{carry\_buffer} & 0.0 & 0.0 & Spread-level gate for long entries. \\
 \texttt{min\_hold} & 7 calendar days & 10 calendar days & Minimum hold before flip/carry exits. \\
 \texttt{allow\_short} & enabled & enabled & Allows short-spread entries. \\
-\hline
-\end{tabular}
-\caption{Trending/momentum strategy defaults.}
-\label{tab:pairs-trend-defaults}
-\end{table}
+\end{longtable}
+}
 
 For yield-based spread families, the callback negates the series before passing it
 to both engines so a positive internal PnL direction corresponds to an economic
 narrowing/price-long trade; display signs are restored afterwards. This convention
 must be retained when reviewing direction, carry, and threshold settings.
 
-\subsubsection{Portfolio Aggregation and Measurement Limitations}
+\subsection{Portfolio Aggregation and Measurement Limitations}
 
 Portfolio mode loads the persisted current Alpha snapshot, normalizes the positive
 candidate weights across instruments with available overlapping history, and sums
@@ -179,7 +206,7 @@ whereas the portfolio screen reports a daily-PnL Sharpe annualized by
 $\sqrt{252}$. These are not comparable with each other or directly with the
 platform-wide return-based convention in \S1.
 
-\subsubsection{Performance-improvement Plan (Documentation Only)}
+\subsection{Performance-improvement Plan (Documentation Only)}
 
 No implementation is made by this document. The following sequence is recommended
 before interpreting optimization results or increasing risk:
