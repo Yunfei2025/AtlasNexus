@@ -264,7 +264,3 @@ Phase 3 backtests meaningful.
   `filter_bonds_by_type`, separate effort.
 
 
-
-
-d:\PyProjects\FIEngine\bin-v4.0\docs\dev\Alpha_Book_Review.md
-on alpha book, my goal is to build up a RV trading system that monitors and analyse the spreads among bond-swap-futures "trinity", i.e. cross-product cross tenor spreads. within each product type, we have subproducts like LGB/CDB/CGB etc... So based on the current design, what types of spread we may still miss in RV? for existing spreads, any miscalculation or wrong signal generation are there? Please review and comment to update this doc.
