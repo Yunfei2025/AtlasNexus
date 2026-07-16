@@ -51,12 +51,13 @@ stored \texttt{style} field in portfolio mode or selected/auto-suggested from th
 \endfoot
 \bottomrule
 \endlastfoot
-Mean-reverting (MR) & \texttt{backtest/engine\_mr.py::run\_spread\_backtest} & A statistically rich/cheap spread will revert toward its local equilibrium. & A 120-day rolling z-score, adjusted by a bounded 30-day carry/volatility term. \\
-Trending / momentum & \texttt{backtest/engine\_trend.py::run\_trend\_backtest\_dc} & A confirmed directional move, supported by momentum, will persist long enough to exceed a volatility-scaled trailing stop. & Directional-change state, 20-day momentum normalized by 60-day daily-change volatility, and a carry-level gate. \\
+Mean-reverting (MR) & \texttt{engine\_mr.py} & A statistically rich/cheap spread will revert toward its local equilibrium. & A 120-day rolling z-score, adjusted by a bounded 30-day carry/volatility term. \\
+Trending / momentum & \texttt{engine\_trend.py} & A confirmed directional move, supported by momentum, will persist long enough to exceed a volatility-scaled trailing stop. & Directional-change state, 20-day momentum normalized by 60-day daily-change volatility, and a carry-level gate. \\
 \end{longtable}
 }
 
 \subsection{Regime Selection and Scope}
+\label{sec:pairs-regime-selection}
 
 \texttt{curves/calibration/regime.py::compute\_regime\_features} computes four rolling,
 60-day indicators on first differences: Kaufman efficiency ratio, a single-scale
@@ -72,6 +73,108 @@ mode reads each candidate's current stored \texttt{style} and applies that one e
 the whole selected historical period. Its results therefore answer, ``how would the
 current book's style assignment have behaved?'', rather than ``how would a
 historically available regime classifier have switched styles each day?''
+
+\paragraph{Indicator definitions.} Let $s_t$ be the spread level, $\Delta s_t = s_t -
+s_{t-1}$ its first difference, and $w=60$ observations (\texttt{DEFAULT\_REGIME\_WINDOW})
+the trailing window. All four indicators are computed on the most recent $w$ values of
+$\Delta s$ (or, for the efficiency ratio, on the corresponding $w$-step level change):
+
+\begin{equation}
+\begin{aligned}
+\text{Efficiency ratio: } && ER_t &= \frac{\left|s_t - s_{t-w}\right|}{\displaystyle\sum_{i=t-w+1}^{t} \left|\Delta s_i\right|}, \\[4pt]
+\text{Hurst exponent (single-scale R/S): } && Y_i &= \sum_{k=1}^{i}\bigl(\Delta s_k - \overline{\Delta s}\bigr),\quad
+R = \max_i Y_i - \min_i Y_i,\quad S = \operatorname{sd}(\Delta s), \\
+&& H_t &= \frac{\ln(R/S)}{\ln w}, \\[4pt]
+\text{Variance ratio: } && w_{\mathrm{short}} &= \max\!\left(\left\lfloor w/4\right\rfloor,\,2\right),\quad
+VR_t = \frac{\operatorname{Var}_{w_{\mathrm{short}}}(\Delta s)\,\bigl(w / w_{\mathrm{short}}\bigr)}{\operatorname{Var}_{w}(\Delta s)}, \\[4pt]
+\text{Lag-1 autocorrelation: } && AC_t &= \operatorname{corr}\!\left(\Delta s_i,\ \Delta s_{i-1}\right) \text{ over the trailing } w \text{ observations}.
+\end{aligned}
+\end{equation}
+
+Plain-language reading of each indicator:
+\begin{itemize}
+\item \textbf{Efficiency ratio $ER_t \in [0,1]$}: ratio of the net $w$-step displacement to
+the total path length traveled to get there. Near $1$: the spread moved directly in one
+direction with little back-and-forth (efficient/trending). Near $0$: large round-trip
+churn relative to the net move (choppy/range-bound, favors mean reversion).
+\item \textbf{Hurst exponent $H_t$}: $H_t>0.5$ indicates persistence (an up-move tends to
+be followed by another up-move --- trending); $H_t=0.5$ is consistent with a random
+walk (no memory); $H_t<0.5$ indicates anti-persistence (moves tend to reverse ---
+mean-reverting).
+\item \textbf{Variance ratio $VR_t$}: compares variance realized over the short window,
+rescaled to the long window's horizon, against the actual long-window variance. $VR_t>1$
+means variance is growing faster than a random walk would imply (trending/momentum);
+$VR_t<1$ means it grows slower (mean-reverting, i.e.\ moves get walked back).
+\item \textbf{Lag-1 autocorrelation $AC_t$}: positive autocorrelation of daily changes
+indicates momentum/continuation; negative autocorrelation indicates a reversal
+tendency (mean reversion).
+\end{itemize}
+
+\paragraph{Voting thresholds.} Each indicator casts one vote in $\{-1, 0, +1\}$
+(mean-reverting, neutral, trending):
+
+{\small
+\setlength{\LTleft}{0pt}
+\setlength{\LTright}{0pt}
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{longtable}{p{0.24\textwidth} p{0.22\textwidth} p{0.22\textwidth} p{0.24\textwidth}}
+\caption{Regime-vote thresholds per indicator.}\label{tab:pairs-regime-votes-overleaf} \\
+\toprule
+\textbf{Indicator} & \textbf{Trending vote ($+1$)} & \textbf{Mean-reverting vote ($-1$)} & \textbf{Otherwise} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Indicator} & \textbf{Trending vote ($+1$)} & \textbf{Mean-reverting vote ($-1$)} & \textbf{Otherwise} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{\textit{Continued on next page}} \\
+\midrule
+\endfoot
+\bottomrule
+\endlastfoot
+Efficiency ratio $ER_t$ & $> 0.35$ & $< 0.20$ & neutral ($0$) \\
+Hurst exponent $H_t$ & $> 0.55$ & $< 0.45$ & neutral ($0$) \\
+Variance ratio $VR_t$ & $> 1.05$ & $< 0.95$ & neutral ($0$) \\
+Lag-1 autocorrelation $AC_t$ & $> 0.05$ & $< -0.05$ & neutral ($0$) \\
+\end{longtable}
+}
+
+The four votes are summed and normalized to a \texttt{regime\_score} $\in [-1, +1]$ (sum
+divided by $4$); \texttt{regime\_confidence} is $\left|\texttt{regime\_score}\right|$. The
+net (unnormalized) vote sum determines the label: $\ge +2$ votes selects
+\texttt{trending}; $\le -2$ votes selects \texttt{mean\_reverting}; any net vote in
+$\{-1, 0, +1\}$ is reported as \texttt{uncertain}. This ensemble-voting design means at
+least two of the four indicators must agree in the same direction before a definite
+regime is assigned; a single strong indicator outvoted by the others yields
+\texttt{uncertain} rather than a confident call.
+
+\paragraph{Selection precedence in the individual-screen UI.} When a user picks a
+spread/instrument in the individual backtest screen, the auto-suggested style is
+resolved in priority order: (1) if the instrument already has a stored regime from the
+current Alpha candidate scan (\emph{source: candidates}), that value is used directly;
+(2) else, if the point-in-time spread snapshot table already carries a
+\texttt{regime}/\texttt{regime\_confidence} column (\emph{source: snapshot}), that value is
+used; (3) otherwise \texttt{compute\_regime\_features} is run fresh on the loaded
+historical time series (\emph{source: time-series}), requiring at least $w+5$
+observations. For an \texttt{uncertain} result, the tiebreaker is the sign of the
+instrument's latest 3-month carry/roll edge (in bp, read from the snapshot table): a
+positive edge favors \texttt{MR} (you are paid to wait for reversion), a non-positive
+edge favors \texttt{Trend}, and if no edge value is available the UI conservatively
+defaults to \texttt{MR}.
+
+\paragraph{Not a Markov/HMM model.} Both \texttt{compute\_regime\_features} and the
+directional-change trend state of \S\ref{sec:pairs-trend-model} are deterministic,
+rule-based calculations on a rolling window --- there is no hidden-state inference, no
+fitted transition matrix, and no probabilistic smoothing. This is a deliberate
+``lightweight real-time path'' design choice (see the module docstring). Note that
+\texttt{futures/backtest/regime.py} additionally defines a separate
+\texttt{RegimeDetector} class built on \texttt{hmmlearn.GaussianHMM} for the futures
+strategy stack; the Alpha/pairs regime classifier described here imports only the two
+stateless helper functions from that module (\texttt{\_estimate\_hurst} and
+\texttt{\_calculate\_variance\_ratio}) and does \textbf{not} use, fit, or depend on that
+HMM class.
 
 \subsection{Mean-reversion Model and Defaults}
 
@@ -129,6 +232,7 @@ branch; the UI routes trend selections to the separate trend engine. It should n
 be interpreted as a third hybrid signal.
 
 \subsection{Trending / Momentum Model and Defaults}
+\label{sec:pairs-trend-model}
 
 The trend engine derives a persistent directional-change state
 $D_t \in \{-1,0,1\}$, then requires it to agree with normalized momentum:
@@ -142,11 +246,25 @@ D_t\,m_t^{\mathrm{norm}} &> 0, \quad \left|m_t^{\mathrm{norm}}\right| \ge 0.5.
 \end{equation}
 
 \texttt{D\_t} is obtained from the relative directional-change generator using \texttt{theta}.
+This generator (\texttt{curves/calibration/trend.py::generate}) is a deterministic
+rule-based state machine, \textbf{not} a Markov chain or hidden Markov model: it tracks
+a running local extremum and flips state only when price/spread moves away from that
+extremum by at least \texttt{theta}, emitting an \texttt{Upward Trend Confirmed} or
+\texttt{Downward Trend Confirmed} event that is then forward-filled as $D_t=+1$ or
+$D_t=-1$ until the next confirmed event. There is no transition-probability matrix and
+no inferred hidden state; the same is true of the regime classifier in
+\S\ref{sec:pairs-regime-selection}, which uses rule-based indicator voting rather than
+HMM fitting.
+
 Long entry also requires the spread level to meet \texttt{carry\_buffer}; short entry is
 permitted when \texttt{allow\_short} is enabled. An open position exits on a directional
-state flip or carry-gate failure after \texttt{min\_hold}, or immediately on a trailing
-stop of \texttt{trailing\_mult} $\times\, \operatorname{sd}_{60}(\Delta s)$ from the best favorable level.
-As in MR, closed PnL combines duration-scaled spread movement and carry accrual.
+state flip or carry-gate failure after \texttt{min\_hold}, or immediately on a
+\textbf{volatility-scaled trailing stop}: the engine tracks the best (most favorable)
+spread level reached since entry, and closes the position once the pullback from that
+level reaches \texttt{trailing\_mult} $\times\, \operatorname{sd}_{60}(\Delta s)$ --- i.e. the stop
+band widens automatically in higher-volatility regimes and tightens in calmer ones,
+rather than sitting at a fixed spread distance. As in MR, closed PnL combines
+duration-scaled spread movement and carry accrual.
 
 {\small
 \setlength{\LTleft}{0pt}
@@ -180,10 +298,40 @@ Momentum threshold & 0.5 & 0.5 & Fixed internal threshold for $\left|m_t^{\mathr
 \end{longtable}
 }
 
-For yield-based spread families, the callback negates the series before passing it
-to both engines so a positive internal PnL direction corresponds to an economic
-narrowing/price-long trade; display signs are restored afterwards. This convention
-must be retained when reviewing direction, carry, and threshold settings.
+For yield-based spread families (\texttt{TenorSpread}, \texttt{SwapSpread},
+\texttt{TBondCurve}/\texttt{CBondCurve}, \texttt{TBondSwap}/\texttt{CBondSwap},
+\texttt{NetBasis}, \texttt{FuturesSwap}, \texttt{PCASpread}, \texttt{BinarySpread}),
+the callback negates the raw spread ($-s_t$) before passing it to either engine, so
+that the engine's native $\mathrm{LONG}$ (position $=+1$) already means ``expect the
+raw yield-based spread to fall/narrow,'' and native $\mathrm{SHORT}$ already means
+``expect the raw spread to rise/widen.'' Prices, $z$-scores, and score series are
+sign-restored for display afterwards. This convention must be retained when
+reviewing direction, carry, and threshold settings.
+
+\paragraph{Direction-label bug (identified and fixed 2026-07-16).} The individual
+backtest callback previously applied an \emph{additional} $\mathrm{LONG}$/$\mathrm{SHORT}$
+swap to the trend engine's output only (not to the MR engine's output) after the
+sign-restoration step above. Because the engine's direction was already correct
+under the $-s_t$ convention, this extra swap double-flipped every trend trade's
+displayed direction for yield-based spreads: genuine $\mathrm{SHORT}$ signals (e.g.
+during a sustained \texttt{CGB-10s30s} widening move) were shown as $\mathrm{LONG}$
+and vice versa, which could be misread as an absence of short signals. PnL figures
+were unaffected (they are computed from the underlying position sign, not the
+display label). The redundant swap has been removed from
+\texttt{web/tabs/alpha/callbacks/backtest\_tab.py}, so trend trades now use the same
+(correct) direction convention as MR trades. The trend score-history chart was also
+updated to label the $\pm0.5\sigma$ entry lines with the correct economic direction
+for yield-based spreads, and to display an explicit ``signals computed on
+$-$spread'' subtitle in that mode.
+
+\paragraph{Candidate \texttt{trend\_state} key bug (identified and fixed 2026-07-16).}
+\texttt{curves/refreshers/alpha\_scoring.py} populated the candidate table's
+\texttt{trend\_state} column by reading the key \texttt{"state"} from
+\texttt{compute\_trend\_signal}'s return dictionary, but that function returns the
+value under the key \texttt{"trend\_state"}. The lookup therefore fell back to its
+default of \texttt{0.0} for effectively every candidate, silently suppressing the
+directional-change state shown in the candidate scan even when a trend was
+confirmed. The key has been corrected.
 
 \subsection{Portfolio Aggregation and Measurement Limitations}
 

@@ -509,7 +509,7 @@ def build_pairs_layout():
             # ── Results panel: 2x2 grid for pair cards (right side) ──────────
             html.Div(
                 id="pairs-plots-container",
-                style={"display": "grid", "gridTemplateColumns": "minmax(0, 1fr)", "gap": "10px", "flex": "1", "minWidth": "0"},
+                style={"display": "grid", "gridTemplateColumns": "repeat(2, minmax(0, 1fr))", "gap": "10px", "flex": "1", "minWidth": "0"},
                 children=[
                     html.Div([
                         html.Div(
@@ -1139,13 +1139,13 @@ def register_callbacks(app) -> None:
             last_updated = "Last updated: Loading..."
 
         # Return cards or placeholder. NOTE: pairs-plots-container is a CSS
-        # grid (single column); the children list must be the cards themselves,
+        # grid (2 columns); the children list must be the cards themselves,
         # not a single wrapper html.Div, otherwise spacing/scroll behavior is
         # harder to control from CSS.
         if not cards:
             content = [html.Div(
                 "Click 'Refresh' to generate pair analysis",
-                style={'color': THEME['text_sub'], 'padding': '40px', 'textAlign': 'center'},
+                style={'color': THEME['text_sub'], 'padding': '40px', 'textAlign': 'center', 'gridColumn': '1 / -1'},
             )]
         else:
             content = cards

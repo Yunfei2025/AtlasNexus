@@ -142,7 +142,7 @@ def _enrich_candidates_with_regression(
 			# ── Trend signal ──
 			try:
 				ts = compute_trend_signal(s_enriched)
-				trend_states.append(ts.get("state", 0.0))
+				trend_states.append(ts.get("trend_state", ts.get("state", 0.0)))
 				trend_moms.append(ts.get("momentum_20d", np.nan))
 			except Exception:
 				trend_states.append(0.0)

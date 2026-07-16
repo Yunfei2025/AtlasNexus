@@ -10,7 +10,7 @@ import pandas as pd
 
 from dash import dcc, html, dash_table
 
-from ..data import THEME
+from ..data import THEME, YIELD_BASED_SPREAD_TYPES
 
 
 def _coerce_datetime_series(series: pd.Series | None) -> pd.Series | None:
@@ -87,6 +87,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
               'borderRadius': '6px', 'padding': '12px 16px', 'marginBottom': '15px'})
 
     is_trend = 'trend_state_ts' in results
+    is_yield_based = results.get('spread_type') in YIELD_BASED_SPREAD_TYPES
     is_bondswap = results.get('spread_type') in ('TBondSwap', 'CBondSwap', 'BondSwap')
     trades_df = results.get('trades_df')
 
@@ -266,8 +267,32 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         signal_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
 
         if is_trend:
-            signal_fig.add_hline(y=0.5,  line_dash='dash', line_color='rgba(0,204,150,0.55)', annotation_text='+0.5σ entry')
-            signal_fig.add_hline(y=-0.5, line_dash='dash', line_color='rgba(239,85,59,0.55)',  annotation_text='-0.5σ entry')
+            if is_yield_based:
+                signal_fig.add_hline(
+                    y=0.5,
+                    line_dash='dash',
+                    line_color='rgba(239,85,59,0.55)',
+                    annotation_text='+0.5σ short entry',
+                )
+                signal_fig.add_hline(
+                    y=-0.5,
+                    line_dash='dash',
+                    line_color='rgba(0,204,150,0.55)',
+                    annotation_text='-0.5σ long entry',
+                )
+            else:
+                signal_fig.add_hline(
+                    y=0.5,
+                    line_dash='dash',
+                    line_color='rgba(0,204,150,0.55)',
+                    annotation_text='+0.5σ long entry',
+                )
+                signal_fig.add_hline(
+                    y=-0.5,
+                    line_dash='dash',
+                    line_color='rgba(239,85,59,0.55)',
+                    annotation_text='-0.5σ short entry',
+                )
         else:
             _ez = float(results.get('entry_z', 2.0))
             _sz = float(results.get('stop_z', 4.0))
@@ -316,8 +341,11 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
                 signal_fig.add_trace(go.Scatter(x=loss_x['exit_date'], y=_score_at(loss_x, 'exit_date'), mode='markers', marker=dict(symbol='x', size=8, color=THEME['danger'], opacity=0.8), showlegend=False))
 
         yaxis_label = 'Norm Mom (σ)' if is_trend else ('Composite Signal' if _composite is not None else 'Z-Score')
+        score_title = f'Score History ({score_label})'
+        if is_trend and is_yield_based:
+            score_title += '<br><sup>Yield-based mode: signals are computed on -spread (Long = expect spread down/narrow).</sup>'
         signal_fig.update_layout(
-            title=f'Score History ({score_label})', height=230,
+            title=score_title, height=230,
             margin=dict(l=50, r=20, t=40, b=40),
             plot_bgcolor=THEME['bg_main'], paper_bgcolor=THEME['bg_main'],
             font=dict(color=THEME['text_main']),

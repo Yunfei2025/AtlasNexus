@@ -441,6 +441,16 @@ def register_backtest_callbacks(app) -> None:
             _negate_ts = is_yield_based
 
             if style == 'trend':
+                # Yield-based convention note:
+                # We pass -spread into the trend engine so it can keep the same
+                # generic entry rule used for price-like series:
+                #   state>0 & norm_mom>=0.5 -> LONG
+                #   state<0 & norm_mom<=-0.5 -> SHORT
+                # This is algebraically equivalent to using raw spread S with
+                # swapped economic directions:
+                #   S up strongly  -> SHORT
+                #   S down strongly -> LONG
+                # i.e. exactly the convention requested for yield spreads.
                 results = run_trend_backtest_dc(
                     spread_ts=-ts if _negate_ts else ts,
                     theta=float(theta) if theta is not None else 0.02,
@@ -484,26 +494,28 @@ def register_backtest_callbacks(app) -> None:
                     series = results.get(key)
                     if isinstance(series, pd.Series):
                         results[key] = -series
+                # NOTE: direction labels ('LONG'/'SHORT') from both engines are already
+                # correct after the sign inversion above — the engines see -ts, so
+                # their internal LONG (position=+1) means "expects the inverted series
+                # to rise", i.e. "expects the raw yield-based spread to fall/narrow",
+                # which is exactly the documented LONG convention for yield-based
+                # spreads. No further relabeling is needed (previously the trend path
+                # incorrectly re-flipped LONG/SHORT here, mislabeling every trend
+                # signal for TenorSpread/SwapSpread/etc.).
                 for trade in results.get('trades', []):
                     for k in ('entry_price', 'exit_price', 'entry_z', 'exit_z'):
                         if k in trade:
                             trade[k] = -trade[k]
-                    if style == 'trend' and 'direction' in trade:
-                        trade['direction'] = 'LONG' if trade['direction'] == 'SHORT' else ('SHORT' if trade['direction'] == 'LONG' else trade['direction'])
                 open_trade = results.get('open_trade')
                 if isinstance(open_trade, dict):
                     for k in ('entry_price', 'current_price', 'entry_z'):
                         if k in open_trade and open_trade[k] is not None:
                             open_trade[k] = -open_trade[k]
-                    if style == 'trend' and 'direction' in open_trade:
-                        open_trade['direction'] = 'LONG' if open_trade['direction'] == 'SHORT' else ('SHORT' if open_trade['direction'] == 'LONG' else open_trade['direction'])
                 _tdf = results.get('trades_df')
                 if isinstance(_tdf, pd.DataFrame) and not _tdf.empty:
                     for k in ('entry_price', 'exit_price', 'entry_z', 'exit_z'):
                         if k in _tdf.columns:
                             results['trades_df'][k] = -_tdf[k]
-                    if style == 'trend' and 'direction' in _tdf.columns:
-                        results['trades_df']['direction'] = _tdf['direction'].replace({'LONG': 'SHORT', 'SHORT': 'LONG'})
         except Exception as exc:
             import traceback
             return html.Div(f"Backtest engine error: {exc}\n{traceback.format_exc(limit=8)}", style={'color': THEME['warning'], 'whiteSpace': 'pre-wrap', 'fontSize': '11px', 'padding': '10px'}), f"Error at {datetime.now().strftime('%H:%M:%S')}"
