@@ -33,8 +33,15 @@ def generate(data, d):
     n_ext = 0
     
     for i in range(0, len(p)):
+        # Relative moves must be normalized by magnitude rather than signed
+        # level. Yield-based spreads are inverted before trend backtesting, so
+        # their input can be negative; dividing by a negative extremum reverses
+        # the directional-change comparisons and can freeze the state.
+        ext_scale = abs(ext)
+        if ext_scale == 0:
+            ext_scale = np.finfo(float).eps
         if event == 'upturn':
-            if (p['Price'][i]-ext)/ext <= - d:
+            if (p['Price'][i]-ext)/ext_scale <= - d:
                 event = 'downturn'                
                 p.at[n_ext, 'Event'] = 'Local Max'
                 p.at[i, 'Event'] = 'Downward Trend Confirmed'
@@ -46,7 +53,7 @@ def generate(data, d):
                     ext = p['Price'][i]
                     n_ext = i
         else:
-            if (p['Price'][i]-ext)/ext >= d:
+            if (p['Price'][i]-ext)/ext_scale >= d:
                 event = 'upturn'               
                 p.at[n_ext, 'Event'] = 'Local Min'
                 p.at[i, 'Event'] = 'Upward Trend Confirmed'   

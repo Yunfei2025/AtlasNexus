@@ -236,6 +236,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     instrument_div = html.Div([dcc.Graph(figure=instrument_fig, style={'height': f'{_chart_height}px'})], style={'marginBottom': '15px'})
 
     score_div = html.Div()
+    is_hybrid = bool(results.get('hybrid'))
     _composite = results.get('composite_signal_ts')
     _raw_score = results.get('norm_mom_ts') if is_trend else (_composite if _composite is not None else results.get('zscore_ts'))
     if _raw_score is not None and len(_raw_score.dropna()) > 0:
@@ -253,11 +254,23 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
 
         signal_fig = go.Figure()
 
+        if is_hybrid and isinstance(results.get('regime_ts'), pd.Series):
+            regime_lookup = {'mean_reverting': -3.0, 'uncertain': 0.0, 'trending': 3.0}
+            regime_ts = results['regime_ts'].reindex(score_ts_display.index).ffill().fillna('uncertain')
+            regime_values = regime_ts.map(regime_lookup).fillna(0.0)
+            signal_fig.add_trace(go.Scatter(
+                x=regime_values.index, y=regime_values.values,
+                mode='lines', name='Strategy Regime',
+                line=dict(color='rgba(76,175,80,0.75)', width=1.4, shape='hv'),
+                customdata=regime_ts.str.replace('_', ' ').str.title(),
+                hovertemplate='Regime: %{customdata}<extra></extra>',
+            ))
+
         if is_trend and 'trend_state_ts' in results and results['trend_state_ts'] is not None:
             _tst = results['trend_state_ts'].reindex(score_ts_display.index).ffill().fillna(0.0)
             signal_fig.add_trace(go.Scatter(
                 x=score_ts_display.index, y=(_tst * 2.0).values,
-                mode='lines', name='Trend State (×2)',
+                mode='lines', name='DC Direction State (×2)',
                 line=dict(color='rgba(255,165,0,0.45)', width=1, shape='hv'),
                 fill='tozeroy', fillcolor='rgba(255,165,0,0.07)', showlegend=False,
             ))
@@ -342,6 +355,8 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
 
         yaxis_label = 'Norm Mom (σ)' if is_trend else ('Composite Signal' if _composite is not None else 'Z-Score')
         score_title = f'Score History ({score_label})'
+        if is_hybrid:
+            score_title += '<br><sup>Strategy regime: Trend = +3, Uncertain = 0, Mean-Reverting = -3. DC direction state is shown at +/-2.</sup>'
         if is_trend and is_yield_based:
             score_title += '<br><sup>Yield-based mode: signals are computed on -spread (Long = expect spread down/narrow).</sup>'
         signal_fig.update_layout(
@@ -351,7 +366,8 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             font=dict(color=THEME['text_main']),
             xaxis=dict(gridcolor=THEME['bg_card'], tickformat='%b\n%Y', hoverformat='%Y-%m-%d', **_xaxis_range),
             yaxis=dict(title=yaxis_label, gridcolor=THEME['bg_card']),
-            showlegend=False,
+            showlegend=is_hybrid,
+            legend=dict(orientation='h', yanchor='bottom', y=1.10, xanchor='right', x=1, font=dict(size=10)),
         )
         score_div = html.Div([dcc.Graph(figure=signal_fig, style={'height': '230px'})], style={'marginBottom': '15px'})
 

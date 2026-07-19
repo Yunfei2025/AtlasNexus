@@ -23,6 +23,21 @@ from futures.backtest.regime import (
 )
 
 
+def _variance_ratio(changes: pd.Series, k: int) -> float:
+    """Return $Var(sum(r, k)) / (k * Var(r))$ for a return series."""
+    values = pd.to_numeric(changes, errors='coerce').dropna()
+    if len(values) < k + 2:
+        return 1.0
+    one_period_var = float(values.var())
+    if not np.isfinite(one_period_var) or one_period_var <= 0:
+        return 1.0
+    k_period_returns = values.rolling(k).sum().dropna()
+    k_period_var = float(k_period_returns.var())
+    if not np.isfinite(k_period_var):
+        return 1.0
+    return k_period_var / (k * one_period_var)
+
+
 # ---------------------------------------------------------------------------
 # Core feature computation (vectorised, no HMM dependency)
 # ---------------------------------------------------------------------------
@@ -70,11 +85,8 @@ def compute_regime_features(
     out["hurst"] = h
 
     # 3. Variance Ratio
-    short_w = max(window // 4, 2)
-    short_var = float(changes.iloc[-short_w:].var())
-    long_var = float(changes.iloc[-window:].var())
-    scale = window / short_w
-    vr = (short_var * scale) / long_var if long_var > 0 else 1.0
+    k = max(window // 4, 2)
+    vr = _variance_ratio(tail, k)
     out["variance_ratio"] = vr
 
     # 4. Lag-1 autocorrelation
@@ -142,11 +154,10 @@ def compute_regime_features_series(
     )
 
     # Variance Ratio
-    short_w = max(window // 4, 2)
-    short_var = changes.rolling(short_w).var()
-    long_var = changes.rolling(window).var()
-    scale = window / short_w
-    vr = (short_var * scale) / long_var.replace(0, np.nan)
+    k = max(window // 4, 2)
+    vr = changes.rolling(window).apply(
+        lambda values: _variance_ratio(pd.Series(values), k), raw=False,
+    )
 
     # Autocorrelation
     ac = changes.rolling(window).apply(lambda x: x.autocorr(lag=1), raw=False).fillna(0.0)

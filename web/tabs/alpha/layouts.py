@@ -619,10 +619,11 @@ def build_individual_backtest_panel() -> html.Div:
                         dcc.RadioItems(
                             id='bt-trade-style',
                             options=[
+                                {'label': ' Auto Regime (MR / Trend)', 'value': 'hybrid'},
                                 {'label': ' Mean-Reversion', 'value': 'mr'},
                                 {'label': ' Trend (Directional-Change)', 'value': 'trend'},
                             ],
-                            value='mr',
+                            value='hybrid',
                             className='an-radio-stack',
                             labelStyle={'display': 'flex', 'alignItems': 'center', 'gap': '6px',
                                         'color': 'var(--text-secondary)', 'fontSize': '11px',

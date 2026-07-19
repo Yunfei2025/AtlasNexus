@@ -21,7 +21,10 @@ from ..data import (
 )
 from .portfolio import _SUMMARY_ALPHA_PARQUET
 from ..layouts import build_individual_backtest_panel, build_portfolio_backtest_panel
-from ..backtest import run_spread_backtest, run_trend_backtest_dc, build_backtest_results_display
+from ..backtest import (
+    run_spread_backtest, run_trend_backtest_dc, run_regime_hybrid_backtest,
+    build_backtest_results_display,
+)
 
 
 def register_backtest_callbacks(app) -> None:
@@ -88,12 +91,9 @@ def register_backtest_callbacks(app) -> None:
     # BACKTEST: Auto-detect regime and set trade style from instrument
     # -------------------------------------------------------------------------
     _BT_BASE_OPTIONS = [
+        {'label': ' Auto Regime (MR / Trend)', 'value': 'hybrid'},
         {'label': ' Mean-Reversion', 'value': 'mr'},
         {'label': ' Trend (Directional-Change)', 'value': 'trend'},
-    ]
-    _BT_DISABLED_OPTIONS = [
-        {'label': ' Mean-Reversion', 'value': 'mr', 'disabled': True},
-        {'label': ' Trend (Directional-Change)', 'value': 'trend', 'disabled': True},
     ]
     _BT_STYLE_DIV_HIDDEN  = {'marginBottom': '5px', 'display': 'none'}
     _BT_STYLE_DIV_VISIBLE = {'marginBottom': '5px'}
@@ -184,11 +184,11 @@ def register_backtest_callbacks(app) -> None:
             regime_color = {'mean_reverting': THEME['success'], 'trending': THEME['accent'], 'uncertain': THEME['warning']}.get(regime, THEME['text_sub'])
 
             if regime == 'mean_reverting':
-                style_key = 'mr'
-                auto_options = _BT_DISABLED_OPTIONS
+                style_key = 'hybrid'
+                auto_options = _BT_BASE_OPTIONS
             elif regime == 'trending':
-                style_key = 'trend'
-                auto_options = _BT_DISABLED_OPTIONS
+                style_key = 'hybrid'
+                auto_options = _BT_BASE_OPTIONS
             else:
                 # Uncertain regime: use the sign of the 3m edge as a tiebreaker.
                 # Positive edge rewards waiting for reversion → MR.
@@ -214,10 +214,10 @@ def register_backtest_callbacks(app) -> None:
                 except Exception:
                     pass
                 if not np.isnan(edge_val):
-                    style_key = 'mr' if edge_val > 0 else 'trend'
+                    style_key = 'hybrid'
                     edge_hint = f"edge={edge_val:+.1f}bp → {'MR' if edge_val > 0 else 'Trend'} suggested"
                 else:
-                    style_key = 'mr'
+                    style_key = 'hybrid'
                     edge_hint = "edge unavailable → MR suggested"
 
             if regime == 'uncertain':
@@ -258,7 +258,7 @@ def register_backtest_callbacks(app) -> None:
                       'borderRadius': '6px', 'padding': '14px 16px', 'flex': '1'}
         if style == 'trend':
             base_mr['display'] = 'none'
-        else:
+        elif style == 'mr':
             base_trend['display'] = 'none'
         return base_mr, base_trend
 
@@ -440,7 +440,29 @@ def register_backtest_callbacks(app) -> None:
 
             _negate_ts = is_yield_based
 
-            if style == 'trend':
+            if style == 'hybrid':
+                results = run_regime_hybrid_backtest(
+                    spread_ts=-ts if _negate_ts else ts,
+                    entry_z=entry_z or 2.0,
+                    exit_z=exit_z or 0.5,
+                    stop_z=stop_z or 4.0,
+                    theta=float(theta) if theta is not None else 0.02,
+                    mom_window=int(mom_window) if mom_window is not None else 20,
+                    vol_window=int(vol_window) if vol_window is not None else 60,
+                    trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
+                    carry_buffer=float(carry_buffer) if carry_buffer is not None else 0.0,
+                    allow_short=bool(allow_short and 'allow' in allow_short),
+                    min_hold=int(min_hold) if min_hold is not None else 7,
+                    carry_roll_ts=carry_roll_ts_instrument,
+                    carry_roll_bp=carry_roll_bp,
+                    duration_mult=duration_mult,
+                    borrow_cost_long_bp=bc_long,
+                    borrow_cost_short_bp=bc_short,
+                    spread_type=spread_type,
+                    tenor_ratio=0.5 if spread_type == 'TenorSpread' else 1.0,
+                    carry_roll_sell_ts=_cr_sell_for_backtest,
+                )
+            elif style == 'trend':
                 # Yield-based convention note:
                 # We pass -spread into the trend engine so it can keep the same
                 # generic entry rule used for price-like series:
