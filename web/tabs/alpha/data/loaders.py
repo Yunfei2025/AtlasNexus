@@ -211,11 +211,9 @@ def display_key(spread_type: str, inst: str) -> str:
     T/TF/TS/TL, so a suffix is mandatory there too.
     """
     if spread_type in ('TBondCurve', 'CBondCurve'):
-        base = inst.replace('.IB', '')
-        return f'{base}-OTR'
+        return f'{inst}-OTR'
     if spread_type in ('TBondSwap', 'CBondSwap'):
-        base = inst.replace('.IB', '')
-        return f'{base}-Swp'
+        return f'{inst}-Swp'
     if spread_type == 'NetBasis':
         return f'{inst}-Basis'
     if spread_type == 'TermBasis':

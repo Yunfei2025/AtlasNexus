@@ -8,7 +8,7 @@ from typing import Dict, List, Any, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from .data import load_spread_timeseries
+from .data import load_spread_timeseries, display_key
 
 
 def compute_spread_correlation(
@@ -23,7 +23,7 @@ def compute_spread_correlation(
         if ts is not None and isinstance(ts, pd.DataFrame):
             ts = ts.tail(lookback_days)
             for col in ts.columns:
-                all_spreads[f"{stype}|{col}"] = ts[col]
+                all_spreads[display_key(stype, str(col))] = ts[col]
 
     if len(all_spreads) < 2:
         return None, None

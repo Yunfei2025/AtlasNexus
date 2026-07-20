@@ -166,6 +166,19 @@ def _get_upstream_regime(spread_type: str, instrument: str) -> str:
 def _normalize_curated_entry(entry: dict, *, infer_regime: bool = True) -> dict:
     instrument = str(entry.get('instrument') or entry.get('ID') or '').strip()
     spread_type = str(entry.get('spread_type') or entry.get('type') or '').strip()
+
+    # Backward-compat: older stores persisted matrix labels like
+    # "TBondCurve|250017.IB" in instrument; recover raw fields.
+    if '|' in instrument:
+        maybe_stype, maybe_inst = instrument.split('|', 1)
+        _known_spread_types = {
+            t for info in SPREAD_CATEGORIES.values() for t in info.get('types', [])
+        }
+        if maybe_stype in _known_spread_types and maybe_inst:
+            if not spread_type or spread_type == 'Unknown':
+                spread_type = maybe_stype
+            instrument = maybe_inst
+
     # Prefer 'style' (already a raw category) over 'regime' when regime is absent/uncertain.
     _raw = str(entry.get('regime') or entry.get('style') or '').strip()
     regime = _style_to_regime(_raw) if _raw else 'uncertain'
@@ -384,6 +397,18 @@ def register_candidate_callbacks(app) -> None:
             df_all = df_all.copy()
             df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) < 0 else 'SELL')
 
+        # Snapshots may not persist a regime, but the candidate builder always
+        # derives a usable style.  Promote that style for display and downstream
+        # portfolio state rather than leaving every valid candidate as unknown.
+        if 'style' in df_all.columns:
+            inferred_regime = df_all['style'].map(_style_to_regime)
+            if 'regime' not in df_all.columns:
+                df_all['regime'] = inferred_regime
+            else:
+                regime_text = df_all['regime'].astype(str).str.strip().str.lower()
+                missing_regime = regime_text.isin({'', 'nan', 'none', 'unknown', 'uncertain'})
+                df_all.loc[missing_regime, 'regime'] = inferred_regime.loc[missing_regime]
+
         # Load seasonal data regardless of whether the upstream pipeline has
         # already populated `score`.  The pipeline does populate it, which used
         # to leave the optional gate unreachable.
@@ -592,8 +617,8 @@ def register_candidate_callbacks(app) -> None:
         trend_by_regime = regime_s.eq('trending')
         uncertain_mask  = regime_s.eq('uncertain')
         no_regime       = ~mr_by_regime & ~trend_by_regime & ~uncertain_mask
-        style_mr    = (no_regime | uncertain_mask) & style_s.eq('meanreversion')
-        style_trend = (no_regime | uncertain_mask) & style_s.isin({'carry', 'trend', 'trendfollowing'})
+        style_mr    = (no_regime | uncertain_mask) & style_s.isin({'meanreversion', 'mean-reverting', 'mean_reverting', 'mr'})
+        style_trend = (no_regime | uncertain_mask) & style_s.isin({'carry', 'trend', 'trendfollowing', 'momentum', 'mixed'})
         uncertain_unmapped = uncertain_mask & ~style_mr & ~style_trend
 
         df_mr         = df_display[mr_by_regime | style_mr][_mr_avail].copy()
@@ -813,6 +838,29 @@ def register_candidate_callbacks(app) -> None:
         if not n_clicks or not categories:
             return html.Div("Select categories and click Check Correlation.", style={'color': THEME['text_sub']}), [], {}, []
 
+        def _normalize_corr_labels(df: pd.DataFrame) -> pd.DataFrame:
+            """Convert legacy 'spread_type|instrument' labels to display_key labels."""
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                return df
+
+            def _norm(label: object) -> str:
+                text = str(label)
+                if '|' not in text:
+                    return text
+                stype, inst = text.split('|', 1)
+                return display_key(stype, inst)
+
+            rows = [_norm(i) for i in df.index]
+            cols = [_norm(c) for c in df.columns]
+            out = df.copy()
+            out.index = rows
+            out.columns = cols
+            # Guard against accidental duplicate labels after normalization.
+            if out.index.duplicated().any() or out.columns.duplicated().any():
+                out = out.groupby(level=0).mean()
+                out = out.T.groupby(level=0).mean().T
+            return out
+
         corr_matrix = None
 
         if all_candidates and len(all_candidates) > 0:
@@ -865,9 +913,16 @@ def register_candidate_callbacks(app) -> None:
 
             if candidates_data and isinstance(candidates_data, dict):
                 corr_matrix = candidates_data.get('corr')
+                if isinstance(corr_matrix, dict):
+                    corr_matrix = pd.DataFrame(corr_matrix)
+                if isinstance(corr_matrix, pd.DataFrame):
+                    corr_matrix = _normalize_corr_labels(corr_matrix)
 
             if corr_matrix is None or not isinstance(corr_matrix, pd.DataFrame) or corr_matrix.empty:
                 corr_matrix, _ = compute_spread_correlation(spread_types, lookback_days=lookback)
+
+        if isinstance(corr_matrix, pd.DataFrame):
+            corr_matrix = _normalize_corr_labels(corr_matrix)
 
         if corr_matrix is None or corr_matrix.empty:
             return html.Div("Insufficient data for correlation analysis. Need at least 2 instruments with historical data.", style={'color': THEME['warning']}), [], {}, []
@@ -1023,7 +1078,10 @@ def register_candidate_callbacks(app) -> None:
         if raw_id == 'alpha-add-trade-btn':
             if not spread_type or not instrument:
                 raise PreventUpdate
-            if any(e['instrument'] == instrument for e in current):
+            if any(
+                e.get('spread_type') == spread_type and e.get('instrument') == instrument
+                for e in current
+            ):
                 raise PreventUpdate
             # Auto-populate regime and direction from snapshot
             _regime = 'uncertain'
@@ -1137,13 +1195,14 @@ def register_candidate_callbacks(app) -> None:
 
         _sub  = {'color': THEME['text_sub'], 'fontSize': '12px', 'fontStyle': 'italic'}
 
-        instruments = instruments or []
-        positions   = positions   or []
+        instruments = _merge_curated_entries(instruments or [])
+        positions   = _merge_curated_entries(positions   or [])
         matrix_cols = set(matrix_data.keys()) if matrix_data else set()
 
         # Remove from Table A any instrument already present in Table B (Saved Positions).
-        _pos_inst_set = {e.get('instrument', '') for e in positions}
-        instruments = [e for e in instruments if e.get('instrument', '') not in _pos_inst_set]
+        _entry_key = lambda e: (e.get('spread_type', ''), e.get('instrument', ''))
+        _pos_key_set = {_entry_key(e) for e in positions}
+        instruments = [e for e in instruments if _entry_key(e) not in _pos_key_set]
 
         _REGIME_OPTIONS = [
             {'label': 'mean-reverting', 'value': 'mean-reverting'},
@@ -1432,8 +1491,8 @@ def register_candidate_callbacks(app) -> None:
         ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px'})
 
         # ── Combined correlation matrix (all instruments from both tables) ──
-        all_instruments = instruments + [p for p in positions
-                                         if p.get('instrument') not in {e.get('instrument') for e in instruments}]
+        _inst_key_set = {_entry_key(e) for e in instruments}
+        all_instruments = instruments + [p for p in positions if _entry_key(p) not in _inst_key_set]
         def _col_key(e):
             return display_key(e.get('spread_type', ''), e.get('instrument', ''))
 

@@ -152,6 +152,84 @@ def _persist_alpha_summary_rows(rows: list[dict]) -> None:
     snapshot.loc[keep_mask].to_parquet(_SUMMARY_ALPHA_PARQUET, index=False)
 
 
+def _beta_user_row_key(row: dict) -> tuple[str, str]:
+    return (str(row.get('Asset Name', '')), str(row.get('Instrument', '')))
+
+
+def _is_truthy_flag(value) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {'1', 'true', 'yes', 'y'}
+    return bool(value)
+
+
+def _load_beta_user_overrides() -> tuple[dict[tuple[str, str], dict], set[tuple[str, str]]]:
+    user_data: dict[tuple[str, str], dict] = {}
+    deleted_keys: set[tuple[str, str]] = set()
+    if not os.path.exists(_BETA_BOOK_USER_PARQUET):
+        return user_data, deleted_keys
+    try:
+        udf = pd.read_parquet(_BETA_BOOK_USER_PARQUET)
+    except Exception:
+        return user_data, deleted_keys
+
+    for _, record in udf.iterrows():
+        key = (str(record.get('asset_name', '')), str(record.get('instrument', '')))
+        if not any(key):
+            continue
+        is_deleted = _is_truthy_flag(record.get('deleted', False))
+        if is_deleted:
+            deleted_keys.add(key)
+            continue
+        user_data[key] = {
+            'open_price': str(record.get('open_price', record.get('open_yld', ''))),
+            'open_date': str(record.get('open_date', '')),
+            'volume': str(record.get('volume', '')),
+        }
+    return user_data, deleted_keys
+
+
+def _persist_beta_user_rows(
+    rows: list[dict],
+    deleted_keys: set[tuple[str, str]] | None = None,
+) -> None:
+    """Persist user-editable fields and hidden-row tombstones to parquet."""
+    if deleted_keys is None:
+        _, deleted_keys = _load_beta_user_overrides()
+
+    visible_rows = [
+        r for r in rows
+        if str(r.get('Asset Type', '')) not in ('', 'TOTAL')
+    ]
+    visible_keys = {_beta_user_row_key(r) for r in visible_rows}
+    deleted_keys = set(deleted_keys) - visible_keys
+
+    records = [
+        {
+            'asset_name': str(r.get('Asset Name', '')),
+            'instrument': str(r.get('Instrument', '')),
+            'open_price': str(r.get('Open Price', '')),
+            'open_date': str(r.get('Open Date', '')),
+            'volume': str(r.get('Volume (MM)', '')),
+            'deleted': False,
+        }
+        for r in visible_rows
+    ]
+    records.extend({
+        'asset_name': asset_name,
+        'instrument': instrument,
+        'open_price': '',
+        'open_date': '',
+        'volume': '',
+        'deleted': True,
+    } for asset_name, instrument in sorted(deleted_keys))
+
+    try:
+        pathlib.Path(_BETA_BOOK_USER_PARQUET).parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(records).to_parquet(_BETA_BOOK_USER_PARQUET, index=False)
+    except Exception:
+        pass
+
+
 def register_risk_callbacks(app):
     """Register Risk / Summary tab callbacks."""
 
@@ -377,19 +455,7 @@ def register_risk_callbacks(app):
                 except Exception:
                     ts = "unknown"
 
-            user_data: dict = {}
-            if _os.path.exists(_BETA_BOOK_USER_PARQUET):
-                try:
-                    udf = pd.read_parquet(_BETA_BOOK_USER_PARQUET)
-                    for _, r in udf.iterrows():
-                        key = (str(r.get('asset_name', '')), str(r.get('instrument', '')))
-                        user_data[key] = {
-                            'open_price': str(r.get('open_price', r.get('open_yld', ''))),
-                            'open_date':  str(r.get('open_date', '')),
-                            'volume':     str(r.get('volume', '')),
-                        }
-                except Exception:
-                    pass
+            user_data, deleted_keys = _load_beta_user_overrides()
 
             close_prices = _get_beta_close_prices()
             _RATES_TYPE = 'Rates'
@@ -423,6 +489,8 @@ def register_risk_callbacks(app):
                 asset_name = str(row.get('Asset Name', ''))
                 instrument = str(row.get('Instrument', ''))
                 key = (asset_name, instrument)
+                if key in deleted_keys:
+                    continue
                 saved = user_data.get(key, {})
 
                 open_price_str = str(saved.get('open_price', ''))
@@ -534,9 +602,12 @@ def register_risk_callbacks(app):
             ]
             _cols = [(c, a) for c, a in _ALL_COLS
                      if c not in ('Open Date', 'Volume (MM)') or c in _visible_cols]
+            _cols = [('__delete', 'center')] + _cols
 
             header_row = html.Tr([
-                _sortable_header(c, c, 'beta', sort_state, align=a) for c, a in _cols
+                (html.Th('', style={'padding': '7px 6px', 'width': '24px'}) if c == '__delete'
+                 else _sortable_header(c, c, 'beta', sort_state, align=a))
+                for c, a in _cols
             ], style={'background': THEME['table_header'], 'borderBottom': f"1px solid {THEME['accent']}"})
 
             def _editable_cell(row_idx: int, col: str, value: str, kind: str = 'text'):
@@ -572,6 +643,14 @@ def register_risk_callbacks(app):
             def _cell(row_idx: int, col: str, row: dict, align: str):
                 val = row.get(col, '')
                 base_style = {'padding': '5px 10px', 'textAlign': align, 'color': THEME['text_main']}
+                if col == '__delete':
+                    return html.Td(
+                        html.Button('×', id={'type': 'beta-row-delete', 'row': row_idx}, n_clicks=0, style={
+                            'background': 'none', 'border': 'none', 'color': THEME['text_sub'],
+                            'cursor': 'pointer', 'fontSize': '14px', 'padding': '0 4px',
+                        }),
+                        style={'padding': '5px 6px', 'textAlign': 'center'},
+                    )
                 if col == 'Asset Type':
                     return html.Td(html.Span(val, style={
                         'padding': '2px 6px', 'borderRadius': '3px', 'fontSize': '9px', 'fontWeight': '600',
@@ -613,7 +692,7 @@ def register_risk_callbacks(app):
                 ))
             for trow in total_rows:
                 body_trs.append(html.Tr(
-                    [html.Td(trow.get(c, ''), style={
+                    [html.Td(trow.get(c, '') if c != '__delete' else '', style={
                         'padding': '5px 10px', 'textAlign': a, 'fontWeight': 'bold',
                         'color': THEME['text_main'],
                     }) for c, a in _cols],
@@ -1642,27 +1721,6 @@ def register_risk_callbacks(app):
             (refresh_clicks or 0) + 1,
         )
 
-    # ── Auto-save edits on the Beta positions table ───────────────────────────
-    def _persist_beta_user_rows(rows: list[dict]) -> None:
-        """Persist user-editable fields (open_price, open_date, volume) to parquet."""
-        records = [
-            {
-                'asset_name':  str(r.get('Asset Name', '')),
-                'instrument':  str(r.get('Instrument', '')),
-                'open_price':  str(r.get('Open Price', '')),
-                'open_date':   str(r.get('Open Date', '')),
-                'volume':      str(r.get('Volume (MM)', '')),
-            }
-            for r in rows
-            if str(r.get('Asset Type', '')) not in ('', 'TOTAL')
-        ]
-        try:
-            import pathlib as _pl
-            _pl.Path(_BETA_BOOK_USER_PARQUET).parent.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(records).to_parquet(_BETA_BOOK_USER_PARQUET, index=False)
-        except Exception:
-            pass
-
     # ── Beta Book: header sort clicks ──────────────────────────────────────────
     @app.callback(
         Output('summary-beta-sort', 'data'),
@@ -1704,6 +1762,36 @@ def register_risk_callbacks(app):
             return f"Beta edits saved at {datetime.now().strftime('%H:%M:%S')}"
         except Exception as exc:
             return f"Save failed: {exc}"
+
+    # ── Beta Book: delete a row from the positions table ──────────────────────
+    @app.callback(
+        [
+            Output('summary-refresh-status', 'children', allow_duplicate=True),
+            Output('summary-refresh-btn', 'n_clicks', allow_duplicate=True),
+        ],
+        Input({'type': 'beta-row-delete', 'row': ALL}, 'n_clicks'),
+        State('summary-beta-rows-store', 'data'),
+        State('summary-refresh-btn', 'n_clicks'),
+        prevent_initial_call=True,
+    )
+    def _delete_beta_row(_n_clicks_list, rows, refresh_clicks):
+        triggered = dash.ctx.triggered_id
+        if not triggered or not any(_n_clicks_list) or not rows:
+            raise dash.exceptions.PreventUpdate
+        row_idx = triggered['row']
+        target = next((r for r in rows if _row_key(r, -1) == row_idx), None)
+        if target is None or str(target.get('Asset Type', '')) in ('', 'TOTAL'):
+            raise dash.exceptions.PreventUpdate
+
+        updated_rows = [r for r in rows if _row_key(r, -1) != row_idx]
+        _, deleted_keys = _load_beta_user_overrides()
+        deleted_keys.add(_beta_user_row_key(target))
+        try:
+            _persist_beta_user_rows(updated_rows, deleted_keys=deleted_keys)
+            return (f"Position removed at {datetime.now().strftime('%H:%M:%S')}",
+                    (refresh_clicks or 0) + 1)
+        except Exception as exc:
+            return f"Delete failed: {exc}", dash.no_update
 
     # ── Beta Book: Open Date — click cell to open calendar, pick to apply ─────
     @app.callback(

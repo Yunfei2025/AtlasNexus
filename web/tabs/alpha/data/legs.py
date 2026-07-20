@@ -183,6 +183,17 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
         else:
             return 'FR007S5Y.IR'
 
+    def _parse_tenor_token(token: str) -> tuple[str, float]:
+        """Parse tenor token like '5y'/'6m' into ('5Y', 5.0) or ('6M', 0.5)."""
+        m = re.match(r'^(\d+)([my])$', str(token).strip().lower())
+        if not m:
+            return ('', 0.0)
+        n = float(m.group(1))
+        unit = m.group(2)
+        if unit == 'm':
+            return (f"{int(n)}M", n / 12.0)
+        return (f"{int(n)}Y", n)
+
     # Duration → nearest reference bond from cvref series
     _REF_TENORS = [
         (0.3, '0.3Y'), (0.5, '0.5Y'), (0.7, '0.7Y'), (1.0, '1Y'), (1.5, '1.5Y'),
@@ -244,6 +255,15 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
             if m:
                 t = m.group(1) + 'Y'
                 return (f'MTN-{t}', f'CGB-{t}')
+        elif upper.startswith('CGBREPO7D-'):
+            # CGBRepo7d-5y: long OTR CGB at that tenor vs short matched FR007 IRS tenor.
+            # Example: CGBRepo7d-5y -> (260008.IB, FR007S5Y.IR)
+            m = re.match(r'CGBREPO7D-(\d+[MY])$', upper)
+            if m:
+                tenor_token, tenor_years = _parse_tenor_token(m.group(1))
+                if tenor_token:
+                    otr = otr_cgb.get(_t_label(tenor_years), '')
+                    return (otr, f'FR007S{tenor_token}.IR')
         return ('', '')
 
     # Bond-Curve: leg1 is the bond, leg2 is nearest duration reference bond

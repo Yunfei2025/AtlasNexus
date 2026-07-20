@@ -1269,7 +1269,19 @@ def register_callbacks(app) -> None:
         from dash.exceptions import PreventUpdate
         if not clickData or "points" not in clickData or not clickData["points"]:
             raise PreventUpdate
-        return clickData["points"][0]["label"]
+        point = clickData["points"][0]
+        ticker = point.get("x")
+        if ticker is None:
+            ticker = point.get("label")
+        if ticker is None:
+            customdata = point.get("customdata")
+            if isinstance(customdata, (list, tuple)) and customdata:
+                ticker = customdata[0]
+            elif customdata is not None:
+                ticker = customdata
+        if not ticker:
+            raise PreventUpdate
+        return ticker
 
     def _fit_to_frame(fig):
         """Strip any hardcoded height/width so the graph fills its container

@@ -34,6 +34,26 @@ from curves.refreshers.alpha_scoring import (
 )
 
 
+def _corr_display_key(spread_type: str, inst: str) -> str:
+	"""Correlation matrix label used across Alpha pipeline and web tab.
+
+	Keep instrument codes human-readable while disambiguating known overlaps.
+	"""
+	stype = str(spread_type or "")
+	instrument = str(inst or "")
+	if stype in {"TBondCurve", "CBondCurve"}:
+		return f"{instrument}-OTR"
+	if stype in {"TBondSwap", "CBondSwap"}:
+		return f"{instrument}-Swp"
+	if stype == "NetBasis":
+		return f"{instrument}-Basis"
+	if stype == "TermBasis":
+		return f"{instrument}-Cal"
+	if stype == "FuturesSwap":
+		return f"{instrument}-FtSwp"
+	return instrument
+
+
 def load_historical_spread_series(
 	spread_type: str,
 	candidates: Iterable[str],
@@ -43,7 +63,7 @@ def load_historical_spread_series(
 ) -> Dict[str, pd.Series]:
 	"""Load historical spread time series for a set of IDs.
 
-	Returns mapping key -> Series, where key is f"{spread_type}|{ID}".
+	Returns mapping key -> Series, where key is the display correlation label.
 	"""
 	paths = AlphaSnapshotPaths(Path(dir_input))
 	candidates = list(candidates)
@@ -67,7 +87,7 @@ def load_historical_spread_series(
 			if cid in df.columns:
 				s = pd.to_numeric(df[cid], errors="coerce").dropna()
 				if not s.empty:
-					s.name = f"{spread_type}|{cid}"
+					s.name = _corr_display_key(spread_type, str(cid))
 					key_to_series[s.name] = s
 
 	elif spread_type in {"CBondCurve", "CBondSwap"}:
@@ -85,7 +105,7 @@ def load_historical_spread_series(
 			if cid in df.columns:
 				s = pd.to_numeric(df[cid], errors="coerce").dropna()
 				if not s.empty:
-					s.name = f"{spread_type}|{cid}"
+					s.name = _corr_display_key(spread_type, str(cid))
 					key_to_series[s.name] = s
 
 	elif spread_type == "SwapSpread":
@@ -104,7 +124,7 @@ def load_historical_spread_series(
 			if cid in df.columns:
 				s = pd.to_numeric(df[cid], errors="coerce").dropna()
 				if not s.empty:
-					s.name = f"{spread_type}|{cid}"
+					s.name = _corr_display_key(spread_type, str(cid))
 					key_to_series[s.name] = s
 
 	elif spread_type == "TenorSpread":
@@ -120,7 +140,7 @@ def load_historical_spread_series(
 			if cid in df.columns:
 				s = pd.to_numeric(df[cid], errors="coerce").dropna()
 				if not s.empty:
-					s.name = f"{spread_type}|{cid}"
+					s.name = _corr_display_key(spread_type, str(cid))
 					key_to_series[s.name] = s
 
 	elif spread_type in {"NetBasis", "FuturesSwap"}:
@@ -138,7 +158,7 @@ def load_historical_spread_series(
 			col = cid if cid in sp.columns else sp.columns[0]
 			s = pd.to_numeric(sp[col], errors="coerce").dropna().sort_index().tail(int(lookback_days))
 			if not s.empty:
-				s.name = f"{spread_type}|{cid}"
+				s.name = _corr_display_key(spread_type, str(cid))
 				key_to_series[s.name] = s
 
 	elif spread_type == "TermBasis":
@@ -153,7 +173,7 @@ def load_historical_spread_series(
 			if cid in sp.columns:
 				s = pd.to_numeric(sp[cid], errors="coerce").dropna()
 				if not s.empty:
-					s.name = f"{spread_type}|{cid}"
+					s.name = _corr_display_key(spread_type, str(cid))
 					key_to_series[s.name] = s
 
 	return key_to_series
@@ -201,7 +221,10 @@ def select_low_corr_basket(
 	# Build key column mapping to corr matrix columns
 	work = candidates.copy()
 	if "corr_key" not in work.columns:
-		work["corr_key"] = work["spread_type"].astype(str) + "|" + work["ID"].astype(str)
+		work["corr_key"] = [
+			_corr_display_key(stype, cid)
+			for stype, cid in zip(work["spread_type"].astype(str), work["ID"].astype(str))
+		]
 
 	work = work[work["corr_key"].isin(corr.columns)].copy()
 	if work.empty:
@@ -436,7 +459,10 @@ def build_alpha_candidates(
 
 	corr, _ = compute_candidate_correlation(series_map)
 	# Add correlation key to candidates (even if corr is None)
-	candidates["corr_key"] = candidates["spread_type"].astype(str) + "|" + candidates["ID"].astype(str)
+	candidates["corr_key"] = [
+		_corr_display_key(stype, cid)
+		for stype, cid in zip(candidates["spread_type"].astype(str), candidates["ID"].astype(str))
+	]
 
 	selected_lowcorr = pd.DataFrame()
 	if corr is not None and not corr.empty:
