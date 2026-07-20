@@ -37,13 +37,13 @@ from ._common import (
     _sortable_header,
     _apply_sort,
 )
+from multiasset.layout import get_cdb_otr_map, get_cgb_otr_map
 from ._risk_charts import (
     build_net_position_fig,
     build_dv01_ladder_fig,
     build_factor_risk_fig,
     build_kpi_cards,
     build_kpi_strip,
-    build_inventory_summary,
 )
 
 
@@ -357,12 +357,13 @@ def register_risk_callbacks(app):
          Output('summary-refresh-status', 'children'),
          Output('summary-beta-rows-store', 'data')],
         [Input('summary-refresh-btn', 'n_clicks'),
+         Input('allocation-results-store', 'data'),
          Input('summary-col-visibility', 'data'),
          Input('summary-beta-sort', 'data')],
         State('summary-beta-active-date-row', 'data'),
         prevent_initial_call=False,
     )
-    def update_summary_book_table(_n_clicks, col_vis, sort_state, active_date_row):
+    def update_summary_book_table(_n_clicks, _allocation_results_data, col_vis, sort_state, active_date_row):
         """Render Beta Book allocation table."""
         col_vis = col_vis or {}
         sort_state = sort_state or {'col': None, 'dir': 'asc'}
@@ -434,21 +435,42 @@ def register_risk_callbacks(app):
             except Exception:
                 return None
 
-        if not _os.path.exists(_SUMMARY_BETA_PARQUET) and not _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
-            return _no_data(
-                "No Beta snapshot found. Click RUN ANALYSIS in the Beta Book → Portfolio tab first."
-            )
+        _cgb_otr_map = get_cgb_otr_map()
+        _cdb_otr_map = get_cdb_otr_map()
+
+        def _canonical_beta_instrument(asset_type: str, universe: str, sector: str, asset_name: str, instrument: str) -> str:
+            if asset_type == 'Rates' and universe == 'China Gov Bond':
+                return _cgb_otr_map.get(sector, instrument or asset_name)
+            if asset_type == 'Credit' and universe == 'China Development Bond':
+                return _cdb_otr_map.get(sector, instrument or asset_name)
+            return instrument or asset_name
+
         try:
-            if _os.path.exists(_SUMMARY_BETA_PARQUET):
+            _beta_snapshot_rows = None
+            if isinstance(_allocation_results_data, dict):
+                _beta_snapshot_rows = _allocation_results_data.get('beta_snapshot_display') or _allocation_results_data.get('beta_snapshot')
+
+            if _beta_snapshot_rows:
+                df = pd.DataFrame(_beta_snapshot_rows)
+            elif _os.path.exists(_SUMMARY_BETA_PARQUET):
                 df = pd.read_parquet(_SUMMARY_BETA_PARQUET)
-            else:
+            elif _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
                 df = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
+            else:
+                return _no_data(
+                    "No Beta snapshot found. Click RUN ANALYSIS in the Beta Book → Portfolio tab first."
+                )
 
             if df.empty:
                 return _no_data("Beta snapshot is empty.")
 
+            if isinstance(_allocation_results_data, dict) and _allocation_results_data.get('beta_snapshot_display'):
+                _beta_snapshot_rows = _allocation_results_data['beta_snapshot_display']
+
             ts = "unknown"
-            if _os.path.exists(_SUMMARY_BETA_PARQUET):
+            if isinstance(_allocation_results_data, dict) and _allocation_results_data.get('beta_snapshot_timestamp'):
+                ts = str(_allocation_results_data.get('beta_snapshot_timestamp', 'unknown'))
+            elif _os.path.exists(_SUMMARY_BETA_PARQUET):
                 try:
                     snap = pd.read_parquet(_SUMMARY_BETA_PARQUET)
                     ts = snap['_timestamp'].iloc[0] if '_timestamp' in snap.columns else "unknown"
@@ -508,11 +530,21 @@ def register_risk_callbacks(app):
                 else:
                     duration_str = ''
 
-                try:
-                    _cap_raw = float(str(row.get('Capital (CNY)', 0) or 0).replace(',', ''))
-                    cap_mm_str = f"{_cap_raw / 1e6:,.2f}" if _cap_raw else ''
-                except (ValueError, TypeError):
-                    cap_mm_str = ''
+                if 'Capital (MM CNY)' in row:
+                    cap_mm_str = str(row.get('Capital (MM CNY)', '') or '')
+                elif 'Capital (CNY)' in row and _beta_snapshot_rows:
+                    cap_mm_str = str(row.get('Capital (CNY)', '') or '')
+                else:
+                    try:
+                        _cap_raw = float(str(row.get('Capital (CNY)', 0) or 0).replace(',', ''))
+                        cap_mm_str = f"{_cap_raw / 1e6:,.2f}" if _cap_raw else ''
+                    except (ValueError, TypeError):
+                        cap_mm_str = ''
+
+                dv01_str = ''
+                if 'DV01 (MM CNY)' in row:
+                    dv01_val = row.get('DV01 (MM CNY)', '')
+                    dv01_str = f"{float(dv01_val):,.4f}" if isinstance(dv01_val, (int, float)) else str(dv01_val or '')
 
                 try:
                     _wt_raw = str(row.get('Weight (%)', '') or '').replace('%', '').replace(',', '').strip()
@@ -543,6 +575,7 @@ def register_risk_callbacks(app):
                     'Instrument':       instrument,
                     'Duration':         duration_str,
                     'Capital (MM CNY)': cap_mm_str,
+                    'DV01 (MM CNY)':    dv01_str,
                     'Weight (%)':       weight_str,
                     'Allocation':       weight_str,
                     'Open Price':       open_price_str,
@@ -2033,16 +2066,16 @@ def register_risk_callbacks(app):
                             otr_cdb.get(_t_label(float(m.group(1))), ''))
             elif upper.startswith('LGBCGB-'):
                 # Curve-level yield spread (中债 AAA local-gov-bond yield vs CGB
-                # yield) — no tradable bond pair, so legs are curve/tenor labels.
+                # yield). Use the live on-the-run CGB bond for the CGB leg.
                 m = _re.match(r'LGBCGB-(\d+)Y$', upper)
                 if m:
                     t = m.group(1) + 'Y'
-                    return (f'LGB-{t}', f'CGB-{t}')
+                    return (f'LGB-{t}', otr_cgb.get(t, f'CGB-{t}'))
             elif upper.startswith('MTNCGB-'):
                 m = _re.match(r'MTNCGB-(\d+)Y$', upper)
                 if m:
                     t = m.group(1) + 'Y'
-                    return (f'MTN-{t}', f'CGB-{t}')
+                    return (f'MTN-{t}', otr_cgb.get(t, f'CGB-{t}'))
             return ('', '')
 
         elif stype == 'TBondCurve':
@@ -2087,15 +2120,13 @@ def register_risk_callbacks(app):
          Output('risk-netpos-container', 'children'),
          Output('risk-dv01-container', 'children'),
          Output('risk-factor-container', 'children'),
-         Output('risk-inventory-container', 'children'),
          Output('risk-refresh-status', 'children')],
         [Input('an-summary-subtabs', 'value'),
          Input('risk-refresh-btn', 'n_clicks'),
-         Input('allocation-results-store', 'data'),
-         Input('risk-inventory-expanded', 'data')],
+         Input('allocation-results-store', 'data')],
         prevent_initial_call=False,
     )
-    def update_risk_tables(tab_value, _n_clicks, allocation_results_data, inventory_expanded):
+    def update_risk_tables(tab_value, _n_clicks, allocation_results_data):
         import os as _os
         import re
 
@@ -2107,9 +2138,18 @@ def register_risk_callbacks(app):
                                         'padding': '20px', 'textAlign': 'center', 'fontSize': '13px'})
 
         # ── Tenor bucket helper ───────────────────────────────────────────────
-        _TENOR_ORDER = ['1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
-        _TENOR_BOUNDS = [(0.0, 1.5), (1.5, 3.5), (3.5, 7.0),
-                         (7.0, 12.0), (12.0, 17.0), (17.0, 9999.0)]
+        _TENOR_ORDER = ['3M', '6M', '9M', '1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
+        _TENOR_BOUNDS = [
+            (0.0, 0.375),
+            (0.375, 0.625),
+            (0.625, 0.875),
+            (0.875, 1.5),
+            (1.5, 3.5),
+            (3.5, 7.0),
+            (7.0, 12.0),
+            (12.0, 17.0),
+            (17.0, 9999.0),
+        ]
 
         def _dur_to_tenor(dur: float) -> str:
             for label, (lo, hi) in zip(_TENOR_ORDER, _TENOR_BOUNDS):
@@ -2117,8 +2157,11 @@ def register_risk_callbacks(app):
                     return label
             return '30Y'
 
-        _SECTOR_TO_TENOR = {'1Y': '1Y', '2Y': '2Y', '5Y': '5Y',
-                            '10Y': '10Y', '20Y': '20Y', '30Y': '30Y'}
+        _SECTOR_TO_TENOR = {
+            '3M': '3M', '6M': '6M', '9M': '9M',
+            '1Y': '1Y', '2Y': '2Y', '5Y': '5Y',
+            '10Y': '10Y', '20Y': '20Y', '30Y': '30Y',
+        }
 
         # ── Alpha spread-type → Key Term column (Bonds/Swaps/Futures/Other) ───
         _ALPHA_COL = {
@@ -2146,46 +2189,68 @@ def register_risk_callbacks(app):
 
         # ── Load Beta positions ───────────────────────────────────────────────
         beta_rows, kt_grid = [], {t: {c: 0.0 for c in _KT_COLS} for t in _TENOR_ORDER}
-        if _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
-            try:
-                bdf = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
-                for _, r in bdf.iterrows():
-                    atype = str(r.get('Asset Type', ''))
-                    if atype == 'TOTAL':
-                        continue
-                    name     = str(r.get('Asset Name', ''))
-                    sector   = str(r.get('Sector', ''))
-                    cap_str  = str(r.get('Capital (CNY)', ''))
-                    dv01_val = r.get('DV01 (MM CNY)', 0)
+        try:
+            for _, r in df.iterrows():
+                asset_type = str(r.get('Asset Type', ''))
+                if asset_type == 'TOTAL':
+                    continue
+
+                name     = str(r.get('Asset Name', ''))
+                sector   = str(r.get('Sector', ''))
+                universe = str(r.get('Universe', ''))
+
+                cap_mm = 0.0
+                cap_mm_raw = r.get('Capital (MM CNY)', None)
+                if cap_mm_raw not in (None, '') and pd.notna(cap_mm_raw):
                     try:
-                        dv01_mm = float(str(dv01_val).replace(',', '')) if dv01_val else 0.0
+                        cap_mm = float(str(cap_mm_raw).replace(',', ''))
+                    except (ValueError, TypeError):
+                        cap_mm = 0.0
+                else:
+                    cap_cny_raw = r.get('Capital (CNY)', None)
+                    try:
+                        cap_cny = float(str(cap_cny_raw).replace(',', '')) if cap_cny_raw not in (None, '') else 0.0
+                        cap_mm = cap_cny / 1e6
+                    except (ValueError, TypeError):
+                        cap_mm = 0.0
+
+                dv01_mm = 0.0
+                dv01_val = r.get('DV01 (MM CNY)', r.get('DV01 (MM/bp)', 0))
+                if dv01_val not in (None, '') and pd.notna(dv01_val):
+                    try:
+                        dv01_mm = float(str(dv01_val).replace(',', ''))
                     except (ValueError, TypeError):
                         dv01_mm = 0.0
 
-                    instrument = str(r.get('Instrument', ''))
-                    beta_rows.append({
-                        'Book': 'Beta', 'Name': name,
-                        'Leg1': instrument,  # For Beta, Leg1 is the instrument itself
-                        'Leg2': '',
-                        'Capital (MM)': cap_str, 'DV01 (MM/bp)': f"{dv01_mm:.4f}",
-                        'Direction': 'BUY',  # Beta positions are always BUY
-                    })
-                    try:
-                        cap_mm = float(cap_str.replace(',', '')) if cap_str else 0.0
-                    except (ValueError, TypeError):
-                        cap_mm = 0.0
-                    _add_net(instrument, cap_mm, 'Beta')  # Beta Book positions are always long
+                instrument = _canonical_beta_instrument(
+                    asset_type,
+                    universe,
+                    sector,
+                    name,
+                    str(r.get('Instrument', '')),
+                )
 
-                    # Key Term: rate-tenor Beta positions are bond duration; non-rate sectors → Other
-                    tenor = _SECTOR_TO_TENOR.get(sector)
-                    if tenor and dv01_mm != 0.0:
-                        col = 'Bonds' if sector in _SECTOR_TO_TENOR else 'Other'
-                        kt_grid[tenor][col] = round(kt_grid[tenor][col] + dv01_mm, 4)
-            except Exception:
-                pass
+                beta_rows.append({
+                    'Book': 'Beta',
+                    'Name': name,
+                    'Leg1': instrument,  # For Beta, Leg1 is the instrument itself
+                    'Leg2': '',
+                    'Capital (MM)': f"{round(cap_mm):.0f}",
+                    'DV01 (MM/bp)': f"{round(dv01_mm):.0f}",
+                    'Direction': 'BUY',  # Beta positions are always BUY
+                })
+
+                _add_net(instrument, cap_mm, 'Beta')  # Beta Book positions are always long
+
+                # Key Term: rate-tenor Beta positions are bond duration; non-rate sectors → Other
+                tenor = _SECTOR_TO_TENOR.get(sector)
+                if tenor and dv01_mm != 0.0:
+                    col = 'Bonds' if sector in _SECTOR_TO_TENOR else 'Other'
+                    kt_grid[tenor][col] = round(kt_grid[tenor][col] + dv01_mm, 4)
+        except Exception:
+            pass
 
         # ── Load Alpha positions ──────────────────────────────────────────────
-        _ld = _load_leg_data()   # instrument data for leg resolution
         alpha_rows = []
         if _os.path.exists(_SUMMARY_ALPHA_PARQUET):
             try:
@@ -2208,7 +2273,13 @@ def register_risk_callbacks(app):
                     stype     = str(r.get('spread_type', ''))
                     dir_sign  = -1.0 if direction in ('SELL', 'SHORT') else 1.0
 
-                    leg1, leg2 = _resolve_legs(stype, tid, duration, _ld)
+                    leg1 = str(r.get('Leg1', '') or r.get('leg1', '') or '').strip()
+                    leg2 = str(r.get('Leg2', '') or r.get('leg2', '') or '').strip()
+                    if not leg1 and not leg2:
+                        # Older snapshots may not carry explicit legs; fall back to
+                        # the canonical resolver only for those legacy rows.
+                        _ld = _load_leg_data()
+                        leg1, leg2 = _resolve_legs(stype, tid, duration, _ld)
 
                     # Net capital per leg: BUY → long leg1 / short leg2 (and vice
                     # versa for SELL), at full notional on each side.
@@ -2219,8 +2290,8 @@ def register_risk_callbacks(app):
                     alpha_rows.append({
                         'Book': 'Alpha', 'Name': tid,
                         'Leg1': leg1, 'Leg2': leg2,
-                        'Capital (MM)': f"{notional:.1f}",
-                        'DV01 (MM/bp)': f"{dv01_mm * dir_sign:.4f}",
+                        'Capital (MM)': f"{round(notional):.0f}",
+                        'DV01 (MM/bp)': f"{round(dv01_mm * dir_sign):.0f}",
                         'Direction': direction,
                     })
 
@@ -2250,44 +2321,8 @@ def register_risk_callbacks(app):
                 _no_data_div(_empty_msg),
                 _no_data_div("No data."),
                 _no_data_div("No data."),
-                _no_data_div(_empty_msg),
                 "",
             )
-
-        # ── Inventory table (full DataTable, shown when expanded) ─────────────
-        all_rows = beta_rows + alpha_rows
-        _dir_style = [
-            {'if': {'filter_query': '{Direction} = "BUY"'},
-             'backgroundColor': 'rgba(0,204,150,0.08)'},
-            {'if': {'filter_query': '{Direction} = "SELL"'},
-             'backgroundColor': 'rgba(239,85,59,0.08)'},
-            {'if': {'filter_query': '{Book} = "Beta"', 'column_id': 'Book'},
-             'color': THEME['accent'], 'fontWeight': 'bold'},
-            {'if': {'filter_query': '{Book} = "Alpha"', 'column_id': 'Book'},
-             'color': THEME['danger'], 'fontWeight': 'bold'},
-        ]
-        inventory_table = dash_table.DataTable(
-            data=all_rows,
-            columns=[{'name': c, 'id': c} for c in
-                     ['Book', 'Name', 'Leg1', 'Leg2',
-                      'Capital (MM)', 'DV01 (MM/bp)', 'Direction']],
-            style_cell={'textAlign': 'center', 'padding': '5px 8px', 'fontSize': '12px',
-                        'backgroundColor': THEME['table_row_odd'],
-                        'color': THEME['text_main'], 'border': 'none'},
-            style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'],
-                          'fontWeight': 'bold', 'border': 'none'},
-            style_data_conditional=[
-                {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
-                *_dir_style,
-            ],
-            style_table={'overflowX': 'auto'},
-            sort_action='native', page_size=40,
-        )
-
-        inventory_content = (
-            inventory_table if inventory_expanded
-            else build_inventory_summary(beta_rows, alpha_rows)
-        )
 
         # ── Net position by instrument chart (Beta long + Alpha legs combined) ─
         netpos_fig = build_net_position_fig(net_pos)
@@ -2326,18 +2361,5 @@ def register_risk_callbacks(app):
         n_alpha = len(alpha_rows)
         status  = (f"{n_beta} beta · {n_alpha} alpha positions · "
                    f"updated {datetime.now().strftime('%H:%M:%S')}")
-        return kpi_strip, netpos_graph, dv01_graph, factor_graph, inventory_content, status
-
-    # ── Position Inventory: collapse/expand toggle ──────────────────────────────
-    @app.callback(
-        [Output('risk-inventory-expanded', 'data'),
-         Output('risk-inventory-toggle-btn', 'children')],
-        Input('risk-inventory-toggle-btn', 'n_clicks'),
-        State('risk-inventory-expanded', 'data'),
-        prevent_initial_call=True,
-    )
-    def _toggle_risk_inventory(_n_clicks, expanded):
-        is_expanded = not bool(expanded)
-        label = "▲ Collapse" if is_expanded else "▼ Expand table"
-        return is_expanded, label
+        return kpi_strip, netpos_graph, dv01_graph, factor_graph, status
 

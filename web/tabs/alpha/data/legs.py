@@ -243,18 +243,17 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
                 return (otr_cdb.get(t2, ''), otr_cdb.get(t1, ''))
         elif upper.startswith('LGBCGB-'):
             # LGBCGB is a curve-level yield spread (中债 AAA local-gov-bond yield
-            # vs CGB yield) rather than a pair of tradable bonds — there's no OTR
-            # pick possible, so legs are the curve/tenor labels themselves.
+            # vs CGB yield). Use the live on-the-run CGB bond for the CGB leg.
             m = re.match(r'LGBCGB-(\d+)Y$', upper)
             if m:
                 t = m.group(1) + 'Y'
-                return (f'LGB-{t}', f'CGB-{t}')
+                return (f'LGB-{t}', otr_cgb.get(t, f'CGB-{t}'))
         elif upper.startswith('MTNCGB-'):
-            # Same idea as LGBCGB: 中债 AAA MTN yield curve vs CGB yield curve.
+            # Same idea as LGBCGB: use the live on-the-run CGB bond for the CGB leg.
             m = re.match(r'MTNCGB-(\d+)Y$', upper)
             if m:
                 t = m.group(1) + 'Y'
-                return (f'MTN-{t}', f'CGB-{t}')
+                return (f'MTN-{t}', otr_cgb.get(t, f'CGB-{t}'))
         elif upper.startswith('CGBREPO7D-'):
             # CGBRepo7d-5y: long OTR CGB at that tenor vs short matched FR007 IRS tenor.
             # Example: CGBRepo7d-5y -> (260008.IB, FR007S5Y.IR)

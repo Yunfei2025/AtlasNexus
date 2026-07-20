@@ -15,6 +15,20 @@ _CGB_TENOR_BANDS: dict = {
     "10Y": (8.5, 10.0), "20Y": (15.0, 25.0), "30Y": (25.0, 30.0),
 }
 
+_COMMODITY_TICKER_MAP: dict[str, str] = {
+    'Gold': 'AU.SHF',
+    'Silver': 'AG.SHF',
+    'Aluminium': 'AL.SHF',
+    'Copper': 'CU.SHF',
+    'Zinc': 'ZN.SHF',
+    'Crude_Oil': 'SC.INE',
+    'Rebar': 'RB.SHF',
+    'Live_Hog': 'LC.GFE',
+    'Soda_Ash': 'SA.CZC',
+    'Coking_Coal': 'JM.DCE',
+    'Containerized_Freight': 'EC.INE',
+}
+
 
 def get_cgb_otr_map() -> dict[str, str]:
     """Return {tenor: on-the-run bond ID} for CGB (TBond) using highest TOR per bucket.
@@ -76,6 +90,30 @@ def get_cgb_otr_map() -> dict[str, str]:
         return {}
 
 
+def get_cdb_otr_map() -> dict[str, str]:
+    """Return {tenor: on-the-run CDB bond ID} using the latest CBond cvref row."""
+    try:
+        from settings.paths import DIR_INPUT
+        import numpy as np
+        from pathlib import Path
+
+        cvref = pd.read_pickle(str(Path(DIR_INPUT) / "CBond-cvref.pkl"))
+        ref_bond = cvref.get("RefBond", pd.DataFrame()) if isinstance(cvref, dict) else pd.DataFrame()
+        if not isinstance(ref_bond, pd.DataFrame) or ref_bond.empty:
+            return {}
+
+        last_row = ref_bond.iloc[-1]
+        result: dict[str, str] = {}
+        for tenor in ("1Y", "2Y", "5Y", "10Y", "20Y", "30Y"):
+            key = f"Term near {tenor}"
+            value = last_row.get(key, "")
+            if pd.notna(value) and str(value).strip() not in ("", "nan", "None", "—"):
+                result[tenor] = str(value)
+        return result
+    except Exception:
+        return {}
+
+
 def prepare_portfolio_table(summary_df, factor_exposures_df, portfolio=None):
     """
     Prepare the portfolio table with asset type, universe, sector, allocation, and sensitivities.
@@ -103,7 +141,8 @@ def prepare_portfolio_table(summary_df, factor_exposures_df, portfolio=None):
 
     # Build classification columns (vectorized via .map)
     asset_col = filtered['Asset']
-    otr_map = get_cgb_otr_map()
+    cgb_otr_map = get_cgb_otr_map()
+    cdb_otr_map = get_cdb_otr_map()
     filtered = filtered.assign(
         **{
             'Asset Type': asset_col.map(get_asset_type),
@@ -111,9 +150,15 @@ def prepare_portfolio_table(summary_df, factor_exposures_df, portfolio=None):
             'Sector':     asset_col.map(get_sector),
             'Asset Name': asset_col,
             'Instrument': [
-                (otr_map.get(sector, f"CGB-{sector}")
-                 if universe == 'China Gov Bond' and asset_type == 'Rates'
-                 else asset)
+                (
+                    cgb_otr_map.get(sector, f"CGB-{sector}")
+                    if universe == 'China Gov Bond' and asset_type == 'Rates'
+                    else cdb_otr_map.get(sector, asset)
+                    if universe == 'China Development Bond' and asset_type == 'Credit'
+                    else _COMMODITY_TICKER_MAP.get(asset, asset)
+                    if asset_type == 'Commodities'
+                    else asset
+                )
                 for asset, asset_type, universe, sector in zip(
                     asset_col,
                     asset_col.map(get_asset_type),

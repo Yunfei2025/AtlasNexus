@@ -856,6 +856,9 @@ def register_portfolio_run_callbacks(app):
                 'factor_exposures': factor_exp.to_dict() if isinstance(factor_exp, pd.DataFrame) else {},
                 'factor_risk': _store_factor_risk,
                 'portfolio': portfolio.to_dict() if isinstance(portfolio, pd.DataFrame) else {},
+                'beta_snapshot_display': portfolio_table_df.to_dict('records'),
+                'beta_snapshot': _snap.to_dict('records'),
+                'beta_snapshot_timestamp': _run_timestamp.isoformat(),
                 'timestamp': datetime.now().isoformat(),
             }
             return (portfolio_table, status_msg, timestamp_msg,

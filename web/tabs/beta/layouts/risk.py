@@ -357,22 +357,6 @@ def build_multiasset_risk_layout():
                 ], className='risk-charts-right-col'),
             ], className='risk-charts-grid'),
 
-            # ── Position Inventory (collapsible) ─────────────────────────────
-            html.Div([
-                html.Div([
-                    html.Div("Position Inventory (Beta + Alpha)", className='risk-panel-header',
-                              style={'flex': '1', 'border': 'none', 'marginBottom': '0', 'paddingBottom': '0'}),
-                    html.Button("▼ Expand table", id='risk-inventory-toggle-btn', n_clicks=0,
-                                className='risk-inventory-toggle-btn'),
-                ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center',
-                          'marginBottom': '14px', 'paddingBottom': '8px',
-                          'borderBottom': f'1px solid {THEME["table_header"]}'}),
-                dcc.Store(id='risk-inventory-expanded', data=False),
-                html.Div(id='risk-inventory-container',
-                         children=[html.Div("Click Refresh to load positions.",
-                                            style={'color': THEME['text_sub'], 'fontStyle': 'italic',
-                                                   'padding': '20px', 'textAlign': 'center'})]),
-            ], className='risk-panel'),
         ]),
 
         ]),
