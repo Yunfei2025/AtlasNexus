@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dash
 import numpy as np
+import os
 from dash import html, dcc, dash_table
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
@@ -425,7 +426,7 @@ def register_backtest_rfbt_callbacks(app):
     @app.callback(
         [Output('factor-signal-container', 'children'),
          Output('factor-train-status', 'children'),
-         Output('factor-signals-snapshot-store', 'data', allow_duplicate=True)],
+         Output('factor-signals-snapshot-store', 'data')],
         [Input('factor-train-btn', 'n_clicks'),
          Input('factor-predict-btn', 'n_clicks')],
         [State('factor-selection-store', 'data'),
@@ -443,25 +444,26 @@ def register_backtest_rfbt_callbacks(app):
         trigger_id = getattr(dash.callback_context, 'triggered_id', None)
         action = 'predict' if trigger_id == 'factor-predict-btn' else 'train'
 
-        # Always refresh factor-rates.pkl before predicting/training so that
-        # today's market data is included without requiring a manual button press.
-        try:
-            from multiasset.factor_backtest import update_factor_rates
-            _, n_new = update_factor_rates(DIR_INPUT)
-            if n_new:
-                print(f"factor-rates.pkl: +{n_new} new day(s) appended before predict/train")
-        except Exception as _ufr_exc:
-            print(f"Warning: factor-rates incremental update failed: {_ufr_exc}")
+        # Refreshing factor files can invoke external market-data work and
+        # block the Dash request long enough for the browser to abandon it.
+        # The saved current-month model remains immediately usable; opt in to
+        # the refresh when an interactive user explicitly needs it.
+        if os.environ.get("FI_REFRESH_FACTOR_DATA", "").strip().lower() in {"1", "true", "yes", "on"}:
+            try:
+                from multiasset.factor_backtest import update_factor_rates
+                _, n_new = update_factor_rates(DIR_INPUT)
+                if n_new:
+                    print(f"factor-rates.pkl: +{n_new} new day(s) appended before predict/train")
+            except Exception as _ufr_exc:
+                print(f"Warning: factor-rates incremental update failed: {_ufr_exc}")
 
-        # Keep factor-credit.pkl in sync too (separate file/cadence, same
-        # underlying credit calculation — see multiasset/factor_backtest.py).
-        try:
-            from multiasset.factor_backtest import update_factor_credit
-            _, n_new_cr = update_factor_credit(DIR_INPUT)
-            if n_new_cr:
-                print(f"factor-credit.pkl: +{n_new_cr} new day(s) appended before predict/train")
-        except Exception as _ufc_exc:
-            print(f"Warning: factor-credit incremental update failed: {_ufc_exc}")
+            try:
+                from multiasset.factor_backtest import update_factor_credit
+                _, n_new_cr = update_factor_credit(DIR_INPUT)
+                if n_new_cr:
+                    print(f"factor-credit.pkl: +{n_new_cr} new day(s) appended before predict/train")
+            except Exception as _ufc_exc:
+                print(f"Warning: factor-credit incremental update failed: {_ufc_exc}")
 
         store_data = store_data or {}
         factors = list(dict.fromkeys(

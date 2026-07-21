@@ -167,22 +167,31 @@ def run_atlasnexus_daily_app():
         logger.info("Starting AtlasNexus Daily Console")
         logger.info("Web server starting... Press Ctrl+C to stop and return to main menu")
 
-        # Run initialise in a background thread so the Dash server starts
-        # immediately and the page is accessible while data updates run.
-        import threading
-        def _bg_init():
-            try:
-                status = run_initialise()
-                logger.info(f"AtlasNexus startup initialisation: {status}")
-            except Exception as exc:
-                logger.warning(f"AtlasNexus background initialisation error: {exc}")
-        threading.Thread(target=_bg_init, daemon=True).start()
+        # A full initialise rebuild is CPU- and I/O-intensive.  Running it in
+        # this process makes Dash callbacks time out while the server is still
+        # starting, leaving controls such as Beta Candidates → Predict blank.
+        # Keep the web console responsive by default; opt in when needed.
+        if os.environ.get("FI_AUTO_INITIALISE", "").strip().lower() in {"1", "true", "yes", "on"}:
+            import threading
 
-        # Drive periodic refreshers from a plain daemon thread instead of
-        # Dash background callbacks. DiskcacheManager spawns a worker via
-        # `multiprocess` which deadlocks on Windows because spawn re-imports
-        # this module; the in-process thread behaves the same on every OS.
-        start_periodic_refresh()
+            def _bg_init():
+                try:
+                    status = run_initialise()
+                    logger.info(f"AtlasNexus startup initialisation: {status}")
+                except Exception as exc:
+                    logger.warning(f"AtlasNexus background initialisation error: {exc}")
+
+            threading.Thread(target=_bg_init, daemon=True).start()
+        else:
+            logger.info("Skipping automatic initialisation; set FI_AUTO_INITIALISE=1 to run it at startup.")
+
+        # The periodic refresher can also initiate a full market-data/curve
+        # refresh immediately.  Keep it opt-in for interactive dashboard
+        # sessions so it cannot starve Dash request handling at startup.
+        if os.environ.get("FI_AUTO_REFRESH", "").strip().lower() in {"1", "true", "yes", "on"}:
+            start_periodic_refresh()
+        else:
+            logger.info("Skipping automatic periodic refresh; set FI_AUTO_REFRESH=1 to enable it.")
 
         browser_url = _browser_url(8080)
         logger.info(f"Opening AtlasNexus Daily Console in browser: {browser_url}")
