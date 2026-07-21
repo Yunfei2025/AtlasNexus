@@ -197,12 +197,55 @@ def _select_layout(
 def build_spread_series(b: str, season: int, stype: str) -> Dict[str, Any]:
     """Assemble primary and auxiliary time series required for a spread chart."""
 
+    def _build_stat_info_from_spread(spread_df: pd.DataFrame) -> pd.DataFrame:
+        """Create a minimal StatInfo table when only a Spread DataFrame is available."""
+        stat_cols = ['stationary', 'halflife', 'mean', 'vol', 'max', 'min']
+        stat_info = pd.DataFrame(index=spread_df.columns, columns=stat_cols)
+        stat_info.index.name = 'ID'
+        for col in spread_df.columns:
+            sp = pd.to_numeric(spread_df[col], errors='coerce').dropna()
+            if len(sp) == 0:
+                continue
+            stat_info.loc[col, 'mean'] = float(sp.mean())
+            stat_info.loc[col, 'vol'] = float(sp.std()) if len(sp) > 1 else 0.0
+            stat_info.loc[col, 'max'] = float(sp.max())
+            stat_info.loc[col, 'min'] = float(sp.min())
+            stat_info.loc[col, 'halflife'] = np.nan
+            stat_info.loc[col, 'stationary'] = 'NO'
+        for c in ['halflife', 'mean', 'vol', 'max', 'min']:
+            stat_info[c] = pd.to_numeric(stat_info[c], errors='coerce')
+        return stat_info
+
+    def _normalize_dataset(raw_ds: Any) -> Dict[str, Any]:
+        """Normalize spread dataset to a dict interface used by chart builders.
+
+        Some spread types (notably TenorSpread fallback files) may be loaded as
+        a plain DataFrame instead of a dict with Spread/StatInfo.
+        """
+        if isinstance(raw_ds, dict):
+            if 'StatInfo' in raw_ds and isinstance(raw_ds['StatInfo'], pd.DataFrame):
+                return raw_ds
+            if 'Spread' in raw_ds and isinstance(raw_ds['Spread'], pd.DataFrame):
+                d = dict(raw_ds)
+                d['StatInfo'] = _build_stat_info_from_spread(d['Spread'])
+                return d
+
+        if isinstance(raw_ds, pd.DataFrame):
+            spread_df = raw_ds.apply(pd.to_numeric, errors='coerce')
+            return {
+                'Spread': spread_df,
+                'StatInfo': _build_stat_info_from_spread(spread_df),
+            }
+
+        raise ValueError(f"Unsupported spread dataset type: {type(raw_ds)}")
+
     def _resolve_datasets(spread_type: str):
-        d = (
+        raw_ds = (
             spread_ts[spread_type][FuturesConfig.SEASONS[season]]
             if spread_type == "NetBasis"
             else spread_ts[spread_type]
         )
+        d = _normalize_dataset(raw_ds)
         tenors = list(d["StatInfo"].index)
         return d, tenors
 

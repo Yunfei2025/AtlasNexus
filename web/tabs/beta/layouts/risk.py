@@ -323,7 +323,21 @@ def build_multiasset_risk_layout():
             # ── Charts: Net Position (1fr) | DV01 + Factor Risk (440px) ─────
             html.Div([
                 html.Div([
-                    html.Div("Net Position by Instrument", className='risk-panel-header'),
+                    html.Div([
+                        html.Div("Net Position by Instrument", className='risk-panel-header'),
+                        dcc.Dropdown(
+                            id='risk-netpos-book-filter',
+                            options=[
+                                {'label': 'Mixed', 'value': 'mixed'},
+                                {'label': 'Beta', 'value': 'beta'},
+                                {'label': 'Alpha', 'value': 'alpha'},
+                            ],
+                            value='mixed',
+                            clearable=False,
+                            searchable=False,
+                            style={'minWidth': '120px', 'fontSize': '11px'},
+                        ),
+                    ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center', 'gap': '10px'}),
                     html.Div([
                         html.Div([
                             html.Div(style={'width': '8px', 'height': '8px', 'borderRadius': '1px',
@@ -341,7 +355,21 @@ def build_multiasset_risk_layout():
 
                 html.Div([
                     html.Div([
-                        html.Div("DV01 Duration Ladder (MM/bp)", className='risk-panel-header'),
+                        html.Div([
+                            html.Div("DV01 Duration Ladder (MM/bp)", className='risk-panel-header'),
+                            dcc.Dropdown(
+                                id='risk-dv01-book-filter',
+                                options=[
+                                    {'label': 'Mixed', 'value': 'mixed'},
+                                    {'label': 'Beta', 'value': 'beta'},
+                                    {'label': 'Alpha', 'value': 'alpha'},
+                                ],
+                                value='mixed',
+                                clearable=False,
+                                searchable=False,
+                                style={'minWidth': '120px', 'fontSize': '11px'},
+                            ),
+                        ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center', 'gap': '10px'}),
                         html.Div(id='risk-dv01-container',
                                  children=[html.Div("Click Refresh to load positions.",
                                                     style={'color': THEME['text_sub'], 'fontStyle': 'italic',
@@ -356,6 +384,24 @@ def build_multiasset_risk_layout():
                     ], className='risk-panel'),
                 ], className='risk-charts-right-col'),
             ], className='risk-charts-grid'),
+
+            # ── Position Inventory (collapsible) ─────────────────────────────
+            dcc.Store(id='risk-inventory-expanded', data=False),
+            html.Div([
+                html.Div([
+                    html.Div("Position Inventory (Beta + Alpha)", className='risk-panel-header'),
+                    html.Button("▼ Expand table", id='risk-inventory-toggle-btn', n_clicks=0, style={
+                        'fontSize': '11px', 'padding': '3px 10px',
+                        'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
+                        'border': f'1px solid {THEME["accent"]}', 'borderRadius': '4px', 'cursor': 'pointer',
+                    }),
+                ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center',
+                          'marginBottom': '10px'}),
+                html.Div(id='risk-inventory-container',
+                         children=[html.Div("Click Refresh to load positions.",
+                                            style={'color': THEME['text_sub'], 'fontStyle': 'italic',
+                                                   'padding': '20px', 'textAlign': 'center'})]),
+            ], className='risk-panel', style={'marginTop': '16px'}),
 
         ]),
 

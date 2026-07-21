@@ -370,7 +370,6 @@ def register_risk_callbacks(app):
         col_vis = col_vis or {}
         sort_state = sort_state or {'col': None, 'dir': 'asc'}
         import os as _os
-        from dash import ctx as _ctx
 
         def _no_data(msg: str):
             return (
@@ -419,6 +418,50 @@ def register_risk_callbacks(app):
             except Exception:
                 pass
 
+        def _fmt_file_ts(path: str) -> str:
+            try:
+                return datetime.fromtimestamp(_os.path.getmtime(path)).isoformat()
+            except Exception:
+                return 'unknown'
+
+        def _load_persisted_beta_snapshot() -> tuple[list[dict], str, str]:
+            """Fallback loader when allocation-results-store is empty.
+
+            Priority:
+            1) summary_beta_portfolio.parquet (canonical snapshot source)
+            2) beta_book_positions.parquet (legacy/UI table export)
+            """
+            if _os.path.exists(_SUMMARY_BETA_PARQUET):
+                try:
+                    bdf = pd.read_parquet(_SUMMARY_BETA_PARQUET)
+                    if not bdf.empty:
+                        ts = 'unknown'
+                        if '_timestamp' in bdf.columns and bdf['_timestamp'].notna().any():
+                            ts = str(bdf['_timestamp'].dropna().astype(str).iloc[-1])
+                        else:
+                            ts = _fmt_file_ts(_SUMMARY_BETA_PARQUET)
+                        return bdf.to_dict('records'), ts, 'saved beta snapshot'
+                except Exception:
+                    pass
+
+            if _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
+                try:
+                    bdf = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
+                    if not bdf.empty:
+                        # Legacy fallback stores capital in MM CNY under column
+                        # name "Capital (CNY)"; normalize back to CNY here.
+                        if 'Capital (CNY)' in bdf.columns:
+                            _cap = pd.to_numeric(
+                                bdf['Capital (CNY)'].astype(str).str.replace(',', ''),
+                                errors='coerce',
+                            )
+                            bdf['Capital (CNY)'] = _cap * 1_000_000.0
+                        return bdf.to_dict('records'), _fmt_file_ts(_BETA_BOOK_POSITIONS_PARQUET), 'saved beta positions'
+                except Exception:
+                    pass
+
+            return [], 'unknown', ''
+
         def _compute_carry_mtm(spread_type: str, instrument_id: str,
                                open_date_str: str, volume_mm: float) -> float | None:
             """Compute cumulative carry+roll MTM from open_date to today (MM CNY)."""
@@ -442,16 +485,20 @@ def register_risk_callbacks(app):
             # Beta Book -> Portfolio (`allocation-results-store`).
             _store = allocation_results_data or {}
             _records = _store.get('beta_snapshot_display', [])
+            ts = str(_store.get('beta_snapshot_timestamp', 'unknown'))
+            source_label = 'live session'
+
+            if not _records:
+                _records, ts, source_label = _load_persisted_beta_snapshot()
+
             if not _records:
                 return _no_data(
-                    "No Beta allocation results found. Click RUN ANALYSIS in the Beta Book -> Portfolio tab first."
+                    "No Beta allocation results found. Run analysis in Beta Portfolio once to generate saved snapshot files."
                 )
             df = pd.DataFrame(_records)
 
             if df.empty:
                 return _no_data("Beta snapshot is empty.")
-
-            ts = str(_store.get('beta_snapshot_timestamp', 'unknown'))
 
             user_data, deleted_keys = _load_beta_user_overrides()
 
@@ -740,7 +787,7 @@ def register_risk_callbacks(app):
                           'position': 'relative', 'zIndex': '1001'}),
                 table,
             ])
-            status = f"Beta snapshot from {ts[:19]}"
+            status = f"Beta snapshot from {ts[:19]} ({source_label})"
             return content, status, display_rows
 
         except Exception as exc:
@@ -2127,10 +2174,12 @@ def register_risk_callbacks(app):
         [Input('an-summary-subtabs', 'value'),
          Input('risk-refresh-btn', 'n_clicks'),
          Input('allocation-results-store', 'data'),
+         Input('risk-netpos-book-filter', 'value'),
+         Input('risk-dv01-book-filter', 'value'),
          Input('risk-inventory-expanded', 'data')],
         prevent_initial_call=False,
     )
-    def update_risk_tables(tab_value, _n_clicks, allocation_results_data, inventory_expanded):
+    def update_risk_tables(tab_value, _n_clicks, allocation_results_data, netpos_filter, dv01_filter, inventory_expanded):
         import os as _os
         import re
 
@@ -2142,9 +2191,18 @@ def register_risk_callbacks(app):
                                         'padding': '20px', 'textAlign': 'center', 'fontSize': '13px'})
 
         # ── Tenor bucket helper ───────────────────────────────────────────────
-        _TENOR_ORDER = ['1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
-        _TENOR_BOUNDS = [(0.0, 1.5), (1.5, 3.5), (3.5, 7.0),
-                         (7.0, 12.0), (12.0, 17.0), (17.0, 9999.0)]
+        _TENOR_ORDER = ['3M', '6M', '9M', '1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
+        _TENOR_BOUNDS = [
+            (0.0, 0.375),
+            (0.375, 0.625),
+            (0.625, 0.875),
+            (0.875, 1.5),
+            (1.5, 3.5),
+            (3.5, 7.0),
+            (7.0, 12.0),
+            (12.0, 17.0),
+            (17.0, 9999.0),
+        ]
 
         def _dur_to_tenor(dur: float) -> str:
             for label, (lo, hi) in zip(_TENOR_ORDER, _TENOR_BOUNDS):
@@ -2152,8 +2210,8 @@ def register_risk_callbacks(app):
                     return label
             return '30Y'
 
-        _SECTOR_TO_TENOR = {'1Y': '1Y', '2Y': '2Y', '5Y': '5Y',
-                            '10Y': '10Y', '20Y': '20Y', '30Y': '30Y'}
+        _SECTOR_TO_TENOR = {'3M': '3M', '6M': '6M', '9M': '9M', '1Y': '1Y', '2Y': '2Y', '5Y': '5Y',
+                    '10Y': '10Y', '20Y': '20Y', '30Y': '30Y'}
 
         # ── Alpha spread-type → Key Term column (Bonds/Swaps/Futures/Other) ───
         _ALPHA_COL = {
@@ -2181,6 +2239,9 @@ def register_risk_callbacks(app):
 
         # ── Load Beta positions (live store first, parquet fallback) ──────────
         beta_rows, kt_grid = [], {t: {c: 0.0 for c in _KT_COLS} for t in _TENOR_ORDER}
+        # Separate book-specific risk ladders for dropdown filtering.
+        kt_grid_beta = {t: {c: 0.0 for c in _KT_COLS} for t in _TENOR_ORDER}
+        kt_grid_alpha = {t: {c: 0.0 for c in _KT_COLS} for t in _TENOR_ORDER}
         _beta_records = []
         if allocation_results_data and isinstance(allocation_results_data, dict):
             _beta_records = allocation_results_data.get('beta_snapshot_display', []) or []
@@ -2225,6 +2286,7 @@ def register_risk_callbacks(app):
                 if tenor and dv01_mm != 0.0:
                     col = 'Bonds' if sector in _SECTOR_TO_TENOR else 'Other'
                     kt_grid[tenor][col] = round(kt_grid[tenor][col] + dv01_mm, 4)
+                    kt_grid_beta[tenor][col] = round(kt_grid_beta[tenor][col] + dv01_mm, 4)
         except Exception:
             pass
 
@@ -2281,9 +2343,12 @@ def register_risk_callbacks(app):
                             tenor2 = _dur_to_tenor(_tenor_str_to_years(_m2.group(1)))
                             kt_grid[tenor1][col] = round(kt_grid[tenor1][col] + dv01_mm * dir_sign, 4)
                             kt_grid[tenor2][col] = round(kt_grid[tenor2][col] - dv01_mm * dir_sign, 4)
+                            kt_grid_alpha[tenor1][col] = round(kt_grid_alpha[tenor1][col] + dv01_mm * dir_sign, 4)
+                            kt_grid_alpha[tenor2][col] = round(kt_grid_alpha[tenor2][col] - dv01_mm * dir_sign, 4)
                         else:
                             tenor = _dur_to_tenor(duration)
                             kt_grid[tenor][col] = round(kt_grid[tenor][col] + dv01_mm * dir_sign, 4)
+                            kt_grid_alpha[tenor][col] = round(kt_grid_alpha[tenor][col] + dv01_mm * dir_sign, 4)
             except Exception:
                 pass
 
@@ -2333,8 +2398,22 @@ def register_risk_callbacks(app):
             else build_inventory_summary(beta_rows, alpha_rows)
         )
 
-        # ── Net position by instrument chart (Beta long + Alpha legs combined) ─
-        netpos_fig = build_net_position_fig(net_pos)
+        # ── Net position by instrument chart (book-filtered) ─────────────────
+        _netpos_mode = (netpos_filter or 'mixed').lower()
+        if _netpos_mode == 'beta':
+            net_pos_view = {
+                code: {'Beta': vals.get('Beta', 0.0), 'Alpha': 0.0}
+                for code, vals in net_pos.items()
+            }
+        elif _netpos_mode == 'alpha':
+            net_pos_view = {
+                code: {'Beta': 0.0, 'Alpha': vals.get('Alpha', 0.0)}
+                for code, vals in net_pos.items()
+            }
+        else:
+            net_pos_view = net_pos
+
+        netpos_fig = build_net_position_fig(net_pos_view)
         netpos_graph = dcc.Graph(figure=netpos_fig, config={'displayModeBar': False})
 
         # ── Factor Risk (Beta only, no SPDL/SPSL) — feeds the Factor Risk chart ─
@@ -2354,8 +2433,16 @@ def register_risk_callbacks(app):
         else:
             factor_risk_df = None
 
-        # ── DV01 Duration Ladder chart (Beta + Alpha combined, from kt_grid) ───
-        dv01_fig = build_dv01_ladder_fig(kt_grid, _TENOR_ORDER)
+        # ── DV01 Duration Ladder chart (book-filtered) ───────────────────────
+        _dv01_mode = (dv01_filter or 'mixed').lower()
+        if _dv01_mode == 'beta':
+            kt_grid_view = kt_grid_beta
+        elif _dv01_mode == 'alpha':
+            kt_grid_view = kt_grid_alpha
+        else:
+            kt_grid_view = kt_grid
+
+        dv01_fig = build_dv01_ladder_fig(kt_grid_view, _TENOR_ORDER)
         dv01_graph = dcc.Graph(figure=dv01_fig, config={'displayModeBar': False})
 
         # ── Factor Risk Attribution chart (sqrt-scale, from factor_risk_df) ────
