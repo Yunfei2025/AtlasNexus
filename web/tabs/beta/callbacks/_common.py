@@ -16,6 +16,13 @@ _BETA_BOOK_POSITIONS_PARQUET = str(DIR_INPUT / 'beta_book_positions.parquet')
 _BETA_BOOK_USER_PARQUET  = str(DIR_INPUT / 'beta_book_user.parquet')
 _ALPHA_POSITIONS_PARQUET = str(DIR_INPUT / 'alpha_book_positions.parquet')
 
+# Materialized "Portfolio Allocation Snapshot" exports — written whenever the
+# Summary > Books Refresh button is clicked (or a Run Analysis / Run
+# Optimization just completed), one file per book so each can be inspected /
+# reused independently of the Dash session.
+_SUMMARY_BETA_DISPLAY_PARQUET  = str(DIR_INPUT / 'summary_beta_display.parquet')
+_SUMMARY_ALPHA_DISPLAY_PARQUET = str(DIR_INPUT / 'summary_alpha_display.parquet')
+
 # Optional: carry+roll timeseries loader (from alpha data module)
 try:
     from web.tabs.alpha.data import load_carry_roll_timeseries as _load_cr_ts

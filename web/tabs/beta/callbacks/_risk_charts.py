@@ -51,17 +51,24 @@ def _net_pos_bar_color(beta: float, alpha: float, net: float) -> str:
 def build_net_position_fig(net_pos: dict, top_n: int = 15) -> go.Figure:
     """Diverging horizontal bar chart of net position by instrument.
 
-    `net_pos` is the dict built in update_risk_tables: {code: {'Beta': mm, 'Alpha': mm}}.
+    `net_pos` is the dict built in update_risk_tables:
+    {code: {'Beta': mm, 'Alpha': mm, 'DV01': mm_per_bp}}.
     """
     rows = []
     for code, e in net_pos.items():
         beta, alpha = e.get("Beta", 0.0), e.get("Alpha", 0.0)
         net = round(beta + alpha, 4)
+        dv01 = round(
+            e.get("DV01", e.get("BetaDV01", 0.0) + e.get("AlphaDV01", 0.0)),
+            4,
+        )
         if abs(net) < 1e-6 and abs(beta) < 1e-6 and abs(alpha) < 1e-6:
             continue
-        rows.append({"inst": code, "beta": beta, "alpha": alpha, "net": net})
+        rows.append({"inst": code, "beta": beta, "alpha": alpha, "net": net, "dv01": dv01})
 
-    rows.sort(key=lambda r: -abs(r["net"]))
+    # Sort instruments by DV01 magnitude (duration * size proxy), then by
+    # net notional magnitude for deterministic tie-breaking.
+    rows.sort(key=lambda r: (-abs(r["dv01"]), -abs(r["net"])))
     rows = rows[:top_n]
     rows.reverse()  # plot largest at top
 
@@ -80,9 +87,10 @@ def build_net_position_fig(net_pos: dict, top_n: int = 15) -> go.Figure:
     fig.add_trace(go.Bar(
         x=nets, y=insts, orientation="h",
         marker_color=colors, opacity=0.88,
+        customdata=[[r["dv01"]] for r in rows],
         text=text, textposition="outside",
         textfont={"color": TOKENS["text"], "size": 10},
-        hovertemplate="%{y}: %{x:+,.1f} MM<extra></extra>",
+        hovertemplate="%{y}: %{x:+,.1f} MM | DV01 %{customdata[0]:+,.3f} MM/bp<extra></extra>",
     ))
 
     fig.update_layout(**_base_layout(
@@ -98,10 +106,14 @@ def build_net_position_fig(net_pos: dict, top_n: int = 15) -> go.Figure:
 
 def build_dv01_ladder_fig(kt_grid: dict, tenor_order: list[str]) -> go.Figure:
     """Stacked vertical bar chart: DV01 (MM/bp) by tenor, split Bonds/Swaps/Futures."""
-    tenors = [t for t in tenor_order if any(abs(v) > 1e-8 for v in kt_grid[t].values())]
+    tenors = [t for t in tenor_order if t in kt_grid]
+    has_any_rate_position = any(
+        any(abs(v) > 1e-8 for v in kt_grid[t].values())
+        for t in tenors
+    )
 
     fig = go.Figure()
-    if not tenors:
+    if not tenors or not has_any_rate_position:
         fig.update_layout(**_base_layout(height=290))
         fig.add_annotation(text="No rate positions found.", showarrow=False,
                             font={"color": TOKENS["muted"]})

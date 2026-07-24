@@ -263,7 +263,7 @@ def build_multiasset_risk_layout():
 
             # Column-visibility pills — track via dcc.Store, options depend on active book
             dcc.Store(id='summary-book-active', data='beta'),
-            dcc.Store(id='summary-col-visibility', data={'open_date': False, 'volume': False, 'score': False}),
+            dcc.Store(id='summary-col-visibility', data={'open_date': False, 'volume': False}),
             dcc.Store(id='summary-beta-sort', data={'col': None, 'dir': 'asc'}),
             dcc.Store(id='summary-alpha-sort', data={'col': None, 'dir': 'asc'}),
             dcc.Store(id='summary-beta-active-date-row', data=None),
@@ -277,13 +277,6 @@ def build_multiasset_risk_layout():
                 }),
                 html.Button("Open Date", id='summary-col-pill-open_date', n_clicks=0, style=col_pill_style(False)),
                 html.Button("Volume", id='summary-col-pill-volume', n_clicks=0, style=col_pill_style(False)),
-                # Always present (even on the Beta book, where it's unused) so the
-                # column-visibility callback's Input always resolves — Dash's
-                # client-side renderer throws if a static-id Input is ever absent
-                # from the live layout, which silently breaks the Open Date/Volume
-                # pills too since they share the same callback.
-                html.Button("Score", id='summary-col-pill-score', n_clicks=0,
-                            style={**col_pill_style(False), 'display': 'none'}),
             ], id='summary-col-pills-row', style={'display': 'flex', 'alignItems': 'center', 'gap': '6px', 'marginBottom': '10px', 'flexWrap': 'wrap'}),
 
             # Single full-width table container — content swapped by book toggle
