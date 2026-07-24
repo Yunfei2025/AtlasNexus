@@ -201,6 +201,7 @@ def _autoruns1_tick() -> None:
     cache means subsequent ticks are free.
     """
     if not _locks["autoruns1"].acquire(blocking=False):
+        logger.info("Intraday refresh skipped: the previous refresh is still running.")
         return
     try:
         if not DIRECT_CALLS_AVAILABLE:
@@ -218,11 +219,28 @@ def _autoruns1_tick() -> None:
         in_window = (t.hour >= TradingHoursConfig.START_HOUR) and (t.hour <= TradingHoursConfig.END_HOUR) and (t.date() == date_m)
         in_credit_window = (t.hour >= TradingHoursConfig.CREDIT_START_HOUR) and (t.hour <= TradingHoursConfig.CREDIT_END_HOUR) and (t.date() == date_m)
 
-        if in_window:
-            Utils.run_parallel_tasks([
-                lambda btype=btype: BondCurveRefresher.main(bond_type=btype)
-                for btype in BOND_TYPES
-            ])
+        if not in_window:
+            reasons = []
+            if not TradingHoursConfig.START_HOUR <= t.hour <= TradingHoursConfig.END_HOUR:
+                reasons.append(
+                    f"outside trading window {TradingHoursConfig.START_HOUR:02d}:00–{TradingHoursConfig.END_HOUR:02d}:59"
+                )
+            if t.date() != date_m:
+                reasons.append(f"macro-px.pkl date is {date_m or 'missing'}, expected {t.date().isoformat()}")
+            message = "Intraday refresh deferred: " + "; ".join(reasons)
+            logger.info(message)
+            _set_status("autoruns1", message)
+            return
+
+        logger.info(
+            "Intraday refresh started: asof=%s, macro-px.pkl=%s, credit_window=%s",
+            t.date().isoformat(), date_m, in_credit_window,
+        )
+
+        Utils.run_parallel_tasks([
+            lambda btype=btype: BondCurveRefresher.main(bond_type=btype)
+            for btype in BOND_TYPES
+        ])
 
         if in_credit_window:
             Utils.run_parallel_tasks([
@@ -230,16 +248,16 @@ def _autoruns1_tick() -> None:
                 for obtype in BondConfig.INCLUDE_FILTERS.keys()
             ])
 
-        if in_window:
-            IRSRefresher.main()
-            StatRefresher.main()
-            _set_status(
-                "autoruns1",
-                "This app generates prices and statistics of Bonds and Swaps every "
-                + str(int(t_int / 60e3))
-                + "min. Data refreshed at: "
-                + datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
-            )
+        IRSRefresher.main()
+        StatRefresher.main()
+        message = (
+            "This app generates prices and statistics of Bonds and Swaps every "
+            + str(int(t_int / 60e3))
+            + "min. Data refreshed at: "
+            + datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S")
+        )
+        logger.info("Intraday refresh completed: %s", message)
+        _set_status("autoruns1", message)
     except Exception as e:
         error_msg = f"Auto refresh failed: {e}"
         print(error_msg)
@@ -289,10 +307,15 @@ def start_periodic_refresh(interval_seconds: float | None = None) -> None:
         interval_seconds = max(1.0, t_int / 1000.0)
 
     long_interval_seconds = max(interval_seconds, 4.0 * interval_seconds)
+    initial_delay_seconds = min(30.0, interval_seconds)
+    logger.info(
+        "Intraday refresh scheduler started: interval=%ss; first check in %ss.",
+        int(interval_seconds), int(initial_delay_seconds),
+    )
 
     def _loop() -> None:
         # Defer the first tick so startup `_bg_init` can finish first.
-        time.sleep(min(30.0, interval_seconds))
+        time.sleep(initial_delay_seconds)
         last_long_tick = 0.0
         while True:
             try:

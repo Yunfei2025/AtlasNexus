@@ -97,7 +97,7 @@ from web.tabs.atlas_pricer_tab import (
 
 
 # Refresh interval constants (milliseconds) — tune these in one place
-GRAPH_INTERVAL        = int(os.environ.get("GRAPH_INTERVAL", 30 * 60_000))  # data graphs: 30 min
+GRAPH_INTERVAL        = int(os.environ.get("GRAPH_INTERVAL", 15 * 60_000))  # data graphs: 15 min
 _INTERVAL_HEADER_MS   = 5_000   # header clock + job pill strip
 _INTERVAL_RUN_CTR_MS  = 5_000   # run center log tail / job status
 
@@ -744,7 +744,7 @@ def _header_status(n, job_id):
             ))
         elif state == "FAILED":
             pills.append(html.Span(
-                [html.Span(className="dot"), "Failed"],
+                [html.Span(className="dot"), "Last job failed"],
                 className="an-status-pill error",
             ))
 
@@ -1142,8 +1142,10 @@ def _render_log_line(line: str):
 
 @app.callback(
     Output("an-run-center-content", "children"),
+    Output("an-job-id", "data", allow_duplicate=True),
     Input("an-run-center-interval", "n_intervals"),
     State("an-job-id", "data"),
+    prevent_initial_call=True,
 )
 def _update_run_center(n, job_id):
     """Update Run Center status bar + log viewer on interval.
@@ -1157,7 +1159,18 @@ def _update_run_center(n, job_id):
     running_jobs = list_running_jobs()  # already finalizes stale entries internally
     is_running = bool(running_jobs)
 
-    status = finalize_job_if_done(job_id) if job_id else None
+    # Startup EOD is launched before a browser session exists, so it has no
+    # client-side job id. Adopt a running job discovered from the shared job
+    # registry to display its status and log in Execution Center.
+    active_job_id = job_id
+    clear_job_id = no_update
+    if running_jobs:
+        running_job_id = running_jobs[0].get("job_id")
+        if running_job_id and running_job_id != active_job_id:
+            active_job_id = running_job_id
+            clear_job_id = active_job_id
+
+    status = finalize_job_if_done(active_job_id) if active_job_id else None
 
     if is_running:
         jtype = _cmd_type(running_jobs[0].get("cmd", [])) or "job"
@@ -1171,6 +1184,11 @@ def _update_run_center(n, job_id):
         ended   = (status.get("ended_at", "") or "")[:19] or "—"
         jtype   = _cmd_type(status.get("cmd", [])) or "?"
         last_run_text = f"Last: {jtype} | {started} → {ended} | {state}"
+
+        # Clear stale remembered job id once it has successfully finished,
+        # so old FAILED/SUCCESS pills do not linger forever in header state.
+        if state == "FINISHED" and status.get("returncode") == 0:
+            clear_job_id = None
     else:
         last_run_text = f"Latest EOD: {format_run_meta(meta)}"
 
@@ -1186,7 +1204,7 @@ def _update_run_center(n, job_id):
         className="rc-status-bar",
     )
 
-    log_text = tail_log(job_id, max_lines=200) if job_id else ""
+    log_text = tail_log(active_job_id, max_lines=200) if active_job_id else ""
     lines = [ln for ln in log_text.splitlines() if ln.strip()]
     if lines:
         log_children = [_render_log_line(ln) for ln in lines]
@@ -1197,8 +1215,11 @@ def _update_run_center(n, job_id):
 
     log_viewer = html.Div(log_children, id="an-run-center-log-viewer", className="rc-log-viewer")
 
-    return html.Div([status_bar, html.Div(log_viewer, className="rc-panel-flush")],
-                     style={"display": "flex", "flexDirection": "column", "gap": "14px"})
+    return (
+        html.Div([status_bar, html.Div(log_viewer, className="rc-panel-flush")],
+                 style={"display": "flex", "flexDirection": "column", "gap": "14px"}),
+        clear_job_id,
+    )
 
 
 # (tab-switcher callbacks registered above via _make_tab_switcher)

@@ -37,6 +37,27 @@ def _force_update_requested(cfg=None) -> bool:
     return bool(getattr(cfg, "params", {}).get("force_update", False))
 
 
+def _normalized_date_key(value):
+    if isinstance(value, pd.Timestamp):
+        return value.date()
+    if hasattr(value, "date") and not isinstance(value, str):
+        try:
+            return value.date()
+        except Exception:
+            pass
+    if isinstance(value, str):
+        try:
+            return pd.Timestamp(value).date()
+        except Exception:
+            return value
+    return value
+
+
+def _tick_dict_has_date(tick_dict, target_date) -> bool:
+    normalized_target = _normalized_date_key(target_date)
+    return any(_normalized_date_key(existing_key) == normalized_target for existing_key in tick_dict.keys())
+
+
 def retrieveTick(date, futures):
     if not _is_trading_hours():
         return pd.DataFrame()
@@ -67,12 +88,14 @@ def retrieveFuturesTick(cfg=None):
         file_path = os.path.join(DIR_DATA, 'futures', f.split('.')[0] + '.pkl')
         tick_dict = updatePKL(tick_dict, file_path)
         for d in day_list:
-            if d not in tick_dict.keys():
-                ds = d.strftime('%Y-%m-%d')
-                print("Updating ", f, ds)
-                temp = _wst(f, "last,ask,bid,volume", ds)
-                if temp.shape[0] > 10:
-                    tick_dict[d] = temp
+            if _tick_dict_has_date(tick_dict, d):
+                continue
+
+            ds = d.strftime('%Y-%m-%d')
+            print("Updating ", f, ds)
+            temp = _wst(f, "last,ask,bid,volume", ds)
+            if temp.shape[0] > 10:
+                tick_dict[d] = temp
         try:
             print("Saving ", f)
             tick_dict = updatePKL(tick_dict, file_path)

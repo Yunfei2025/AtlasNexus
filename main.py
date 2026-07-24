@@ -10,7 +10,7 @@ import logging
 import argparse
 import socket
 import multiprocessing as mp
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from curves.backtest.selection import expand_backfill_btypes
@@ -50,6 +50,12 @@ sys.path.insert(0, str(project_root))
 # Module-level logger placeholder; configured in __main__
 logger = logging.getLogger(__name__)
 
+_STARTUP_EOD_ARTIFACTS = (
+    "CBond-cvref.pkl",
+    "TBond-cvref.pkl",
+    "TBond-spds.pkl",
+)
+
 
 def _resolve_browser_host() -> str:
     """Return a browser-friendly host for local app launch.
@@ -71,6 +77,68 @@ def _resolve_browser_host() -> str:
 
 def _browser_url(port: int) -> str:
     return f"http://{_resolve_browser_host()}:{port}/"
+
+
+def _file_mtime_date(path: Path) -> date | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).date()
+    except FileNotFoundError:
+        return None
+
+
+def _should_run_startup_eod(project_root: Path) -> tuple[bool, str]:
+    env_override = os.environ.get("FI_AUTO_EOD")
+    if env_override is not None and env_override.strip().lower() in {"0", "false", "no", "off"}:
+        return False, "disabled by FI_AUTO_EOD"
+
+    from settings.general import DateConfig
+
+    asof = datetime.today().date()
+    if not DateConfig.is_cn_workday(asof):
+        return False, f"{asof.isoformat()} is not a CN workday"
+
+    try:
+        from web.services.artifacts import find_latest_run
+    except Exception as exc:
+        return True, f"run metadata unavailable ({exc})"
+
+    latest = find_latest_run(mode="eod")
+    if latest is None:
+        return True, "no prior EOD run found"
+
+    if latest.asof != asof.isoformat() or latest.status != "completed":
+        return True, f"latest EOD run is {latest.asof or 'unknown'} with status {latest.status or 'unknown'}"
+
+    from settings.paths import DIR_INPUT
+
+    stale_artifacts = [
+        name for name in _STARTUP_EOD_ARTIFACTS
+        if _file_mtime_date(Path(DIR_INPUT) / name) != asof
+    ]
+    if stale_artifacts:
+        return True, "stale daily artifacts: " + ", ".join(stale_artifacts)
+
+    return False, f"latest EOD run and core artifacts already match {asof.isoformat()}"
+
+
+def _launch_startup_eod(project_root: Path) -> bool:
+    should_run, reason = _should_run_startup_eod(project_root)
+    if not should_run:
+        logger.info("Skipping automatic startup EOD: %s", reason)
+        return False
+
+    try:
+        # Use the same tracked job mechanism as Execution Center. This makes
+        # the startup run visible in the UI and prevents a manual EOD launch
+        # from duplicating it while it is still using shared artifacts.
+        from web.services.jobs import start_engine_job
+
+        job = start_engine_job(argv=["eod", "--update-data"])
+        logger.info("Started automatic startup EOD job %s: %s", job.job_id, reason)
+        return True
+    except Exception:
+        logger.exception("Failed to start automatic startup EOD: %s", reason)
+        return False
 
 
 def _parse_date(s: str) -> str:
@@ -167,11 +235,12 @@ def run_atlasnexus_daily_app():
         logger.info("Starting AtlasNexus Daily Console")
         logger.info("Web server starting... Press Ctrl+C to stop and return to main menu")
 
-        # A full initialise rebuild is CPU- and I/O-intensive.  Running it in
-        # this process makes Dash callbacks time out while the server is still
-        # starting, leaving controls such as Beta Candidates → Predict blank.
-        # Keep the web console responsive by default; opt in when needed.
-        if os.environ.get("FI_AUTO_INITIALISE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        _launch_startup_eod(project_root)
+
+        # Run the daily generation process in the background so the dashboard
+        # stays responsive while curves and derived artifacts are rebuilt.
+        # Set FI_AUTO_INITIALISE=0 to suppress it for a dashboard-only session.
+        if os.environ.get("FI_AUTO_INITIALISE", "").strip().lower() not in {"0", "false", "no", "off"}:
             import threading
 
             def _bg_init():
@@ -183,15 +252,14 @@ def run_atlasnexus_daily_app():
 
             threading.Thread(target=_bg_init, daemon=True).start()
         else:
-            logger.info("Skipping automatic initialisation; set FI_AUTO_INITIALISE=1 to run it at startup.")
+            logger.info("Skipping automatic initialisation; FI_AUTO_INITIALISE disables it.")
 
-        # The periodic refresher can also initiate a full market-data/curve
-        # refresh immediately.  Keep it opt-in for interactive dashboard
-        # sessions so it cannot starve Dash request handling at startup.
-        if os.environ.get("FI_AUTO_REFRESH", "").strip().lower() in {"1", "true", "yes", "on"}:
+        # Keep intraday market data and derived curves current while the daily
+        # dashboard is running. Set FI_AUTO_REFRESH=0 to disable this loop.
+        if os.environ.get("FI_AUTO_REFRESH", "").strip().lower() not in {"0", "false", "no", "off"}:
             start_periodic_refresh()
         else:
-            logger.info("Skipping automatic periodic refresh; set FI_AUTO_REFRESH=1 to enable it.")
+            logger.info("Skipping automatic periodic refresh; FI_AUTO_REFRESH disables it.")
 
         browser_url = _browser_url(8080)
         logger.info(f"Opening AtlasNexus Daily Console in browser: {browser_url}")

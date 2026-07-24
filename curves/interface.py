@@ -76,7 +76,11 @@ def refresh_credit(cfg: RunConfig, store: ArtifactStore) -> None:
     logger.info("[curves] Refreshing credit spreads")
     try:
         from curves.refreshers.credit import CreditSpreadRefresher
-        CreditSpreadRefresher.main()
+        from settings.fixed_income import BondConfig
+
+        for bond_type in BondConfig.INCLUDE_FILTERS.keys():
+            logger.info("[curves] Refreshing credit spread for %s", bond_type)
+            CreditSpreadRefresher.main(other_bond_type=bond_type)
         logger.info("[curves] Credit refresh done")
     except Exception:
         logger.exception("[curves] Credit refresh failed")

@@ -35,7 +35,7 @@ from settings.futures import FuturesConfig
 
 # Setup the app
 # Use integer milliseconds and coerce env overrides to int for consistency
-t_int = int(30 * 60e3)  # unit ms, min*60*1e3 sec
+t_int = int(15 * 60e3)  # unit ms, min*60*1e3 sec
 GRAPH_INTERVAL = int(os.environ.get("GRAPH_INTERVAL", t_int))
 t_int1 = int(120 * 60e3)  # unit ms, min*60*1e3 sec
 GRAPH_INTERVAL1 = int(os.environ.get("GRAPH_INTERVAL", t_int1))
