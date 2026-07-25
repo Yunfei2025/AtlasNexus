@@ -212,7 +212,7 @@ def build_candidates_layout() -> html.Div:
                     dcc.Checklist(
                         id='seasonal-prefilter-toggle',
                         options=[{'label': ' Apply seasonal gate before scan (exclude noise months)', 'value': 'on'}],
-                        value=[],
+                        value=['on'],
                         inputStyle={'marginRight': '6px', 'accentColor': THEME['accent']},
                         labelStyle={'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600', 'cursor': 'pointer'},
                     ),
@@ -452,13 +452,15 @@ def build_portfolio_layout() -> html.Div:
                     html.Label("Total Capital", style=_label_style),
                     html.Div([
                         dcc.Input(
-                            id='alpha-total-capital', type='number', value=10, min=1,
-                            style={'width': '70px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
+                            id='alpha-total-capital', type='number', value=500, min=1,
+                            className='no-spinner',
+                            style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',
                                    'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
-                                   'textAlign': 'right'},
+                                   'textAlign': 'right', 'MozAppearance': 'textfield',
+                                   'WebkitAppearance': 'none', 'appearance': 'textfield'},
                         ),
-                        html.Span("Billion CNY", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
+                        html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
                     ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
                 ]),
                 html.Div([
@@ -466,17 +468,55 @@ def build_portfolio_layout() -> html.Div:
                     html.Div([
                         dcc.Input(
                             id='alpha-dv01-budget', type='number', value=5, min=0,
-                            style={'width': '70px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
+                            className='no-spinner',
+                            style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',
                                    'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
-                                   'textAlign': 'right'},
+                                   'textAlign': 'right', 'MozAppearance': 'textfield',
+                                   'WebkitAppearance': 'none', 'appearance': 'textfield'},
                         ),
                         html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
                     ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
                 ]),
                 html.Div([
+                    html.Label("Bond Margin Rate", style=_label_style),
+                    html.Div([
+                        dcc.Input(
+                            id='alpha-bond-margin-rate', type='number', value=5, min=0, max=100, step=0.5,
+                            className='no-spinner',
+                            style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
+                                   'border': '1px solid var(--border-default)', 'borderRadius': '4px',
+                                   'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
+                                   'textAlign': 'right', 'MozAppearance': 'textfield',
+                                   'WebkitAppearance': 'none', 'appearance': 'textfield'},
+                        ),
+                        html.Span("%", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+                ]),
+                html.Div([
+                    html.Label("Swaps / Futures Margin Rate", style=_label_style),
+                    html.Div([
+                        dcc.Input(
+                            id='alpha-swap-margin-rate', type='number', value=5, min=0, max=100, step=0.5,
+                            className='no-spinner',
+                            style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
+                                   'border': '1px solid var(--border-default)', 'borderRadius': '4px',
+                                   'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
+                                   'textAlign': 'right', 'MozAppearance': 'textfield',
+                                   'WebkitAppearance': 'none', 'appearance': 'textfield'},
+                        ),
+                        html.Span("%", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+                ]),
+                html.Div([
                     html.Label("Method", style=_label_style),
-                    html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '12px', 'fontWeight': '700'}),
+                    html.Div([
+                        html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '12px', 'fontWeight': '700'}),
+                        html.Span(
+                            "Spread direction convention: SELL = expect spread up/widen, BUY = expect spread down/narrow.",
+                            style={'color': THEME['text_sub'], 'fontSize': '10px'},
+                        ),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '2px'}),
                 ]),
             ], style={'padding': '14px 16px', 'display': 'flex', 'flexWrap': 'wrap', 'gap': '24px',
                       'alignItems': 'flex-end', 'borderBottom': '1px solid var(--border-strong)'}),

@@ -48,7 +48,7 @@ def _net_pos_bar_color(beta: float, alpha: float, net: float) -> str:
     return _NET_MIXED_LONG if net >= 0 else _NET_MIXED_SHORT
 
 
-def build_net_position_fig(net_pos: dict, top_n: int = 15) -> go.Figure:
+def build_net_position_fig(net_pos: dict, top_n: int | None = None) -> go.Figure:
     """Diverging horizontal bar chart of net position by instrument.
 
     `net_pos` is the dict built in update_risk_tables:
@@ -66,11 +66,10 @@ def build_net_position_fig(net_pos: dict, top_n: int = 15) -> go.Figure:
             continue
         rows.append({"inst": code, "beta": beta, "alpha": alpha, "net": net, "dv01": dv01})
 
-    # Sort instruments by DV01 magnitude (duration * size proxy), then by
-    # net notional magnitude for deterministic tie-breaking.
-    rows.sort(key=lambda r: (-abs(r["dv01"]), -abs(r["net"])))
-    rows = rows[:top_n]
-    rows.reverse()  # plot largest at top
+    # Sort instruments by name for a stable lexical scan in the dashboard.
+    rows.sort(key=lambda r: str(r["inst"]).upper())
+    if isinstance(top_n, int) and top_n > 0:
+        rows = rows[:top_n]
 
     fig = go.Figure()
     if not rows:

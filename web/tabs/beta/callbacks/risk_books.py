@@ -239,9 +239,23 @@ def register_risk_books_callbacks(app):
             fresh page load always shows the last saved state.
 
             Priority:
-            1) summary_beta_portfolio.parquet (canonical snapshot source)
-            2) beta_book_positions.parquet (legacy/UI table export)
+            1) summary_beta_display.parquet (render-ready snapshot)
+            2) summary_beta_portfolio.parquet (canonical snapshot source)
+            3) beta_book_positions.parquet (legacy/UI table export)
             """
+            if _os.path.exists(_SUMMARY_BETA_DISPLAY_PARQUET):
+                try:
+                    bdf = pd.read_parquet(_SUMMARY_BETA_DISPLAY_PARQUET)
+                    if not bdf.empty:
+                        ts = 'unknown'
+                        if '_timestamp' in bdf.columns and bdf['_timestamp'].notna().any():
+                            ts = str(bdf['_timestamp'].dropna().astype(str).iloc[-1])
+                        else:
+                            ts = _fmt_file_ts(_SUMMARY_BETA_DISPLAY_PARQUET)
+                        return bdf.to_dict('records'), ts, 'saved beta display snapshot'
+                except Exception:
+                    pass
+
             if _os.path.exists(_SUMMARY_BETA_PARQUET):
                 try:
                     bdf = pd.read_parquet(_SUMMARY_BETA_PARQUET)
@@ -410,18 +424,6 @@ def register_risk_books_callbacks(app):
 
             if not display_rows:
                 return _no_data("Beta snapshot is empty.")
-
-            # ── Persist a clean, file-backed export on explicit Refresh (or
-            # right after a Run Analysis just wrote the canonical snapshot) ──
-            if dash.ctx.triggered_id in ('summary-refresh-btn', 'allocation-results-store'):
-                try:
-                    _export_cols = [k for k in display_rows[0].keys() if not k.startswith('_')]
-                    _export_df = pd.DataFrame([{k: r.get(k) for k in _export_cols} for r in display_rows])
-                    _export_df['_timestamp'] = datetime.now().isoformat()
-                    pathlib.Path(_SUMMARY_BETA_DISPLAY_PARQUET).parent.mkdir(parents=True, exist_ok=True)
-                    _export_df.to_parquet(_SUMMARY_BETA_DISPLAY_PARQUET, index=False)
-                except Exception as _pe:
-                    print(f"Warning: Could not persist Beta display snapshot: {_pe}")
 
             def _sum_num(col):
                 t, any_ = 0.0, False
@@ -628,8 +630,36 @@ def register_risk_books_callbacks(app):
         """Render Alpha Book allocation table."""
         import os as _os
         sort_state = sort_state or {'col': None, 'dir': 'asc'}
-        from dash import ctx as _ctx
         col_vis = col_vis or {}
+
+        def _fmt_file_ts(path: str) -> str:
+            try:
+                return datetime.fromtimestamp(_os.path.getmtime(path)).isoformat()
+            except Exception:
+                return 'unknown'
+
+        def _load_persisted_alpha_display() -> tuple[list[dict], str, str]:
+            """Load saved Alpha display snapshot rows, excluding helper columns.
+
+            Priority:
+            1) summary_alpha_display.parquet (render-ready snapshot)
+            2) none -> caller falls back to canonical alpha snapshot rebuild
+            """
+            if _os.path.exists(_SUMMARY_ALPHA_DISPLAY_PARQUET):
+                try:
+                    adf = pd.read_parquet(_SUMMARY_ALPHA_DISPLAY_PARQUET)
+                    if not adf.empty:
+                        ts = 'unknown'
+                        if '_timestamp' in adf.columns and adf['_timestamp'].notna().any():
+                            ts = str(adf['_timestamp'].dropna().astype(str).iloc[-1])
+                        else:
+                            ts = _fmt_file_ts(_SUMMARY_ALPHA_DISPLAY_PARQUET)
+                        records = adf.to_dict('records')
+                        records = [{k: v for k, v in r.items() if not str(k).startswith('_')} for r in records]
+                        return records, ts, 'saved alpha display snapshot'
+                except Exception:
+                    pass
+            return [], 'unknown', ''
 
         def _no_data(msg: str):
             return (
@@ -770,15 +800,21 @@ def register_risk_books_callbacks(app):
 
         _alpha_duration_snap_cache: dict[str, pd.DataFrame | None] = {}
 
-        if not _os.path.exists(_SUMMARY_ALPHA_PARQUET):
-            return _no_data(
-                "No Alpha snapshot found. Click RUN OPTIMIZATION in the Alpha Book → Portfolio tab first."
-            )
         try:
-            is_refresh = bool(_n_clicks and _ctx.triggered_id == 'summary-refresh-btn')
-            df  = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
-            ts  = df['_timestamp'].iloc[0] if '_timestamp' in df.columns else "unknown"
-            pos = _load_positions()
+            _saved_rows, ts_saved, source_saved = _load_persisted_alpha_display()
+            if _saved_rows:
+                display_rows = [dict(r) for r in _saved_rows]
+                ts = ts_saved
+                source_label = source_saved
+            else:
+                if not _os.path.exists(_SUMMARY_ALPHA_PARQUET):
+                    return _no_data(
+                        "No Alpha snapshot found. Click RUN OPTIMIZATION in the Alpha Book -> Portfolio tab first."
+                    )
+                df  = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
+                ts  = df['_timestamp'].iloc[0] if '_timestamp' in df.columns else "unknown"
+                source_label = 'saved alpha snapshot'
+                pos = _load_positions()
 
             def _fmt1(v):
                 try:
@@ -787,132 +823,133 @@ def register_risk_books_callbacks(app):
                 except (TypeError, ValueError):
                     return ''
 
-            display_rows = []
-            for _row_idx, (_, row) in enumerate(df.iterrows()):
-                trade_id = str(row.get('ID', ''))
-                if trade_id in ('TOTAL', ''):
-                    continue
-                spread_type    = str(row.get('spread_type', ''))
-                key            = (spread_type, trade_id)
-                saved          = pos.get(key, {})
-                open_price_str = str(saved.get('open_price_bp', ''))
-                volume_str     = str(saved.get('volume_mm', ''))
-                open_date_str  = str(saved.get('open_date', ''))
+            if not _saved_rows:
+                display_rows = []
+                for _row_idx, (_, row) in enumerate(df.iterrows()):
+                    trade_id = str(row.get('ID', ''))
+                    if trade_id in ('TOTAL', ''):
+                        continue
+                    spread_type    = str(row.get('spread_type', ''))
+                    key            = (spread_type, trade_id)
+                    saved          = pos.get(key, {})
+                    open_price_str = str(saved.get('open_price_bp', ''))
+                    volume_str     = str(saved.get('volume_mm', ''))
+                    open_date_str  = str(saved.get('open_date', ''))
 
-                spread_val = row.get('spread', None)
-                zscore_val = _resolve_alpha_metric(spread_type, trade_id, 'Zscore', fallback=_coerce_float(row.get('Zscore')))
-                carry_roll_val = _resolve_alpha_metric(spread_type, trade_id, 'carry_roll', fallback=_coerce_float(row.get('carry_roll')))
-                breakeven_val = _resolve_alpha_metric(spread_type, trade_id, 'breakeven_3m', fallback=_coerce_float(row.get('breakeven_3m')))
-                notional   = float(row.get('notional_mm', 0) or 0)
-                dv01_k     = float(row.get('DV01_k', 0) or 0)
-                _dur_raw   = row.get('_duration', None)
-                if _dur_raw is not None and pd.notna(_dur_raw):
-                    duration = float(_dur_raw)
-                elif notional > 0:
-                    duration = round(dv01_k * 10.0 / notional, 2)
-                else:
-                    duration = 0.0
+                    spread_val = row.get('spread', None)
+                    zscore_val = _resolve_alpha_metric(spread_type, trade_id, 'Zscore', fallback=_coerce_float(row.get('Zscore')))
+                    carry_roll_val = _resolve_alpha_metric(spread_type, trade_id, 'carry_roll', fallback=_coerce_float(row.get('carry_roll')))
+                    breakeven_val = _resolve_alpha_metric(spread_type, trade_id, 'breakeven_3m', fallback=_coerce_float(row.get('breakeven_3m')))
+                    notional   = float(row.get('notional_mm', 0) or 0)
+                    dv01_k     = float(row.get('DV01_k', 0) or 0)
+                    _dur_raw   = row.get('_duration', None)
+                    if _dur_raw is not None and pd.notna(_dur_raw):
+                        duration = float(_dur_raw)
+                    elif notional > 0:
+                        duration = round(dv01_k * 10.0 / notional, 2)
+                    else:
+                        duration = 0.0
 
-                # Resolve leg1/leg2 for all spread types
-                leg1, leg2 = _resolve_bondcurve_legs(spread_type, trade_id, duration)
-                leg_ratio_val = _leg_volume_ratio(leg1, leg2, spread_type, trade_id, duration, _alpha_duration_snap_cache)
-                leg_ratio = f"{leg_ratio_val:.2f}" if leg_ratio_val is not None else ''
-                leg2_target_volume = (
-                    round(notional * leg_ratio_val / 10.0) * 10.0 if leg_ratio_val is not None else None
-                )
+                    # Resolve leg1/leg2 for all spread types
+                    leg1, leg2 = _resolve_bondcurve_legs(spread_type, trade_id, duration)
+                    leg_ratio_val = _leg_volume_ratio(leg1, leg2, spread_type, trade_id, duration, _alpha_duration_snap_cache)
+                    leg_ratio = f"{leg_ratio_val:.2f}" if leg_ratio_val is not None else ''
+                    leg2_target_volume = (
+                        round(notional * leg_ratio_val / 10.0) * 10.0 if leg_ratio_val is not None else None
+                    )
 
-                cp_fallback_bp = _resolve_alpha_metric(
-                    spread_type, trade_id, 'spread',
-                    fallback=round(float(spread_val), 4) if pd.notna(spread_val) else None,
-                    scale_to_bp=True,
-                )
-                cp_bp = _resolve_alpha_close_price_bp(
-                    spread_type,
-                    trade_id,
-                    leg1,
-                    leg2,
-                    cp_fallback_bp,
-                )
+                    cp_fallback_bp = _resolve_alpha_metric(
+                        spread_type, trade_id, 'spread',
+                        fallback=round(float(spread_val), 4) if pd.notna(spread_val) else None,
+                        scale_to_bp=True,
+                    )
+                    cp_bp = _resolve_alpha_close_price_bp(
+                        spread_type,
+                        trade_id,
+                        leg1,
+                        leg2,
+                        cp_fallback_bp,
+                    )
 
-                # Carry+Roll is shown as a 3m value in the table.
-                # Use the live spread-based annual proxy when available and convert annual -> quarterly.
-                # This keeps borrow-cost drag out of the displayed carry for bond shorts.
-                carry_roll_3m_val = None
-                base_annual_bp = cp_bp if cp_bp is not None else carry_roll_val
-                if base_annual_bp is not None:
-                    carry_roll_3m_val = base_annual_bp / 4.0
+                    # Carry+Roll is shown as a 3m value in the table.
+                    # Use the live spread-based annual proxy when available and convert annual -> quarterly.
+                    # This keeps borrow-cost drag out of the displayed carry for bond shorts.
+                    carry_roll_3m_val = None
+                    base_annual_bp = cp_bp if cp_bp is not None else carry_roll_val
+                    if base_annual_bp is not None:
+                        carry_roll_3m_val = base_annual_bp / 4.0
 
-                mtm_price_mm = mtm_spd_bp = mtm_carry_mm = mtm_total_mm = None
-                try:
-                    open_price_bp = float(open_price_str) if open_price_str else None
-                    volume_mm_f   = float(volume_str)     if volume_str     else None
-                    direction     = row.get('direction', '').upper()
-                    if open_price_bp is not None and cp_bp is not None:
-                        if spread_type in ['TBondCurve', 'TBondSpread']:
-                            mtm_spd_bp = open_price_bp - cp_bp
-                        elif spread_type == 'TenorSpread':
-                            mtm_spd_bp = cp_bp - open_price_bp
-                        else:
-                            mtm_spd_bp = (open_price_bp - cp_bp) if direction == 'SELL' else (cp_bp - open_price_bp)
-                    if mtm_spd_bp is not None and volume_mm_f is not None:
-                        mtm_price_mm = round(mtm_spd_bp * duration * volume_mm_f / 10000.0, 4)
-                    if volume_mm_f is not None:
-                        mtm_carry_mm = _compute_carry_mtm(spread_type, trade_id, open_date_str, volume_mm_f)
-                    if mtm_price_mm is not None or mtm_carry_mm is not None:
-                        mtm_total_mm = round((mtm_price_mm or 0.0) + (mtm_carry_mm or 0.0), 4)
-                except (ValueError, TypeError):
-                    pass
+                    mtm_price_mm = mtm_spd_bp = mtm_carry_mm = mtm_total_mm = None
+                    try:
+                        open_price_bp = float(open_price_str) if open_price_str else None
+                        volume_mm_f   = float(volume_str)     if volume_str     else None
+                        direction     = row.get('direction', '').upper()
+                        if open_price_bp is not None and cp_bp is not None:
+                            if spread_type in ['TBondCurve', 'TBondSpread']:
+                                mtm_spd_bp = open_price_bp - cp_bp
+                            elif spread_type == 'TenorSpread':
+                                mtm_spd_bp = cp_bp - open_price_bp
+                            else:
+                                mtm_spd_bp = (open_price_bp - cp_bp) if direction == 'SELL' else (cp_bp - open_price_bp)
+                        if mtm_spd_bp is not None and volume_mm_f is not None:
+                            mtm_price_mm = round(mtm_spd_bp * duration * volume_mm_f / 10000.0, 4)
+                        if volume_mm_f is not None:
+                            mtm_carry_mm = _compute_carry_mtm(spread_type, trade_id, open_date_str, volume_mm_f)
+                        if mtm_price_mm is not None or mtm_carry_mm is not None:
+                            mtm_total_mm = round((mtm_price_mm or 0.0) + (mtm_carry_mm or 0.0), 4)
+                    except (ValueError, TypeError):
+                        pass
 
-                # Stop/Target are stored as bp *distances* from entry, signed by
-                # direction (BUY: stop below entry, target above; SELL: reversed).
-                _direction_u = str(row.get('direction', '')).strip().upper()
-                _stop_mag   = row.get('stop_loss')
-                _target_mag = row.get('profit_target')
-                stop_level = target_level = None
-                try:
-                    _sl_mag = float(_stop_mag) if _stop_mag not in (None, '') else None
-                    _tp_mag = float(_target_mag) if _target_mag not in (None, '') else None
-                    if open_price_bp is not None:
-                        if _sl_mag is not None:
-                            stop_level = open_price_bp - _sl_mag if _direction_u == 'BUY' else open_price_bp + _sl_mag
-                        if _tp_mag is not None:
-                            target_level = open_price_bp + _tp_mag if _direction_u == 'BUY' else open_price_bp - _tp_mag
-                except (ValueError, TypeError):
-                    pass
+                    # Stop/Target are stored as bp *distances* from entry, signed by
+                    # direction (BUY: stop below entry, target above; SELL: reversed).
+                    _direction_u = str(row.get('direction', '')).strip().upper()
+                    _stop_mag   = row.get('stop_loss')
+                    _target_mag = row.get('profit_target')
+                    stop_level = target_level = None
+                    try:
+                        _sl_mag = float(_stop_mag) if _stop_mag not in (None, '') else None
+                        _tp_mag = float(_target_mag) if _target_mag not in (None, '') else None
+                        if open_price_bp is not None:
+                            if _sl_mag is not None:
+                                stop_level = open_price_bp - _sl_mag if _direction_u == 'BUY' else open_price_bp + _sl_mag
+                            if _tp_mag is not None:
+                                target_level = open_price_bp + _tp_mag if _direction_u == 'BUY' else open_price_bp - _tp_mag
+                    except (ValueError, TypeError):
+                        pass
 
-                display_rows.append({
-                    '__row_key':              str(_row_idx),
-                    'ID':                     trade_id,
-                    'Leg 1':                  leg1,
-                    'Leg 2':                  leg2,
-                    'Ratio (V2/V1)':          leg_ratio,
-                    'Target Volume Leg2 (MM CNY)': f"{leg2_target_volume:,.1f}" if leg2_target_volume is not None else '',
-                    'Spread Type':            spread_type,
-                    'Style':                  row.get('style', ''),
-                    'Direction':              row.get('direction', ''),
-                    'Duration':               f"{duration:.2f}" if duration else 'N/A',
-                    'Open price (bp)':        open_price_str,
-                    'Volume (mm)':            volume_str,
-                    'Open date':              open_date_str,
-                    'Z-Score':                f"{zscore_val:.2f}" if zscore_val is not None else '',
-                    'Close Price (bp)':       f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
-                    'Progress':               '',
-                    'Target Volume (MM CNY)': f"{notional:,.1f}",
-                    'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",
-                    'Carry+Roll (3m,bp)':     _fmt1(-carry_roll_3m_val if str(row.get('direction', '')).strip().upper() == 'SELL' else carry_roll_3m_val),
-                    'Breakeven (3m,bp)':      _fmt1(breakeven_val),
-                    'Stop (bp)':              _fmt1(row.get('stop_loss')),
-                    'Target (bp)':            _fmt1(row.get('profit_target')),
-                    'MTM spd (bp)':           f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else '',
-                    'MtM Carry (MM CNY)':     f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
-                    'MtM Value (MM CNY)':     f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
-                    'Target Weight (%)':      f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
-                    'Weight (%)':             '',
-                    '_entry_level':           open_price_str,
-                    '_current_level':         f"{cp_bp:.4f}" if cp_bp is not None else '',
-                    '_stop_level':            f"{stop_level:.4f}" if stop_level is not None else '',
-                    '_target_level':          f"{target_level:.4f}" if target_level is not None else '',
-                })
+                    display_rows.append({
+                        '__row_key':              str(_row_idx),
+                        'ID':                     trade_id,
+                        'Leg 1':                  leg1,
+                        'Leg 2':                  leg2,
+                        'Ratio (V2/V1)':          leg_ratio,
+                        'Target Volume Leg2 (MM CNY)': f"{leg2_target_volume:,.1f}" if leg2_target_volume is not None else '',
+                        'Spread Type':            spread_type,
+                        'Style':                  row.get('style', ''),
+                        'Direction':              row.get('direction', ''),
+                        'Duration':               f"{duration:.2f}" if duration else 'N/A',
+                        'Open price (bp)':        open_price_str,
+                        'Volume (mm)':            volume_str,
+                        'Open date':              open_date_str,
+                        'Z-Score':                f"{zscore_val:.2f}" if zscore_val is not None else '',
+                        'Close Price (bp)':       f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
+                        'Progress':               '',
+                        'Target Volume (MM CNY)': f"{notional:,.1f}",
+                        'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",
+                        'Carry+Roll (3m,bp)':     _fmt1(-carry_roll_3m_val if str(row.get('direction', '')).strip().upper() == 'SELL' else carry_roll_3m_val),
+                        'Breakeven (3m,bp)':      _fmt1(breakeven_val),
+                        'Stop (bp)':              _fmt1(row.get('stop_loss')),
+                        'Target (bp)':            _fmt1(row.get('profit_target')),
+                        'MTM spd (bp)':           f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else '',
+                        'MtM Carry (MM CNY)':     f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
+                        'MtM Value (MM CNY)':     f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
+                        'Target Weight (%)':      f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
+                        'Weight (%)':             '',
+                        '_entry_level':           open_price_str,
+                        '_current_level':         f"{cp_bp:.4f}" if cp_bp is not None else '',
+                        '_stop_level':            f"{stop_level:.4f}" if stop_level is not None else '',
+                        '_target_level':          f"{target_level:.4f}" if target_level is not None else '',
+                    })
 
             total_vol = 0.0
             for r in display_rows:
@@ -929,17 +966,6 @@ def register_risk_books_callbacks(app):
 
             if not display_rows:
                 return _no_data("Alpha snapshot is empty.")
-
-            # ── Persist a clean, file-backed export on explicit Refresh ────────
-            if is_refresh:
-                try:
-                    _export_cols = [k for k in display_rows[0].keys() if not k.startswith('_')]
-                    _export_df = pd.DataFrame([{k: r.get(k) for k in _export_cols} for r in display_rows])
-                    _export_df['_timestamp'] = datetime.now().isoformat()
-                    pathlib.Path(_SUMMARY_ALPHA_DISPLAY_PARQUET).parent.mkdir(parents=True, exist_ok=True)
-                    _export_df.to_parquet(_SUMMARY_ALPHA_DISPLAY_PARQUET, index=False)
-                except Exception as _pe:
-                    print(f"Warning: Could not persist Alpha display snapshot: {_pe}")
 
             _BOND_OUTRIGHT_TYPES = {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'}
 
@@ -1236,7 +1262,7 @@ def register_risk_books_callbacks(app):
                 *([_reminder_banner] if _reminder_banner else []),
                 table,
             ], id='summary-alpha-table-wrapper')
-            status = f"Alpha snapshot from {ts[:19]}" + (" — saved" if is_refresh else "")
+            status = f"Alpha snapshot from {ts[:19]} ({source_label})"
             return content, status, display_rows
 
         except Exception as exc:
@@ -1517,3 +1543,50 @@ def register_risk_books_callbacks(app):
             updated_rows,
             (refresh_clicks or 0) + 1,
         )
+
+    # ── Summary Refresh: force-persist both Book snapshot tables ─────────────
+    @app.callback(
+        Output('summary-refresh-status', 'children', allow_duplicate=True),
+        Input('summary-refresh-btn', 'n_clicks'),
+        State('summary-beta-rows-store', 'data'),
+        State('summary-alpha-rows-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def _persist_books_snapshots_on_refresh(_n_clicks, beta_rows, alpha_rows):
+        if not _n_clicks:
+            raise dash.exceptions.PreventUpdate
+
+        def _write_rows(rows, out_path: str, total_key: str, total_value: str) -> bool:
+            if not isinstance(rows, list) or not rows:
+                return False
+            clean_rows = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get(total_key, '')) == total_value:
+                    continue
+                clean_rows.append({k: v for k, v in row.items() if not str(k).startswith('_')})
+            if not clean_rows:
+                return False
+            out_df = pd.DataFrame(clean_rows)
+            out_df['_timestamp'] = datetime.now().isoformat()
+            pathlib.Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            out_df.to_parquet(out_path, index=False)
+            return True
+
+        saved = []
+        try:
+            if _write_rows(beta_rows, _SUMMARY_BETA_DISPLAY_PARQUET, 'Asset Type', 'TOTAL'):
+                saved.append('beta')
+        except Exception as exc:
+            print(f"Warning: Could not persist Beta display snapshot on refresh: {exc}")
+
+        try:
+            if _write_rows(alpha_rows, _SUMMARY_ALPHA_DISPLAY_PARQUET, 'ID', 'TOTAL'):
+                saved.append('alpha')
+        except Exception as exc:
+            print(f"Warning: Could not persist Alpha display snapshot on refresh: {exc}")
+
+        if saved:
+            return f"Refresh saved snapshots: {', '.join(saved)} at {datetime.now().strftime('%H:%M:%S')}"
+        return dash.no_update

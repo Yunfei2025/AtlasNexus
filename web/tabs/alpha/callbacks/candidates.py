@@ -227,6 +227,24 @@ def _load_alpha_book_positions() -> list[dict]:
         df = df.drop_duplicates(subset=_id_cols, keep='first')
 
     _snap_cache: dict = {}
+
+    # Fallback map for Zscore when per-spread snapshots are unavailable.
+    _summary_alpha_z: dict[tuple[str, str], float] = {}
+    try:
+        _summary_alpha_path = _get_input_dir() / 'summary_alpha_portfolio.parquet'
+        if _summary_alpha_path.exists():
+            _sdf = pd.read_parquet(_summary_alpha_path)
+            if isinstance(_sdf, pd.DataFrame) and not _sdf.empty:
+                if 'spread_type' in _sdf.columns and 'ID' in _sdf.columns and 'Zscore' in _sdf.columns:
+                    _tmp = _sdf[['spread_type', 'ID', 'Zscore']].copy()
+                    _tmp['Zscore'] = pd.to_numeric(_tmp['Zscore'], errors='coerce')
+                    _tmp = _tmp.dropna(subset=['Zscore'])
+                    # Keep first occurrence per key; later rows are usually the same trade.
+                    _tmp = _tmp.drop_duplicates(subset=['spread_type', 'ID'], keep='first')
+                    for _, _r in _tmp.iterrows():
+                        _summary_alpha_z[(str(_r['spread_type']), str(_r['ID']))] = float(_r['Zscore'])
+    except Exception:
+        pass
     rows: list[dict] = []
     for _, row in df.iterrows():
         entry = row.to_dict()
@@ -262,6 +280,25 @@ def _load_alpha_book_positions() -> list[dict]:
             if snap is not None and inst in snap.index and 'direction' in snap.columns:
                 raw_dir = str(snap.loc[inst, 'direction'] or '').strip().upper()
         entry['direction'] = raw_dir if raw_dir in {'BUY', 'SELL'} else ''
+
+        # Z-score: use existing value if present, else backfill from spread
+        # snapshot (scan output), then summary alpha snapshot as fallback.
+        zscore_val = pd.to_numeric(entry.get('Zscore', entry.get('zscore', None)), errors='coerce')
+        if pd.isna(zscore_val):
+            if stype not in _snap_cache:
+                try:
+                    _snap_cache[stype] = load_spread_data(stype)
+                except Exception:
+                    _snap_cache[stype] = None
+            snap = _snap_cache[stype]
+            if snap is not None and inst in snap.index and 'Zscore' in snap.columns:
+                zscore_val = pd.to_numeric(snap.loc[inst, 'Zscore'], errors='coerce')
+
+        if pd.isna(zscore_val):
+            zscore_val = _summary_alpha_z.get((stype, inst), np.nan)
+
+        if pd.notna(zscore_val):
+            entry['Zscore'] = round(float(zscore_val), 4)
 
         entry = _normalize_curated_entry(entry, infer_regime=True)
         if entry['instrument'] and entry['spread_type']:

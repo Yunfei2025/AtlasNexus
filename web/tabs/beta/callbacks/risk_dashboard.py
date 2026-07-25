@@ -85,7 +85,7 @@ def register_risk_dashboard_callbacks(app):
                                         'padding': '20px', 'textAlign': 'center', 'fontSize': '13px'})
 
         # ── Tenor bucket helper ───────────────────────────────────────────────
-        _TENOR_ORDER = ['3M', '6M', '9M', '1Y', '2Y', '5Y', '10Y', '30Y', '20Y']
+        _TENOR_ORDER = ['3M', '6M', '9M', '1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
         _TENOR_BOUNDS = [
             (0.0, 0.375),
             (0.375, 0.625),
@@ -94,8 +94,8 @@ def register_risk_dashboard_callbacks(app):
             (1.5, 3.5),
             (3.5, 7.0),
             (7.0, 12.0),
-            (17.0, 9999.0),
             (12.0, 17.0),
+            (17.0, 9999.0),
         ]
 
         def _dur_to_tenor(dur: float) -> str:

@@ -15,6 +15,7 @@ from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
 
 from settings.paths import DIR_INPUT as _DIR_INPUT
+from ...beta.callbacks.risk_helpers import _leg_volume_ratio
 
 from ..data import (
     THEME, SPREAD_CATEGORIES,
@@ -127,10 +128,12 @@ def register_portfolio_callbacks(app) -> None:
          State('alpha-enforce-corr', 'value'),
          State('alpha-curated-instruments-store', 'data'),
          State('alpha-book-positions-store', 'data'),
-         State('alpha-dv01-budget', 'value')],
+         State('alpha-dv01-budget', 'value'),
+         State('alpha-bond-margin-rate', 'value'),
+         State('alpha-swap-margin-rate', 'value')],
         prevent_initial_call=True
     )
-    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, alloc_method, enforce_corr, curated_instruments, book_positions, total_dv01_budget):
+    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, alloc_method, enforce_corr, curated_instruments, book_positions, total_dv01_budget, bond_margin_rate, swap_margin_rate):
         if not n_clicks:
             return html.Div(), html.Div(), html.Div(), []
 
@@ -151,18 +154,24 @@ def register_portfolio_callbacks(app) -> None:
                 if not _inst or _inst in _seen:
                     continue
                 _seen.add(_inst)
-                candidates.append({
+                _row = {
                     'ID': _inst,
                     'spread_type': _e.get('spread_type', ''),
                     'direction': _e.get('direction', 'BUY'),
                     'style': _e.get('regime', _e.get('style', '')),
                     'score': float(_e.get('score', 0.01)),
-                })
+                }
+                _z = pd.to_numeric(_e.get('Zscore', _e.get('zscore', None)), errors='coerce')
+                if pd.notna(_z):
+                    _row['Zscore'] = float(_z)
+                candidates.append(_row)
 
         try:
-            total_capital = float(total_capital) if total_capital is not None else 10.0
-            total_capital_mm = total_capital * 1000
+            total_capital = float(total_capital) if total_capital is not None else 500.0
+            total_capital_mm = total_capital
             total_dv01_budget = float(total_dv01_budget) if total_dv01_budget is not None else 5.0
+            bond_margin_rate = (float(bond_margin_rate) if bond_margin_rate is not None else 5.0) / 100.0
+            swap_margin_rate = (float(swap_margin_rate) if swap_margin_rate is not None else 5.0) / 100.0
 
             # Merge all instruments from correlation matrix (curated_instruments) with saved positions (book_positions).
             # Combine both: curated from correlation check (new candidates) + book_positions (saved old trades).
@@ -209,6 +218,10 @@ def register_portfolio_callbacks(app) -> None:
                             for col in _snap_cols:
                                 if col in snap_row.index and pd.notna(snap_row.get(col)):
                                     inst_row[col] = snap_row[col]
+                        if 'Zscore' not in inst_row or pd.isna(pd.to_numeric(inst_row.get('Zscore'), errors='coerce')):
+                            _entry_z = pd.to_numeric(entry.get('Zscore', entry.get('zscore', None)), errors='coerce')
+                            if pd.notna(_entry_z):
+                                inst_row['Zscore'] = float(_entry_z)
                         inst_row.setdefault('score', median_score)
                         inst_row.setdefault('direction', 'N/A')
                         # Snap carry_roll is BUY-side raw; flip for SELL so it matches
@@ -378,14 +391,13 @@ def register_portfolio_callbacks(app) -> None:
                 df_scored['notional_mm'] = np.floor(df_scored['notional_mm'] * _dv01_scale / 10) * 10
                 df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)
 
-            df_nonzero = df_scored[df_scored['weight'] > 0.0001].copy()
-            optimized_results = df_nonzero.to_dict('records')
-
             # Step F: Resolve underlying instrument legs for each trade
             try:
                 _leg_data = _load_leg_data()
                 leg1_list = []
                 leg2_list = []
+                ratio_list = []
+                _alpha_duration_snap_cache: Dict[str, Any] = {}
                 for _, row in df_scored.iterrows():
                     stype = str(row.get('spread_type', ''))
                     tid = str(row.get('ID', ''))
@@ -393,19 +405,89 @@ def register_portfolio_callbacks(app) -> None:
                     l1, l2 = resolve_legs(stype, tid, dur, _leg_data)
                     leg1_list.append(l1)
                     leg2_list.append(l2)
+                    leg_ratio = _leg_volume_ratio(l1, l2, stype, tid, dur, _alpha_duration_snap_cache)
+                    ratio_list.append(round(float(leg_ratio), 4) if leg_ratio is not None else np.nan)
                 df_scored['Leg1'] = leg1_list
                 df_scored['Leg2'] = leg2_list
+                df_scored['ratio_v2_v1'] = ratio_list
             except Exception as e:
                 print(f"⚠ Leg resolution failed: {e}")
                 df_scored['Leg1'] = ''
                 df_scored['Leg2'] = ''
+                df_scored['ratio_v2_v1'] = np.nan
+
+            # Step G: Net Notional + Margin (capital consumption)
+            # Each leg is classified as either:
+            #   - Bond (leg code ends '.IB'): funded via repo/TRS with security
+            #     firms at a single gross `bond_margin_rate` regardless of long
+            #     vs short direction.
+            #   - Swap / Futures (IRS '.IR' legs, futures contract codes, or any
+            #     unresolved leg as a conservative floor): funded via exchange/
+            #     counterparty margin at `swap_margin_rate`.
+            # Bond margin uses gross bond legs at one rate (TRS-style):
+            #   margin_bond = (|bond_leg1| + |bond_leg2|) * bond_margin_rate
+            # For bond-vs-bond spreads this implies:
+            #   net_notional = signed_leg1 * (1 - ratio)
+            #   margin_bond = |signed_leg1| * (1 + ratio) * bond_margin_rate
+            def _compute_net_and_margin(notional_mm: pd.Series) -> tuple:
+                leg1_signed = notional_mm
+                _ratio = pd.to_numeric(df_scored['ratio_v2_v1'], errors='coerce').fillna(1.0)
+                leg2_signed = -leg1_signed * _ratio
+
+                _leg1 = df_scored['Leg1'].astype(str)
+                _leg2 = df_scored['Leg2'].astype(str)
+                _leg1_is_bond = _leg1.str.endswith('.IB')
+                _leg2_is_bond = _leg2.str.endswith('.IB')
+                _leg1_exists = _leg1.str.len() > 0
+                _leg2_exists = _leg2.str.len() > 0
+
+                bond_gross = (
+                    leg1_signed.abs().where(_leg1_is_bond, 0.0)
+                    + leg2_signed.abs().where(_leg2_is_bond, 0.0)
+                )
+
+                swapfut_net = (
+                    leg1_signed.where(_leg1_exists & ~_leg1_is_bond, 0.0)
+                    + leg2_signed.where(_leg2_exists & ~_leg2_is_bond, 0.0)
+                )
+                # Conservative floor: if both legs failed to resolve, still margin
+                # the trade's own notional at the swap/futures rate rather than
+                # silently letting it consume zero capital.
+                _both_unresolved = (~_leg1_exists) & (~_leg2_exists)
+                _fallback = leg1_signed.abs().where(_both_unresolved, 0.0)
+
+                net_notional = (leg1_signed + leg2_signed).round(1)
+                margin = (
+                    bond_gross * bond_margin_rate
+                    + swapfut_net.abs() * swap_margin_rate
+                    + _fallback * swap_margin_rate
+                ).round(2)
+                return net_notional, margin
+
+            df_scored['net_notional_mm'], df_scored['margin_mm'] = _compute_net_and_margin(df_scored['notional_mm'])
+
+            # Step H: Capital constraint — total margin used across all trades must
+            # stay within total_capital_mm (the "Total Capital" box). Margin is not
+            # netted across trades (each position ties up its own capital), so we
+            # scale down uniformly, same pattern as the DV01 budget constraint (Step E).
+            _total_margin_mm = df_scored['margin_mm'].sum()
+            if _total_margin_mm > total_capital_mm and _total_margin_mm > 1e-6:
+                _margin_scale = total_capital_mm / _total_margin_mm
+                df_scored['notional_mm'] = np.floor(df_scored['notional_mm'] * _margin_scale / 10) * 10
+                df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)
+                df_scored['net_notional_mm'], df_scored['margin_mm'] = _compute_net_and_margin(df_scored['notional_mm'])
+
+            # Build downstream payload after leg + ratio enrichment so later
+            # stages (Summary/Backtest/etc.) receive the ratio field.
+            df_nonzero = df_scored[df_scored['weight'] > 0.0001].copy()
+            optimized_results = df_nonzero.to_dict('records')
 
             display_cols = [
-                'ID', 'Leg1', 'Leg2', 'style', 'direction',
+                'ID', 'Leg1', 'Leg2', 'ratio_v2_v1', 'style', 'direction',
                 'Zscore', 'spread', 'mean', 'vol',
                 'carry_roll', 'breakeven_3m', 'stop_loss', 'profit_target',
                 'seasonal_edge_bps', 'score',
-                'weight', 'risk_contribution', 'notional_mm', 'DV01_k',
+                'weight', 'risk_contribution', 'notional_mm', 'margin_mm', 'DV01_k',
             ]
             available_cols = [c for c in display_cols if c in df_scored.columns]
             df_display = df_scored[available_cols].copy()
@@ -458,7 +540,7 @@ def register_portfolio_callbacks(app) -> None:
 
             summary_row: dict = {c: "" for c in df_display.columns}
             summary_row['ID'] = 'TOTAL'
-            for col, decimals in [('weight', 4), ('risk_contribution', 2), ('notional_mm', 0)]:
+            for col, decimals in [('weight', 4), ('risk_contribution', 2), ('notional_mm', 0), ('margin_mm', 2)]:
                 if col in df_display.columns:
                     total = df_display[col].sum()
                     summary_row[col] = round(total, decimals)
@@ -503,36 +585,60 @@ def register_portfolio_callbacks(app) -> None:
 
             _port_col_labels = {
                 'Leg1': 'leg 1', 'Leg2': 'leg 2', 'style': 'style',
+                'ratio_v2_v1': 'Ratio (V2/V1)',
                 'Zscore': 'z-score', 'spread': 'spread(bp)', 'mean': 'mean(bp)',
                 'vol': 'vol(bp)',
                 'carry_roll': 'CR(3m)', 'breakeven_3m': 'b/e(3m)',
                 'stop_loss': 'stop(bp)', 'profit_target': 'target(bp)',
                 'seasonal_edge_bps': 'seas.edge', 'score': 'score',
                 'weight': 'weight', 'risk_contribution': 'RC%',
-                'notional_mm': 'notional(MM)', 'DV01_k': 'DV01(k)',
+                'notional_mm': 'NOTIONAL (MM)',
+                'margin_mm': 'Margin (MM)', 'DV01_k': 'DV01(k)',
                 'direction': 'DIR',
             }
+
+            # Content-aware widths: estimate each column width from the longest
+            # value (including header), then clamp to a practical range.
+            _col_width_styles = []
+            for _c in df_display.columns:
+                _hdr = str(_port_col_labels.get(_c, _c))
+                _vals = df_display[_c].fillna('').astype(str)
+                _max_chars = max([len(_hdr)] + [len(v) for v in _vals.tolist()])
+                _px = min(max(72, _max_chars * 8 + 24), 360)
+                _col_width_styles.append({
+                    'if': {'column_id': _c},
+                    'minWidth': f'{_px}px',
+                    'width': f'{_px}px',
+                    'maxWidth': f'{_px}px',
+                })
+
             table = dash_table.DataTable(
                 id='alpha-scored-table',
                 columns=[{'name': _port_col_labels.get(c, c), 'id': c} for c in df_display.columns],
                 data=df_display.to_dict('records'),
-                style_table={'overflowX': 'auto', 'overflowY': 'auto', 'maxHeight': '400px', 'backgroundColor': 'transparent', 'minWidth': '100%'},
+                style_table={'overflowY': 'auto', 'maxHeight': '400px', 'backgroundColor': 'transparent', 'minWidth': 'max-content'},
                 style_header={'backgroundColor': 'var(--surface-panel)', 'color': THEME['text_sub'],
                               'fontWeight': '600', 'textAlign': 'left', 'border': 'none',
                               'borderBottom': '1px solid var(--border-strong)', 'fontSize': '10px',
                               'textTransform': 'uppercase', 'letterSpacing': '0.05em', 'position': 'sticky', 'top': '0'},
                 style_cell={'backgroundColor': 'transparent', 'color': THEME['text_main'], 'textAlign': 'left',
                             'padding': '6px 8px', 'fontSize': '11px', 'border': 'none',
-                            'borderBottom': '1px solid rgba(255,255,255,0.04)', 'minWidth': '80px'},
-                style_data_conditional=conditional_style,
-                sort_action='native', page_size=15,
+                            'borderBottom': '1px solid rgba(255,255,255,0.04)',
+                            'whiteSpace': 'nowrap'},
+                style_data_conditional=conditional_style + _col_width_styles,
+                sort_action='native', page_size=15, fill_width=False,
+            )
+            table = html.Div(
+                table,
+                style={'overflowX': 'auto', 'overflowY': 'hidden', 'width': '100%', 'maxWidth': '100%'},
             )
 
             summary = html.Div([
                 html.Div([
                     html.Div([html.Strong("Total Trades: ", style={'color': THEME['text_sub']}), html.Span(f"{len(df_scored)}", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
-                    html.Div([html.Strong("Capital Allocated: ", style={'color': THEME['text_sub']}), html.Span(f"{total_capital:.1f} B CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
+                    html.Div([html.Strong("Margin Budget: ", style={'color': THEME['text_sub']}), html.Span(f"{total_capital:.1f} MM CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("DV01 Budget: ", style={'color': THEME['text_sub']}), html.Span(f"{total_dv01_budget:.1f} MM CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
+                    html.Div([html.Strong("Margin Used: ", style={'color': THEME['text_sub']}), html.Span(f"{df_scored['margin_mm'].sum():.2f} / {total_capital:.1f} MM CNY" if 'margin_mm' in df_scored.columns else "N/A", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("Avg Score: ", style={'color': THEME['text_sub']}), html.Span(f"{df_scored['score'].mean():.3f}", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("Risk Parity: ", style={'color': THEME['text_sub']}), html.Span(f"σ(RC)={df_scored['risk_contribution'].std():.3f}" if 'risk_contribution' in df_scored.columns else "N/A", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("BUY/SELL: ", style={'color': THEME['text_sub']}), html.Span(f"{(df_scored['direction'] == 'BUY').sum()} / {(df_scored['direction'] == 'SELL').sum()}" if 'direction' in df_scored.columns else "N/A", style={'color': THEME['text_main']})]),
@@ -575,10 +681,10 @@ def register_portfolio_callbacks(app) -> None:
                 _save_cols = [
                     c for c in [
                         'ID', 'spread_type', 'category', 'style', 'direction',
-                        'Leg1', 'Leg2',
+                        'Leg1', 'Leg2', 'ratio_v2_v1',
                         'Zscore', 'spread', 'carry_roll', 'breakeven_3m', 'vol', 'halflife',
                         'stop_loss', 'profit_target',
-                        'notional_mm', '_duration', 'DV01_k', 'weight', 'risk_contribution',
+                        'notional_mm', 'margin_mm', '_duration', 'DV01_k', 'weight', 'risk_contribution',
                     ] if c in df_scored.columns
                 ]
                 _snap = df_scored[_save_cols].copy()
