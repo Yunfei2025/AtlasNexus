@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Shared, non-Dash helper functions used by the Risk / Summary callback
-modules (risk_books.py, risk_tickets.py, risk_dashboard.py).
+modules (books, tickets, dashboard).
 
 These are plain functions with no `app` closure dependency, so they live at
 module level and can be imported wherever needed instead of being redefined
@@ -18,9 +18,9 @@ import numpy as np
 import pandas as pd
 
 from settings.paths import DIR_INPUT
-from ...alpha.data import load_spread_data as _load_alpha_spread_data
-from ...alpha.data.duration import _tenor_to_duration
-from ._common import (
+from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
+from web.tabs.alpha.data.duration import _tenor_to_duration
+from web.tabs.beta.callbacks._common import (
     _SUMMARY_ALPHA_PARQUET,
     _BETA_BOOK_USER_PARQUET,
     _ALPHA_POSITIONS_PARQUET,

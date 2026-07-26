@@ -9,7 +9,7 @@ from dash import dcc, html
 import dash_bootstrap_components as dbc
 
 from ..data import THEME, FUTURES_AVAILABLE, SELECTED_FACTOR_POOL
-from ...atlas_components import button as an_button
+from ...ui.components import button as an_button
 
 # Conditionally import futures discovery helper
 if FUTURES_AVAILABLE:

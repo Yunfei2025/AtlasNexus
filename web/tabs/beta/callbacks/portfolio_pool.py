@@ -16,7 +16,7 @@ from dash.dependencies import Input, Output, State
 from multiasset.storage import save_asset_pool
 
 from ..data import THEME, DIVERSIFICATION_RECOMMENDATIONS
-from ...atlas_components import asset_pool_item
+from ...ui.components import asset_pool_item
 
 
 def register_portfolio_pool_callbacks(app):

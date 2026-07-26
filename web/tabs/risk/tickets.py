@@ -18,8 +18,8 @@ from dash import html, dash_table
 from dash.dependencies import Input, Output
 import pandas as pd
 
-from ..data import THEME
-from ._common import (
+from web.tabs.beta.data import THEME
+from web.tabs.beta.callbacks._common import (
     _BETA_BOOK_POSITIONS_PARQUET,
     _BETA_BOOK_USER_PARQUET,
     _ALPHA_POSITIONS_PARQUET,

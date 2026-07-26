@@ -356,7 +356,7 @@ def _ref_bonds_table_data(curve_type: str):
     Data sourced from the Market Data tab's canonical reference set.
     """
     try:
-        from web.tabs.atlas_market_data_tab import _load_reference_bonds
+        from web.tabs.market.data import _load_reference_bonds
         df = _load_reference_bonds()
         if df.empty:
             return [], []

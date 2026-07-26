@@ -7,7 +7,7 @@ from dash import dcc, html
 
 from multiasset.storage import load_last_asset_pool
 
-from ...atlas_components import asset_pool_item
+from ...ui.components import asset_pool_item
 
 
 _CARD_WRAP = {

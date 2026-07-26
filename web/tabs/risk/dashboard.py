@@ -14,12 +14,12 @@ from dash.dependencies import Input, Output, State
 import pandas as pd
 from datetime import datetime
 
-from ..data import THEME, ALLOCATION_RESULTS
-from ._common import (
+from web.tabs.beta.data import THEME, ALLOCATION_RESULTS
+from web.tabs.beta.callbacks._common import (
     _SUMMARY_ALPHA_PARQUET,
     _BETA_BOOK_POSITIONS_PARQUET,
 )
-from ._risk_charts import (
+from .charts import (
     build_net_position_fig,
     build_dv01_ladder_fig,
     build_factor_risk_fig,
@@ -27,7 +27,7 @@ from ._risk_charts import (
     build_kpi_strip,
     build_inventory_summary,
 )
-from .risk_helpers import (
+from .helpers import (
     _load_leg_data,
     _resolve_legs,
     _parse_repo_spread_legs,
@@ -208,6 +208,17 @@ def register_risk_dashboard_callbacks(app):
         if _os.path.exists(_SUMMARY_ALPHA_PARQUET):
             try:
                 adf = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
+
+                # Keep only the latest optimization snapshot batch. The Alpha
+                # snapshot file is upserted and may retain older trades that are
+                # not part of the current portfolio, which would otherwise leak
+                # into Net Position by Instrument after a Risk refresh.
+                if '_timestamp' in adf.columns:
+                    _ts = pd.to_datetime(adf['_timestamp'], errors='coerce')
+                    if _ts.notna().any():
+                        _latest_ts = _ts[_ts.notna()].max()
+                        adf = adf.loc[_ts.eq(_latest_ts)].copy()
+
                 for _, r in adf.iterrows():
                     tid = str(r.get('ID', ''))
                     if tid in ('', 'TOTAL'):

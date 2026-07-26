@@ -6,10 +6,10 @@ from __future__ import annotations
 from dash import dcc, html, dash_table
 import plotly.graph_objects as go
 
-from ..data import THEME, ALLOCATION_RESULTS
+from web.tabs.beta.data import THEME, ALLOCATION_RESULTS
 
 
-def build_multiasset_risk_layout():
+def build_risk_layout():
     """Build the layout for the Risk/Summary tab.
 
     Structure:

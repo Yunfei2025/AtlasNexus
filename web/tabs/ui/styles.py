@@ -61,7 +61,7 @@ summary_subtabs_colors: Dict[str, Any] = {
 #
 # Or register once globally in the app entry-point:
 #   import plotly.io as pio
-#   from web.tabs.atlas_styles import ATLAS_PLOTLY_TEMPLATE
+#   from web.tabs.ui.styles import ATLAS_PLOTLY_TEMPLATE
 #   pio.templates["atlas"] = ATLAS_PLOTLY_TEMPLATE
 #   pio.templates.default = "plotly_dark+atlas"
 # ---------------------------------------------------------------------------

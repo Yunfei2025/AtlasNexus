@@ -18,22 +18,21 @@ Notes:
   Instead, we re-implement only the required callbacks here, by copying minimal
   logic and switching decorators to use `app.callback`.
 
-This module is a thin facade over the per-tab modules below, kept for backward
-compatibility with existing imports (`from web.tabs.atlas_fi_tabs import ...`):
+This package coordinates the fixed-income tab modules:
 
-- `atlas_fi_common.py`  -- shared small UI helpers (e.g. `_fi_card_header`)
-- `atlas_fi_spreads.py` -- Spread Analysis tab layout + callbacks
-- `atlas_fi_curves.py`  -- Curves tab layout + callbacks
-- `atlas_fi_pairs.py`   -- Pairs tab layout + callbacks
-- `atlas_fi_surface.py` -- Surface (yield surface) tab layout + callbacks
+- `common.py`  -- shared small UI helpers (e.g. `_fi_card_header`)
+- `spreads.py` -- Spread Analysis tab layout + callbacks
+- `curves.py`  -- Curves tab layout + callbacks
+- `pairs.py`   -- Pairs tab layout + callbacks
+- `surface.py` -- Surface (yield surface) tab layout + callbacks
 """
 
 from __future__ import annotations
 
-from web.tabs.atlas_fi_curves import build_curves_layout, register_curves_callbacks
-from web.tabs.atlas_fi_pairs import build_pairs_layout, register_pairs_callbacks
-from web.tabs.atlas_fi_spreads import build_spreads_layout, register_spreads_callbacks
-from web.tabs.atlas_fi_surface import build_surface_layout, register_surface_callbacks
+from .curves import build_curves_layout, register_curves_callbacks
+from .pairs import build_pairs_layout, register_pairs_callbacks
+from .spreads import build_spreads_layout, register_spreads_callbacks
+from .surface import build_surface_layout, register_surface_callbacks
 
 __all__ = [
     "build_spreads_layout",

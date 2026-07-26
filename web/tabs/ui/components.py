@@ -1,13 +1,13 @@
 """
-atlas_components.py — AtlasNexus Dash Component Helpers
+components.py — AtlasNexus Dash Component Helpers
 ========================================================
 DROP THIS FILE into  web/tabs/  (or web/) in your codebase.
 
 Usage:
-    from web.tabs.atlas_components import button, card, badge, label_field
+    from web.tabs.ui.components import button, card, badge, label_field
 
 These are thin wrappers around html.* / dcc.* that apply consistent
-AtlasNexus styles, matching the colours in atlas_styles.py exactly.
+AtlasNexus styles, matching the colours in ui/styles.py exactly.
 All kwargs are forwarded to the underlying Dash component so you keep
 full control (id, n_clicks, disabled, style overrides, className, etc.)
 

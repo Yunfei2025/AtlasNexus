@@ -21,7 +21,7 @@ project_root = Path(__file__).parent.parent.parent.resolve()
 sys.path.insert(0, str(project_root))
 
 # Import lightweight style constants (do not import web.core which triggers data loads).
-from web.tabs.atlas_styles import (
+from web.tabs.ui.styles import (
     summary_subtabs_style, summary_subtabs_colors,
     BOOK_ACCENT,
     ATLAS_PLOTLY_TEMPLATE,
@@ -42,7 +42,7 @@ from web.services.jobs import (
     list_running_jobs, finalize_job_if_done, _cmd_type,
 )
 
-from web.tabs.atlas_fi_tabs import (
+from web.tabs.fixed_income import (
     build_curves_layout,
     build_pairs_layout,
     build_spreads_layout,
@@ -50,18 +50,17 @@ from web.tabs.atlas_fi_tabs import (
     register_callbacks as register_fi_callbacks,
 )
 
-from web.tabs.atlas_alpha_tabs import (
+from web.tabs.alpha import (
     build_candidates_layout,
     build_portfolio_layout,
     build_backtest_layout,
     register_alpha_callbacks,
 )
 
-from web.tabs.atlas_multiasset_tabs import (
+from web.tabs.beta import (
     build_multiasset_factor_layout,
     build_multiasset_portfolio_layout,
     build_multiasset_bond_layout,
-    build_multiasset_risk_layout,
     build_multiasset_backtest_layout,
     build_risk_factor_backtest_layout,
     build_factor_backtest_layout,
@@ -69,28 +68,29 @@ from web.tabs.atlas_multiasset_tabs import (
     build_factor_history_layout,
     register_multiasset_callbacks,
 )
+from web.tabs.risk import build_risk_layout, register_risk_callbacks
 
-from web.tabs.atlas_volatility_tabs import (
+from web.tabs.volatility import (
     build_volatility_layout,
     register_volatility_callbacks,
 )
 
-from web.tabs.atlas_factor_backtest_tabs import (
+from web.tabs.beta.factor_backtest import (
     build_factor_model_backtest_layout,
     # register_factor_backtest_callbacks,  # replaced by rfbt- callbacks in multiasset
 )
 
-from web.tabs.atlas_trend_tabs import (
+from web.tabs.market import (
     build_trend_layout,
     register_trend_callbacks,
 )
 
-from web.tabs.atlas_market_data_tab import (
+from web.tabs.market import (
     build_market_data_layout,
     register_market_data_callbacks,
 )
 
-from web.tabs.atlas_pricer_tab import (
+from web.tabs.market import (
     build_pricer_layout,
     register_pricer_callbacks,
 )
@@ -166,6 +166,7 @@ def _serve_user_manual():
 # Register callbacks for migrated legacy FI layouts (Pairs tab refresh callback).
 register_fi_callbacks(app)
 register_multiasset_callbacks(app)
+register_risk_callbacks(app)
 register_alpha_callbacks(app)
 register_volatility_callbacks(app)
 # register_factor_backtest_callbacks(app)  # replaced by rfbt- callbacks in multiasset
@@ -425,9 +426,20 @@ def build_tabs_panel():
                                 ),
                             ], style={'flex': '1'}),
                             html.Div([
+                                html.Label("Start N", style=_lbl_style),
+                                dcc.Input(
+                                    id="an-dv-row-start",
+                                    type="number",
+                                    value=0,
+                                    min=0,
+                                    step=1,
+                                    style=_input_style,
+                                ),
+                            ], style={'width': '64px'}),
+                            html.Div([
                                 html.Label("N", style=_lbl_style),
                                 dcc.Input(
-                                    id="an-dv-n",
+                                    id="an-dv-row-n",
                                     type="number",
                                     value=10,
                                     min=0,
@@ -436,6 +448,33 @@ def build_tabs_panel():
                                 ),
                             ], style={'width': '64px'}),
                         ], style={'display': 'flex', 'gap': '10px', 'alignItems': 'flex-end'}),
+                        html.Div([
+                            html.Div([
+                                html.Label("Columns", style=_lbl_style),
+                            ], style={'flex': '1'}),
+                            html.Div([
+                                html.Label("Start N", style=_lbl_style),
+                                dcc.Input(
+                                    id="an-dv-column-start",
+                                    type="number",
+                                    value=0,
+                                    min=0,
+                                    step=1,
+                                    style=_input_style,
+                                ),
+                            ], style={'width': '64px'}),
+                            html.Div([
+                                html.Label("N", style=_lbl_style),
+                                dcc.Input(
+                                    id="an-dv-column-n",
+                                    type="number",
+                                    value=10,
+                                    min=0,
+                                    step=1,
+                                    style=_input_style,
+                                ),
+                            ], style={'width': '64px'}),
+                        ], style={'display': 'flex', 'gap': '10px', 'alignItems': 'flex-end', 'marginTop': '10px'}),
                         html.Div(id="an-dv-error", style={'color': '#e06c75', 'fontSize': '12px', 'marginTop': '8px'}),
                     ], className="rc-panel"),
 
@@ -454,7 +493,7 @@ def build_tabs_panel():
                         html.Div("Data Viewer Preview", className="rc-section-label"),
                         html.Div(id="an-dv-breadcrumb", style={'marginBottom': '10px'}),
                         html.Div(id="an-dv-tree", style={'marginBottom': '10px'}),
-                        html.Div(id="an-dv-preview"),
+                        html.Div(id="an-dv-preview", style={'width': '100%', 'minWidth': 0}),
                     ], className="rc-panel"),
                 ], className="rc-right-col"),
 
@@ -521,7 +560,7 @@ def build_tabs_panel():
         className="an-tab-pane",
     )
 
-    _risk_inner = build_multiasset_risk_layout()
+    _risk_inner = build_risk_layout()
     risk_content = html.Div(
         [
             dcc.Tabs(
@@ -958,25 +997,29 @@ def _dv_render_breadcrumb(file_label: str, key_path: list) -> "html.Div":
     return html.Div(crumbs, style={'display': 'flex', 'flexWrap': 'wrap', 'alignItems': 'center'})
 
 
-def _dv_render_preview(node, mode: str, n) -> "html.Div":
+def _dv_render_preview(node, mode: str, row_start, row_n, column_start, column_n) -> "html.Div":
     import pandas as pd
 
     if isinstance(node, (pd.DataFrame, pd.Series)):
         df = node.to_frame() if isinstance(node, pd.Series) else node
-        n = int(n) if n is not None else 10
+        row_start = max(0, int(row_start) if row_start is not None else 0)
+        row_n = max(0, int(row_n) if row_n is not None else 10)
+        column_start = max(0, int(column_start) if column_start is not None else 0)
+        column_n = max(0, int(column_n) if column_n is not None else 10)
         if mode == "head":
-            view = df.head(n)
+            view = df.iloc[row_start:row_start + row_n]
         elif mode == "tail":
-            view = df.tail(n)
+            view = df.tail(row_n)
         else:  # row
-            view = df.iloc[[n]] if 0 <= n < len(df) else df.iloc[0:0]
+            view = df.iloc[[row_n]] if 0 <= row_n < len(df) else df.iloc[0:0]
+        view = view.iloc[:, column_start:column_start + column_n]
         view = view.reset_index()
         return html.Div([
             html.Div(f"shape: {df.shape[0]} rows x {df.shape[1]} cols", style={'color': '#aab0c0', 'fontSize': '11px', 'marginBottom': '6px'}),
             dash_table.DataTable(
                 columns=[{'name': str(c), 'id': str(c)} for c in view.columns],
                 data=view.astype(object).where(pd.notnull(view), None).to_dict('records'),
-                style_table={'overflowX': 'auto'},
+                style_table={'overflowX': 'auto', 'width': '100%', 'maxWidth': '100%'},
                 style_cell={'textAlign': 'center', 'fontSize': '12px', 'padding': '4px 8px',
                             'backgroundColor': '#0d1b3d', 'color': '#cdd6f4', 'border': '1px solid #2a5298'},
                 style_header={'backgroundColor': '#112e66', 'fontWeight': '600'},
@@ -1033,10 +1076,13 @@ def _dv_update_state(load_clicks, crumb_clicks, node_clicks, filepath, state):
     Output("an-dv-error", "children", allow_duplicate=True),
     Input("an-dv-state", "data"),
     Input("an-dv-mode", "value"),
-    Input("an-dv-n", "value"),
+    Input("an-dv-row-start", "value"),
+    Input("an-dv-row-n", "value"),
+    Input("an-dv-column-start", "value"),
+    Input("an-dv-column-n", "value"),
     prevent_initial_call=True,
 )
-def _dv_render(state, mode, n):
+def _dv_render(state, mode, row_start, row_n, column_start, column_n):
     if not state or not state.get("file"):
         # Leave an-dv-error untouched: _dv_update_state may have just set an
         # error message (e.g. file-not-found) and cleared state in the same tick.
@@ -1049,7 +1095,7 @@ def _dv_render(state, mode, n):
     breadcrumb = _dv_render_breadcrumb(state.get("label", state["file"]), state["path"])
     tree = _dv_render_tree(node)
     try:
-        preview = _dv_render_preview(node, mode or "head", n)
+        preview = _dv_render_preview(node, mode or "head", row_start, row_n, column_start, column_n)
     except Exception as exc:
         return breadcrumb, tree, None, f"Failed to render preview: {exc}"
     return breadcrumb, tree, preview, ""

@@ -14,7 +14,7 @@ import math
 from dash import html
 import plotly.graph_objects as go
 
-from web.tabs.atlas_styles import PLOTLY_LAYOUT_DEFAULTS, TOKENS
+from web.tabs.ui.styles import PLOTLY_LAYOUT_DEFAULTS, TOKENS
 
 _NET_BETA_ONLY = TOKENS["blue"]       # pure beta -> blue
 _NET_ALPHA_LONG = TOKENS["amber"]     # pure alpha long -> amber

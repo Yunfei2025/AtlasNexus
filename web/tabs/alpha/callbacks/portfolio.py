@@ -15,7 +15,7 @@ from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
 
 from settings.paths import DIR_INPUT as _DIR_INPUT
-from ...beta.callbacks.risk_helpers import _leg_volume_ratio
+from ...risk.helpers import _leg_volume_ratio
 
 from ..data import (
     THEME, SPREAD_CATEGORIES,

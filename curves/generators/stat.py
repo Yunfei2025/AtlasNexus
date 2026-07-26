@@ -730,7 +730,7 @@ class StatGenerator:
             return col if col in swap_ts.columns else None
 
         cgb_cols = self._resolve_curve_column_map(cgb, [1, 2, 3, 5, 10, 20, 30])
-        cdb_cols = self._resolve_curve_column_map(cdb, [5, 10])
+        cdb_cols = self._resolve_curve_column_map(cdb, [5, 10, 30])
         lgb_cols = self._resolve_curve_column_map(lgb, [5, 10, 30]) if lgb is not None else {}
         mtn_cols = self._resolve_curve_column_map(mtn, [1, 3, 5]) if mtn is not None else {}
 
@@ -743,6 +743,7 @@ class StatGenerator:
         cgb30 = _series(cgb, cgb_cols.get(30))
         cdb5  = _series(cdb, cdb_cols.get(5))
         cdb10 = _series(cdb, cdb_cols.get(10))
+        cdb30 = _series(cdb, cdb_cols.get(30))
         lgb5  = _series(lgb, lgb_cols.get(5))  if lgb is not None else None
         lgb10 = _series(lgb, lgb_cols.get(10)) if lgb is not None else None
         lgb30 = _series(lgb, lgb_cols.get(30)) if lgb is not None else None
@@ -765,8 +766,10 @@ class StatGenerator:
 
         instruments = {}
         if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10  - cgb5
+        if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30  - cgb10
         if cgb10 is not None and cgb20 is not None: instruments['CGB-10s20s'] = cgb20  - cgb10
         if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10  - cdb5
+        if cdb10 is not None and cdb30 is not None: instruments['CDB-10s30s'] = cdb30  - cdb10
         if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5   - cgb5
         if cdb10 is not None and cgb10 is not None: instruments['CDBCGB-10y'] = cdb10  - cgb10
 

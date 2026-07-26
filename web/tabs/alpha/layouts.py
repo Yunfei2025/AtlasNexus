@@ -8,7 +8,7 @@ from typing import Dict, List
 from dash import dcc, html, dash_table
 
 from .data import THEME, SPREAD_CATEGORIES
-from ..atlas_components import button as an_button
+from ..ui.components import button as an_button
 
 
 _BACKTEST_SPREAD_TYPE_OPTIONS = [

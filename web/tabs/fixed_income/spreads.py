@@ -13,7 +13,7 @@ from __future__ import annotations
 from dash import dcc, html
 from dash.dependencies import Input, Output
 
-from web.tabs.atlas_fi_common import _fi_card_header
+from .common import _fi_card_header
 
 
 def build_spreads_layout():

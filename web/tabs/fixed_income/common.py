@@ -1,5 +1,5 @@
-"""Small shared UI helpers used across the FI dashboard tab modules
-(`atlas_fi_spreads.py`, `atlas_fi_curves.py`, `atlas_fi_pairs.py`).
+"""Small shared UI helpers used across the fixed-income dashboard modules
+(`spreads.py`, `curves.py`, `pairs.py`).
 """
 
 from __future__ import annotations
