@@ -37,6 +37,32 @@ def _coerce_float(value) -> float | None:
         return None
 
 
+def _alpha_spread_pnl_bp(
+    spread_type: str,
+    direction: str,
+    open_price_bp: float | None,
+    close_price_bp: float | None,
+) -> float | None:
+    """Return the favourable mark-to-market spread move in basis points.
+    """
+    if open_price_bp is None or close_price_bp is None:
+        return None
+    move_bp = close_price_bp - open_price_bp
+    is_buy = str(direction).strip().upper() == 'BUY'
+    # Requested convention: BUY profits on spread narrowing; SELL profits on widening.
+    return -move_bp if is_buy else move_bp
+
+
+def _alpha_progress_direction(spread_type: str, direction: str) -> str:
+    """Map a trade to the price direction expected by the progress widget."""
+    normalized = str(direction).strip().upper()
+    if normalized == 'BUY':
+        return 'SELL'
+    if normalized == 'SELL':
+        return 'BUY'
+    return normalized
+
+
 def _row_key(row: dict, default: int = -1) -> int:
     """Parse a row's `__row_key` as int, falling back on non-numeric values
     (e.g. the synthetic TOTAL row, whose `__row_key` is '')."""
@@ -59,6 +85,8 @@ def _compute_alpha_carry_mtm(
         if cr_ts is None or instrument_id not in cr_ts.columns:
             return None
         series = cr_ts[instrument_id].dropna()
+        series.index = pd.to_datetime(series.index, errors='coerce')
+        series = series[series.index.notna()]
         open_dt = pd.to_datetime(open_date_str)
         today = pd.Timestamp.today().normalize()
         mask = (series.index >= open_dt) & (series.index <= today)
@@ -72,13 +100,21 @@ def _refresh_alpha_display_row(row: dict) -> dict:
     updated = dict(row)
     open_price_bp = _coerce_float(updated.get('Open price (bp)'))
     volume_mm = _coerce_float(updated.get('Volume (mm)'))
+    if volume_mm is None:
+        volume_mm = _coerce_float(updated.get('Target Volume (MM CNY)'))
     duration = _coerce_float(updated.get('Duration'))
     close_price_bp = _coerce_float(updated.get('Close Price (bp)'))
 
+    mtm_spd_bp = _alpha_spread_pnl_bp(
+        str(updated.get('Spread Type', '')),
+        str(updated.get('Direction', '')),
+        open_price_bp,
+        close_price_bp,
+    )
     mtm_price_mm = None
-    if None not in (open_price_bp, volume_mm, duration, close_price_bp):
+    if None not in (mtm_spd_bp, volume_mm, duration):
         mtm_price_mm = round(
-            volume_mm * duration * (close_price_bp - open_price_bp) / 10000.0,
+            volume_mm * duration * mtm_spd_bp / 10000.0,
             4,
         )
 
@@ -93,7 +129,7 @@ def _refresh_alpha_display_row(row: dict) -> dict:
     if mtm_price_mm is not None or mtm_carry_mm is not None:
         mtm_total_mm = round((mtm_price_mm or 0.0) + (mtm_carry_mm or 0.0), 4)
 
-    updated['MTM spd (bp)'] = f"{open_price_bp:,.4f}" if open_price_bp is not None else ''
+    updated['MTM spd (bp)'] = f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else ''
     updated['MtM Carry (MM CNY)'] = f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else ''
     updated['MtM Value (MM CNY)'] = f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else ''
     return updated

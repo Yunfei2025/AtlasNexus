@@ -452,8 +452,7 @@ def build_portfolio_layout() -> html.Div:
                     html.Label("Total Capital", style=_label_style),
                     html.Div([
                         dcc.Input(
-                            id='alpha-total-capital', type='number', value=500, min=1,
-                            className='no-spinner',
+                            id='alpha-total-capital', type='text', value='1000', inputMode='numeric',
                             style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',
                                    'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
@@ -467,8 +466,7 @@ def build_portfolio_layout() -> html.Div:
                     html.Label("Total Single Side DV01", style=_label_style),
                     html.Div([
                         dcc.Input(
-                            id='alpha-dv01-budget', type='number', value=5, min=0,
-                            className='no-spinner',
+                            id='alpha-dv01-budget', type='text', value='5', inputMode='decimal',
                             style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',
                                    'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
@@ -482,7 +480,7 @@ def build_portfolio_layout() -> html.Div:
                     html.Label("Bond Margin Rate", style=_label_style),
                     html.Div([
                         dcc.Input(
-                            id='alpha-bond-margin-rate', type='number', value=5, min=0, max=100, step=0.5,
+                            id='alpha-bond-margin-rate', type='text', value='5', inputMode='decimal',
                             className='no-spinner',
                             style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',
@@ -497,7 +495,7 @@ def build_portfolio_layout() -> html.Div:
                     html.Label("Swaps / Futures Margin Rate", style=_label_style),
                     html.Div([
                         dcc.Input(
-                            id='alpha-swap-margin-rate', type='number', value=5, min=0, max=100, step=0.5,
+                            id='alpha-swap-margin-rate', type='text', value='5', inputMode='decimal',
                             className='no-spinner',
                             style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',

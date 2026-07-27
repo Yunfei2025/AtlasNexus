@@ -222,7 +222,7 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
             print(f"Warning: Could not load spread time-series for {trade_id}: {e}")
 
     if len(spread_series) < 2:
-        print("⚠ Insufficient historical data for risk parity, using inverse volatility")
+        print("WARNING: Insufficient historical data for risk parity, using inverse volatility")
         n = len(df_candidates)
         weights = dict(zip(df_candidates['ID'], [1/n] * n))
         risk_contrib = np.ones(n) / n
@@ -236,7 +236,7 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     spread_df = pd.DataFrame(spread_series).dropna()
 
     if len(spread_df) < 20:
-        print("⚠ Too few common dates for covariance, using inverse volatility")
+        print("WARNING: Too few common dates for covariance, using inverse volatility")
         n = len(df_candidates)
         weights = dict(zip(df_candidates['ID'], [1/n] * n))
         risk_contrib = np.ones(n) / n
@@ -354,7 +354,7 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     )
 
     if not result.success:
-        print(f"⚠ Risk parity optimization did not converge: {result.message}")
+        print(f"WARNING: Risk parity optimization did not converge: {result.message}")
         weights_array = np.ones(n) / n
     else:
         weights_array = result.x
@@ -364,7 +364,7 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     risk_contrib = _risk_contribution(weights_array, cov)
 
     weights_dict = {col: w for col, w in zip(spread_df.columns, weights_array)}
-    print(f"✓ Risk parity optimised: weight std={weights_array.std():.4f}, "
+    print(f"Risk parity optimized: weight std={weights_array.std():.4f}, "
           f"RC std={risk_contrib.std():.4f}, min_w={weights_array.min():.4f}")
 
     return weights_dict, risk_contrib, vol_computed

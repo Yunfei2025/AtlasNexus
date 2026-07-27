@@ -167,7 +167,7 @@ def register_portfolio_callbacks(app) -> None:
                 candidates.append(_row)
 
         try:
-            total_capital = float(total_capital) if total_capital is not None else 500.0
+            total_capital = float(total_capital) if total_capital is not None else 1000.0
             total_capital_mm = total_capital
             total_dv01_budget = float(total_dv01_budget) if total_dv01_budget is not None else 5.0
             bond_margin_rate = (float(bond_margin_rate) if bond_margin_rate is not None else 5.0) / 100.0
@@ -260,8 +260,11 @@ def register_portfolio_callbacks(app) -> None:
 
                 df = df_curated
 
+            # Manually saved/book positions do not carry the scanner's score.
+            # Give those rows a neutral positive score so they remain eligible
+            # for allocation rather than all being filtered out below.
             if 'score' not in df.columns:
-                df['score'] = 0.0
+                df['score'] = 0.01
             df['score'] = pd.to_numeric(df['score'], errors='coerce').fillna(0.0)
             df_scored = df.sort_values('score', ascending=False)
 
@@ -319,7 +322,7 @@ def register_portfolio_callbacks(app) -> None:
                     _new_vol = df_scored['ID'].map(vol_computed)
                     df_scored['vol'] = _new_vol.where(~_is_raw_unit, df_scored.get('vol')).fillna(df_scored.get('vol', np.nan))
                 except Exception as e:
-                    print(f"⚠ Risk parity failed: {e}, falling back to equal weights")
+                    print(f"WARNING: Risk parity failed: {e}, falling back to equal weights")
                     df_scored['weight'] = 1 / n_trades
                     df_scored['risk_contribution'] = 1 / n_trades
 
@@ -411,7 +414,7 @@ def register_portfolio_callbacks(app) -> None:
                 df_scored['Leg2'] = leg2_list
                 df_scored['ratio_v2_v1'] = ratio_list
             except Exception as e:
-                print(f"⚠ Leg resolution failed: {e}")
+                print(f"WARNING: Leg resolution failed: {e}")
                 df_scored['Leg1'] = ''
                 df_scored['Leg2'] = ''
                 df_scored['ratio_v2_v1'] = np.nan
@@ -693,7 +696,7 @@ def register_portfolio_callbacks(app) -> None:
                 # replaces values for trades that re-appear, adds genuinely new trades.
                 _id_cols = [c for c in ('spread_type', 'ID') if c in _snap.columns] or ['ID']
                 merged = _upsert_snapshot(_snap, _SUMMARY_ALPHA_PARQUET, _id_cols)
-                print(f"✓ Alpha snapshot merged → {_SUMMARY_ALPHA_PARQUET} ({len(merged)} rows after upsert)")
+                print(f"Alpha snapshot merged: {_SUMMARY_ALPHA_PARQUET} ({len(merged)} rows after upsert)")
             except Exception as _se:
                 print(f"Warning: Could not save Alpha snapshot: {_se}")
 

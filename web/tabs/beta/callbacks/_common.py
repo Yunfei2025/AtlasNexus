@@ -128,11 +128,11 @@ def _price_progress_bar(
     2. A thin amber tick pinned at Current.
     3. A thin green tick pinned at Target.
 
-    All positions are computed against the [min(entry, stop), max(target, entry)]
-    span, same as the guide's `mn`/`mx`/`rng` logic.
+    All positions are computed against the full entry/current/stop/target range
+    so both BUY and SELL setups fit within the bar.
     """
-    lo = min(entry, stop)
-    hi = max(target, entry)
+    lo = min(entry, current, stop, target)
+    hi = max(entry, current, stop, target)
     span = (hi - lo) or 1.0
     entry_pct   = (entry - lo) / span * 100
     current_pct = (current - lo) / span * 100

@@ -34,7 +34,8 @@ def register_risk_book_interaction_callbacks(app):
     
     # ── Alpha Book: inline edits on Open price (bp) / Volume (mm) ─────────────
     @app.callback(
-        Output('summary-refresh-status', 'children', allow_duplicate=True),
+        [Output('summary-refresh-status', 'children', allow_duplicate=True),
+         Output('summary-alpha-rows-store', 'data', allow_duplicate=True)],
         Input({'type': 'alpha-cell-input', 'row': ALL, 'col': ALL}, 'value'),
         State({'type': 'alpha-cell-input', 'row': ALL, 'col': ALL}, 'id'),
         State('summary-alpha-rows-store', 'data'),
@@ -44,19 +45,30 @@ def register_risk_book_interaction_callbacks(app):
         triggered = dash.ctx.triggered_id
         if not triggered or not rows:
             raise dash.exceptions.PreventUpdate
-        row_idx, col = triggered['row'], triggered['col']
         updated_rows = [dict(r) for r in rows]
-        target = next((r for r in updated_rows if _row_key(r, -1) == row_idx), None)
-        if target is None:
+        current_values = {
+            (item['row'], item['col']): '' if value is None else value
+            for value, item in zip(values, ids)
+        }
+        changed = False
+        for row in updated_rows:
+            row_idx = _row_key(row, -1)
+            row_changed = False
+            for col in ('Open price (bp)', 'Volume (mm)'):
+                key = (row_idx, col)
+                if key in current_values and row.get(col, '') != current_values[key]:
+                    row[col] = current_values[key]
+                    changed = True
+                    row_changed = True
+            if row_changed:
+                row.update(_refresh_alpha_display_row(row))
+        if not changed:
             raise dash.exceptions.PreventUpdate
-        new_value = next((v for v, i in zip(values, ids) if i['row'] == row_idx and i['col'] == col), None)
-        target[col] = new_value or ''
-        target.update(_refresh_alpha_display_row(target))
         try:
             _persist_alpha_summary_rows(updated_rows)
-            return f"Edits saved at {datetime.now().strftime('%H:%M:%S')}"
+            return f"Edits saved at {datetime.now().strftime('%H:%M:%S')}", updated_rows
         except Exception as exc:
-            return f"Save failed: {exc}"
+            return f"Save failed: {exc}", dash.no_update
     
     # ── Alpha Book: delete a row from the positions table ─────────────────────
     @app.callback(
@@ -173,7 +185,8 @@ def register_risk_book_interaction_callbacks(app):
     
     # ── Beta Book: inline edits on Open Price / Volume (MM) ───────────────────
     @app.callback(
-        Output('summary-refresh-status', 'children', allow_duplicate=True),
+        [Output('summary-refresh-status', 'children', allow_duplicate=True),
+         Output('summary-beta-rows-store', 'data', allow_duplicate=True)],
         Input({'type': 'beta-cell-input', 'row': ALL, 'col': ALL}, 'value'),
         State({'type': 'beta-cell-input', 'row': ALL, 'col': ALL}, 'id'),
         State('summary-beta-rows-store', 'data'),
@@ -183,18 +196,26 @@ def register_risk_book_interaction_callbacks(app):
         triggered = dash.ctx.triggered_id
         if not triggered or not rows:
             raise dash.exceptions.PreventUpdate
-        row_idx, col = triggered['row'], triggered['col']
         updated_rows = [dict(r) for r in rows]
-        target = next((r for r in updated_rows if _row_key(r, -1) == row_idx), None)
-        if target is None:
+        current_values = {
+            (item['row'], item['col']): '' if value is None else value
+            for value, item in zip(values, ids)
+        }
+        changed = False
+        for row in updated_rows:
+            row_idx = _row_key(row, -1)
+            for col in ('Open Price', 'Volume (MM)'):
+                key = (row_idx, col)
+                if key in current_values and row.get(col, '') != current_values[key]:
+                    row[col] = current_values[key]
+                    changed = True
+        if not changed:
             raise dash.exceptions.PreventUpdate
-        new_value = next((v for v, i in zip(values, ids) if i['row'] == row_idx and i['col'] == col), None)
-        target[col] = new_value or ''
         try:
             _persist_beta_user_rows(updated_rows)
-            return f"Beta edits saved at {datetime.now().strftime('%H:%M:%S')}"
+            return f"Beta edits saved at {datetime.now().strftime('%H:%M:%S')}", updated_rows
         except Exception as exc:
-            return f"Save failed: {exc}"
+            return f"Save failed: {exc}", dash.no_update
     
     # ── Beta Book: delete a row from the positions table ──────────────────────
     @app.callback(
@@ -297,11 +318,44 @@ def register_risk_book_interaction_callbacks(app):
         Input('summary-refresh-btn', 'n_clicks'),
         State('summary-beta-rows-store', 'data'),
         State('summary-alpha-rows-store', 'data'),
+        State({'type': 'beta-cell-input', 'row': ALL, 'col': ALL}, 'value'),
+        State({'type': 'beta-cell-input', 'row': ALL, 'col': ALL}, 'id'),
+        State({'type': 'alpha-cell-input', 'row': ALL, 'col': ALL}, 'value'),
+        State({'type': 'alpha-cell-input', 'row': ALL, 'col': ALL}, 'id'),
         prevent_initial_call=True,
     )
-    def _persist_books_snapshots_on_refresh(_n_clicks, beta_rows, alpha_rows):
+    def _persist_books_snapshots_on_refresh(
+        _n_clicks, beta_rows, alpha_rows,
+        beta_values, beta_ids, alpha_values, alpha_ids,
+    ):
         if not _n_clicks:
             raise dash.exceptions.PreventUpdate
+
+        def _apply_current_values(rows, values, ids, editable_cols, refresh_row=None):
+            updated_rows = [dict(row) for row in rows or []]
+            current_values = {
+                (item['row'], item['col']): '' if value is None else value
+                for value, item in zip(values or [], ids or [])
+            }
+            for row in updated_rows:
+                row_idx = _row_key(row, -1)
+                row_changed = False
+                for col in editable_cols:
+                    key = (row_idx, col)
+                    if key in current_values:
+                        row[col] = current_values[key]
+                        row_changed = True
+                if row_changed and refresh_row is not None:
+                    row.update(refresh_row(row))
+            return updated_rows
+
+        beta_rows = _apply_current_values(
+            beta_rows, beta_values, beta_ids, ('Open Price', 'Volume (MM)'),
+        )
+        alpha_rows = _apply_current_values(
+            alpha_rows, alpha_values, alpha_ids,
+            ('Open price (bp)', 'Volume (mm)'), _refresh_alpha_display_row,
+        )
     
         def _write_rows(rows, out_path: str, total_key: str, total_value: str) -> bool:
             if not isinstance(rows, list) or not rows:
@@ -323,12 +377,16 @@ def register_risk_book_interaction_callbacks(app):
     
         saved = []
         try:
+            if beta_rows:
+                _persist_beta_user_rows(beta_rows)
             if _write_rows(beta_rows, _SUMMARY_BETA_DISPLAY_PARQUET, 'Asset Type', 'TOTAL'):
                 saved.append('beta')
         except Exception as exc:
             print(f"Warning: Could not persist Beta display snapshot on refresh: {exc}")
     
         try:
+            if alpha_rows:
+                _persist_alpha_summary_rows(alpha_rows)
             if _write_rows(alpha_rows, _SUMMARY_ALPHA_DISPLAY_PARQUET, 'ID', 'TOTAL'):
                 saved.append('alpha')
         except Exception as exc:

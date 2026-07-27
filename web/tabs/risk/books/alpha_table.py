@@ -14,7 +14,7 @@ from settings.paths import DIR_INPUT
 from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
 from web.tabs.beta.data import THEME
 from web.tabs.beta.callbacks._common import _SUMMARY_ALPHA_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET, _ALPHA_POSITIONS_PARQUET, _load_cr_ts, _price_progress_bar, _dir_badge, _style_badge, _signed_value_style, _zscore_cell_style, _sortable_header, _apply_sort
-from ..helpers import _coerce_float, _load_leg_data, _resolve_legs, _leg_volume_ratio, _row_key
+from ..helpers import _alpha_progress_direction, _alpha_spread_pnl_bp, _coerce_float, _load_leg_data, _resolve_legs, _leg_volume_ratio, _row_key
 
 
 def register_alpha_book_table_callbacks(app):
@@ -180,6 +180,8 @@ def register_alpha_book_table_callbacks(app):
                 if cr_ts is None or instrument_id not in cr_ts.columns:
                     return None
                 series = cr_ts[instrument_id].dropna()
+                series.index = pd.to_datetime(series.index, errors='coerce')
+                series = series[series.index.notna()]
                 open_dt = pd.to_datetime(open_date_str)
                 today   = pd.Timestamp.today().normalize()
                 mask = (series.index >= open_dt) & (series.index <= today)
@@ -204,20 +206,25 @@ def register_alpha_book_table_callbacks(app):
         _alpha_duration_snap_cache: dict[str, pd.DataFrame | None] = {}
     
         try:
-            _saved_rows, ts_saved, source_saved = _load_persisted_alpha_display()
-            if _saved_rows:
-                display_rows = [dict(r) for r in _saved_rows]
-                ts = ts_saved
-                source_label = source_saved
+            # The canonical allocation snapshot is updated by Alpha Portfolio's
+            # Run Optimization action.  A display export is intentionally only
+            # a fallback: using it first makes Summary keep rendering an older
+            # table after a newly added allocation has been saved.
+            if _os.path.exists(_SUMMARY_ALPHA_PARQUET):
+                _saved_rows = []
+                df = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
+                ts = df['_timestamp'].iloc[-1] if '_timestamp' in df.columns else "unknown"
+                source_label = 'saved alpha snapshot'
+                pos = _load_positions()
             else:
-                if not _os.path.exists(_SUMMARY_ALPHA_PARQUET):
+                _saved_rows, ts_saved, source_saved = _load_persisted_alpha_display()
+                if not _saved_rows:
                     return _no_data(
                         "No Alpha snapshot found. Click RUN OPTIMIZATION in the Alpha Book -> Portfolio tab first."
                     )
-                df  = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
-                ts  = df['_timestamp'].iloc[0] if '_timestamp' in df.columns else "unknown"
-                source_label = 'saved alpha snapshot'
-                pos = _load_positions()
+                display_rows = [dict(r) for r in _saved_rows]
+                ts = ts_saved
+                source_label = source_saved
     
             def _fmt1(v):
                 try:
@@ -245,6 +252,7 @@ def register_alpha_book_table_callbacks(app):
                     breakeven_val = _resolve_alpha_metric(spread_type, trade_id, 'breakeven_3m', fallback=_coerce_float(row.get('breakeven_3m')))
                     notional   = float(row.get('notional_mm', 0) or 0)
                     dv01_k     = float(row.get('DV01_k', 0) or 0)
+                    risk_contribution = _coerce_float(row.get('risk_contribution'))
                     _dur_raw   = row.get('_duration', None)
                     if _dur_raw is not None and pd.notna(_dur_raw):
                         duration = float(_dur_raw)
@@ -285,15 +293,14 @@ def register_alpha_book_table_callbacks(app):
                     mtm_price_mm = mtm_spd_bp = mtm_carry_mm = mtm_total_mm = None
                     try:
                         open_price_bp = float(open_price_str) if open_price_str else None
-                        volume_mm_f   = float(volume_str)     if volume_str     else None
+                        # An allocation has a target notional before it becomes an
+                        # executed position.  Use that target for indicative MTM
+                        # until the operator enters an actual volume.
+                        volume_mm_f = float(volume_str) if volume_str else abs(notional)
                         direction     = row.get('direction', '').upper()
-                        if open_price_bp is not None and cp_bp is not None:
-                            if spread_type in ['TBondCurve', 'TBondSpread']:
-                                mtm_spd_bp = open_price_bp - cp_bp
-                            elif spread_type == 'TenorSpread':
-                                mtm_spd_bp = cp_bp - open_price_bp
-                            else:
-                                mtm_spd_bp = (open_price_bp - cp_bp) if direction == 'SELL' else (cp_bp - open_price_bp)
+                        mtm_spd_bp = _alpha_spread_pnl_bp(
+                            spread_type, direction, open_price_bp, cp_bp,
+                        )
                         if mtm_spd_bp is not None and volume_mm_f is not None:
                             mtm_price_mm = round(mtm_spd_bp * duration * volume_mm_f / 10000.0, 4)
                         if volume_mm_f is not None:
@@ -312,11 +319,12 @@ def register_alpha_book_table_callbacks(app):
                     try:
                         _sl_mag = float(_stop_mag) if _stop_mag not in (None, '') else None
                         _tp_mag = float(_target_mag) if _target_mag not in (None, '') else None
+                        _progress_direction = _alpha_progress_direction(spread_type, _direction_u)
                         if open_price_bp is not None:
                             if _sl_mag is not None:
-                                stop_level = open_price_bp - _sl_mag if _direction_u == 'BUY' else open_price_bp + _sl_mag
+                                stop_level = open_price_bp - _sl_mag if _progress_direction == 'BUY' else open_price_bp + _sl_mag
                             if _tp_mag is not None:
-                                target_level = open_price_bp + _tp_mag if _direction_u == 'BUY' else open_price_bp - _tp_mag
+                                target_level = open_price_bp + _tp_mag if _progress_direction == 'BUY' else open_price_bp - _tp_mag
                     except (ValueError, TypeError):
                         pass
     
@@ -347,6 +355,7 @@ def register_alpha_book_table_callbacks(app):
                         'MtM Carry (MM CNY)':     f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
                         'MtM Value (MM CNY)':     f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
                         'Target Weight (%)':      f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
+                        'RC (%)':                 f"{risk_contribution * 100:.2f}%" if risk_contribution is not None else '',
                         'Weight (%)':             '',
                         '_entry_level':           open_price_str,
                         '_current_level':         f"{cp_bp:.4f}" if cp_bp is not None else '',
@@ -391,6 +400,7 @@ def register_alpha_book_table_callbacks(app):
             _s_carry  = _sum_col('MtM Carry (MM CNY)')
             _s_mtm    = _sum_col('MtM Value (MM CNY)')
             _s_tgt_wt = _sum_col('Target Weight (%)')
+            _s_rc     = _sum_col('RC (%)')
             _s_wt     = _sum_col('Weight (%)')
     
             total_row = {c: '' for c in display_rows[0].keys()}
@@ -401,6 +411,7 @@ def register_alpha_book_table_callbacks(app):
             total_row['MtM Carry (MM CNY)']     = f"{_s_carry:,.4f}"  if _s_carry  is not None else ''
             total_row['MtM Value (MM CNY)']     = f"{_s_mtm:,.4f}"    if _s_mtm    is not None else ''
             total_row['Target Weight (%)']      = f"{_s_tgt_wt:.2f}%" if _s_tgt_wt is not None else ''
+            total_row['RC (%)']                 = f"{_s_rc:.2f}%"     if _s_rc     is not None else ''
             total_row['Weight (%)']             = f"{_s_wt:.2f}%"     if _s_wt     is not None else ''
             display_rows.append(total_row)
     
@@ -417,7 +428,7 @@ def register_alpha_book_table_callbacks(app):
                 if r.get('ID') == 'TOTAL':
                     continue
                 _tid  = r.get('ID', '')
-                _dir  = str(r.get('Direction', '')).strip().upper()
+                _dir  = _alpha_progress_direction(r.get('Spread Type', ''), r.get('Direction', ''))
                 _op_s = str(r.get('Open price (bp)', '') or '').strip()
                 _cp_s = str(r.get('Close Price (bp)', '') or '').strip()
                 _sl_s = str(r.get('Stop (bp)', '') or '').strip()
@@ -470,7 +481,7 @@ def register_alpha_book_table_callbacks(app):
                 'Duration', 'Open price (bp)', 'Volume (mm)', 'Z-Score', 'Close Price (bp)',
                 'Target Volume (MM CNY)', 'Target Volume Leg2 (MM CNY)', 'DV01 (k CNY/bp)', 'Carry+Roll (3m,bp)',
                 'Breakeven (3m,bp)', 'Stop (bp)', 'Target (bp)', 'MTM spd (bp)',
-                'MtM Carry (MM CNY)', 'MtM Value (MM CNY)', 'Target Weight (%)', 'Weight (%)',
+                'MtM Carry (MM CNY)', 'MtM Value (MM CNY)', 'Target Weight (%)', 'RC (%)', 'Weight (%)',
             }
             body_rows = _apply_sort(body_rows, sort_state, _numeric_cols)
     
@@ -484,7 +495,7 @@ def register_alpha_book_table_callbacks(app):
                 ('Carry+Roll (3m,bp)', 'right'), ('Breakeven (3m,bp)', 'right'),
                 ('Stop (bp)', 'right'), ('Target (bp)', 'right'), ('MTM spd (bp)', 'right'),
                 ('MtM Carry (MM CNY)', 'right'), ('MtM Value (MM CNY)', 'right'),
-                ('Target Weight (%)', 'right'), ('Weight (%)', 'right'),
+                ('Target Weight (%)', 'right'), ('RC (%)', 'right'), ('Weight (%)', 'right'),
             ]
             _cols = [(c, a) for c, a in _ALL_COLS
                      if c not in ('Open date', 'Volume (mm)') or c in _visible_cols]
@@ -567,7 +578,7 @@ def register_alpha_book_table_callbacks(app):
                         stop   = float(row.get('_stop_level', '') or '')
                     except (TypeError, ValueError):
                         return html.Td('', style=base_style)
-                    direction = str(row.get('Direction', '')).strip().upper()
+                    direction = _alpha_progress_direction(row.get('Spread Type', ''), row.get('Direction', ''))
                     return html.Td(_price_progress_bar(entry, cur, target, stop, direction),
                                     style={**base_style, 'minWidth': '90px'})
                 if col == '__delete':
