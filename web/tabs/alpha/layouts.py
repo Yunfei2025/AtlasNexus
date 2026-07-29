@@ -212,7 +212,7 @@ def build_candidates_layout() -> html.Div:
                     dcc.Checklist(
                         id='seasonal-prefilter-toggle',
                         options=[{'label': ' Apply seasonal gate before scan (exclude noise months)', 'value': 'on'}],
-                        value=['on'],
+                        value=[],
                         inputStyle={'marginRight': '6px', 'accentColor': THEME['accent']},
                         labelStyle={'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600', 'cursor': 'pointer'},
                     ),
@@ -382,7 +382,7 @@ def build_portfolio_layout() -> html.Div:
                     "Run Check Correlation in the Candidates subtab first to populate the candidate list. "
                     "Saved positions from alpha_book_positions.parquet are shown separately below. "
                     "Both tables feed into the correlation matrix and portfolio optimisation.",
-                    style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '0'},
+                    style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '10px'}
                 ),
 
                 # Add trade row
@@ -453,11 +453,10 @@ def build_portfolio_layout() -> html.Div:
                     html.Div([
                         dcc.Input(
                             id='alpha-total-capital', type='text', value='1000', inputMode='numeric',
-                            style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
+                            style={'width': '70px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',
                                    'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
-                                   'textAlign': 'right', 'MozAppearance': 'textfield',
-                                   'WebkitAppearance': 'none', 'appearance': 'textfield'},
+                                   'textAlign': 'right'},
                         ),
                         html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
                     ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
@@ -467,54 +466,17 @@ def build_portfolio_layout() -> html.Div:
                     html.Div([
                         dcc.Input(
                             id='alpha-dv01-budget', type='text', value='5', inputMode='decimal',
-                            style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
+                            style={'width': '70px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',
                                    'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
-                                   'textAlign': 'right', 'MozAppearance': 'textfield',
-                                   'WebkitAppearance': 'none', 'appearance': 'textfield'},
+                                   'textAlign': 'right'},
                         ),
                         html.Span("Million CNY", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
                     ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
                 ]),
                 html.Div([
-                    html.Label("Bond Margin Rate", style=_label_style),
-                    html.Div([
-                        dcc.Input(
-                            id='alpha-bond-margin-rate', type='text', value='5', inputMode='decimal',
-                            className='no-spinner',
-                            style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
-                                   'border': '1px solid var(--border-default)', 'borderRadius': '4px',
-                                   'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
-                                   'textAlign': 'right', 'MozAppearance': 'textfield',
-                                   'WebkitAppearance': 'none', 'appearance': 'textfield'},
-                        ),
-                        html.Span("%", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
-                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
-                ]),
-                html.Div([
-                    html.Label("Swaps / Futures Margin Rate", style=_label_style),
-                    html.Div([
-                        dcc.Input(
-                            id='alpha-swap-margin-rate', type='text', value='5', inputMode='decimal',
-                            className='no-spinner',
-                            style={'width': '92px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
-                                   'border': '1px solid var(--border-default)', 'borderRadius': '4px',
-                                   'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
-                                   'textAlign': 'right', 'MozAppearance': 'textfield',
-                                   'WebkitAppearance': 'none', 'appearance': 'textfield'},
-                        ),
-                        html.Span("%", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
-                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
-                ]),
-                html.Div([
                     html.Label("Method", style=_label_style),
-                    html.Div([
-                        html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '12px', 'fontWeight': '700'}),
-                        html.Span(
-                            "Spread direction convention: SELL = expect spread up/widen, BUY = expect spread down/narrow.",
-                            style={'color': THEME['text_sub'], 'fontSize': '10px'},
-                        ),
-                    ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '2px'}),
+                    html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '12px', 'fontWeight': '700'}),
                 ]),
             ], style={'padding': '14px 16px', 'display': 'flex', 'flexWrap': 'wrap', 'gap': '24px',
                       'alignItems': 'flex-end', 'borderBottom': '1px solid var(--border-strong)'}),
@@ -654,14 +616,38 @@ def build_individual_backtest_panel() -> html.Div:
                 html.Div([
                     html.H2("Trade Style", style={**_hdr, 'fontSize': '12px'}),
                     html.Div([
+                        html.Label("Style Control", style={**_lbl, 'fontSize': '8px'}),
+                        dcc.RadioItems(
+                            id='bt-style-mode',
+                            options=[
+                                {'label': ' Manual', 'value': 'manual'},
+                                {'label': ' Auto Monthly', 'value': 'auto_monthly'},
+                            ],
+                            value='manual',
+                            className='an-radio-stack',
+                            labelStyle={'display': 'flex', 'alignItems': 'center', 'gap': '6px',
+                                        'color': 'var(--text-secondary)', 'fontSize': '11px',
+                                        'marginBottom': '6px', 'cursor': 'pointer'},
+                            inputStyle={'accentColor': 'var(--accent-amber)', 'cursor': 'pointer'},
+                        ),
+                        html.Label("Uncertain Regime", style={**_lbl, 'fontSize': '8px', 'marginTop': '6px'}),
+                        dcc.Dropdown(
+                            id='bt-uncertain-policy',
+                            options=[
+                                {'label': 'Assign Trend', 'value': 'trend'},
+                                {'label': 'Assign Manual Style', 'value': 'manual'},
+                            ],
+                            value='trend',
+                            clearable=False,
+                            style={'fontSize': '12px', 'marginBottom': '8px'},
+                        ),
                         dcc.RadioItems(
                             id='bt-trade-style',
                             options=[
-                                {'label': ' Auto Regime (MR / Trend)', 'value': 'hybrid'},
                                 {'label': ' Mean-Reversion', 'value': 'mr'},
                                 {'label': ' Trend (Directional-Change)', 'value': 'trend'},
                             ],
-                            value='hybrid',
+                            value='mr',
                             className='an-radio-stack',
                             labelStyle={'display': 'flex', 'alignItems': 'center', 'gap': '6px',
                                         'color': 'var(--text-secondary)', 'fontSize': '11px',

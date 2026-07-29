@@ -608,6 +608,13 @@ input.no-spinner[type="number"] {
 .modebar { 
   background: transparent !important;
 }
+.js-plotly-plot .plotly .modebar {
+  top: auto !important;
+  right: auto !important;
+  bottom: 8px !important;
+  left: 8px !important;
+  z-index: 3 !important;
+}
 .modebar-btn path { 
   fill: var(--an-muted) !important;
 }

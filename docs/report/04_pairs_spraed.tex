@@ -26,9 +26,11 @@ and stability of the hedge ratio through regime shifts.
 
 The Alpha Book backtest in \texttt{web/tabs/alpha/} evaluates individual relative-value
 spreads and combines the current Portfolio allocation into an indicative book
-equity curve. It has two distinct strategy types, selected from the candidate's
-stored \texttt{style} field in portfolio mode or selected/auto-suggested from the latest
-60-day regime snapshot in individual mode:
+equity curve. Each spread is assigned exactly one style, mean reversion (MR) or
+trend, on the first available trading day of each calendar month. The assignment
+is fixed through month-end: the model does not adaptively switch engines within
+the month. Candidate scores rank and allocate capital; they are not intramonth
+entry confirmations.
 
 {\small
 \setlength{\LTleft}{0pt}
@@ -51,8 +53,8 @@ stored \texttt{style} field in portfolio mode or selected/auto-suggested from th
 \endfoot
 \bottomrule
 \endlastfoot
-Mean-reverting (MR) & \texttt{engine\_mr.py} & A statistically rich/cheap spread will revert toward its local equilibrium. & A 120-day rolling z-score, adjusted by a bounded 30-day carry/volatility term. \\
-Trending / momentum & \texttt{engine\_trend.py} & A confirmed directional move, supported by momentum, will persist long enough to exceed a volatility-scaled trailing stop. & Directional-change state, 20-day momentum normalized by 60-day daily-change volatility, and a carry-level gate. \\
+Mean-reverting (MR) & \texttt{engine\_mr.py} & A statistically rich/cheap spread will revert toward its local equilibrium. & A 120-day rolling z-score crosses the entry band. \\
+Trend & \texttt{engine\_trend.py} & A confirmed directional reversal from a local extremum will persist sufficiently to justify a directional position. & A confirmed directional-change (DC) event using the monthly frozen, volatility-calibrated absolute threshold. \\
 \end{longtable}
 }
 
@@ -64,15 +66,21 @@ Trending / momentum & \texttt{engine\_trend.py} & A confirmed directional move, 
 R/S Hurst estimate, a variance-ratio proxy, and lag-1 autocorrelation. Each casts a
 trend / mean-reversion / neutral vote. A net vote of at least $+2$ selects
 \texttt{trending}; at most $-2$ selects \texttt{mean\_reverting}; otherwise the result is
-\texttt{uncertain}. In the individual UI, a certain result locks the matching style. For
-an uncertain result, the sign of the latest carry/roll edge is a tiebreaker
-(positive selects MR; non-positive selects trend when available).
+\texttt{uncertain}.
 
-This is a \textbf{point-in-time routing aid}, not a rolling adaptive backtest: portfolio
-mode reads each candidate's current stored \texttt{style} and applies that one engine over
-the whole selected historical period. Its results therefore answer, ``how would the
-current book's style assignment have behaved?'', rather than ``how would a
-historically available regime classifier have switched styles each day?''
+The classifier is invoked only at the monthly review date, using data available on
+or before that date. Its result is mapped to canonical \texttt{mr} or \texttt{trend}
+and held through month-end. If the result is uncertain or history is insufficient,
+the prior monthly style is retained; before the first valid classification, the
+spread family's static default applies. If the new style differs from an open
+position's style, that position is closed once at the review observation with
+\texttt{exit\_reason=monthly\_style\_change}. Regime details are retained in the review
+audit trail, not used for daily routing or as a hidden entry filter.
+
+Each monthly record contains the review date, assigned style, classifier label,
+vote score/confidence, fallback reason, and, for a trend assignment, the frozen DC
+threshold and its calibration inputs. This makes both the style and the timing
+threshold reproducible without look-ahead bias.
 
 \paragraph{Indicator definitions.} Let $s_t$ be the spread level, $\Delta s_t = s_t -
 s_{t-1}$ its first difference, and $w=60$ observations (\texttt{DEFAULT\_REGIME\_WINDOW})
@@ -150,20 +158,6 @@ least two of the four indicators must agree in the same direction before a defin
 regime is assigned; a single strong indicator outvoted by the others yields
 \texttt{uncertain} rather than a confident call.
 
-\paragraph{Selection precedence in the individual-screen UI.} When a user picks a
-spread/instrument in the individual backtest screen, the auto-suggested style is
-resolved in priority order: (1) if the instrument already has a stored regime from the
-current Alpha candidate scan (\emph{source: candidates}), that value is used directly;
-(2) else, if the point-in-time spread snapshot table already carries a
-\texttt{regime}/\texttt{regime\_confidence} column (\emph{source: snapshot}), that value is
-used; (3) otherwise \texttt{compute\_regime\_features} is run fresh on the loaded
-historical time series (\emph{source: time-series}), requiring at least $w+5$
-observations. For an \texttt{uncertain} result, the tiebreaker is the sign of the
-instrument's latest 3-month carry/roll edge (in bp, read from the snapshot table): a
-positive edge favors \texttt{MR} (you are paid to wait for reversion), a non-positive
-edge favors \texttt{Trend}, and if no edge value is available the UI conservatively
-defaults to \texttt{MR}.
-
 \paragraph{Not a Markov/HMM model.} Both \texttt{compute\_regime\_features} and the
 directional-change trend state of \S\ref{sec:pairs-trend-model} are deterministic,
 rule-based calculations on a rolling window --- there is no hidden-state inference, no
@@ -182,20 +176,15 @@ For a spread level $s_t$, the MR engine uses a fixed internal lookback of 120
 observations:
 
 \begin{equation}
-\begin{aligned}
-z_t &= \frac{s_t - \operatorname{mean}_{120}(s)}{\operatorname{sd}_{120}(s)}, \\
-CS_t &= z_t - \operatorname{clip}\!\left(\frac{CR_t\,(30/90)}{\operatorname{sd}_{120}(s)},\,-1.5,\,1.5\right).
-\end{aligned}
+z_t = \frac{s_t - \operatorname{mean}_{120}(s)}{\operatorname{sd}_{120}(s)}.
 \end{equation}
 
-Here $CR_t$ is the aligned carry/roll series (or a snapshot fallback); the 30/90
-scaling translates the stored three-month convention into the scoring horizon. The
-engine enters long when $CS_t \le -z_{entry}$ and short when
-$CS_t \ge z_{entry}$. A signal exit is allowed only after \texttt{min\_hold}; it occurs
-when the composite score has reverted inside the exit band. A $z$-score stop is
-always active, including during the minimum holding period. Closed-trade PnL is
-spread change times the duration multiplier plus accrued carry/roll; the latter
-includes direction-aware borrow adjustments for the supported spread families.
+The engine enters long when $z_t \le -z_{entry}$ and short when
+$z_t \ge z_{entry}$. A signal exit is allowed only after \texttt{min\_hold}; it occurs
+when the z-score reverts inside the exit band. A $z$-score stop is always active,
+including during the minimum holding period. Carry/roll and direction-aware borrow
+adjustments accrue in realized PnL and can inform ranking and allocation, but do not
+change an MR entry or exit decision.
 
 {\small
 \setlength{\LTleft}{0pt}
@@ -219,52 +208,66 @@ includes direction-aware borrow adjustments for the supported spread families.
 \bottomrule
 \endlastfoot
 Internal z-score lookback & 120 observations & 120 observations & Local equilibrium and dispersion; not UI-configurable. \\
-\texttt{entry\_z} & 2.0 & 2.5 & Absolute composite-score entry threshold. \\
+\texttt{entry\_z} & 2.0 & 2.5 & Absolute z-score entry threshold. \\
 \texttt{exit\_z} & 0.5 & 0.25 & Reversion band used after the minimum hold. \\
 \texttt{stop\_z} & 4.0 & 5.0 & Adverse z-score stop. \\
 \texttt{min\_hold} & 7 calendar days & 10 calendar days & Minimum holding period for signal exits; stop remains active. \\
-Carry score horizon & 30 days & 30 days & Fixed carry-adjustment horizon. \\
 \end{longtable}
 }
 
-The \texttt{trade\_style} argument currently has identical entry logic for its non-MR
-branch; the UI routes trend selections to the separate trend engine. It should not
-be interpreted as a third hybrid signal.
-
-\subsection{Trending / Momentum Model and Defaults}
+\subsection{Trend Model and Defaults}
 \label{sec:pairs-trend-model}
 
-The trend engine derives a persistent directional-change state
-$D_t \in \{-1,0,1\}$, then requires it to agree with normalized momentum:
+The trend engine is event-driven. It enters long only after an \texttt{Upward Trend
+Confirmed} DC event and enters short only after a \texttt{Downward Trend Confirmed}
+event, when \texttt{allow\_short} is enabled. It does not use normalized momentum,
+carry level, candidate score, or the current regime label as a second intramonth
+entry gate.
+
+The DC generator uses an absolute threshold in spread units:
 
 \begin{equation}
-\begin{aligned}
-m_t &= s_t - s_{t-20}, \\
-m_t^{\mathrm{norm}} &= \frac{m_t}{\operatorname{sd}_{60}(\Delta s)}, \\
-D_t\,m_t^{\mathrm{norm}} &> 0, \quad \left|m_t^{\mathrm{norm}}\right| \ge 0.5.
-\end{aligned}
+\left|s_t-e_t\right| \ge \theta_{i,m},
 \end{equation}
 
-\texttt{D\_t} is obtained from the relative directional-change generator using \texttt{theta}.
-This generator (\texttt{curves/calibration/trend.py::generate}) is a deterministic
-rule-based state machine, \textbf{not} a Markov chain or hidden Markov model: it tracks
-a running local extremum and flips state only when price/spread moves away from that
-extremum by at least \texttt{theta}, emitting an \texttt{Upward Trend Confirmed} or
-\texttt{Downward Trend Confirmed} event that is then forward-filled as $D_t=+1$ or
-$D_t=-1$ until the next confirmed event. There is no transition-probability matrix and
-no inferred hidden state; the same is true of the regime classifier in
-\S\ref{sec:pairs-regime-selection}, which uses rule-based indicator voting rather than
-HMM fitting.
+where $e_t$ is the active running extremum, $i$ is the spread, and $m$ is its
+review month. To make the absolute event scale suitable for heterogeneous spreads,
+the threshold is calibrated at the monthly review and then held fixed through
+month-end:
 
-Long entry also requires the spread level to meet \texttt{carry\_buffer}; short entry is
-permitted when \texttt{allow\_short} is enabled. An open position exits on a directional
-state flip or carry-gate failure after \texttt{min\_hold}, or immediately on a
-\textbf{volatility-scaled trailing stop}: the engine tracks the best (most favorable)
-spread level reached since entry, and closes the position once the pullback from that
-level reaches \texttt{trailing\_mult} $\times\, \operatorname{sd}_{60}(\Delta s)$ --- i.e. the stop
-band widens automatically in higher-volatility regimes and tightens in calmer ones,
-rather than sitting at a fixed spread distance. As in MR, closed PnL combines
-duration-scaled spread movement and carry accrual.
+\begin{equation}
+\theta_{i,m}=\operatorname{clip}\!\left(k_{c(i)}\hat{\sigma}^{\mathrm{MAD}}_{i,m},
+\theta^{\min}_{c(i)},\theta^{\max}_{c(i)}\right).
+\end{equation}
+
+Here $c(i)$ denotes the spread family and $\hat{\sigma}^{\mathrm{MAD}}$ is the
+60-observation robust daily-change scale,
+\begin{equation}
+\hat{\sigma}^{\mathrm{MAD}}=1.4826\times
+\operatorname{median}\!\left(\left|\Delta s_t-
+\operatorname{median}(\Delta s)\right|\right).
+\end{equation}
+The family multiplier $k_{c(i)}$, noise floor $\theta^{\min}_{c(i)}$, and ceiling
+$\theta^{\max}_{c(i)}$ are selected by family-level walk-forward calibration, rather
+than fitted separately to every instrument. A fallback static family threshold is
+used when the 60-observation history is unavailable. Optional month-to-month
+smoothing limits a threshold change to $[2/3,3/2]$ of the preceding month's value.
+This is still an absolute DC event rule at trade time, and is stable for inverted,
+near-zero, and zero-crossing spreads.
+
+The generator (\texttt{curves/calibration/trend.py::generate\_absolute}) is a
+deterministic rule-based state machine, \textbf{not} a Markov chain or hidden Markov
+model: it tracks a running local extremum and flips state only when the spread moves
+away from that extremum by at least $\theta_{i,m}$. It emits an \texttt{Upward Trend
+Confirmed} or \texttt{Downward Trend Confirmed} event; its state is forward-filled as
+$D_t=+1$ or $D_t=-1$ until the next confirmed event.
+
+An open position exits on an opposite confirmed DC event after \texttt{min\_hold}, or
+immediately on a \textbf{volatility-scaled trailing stop}. The engine tracks the best
+(most favorable) spread level reached since entry and closes the position once the
+pullback reaches \texttt{trailing\_mult} $\times\hat{\sigma}^{\mathrm{MAD}}_{i,m}$.
+The trailing scale is also frozen for the review month. As in MR, closed PnL combines
+duration-scaled spread movement, carry accrual, and applicable borrow costs.
 
 {\small
 \setlength{\LTleft}{0pt}
@@ -272,7 +275,7 @@ duration-scaled spread movement and carry accrual.
 \setlength{\tabcolsep}{5pt}
 \renewcommand{\arraystretch}{1.15}
 \begin{longtable}{p{0.24\textwidth} p{0.17\textwidth} p{0.19\textwidth} p{0.32\textwidth}}
-\caption{Trending/momentum strategy defaults.}\label{tab:pairs-trend-defaults-overleaf} \\
+\caption{Trend strategy parameters.}\label{tab:pairs-trend-defaults-overleaf} \\
 \toprule
 \textbf{Parameter} & \textbf{Standard default} & \textbf{Tenor-spread preset} & \textbf{Role} \\
 \midrule
@@ -287,16 +290,61 @@ duration-scaled spread movement and carry accrual.
 \endfoot
 \bottomrule
 \endlastfoot
-\texttt{theta} & 0.02 & 0.03 & Relative directional-change threshold in the backtest engine. \\
-\texttt{mom\_window} & 20 observations & 30 observations & Momentum lookback. \\
-\texttt{vol\_window} & 60 observations & 90 observations & Daily-change volatility lookback. \\
-Momentum threshold & 0.5 & 0.5 & Fixed internal threshold for $\left|m_t^{\mathrm{norm}}\right|$; not UI-configurable. \\
-\texttt{trailing\_mult} & 1.5 & 2.0 & Favorable-excursion trailing-stop multiple. \\
-\texttt{carry\_buffer} & 0.0 & 0.0 & Spread-level gate for long entries. \\
-\texttt{min\_hold} & 7 calendar days & 10 calendar days & Minimum hold before flip/carry exits. \\
+DC calibration lookback & 60 observations & 60 observations & Point-in-time robust daily-change scale at the monthly review. \\
+DC threshold $\theta_{i,m}$ & $\operatorname{clip}(k_c\hat{\sigma}^{\mathrm{MAD}},\theta_c^{\min},\theta_c^{\max})$ & Same family rule & Absolute threshold, fixed through the review month. \\
+Family multiplier $k_c$ & Walk-forward calibrated & Walk-forward calibrated & Controls DC sensitivity; estimated by family, never per-instrument in sample. \\
+Threshold floor / cap & Family configured & Family configured & Prevents quote-noise churn and post-shock signal starvation. \\
+Threshold smoothing & $[2/3,3/2]$ prior month & $[2/3,3/2]$ prior month & Optional bound on monthly threshold changes. \\
+\texttt{trailing\_mult} & 1.5 & 2.0 & Multiple of the frozen monthly robust scale. \\
+\texttt{min\_hold} & 7 calendar days & 10 calendar days & Minimum hold before an opposite-DC signal exit. \\
 \texttt{allow\_short} & enabled & enabled & Allows short-spread entries. \\
 \end{longtable}
 }
+
+\subsection{Model Comparison and Deliberate Exclusions}
+
+The selected design separates three decisions: monthly style selection, monthly
+threshold calibration, and event-level trade timing. Table
+\ref{tab:pairs-model-comparison-overleaf} records the alternatives considered and
+why they are not used as the production entry model.
+
+{
+\small
+\setlength{\LTleft}{0pt}
+\setlength{\LTright}{0pt}
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{longtable}{p{0.24\textwidth} p{0.27\textwidth} p{0.38\textwidth}}
+\caption{Trend-model comparison and production decision.}\label{tab:pairs-model-comparison-overleaf} \\
+\toprule
+\textbf{Alternative} & \textbf{Potential benefit} & \textbf{Why it is not the production entry rule} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Alternative} & \textbf{Potential benefit} & \textbf{Why it is not the production entry rule} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\textit{Continued on next page}} \\
+\midrule
+\endfoot
+\bottomrule
+\endlastfoot
+Single global absolute DC threshold & Simple and transparent. & Spread levels, volatility, liquidity, and quote noise differ materially by instrument. One global threshold creates excessive flips in quiet series and too few events in volatile series. The selected model instead uses a monthly frozen, family-calibrated absolute threshold. \\
+Relative DC threshold & Automatically changes with the level of a positive series. & It is unstable or undefined near zero and changes directional interpretation for negative/inverted yield spreads. The production rule compares an absolute movement in spread units. \\
+Normalized momentum entry & Measures fixed-window move strength relative to volatility. & It is lagging and path-insensitive: a new DC reversal can be vetoed because its trailing window still contains the preceding move. It also needs an arbitrary lookback and threshold. It remains a diagnostic and may inform threshold research, but does not confirm, veto, reverse, or size a trade. \\
+DC plus normalized-momentum confirmation & May reduce some weak DC events. & It introduces a second correlated gate, delays entry, and obscures the causal reason for a trade. The monthly style assignment is the broad filter; the confirmed DC event is the single timing rule. \\
+Carry-level or candidate-score gate & May favour positive expected carry and highly ranked candidates. & Carry is realized in PnL and candidate scores determine ranking/allocation, but neither establishes a trend reversal. Using either as an entry veto mixes portfolio selection with trade timing and creates a hidden signal filter. \\
+Daily adaptive MR/trend routing & Responds quickly to changing market conditions. & Daily switching increases turnover and makes historical attribution and auditability weak. It can switch an open position without a separate trade event. The selected model permits a style change only at the next monthly review. \\
+HMM / Markov regime model & Can estimate latent states and transition probabilities. & It adds fitted-state, transition, and retraining risk for limited per-spread histories, while reducing transparency. It is not required for the baseline. HMM research remains separate from this deterministic Alpha model. \\
+\end{longtable}
+}
+
+The chosen model is therefore not a claim that momentum or HMM methods cannot add
+value. It is a parsimonious baseline with a single observable entry event and a
+complete point-in-time audit trail. Any alternative must demonstrate incremental
+out-of-sample net performance, stable turnover, and comparable interpretability
+before it replaces this baseline.
 
 For yield-based spread families (\texttt{TenorSpread}, \texttt{SwapSpread},
 \texttt{TBondCurve}/\texttt{CBondCurve}, \texttt{TBondSwap}/\texttt{CBondSwap},
@@ -320,9 +368,7 @@ were unaffected (they are computed from the underlying position sign, not the
 display label). The redundant swap has been removed from
 \texttt{web/tabs/alpha/callbacks/backtest\_tab.py}, so trend trades now use the same
 (correct) direction convention as MR trades. The trend score-history chart was also
-updated to label the $\pm0.5\sigma$ entry lines with the correct economic direction
-for yield-based spreads, and to display an explicit ``signals computed on
-$-$spread'' subtitle in that mode.
+updated to display the same sign convention explicitly.
 
 \paragraph{Candidate \texttt{trend\_state} key bug (identified and fixed 2026-07-16).}
 \texttt{curves/refreshers/alpha\_scoring.py} populated the candidate table's
@@ -354,10 +400,10 @@ whereas the portfolio screen reports a daily-PnL Sharpe annualized by
 $\sqrt{252}$. These are not comparable with each other or directly with the
 platform-wide return-based convention in \S1.
 
-\subsection{Performance-improvement Plan (Documentation Only)}
+\subsection{Validation and Implementation Requirements}
 
-No implementation is made by this document. The following sequence is recommended
-before interpreting optimization results or increasing risk:
+Before increasing risk or selecting family parameters, the implementation must meet
+the following validation requirements:
 
 \begin{enumerate}
 \item \textbf{Make performance measurement investable first.} Apply instrument- and
@@ -367,38 +413,32 @@ then make capital and the configured transaction cost operational. Report gross
 and net results, turnover, capacity/DV01, and return-based daily Sharpe using one
 shared convention.
 
-\item \textbf{Validate both models with a genuinely walk-forward design.} Freeze all
-parameters and style/routing decisions using only information available at each
-date; refit/reselect on rolling training windows; reserve a final untouched period.
-Use purged, embargoed or anchored walk-forward folds where overlapping holding
-periods make ordinary splits optimistic. Compare against always-MR, always-trend,
-and no-trade baselines.
+\item \textbf{Validate with a genuinely walk-forward design.} Freeze the monthly style,
+robust scale, threshold multiplier, floor/cap, and trailing-stop setting using only
+information available at each review date; reserve a final untouched period. Use
+purged, embargoed, or anchored walk-forward folds where overlapping holding periods
+make ordinary splits optimistic. Compare against always-MR, always-trend, no-trade,
+and the rejected alternatives in Table \ref{tab:pairs-model-comparison-overleaf}.
 
-\item \textbf{Repair and calibrate regime routing before relying on it.} The current
-variance-ratio calculation compares variances estimated over unequal samples and
-scales the short-window variance by the window ratio; it is not a Lo--MacKinlay
-multi-period variance ratio and is biased toward a trend vote. The single-scale
-60-day R/S Hurst estimate also has finite-sample bias. Calibrate all thresholds to
-simulated/random-walk and instrument-family null distributions, add regime
-hysteresis/confidence gating, and demonstrate that conditional engine performance
-beats the static baselines.
+\item \textbf{Calibrate the monthly classifier and threshold by family.} The
+variance-ratio proxy and single-scale 60-day R/S Hurst estimate have finite-sample
+limitations. Calibrate classifier votes and the DC multiplier/floor/cap to
+instrument-family null distributions and walk-forward results. The review output
+must always report confidence, fallback reason, robust scale, and final absolute
+threshold.
 
-\item \textbf{Align parameter units with the traded object.} The trend backtest currently
-uses the relative DC generator while the live snapshot trend signal uses an
-absolute generator. Relative thresholds are unstable for inverted or near-zero
-spreads, and \texttt{theta=0.02} therefore has a different meaning from a 2 bp absolute
-threshold. Use one causal, spread-unit-consistent definition, preferably a
-volatility-scaled absolute threshold; normalize momentum over its horizon (or
-calibrate the existing statistic) and replace the spread-level \texttt{carry\_buffer} with
-direction-aware carry/roll expected edge.
+\item \textbf{Enforce one causal DC implementation.} All trend paths must call the
+absolute DC generator with the review month's frozen threshold. Test positive,
+inverted, near-zero, and zero-crossing spreads; verify no entry occurs before the
+first confirmed event; and verify that normalized momentum and carry cannot gate an
+entry or an opposite-DC exit.
 
-\item \textbf{Estimate parameters by spread family and reversion speed, not global UI
-presets.} Estimate an out-of-sample OU half-life/stationarity diagnostic per
-instrument; trade MR only when its half-life fits the intended 1-week to 1-month
-holding horizon and set the z-score lookback from that estimate. For trend, select
-DC, momentum, volatility, and stop horizons by robust family-level grids or
-Bayesian/regularized selection, scoring stability across folds rather than the
-single best historical Sharpe.
+\item \textbf{Estimate parameters by spread family, not individual in-sample fit.}
+Estimate an out-of-sample OU half-life/stationarity diagnostic per instrument; trade
+MR only when its half-life fits the intended 1-week to 1-month holding horizon. For
+trend, select the DC multiplier, floor/cap, robust-scale lookback, and trailing-stop
+multiple by conservative family-level grids, scoring stability across folds rather
+than the single best historical Sharpe.
 
 \item \textbf{Improve portfolio construction after signals are credible.} Preserve the
 historically available allocation at each rebalance; volatility-target gross DV01;

@@ -22,7 +22,7 @@ from ..data import (
 from .portfolio import _SUMMARY_ALPHA_PARQUET
 from ..layouts import build_individual_backtest_panel, build_portfolio_backtest_panel
 from ..backtest import (
-    run_spread_backtest, run_trend_backtest_dc, run_regime_hybrid_backtest,
+    run_spread_backtest, run_trend_backtest_dc,
     build_backtest_results_display,
 )
 
@@ -47,6 +47,86 @@ def register_backtest_callbacks(app) -> None:
             pass
 
         return optimized_data or []
+
+    def _default_style_for_spread(spread_type: str) -> str:
+        """Return category default style in canonical form: mr or trend."""
+        for _, info in SPREAD_CATEGORIES.items():
+            if spread_type in info.get('types', []):
+                return 'trend' if info.get('style', 'MeanReversion') == 'Trend' else 'mr'
+        return 'mr'
+
+    def _build_monthly_style_schedule(spread_ts: pd.Series, spread_type: str) -> tuple[pd.DataFrame, pd.Series]:
+        """Compute point-in-time monthly style assignment and daily regime strip."""
+        from curves.calibration.regime import DEFAULT_REGIME_WINDOW, compute_regime_features
+
+        s = pd.to_numeric(spread_ts, errors='coerce').dropna().copy()
+        if not isinstance(s.index, pd.DatetimeIndex):
+            s.index = pd.to_datetime(s.index)
+        if getattr(s.index, 'tz', None) is not None:
+            s.index = s.index.tz_localize(None)
+        s = s.sort_index()
+
+        if len(s) == 0:
+            return pd.DataFrame(), pd.Series(dtype=object)
+
+        review_dates = s.groupby(s.index.to_period('M')).apply(lambda x: x.index.min())
+        if review_dates is None or len(review_dates) == 0:
+            return pd.DataFrame(), pd.Series(dtype=object)
+
+        default_style = _default_style_for_spread(spread_type)
+        prev_style = None
+        rows = []
+
+        for rd in review_dates.sort_values().tolist():
+            hist = s.loc[:rd].dropna()
+            fallback_reason = ''
+            regime = 'uncertain'
+            score = np.nan
+
+            if len(hist) >= DEFAULT_REGIME_WINDOW + 5:
+                info = compute_regime_features(hist, window=DEFAULT_REGIME_WINDOW)
+                regime = str(info.get('regime', 'uncertain') or 'uncertain').strip().lower()
+                score = float(info.get('regime_score', np.nan))
+                if regime == 'trending':
+                    assigned_style = 'trend'
+                elif regime == 'mean_reverting':
+                    assigned_style = 'mr'
+                elif prev_style is not None:
+                    assigned_style = prev_style
+                    fallback_reason = 'uncertain->previous_style'
+                else:
+                    assigned_style = default_style
+                    fallback_reason = 'uncertain->default_style'
+            else:
+                regime = 'insufficient_history'
+                if prev_style is not None:
+                    assigned_style = prev_style
+                    fallback_reason = 'insufficient->previous_style'
+                else:
+                    assigned_style = default_style
+                    fallback_reason = 'insufficient->default_style'
+
+            rows.append({
+                'review_date': pd.Timestamp(rd),
+                'regime': regime,
+                'regime_score': score,
+                'assigned_style': assigned_style,
+                'fallback_reason': fallback_reason,
+            })
+            prev_style = assigned_style
+
+        schedule = pd.DataFrame(rows)
+        if schedule.empty:
+            return schedule, pd.Series(dtype=object)
+
+        month_to_style = {
+            pd.Timestamp(r['review_date']).to_period('M'): str(r['assigned_style'])
+            for r in rows
+        }
+        monthly_style = s.index.to_period('M').map(lambda m: month_to_style.get(m, default_style))
+        regime_strip = pd.Series(monthly_style, index=s.index).map({'trend': 'trending', 'mr': 'mean_reverting'}).fillna('uncertain')
+
+        return schedule, regime_strip
 
     # -------------------------------------------------------------------------
     # BACKTEST: Mode Tab Selector
@@ -91,7 +171,6 @@ def register_backtest_callbacks(app) -> None:
     # BACKTEST: Auto-detect regime and set trade style from instrument
     # -------------------------------------------------------------------------
     _BT_BASE_OPTIONS = [
-        {'label': ' Auto Regime (MR / Trend)', 'value': 'hybrid'},
         {'label': ' Mean-Reversion', 'value': 'mr'},
         {'label': ' Trend (Directional-Change)', 'value': 'trend'},
     ]
@@ -183,46 +262,10 @@ def register_backtest_callbacks(app) -> None:
 
             regime_color = {'mean_reverting': THEME['success'], 'trending': THEME['accent'], 'uncertain': THEME['warning']}.get(regime, THEME['text_sub'])
 
-            if regime == 'mean_reverting':
-                style_key = 'hybrid'
-                auto_options = _BT_BASE_OPTIONS
-            elif regime == 'trending':
-                style_key = 'hybrid'
-                auto_options = _BT_BASE_OPTIONS
-            else:
-                # Uncertain regime: use the sign of the 3m edge as a tiebreaker.
-                # Positive edge rewards waiting for reversion → MR.
-                # Negative/zero edge means follow Trend.
-                auto_options = _BT_BASE_OPTIONS
-                edge_val = np.nan
-                try:
-                    snap_df = load_spread_data(spread_type)
-                    if isinstance(snap_df, pd.DataFrame) and not snap_df.empty:
-                        _row = None
-                        if instrument in snap_df.index:
-                            _row = snap_df.loc[instrument]
-                        elif 'ID' in snap_df.columns:
-                            _m = snap_df[snap_df['ID'].astype(str) == str(instrument)]
-                            if not _m.empty:
-                                _row = _m.iloc[0]
-                        if _row is not None:
-                            for _c in ['carry_roll', 'carry_3m_bp', 'Carry(3m,bp)', 'carry']:
-                                _v = _row.get(_c, np.nan)
-                                if _v is not None and np.isfinite(float(_v)):
-                                    edge_val = float(_v)
-                                    break
-                except Exception:
-                    pass
-                if not np.isnan(edge_val):
-                    style_key = 'hybrid'
-                    edge_hint = f"edge={edge_val:+.1f}bp → {'MR' if edge_val > 0 else 'Trend'} suggested"
-                else:
-                    style_key = 'hybrid'
-                    edge_hint = "edge unavailable → MR suggested"
-
+            auto_options = _BT_BASE_OPTIONS
             if regime == 'uncertain':
                 badge_extra = html.Span(
-                    f"  (score: {score:+.2f})  {edge_hint}",
+                    f"  (score: {score:+.2f})",
                     style={'color': THEME['warning'], 'fontSize': '11px'},
                 )
             else:
@@ -247,15 +290,19 @@ def register_backtest_callbacks(app) -> None:
     @app.callback(
         [Output('bt-mr-params-div', 'style'),
          Output('bt-trend-params-div', 'style')],
-        Input('bt-trade-style', 'value'),
+        [Input('bt-trade-style', 'value'),
+         Input('bt-style-mode', 'value')],
     )
-    def toggle_backtest_params(style):
+    def toggle_backtest_params(style, style_mode):
         base_mr = {
             'background': 'var(--surface-panel)', 'border': '1px solid var(--border-strong)',
             'borderRadius': '6px', 'padding': '14px 16px', 'marginBottom': '14px',
         }
         base_trend = {'background': 'var(--surface-panel)', 'border': '1px solid var(--border-strong)',
                       'borderRadius': '6px', 'padding': '14px 16px', 'flex': '1'}
+        if style_mode == 'auto_monthly':
+            # Auto mode can resolve to either style at runtime; keep both visible.
+            return base_mr, base_trend
         if style == 'trend':
             base_mr['display'] = 'none'
         elif style == 'mr':
@@ -295,7 +342,9 @@ def register_backtest_callbacks(app) -> None:
          State('bt-exit-z', 'value'),
          State('bt-stop-z', 'value'),
          State('bt-period', 'value'),
+         State('bt-style-mode', 'value'),
          State('bt-trade-style', 'value'),
+         State('bt-uncertain-policy', 'value'),
          State('bt-theta', 'value'),
          State('bt-mom-window', 'value'),
          State('bt-vol-window', 'value'),
@@ -306,8 +355,8 @@ def register_backtest_callbacks(app) -> None:
         prevent_initial_call=True
     )
     def run_individual_backtest(
-        n_clicks, spread_type, instrument, entry_z, exit_z, stop_z, period, style,
-        theta, mom_window, vol_window, trailing_mult, carry_buffer, allow_short, min_hold
+        n_clicks, spread_type, instrument, entry_z, exit_z, stop_z, period, style_mode, style,
+        uncertain_policy, theta, mom_window, vol_window, trailing_mult, carry_buffer, allow_short, min_hold
     ):
         if not n_clicks:
             return html.Div(), ""
@@ -380,7 +429,31 @@ def register_backtest_callbacks(app) -> None:
                     carry_roll_ts_instrument = -carry_roll_ts_instrument
                 carry_roll_bp = -carry_roll_bp
 
-        style = style or 'mr'
+        style_mode = (style_mode or 'manual').strip().lower()
+        style = (style or 'mr').strip().lower()
+        uncertain_policy = (uncertain_policy or 'trend').strip().lower()
+
+        if style_mode == 'auto_monthly':
+            monthly_schedule, _ = _build_monthly_style_schedule(ts, spread_type)
+            if isinstance(monthly_schedule, pd.DataFrame) and not monthly_schedule.empty:
+                _schedule = monthly_schedule.copy()
+                if uncertain_policy == 'trend':
+                    _m = _schedule['regime'].astype(str).str.lower().eq('uncertain')
+                    _schedule.loc[_m, 'assigned_style'] = 'trend'
+                    _schedule.loc[_m, 'fallback_reason'] = _schedule.loc[_m, 'fallback_reason'].astype(str) + '|uncertain->trend'
+                elif uncertain_policy == 'manual':
+                    _m = _schedule['regime'].astype(str).str.lower().eq('uncertain')
+                    _schedule.loc[_m, 'assigned_style'] = style
+                    _schedule.loc[_m, 'fallback_reason'] = _schedule.loc[_m, 'fallback_reason'].astype(str) + '|uncertain->manual'
+
+                # Auto-monthly resolves to the latest monthly style for this run.
+                style = str(_schedule.iloc[-1].get('assigned_style', style) or style).strip().lower()
+                monthly_schedule = _schedule
+            else:
+                # Fallback for insufficient history: requested uncertain policy.
+                if uncertain_policy == 'trend':
+                    style = 'trend'
+
         try:
             duration_mult = _get_duration_mult(instrument, spread_type)
             bc_long, bc_short = _get_borrow_cost_annual_bp(spread_type, instrument)
@@ -440,46 +513,12 @@ def register_backtest_callbacks(app) -> None:
 
             _negate_ts = is_yield_based
 
-            if style == 'hybrid':
-                results = run_regime_hybrid_backtest(
-                    spread_ts=-ts if _negate_ts else ts,
-                    entry_z=entry_z or 2.0,
-                    exit_z=exit_z or 0.5,
-                    stop_z=stop_z or 4.0,
-                    theta=float(theta) if theta is not None else 0.02,
-                    mom_window=int(mom_window) if mom_window is not None else 20,
-                    vol_window=int(vol_window) if vol_window is not None else 60,
-                    trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
-                    carry_buffer=float(carry_buffer) if carry_buffer is not None else 0.0,
-                    allow_short=bool(allow_short and 'allow' in allow_short),
-                    min_hold=int(min_hold) if min_hold is not None else 7,
-                    carry_roll_ts=carry_roll_ts_instrument,
-                    carry_roll_bp=carry_roll_bp,
-                    duration_mult=duration_mult,
-                    borrow_cost_long_bp=bc_long,
-                    borrow_cost_short_bp=bc_short,
-                    spread_type=spread_type,
-                    tenor_ratio=0.5 if spread_type == 'TenorSpread' else 1.0,
-                    carry_roll_sell_ts=_cr_sell_for_backtest,
-                )
-            elif style == 'trend':
-                # Yield-based convention note:
-                # We pass -spread into the trend engine so it can keep the same
-                # generic entry rule used for price-like series:
-                #   state>0 & norm_mom>=0.5 -> LONG
-                #   state<0 & norm_mom<=-0.5 -> SHORT
-                # This is algebraically equivalent to using raw spread S with
-                # swapped economic directions:
-                #   S up strongly  -> SHORT
-                #   S down strongly -> LONG
-                # i.e. exactly the convention requested for yield spreads.
+            if style == 'trend':
                 results = run_trend_backtest_dc(
                     spread_ts=-ts if _negate_ts else ts,
                     theta=float(theta) if theta is not None else 0.02,
-                    mom_window=int(mom_window) if mom_window is not None else 20,
                     vol_window=int(vol_window) if vol_window is not None else 60,
                     trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
-                    carry_buffer=float(carry_buffer) if carry_buffer is not None else 0.0,
                     allow_short=bool(allow_short and 'allow' in allow_short),
                     carry_roll_ts=carry_roll_ts_instrument,
                     carry_roll_bp=carry_roll_bp,
@@ -490,6 +529,9 @@ def register_backtest_callbacks(app) -> None:
                     tenor_ratio=0.5 if spread_type == 'TenorSpread' else 1.0,
                     carry_roll_sell_ts=_cr_sell_for_backtest,
                     min_hold=int(min_hold) if min_hold is not None else 7,
+                    adaptive_theta=True,
+                    theta_min_mult=0.5,
+                    theta_max_mult=2.5,
                 )
             else:
                 results = run_spread_backtest(
@@ -512,7 +554,7 @@ def register_backtest_callbacks(app) -> None:
             # For YTM-based spreads: restore original display signs after internal inversion.
             if _negate_ts and isinstance(results, dict):
                 results['spread_ts'] = ts
-                for key in ('zscore_ts', 'composite_signal_ts', 'norm_mom_ts', 'trend_state_ts'):
+                for key in ('zscore_ts', 'composite_signal_ts', 'trend_state_ts'):
                     series = results.get(key)
                     if isinstance(series, pd.Series):
                         results[key] = -series
@@ -547,8 +589,29 @@ def register_backtest_callbacks(app) -> None:
             results['carry_roll_sell_ts'] = _cr_sell_for_chart
         if isinstance(results, dict):
             results['spread_type'] = spread_type
+            results['style_mode'] = style_mode
+            results['style_effective'] = style
+            results['uncertain_policy'] = uncertain_policy
+            try:
+                monthly_schedule, monthly_regime_ts = _build_monthly_style_schedule(ts, spread_type)
+                if style_mode == 'auto_monthly' and isinstance(monthly_schedule, pd.DataFrame) and not monthly_schedule.empty:
+                    if uncertain_policy == 'trend':
+                        _m = monthly_schedule['regime'].astype(str).str.lower().eq('uncertain')
+                        monthly_schedule.loc[_m, 'assigned_style'] = 'trend'
+                    elif uncertain_policy == 'manual':
+                        _m = monthly_schedule['regime'].astype(str).str.lower().eq('uncertain')
+                        monthly_schedule.loc[_m, 'assigned_style'] = style
+                if not monthly_schedule.empty:
+                    results['monthly_style_schedule'] = monthly_schedule
+                    results['monthly_regime_ts'] = monthly_regime_ts
+            except Exception:
+                # Keep display resilient even if monthly schedule computation fails.
+                pass
 
-        status = f"Backtest completed at {datetime.now().strftime('%H:%M:%S')}"
+        status = (
+            f"Backtest completed at {datetime.now().strftime('%H:%M:%S')} "
+            f"[mode={style_mode}, effective_style={style}, uncertain={uncertain_policy}]"
+        )
         try:
             display = build_backtest_results_display(results, title=f"Backtest: {display_instrument} ({spread_type})")
         except Exception as exc:
@@ -744,6 +807,12 @@ def register_backtest_callbacks(app) -> None:
                             spread_ts=ts_bt, carry_roll_ts=_cr_ts,
                             carry_roll_bp=_cr_bp, duration_mult=dur,
                             allow_short=True,
+                            spread_type=spread_type,
+                            theta=0.03 if spread_type == 'TenorSpread' else 0.02,
+                            vol_window=90 if spread_type == 'TenorSpread' else 60,
+                            adaptive_theta=True,
+                            theta_min_mult=0.5,
+                            theta_max_mult=2.5,
                             min_hold=_min_hold,
                         )
                     else:

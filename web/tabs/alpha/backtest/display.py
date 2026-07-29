@@ -222,15 +222,21 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
 
     score_div = html.Div()
     is_hybrid = bool(results.get('hybrid'))
+    monthly_regime_ts = results.get('monthly_regime_ts')
+    monthly_style_schedule = results.get('monthly_style_schedule')
     _composite = results.get('composite_signal_ts')
     _raw_score = results.get('norm_mom_ts') if is_trend else (_composite if _composite is not None else results.get('zscore_ts'))
+    if is_trend and _raw_score is None and isinstance(results.get('trend_state_ts'), pd.Series):
+        _raw_score = results.get('trend_state_ts')
     if _raw_score is not None and len(_raw_score.dropna()) > 0:
         score_ts_display = _coerce_datetime_series(_raw_score)
         if score_ts_display is None:
             score_ts_display = _raw_score
         score_ts_display = score_ts_display.dropna()
         if is_trend:
-            score_label = 'Norm Momentum (σ)'
+            score_label = 'Trend State (+1/-1)'
+            if isinstance(results.get('norm_mom_ts'), pd.Series):
+                score_label = 'Norm Momentum (σ)'
         else:
             if _composite is not None:
                 score_label = 'Composite Signal (Z - Carry) (120d)'
@@ -250,6 +256,23 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
                 customdata=regime_ts.str.replace('_', ' ').str.title(),
                 hovertemplate='Regime: %{customdata}<extra></extra>',
             ))
+
+        if isinstance(monthly_regime_ts, pd.Series):
+            monthly_reg = _coerce_datetime_series(monthly_regime_ts)
+            if isinstance(monthly_reg, pd.Series):
+                monthly_reg = monthly_reg.reindex(score_ts_display.index).ffill().fillna('uncertain')
+                monthly_lookup = {'mean_reverting': -3.0, 'uncertain': 0.0, 'trending': 3.0}
+                monthly_values = monthly_reg.map(monthly_lookup).fillna(0.0)
+                signal_fig.add_trace(go.Scatter(
+                    x=monthly_values.index,
+                    y=monthly_values.values,
+                    mode='lines',
+                    name='Monthly Regime',
+                    line=dict(color='rgba(156,39,176,0.78)', width=1.3, shape='hv'),
+                    customdata=monthly_reg.astype(str).str.replace('_', ' ').str.title(),
+                    hovertemplate='Monthly regime: %{customdata}<extra></extra>',
+                    showlegend=True,
+                ))
 
         if is_trend and 'trend_state_ts' in results and results['trend_state_ts'] is not None:
             _tst = results['trend_state_ts'].reindex(score_ts_display.index).ffill().fillna(0.0)
@@ -327,11 +350,23 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
                 signal_fig.add_trace(go.Scatter(x=loss_x['exit_date'], y=_score_at(loss_x, 'exit_date'), mode='markers', marker=dict(symbol='x', size=8, color=THEME['danger'], opacity=0.8), showlegend=False))
 
         yaxis_label = 'Norm Mom (σ)' if is_trend else ('Composite Signal' if _composite is not None else 'Z-Score')
+        if is_trend and score_label == 'Trend State (+1/-1)':
+            yaxis_label = 'Trend State'
         score_title = f'Score History ({score_label})'
         if is_hybrid:
             score_title += '<br><sup>Strategy regime: Trend = +3, Uncertain = 0, Mean-Reverting = -3. DC direction state is shown at +/-2.</sup>'
+        if isinstance(monthly_style_schedule, pd.DataFrame) and not monthly_style_schedule.empty:
+            try:
+                _last_row = monthly_style_schedule.iloc[-1]
+                _asof = pd.Timestamp(_last_row.get('review_date')).strftime('%Y-%m-%d')
+                _sty = str(_last_row.get('assigned_style', '')).upper()
+                _reg = str(_last_row.get('regime', '')).replace('_', ' ').upper()
+                score_title += f'<br><sup>Monthly style assignment: {_sty} (review {_asof}, classifier {_reg}).</sup>'
+            except Exception:
+                pass
         if is_trend and is_yield_based:
             score_title += '<br><sup>Yield-based mode: signals are computed on -spread (Long = expect spread down/narrow).</sup>'
+        _show_legend = is_hybrid or isinstance(monthly_regime_ts, pd.Series)
         signal_fig.update_layout(
             title=score_title, height=230,
             margin=dict(l=50, r=20, t=40, b=40),
@@ -339,7 +374,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             font=dict(color=THEME['text_main']),
             xaxis=dict(gridcolor=THEME['bg_card'], tickformat='%b\n%Y', hoverformat='%Y-%m-%d', **_xaxis_range),
             yaxis=dict(title=yaxis_label, gridcolor=THEME['bg_card']),
-            showlegend=is_hybrid,
+            showlegend=_show_legend,
             legend=dict(orientation='h', yanchor='bottom', y=1.10, xanchor='right', x=1, font=dict(size=10)),
         )
         score_div = html.Div([dcc.Graph(figure=signal_fig, style={'height': '230px'})], style={'marginBottom': '15px'})
