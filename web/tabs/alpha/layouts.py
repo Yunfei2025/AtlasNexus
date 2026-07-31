@@ -755,6 +755,25 @@ def build_portfolio_backtest_panel() -> html.Div:
                         html.Label("Transaction Cost (bp)", style=_lbl),
                         dcc.Input(id='bt-txn-cost', type='number', value=0.5, min=0, max=5, step=0.1, style=_inp),
                     ]),
+                    # These signal settings are consumed by the portfolio
+                    # callback. They must be present in this mode as well as
+                    # the Individual Spread mode so Dash can resolve its State.
+                    html.Div([
+                        html.Label("Entry Z-Score", style=_lbl),
+                        dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25, style=_inp),
+                    ]),
+                    html.Div([
+                        html.Label("Exit Z-Score", style=_lbl),
+                        dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25, style=_inp),
+                    ]),
+                    html.Div([
+                        html.Label("Stop Loss (σ)", style=_lbl),
+                        dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style=_inp),
+                    ]),
+                    html.Div([
+                        html.Label("Minimum Hold (days)", style=_lbl),
+                        dcc.Input(id='bt-min-hold', type='number', value=7, min=1, max=30, step=1, style=_inp),
+                    ]),
                 ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(150px, 1fr))', 'gap': '12px'}),
             ], style={**_card, 'flex': '1'}),
 

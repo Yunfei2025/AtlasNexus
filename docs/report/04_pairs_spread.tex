@@ -22,6 +22,70 @@ are only flagged when the relationship is statistically stable.
 Stationarity/cointegration testing rigor, lookback choice for the regression window,
 and stability of the hedge ratio through regime shifts.
 
+\subsection{30Y CGB On/Off-the-Run Relative Value within \texttt{TBondCurve}}
+\label{sec:pairs-tbondcurve-otr-ofr}
+
+The 30Y China Government Bond (CGB) on/off-the-run (OTR/OFR) trade is represented as
+a \texttt{TBondCurve} sub-strategy, rather than as an extrapolation of the fitted
+1--10Y model curve.  Its economic object is the 30Y liquidity premium: the current,
+most liquid eligible 30Y CGB (OTR) is compared with a liquid prior 30Y issue (OFR).
+For an OFR-minus-OTR yield spread,
+\begin{equation}
+	s_t = y^{\mathrm{OFR}}_t - y^{\mathrm{OTR}}_t,
+\end{equation}
+the executable relative-value position is long the OFR and short the OTR when the
+spread is unusually wide.  The cash legs are sized DV01-neutral,
+\begin{equation}
+	N_{\mathrm{OTR}} = N_{\mathrm{OFR}}
+	\frac{\mathrm{DV01}_{\mathrm{OFR}}}{\mathrm{DV01}_{\mathrm{OTR}}},
+\end{equation}
+with residual duration and convexity exposure reported separately.  This is a
+sovereign liquidity/relative-value strategy, not a conventional credit-spread
+strategy.  Candidate eligibility requires live two-sided quotes, adequate turnover,
+short/borrow availability for the OTR leg, and an all-in expected benefit that exceeds
+bid--offer, funding, borrow, and execution buffers.
+
+\paragraph{OTR rolls and new-issue cold start.}
+The OTR identifier changes at issuance, so a new OTR/OFR pair has no pair-specific
+history on its first day.  Historical spread data remain useful, but must not be
+treated as if they were observations of the new pair.  The production history is a
+point-in-time, rolled pair series: each observation uses the OTR and OFR that were
+eligible on that date, with the pair identifiers, issuance ages, remaining maturities,
+DV01 hedge ratio, and roll date retained in the audit record.  A historical
+``analogue'' distribution, conditioned on OTR issuance age and comparable 30Y
+remaining-maturity buckets, may provide a conservative prior for monitoring and
+entry-threshold calibration; it must not fabricate a z-score history for a new pair
+or be used with future constituent knowledge.
+
+The new pair is therefore \emph{observe-only} until it has sufficient post-roll,
+executable observations.  In the baseline, it needs at least 20 valid observations
+for descriptive statistics, 60 for the monthly regime classifier, and 120 for the
+pair-specific MR z-score.  Before the 120-observation threshold, the candidate is
+labeled \texttt{insufficient\_pair\_history}, receives no allocation, and displays its
+analogue percentile, liquidity diagnostics, and accumulated live history.  A new OTR
+also causes any predecessor pair to close or be explicitly rolled at the known
+roll-date observation; the two histories are not silently concatenated.
+
+\paragraph{Mean reversion versus trend.}
+The default economic hypothesis is mean reversion after the post-issuance liquidity
+premium has stabilized: OFR cheapness relative to OTR is expected to normalize as
+benchmark-demand, auction, and initial positioning effects decay.  It is not an
+assumption that every 30Y OTR/OFR spread is stationary.  Fresh-issue periods can
+trend or gap because of auction supply, dealer inventory, benchmark/index demand,
+special repo, and short-squeeze conditions.  Accordingly, the static \texttt{TBondCurve}
+family default remains MR only after the pair-specific warm-up; the existing monthly,
+point-in-time regime classifier may route a mature eligible pair to the trend engine
+when it identifies a trending regime.  An uncertain or cold-start pair is not forced
+into either engine and is not traded.
+
+\paragraph{Scope boundary.}
+This sub-strategy does not extend the affine curve calibration beyond its validated
+1--10Y range.  It shares the \texttt{TBondCurve} data, risk, candidate, allocation,
+and backtest plumbing, but has an explicit \texttt{otr\_ofr} signal variant so that
+pair selection, spread sign, DV01 hedge ratio, roll handling, history sufficiency,
+and transaction-cost assumptions remain distinguishable from the model-curve
+residual variant.
+
 \section{Alpha Portfolio $\rightarrow$ Backtest: Style-routed Spread Strategies}
 
 The Alpha Book backtest in \texttt{web/tabs/alpha/} evaluates individual relative-value
