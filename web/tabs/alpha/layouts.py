@@ -361,6 +361,8 @@ def build_portfolio_layout() -> html.Div:
             dcc.Input(id='alpha-mom-window', type='number', value=20, style={'display': 'none'}),
             dcc.Input(id='alpha-alloc-method', type='text', value='risk_parity', style={'display': 'none'}),
             dcc.Checklist(id='alpha-enforce-corr', options=[], value=[], style={'display': 'none'}),
+            dcc.Input(id='alpha-bond-margin-rate', type='number', value=5.0, style={'display': 'none'}),
+            dcc.Input(id='alpha-swap-margin-rate', type='number', value=5.0, style={'display': 'none'}),
         ], style={'display': 'none'}),
 
         html.Div([

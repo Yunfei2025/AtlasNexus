@@ -93,6 +93,7 @@ def build_layout(app):
                             html.Div([html.H6("Volume Histogram", className="graph__title")]),
                             dcc.Graph(
                                 id="vol-histogram",
+                                config={'displayModeBar': False},
                                 figure=dict(
                                     layout=dict(
                                         plot_bgcolor=app_color["graph_bg"],
@@ -108,6 +109,7 @@ def build_layout(app):
                             html.Div([html.H6("Price Candlestick Chart", className="graph__title")]),
                             dcc.Graph(
                                 id="futures-price",
+                                config={'displayModeBar': False},
                                 figure=dict(
                                     layout=dict(
                                         plot_bgcolor=app_color["graph_bg"],

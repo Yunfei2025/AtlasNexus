@@ -278,7 +278,7 @@ def register_portfolio_callbacks(app) -> None:
                 font=dict(color=THEME['text_main'], size=10),
                 xaxis=dict(tickangle=45),
             )
-            corr_div = html.Div([dcc.Graph(figure=heatmap)])
+            corr_div = html.Div([dcc.Graph(figure=heatmap, config={'displayModeBar': False})])
         else:
             corr_div = html.Div('Click ↻ Recalculate Correlation to build the matrix for all instruments.', style=_sub)
 

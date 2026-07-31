@@ -391,9 +391,9 @@ def build_multiasset_backtest_layout():
             type="circle",
             color=THEME['accent'],
             children=[
-                dcc.Graph(id='historical-allocation-chart'),
+                dcc.Graph(id='historical-allocation-chart', config={'displayModeBar': False}),
                 html.Div(style={'height': '20px'}),
-                dcc.Graph(id='pnl-attribution-chart'),
+                dcc.Graph(id='pnl-attribution-chart', config={'displayModeBar': False}),
                 html.Div(style={'height': '20px'}),
                 # Asset Pool Changes Section
                 html.Div(id='asset-changes-container')

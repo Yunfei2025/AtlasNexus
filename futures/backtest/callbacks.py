@@ -562,5 +562,5 @@ def register_callbacks(app):
         return html.Div([
             metrics_row,
             html.Hr(),
-            dcc.Graph(figure=fig)
+            dcc.Graph(figure=fig, config={'displayModeBar': False})
         ])

@@ -268,10 +268,10 @@ def _build_results_layout(results: Any, ticker: str, start_date: str, end_date: 
 
     figures = html.Div(
         [
-            html.Div(dcc.Graph(figure=_make_line_figure(cumulative_returns, "Cumulative Returns", THEME["accent"]))),
-            html.Div(dcc.Graph(figure=_make_line_figure(strategy_returns, "Strategy Returns", THEME["success"]))),
-            html.Div(dcc.Graph(figure=_make_line_figure(predictions, "Predictions", THEME["warning"]))),
-            html.Div(dcc.Graph(figure=_make_line_figure(positions, "Positions", THEME["danger"]))),
+            html.Div(dcc.Graph(figure=_make_line_figure(cumulative_returns, "Cumulative Returns", THEME["accent"]), config={'displayModeBar': False})),
+            html.Div(dcc.Graph(figure=_make_line_figure(strategy_returns, "Strategy Returns", THEME["success"]), config={'displayModeBar': False})),
+            html.Div(dcc.Graph(figure=_make_line_figure(predictions, "Predictions", THEME["warning"]), config={'displayModeBar': False})),
+            html.Div(dcc.Graph(figure=_make_line_figure(positions, "Positions", THEME["danger"]), config={'displayModeBar': False})),
         ],
         style={
             "display": "grid",

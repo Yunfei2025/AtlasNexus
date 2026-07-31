@@ -578,20 +578,20 @@ def build_vol_results_display(
     charts_div = html.Div([
         _vol_chart_card(
             "Implied Volatility Term Structure",
-            dcc.Graph(figure=fig_ts, style={'height': '300px'}),
+            dcc.Graph(figure=fig_ts, config={'displayModeBar': False}, style={'height': '300px'}),
             legend_items=[('#3498db', '1M IV'), ('#f39c12', '2M IV'), ('#e74c3c', '3M IV')],
         ),
         _vol_chart_card(
             "Mean Reversion: Bollinger Bands",
-            dcc.Graph(figure=fig_bb, style={'height': '350px'}),
+            dcc.Graph(figure=fig_bb, config={'displayModeBar': False}, style={'height': '350px'}),
         ),
         _vol_chart_card(
             "Strategy Cumulative Return",
-            dcc.Graph(figure=fig_cum, style={'height': '250px'}),
+            dcc.Graph(figure=fig_cum, config={'displayModeBar': False}, style={'height': '250px'}),
         ),
         _vol_chart_card(
             "Term Structure Slope Z-Score (1M-3M)",
-            dcc.Graph(figure=fig_slope, style={'height': '200px'}),
+            dcc.Graph(figure=fig_slope, config={'displayModeBar': False}, style={'height': '200px'}),
         ),
     ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'})
 

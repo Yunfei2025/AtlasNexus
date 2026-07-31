@@ -593,7 +593,7 @@ def register_factor_callbacks(app):
             # Format display — heatmap goes to the right column, table +
             # diversification recommendation go to the left column under the
             # signal cards (matches the guide's side-by-side layout).
-            heatmap_div = html.Div(dcc.Graph(figure=heatmap_fig))
+            heatmap_div = html.Div(dcc.Graph(figure=heatmap_fig, config={'displayModeBar': False}))
 
             table_div = html.Div([
                 html.Div(f"Lowest Absolute Correlations (Diversification Opportunities) — Top {top_pairs} Pairs",

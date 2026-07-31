@@ -273,7 +273,7 @@ def build_trend_layout() -> html.Div:
                                     id="an-trend-graph",
                                     style={"height": "820px"},
                                     config={
-                                        "displayModeBar": "hover",
+                                        "displayModeBar": False,
                                         "displaylogo": False,
                                         "scrollZoom": True,
                                         "modeBarButtonsToRemove": [

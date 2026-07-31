@@ -57,7 +57,7 @@ class PlotGenerator:
                 include_plotlyjs='cdn',
                 config={
                     'responsive': True,
-                    'displayModeBar': True,
+                    'displayModeBar': False,
                     'modeBarButtonsToAdd': ['pan2d', 'lasso2d'],
                     'displaylogo': False
                 }

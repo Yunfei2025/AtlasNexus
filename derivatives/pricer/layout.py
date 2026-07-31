@@ -177,7 +177,7 @@ def create_chart_panel():
         html.H3("Payoff Diagram", style={'color': '#34495e'}),
         
         # Payoff Chart
-        dcc.Graph(id='payoff-chart', style={'marginTop': 20})
+        dcc.Graph(id='payoff-chart', config={'displayModeBar': False}, style={'marginTop': 20})
         
     ], style={
         'padding': '20px',

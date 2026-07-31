@@ -288,7 +288,7 @@ def get_dashboard_javascript(plot_configs: List[Dict]) -> str:
                 }}
                 Plotly.newPlot(config.id, plotData.data, plotData.layout, {{
                     responsive: true,
-                    displayModeBar: true,
+                    displayModeBar: false,
                     modeBarButtonsToAdd: ['pan2d', 'lasso2d'],
                     displaylogo: false
                 }}).then(() => {{

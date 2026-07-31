@@ -85,12 +85,12 @@ def build_spread_tab():
             ], className="one-fourth column histogram__container"),
             html.Div([
                 html.Div([html.H6("Daily Spread Statistics", className="graph__title")]),
-                dcc.Graph(id="graph-spread-bar", figure=dict(layout=dict(
+                dcc.Graph(id="graph-spread-bar", config={'displayModeBar': False}, figure=dict(layout=dict(
                     plot_bgcolor=app_color["graph_bg"], paper_bgcolor=app_color["graph_bg"],
                 ))),
                 html.Div([html.H6("Spread Time Series", className="graph__title")]),
                 html.Div(id='ticker', className="graph__title"),
-                dcc.Graph(id="graph-spread", figure=dict(layout=dict(
+                dcc.Graph(id="graph-spread", config={'displayModeBar': False}, figure=dict(layout=dict(
                     plot_bgcolor=app_color["graph_bg"], paper_bgcolor=app_color["graph_bg"],
                 ))),
             ], className="three-fourths column futures__price__container"),
@@ -137,7 +137,7 @@ def build_curves_tab():
             ], className="one-fourth column histogram__container"),
             html.Div([
                 html.Div([html.H6(id="curves-title", children="Real Time Curves", className="graph__title")]),
-                dcc.Graph(id="curves-graph", figure=dict(layout=dict(
+                dcc.Graph(id="curves-graph", config={'displayModeBar': False}, figure=dict(layout=dict(
                     plot_bgcolor=app_color["graph_bg"], paper_bgcolor=app_color["graph_bg"],
                 ))),
             ], className="three-fourths column futures__price__container"),
@@ -181,7 +181,7 @@ def build_trend_tab():
             ], className="one-fourth column histogram__container"),
             html.Div([
                 html.Div([html.H6("Trends", className="graph__title")]),
-                dcc.Graph(id="trend-graph", figure=dict(layout=dict(
+                dcc.Graph(id="trend-graph", config={'displayModeBar': False}, figure=dict(layout=dict(
                     plot_bgcolor=app_color["graph_bg"], paper_bgcolor=app_color["graph_bg"],
                 ))),
             ], className="three-fourths column futures__price__container"),

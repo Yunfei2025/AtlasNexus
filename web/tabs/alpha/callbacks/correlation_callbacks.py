@@ -111,7 +111,7 @@ def register_correlation_callbacks(app) -> None:
             corr_vals = sub_corr.values.copy()
             mask_upper = np.triu(np.ones(corr_vals.shape), k=0).astype(bool)
             corr_vals[mask_upper] = np.nan
-            heatmap_div = dcc.Graph(figure=_build_heatmap(corr_vals, title=f'Spread Correlation Matrix — {len(heatmap_assets)} instruments (max |corr| ≤ {max_corr})', height=max(350, 28 * len(heatmap_assets) + 100)), style={'height': f'{max(350, 28 * len(heatmap_assets) + 100)}px'})
+            heatmap_div = dcc.Graph(figure=_build_heatmap(corr_vals, title=f'Spread Correlation Matrix — {len(heatmap_assets)} instruments (max |corr| ≤ {max_corr})', height=max(350, 28 * len(heatmap_assets) + 100)), config={'displayModeBar': False}, style={'height': f'{max(350, 28 * len(heatmap_assets) + 100)}px'})
         else:
             heatmap_div = html.Div("Not enough assets passed the correlation filter.", style={'color': THEME['text_sub']})
 

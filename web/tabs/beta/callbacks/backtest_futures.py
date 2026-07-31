@@ -298,7 +298,7 @@ def register_backtest_futures_callbacks(app):
                     style={'color': 'var(--text-muted)', 'fontSize': '10px', 'padding': '4px 0'},
                 )
 
-            return dcc.Graph(figure=fig), strategy_table
+            return dcc.Graph(figure=fig, config={'displayModeBar': False}), strategy_table
 
         except Exception as e:
             import traceback

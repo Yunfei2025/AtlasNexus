@@ -218,7 +218,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             xaxis=dict(gridcolor=THEME['bg_card'], tickformat='%b\n%Y', hoverformat='%Y-%m-%d', **_xaxis_range),
             yaxis=dict(title='Spread (bp)', gridcolor=THEME['bg_card']),
         )
-    instrument_div = html.Div([dcc.Graph(figure=instrument_fig, style={'height': f'{_chart_height}px'})], style={'marginBottom': '15px'})
+    instrument_div = html.Div([dcc.Graph(figure=instrument_fig, config={'displayModeBar': False}, style={'height': f'{_chart_height}px'})], style={'marginBottom': '15px'})
 
     score_div = html.Div()
     is_hybrid = bool(results.get('hybrid'))
@@ -377,7 +377,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             showlegend=_show_legend,
             legend=dict(orientation='h', yanchor='bottom', y=1.10, xanchor='right', x=1, font=dict(size=10)),
         )
-        score_div = html.Div([dcc.Graph(figure=signal_fig, style={'height': '230px'})], style={'marginBottom': '15px'})
+        score_div = html.Div([dcc.Graph(figure=signal_fig, config={'displayModeBar': False}, style={'height': '230px'})], style={'marginBottom': '15px'})
 
     equity_fig = go.Figure()
     equity_ts  = results.get('equity_ts')
@@ -434,7 +434,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         yaxis=dict(title='bp', gridcolor=THEME['bg_card']),
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1, font=dict(size=10), bgcolor='rgba(0,0,0,0)'),
     )
-    equity_div = html.Div([dcc.Graph(figure=equity_fig, style={'height': '250px'})], style={'marginBottom': '15px'})
+    equity_div = html.Div([dcc.Graph(figure=equity_fig, config={'displayModeBar': False}, style={'height': '250px'})], style={'marginBottom': '15px'})
 
     trades_table = html.Div()
     if ('trades_df' in results and results['trades_df'] is not None and len(results['trades_df']) > 0) or open_trade:

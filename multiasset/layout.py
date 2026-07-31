@@ -369,7 +369,7 @@ def create_layout():
                         ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '12px'}),
                     ], style={'maxWidth': '800px', 'margin': '0 auto 20px auto', 'padding': '15px', 'backgroundColor': '#f8f9fa', 'borderRadius': '5px'}),
                     
-                    dcc.Graph(id='factor-history-chart')
+                    dcc.Graph(id='factor-history-chart', config={'displayModeBar': False})
                 ], style={'backgroundColor': '#ffffff', 'padding': '20px', 'border': '1px solid #bdc3c7', 'borderRadius': '5px', 'margin': '20px'})
             ]),
             
@@ -614,7 +614,7 @@ def create_layout():
                         # Left column: Heatmap
                         html.Div([
                             html.H4("Asset Sensitivity to Risk Factors", style={'textAlign': 'center', 'color': '#2c3e50', 'marginBottom': '15px', 'fontSize': '14px'}),
-                            dcc.Graph(id='sensitivity-heatmap', style={'height': '500px', 'margin': '0'})
+                            dcc.Graph(id='sensitivity-heatmap', config={'displayModeBar': False}, style={'height': '500px', 'margin': '0'})
                         ], style={'flex': '1', 'minWidth': '0', 'paddingRight': '10px'}),
                         
                         # Right column: Factor Volatility Table
@@ -665,9 +665,9 @@ def create_layout():
                             id="loading-history",
                             type="default",
                             children=[
-                                dcc.Graph(id='historical-allocation-chart'),
+                                dcc.Graph(id='historical-allocation-chart', config={'displayModeBar': False}),
                                 html.Div(style={'height': '30px'}),
-                                dcc.Graph(id='pnl-attribution-chart')
+                                dcc.Graph(id='pnl-attribution-chart', config={'displayModeBar': False})
                             ]
                         )
                     ])

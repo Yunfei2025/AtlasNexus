@@ -280,7 +280,7 @@ class FuturesPortfolioDashboard:
                                     html.Div(id='allocation-status', className="mt-4")
                                 ], width=6)
                             ], className="mb-3"),
-                            dcc.Graph(id='allocation-chart'),
+                            dcc.Graph(id='allocation-chart', config={'displayModeBar': False}),
                             dbc.Row([
                                 dbc.Col([
                                     html.Div(id='allocation-table', className="mt-3")
@@ -361,9 +361,9 @@ class FuturesPortfolioDashboard:
                                             html.H5("Trend Following Strategy", 
                                                    className="text-center mb-3",
                                                    style={'color': '#3498db'}),
-                                            dcc.Graph(id='trend-position-chart', style={'height': '250px'}),
+                                            dcc.Graph(id='trend-position-chart', config={'displayModeBar': False}, style={'height': '250px'}),
                                             html.Div(id='trend-metrics', className="mb-3"),
-                                            dcc.Graph(id='trend-pnl-chart', style={'height': '250px'})
+                                            dcc.Graph(id='trend-pnl-chart', config={'displayModeBar': False}, style={'height': '250px'})
                                         ], width=6),
                                         
                                         # Mean Reversion
@@ -371,9 +371,9 @@ class FuturesPortfolioDashboard:
                                             html.H5("Mean Reversion Strategy", 
                                                    className="text-center mb-3",
                                                    style={'color': '#9b59b6'}),
-                                            dcc.Graph(id='mr-position-chart', style={'height': '250px'}),
+                                            dcc.Graph(id='mr-position-chart', config={'displayModeBar': False}, style={'height': '250px'}),
                                             html.Div(id='mr-metrics', className="mb-3"),
-                                            dcc.Graph(id='mr-pnl-chart', style={'height': '250px'})
+                                            dcc.Graph(id='mr-pnl-chart', config={'displayModeBar': False}, style={'height': '250px'})
                                         ], width=6)
                                     ])
                                 ]
@@ -397,11 +397,11 @@ class FuturesPortfolioDashboard:
                                 children=[
                                     dbc.Row([
                                         dbc.Col([
-                                            dcc.Graph(id='combined-position-chart', style={'height': '300px'})
+                                            dcc.Graph(id='combined-position-chart', config={'displayModeBar': False}, style={'height': '300px'})
                                         ], width=6),
                                         dbc.Col([
                                             html.Div(id='combined-metrics', className="mb-3"),
-                                            dcc.Graph(id='combined-pnl-chart', style={'height': '250px'})
+                                            dcc.Graph(id='combined-pnl-chart', config={'displayModeBar': False}, style={'height': '250px'})
                                         ], width=6)
                                     ])
                                 ]

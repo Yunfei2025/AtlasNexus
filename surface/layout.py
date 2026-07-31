@@ -243,7 +243,7 @@ def create_layout():
                         plot_bgcolor=app_color["graph_bg"],
                         paper_bgcolor=app_color["graph_bg"],
                     )),
-                    config={"displayModeBar": True, "displaylogo": False},
+                    config={"displayModeBar": False, "displaylogo": False},
                 ),
             ],
             style={

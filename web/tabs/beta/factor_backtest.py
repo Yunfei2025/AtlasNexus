@@ -484,8 +484,8 @@ def _build_results_layout(results: Any, ticker: str, start_date: str, end_date: 
     ic_fig.update_layout(title="Rolling 60-day IC  (dotted = raw, solid = EWMA-20)", height=310, **_common)
 
     charts_row = html.Div([
-        html.Div(dcc.Graph(figure=pnl_fig), style={"flex": "1", "minWidth": "0"}),
-        html.Div(dcc.Graph(figure=ic_fig),  style={"flex": "1", "minWidth": "0"}),
+        html.Div(dcc.Graph(figure=pnl_fig, config={'displayModeBar': False}), style={"flex": "1", "minWidth": "0"}),
+        html.Div(dcc.Graph(figure=ic_fig, config={'displayModeBar': False}),  style={"flex": "1", "minWidth": "0"}),
     ], style={"display": "flex", "gap": "12px", "marginBottom": "16px"})
 
     # ── Section 4: Signal History bar chart (colour-coded) ────────────────────
@@ -528,7 +528,7 @@ def _build_results_layout(results: Any, ticker: str, start_date: str, end_date: 
         charts_row,
         html.H5("Signal History",
                 style={"color": THEME["accent"], "marginBottom": "8px", "fontSize": "14px"}),
-        dcc.Graph(figure=sig_fig),
+        dcc.Graph(figure=sig_fig, config={'displayModeBar': False}),
     ]
     if top_alpha_div is not None:
         children.append(top_alpha_div)

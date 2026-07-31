@@ -123,7 +123,7 @@ def build_curves_layout():
                                 id="curves-graph",
                                 style={"height": "660px"},
                                 config={
-                                    "displayModeBar": "hover",
+                                    "displayModeBar": False,
                                     "displaylogo": False,
                                     "scrollZoom": True,
                                     "modeBarButtonsToRemove": [

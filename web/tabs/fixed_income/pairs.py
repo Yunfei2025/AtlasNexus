@@ -243,7 +243,7 @@ def _build_pair_card(leg1, leg2, stats, figure=None):
     if figure:
         chart = dcc.Graph(
             figure=figure,
-            config={'displayModeBar': 'hover', 'displaylogo': False, 'responsive': True},
+            config={'displayModeBar': False, 'displaylogo': False, 'responsive': True},
             style={'height': '430px'},
         )
     else:
