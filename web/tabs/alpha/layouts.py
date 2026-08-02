@@ -316,6 +316,19 @@ def build_candidates_layout() -> html.Div:
                                     style={'width': '80px', 'fontSize': '11px'},
                                 ),
                             ], style={'display': 'flex', 'alignItems': 'center', 'gap': '6px'}),
+                            html.Div([
+                                html.Span("Candidates:", style={'fontSize': '9px', 'color': THEME['text_sub'],
+                                                                 'whiteSpace': 'nowrap'}),
+                                dcc.Input(
+                                    id='alpha-corr-candidate-count',
+                                    type='number',
+                                    value=10,
+                                    min=1,
+                                    step=1,
+                                    debounce=True,
+                                    style={'width': '72px', 'fontSize': '11px'},
+                                ),
+                            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '6px'}),
                             html.Button(
                                 "📊 Check Correlation",
                                 id='alpha-corr-btn', n_clicks=0,
@@ -362,7 +375,7 @@ def build_portfolio_layout() -> html.Div:
             dcc.Input(id='alpha-alloc-method', type='text', value='risk_parity', style={'display': 'none'}),
             dcc.Checklist(id='alpha-enforce-corr', options=[], value=[], style={'display': 'none'}),
             dcc.Input(id='alpha-bond-margin-rate', type='number', value=5.0, style={'display': 'none'}),
-            dcc.Input(id='alpha-swap-margin-rate', type='number', value=5.0, style={'display': 'none'}),
+            dcc.Input(id='alpha-swap-margin-rate', type='number', value=3.0, style={'display': 'none'}),
         ], style={'display': 'none'}),
 
         html.Div([
@@ -440,12 +453,20 @@ def build_portfolio_layout() -> html.Div:
         html.Div([
             _alpha_card_header(
                 "Portfolio Allocation Results",
-                action=html.Button(
-                    "GENERATE PORTFOLIO", id='alpha-score-btn', n_clicks=0,
-                    style={'padding': '6px 16px', 'background': THEME['accent'], 'color': 'var(--navy-950)',
-                           'border': 'none', 'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700',
-                           'letterSpacing': '0.04em', 'cursor': 'pointer'},
-                ),
+                action=html.Div([
+                    html.Button(
+                        "GENERATE PORTFOLIO", id='alpha-score-btn', n_clicks=0,
+                        style={'padding': '6px 16px', 'background': THEME['accent'], 'color': 'var(--navy-950)',
+                               'border': 'none', 'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700',
+                               'letterSpacing': '0.04em', 'cursor': 'pointer'},
+                    ),
+                    html.Button(
+                        "DOWNLOAD TABLE", id='alpha-download-portfolio-btn', n_clicks=0,
+                        style={'padding': '6px 16px', 'background': 'transparent', 'color': THEME['accent'],
+                               'border': f"1px solid {THEME['accent']}", 'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700',
+                               'letterSpacing': '0.04em', 'cursor': 'pointer'},
+                    ),
+                ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
             ),
 
             # Configuration (was its own card) — now the top section of this card
@@ -480,10 +501,28 @@ def build_portfolio_layout() -> html.Div:
                     html.Label("Method", style=_label_style),
                     html.Span("Risk Parity", style={'color': THEME['accent'], 'fontSize': '12px', 'fontWeight': '700'}),
                 ]),
+                html.Div(style={'alignSelf': 'stretch', 'width': '1px', 'background': 'var(--border-strong)'}),
+                html.Div([
+                    html.Label("Repo Leverage", style=_label_style),
+                    html.Div([
+                        dcc.Input(
+                            id='alpha-repo-leverage', type='number', value=15.0, min=1.0, step=0.5,
+                            style={'width': '64px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
+                                   'border': '1px solid var(--border-default)', 'borderRadius': '4px',
+                                   'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
+                                   'textAlign': 'right'},
+                        ),
+                        html.Span("x", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '6px'}),
+                ]),
+                html.Div(id='alpha-financing-summary', style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '16px',
+                                                              'alignItems': 'flex-end'}),
             ], style={'padding': '14px 16px', 'display': 'flex', 'flexWrap': 'wrap', 'gap': '24px',
                       'alignItems': 'flex-end', 'borderBottom': '1px solid var(--border-strong)'}),
 
             dcc.Store(id='alpha-optimized-weights', storage_type='session'),
+            dcc.Store(id='alpha-portfolio-export-store', storage_type='session'),
+            dcc.Download(id='alpha-portfolio-download'),
 
             html.Div(
                 id='alpha-portfolio-summary',

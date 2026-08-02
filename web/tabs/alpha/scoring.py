@@ -8,7 +8,7 @@ from typing import Dict, List, Any, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from .data import load_spread_timeseries, display_key
+from .data import _get_duration_mult, load_spread_timeseries, display_key
 
 
 def compute_spread_correlation(
@@ -200,12 +200,13 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     risk_contrib : np.ndarray
         Risk contribution per asset
     vol_computed : Dict[str, float]
-        Trade ID → annualized volatility (%) computed from 252-day return window.
-        Matches the volatility window used for weight optimization.
+        Trade ID → annualized raw spread volatility in basis points, computed
+        from the same 252-day window used by the allocation.
     """
     from scipy.optimize import minimize
 
     spread_series: Dict[str, pd.Series] = {}
+    duration_by_trade: Dict[str, float] = {}
     ts_cache: Dict[str, Any] = {}
 
     for _, row in df_candidates.iterrows():
@@ -218,6 +219,10 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
             if ts is not None and isinstance(ts, pd.DataFrame) and trade_id in ts.columns:
                 series = ts[trade_id].dropna().tail(252)
                 spread_series[trade_id] = series
+                duration_by_trade[trade_id] = max(
+                    0.01,
+                    float(_get_duration_mult(str(trade_id), str(spread_type))),
+                )
         except Exception as e:
             print(f"Warning: Could not load spread time-series for {trade_id}: {e}")
 
@@ -254,12 +259,20 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
         if _iqr > 0:
             returns[col] = returns[col].clip(lower=_q1 - 5 * _iqr, upper=_q3 + 5 * _iqr)
 
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # NEW: Compute volatility from same 252-day return window
-    # This ensures table display vol matches the vol used in optimization
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    daily_vols = returns.std()  # std of daily changes
-    vol_computed = (daily_vols * np.sqrt(252) * 100).to_dict()  # annualize to %
+    # Convert spread changes to duration-adjusted price-risk changes.  A short
+    # Repo7d-3m6m trade therefore carries materially less P&L risk per unit of
+    # capital than a long Repo7d-1y5y trade with the same spread volatility.
+    # The risk-parity covariance below must retain this scale; standardising
+    # each column to unit variance would remove both duration and volatility.
+    duration_s = pd.Series(duration_by_trade).reindex(returns.columns).fillna(1.0)
+    price_returns = returns.mul(duration_s, axis='columns')
+
+    # Keep the table's Vol(BP) field as raw annualized spread volatility.  The
+    # duration-adjusted price_returns below are used only for the risk-parity
+    # covariance; reporting them as spread volatility would inflate long-tenor
+    # spreads such as CDBCGB-10y by their duration multiplier.
+    daily_spread_vols = returns.std()
+    vol_computed = (daily_spread_vols * np.sqrt(252) * 100).to_dict()
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # DIAGNOSTICS: Risk parity input statistics (set _DEBUG_RP = True to enable)
@@ -309,19 +322,7 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
                             print(f"  vs {peer:28s}: corr={corr_val:7.4f} ({interpretation})")
         print("="*75 + "\n")
 
-    # Standardise each column by its own std before computing covariance.
-    # Spread series live in wildly different native units (e.g. TenorSpread/
-    # SwapSpread are yield-% decimals like 0.01-0.3, while NetBasis/FuturesSwap/
-    # TermBasis are raw CNY price points like 10-40) — a raw covariance matrix
-    # would let the largest-unit series dominate risk contribution purely from
-    # unit scale, not genuine relative risk, starving every other trade's RC to
-    # ~0. Dividing by std turns this into a correlation-structure-driven ERC
-    # optimization: each asset contributes risk based on its diversification
-    # value, not its arbitrary measurement unit.
-    col_std = returns.std().replace(0, np.nan)
-    returns_normalized = (returns / col_std).fillna(0.0)
-
-    cov_matrix = returns_normalized.cov()
+    cov_matrix = price_returns.cov()
     cov = cov_matrix.values
     n = len(cov)
 

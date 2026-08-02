@@ -28,12 +28,18 @@ def register_correlation_callbacks(app) -> None:
         [State('alpha-spread-categories', 'value'),
          State('alpha-corr-lookback', 'value'),
          State('alpha-max-corr', 'value'),
+         State('alpha-corr-candidate-count', 'value'),
          State('alpha-selected-candidates', 'data')],
         prevent_initial_call=True,
     )
-    def check_correlation(n_clicks, categories, lookback, max_corr, all_candidates):
+    def check_correlation(n_clicks, categories, lookback, max_corr, candidate_count, all_candidates):
         if not n_clicks or not categories:
             return html.Div("Select categories and click Check Correlation.", style={'color': THEME['text_sub']}), [], {}, []
+
+        try:
+            target_count = max(1, int(candidate_count or 10))
+        except (TypeError, ValueError):
+            target_count = 10
 
         corr_matrix = None
 
@@ -97,11 +103,11 @@ def register_correlation_callbacks(app) -> None:
         if corr_matrix is None or corr_matrix.empty:
             return html.Div("Insufficient data for correlation analysis. Need at least 2 instruments with historical data.", style={'color': THEME['warning']}), [], {}, []
 
-        low_corr_pairs = rank_low_correlation_pairs(corr_matrix, top_n=10)
+        low_corr_pairs = rank_low_correlation_pairs(corr_matrix, top_n=target_count)
         high_corr = low_corr_pairs[low_corr_pairs['AbsCorr'] > max_corr]
 
         diverse_keys = select_diverse_instruments(
-            corr_matrix, all_candidates or [], n=10,
+            corr_matrix, all_candidates or [], n=target_count,
             max_abs_corr=float(max_corr) if max_corr is not None else 1.0,
         )
         heatmap_assets = [k for k in diverse_keys if k in corr_matrix.columns]

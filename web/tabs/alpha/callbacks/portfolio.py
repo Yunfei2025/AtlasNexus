@@ -118,7 +118,9 @@ def register_portfolio_callbacks(app) -> None:
         [Output('alpha-scored-table-container', 'children'),
          Output('alpha-risk-chart-container', 'children'),
          Output('alpha-portfolio-summary', 'children'),
-         Output('alpha-optimized-weights', 'data')],
+         Output('alpha-optimized-weights', 'data'),
+         Output('alpha-portfolio-export-store', 'data'),
+         Output('alpha-financing-summary', 'children')],
         Input('alpha-score-btn', 'n_clicks'),
         [State('alpha-selected-candidates', 'data'),
          State('alpha-mom-k', 'value'),
@@ -130,12 +132,13 @@ def register_portfolio_callbacks(app) -> None:
          State('alpha-book-positions-store', 'data'),
          State('alpha-dv01-budget', 'value'),
          State('alpha-bond-margin-rate', 'value'),
-         State('alpha-swap-margin-rate', 'value')],
+         State('alpha-swap-margin-rate', 'value'),
+         State('alpha-repo-leverage', 'value')],
         prevent_initial_call=True
     )
-    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, alloc_method, enforce_corr, curated_instruments, book_positions, total_dv01_budget, bond_margin_rate, swap_margin_rate):
+    def run_scoring(n_clicks, candidates, mom_k, mom_window, total_capital, alloc_method, enforce_corr, curated_instruments, book_positions, total_dv01_budget, bond_margin_rate, swap_margin_rate, repo_leverage):
         if not n_clicks:
-            return html.Div(), html.Div(), html.Div(), []
+            return html.Div(), html.Div(), html.Div(), [], None, html.Div()
 
         if not candidates:
             # Fall back to saved positions instead of blocking
@@ -143,7 +146,7 @@ def register_portfolio_callbacks(app) -> None:
             if not saved:
                 return (
                     html.Div("No candidates or saved positions. Run scan in Candidates tab first.", style={'color': THEME['warning']}),
-                    html.Div(), html.Div(), []
+                    html.Div(), html.Div(), [], None, html.Div()
                 )
             # Build minimal candidate rows from saved positions so the rest of the
             # pipeline can proceed without a prior scan.
@@ -171,7 +174,9 @@ def register_portfolio_callbacks(app) -> None:
             total_capital_mm = total_capital
             total_dv01_budget = float(total_dv01_budget) if total_dv01_budget is not None else 5.0
             bond_margin_rate = (float(bond_margin_rate) if bond_margin_rate is not None else 5.0) / 100.0
-            swap_margin_rate = (float(swap_margin_rate) if swap_margin_rate is not None else 5.0) / 100.0
+            swap_margin_rate = (float(swap_margin_rate) if swap_margin_rate is not None else 3.0) / 100.0
+            repo_leverage = max(1.0, float(repo_leverage) if repo_leverage is not None else 15.0)
+            repo_margin_rate = 1.0 / repo_leverage
 
             # Merge all instruments from correlation matrix (curated_instruments) with saved positions (book_positions).
             # Combine both: curated from correlation check (new candidates) + book_positions (saved old trades).
@@ -282,7 +287,7 @@ def register_portfolio_callbacks(app) -> None:
             if n_trades == 0:
                 return (
                     html.Div("No candidates with positive expected edge. Run Scan in Candidates tab first.", style={'color': THEME['warning']}),
-                    html.Div(), html.Div(), []
+                    html.Div(), html.Div(), [], None, html.Div()
                 )
 
             alloc_method = alloc_method or 'risk_parity'
@@ -303,16 +308,13 @@ def register_portfolio_callbacks(app) -> None:
                     weights_dict, risk_contrib, vol_computed = _compute_risk_parity_weights(df_scored)
                     df_scored['weight'] = df_scored['ID'].map(weights_dict).fillna(1 / n_trades)
                     rc_map = dict(zip(weights_dict.keys(), risk_contrib))
-                    df_scored['risk_contribution'] = df_scored['ID'].map(rc_map).fillna(df_scored['weight'])
+                    df_scored['risk_contribution'] = (
+                        df_scored['ID'].map(rc_map).fillna(df_scored['weight']).multiply(100.0)
+                    )
 
-                    # Override vol with computed value from same 252-day window —
-                    # but only for spread types whose native (or converted) units
-                    # are yield-% decimals (TenorSpread, SwapSpread, and now
-                    # TermBasis, which _compute_risk_parity_weights converts to a
-                    # yield-equivalent via CTD duration). NetBasis/FuturesSwap stay
-                    # in raw CNY price-point units, so their annualized std here is
-                    # a meaningless huge number (e.g. 16000%+); keep their original
-                    # snapshot-sourced vol (already in sensible bp units).
+                    # Override Vol(BP) with raw annualized spread volatility from
+                    # the same window. Duration affects allocation covariance, not
+                    # the displayed spread-volatility measure.
                     _RAW_UNIT_TYPES = {'NetBasis', 'FuturesSwap'}
                     _is_raw_unit = (
                         df_scored['spread_type'].isin(_RAW_UNIT_TYPES)
@@ -324,7 +326,7 @@ def register_portfolio_callbacks(app) -> None:
                 except Exception as e:
                     print(f"WARNING: Risk parity failed: {e}, falling back to equal weights")
                     df_scored['weight'] = 1 / n_trades
-                    df_scored['risk_contribution'] = 1 / n_trades
+                    df_scored['risk_contribution'] = 100 / n_trades
 
             weight_sum = df_scored['weight'].sum()
             if weight_sum > 0 and abs(weight_sum - 1.0) > 1e-9:
@@ -422,13 +424,12 @@ def register_portfolio_callbacks(app) -> None:
             # Step G: Net Notional + Margin (capital consumption)
             # Each leg is classified as either:
             #   - Bond (leg code ends '.IB'): funded via repo/TRS with security
-            #     firms at a single gross `bond_margin_rate` regardless of long
-            #     vs short direction.
+            #     firms through repo at 1 / `repo_leverage` of gross bond exposure.
             #   - Swap / Futures (IRS '.IR' legs, futures contract codes, or any
             #     unresolved leg as a conservative floor): funded via exchange/
             #     counterparty margin at `swap_margin_rate`.
-            # Bond margin uses gross bond legs at one rate (TRS-style):
-            #   margin_bond = (|bond_leg1| + |bond_leg2|) * bond_margin_rate
+            # Bond repo capital uses gross bond legs at the configured leverage:
+            #   margin_bond = (|bond_leg1| + |bond_leg2|) / repo_leverage
             # For bond-vs-bond spreads this implies:
             #   net_notional = signed_leg1 * (1 - ratio)
             #   margin_bond = |signed_leg1| * (1 + ratio) * bond_margin_rate
@@ -461,7 +462,7 @@ def register_portfolio_callbacks(app) -> None:
 
                 net_notional = (leg1_signed + leg2_signed).round(1)
                 margin = (
-                    bond_gross * bond_margin_rate
+                    bond_gross * repo_margin_rate
                     + swapfut_net.abs() * swap_margin_rate
                     + _fallback * swap_margin_rate
                 ).round(2)
@@ -469,16 +470,71 @@ def register_portfolio_callbacks(app) -> None:
 
             df_scored['net_notional_mm'], df_scored['margin_mm'] = _compute_net_and_margin(df_scored['notional_mm'])
 
-            # Step H: Capital constraint — total margin used across all trades must
-            # stay within total_capital_mm (the "Total Capital" box). Margin is not
-            # netted across trades (each position ties up its own capital), so we
-            # scale down uniformly, same pattern as the DV01 budget constraint (Step E).
-            _total_margin_mm = df_scored['margin_mm'].sum()
-            if _total_margin_mm > total_capital_mm and _total_margin_mm > 1e-6:
-                _margin_scale = total_capital_mm / _total_margin_mm
+            # Step H: net all matching leg exposures across the portfolio before
+            # applying repo funding or derivative initial margin.  Total Capital
+            # is therefore a limit on the actual netted financing requirement.
+            def _portfolio_financing(notional_mm: pd.Series) -> tuple[float, float, float]:
+                _ratio = pd.to_numeric(df_scored['ratio_v2_v1'], errors='coerce').fillna(1.0)
+                _leg_exposure: dict[str, float] = {}
+                _leg_is_bond: dict[str, bool] = {}
+
+                for row_idx, leg1, leg2, ratio, leg1_notional in zip(
+                    df_scored.index,
+                    df_scored['Leg1'].astype(str),
+                    df_scored['Leg2'].astype(str),
+                    _ratio,
+                    notional_mm,
+                ):
+                    leg1_notional = float(leg1_notional)
+                    leg2_notional = -leg1_notional * float(ratio)
+                    legs = ((leg1, leg1_notional), (leg2, leg2_notional))
+                    resolved_leg = False
+                    for leg, leg_notional in legs:
+                        if not leg:
+                            continue
+                        resolved_leg = True
+                        _leg_exposure[leg] = _leg_exposure.get(leg, 0.0) + leg_notional
+                        _leg_is_bond[leg] = leg.endswith('.IB')
+                    if not resolved_leg:
+                        fallback_key = f'__unresolved_{row_idx}'
+                        _leg_exposure[fallback_key] = leg1_notional
+                        _leg_is_bond[fallback_key] = False
+
+                net_bond_mm = sum(abs(exposure) for leg, exposure in _leg_exposure.items() if _leg_is_bond[leg])
+                net_derivative_mm = sum(abs(exposure) for leg, exposure in _leg_exposure.items() if not _leg_is_bond[leg])
+                capital_without_repo = net_bond_mm + net_derivative_mm * swap_margin_rate
+                capital_with_repo = net_bond_mm * repo_margin_rate + net_derivative_mm * swap_margin_rate
+                return net_bond_mm, capital_without_repo, capital_with_repo
+
+            _, _, _capital_with_repo_mm = _portfolio_financing(df_scored['notional_mm'])
+            if _capital_with_repo_mm > total_capital_mm and _capital_with_repo_mm > 1e-6:
+                _margin_scale = total_capital_mm / _capital_with_repo_mm
                 df_scored['notional_mm'] = np.floor(df_scored['notional_mm'] * _margin_scale / 10) * 10
                 df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)
                 df_scored['net_notional_mm'], df_scored['margin_mm'] = _compute_net_and_margin(df_scored['notional_mm'])
+
+            _ratio = pd.to_numeric(df_scored['ratio_v2_v1'], errors='coerce').fillna(1.0)
+            _leg1_abs = df_scored['notional_mm'].abs()
+            _leg2_abs = _leg1_abs * _ratio
+            _leg1 = df_scored['Leg1'].astype(str)
+            _leg2 = df_scored['Leg2'].astype(str)
+            _leg1_bond = _leg1.str.endswith('.IB')
+            _leg2_bond = _leg2.str.endswith('.IB')
+            _leg1_exists = _leg1.str.len() > 0
+            _leg2_exists = _leg2.str.len() > 0
+            _gross_notional_mm = float((_leg1_abs + _leg2_abs).sum())
+            _net_bond_mm, _capital_without_repo_mm, _capital_with_repo_mm = _portfolio_financing(df_scored['notional_mm'])
+            _gross_leverage = _gross_notional_mm / _capital_with_repo_mm if _capital_with_repo_mm > 0 else 0.0
+
+            _metric_label = {'color': THEME['text_sub'], 'fontSize': '9px', 'fontWeight': '600',
+                             'textTransform': 'uppercase', 'display': 'block', 'marginBottom': '3px'}
+            _metric_value = {'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': '700'}
+            financing_summary = [
+                html.Div([html.Span('Gross Leg Notional', style=_metric_label), html.Span(f'{_gross_notional_mm:,.1f} MM', style=_metric_value)]),
+                html.Div([html.Span('Capital Without Repo (Netted)', style=_metric_label), html.Span(f'{_capital_without_repo_mm:,.1f} MM', style=_metric_value)]),
+                html.Div([html.Span('Capital With Repo (Netted)', style=_metric_label), html.Span(f'{_capital_with_repo_mm:,.1f} MM', style=_metric_value)]),
+                html.Div([html.Span('Gross Leverage', style=_metric_label), html.Span(f'{_gross_leverage:.1f}x', style={**_metric_value, 'color': THEME['accent']} )]),
+            ]
 
             # Build downstream payload after leg + ratio enrichment so later
             # stages (Summary/Backtest/etc.) receive the ratio field.
@@ -530,9 +586,13 @@ def register_portfolio_callbacks(app) -> None:
 
             for col in df_display.columns:
                 if col == 'risk_contribution':
-                    df_display[col] = df_display[col].round(4)
+                    df_display[col] = df_display[col].round(2)
                 elif df_display[col].dtype in ['float64', 'float32']:
                     df_display[col] = df_display[col].round(4)
+
+            # Display notional as absolute size; trade direction is already in DIR.
+            if 'notional_mm' in df_display.columns:
+                df_display['notional_mm'] = pd.to_numeric(df_display['notional_mm'], errors='coerce').abs().round(4)
 
             if 'carry_roll' in df_display.columns and 'direction' in df_display.columns:
                 _sell = df_display['direction'].astype(str).str.strip().str.upper().eq('SELL')
@@ -594,7 +654,7 @@ def register_portfolio_callbacks(app) -> None:
                 'carry_roll': 'CR(3m)', 'breakeven_3m': 'b/e(3m)',
                 'stop_loss': 'stop(bp)', 'profit_target': 'target(bp)',
                 'seasonal_edge_bps': 'seas.edge', 'score': 'score',
-                'weight': 'weight', 'risk_contribution': 'RC%',
+                'weight': 'weight', 'risk_contribution': 'RC (%)',
                 'notional_mm': 'NOTIONAL (MM)',
                 'margin_mm': 'Margin (MM)', 'DV01_k': 'DV01(k)',
                 'direction': 'DIR',
@@ -641,7 +701,7 @@ def register_portfolio_callbacks(app) -> None:
                     html.Div([html.Strong("Total Trades: ", style={'color': THEME['text_sub']}), html.Span(f"{len(df_scored)}", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("Margin Budget: ", style={'color': THEME['text_sub']}), html.Span(f"{total_capital:.1f} MM CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("DV01 Budget: ", style={'color': THEME['text_sub']}), html.Span(f"{total_dv01_budget:.1f} MM CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
-                    html.Div([html.Strong("Margin Used: ", style={'color': THEME['text_sub']}), html.Span(f"{df_scored['margin_mm'].sum():.2f} / {total_capital:.1f} MM CNY" if 'margin_mm' in df_scored.columns else "N/A", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
+                    html.Div([html.Strong("Capital With Repo (Netted): ", style={'color': THEME['text_sub']}), html.Span(f"{_capital_with_repo_mm:.2f} / {total_capital:.1f} MM CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("Avg Score: ", style={'color': THEME['text_sub']}), html.Span(f"{df_scored['score'].mean():.3f}", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("Risk Parity: ", style={'color': THEME['text_sub']}), html.Span(f"σ(RC)={df_scored['risk_contribution'].std():.3f}" if 'risk_contribution' in df_scored.columns else "N/A", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("BUY/SELL: ", style={'color': THEME['text_sub']}), html.Span(f"{(df_scored['direction'] == 'BUY').sum()} / {(df_scored['direction'] == 'SELL').sum()}" if 'direction' in df_scored.columns else "N/A", style={'color': THEME['text_main']})]),
@@ -665,7 +725,7 @@ def register_portfolio_callbacks(app) -> None:
                 df_chart = df_scored.nlargest(15, 'weight')[['ID', 'weight', 'risk_contribution']].copy()
                 df_chart['ID'] = _chart_ids.reindex(df_chart.index)
                 fig.add_trace(go.Bar(x=df_chart['ID'], y=df_chart['weight'] * 100, name='Weight (%)', marker_color=THEME['accent'], yaxis='y'))
-                fig.add_trace(go.Bar(x=df_chart['ID'], y=df_chart['risk_contribution'] * 100, name='Risk Contribution (%)', marker_color=THEME['success'], yaxis='y'))
+                fig.add_trace(go.Bar(x=df_chart['ID'], y=df_chart['risk_contribution'], name='Risk Contribution (%)', marker_color=THEME['success'], yaxis='y'))
                 fig.update_layout(
                     title={'text': 'Portfolio Allocation: Weights vs Risk Contributions', 'font': {'size': 14, 'color': THEME['text_main']}},
                     xaxis={'title': 'Trade ID', 'tickangle': -45, 'color': THEME['text_main']},
@@ -700,7 +760,11 @@ def register_portfolio_callbacks(app) -> None:
             except Exception as _se:
                 print(f"Warning: Could not save Alpha snapshot: {_se}")
 
-            return table, risk_chart, summary, optimized_results
+            export_payload = {
+                'columns': _port_col_labels,
+                'records': df_display.to_dict('records'),
+            }
+            return table, risk_chart, summary, optimized_results, export_payload, financing_summary
 
         except Exception as e:
             import traceback
@@ -711,5 +775,23 @@ def register_portfolio_callbacks(app) -> None:
                 html.Div(error_msg, style={'color': THEME['warning'], 'padding': '10px'}),
                 html.Div(),
                 html.Div(f"Details: {str(e)[:100]}", style={'color': THEME['warning'], 'fontSize': '11px'}),
-                []
+                [],
+                None,
+                html.Div(),
             )
+
+    @app.callback(
+        Output('alpha-portfolio-download', 'data'),
+        Input('alpha-download-portfolio-btn', 'n_clicks'),
+        State('alpha-portfolio-export-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def download_portfolio_table(n_clicks, export_payload):
+        if not n_clicks or not export_payload or not export_payload.get('records'):
+            raise PreventUpdate
+
+        df_export = pd.DataFrame(export_payload['records'])
+        column_labels = export_payload.get('columns', {})
+        df_export = df_export.rename(columns=column_labels)
+        filename = f"alpha_portfolio_allocation_{datetime.now():%Y%m%d_%H%M%S}.csv"
+        return dcc.send_data_frame(df_export.to_csv, filename, index=False)
