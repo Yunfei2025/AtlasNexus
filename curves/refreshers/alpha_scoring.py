@@ -172,6 +172,63 @@ def _enrich_candidates_with_regression(
 	return out
 
 
+def _add_momentum_ma_zscore(
+	df: pd.DataFrame,
+	series_map: Dict[str, pd.Series],
+	*,
+	ma_window: int = 20,
+	z_window: int = 63,
+) -> pd.DataFrame:
+	"""Add a moving-average deviation z-score for Momentum/Carry trades.
+
+	The sign is deliberately ``MA - spread``: a positive value means the
+	spread trades below its moving average, matching the BUY rule for a
+	downward trend.  The raw level/residual z-score is retained separately.
+	"""
+	out = df.copy()
+	if out.empty or "ID" not in out.columns or "spread_type" not in out.columns:
+		out["level_zscore"] = out.get("Zscore", np.nan)
+		out["momentum_zscore"] = np.nan
+		out["momentum_ma"] = np.nan
+		return out
+
+	out["level_zscore"] = pd.to_numeric(out.get("Zscore"), errors="coerce")
+	zscores: list[float] = []
+	mas: list[float] = []
+	keys = (out["spread_type"].astype(str) + "|" + out["ID"].astype(str)).to_numpy()
+	spreads = pd.to_numeric(out.get("spread", pd.Series(np.nan, index=out.index)), errors="coerce").to_numpy()
+	for key, spread_now in zip(keys, spreads):
+		s = series_map.get(key)
+		if not isinstance(s, pd.Series):
+			zscores.append(np.nan)
+			mas.append(np.nan)
+			continue
+		s_enriched = _append_snapshot_spread_to_series(s, spread_now)
+		s_clean = pd.to_numeric(s_enriched, errors="coerce").dropna()
+		if len(s_clean) < max(ma_window + 2, z_window):
+			zscores.append(np.nan)
+			mas.append(np.nan)
+			continue
+		ma = s_clean.rolling(ma_window).mean()
+		deviation = ma - s_clean
+		std = deviation.rolling(z_window).std(ddof=1)
+		last_ma = ma.iloc[-1]
+		last_std = std.iloc[-1]
+		if pd.isna(last_ma) or pd.isna(last_std) or float(last_std) <= 0:
+			zscores.append(np.nan)
+			mas.append(float(last_ma) if pd.notna(last_ma) else np.nan)
+			continue
+		zscores.append(float(deviation.iloc[-1] / last_std))
+		mas.append(float(last_ma))
+
+	out["momentum_zscore"] = zscores
+	out["momentum_ma"] = mas
+	# The Candidates card's Z-score field is the strategy-relevant measure for
+	# Momentum/Carry rows; level_zscore remains available for diagnostics.
+	out["Zscore"] = out["momentum_zscore"]
+	return out
+
+
 def _rank_score(df: pd.DataFrame, style: str) -> pd.Series:
 	"""Deprecated: use unified edge/risk scoring.
 

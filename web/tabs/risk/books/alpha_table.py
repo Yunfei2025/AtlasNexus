@@ -291,6 +291,7 @@ def register_alpha_book_table_callbacks(app):
                         carry_roll_3m_val = base_annual_bp / 4.0
     
                     mtm_price_mm = mtm_spd_bp = mtm_carry_mm = mtm_total_mm = None
+                    open_price_bp = None
                     try:
                         open_price_bp = float(open_price_str) if open_price_str else None
                         # An allocation has a target notional before it becomes an

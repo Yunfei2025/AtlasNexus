@@ -180,8 +180,8 @@ def build_candidates_layout() -> html.Div:
                             id='alpha-direction-filter',
                             options=[
                                 {'label': ' All', 'value': 'all'},
-                                {'label': ' BUY (z < -thd)', 'value': 'buy'},
-                                {'label': ' SELL (z > +thd)', 'value': 'sell'},
+                                {'label': ' BUY candidates', 'value': 'buy'},
+                                {'label': ' SELL candidates', 'value': 'sell'},
                             ],
                             value='all',
                             inputStyle={'marginRight': '7px', 'accentColor': THEME['accent']},
@@ -191,7 +191,7 @@ def build_candidates_layout() -> html.Div:
                     ], style={'flex': '1', 'paddingRight': '20px', 'borderRight': '1px solid var(--border-strong)'}),
 
                     html.Div([
-                        html.Label("Z-Score Threshold (MR candidates only)", style=_label_style),
+                        html.Label("Z-Score Threshold", style=_label_style),
                         dcc.Slider(
                             id='alpha-zscore-threshold',
                             min=1.0, max=3.5, step=0.25, value=2.0,
@@ -199,7 +199,7 @@ def build_candidates_layout() -> html.Div:
                             tooltip={'placement': 'bottom', 'always_visible': False},
                         ),
                         html.P(
-                            "BUY: spread is WIDE (cheap) → expect to narrow. SELL: spread is TIGHT (expensive) → expect to widen.",
+                            "Mean-reversion: BUY when z < −σ; SELL when z > +σ. Momentum/Carry: BUY only in a downward trend when MA-z > +σ; SELL only in an upward trend when MA-z < −σ.",
                             style={'color': THEME['text_sub'], 'fontSize': '10px', 'fontStyle': 'italic', 'marginTop': '8px'},
                         ),
                     ], style={'flex': '1', 'paddingLeft': '20px'}),
@@ -536,7 +536,7 @@ def build_portfolio_layout() -> html.Div:
                 color=THEME['accent'],
                 style={'minHeight': '80px'},
                 children=[
-                    html.Div(id='alpha-scored-table-container', style={'overflowX': 'auto', 'overflowY': 'auto', 'maxHeight': '400px'}),
+                    html.Div(id='alpha-scored-table-container', style={'overflowX': 'auto'}),
                     html.Div(id='alpha-risk-chart-container'),
                 ]
             ),

@@ -21,6 +21,10 @@ import pandas as pd
 from pathlib import Path
 
 from multiasset.pca_analyzer import DeterministicRiskFactorAnalyzer
+from multiasset.pca_analyzer import (
+    get_deterministic_ir_tenors,
+    get_deterministic_ir_weights,
+)
 from multiasset.risk_loader import RiskFactorLoader
 from settings.paths import DIR_INPUT
 
@@ -37,20 +41,6 @@ def get_factor_duration(factor_code: str) -> float:
     Price-based factors (FX, commodities) do not use duration conversion.
     """
     return 1.0 if _is_yield_factor(factor_code) else 0.0
-
-
-# Approximate modified durations (years) for par government bonds at standard tenors.
-# Used to compute the tenor-weighted duration of IRDL/IRSL/IRCV factor portfolios.
-_TENOR_YEARS = [1, 2, 5, 10, 30]
-_TENOR_MOD_DUR = {1: 0.95, 2: 1.90, 5: 4.60, 10: 8.80, 30: 20.0}
-
-# Deterministic factor weights (from multiasset/pca_analyzer.py)
-# IRDL: equal-weight level  |  IRSL: antisymmetric slope  |  IRCV: butterfly curvature
-_IR_WEIGHTS = {
-    'IRDL': [0.20,  0.20,  0.20,  0.20,  0.20],   # equal weight, sum=1 → long-only
-    'IRSL': [-0.40, -0.20,  0.00,  0.20,  0.40],   # steepener, sum=0
-    'IRCV': [0.25, -0.25,  0.00, -0.25,  0.25],    # butterfly, sum=0
-}
 
 
 _CR_FACTOR_TO_LEVEL_NAME = {'CRDL': 'Level', 'CRSL': 'Slope', 'CRCV': 'Curvature'}
@@ -93,10 +83,16 @@ def get_factor_weighted_duration(factor_code: str) -> Optional[float]:
 
     Returns ``None`` for non-yield factors (FX, commodity).
     """
-    prefix = factor_code.split('.')[0]
-    weights = _IR_WEIGHTS.get(prefix)
-    if weights is not None:
-        return sum(w * _TENOR_MOD_DUR[t] for w, t in zip(weights, _TENOR_YEARS))
+    prefix, _, country = factor_code.partition('.')
+    ir_factor_to_basis = {'IRDL': 'Level', 'IRSL': 'Slope', 'IRCV': 'Curvature'}
+    basis_name = ir_factor_to_basis.get(prefix)
+    if basis_name is not None:
+        from multiasset.utils import get_default_sensitivities
+
+        tenors = get_deterministic_ir_tenors(country)
+        weights = get_deterministic_ir_weights(country)[basis_name]
+        durations = [get_default_sensitivities(tenor).get('IRDL', 0.0) for tenor in tenors]
+        return sum(w * d for w, d in zip(weights, durations))
     if prefix in _CR_FACTOR_TO_LEVEL_NAME:
         return _credit_weighted_duration(factor_code)
     return None

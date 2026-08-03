@@ -25,13 +25,40 @@ def _load_fx_curve_artifact(input_dir: str) -> dict:
             raise FileNotFoundError(f"Cannot load fxcurve_ts.pkl from {input_dir}")
 
 
-# Deterministic factor weights for yield curve analysis
+# Deterministic factor weights for yield curve analysis.
+#
+# Most countries use a five-point curve. China has a distinct six-point grid
+# with an additional 20Y node, so it must not reuse the five-point vectors:
+# doing so previously gave CN20Y the 30Y loading and left CN30Y unmodelled.
+STANDARD_IR_TENORS = ('1Y', '2Y', '5Y', '10Y', '30Y')
+CN_IR_TENORS = ('1Y', '2Y', '5Y', '10Y', '20Y', '30Y')
+
 # Tenors: 1Y, 2Y, 5Y, 10Y, 30Y
 DETERMINISTIC_WEIGHTS = {
     'Level': np.array([0.2, 0.2, 0.2, 0.2, 0.2]),      # Equal weights (sum=1)
     'Slope': np.array([-0.4, -0.2, 0.0, 0.2, 0.4]),    # Short negative, long positive (sum=0)
     'Curvature': np.array([0.25, -0.25, 0.0, -0.25, 0.25])  # Wings vs belly (sum=0)
 }
+
+# China tenors: 1Y, 2Y, 5Y, 10Y, 20Y, 30Y.
+# Level is equal-weighted; slope is a centred linear six-point contrast; and
+# curvature is a symmetric wings-versus-belly contrast.  Both non-level
+# vectors sum to zero and are orthogonal to the symmetric level vector.
+CN_DETERMINISTIC_WEIGHTS = {
+    'Level': np.full(6, 1.0 / 6.0),
+    'Slope': np.array([-5, -3, -1, 1, 3, 5], dtype=float) / 18.0,
+    'Curvature': np.array([0.25, 0.0, -0.25, -0.25, 0.0, 0.25]),
+}
+
+
+def get_deterministic_ir_tenors(country: str) -> tuple[str, ...]:
+    """Return the configured deterministic interest-rate tenor grid."""
+    return CN_IR_TENORS if country == 'CN' else STANDARD_IR_TENORS
+
+
+def get_deterministic_ir_weights(country: str) -> dict[str, np.ndarray]:
+    """Return deterministic Level/Slope/Curvature weights for ``country``."""
+    return CN_DETERMINISTIC_WEIGHTS if country == 'CN' else DETERMINISTIC_WEIGHTS
 
 # Deterministic spread weights
 # CDB: 5 tenors (1Y, 2Y, 5Y, 10Y, 30Y) - Level and Slope
@@ -194,7 +221,8 @@ class DeterministicRiskFactorAnalyzer:
             # IRSL.XX = weighted slope (long - short), meaningful in % units
             # This preserves the current absolute level rather than an
             # arbitrary cumsum starting from 0 on the first available date.
-            for factor_name, weights in self.weights.items():
+            weights_by_factor = get_deterministic_ir_weights(country)
+            for factor_name, weights in weights_by_factor.items():
                 n_tenors = min(len(weights), len(curve_data.columns))
                 if n_tenors < len(weights):
                     print(f"Warning: {country} has only {n_tenors} tenors, expected {len(weights)}")
@@ -377,15 +405,15 @@ class DeterministicRiskFactorAnalyzer:
                 sensitivities[cr_factor] = float(weights[tenor_idx])
         return sensitivities
 
-    def get_weights_dataframe(self) -> pd.DataFrame:
+    def get_weights_dataframe(self, country: str = 'CN') -> pd.DataFrame:
         """
         Return the deterministic weights as a DataFrame for inspection.
         
         Returns:
             DataFrame with factors as columns and tenors as rows
         """
-        tenors = ['1Y', '2Y', '5Y', '10Y', '30Y']
-        weights_df = pd.DataFrame(self.weights, index=tenors)
+        tenors = get_deterministic_ir_tenors(country)
+        weights_df = pd.DataFrame(get_deterministic_ir_weights(country), index=tenors)
         return weights_df
     
     def get_spread_weights_dataframes(self) -> Dict[str, pd.DataFrame]:
@@ -416,13 +444,15 @@ class DeterministicRiskFactorAnalyzer:
         Sensitivity = deterministic weight for that tenor and factor.
         
         Args:
-            country: Country code (e.g., 'CN', 'US') - not used for deterministic weights
+            country: Country code (e.g., 'CN', 'US')
             tenor: Tenor string (e.g., '1Y', '10Y')
             
         Returns:
             Dict with IRDL, IRSL, IRCV sensitivities (value change per 1-unit factor change)
         """
-        tenor_order = ['1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
+        tenor_order = get_deterministic_ir_tenors(country)
+        if tenor not in tenor_order:
+            return {}
         tenor_idx = tenor_order.index(tenor)
         
         sensitivities = {}
@@ -433,8 +463,9 @@ class DeterministicRiskFactorAnalyzer:
         }
         
         for factor_name, ir_factor in factor_map.items():
-            if factor_name in self.weights:
-                weights = self.weights[factor_name]
+            weights_by_factor = get_deterministic_ir_weights(country)
+            if factor_name in weights_by_factor:
+                weights = weights_by_factor[factor_name]
                 if tenor_idx < len(weights):
                     sensitivities[ir_factor] = float(weights[tenor_idx])
         

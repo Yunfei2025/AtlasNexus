@@ -1,0 +1,112 @@
+% =====================================================================
+\chapter{Multi-Asset Risk \& Allocation}
+\label{ch:multiasset}
+% =====================================================================
+\textit{Module: }\mod{multiasset/}
+
+\section{Universe}
+\textit{Source: }\mod{multiasset/main.py}
+
+\code{create\_bond\_universe()} and \code{create\_spread\_universe()} build the bond and
+spread asset sets (\code{MultiFactorBondAsset}, \code{Asset}).
+
+\section{$\sqrt{\text{vol}}$ risk budgeting}
+\textit{Source: }\mod{multiasset/budget.py}
+
+\code{derive\_vol\_sqrt\_budgets()} converts a factor-vol map $\{\sigma_i\}$ to
+\textbf{$\sqrt{\text{vol}}$ risk budgets}: higher-vol factors
+(Level $>$ Slope $>$ Curvature) get more budget, but the allocation sits
+\emph{between} equal-risk and vol-proportional, avoiding over-concentration in the
+highest-vol factor,
+\begin{equation}
+b_i \;=\; \frac{\sqrt{\sigma_i}}{\sum_{j}\sqrt{\sigma_j}}.
+\label{eq:sqrtvol}
+\end{equation}
+The square-root exponent is what interpolates between equal weight (exponent $0$) and
+vol-proportional (exponent $1$). Missing factors fall back to
+\code{ESTIMATED\_FALLBACK\_VOL}.
+
+\section{Factor risk-parity optimizer}
+\textit{Source: }\mod{multiasset/factor\_optimizer.py}
+
+\code{FactorRiskParityOptimizer} allocates capital so that \textbf{each risk factor
+contributes equally to total portfolio risk} (not equal asset weight). With weights
+$\bm w$ and factor covariance $\bm\Sigma$, the risk contribution of factor $i$ is
+\begin{equation}
+\mathrm{RC}_i(\bm w) \;=\; w_i\,\frac{(\bm\Sigma\,\bm w)_i}{\sqrt{\bm w\transp\bm\Sigma\,\bm w}},
+\qquad \sum_i \mathrm{RC}_i = \sqrt{\bm w\transp\bm\Sigma\,\bm w},
+\label{eq:rc}
+\end{equation}
+and the optimizer (SciPy \code{minimize}) solves for weights equalising these
+contributions:
+\begin{equation}
+\bm w^\star \;=\; \arg\min_{\bm w}\;
+   \sum_{i}\sum_{j}\bigl(\mathrm{RC}_i(\bm w) - \mathrm{RC}_j(\bm w)\bigr)^2.
+\label{eq:rp}
+\end{equation}
+
+At each rebalance the optimizer:
+\begin{enumerate}
+\item loads the configured portfolio risk factors;
+\item converts factor levels into price-return-space volatility estimates;
+\item estimates \textbf{EWMA factor vols} and covariance with decay
+$\lambda = 0.94$,
+\begin{equation}
+\bm\Sigma_t \;=\; \lambda\,\bm\Sigma_{t-1}
+   + (1-\lambda)\,\bm r_t \bm r_t\transp,
+\qquad \lambda = 0.94;
+\label{eq:ewma}
+\end{equation}
+\item solves \cref{eq:rp} for the risk-parity weights.
+\end{enumerate}
+PCA risk-factor analysis (\mod{pca\_analyzer.py}) supports the factor decomposition.
+
+\subsection{Level, slope, and curvature tenor processing}
+\textit{Sources: }\mod{multiasset/pca\_analyzer.py}, \mod{multiasset/assets.py},
+\mod{multiasset/factor\_optimizer.py}
+
+The deterministic yield-curve model uses an explicit tenor-to-factor loading matrix
+$\bm B$.  The standard international grid is $(1\mathrm{Y}, 2\mathrm{Y},
+5\mathrm{Y}, 10\mathrm{Y}, 30\mathrm{Y})$; China uses the six-point grid
+$(1\mathrm{Y}, 2\mathrm{Y}, 5\mathrm{Y}, 10\mathrm{Y}, 20\mathrm{Y},
+30\mathrm{Y})$.  For China the Level, Slope, and Curvature vectors are
+\begin{equation}
+\begin{split}
+q_{\mathrm{L}} &= (1/6, 1/6, 1/6, 1/6, 1/6, 1/6),\\
+q_{\mathrm{S}} &= (-5, -3, -1, 1, 3, 5)/18,\\
+q_{\mathrm{C}} &= (1/4, 0, -1/4, -1/4, 0, 1/4).
+\end{split}
+\label{eq:cn-lsc-basis}
+\end{equation}
+The Level vector sums to one.  The Slope and Curvature contrasts sum to zero,
+are symmetric/antisymmetric as appropriate, and are orthogonal to Level.  A tenor's
+price-factor loading multiplies its curve loading by a modified-duration proxy.
+
+For tenor weights $\bm w$, realised factor exposure is
+\begin{equation}
+\bm e = \bm B\transp \bm w.
+\label{eq:tenor-factor-exposure}
+\end{equation}
+A Level/Slope/Curvature risk budget cannot uniquely imply tenor weights: six China
+tenors have only three factor equations, and risk budgets additionally depend on
+the factor covariance.  The risk-parity path resolves this under-determination in
+two stages.  It first computes factor-level ERC budgets using the EWMA covariance.
+It then pools the three budgets for a country and allocates them across its tenors
+from an equal-DV01 prior,
+\begin{equation}
+w_i^{\mathrm{DV01}} \propto \frac{1}{\lvert B_{i,\mathrm{IRDL}}\rvert},
+\label{eq:dv01-prior}
+\end{equation}
+using a regularised projection toward the realised Level/Slope/Curvature budget
+split.  \code{TENOR\_TILT\_LAMBDA} controls this trade-off: a larger value retains
+the equal-DV01 allocation, while a smaller value produces a stronger factor-driven
+tenor tilt.  Long-only floors and asset caps are applied after this projection, so
+the final allocation is feasible and stable rather than an exact inverse of
+\cref{eq:tenor-factor-exposure}.
+
+\begin{reviewnote}[Review focus]
+The EWMA $\lambda$ choice and lookback windows (\cref{eq:ewma}); covariance
+conditioning; the level$\rightarrow$return-space conversion for yield factors; and
+whether the $\sqrt{\text{vol}}$ budget (\cref{eq:sqrtvol}) is the intended risk
+philosophy versus strict equal risk (\cref{eq:rp}).
+\end{reviewnote}
