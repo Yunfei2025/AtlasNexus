@@ -1,6 +1,6 @@
 # Alpha Book: Monthly Style Review and Directional-Change Entry Plan
 
-**Status:** Approved implementation plan
+**Status:** Approved individual-trade design; portfolio walk-forward extension planned
 
 ## Objective
 
@@ -100,8 +100,9 @@ and its associated layout:
 - Remove obsolete momentum and carry-entry controls. Retain controls that still
   affect DC threshold, trailing stop, minimum hold, and short permission.
 - Render monthly review markers or a compact review audit table.
-- Keep portfolio backtests fixed to each candidate's stored style; do not introduce
-  daily regime switching in portfolio mode.
+- Route portfolio trades by their own point-in-time monthly style schedule; do not
+   introduce daily regime switching in portfolio mode. The portfolio implementation
+   details are specified in the Portfolio Walk-Forward Extension below.
 
 ### 6. Candidate scoring separation
 
@@ -114,6 +115,45 @@ and [curves/refreshers/alpha_candidates.py](../../curves/refreshers/alpha_candid
   the current `regime_boost`, or replace it with a separately documented ranking-only
   adjustment.
 - Preserve regime details only for the monthly review decision and audit trail.
+
+### 6a. Monthly candidate ranking and trend timing extension
+
+At each monthly review, first classify every eligible spread using only information
+available through the review close. Score candidates **within their assigned style**;
+the score determines eligibility, ranking, direction, and allocation for that month,
+but is not a daily entry confirmation.
+
+- **MR candidates:** retain the existing expected-return/risk score for cross-sectional
+   ranking, subject to stationarity and execution-feasibility requirements. Their daily
+   entry and exit rule remains the z-score-only MR engine.
+- **Trend candidates:** calculate a direction-specific, risk-normalized
+   carry--momentum rank. Carry must include roll, financing, and direction-dependent
+   borrow costs. Momentum must use the economically normalized spread direction and a
+   medium-horizon trend estimate. For each spread, retain only the executable BUY or
+   SELL side with the stronger expected edge; do not interpret the lowest non-negative
+   candidate score as an automatic short.
+- Standardize or rank carry and momentum within comparable spread families, then form
+   a frozen monthly score, for example
+   $R_{i,d}=w_C z(C_{i,d})+w_M z(M_{i,d})$, where $d$ is BUY or SELL. Start with
+   $w_C=w_M=0.5$ and validate alternative weights only at family level.
+- Apply correlation, capacity, DV01, and margin constraints after the style-specific
+   rank. Persist the review date, source-data as-of timestamp, factor inputs,
+   direction, score, and selected allocation in the monthly snapshot.
+
+For a trend candidate selected at the monthly review, use a separate daily
+continuation-timing signal. In economic-PnL orientation, require: (1) positive fast
+and slow trend slopes, (2) positive acceleration, (3) a mild pullback that respects
+the slow trend, and (4) a reconfirmation through the fast trend estimate. Reject an
+entry when the residual z-score is outside a configured absolute stretch bound. The
+z-score is a chase-prevention veto, not a directional signal. The short rule is the
+sign-symmetric counterpart. Exit on an opposite confirmed DC event, volatility
+trailing stop, or persistent slope reversal. Carry and the monthly rank are never
+intramonth entry or exit gates.
+
+Treat this trend-following pullback signal as a named research variant alongside the
+DC-continuation baseline. It may replace the baseline only after anchored,
+family-level walk-forward tests with next-bar execution, costs, turnover/capacity
+limits, and a final held-out period.
 
 ### 7. Documentation
 
@@ -160,3 +200,142 @@ Add or extend tests under [tests](../../tests):
 
 These should be handled as separate research or implementation workstreams after the
 simplified model has a tested baseline.
+
+---
+
+## Portfolio Walk-Forward Extension
+
+### Objective
+
+Backtest the positions in the current Alpha Portfolio as a sequence of historically
+available monthly portfolios. Each instrument must use the MR or trend engine selected
+from its own point-in-time regime at that month's review. Aggregate only the resulting
+daily PnL of positions that were eligible and allocated at that date.
+
+This replaces the current Portfolio Backtest's ``current-book sanity view'': it loads
+today's persisted allocation, applies its weights retroactively, and routes an asset to
+the trend engine only when its stored style contains the string ``trend''. That is not a
+causal portfolio backtest; stored portfolio styles are commonly normalized to
+``momentum'', so they can currently fall through to the MR engine.
+
+### Required Decisions
+
+The following conventions must be explicit and shared by individual and portfolio
+backtests:
+
+1. **Review schedule:** first available observation of each calendar month; all features
+   and allocation inputs are cut off at that close.
+2. **Trade timing:** generate a signal at review-close or daily close, then execute at
+   the next available close/open with configurable one-bar delay. The baseline should
+   use next-bar execution to avoid same-observation fills.
+3. **Style lifecycle:** a monthly style change closes an existing position at the
+   scheduled execution price before the new style may open a replacement. A style that
+   does not change leaves an open position intact.
+4. **Allocation lifecycle:** rebalance the portfolio monthly from a point-in-time
+   candidate universe. Existing positions removed from the eligible allocation are
+   closed; retained positions are resized and new positions may be opened only after
+   their own engine emits an entry signal.
+5. **Uncertain regime:** choose and record one policy: no new trade, retain the prior
+   style for an existing trade, or use the family default. The recommended baseline is
+   ``no new trade; retain/close only under the explicit portfolio lifecycle rule''.
+6. **Accounting:** use a single net-return convention: position DV01/notional,
+   bid--ask and fees on every fill, financing/borrow/carry by day, turnover, gross and
+   net PnL, capital return, and daily return-based Sharpe.
+
+### Implementation Steps
+
+1. **Create a stateful single-instrument runner.** Add a pure module under
+   `web/tabs/alpha/backtest/` that accepts a daily spread, an ordered monthly style
+   schedule, and an optional initial trade state. It must carry position, entry level,
+   best favorable level, carry accrual, and engine style across month boundaries.
+   Do not stitch independent month-local backtests: that can duplicate trades and does
+   not preserve an open position or its stop anchor across a review boundary.
+
+2. **Make monthly style routing canonical.** Move the duplicated schedule helper from
+   `backtest_tab.py` into the new backtest module. The schedule row should include
+   `review_date`, `effective_date`, `regime`, `regime_score`, `assigned_style`,
+   `fallback_reason`, and frozen trend parameters. Resolve style aliases at this
+   boundary: `mr`/`mean-reverting` and `trend`/`trending`/`momentum`.
+
+3. **Preserve engine semantics while adding state.** Reuse the existing MR z-score,
+   stop, DC state, trailing-stop, and carry functions. Refactor their common position
+   transition logic only enough to expose a daily state transition; do not maintain
+   separate rules for individual and portfolio execution.
+
+4. **Build a monthly portfolio snapshot provider.** Persist a dated Alpha allocation
+   snapshot after each scoring run, including candidate universe, selected weights,
+   direction, style/regime inputs, risk settings, and source-data as-of timestamp.
+   Historical runs must read only snapshots available on or before each review; absence
+   of an archived snapshot should be reported as a data gap, never silently replaced
+   with today's `summary_alpha_portfolio.parquet`.
+
+5. **Add `run_alpha_portfolio_walk_forward`.** Given dated portfolio snapshots and
+   price/carry data, run each eligible instrument's stateful schedule, apply weight and
+   position sizing at each rebalance, charge entry/exit/rebalance costs, and aggregate
+   aligned daily net returns. Return portfolio equity, daily gross/net returns, trade
+   ledger, rebalance ledger, monthly regime/style audit, exposure/DV01 series, and
+   missing-data diagnostics.
+
+6. **Replace the current Portfolio Backtest callback gradually.** Keep its present
+   chart as ``Current-book historical sanity view'' while introducing a distinct
+   ``Walk-forward regime portfolio'' mode. The new mode must call the portfolio runner,
+   not re-run `run_spread_backtest` or `run_trend_backtest_dc` independently with
+   today's weights.
+
+7. **Apply execution and cost inputs.** Wire `bt-initial-capital` and `bt-txn-cost`
+   into the portfolio runner. Transaction cost must apply to each initial fill,
+   reversal, forced style close, and rebalance resize. The current callback parses both
+   values but does not use them in PnL.
+
+8. **Migrate and label reporting.** Display the as-of range, number of historical
+   rebalance snapshots, gross/net return, turnover, costs, capacity, and any missing
+   snapshot coverage. Do not call a current-allocation replay a portfolio strategy
+   backtest.
+
+### Acceptance Tests
+
+1. A monthly regime label and allocation use no observation after their review date.
+2. A position remains continuous across a same-style month boundary, retaining entry
+   price and trailing-stop high/low watermark.
+3. A style change produces exactly one forced close and no double-counted carry or
+   transaction cost.
+4. A `momentum` portfolio style routes to the trend implementation after canonical
+   alias resolution.
+5. Changing a historical allocation only affects PnL after that allocation's effective
+   date; it cannot revise earlier portfolio weights.
+6. A one-bar execution delay changes fills predictably in a deterministic fixture.
+7. Gross PnL minus explicit costs equals net PnL, and weighted position returns equal
+   aggregate portfolio return each day.
+
+## Trend-Conditioned Z-Score Research
+
+The proposed rule, stated generically as ``buy in a downward trend when z-score is
+positive, sell in an upward trend when z-score is negative'', is a **counter-trend
+turning-point** rule, not a trend-following rule, when a long position profits from an
+increase in the normalized spread. It attempts to fade a still-rich falling spread or a
+still-cheap rising spread. It may be a valid relative-value signal, but it can also
+systematically enter before a persistent trend has ended. For yield-based spreads,
+apply the platform's normalized economic sign before interpreting long/short; raw
+yield labels are otherwise easy to reverse.
+
+Treat this as a separately named research strategy rather than an untested amendment
+to the baseline DC trend engine. Evaluate three mutually exclusive specifications:
+
+| Variant | Long entry | Short entry | Interpretation |
+| --- | --- | --- | --- |
+| DC continuation baseline | confirmed upward DC state | confirmed downward DC state | Follow the confirmed move. |
+| Trend-following pullback | upward DC state and $z_{min} \le z_t \le z_{max}$ after a pullback/reconfirmation | symmetric | Join the trend at a less extended level; avoids buying the most overextended continuation. |
+| Trend-conditioned fade | downward DC state and $z_t \ge z_{entry}$ | upward DC state and $z_t \le -z_{entry}$ | The proposed logic; fades a trend only when the moving-average dislocation remains large. |
+
+For the fade variant, require a separate reversal confirmation before entry, such as a
+DC reversal, a short-horizon slope reversal, or a close back through an entry band.
+Without that confirmation, ``downtrend plus positive z-score'' can be merely the early
+part of a large continued decline. Exits should be a hard adverse move/volatility stop,
+mean reversion to a defined z-score target, a maximum holding period, and a regime
+change. Never optimize the entry z-score, moving-average lookback, DC threshold, and
+stop separately per instrument.
+
+Select among the baseline and research variants only with family-level, anchored
+walk-forward tests, next-bar fills, costs, turnover/capacity limits, and a final held-out
+period. Report incremental net return, downside risk, turnover, and parameter stability;
+do not promote a variant solely because its in-sample Sharpe is higher.

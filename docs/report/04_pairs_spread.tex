@@ -88,13 +88,29 @@ residual variant.
 
 \section{Alpha Portfolio $\rightarrow$ Backtest: Style-routed Spread Strategies}
 
+\paragraph{Implementation status (2026-08-03).} The following sections distinguish
+the intended methodology from the code currently wired to the dashboard. Individual
+backtest ``Auto Monthly'' does classify each spread at the first available observation
+of a month using information through that date, then runs an MR or trend engine over a
+180-calendar-day warm-up slice ending at that month's end and stitches the in-month
+equity segments together. It does \emph{not} preserve a single open trade state across
+month boundaries, so it cannot currently implement or audit a true
+\texttt{monthly\_style\_change} close. Portfolio Backtest is different again: it loads
+the current persisted Alpha allocation, applies today's normalized weights to the full
+historical per-asset equity curves, and does not run the monthly style schedule. It is
+therefore a current-book historical sanity view, not a causal regime-aware portfolio
+backtest. The planned replacement is a stateful, monthly walk-forward simulation with
+dated historical allocation snapshots, point-in-time style schedules, next-bar fills,
+and explicit rebalance/transaction-cost accounting.
+
 The Alpha Book backtest in \texttt{web/tabs/alpha/} evaluates individual relative-value
 spreads and combines the current Portfolio allocation into an indicative book
 equity curve. Each spread is assigned exactly one style, mean reversion (MR) or
 trend, on the first available trading day of each calendar month. The assignment
 is fixed through month-end: the model does not adaptively switch engines within
-the month. Candidate scores rank and allocate capital; they are not intramonth
-entry confirmations.
+the month. Candidates are scored separately within their assigned style at that
+same review. The resulting frozen score determines eligibility, direction, ranking,
+and allocation; it is not an intramonth entry or exit confirmation.
 
 {\small
 \setlength{\LTleft}{0pt}
@@ -145,6 +161,34 @@ Each monthly record contains the review date, assigned style, classifier label,
 vote score/confidence, fallback reason, and, for a trend assignment, the frozen DC
 threshold and its calibration inputs. This makes both the style and the timing
 threshold reproducible without look-ahead bias.
+
+\subsection{Monthly Candidate Ranking and Allocation}
+\label{sec:pairs-monthly-ranking}
+
+Candidate selection and trade timing are deliberately separate decisions. At the
+monthly review, MR candidates retain the expected-return/risk score used for
+cross-sectional ranking, after stationarity and execution-feasibility checks. Their
+daily z-score rule determines whether and when an allocated candidate enters.
+
+Trend candidates receive a direction-specific carry--momentum score. Let $d$ denote
+an executable BUY or SELL spread direction, $C_{i,d}$ the expected carry, roll,
+financing, and borrow contribution scaled by return volatility, and $M_{i,d}$ the
+medium-horizon economically oriented trend contribution scaled by the same risk
+measure. Within comparable spread families, the score is formed from cross-sectional
+standardized factors,
+\begin{equation}
+R_{i,d}=w_C z(C_{i,d})+w_M z(M_{i,d}), \qquad w_C+w_M=1.
+\end{equation}
+The initial specification uses $w_C=w_M=0.5$. For each spread, the implementation
+retains only the feasible direction with the larger expected edge. It does not treat
+the lowest non-negative candidate score as an automatic short: direction is an
+economic property of the position, while the score measures its strength.
+
+Correlation, capacity, DV01, and margin constraints are applied after this
+style-specific ranking. The dated allocation snapshot retains the source-data
+as-of timestamp, factor values, selected direction, score, and allocation. Neither
+the carry--momentum score nor a subsequent change in rank may act as an intramonth
+entry, exit, or reversal gate.
 
 \paragraph{Indicator definitions.} Let $s_t$ be the spread level, $\Delta s_t = s_t -
 s_{t-1}$ its first difference, and $w=60$ observations (\texttt{DEFAULT\_REGIME\_WINDOW})
@@ -282,11 +326,40 @@ Internal z-score lookback & 120 observations & 120 observations & Local equilibr
 \subsection{Trend Model and Defaults}
 \label{sec:pairs-trend-model}
 
+\paragraph{Current versus target trend implementation.} The current individual trend
+engine enters immediately when its forward-filled absolute DC state is positive or
+negative, exits on an opposite state after \texttt{min\_hold}, and applies a trailing
+stop using the current rolling standard deviation of daily changes. Its adaptive
+threshold is recalculated by month as a base threshold times a bounded ratio of the
+latest robust scale to its historical median. The family-level multiplier/floor/cap,
+frozen trailing-scale, and stateful month-to-month trade lifecycle described below are
+target controls for the planned walk-forward implementation, not all current runtime
+behavior.
+
 The trend engine is event-driven. It enters long only after an \texttt{Upward Trend
 Confirmed} DC event and enters short only after a \texttt{Downward Trend Confirmed}
 event, when \texttt{allow\_short} is enabled. It does not use normalized momentum,
 carry level, candidate score, or the current regime label as a second intramonth
 entry gate.
+
+\paragraph{Trend-following pullback timing research.} For a trend candidate selected
+by the monthly carry--momentum rank, a separate continuation-timing variant may enter
+earlier than the DC-continuation baseline without converting the rank into an entry
+gate. First orient the spread into economic-PnL direction and estimate fast and slow
+local slopes, $\beta^{\mathrm{fast}}_t$ and $\beta^{\mathrm{slow}}_t$. Define a short
+horizon acceleration as $a_t=\beta^{\mathrm{fast}}_t-
+\beta^{\mathrm{fast}}_{t-h}$. A long entry requires positive fast and slow slopes,
+positive acceleration, a mild pullback below the fast trend estimate while remaining
+above the slow estimate, and a reconfirmation back through the fast estimate. The
+short rule is sign-symmetric. The residual z-score is restricted to
+$|z_t|\le z_{\max}$ solely to avoid buying or selling an overextended move; it is not
+a directional trigger. Exits remain an opposite confirmed DC event, a
+volatility-scaled trailing stop, or a persistent slope reversal.
+
+This is a named \emph{trend-following pullback} research specification, distinct from
+the DC-continuation production baseline. It can be promoted only through anchored,
+family-level walk-forward tests using next-bar execution, explicit costs, turnover
+and capacity limits, and a final held-out period.
 
 The DC generator uses an absolute threshold in spread units:
 
@@ -463,6 +536,28 @@ $\operatorname{mean}(\mathrm{pnl})/\operatorname{sd}(\mathrm{pnl})\times\sqrt{\m
 whereas the portfolio screen reports a daily-PnL Sharpe annualized by
 $\sqrt{252}$. These are not comparable with each other or directly with the
 platform-wide return-based convention in \S1.
+
+\paragraph{Regime-aware portfolio target.} The production portfolio backtest must
+instead reconstruct the candidate universe, regime assignment, style, and allocation
+from dated snapshots available at each monthly review. Each retained instrument carries
+its own MR or DC trend trade state through month boundaries; a changed style or removed
+allocation closes the position once at the configured execution price, and a new
+position enters only after the applicable engine emits a valid signal. The portfolio
+then aggregates daily net returns from contemporaneously active, sized positions and
+charges bid--ask, fees, borrow, financing, and rebalance turnover. This design avoids
+both retroactive application of current weights and accidental MR routing of stored
+``momentum'' style labels.
+
+\paragraph{Trend-conditioned z-score research.} A rule that buys a normalized spread
+while its DC state is downward and its moving-average $z$-score remains positive, and
+sells while its state is upward and $z$ remains negative, is a counter-trend
+turning-point strategy rather than continuation trend following. It can be researched
+as a separate, explicitly labeled model, but it should not replace DC continuation by
+assumption: it may enter before a persistent move has ended. A safer research sequence
+compares (i) DC continuation, (ii) same-direction DC with a bounded z-score pullback,
+and (iii) the counter-trend rule with an additional reversal confirmation. All variants
+must use the economic normalized spread sign, next-bar execution, family-level
+walk-forward parameters, transaction costs, and a held-out evaluation period.
 
 \subsection{Validation and Implementation Requirements}
 
