@@ -116,6 +116,45 @@ and [curves/refreshers/alpha_candidates.py](../../curves/refreshers/alpha_candid
   adjustment.
 - Preserve regime details only for the monthly review decision and audit trail.
 
+### 6a. Monthly candidate ranking and trend timing extension
+
+At each monthly review, first classify every eligible spread using only information
+available through the review close. Score candidates **within their assigned style**;
+the score determines eligibility, ranking, direction, and allocation for that month,
+but is not a daily entry confirmation.
+
+- **MR candidates:** retain the existing expected-return/risk score for cross-sectional
+   ranking, subject to stationarity and execution-feasibility requirements. Their daily
+   entry and exit rule remains the z-score-only MR engine.
+- **Trend candidates:** calculate a direction-specific, risk-normalized
+   carry--momentum rank. Carry must include roll, financing, and direction-dependent
+   borrow costs. Momentum must use the economically normalized spread direction and a
+   medium-horizon trend estimate. For each spread, retain only the executable BUY or
+   SELL side with the stronger expected edge; do not interpret the lowest non-negative
+   candidate score as an automatic short.
+- Standardize or rank carry and momentum within comparable spread families, then form
+   a frozen monthly score, for example
+   $R_{i,d}=w_C z(C_{i,d})+w_M z(M_{i,d})$, where $d$ is BUY or SELL. Start with
+   $w_C=w_M=0.5$ and validate alternative weights only at family level.
+- Apply correlation, capacity, DV01, and margin constraints after the style-specific
+   rank. Persist the review date, source-data as-of timestamp, factor inputs,
+   direction, score, and selected allocation in the monthly snapshot.
+
+For a trend candidate selected at the monthly review, use a separate daily
+continuation-timing signal. In economic-PnL orientation, require: (1) positive fast
+and slow trend slopes, (2) positive acceleration, (3) a mild pullback that respects
+the slow trend, and (4) a reconfirmation through the fast trend estimate. Reject an
+entry when the residual z-score is outside a configured absolute stretch bound. The
+z-score is a chase-prevention veto, not a directional signal. The short rule is the
+sign-symmetric counterpart. Exit on an opposite confirmed DC event, volatility
+trailing stop, or persistent slope reversal. Carry and the monthly rank are never
+intramonth entry or exit gates.
+
+Treat this trend-following pullback signal as a named research variant alongside the
+DC-continuation baseline. It may replace the baseline only after anchored,
+family-level walk-forward tests with next-bar execution, costs, turnover/capacity
+limits, and a final held-out period.
+
 ### 7. Documentation
 
 Update [docs/report/AtlasNexus_Model_Methodology.md](../report/AtlasNexus_Model_Methodology.md)
