@@ -686,7 +686,7 @@ def build_individual_backtest_panel() -> html.Div:
                             id='bt-trade-style',
                             options=[
                                 {'label': ' Mean-Reversion', 'value': 'mr'},
-                                {'label': ' Trend (Directional-Change)', 'value': 'trend'},
+                                {'label': ' Trend (Z-Momentum Hysteresis)', 'value': 'trend'},
                             ],
                             value='mr',
                             className='an-radio-stack',
@@ -703,11 +703,11 @@ def build_individual_backtest_panel() -> html.Div:
                 html.Div([
                     html.H2("Trend", style={**_hdr, 'fontSize': '12px'}),
                     html.Div([
-                        html.Div([html.Label("Theta", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-theta', type='number', value=0.02, min=0.001, max=0.2, step=0.001, style=_inp_mono)]),
+                        html.Div([html.Label("Theta z", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-theta', type='number', value=1.25, min=0.25, max=4.0, step=0.05, style=_inp_mono)]),
                         html.Div([html.Label("Mom window", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style=_inp_mono)]),
                         html.Div([html.Label("Vol window", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style=_inp_mono)]),
                         html.Div([html.Label("Trail mult", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-trailing-mult', type='number', value=1.5, min=0.5, max=5.0, step=0.1, style=_inp_mono)]),
-                        html.Div([html.Label("Momentum buffer", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-carry-buffer', type='number', value=0.0, step=0.0001, style=_inp_mono)]),
+                        html.Div([html.Label("Legacy buffer (unused)", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-carry-buffer', type='number', value=0.0, step=0.0001, style={**_inp_mono, 'opacity': 0.55})]),
                     ], className='alpha-trend-params', style={'marginBottom': '10px'}),
                     dcc.Checklist(
                         id='bt-allow-short',

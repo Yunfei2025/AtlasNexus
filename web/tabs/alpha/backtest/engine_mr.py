@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Mean-reversion backtest engine using z-score / composite signal entries."""
+"""Mean-reversion backtest engine using z-score-only signal entries."""
 
 from __future__ import annotations
 
@@ -42,21 +42,7 @@ def run_spread_backtest(
     rolling_std = spread_ts.rolling(lookback).std()
     zscore = (spread_ts - rolling_mean) / rolling_std
 
-    _score_horizon = 30
-    try:
-        _cr_fallback = carry_roll_bp if np.isfinite(carry_roll_bp) else 0.0
-        _cr_aligned = pd.Series(_cr_fallback, index=spread_ts.index, dtype=float)
-        if carry_roll_ts is not None and len(carry_roll_ts) > 0:
-            _ts_cr = carry_roll_ts.copy()
-            if hasattr(_ts_cr.index, 'tz') and _ts_cr.index.tz is not None:
-                _ts_cr.index = _ts_cr.index.tz_localize(None)
-            _cr_aligned = _ts_cr.reindex(spread_ts.index, method='ffill').fillna(_cr_fallback)
-        _safe_std = rolling_std.replace(0, np.nan).fillna(1.0)
-        carry_sigma_ts = (_cr_aligned * _score_horizon / 90.0) / _safe_std
-        carry_sigma_ts = carry_sigma_ts.clip(-1.5, 1.5)
-        composite_signal = zscore - carry_sigma_ts
-    except Exception:
-        composite_signal = zscore.copy()
+    composite_signal = zscore.copy()
 
     # Pre-align carry series to spread index once — avoids O(n²) re-slicing in the loop.
     _cr_fallback_val = (carry_roll_bp or 0.0) / 100.0  # convert bp scalar to %
@@ -71,11 +57,20 @@ def run_spread_backtest(
     _cr_long_aligned = _align_cr(carry_roll_ts)
     _cr_sell_aligned = _align_cr(carry_roll_sell_ts)
 
+    # Numpy views of the per-day series used inside the trade loop — plain array
+    # indexing avoids per-step pandas .iloc overhead over long histories.
+    price_arr = spread_ts.to_numpy(dtype=float)
+    idx_arr = spread_ts.index
+    zscore_arr = zscore.to_numpy(dtype=float)
+    composite_arr = composite_signal.to_numpy(dtype=float)
+    _cr_long_arr = _cr_long_aligned.to_numpy(dtype=float) if _cr_long_aligned is not None else None
+    _cr_sell_arr = _cr_sell_aligned.to_numpy(dtype=float) if _cr_sell_aligned is not None else None
+
     def _cr_val_at(i: int, pos: int) -> float:
-        ts = _cr_sell_aligned if (pos == -1 and _cr_sell_aligned is not None) else _cr_long_aligned
-        if ts is None:
+        arr = _cr_sell_arr if (pos == -1 and _cr_sell_arr is not None) else _cr_long_arr
+        if arr is None:
             return _cr_fallback_val
-        v = ts.iloc[i]
+        v = arr[i]
         return float(v) if np.isfinite(v) else 0.0
 
     trades = []
@@ -93,12 +88,11 @@ def run_spread_backtest(
     carry_values: List[float] = []
 
     for i in range(lookback, len(spread_ts)):
-        date = spread_ts.index[i]
-        price = spread_ts.iloc[i]
-        z = zscore.iloc[i]
+        date = idx_arr[i]
+        price = price_arr[i]
+        z = zscore_arr[i]
 
-        cs_raw = composite_signal.iloc[i]
-        cs = cs_raw if np.isfinite(cs_raw) else z
+        cs = z
 
         if np.isnan(z):
             continue
@@ -111,10 +105,10 @@ def run_spread_backtest(
 
             # Only allow signal-based exits after the minimum holding period.
             if days_held >= min_hold:
-                if position == 1 and cs >= -exit_z:
+                if position == 1 and z >= -exit_z:
                     exit_signal = True
                     exit_reason = 'target'
-                elif position == -1 and cs <= exit_z:
+                elif position == -1 and z <= exit_z:
                     exit_signal = True
                     exit_reason = 'target'
 
@@ -162,27 +156,27 @@ def run_spread_backtest(
 
         if position == 0:
             if trade_style == 'mr':
-                if cs <= -entry_z:
+                if z <= -entry_z:
                     position = 1
                     entry_date = date
                     entry_price = price
-                    entry_zscore = cs
-                elif cs >= entry_z:
+                    entry_zscore = z
+                elif z >= entry_z:
                     position = -1
                     entry_date = date
                     entry_price = price
-                    entry_zscore = cs
+                    entry_zscore = z
             else:
-                if cs <= -entry_z:
+                if z <= -entry_z:
                     position = 1
                     entry_date = date
                     entry_price = price
-                    entry_zscore = cs
-                elif cs >= entry_z:
+                    entry_zscore = z
+                elif z >= entry_z:
                     position = -1
                     entry_date = date
                     entry_price = price
-                    entry_zscore = cs
+                    entry_zscore = z
 
         # Incremental daily MTM — O(n) total, no per-day _carry_accrual call.
         if position != 0 and entry_price is not None:
@@ -210,7 +204,7 @@ def run_spread_backtest(
     open_trade = None
     if position != 0 and entry_price is not None and equity_dates:
         last_date = equity_dates[-1]
-        last_price = float(spread_ts.loc[last_date])
+        last_price = float(price_arr[-1])
         days_open = (last_date - entry_date).days if entry_date else 0
         open_cap_bp = (last_price - entry_price) * position * duration_mult * 100.0
         open_carry_bp = open_cr_sum * position / 90.0 * 100.0

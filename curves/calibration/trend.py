@@ -68,7 +68,7 @@ def generate(data, d):
     p.set_index('Date',inplace=True)
     return p['Event']
 
-def generate_absolute(data, theta_abs):
+def generate_absolute(data, theta_abs, theta_ts=None):
     """Generates directional change events using an absolute threshold.
 
     Same algorithm as :func:`generate` but triggers on
@@ -76,49 +76,68 @@ def generate_absolute(data, theta_abs):
     This is necessary for spread series that can hover near zero where
     a relative threshold is undefined or unstable.
 
+    The state machine is inherently sequential, but the per-step work is
+    done on plain numpy arrays rather than per-row ``.iloc``/``.at`` pandas
+    access, which is materially faster over long histories.
+
     Args:
         data: pandas.Series of spread levels (index = dates/timestamps).
         theta_abs: Absolute threshold in the same units as *data*
-                   (e.g. 0.02 for 2 bp when data is in %).
+                   (e.g. 0.02 for 2 bp when data is in %), used whenever
+                   *theta_ts* is not supplied or is invalid for a given day.
+        theta_ts: Optional per-day absolute threshold, aligned to
+                  ``data.index`` (e.g. a monthly-frozen adaptive schedule).
+                  Falls back to *theta_abs* for any day where it is
+                  NaN/non-positive.
 
     Returns:
         pandas.Series of Directional Change Events (same format as :func:`generate`).
     """
-    p = pd.DataFrame({"Price": data.values})
-    p["Event"] = ''
+    price_arr = np.asarray(data.values, dtype=float)
+    n = len(price_arr)
+    event_arr = np.empty(n, dtype=object)
+    event_arr[:] = ''
+
+    base_theta = float(theta_abs)
+    thr_arr = None
+    if theta_ts is not None:
+        thr_series = theta_ts if isinstance(theta_ts, pd.Series) else pd.Series(theta_ts, index=data.index)
+        thr_arr = pd.to_numeric(thr_series.reindex(data.index), errors='coerce').to_numpy(dtype=float)
+
     event = 'upturn'
-    ext = p['Price'].iloc[0]
+    ext = price_arr[0]
     n_ext = 0
 
-    for i in range(len(p)):
-        price = p['Price'].iloc[i]
+    for i in range(n):
+        price = price_arr[i]
+        if np.isnan(price):
+            continue
+        thr = thr_arr[i] if thr_arr is not None else np.nan
+        if not np.isfinite(thr) or thr <= 0:
+            thr = base_theta
         if event == 'upturn':
-            if (price - ext) <= -theta_abs:
+            if (price - ext) <= -thr:
                 event = 'downturn'
-                p.at[n_ext, 'Event'] = 'Local Max'
-                p.at[i, 'Event'] = 'Downward Trend Confirmed'
+                event_arr[n_ext] = 'Local Max'
+                event_arr[i] = 'Downward Trend Confirmed'
                 ext = price
                 n_ext = i
-            else:
-                if price > ext:
-                    ext = price
-                    n_ext = i
+            elif price > ext:
+                ext = price
+                n_ext = i
         else:
-            if (price - ext) >= theta_abs:
+            if (price - ext) >= thr:
                 event = 'upturn'
-                p.at[n_ext, 'Event'] = 'Local Min'
-                p.at[i, 'Event'] = 'Upward Trend Confirmed'
+                event_arr[n_ext] = 'Local Min'
+                event_arr[i] = 'Upward Trend Confirmed'
                 ext = price
                 n_ext = i
-            else:
-                if price < ext:
-                    ext = price
-                    n_ext = i
+            elif price < ext:
+                ext = price
+                n_ext = i
 
-    p = p.dropna()
-    p['Date'] = data.index
-    p.set_index('Date', inplace=True)
-    return p['Event']
+    result = pd.Series(event_arr, index=data.index, name='Event')
+    return result[~np.isnan(price_arr)]
 
 
 def trend_state_machine(events):
@@ -134,15 +153,10 @@ def trend_state_machine(events):
             −1 after 'Downward Trend Confirmed',
              0 before the first event.
     """
-    state = pd.Series(0, index=events.index, dtype=int)
-    current = 0
-    for idx, ev in events.items():
-        if ev == 'Upward Trend Confirmed':
-            current = 1
-        elif ev == 'Downward Trend Confirmed':
-            current = -1
-        state.at[idx] = current
-    return state
+    raw = pd.Series(np.nan, index=events.index, dtype=float)
+    raw[events.eq('Upward Trend Confirmed')] = 1.0
+    raw[events.eq('Downward Trend Confirmed')] = -1.0
+    return raw.ffill().fillna(0.0).astype(int)
 
 
 def compute_trend_signal(

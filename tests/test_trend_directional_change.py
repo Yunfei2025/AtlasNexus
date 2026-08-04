@@ -1,15 +1,19 @@
 import pandas as pd
+import numpy as np
 
-from web.tabs.alpha.backtest.engine_trend import _dc_trend_state
+from web.tabs.alpha.backtest.engine_trend import _z_momentum_state
 
 
-def test_relative_dc_state_handles_inverted_series_without_freezing():
-    index = pd.date_range('2026-01-01', periods=5, freq='D')
-    raw_spread = pd.Series([100.0, 90.0, 100.0, 110.0, 120.0], index=index)
+def test_z_momentum_state_handles_inverted_series_without_freezing():
+    index = pd.date_range('2026-01-01', periods=180, freq='D')
+    base = np.sin(np.arange(180) / 8.0) * 4.0
+    drift = np.linspace(-2.0, 3.0, 180)
+    raw_spread = pd.Series(base + drift, index=index)
 
-    raw_state = _dc_trend_state(raw_spread, theta=0.03)
-    inverted_state = _dc_trend_state(-raw_spread, theta=0.03)
+    raw_state, _, _ = _z_momentum_state(raw_spread, theta_z=1.0, mom_window=20, vol_window=60)
+    inverted_state, _, _ = _z_momentum_state(-raw_spread, theta_z=1.0, mom_window=20, vol_window=60)
 
-    assert raw_state.iloc[-1] == 1.0
-    assert inverted_state.iloc[-1] == -1.0
-    assert inverted_state.nunique() > 1
+    nonzero = raw_state.ne(0.0) & inverted_state.ne(0.0)
+    assert bool(nonzero.any())
+    assert ((raw_state[nonzero] + inverted_state[nonzero]).abs() < 1e-9).all()
+    assert raw_state.nunique() > 1

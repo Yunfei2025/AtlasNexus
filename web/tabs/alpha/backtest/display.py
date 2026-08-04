@@ -278,7 +278,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             _tst = results['trend_state_ts'].reindex(score_ts_display.index).ffill().fillna(0.0)
             signal_fig.add_trace(go.Scatter(
                 x=score_ts_display.index, y=(_tst * 2.0).values,
-                mode='lines', name='DC Direction State (×2)',
+                mode='lines', name='Trend State (×2)',
                 line=dict(color='rgba(255,165,0,0.45)', width=1, shape='hv'),
                 fill='tozeroy', fillcolor='rgba(255,165,0,0.07)', showlegend=False,
             ))

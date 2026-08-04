@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Trend / carry backtest engine using directional-change trend confirmation."""
+"""Trend / carry backtest engine using z-momentum hysteresis trend confirmation."""
 
 from __future__ import annotations
 
@@ -19,128 +19,50 @@ def _robust_daily_scale(diff_s: pd.Series, window: int) -> pd.Series:
     return 1.4826 * mad
 
 
-def _build_monthly_theta_schedule(
-    s: pd.Series,
-    base_theta: float,
-    vol_window: int,
-    theta_min_mult: float,
-    theta_max_mult: float,
-) -> tuple[pd.Series, pd.DataFrame]:
-    """Build month-frozen theta series using point-in-time robust volatility."""
-    base = float(base_theta)
-    if base <= 0:
-        base = 0.02
+def _z_momentum_state(
+    series: pd.Series,
+    *,
+    theta_z: float = 1.25,
+    mom_window: int = 20,
+    vol_window: int = 60,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Compute hysteresis trend state from z-scored medium-horizon momentum.
 
-    diff_s = s.diff()
-    robust_scale = _robust_daily_scale(diff_s, max(int(vol_window), 20))
-    review_dates = s.groupby(s.index.to_period('M')).apply(lambda x: x.index.min())
-
-    rows: List[Dict[str, Any]] = []
-    theta_by_month: Dict[pd.Period, float] = {}
-    prev_theta = base
-
-    for rd in review_dates.sort_values().tolist():
-        hist_scale = robust_scale.loc[:rd].dropna()
-        fallback_reason = ''
-        if len(hist_scale) == 0:
-            theta_m = prev_theta
-            fallback_reason = 'insufficient_scale_history'
-        else:
-            sigma_now = float(hist_scale.iloc[-1])
-            sigma_ref = float(hist_scale.median())
-            if not np.isfinite(sigma_now) or sigma_now <= 0 or not np.isfinite(sigma_ref) or sigma_ref <= 0:
-                theta_m = prev_theta
-                fallback_reason = 'invalid_scale'
-            else:
-                scale_ratio = sigma_now / sigma_ref
-                scale_ratio = float(np.clip(scale_ratio, theta_min_mult, theta_max_mult))
-                theta_m = base * scale_ratio
-
-        p = pd.Timestamp(rd).to_period('M')
-        theta_by_month[p] = float(theta_m)
-        rows.append({
-            'review_date': pd.Timestamp(rd),
-            'theta_abs': float(theta_m),
-            'base_theta': base,
-            'fallback_reason': fallback_reason,
-        })
-        prev_theta = float(theta_m)
-
-    theta_ts = pd.Series(
-        s.index.to_period('M').map(lambda p: theta_by_month.get(p, base)),
-        index=s.index,
-        dtype=float,
-    )
-    schedule = pd.DataFrame(rows)
-    return theta_ts, schedule
-
-
-def _dc_trend_state(series: pd.Series, theta: float, theta_ts: Optional[pd.Series] = None) -> pd.Series:
-    """Compute trend state (+1/-1) from directional-change events."""
-    try:
-        from curves.calibration.trend import generate_absolute as dc_generate
-    except Exception:
-        dc_generate = None
-
+    Returns:
+        trend_state: +1 / -1 / 0 state series
+        z_mom: z-scored momentum series
+        sigma_mad: rolling robust volatility scale used for normalization
+    """
     s = pd.to_numeric(series, errors='coerce').dropna().copy()
     if s.empty:
-        return pd.Series(dtype=float)
+        empty = pd.Series(dtype=float)
+        return empty, empty, empty
 
-    if theta_ts is not None:
-        th = pd.to_numeric(theta_ts, errors='coerce').reindex(s.index).ffill().fillna(float(theta))
-        state = pd.Series(index=s.index, dtype=float)
-        cur = 0.0
-        event = 'upturn'
-        ext = float(s.iloc[0])
-        for i, dt in enumerate(s.index):
-            px = float(s.iloc[i])
-            thr = float(th.iloc[i])
-            if not np.isfinite(thr) or thr <= 0:
-                thr = float(theta)
-            if event == 'upturn':
-                if (px - ext) <= -thr:
-                    event = 'downturn'
-                    cur = -1.0
-                    ext = px
-                elif px > ext:
-                    ext = px
-            else:
-                if (px - ext) >= thr:
-                    event = 'upturn'
-                    cur = 1.0
-                    ext = px
-                elif px < ext:
-                    ext = px
-            state.iloc[i] = cur
-        state.name = 'trend_state'
-        return state
+    k = max(int(mom_window), 1)
+    w = max(int(vol_window), 20)
+    z_thr = abs(float(theta_z)) if np.isfinite(theta_z) else 1.25
 
-    if dc_generate is None:
-        st = np.sign(s.diff()).replace(0, np.nan).ffill().fillna(0.0)
-        st.name = 'trend_state'
-        return st
+    momentum = s.diff(k)
+    sigma_mad = _robust_daily_scale(momentum, w)
+    z_mom = momentum / sigma_mad.replace(0, np.nan)
+    z_mom = z_mom.replace([np.inf, -np.inf], np.nan)
 
-    events = dc_generate(s, float(theta))
-    state = pd.Series(index=s.index, dtype=float)
-    cur = 0.0
-    for dt, ev in events.items():
-        if ev == 'Upward Trend Confirmed':
-            cur = 1.0
-        elif ev == 'Downward Trend Confirmed':
-            cur = -1.0
-        state.loc[dt] = cur
-    state = state.ffill().fillna(0.0)
+    raw = pd.Series(np.nan, index=s.index, dtype=float)
+    raw[z_mom >= z_thr] = 1.0
+    raw[z_mom <= -z_thr] = -1.0
+    state = raw.ffill().fillna(0.0)
     state.name = 'trend_state'
-    return state
+    z_mom.name = 'z_mom'
+    sigma_mad.name = 'sigma_mad'
+    return state, z_mom, sigma_mad
 
 
-def run_trend_backtest_dc(
+def run_trend_backtest(
     spread_ts: pd.Series,
-    theta: float = 0.02,
+    theta_z: float = 1.25,
     mom_window: int = 20,
     vol_window: int = 60,
     trailing_mult: float = 1.5,
-    carry_buffer: float = 0.0,
     allow_short: bool = True,
     carry_roll_ts: Optional[pd.Series] = None,
     carry_roll_bp: float = 0.0,
@@ -151,11 +73,9 @@ def run_trend_backtest_dc(
     tenor_ratio: float = 1.0,
     carry_roll_sell_ts: Optional[pd.Series] = None,
     min_hold: int = 7,
-    adaptive_theta: bool = True,
-    theta_min_mult: float = 0.5,
-    theta_max_mult: float = 2.5,
+    reentry_cooldown: int = 3,
 ) -> Dict[str, Any]:
-    """Trend/carry backtest using directional-change trend confirmation."""
+    """Trend/carry backtest using z-momentum hysteresis trend confirmation."""
     if spread_ts is None or len(spread_ts) < 60:
         return {'error': 'Insufficient data'}
 
@@ -165,22 +85,14 @@ def run_trend_backtest_dc(
     if len(s) < max(60, vol_window + 5, mom_window + 5):
         return {'error': 'Insufficient data'}
 
-    theta_series = None
-    theta_schedule = pd.DataFrame()
-    if adaptive_theta:
-        try:
-            theta_series, theta_schedule = _build_monthly_theta_schedule(
-                s,
-                base_theta=float(theta),
-                vol_window=int(vol_window),
-                theta_min_mult=float(theta_min_mult),
-                theta_max_mult=float(theta_max_mult),
-            )
-        except Exception:
-            theta_series = None
-            theta_schedule = pd.DataFrame()
-
-    trend_state = _dc_trend_state(s, theta=float(theta), theta_ts=theta_series).reindex(s.index).ffill().fillna(0.0)
+    trend_state, z_mom, sigma_mad = _z_momentum_state(
+        s,
+        theta_z=float(theta_z),
+        mom_window=int(mom_window),
+        vol_window=int(vol_window),
+    )
+    trend_state = trend_state.reindex(s.index).ffill().fillna(0.0)
+    z_mom = z_mom.reindex(s.index)
     sigma = s.diff().rolling(vol_window).std()
 
     # Pre-align carry series to spread index once — avoids O(n²) re-slicing in the loop.
@@ -195,11 +107,20 @@ def run_trend_backtest_dc(
     _cr_long_al = _align_cr_trend(carry_roll_ts)
     _cr_sell_al = _align_cr_trend(carry_roll_sell_ts)
 
+    # Numpy views of the per-day series used inside the trade loop — plain array
+    # indexing avoids per-step pandas .iloc overhead over long histories.
+    s_arr = s.to_numpy(dtype=float)
+    idx_arr = s.index
+    trend_arr = trend_state.to_numpy(dtype=float)
+    sigma_arr = sigma.to_numpy(dtype=float)
+    _cr_long_arr = _cr_long_al.to_numpy(dtype=float) if _cr_long_al is not None else None
+    _cr_sell_arr = _cr_sell_al.to_numpy(dtype=float) if _cr_sell_al is not None else None
+
     def _cr_val_trend(i: int, pos: int) -> float:
-        ts = _cr_sell_al if (pos == -1 and _cr_sell_al is not None) else _cr_long_al
-        if ts is None:
+        arr = _cr_sell_arr if (pos == -1 and _cr_sell_arr is not None) else _cr_long_arr
+        if arr is None:
             return 0.0
-        v = ts.iloc[i]
+        v = arr[i]
         return float(v) if np.isfinite(v) else 0.0
 
     trades: List[Dict[str, Any]] = []
@@ -207,6 +128,9 @@ def run_trend_backtest_dc(
     entry_date = None
     entry_price = None
     best_fav = None
+    cooldown = max(int(reentry_cooldown), 0)
+    last_exit_index = -10**9
+    last_exit_dir = 0
     realized_pnl = 0.0
     realized_capital = 0.0
     realized_carry = 0.0
@@ -218,10 +142,10 @@ def run_trend_backtest_dc(
 
     start_i = max(vol_window, mom_window) + 1
     for i in range(start_i, len(s)):
-        date = s.index[i]
-        px = float(s.iloc[i])
-        st = float(trend_state.iloc[i])
-        vol = float(sigma.iloc[i]) if not np.isnan(sigma.iloc[i]) else np.nan
+        date = idx_arr[i]
+        px = float(s_arr[i])
+        st = float(trend_arr[i])
+        vol = float(sigma_arr[i])
 
         if position != 0:
             days_held = (date - entry_date).days if entry_date is not None else 0
@@ -270,18 +194,22 @@ def run_trend_backtest_dc(
                     'days_held': days_held,
                     'exit_reason': 'trailing' if trailing_stop else 'flip',
                 })
+                last_exit_index = i
+                last_exit_dir = position
                 position = 0
                 entry_date = None
                 entry_price = None
                 best_fav = None
 
         if position == 0:
-            if st > 0:
+            can_reenter_long = not (last_exit_dir == 1 and (i - last_exit_index) <= cooldown)
+            can_reenter_short = not (last_exit_dir == -1 and (i - last_exit_index) <= cooldown)
+            if st > 0 and can_reenter_long:
                 position = 1
                 entry_date = date
                 entry_price = px
                 best_fav = px
-            elif allow_short and st < 0:
+            elif allow_short and st < 0 and can_reenter_short:
                 position = -1
                 entry_date = date
                 entry_price = px
@@ -312,7 +240,7 @@ def run_trend_backtest_dc(
     open_trade = None
     if position != 0 and entry_price is not None and equity_dates:
         last_date = equity_dates[-1]
-        last_price = float(s.loc[last_date])
+        last_price = float(s_arr[-1])
         days_open = (last_date - entry_date).days if entry_date else 0
         open_cap_bp = (last_price - entry_price) * position * duration_mult * 100.0
         open_carry_bp = open_cr_sum * position / 90.0 * 100.0
@@ -342,8 +270,9 @@ def run_trend_backtest_dc(
             'max_drawdown': 0.0,
             'spread_ts': s,
             'trend_state_ts': trend_state,
-            'theta_abs_ts': theta_series,
-            'theta_schedule': theta_schedule,
+            'norm_mom_ts': z_mom,
+            'theta_z': float(theta_z),
+            'reentry_cooldown': cooldown,
             'cum_pnl': np.array([]),
             'equity_ts': equity_ts,
             'carry_roll_ts': carry_roll_ts,
@@ -395,8 +324,9 @@ def run_trend_backtest_dc(
         'max_drawdown': max_drawdown,
         'spread_ts': s,
         'trend_state_ts': trend_state,
-        'theta_abs_ts': theta_series,
-        'theta_schedule': theta_schedule,
+        'norm_mom_ts': z_mom,
+        'theta_z': float(theta_z),
+        'reentry_cooldown': cooldown,
         'cum_pnl': cum_pnl,
         'equity_ts': equity_ts,
         'capital_ts': capital_ts,
@@ -404,3 +334,74 @@ def run_trend_backtest_dc(
         'carry_roll_ts': carry_roll_ts,
         'open_trade': open_trade,
     }
+
+
+def _dc_trend_state(series: pd.Series, theta: float, theta_ts: Optional[pd.Series] = None) -> pd.Series:
+    """Deprecated compatibility wrapper.
+
+    Keeps legacy callers/tests alive while routing to the new z-momentum state.
+    ``theta_ts`` is ignored and retained only for call compatibility.
+    """
+    _ = theta_ts
+    st, _, _ = _z_momentum_state(
+        series,
+        theta_z=float(theta) if np.isfinite(theta) else 1.25,
+        mom_window=1,
+        vol_window=20,
+    )
+    return st
+
+
+def run_trend_backtest_dc(
+    spread_ts: pd.Series,
+    theta: float = 1.25,
+    mom_window: int = 20,
+    vol_window: int = 60,
+    trailing_mult: float = 1.5,
+    carry_buffer: float = 0.0,
+    allow_short: bool = True,
+    carry_roll_ts: Optional[pd.Series] = None,
+    carry_roll_bp: float = 0.0,
+    duration_mult: float = 1.0,
+    borrow_cost_long_bp: float = 0.0,
+    borrow_cost_short_bp: float = 0.0,
+    spread_type: Optional[str] = None,
+    tenor_ratio: float = 1.0,
+    carry_roll_sell_ts: Optional[pd.Series] = None,
+    min_hold: int = 7,
+    adaptive_theta: bool = True,
+    theta_min_mult: float = 0.5,
+    theta_max_mult: float = 2.5,
+) -> Dict[str, Any]:
+    """Compatibility wrapper for legacy callers.
+
+    Parameters tied to the old DC implementation are accepted but ignored.
+    """
+    _ = carry_buffer
+    _ = adaptive_theta
+    _ = theta_min_mult
+    _ = theta_max_mult
+
+    # Legacy callers pass DC spread-unit thresholds (typically 0.02/0.03).
+    # Map those to practical z-threshold defaults during migration.
+    theta_legacy = float(theta) if np.isfinite(theta) else 1.25
+    if theta_legacy < 0.2:
+        theta_legacy = 1.5 if theta_legacy >= 0.03 else 1.25
+
+    return run_trend_backtest(
+        spread_ts=spread_ts,
+        theta_z=theta_legacy,
+        mom_window=mom_window,
+        vol_window=vol_window,
+        trailing_mult=trailing_mult,
+        allow_short=allow_short,
+        carry_roll_ts=carry_roll_ts,
+        carry_roll_bp=carry_roll_bp,
+        duration_mult=duration_mult,
+        borrow_cost_long_bp=borrow_cost_long_bp,
+        borrow_cost_short_bp=borrow_cost_short_bp,
+        spread_type=spread_type,
+        tenor_ratio=tenor_ratio,
+        carry_roll_sell_ts=carry_roll_sell_ts,
+        min_hold=min_hold,
+    )

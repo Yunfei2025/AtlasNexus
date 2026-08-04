@@ -171,7 +171,7 @@ def _run_monthly_style_switch_backtest(
         if style == 'trend':
             return run_trend_backtest_dc(
                 spread_ts=ts,
-                theta=float(theta) if theta is not None else 0.02,
+                theta=float(theta) if theta is not None else 1.25,
                 vol_window=int(vol_window) if vol_window is not None else 60,
                 trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
                 allow_short=bool(allow_short and 'allow' in allow_short),
@@ -222,7 +222,7 @@ def _run_monthly_style_switch_backtest(
         if style_for_month == 'trend':
             res = run_trend_backtest_dc(
                 spread_ts=seg,
-                theta=float(theta) if theta is not None else 0.02,
+                theta=float(theta) if theta is not None else 1.25,
                 vol_window=int(vol_window) if vol_window is not None else 60,
                 trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
                 allow_short=bool(allow_short and 'allow' in allow_short),
@@ -615,9 +615,9 @@ def register_backtest_callbacks(app) -> None:
     )
     def preset_backtest_params(spread_type):
         if spread_type == 'TenorSpread':
-            return 2.5, 0.25, 5.0, 10, 0.03, 30, 90, 2.0
+            return 2.5, 0.25, 5.0, 10, 1.50, 30, 90, 2.0
 
-        return 2.0, 0.5, 4.0, 7, 0.02, 20, 60, 1.5
+        return 2.0, 0.5, 4.0, 7, 1.25, 20, 60, 1.5
 
     # -------------------------------------------------------------------------
     # BACKTEST: Run Individual Backtest
@@ -795,7 +795,7 @@ def register_backtest_callbacks(app) -> None:
                     exit_z=exit_z or 0.5,
                     stop_z=stop_z or 4.0,
                     min_hold=int(min_hold) if min_hold is not None else 7,
-                    theta=float(theta) if theta is not None else 0.02,
+                    theta=float(theta) if theta is not None else 1.25,
                     vol_window=int(vol_window) if vol_window is not None else 60,
                     trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
                     carry_roll_ts=carry_roll_ts_instrument,
@@ -810,7 +810,7 @@ def register_backtest_callbacks(app) -> None:
             elif style == 'trend':
                 results = run_trend_backtest_dc(
                     spread_ts=-ts if _negate_ts else ts,
-                    theta=float(theta) if theta is not None else 0.02,
+                    theta=float(theta) if theta is not None else 1.25,
                     vol_window=int(vol_window) if vol_window is not None else 60,
                     trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
                     allow_short=bool(allow_short and 'allow' in allow_short),
@@ -848,7 +848,7 @@ def register_backtest_callbacks(app) -> None:
             # For YTM-based spreads: restore original display signs after internal inversion.
             if _negate_ts and isinstance(results, dict):
                 results['spread_ts'] = ts
-                for key in ('zscore_ts', 'composite_signal_ts', 'trend_state_ts'):
+                for key in ('zscore_ts', 'composite_signal_ts', 'trend_state_ts', 'norm_mom_ts'):
                     series = results.get(key)
                     if isinstance(series, pd.Series):
                         results[key] = -series
@@ -1102,7 +1102,7 @@ def register_backtest_callbacks(app) -> None:
                             carry_roll_bp=_cr_bp, duration_mult=dur,
                             allow_short=True,
                             spread_type=spread_type,
-                            theta=0.03 if spread_type == 'TenorSpread' else 0.02,
+                            theta=1.50 if spread_type == 'TenorSpread' else 1.25,
                             vol_window=90 if spread_type == 'TenorSpread' else 60,
                             adaptive_theta=True,
                             theta_min_mult=0.5,
