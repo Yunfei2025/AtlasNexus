@@ -199,7 +199,7 @@ def build_candidates_layout() -> html.Div:
                             tooltip={'placement': 'bottom', 'always_visible': False},
                         ),
                         html.P(
-                            "Mean-reversion: BUY when z < −σ; SELL when z > +σ. Momentum/Carry: BUY only in a downward trend when MA-z > +σ; SELL only in an upward trend when MA-z < −σ.",
+                            "Mean-reversion: BUY when z > +σ; SELL when z < −σ. Momentum/Carry uses MAD-normalized momentum hysteresis for intramonth entry and exit.",
                             style={'color': THEME['text_sub'], 'fontSize': '10px', 'fontStyle': 'italic', 'marginTop': '8px'},
                         ),
                     ], style={'flex': '1', 'paddingLeft': '20px'}),
@@ -651,56 +651,11 @@ def build_individual_backtest_panel() -> html.Div:
                 ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
             ], style={**_card, 'minWidth': '220px', 'maxWidth': '260px'}),
 
-            # Trade Style + Trend Params — CENTER (2-col grid)
+            # Automatic monthly regime, trend, and strategy parameters — RIGHT
             html.Div([
-                # Trade Style
                 html.Div([
-                    html.H2("Trade Style", style={**_hdr, 'fontSize': '12px'}),
-                    html.Div([
-                        html.Label("Style Control", style={**_lbl, 'fontSize': '8px'}),
-                        dcc.RadioItems(
-                            id='bt-style-mode',
-                            options=[
-                                {'label': ' Manual', 'value': 'manual'},
-                                {'label': ' Auto Monthly', 'value': 'auto_monthly'},
-                            ],
-                            value='manual',
-                            className='an-radio-stack',
-                            labelStyle={'display': 'flex', 'alignItems': 'center', 'gap': '6px',
-                                        'color': 'var(--text-secondary)', 'fontSize': '11px',
-                                        'marginBottom': '6px', 'cursor': 'pointer'},
-                            inputStyle={'accentColor': 'var(--accent-amber)', 'cursor': 'pointer'},
-                        ),
-                        html.Label("Uncertain Regime", style={**_lbl, 'fontSize': '8px', 'marginTop': '6px'}),
-                        dcc.Dropdown(
-                            id='bt-uncertain-policy',
-                            options=[
-                                {'label': 'Assign Trend', 'value': 'trend'},
-                                {'label': 'Assign Manual Style', 'value': 'manual'},
-                            ],
-                            value='trend',
-                            clearable=False,
-                            style={'fontSize': '12px', 'marginBottom': '8px'},
-                        ),
-                        dcc.RadioItems(
-                            id='bt-trade-style',
-                            options=[
-                                {'label': ' Mean-Reversion', 'value': 'mr'},
-                                {'label': ' Trend (Z-Momentum Hysteresis)', 'value': 'trend'},
-                            ],
-                            value='mr',
-                            className='an-radio-stack',
-                            labelStyle={'display': 'flex', 'alignItems': 'center', 'gap': '6px',
-                                        'color': 'var(--text-secondary)', 'fontSize': '11px',
-                                        'marginBottom': '6px', 'cursor': 'pointer'},
-                            inputStyle={'accentColor': 'var(--accent-amber)', 'cursor': 'pointer'},
-                        ),
-                        html.Div(id='bt-regime-badge', style={'minHeight': '20px', 'marginTop': '2px'}),
-                    ], id='bt-trade-style-div', style={'display': 'none'}),
-                ], style={**_card, 'flex': '1'}),
-
-                # Trend Parameters
-                html.Div([
+                    html.H2("Automatic Monthly Regime", style={**_hdr, 'fontSize': '12px'}),
+                    html.Div(id='bt-regime-badge', style={'minHeight': '20px', 'marginBottom': '14px'}),
                     html.H2("Trend", style={**_hdr, 'fontSize': '12px'}),
                     html.Div([
                         html.Div([html.Label("Theta z", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-theta', type='number', value=1.25, min=0.25, max=4.0, step=0.05, style=_inp_mono)]),
@@ -715,24 +670,20 @@ def build_individual_backtest_panel() -> html.Div:
                         labelStyle={'color': 'var(--text-secondary)', 'fontSize': '11px', 'cursor': 'pointer'},
                         inputStyle={'accentColor': 'var(--accent-amber)', 'cursor': 'pointer', 'marginRight': '6px'},
                     ),
-                ], id='bt-trend-params-div', style={**_card, 'flex': '1', 'display': 'none'}),
+                    html.H2("Strategy Parameters", style={**_hdr, 'fontSize': '12px', 'marginTop': '16px'}),
+                    html.Div([
+                        html.Div([html.Label("Entry Z-Score", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25, style=_inp_mono)]),
+                        html.Div([html.Label("Exit Z-Score", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25, style=_inp_mono)]),
+                        html.Div([html.Label("Stop Loss (σ)", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style=_inp_mono)]),
+                        html.Div([
+                            html.Label("Backtest Period", style={**_lbl, 'fontSize': '8px'}),
+                            dcc.Dropdown(id='bt-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}], value=504, clearable=False, style={'fontSize': '12px'}),
+                        ]),
+                    ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(130px, 1fr))', 'gap': '10px'}),
+                ], style={**_card, 'flex': '1', 'minWidth': '460px'}),
             ], style={'display': 'flex', 'gap': '14px', 'flex': '1'}),
         ], style={'display': 'flex', 'gap': '14px', 'alignItems': 'flex-start', 'marginBottom': '14px',
                   'flexWrap': 'wrap'}),
-
-        # Strategy Parameters (mean-reversion z-score + period)
-        html.Div([
-            html.H2("Strategy Parameters", style=_hdr),
-            html.Div([
-                html.Div([html.Label("Entry Z-Score", style=_lbl), dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25, style=_inp)]),
-                html.Div([html.Label("Exit Z-Score", style=_lbl), dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25, style=_inp)]),
-                html.Div([html.Label("Stop Loss (σ)", style=_lbl), dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style=_inp)]),
-                html.Div([
-                    html.Label("Backtest Period", style=_lbl),
-                    dcc.Dropdown(id='bt-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}], value=504, clearable=False, style={'fontSize': '13px'}),
-                ]),
-            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(130px, 1fr))', 'gap': '12px'}),
-        ], id='bt-mr-params-div', style={**_card, 'marginBottom': '14px'}),
 
         # Run Button
         html.Div([

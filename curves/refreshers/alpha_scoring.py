@@ -16,7 +16,6 @@ import numpy as np
 import pandas as pd
 
 from curves.calibration.regime import SpreadRegimeClassifier
-from curves.calibration.trend import compute_trend_signal
 from curves.refreshers.alpha_snapshot import (
     _append_snapshot_spread_to_series,
     _HORIZON_DAYS,
@@ -29,6 +28,31 @@ from curves.refreshers.alpha_snapshot import (
 def _stationary_yes_mask(s: pd.Series) -> pd.Series:
 	"""Case-insensitive YES check; non-strings become False."""
 	return s.astype(str).str.upper().eq("YES")
+
+
+def _mad_z_momentum_state(
+	s: pd.Series,
+	*,
+	momentum_window: int = 20,
+	vol_window: int = 60,
+	theta_z: float = 1.25,
+) -> tuple[float, float]:
+	"""Return the latest MAD-normalized momentum hysteresis state and z-score."""
+	clean = pd.to_numeric(s, errors="coerce").dropna()
+	if len(clean) < max(momentum_window + 2, vol_window + 2):
+		return 0.0, np.nan
+
+	momentum = clean.diff(max(int(momentum_window), 1))
+	median = momentum.rolling(max(int(vol_window), 20)).median()
+	mad = (momentum - median).abs().rolling(max(int(vol_window), 20)).median()
+	sigma_mad = 1.4826 * mad
+	z_momentum = (momentum / sigma_mad.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+
+	raw_state = pd.Series(np.nan, index=clean.index, dtype=float)
+	raw_state[z_momentum >= abs(float(theta_z))] = 1.0
+	raw_state[z_momentum <= -abs(float(theta_z))] = -1.0
+	state = raw_state.ffill().fillna(0.0)
+	return float(state.iloc[-1]), float(z_momentum.iloc[-1]) if pd.notna(z_momentum.iloc[-1]) else np.nan
 
 
 def _compute_trend_metrics(
@@ -139,11 +163,11 @@ def _enrich_candidates_with_regression(
 				regime_confs.append(np.nan)
 				eff_ratios.append(np.nan)
 				hursts.append(np.nan)
-			# ── Trend signal ──
+			# ── Trend diagnostic: MAD-normalized momentum hysteresis ──
 			try:
-				ts = compute_trend_signal(s_enriched)
-				trend_states.append(ts.get("trend_state", ts.get("state", 0.0)))
-				trend_moms.append(ts.get("momentum_20d", np.nan))
+				trend_state, momentum_zscore = _mad_z_momentum_state(s_enriched)
+				trend_states.append(trend_state)
+				trend_moms.append(momentum_zscore)
 			except Exception:
 				trend_states.append(0.0)
 				trend_moms.append(np.nan)
@@ -179,12 +203,7 @@ def _add_momentum_ma_zscore(
 	ma_window: int = 20,
 	z_window: int = 63,
 ) -> pd.DataFrame:
-	"""Add a moving-average deviation z-score for Momentum/Carry trades.
-
-	The sign is deliberately ``MA - spread``: a positive value means the
-	spread trades below its moving average, matching the BUY rule for a
-	downward trend.  The raw level/residual z-score is retained separately.
-	"""
+	"""Add a MAD-normalized medium-horizon momentum z-score for diagnostics."""
 	out = df.copy()
 	if out.empty or "ID" not in out.columns or "spread_type" not in out.columns:
 		out["level_zscore"] = out.get("Zscore", np.nan)
@@ -210,15 +229,17 @@ def _add_momentum_ma_zscore(
 			mas.append(np.nan)
 			continue
 		ma = s_clean.rolling(ma_window).mean()
-		deviation = ma - s_clean
-		std = deviation.rolling(z_window).std(ddof=1)
+		momentum = s_clean.diff(ma_window)
+		median = momentum.rolling(z_window).median()
+		mad = (momentum - median).abs().rolling(z_window).median()
+		sigma_mad = 1.4826 * mad
 		last_ma = ma.iloc[-1]
-		last_std = std.iloc[-1]
-		if pd.isna(last_ma) or pd.isna(last_std) or float(last_std) <= 0:
+		last_sigma = sigma_mad.iloc[-1]
+		if pd.isna(last_ma) or pd.isna(last_sigma) or float(last_sigma) <= 0:
 			zscores.append(np.nan)
 			mas.append(float(last_ma) if pd.notna(last_ma) else np.nan)
 			continue
-		zscores.append(float(deviation.iloc[-1] / last_std))
+		zscores.append(float(momentum.iloc[-1] / last_sigma))
 		mas.append(float(last_ma))
 
 	out["momentum_zscore"] = zscores

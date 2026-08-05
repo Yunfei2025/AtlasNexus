@@ -412,43 +412,32 @@ def build_alpha_candidates(
 				load_historical_spread_series(stype, ids, dir_input=dir_input, lookback_days=lookback_days)
 			)
 
-	# Enrich with regression slope + 3m rolling vol, then score + rank
-	mr = _enrich_candidates_with_regression(mr, series_map)
-	trend = _enrich_candidates_with_regression(trend, series_map)
-	trend = _add_momentum_ma_zscore(trend, series_map)
+	# Correlation uses human-readable display keys, whereas scoring looks up a
+	# series by ``spread_type|ID``. Keep the correlation map unchanged and add
+	# qualified aliases only for the scoring functions.
+	scoring_series_map = series_map.copy()
+	if not all_pre.empty:
+		for stype, cid in zip(all_pre["spread_type"].astype(str), all_pre["ID"].astype(str)):
+			display_key = _corr_display_key(stype, cid)
+			if display_key in series_map:
+				scoring_series_map[f"{stype}|{cid}"] = series_map[display_key]
 
-	# Momentum/Carry entry rule.  The momentum z-score is the standardised
-	# 20-day MA gap (MA − spread): BUY requires a confirmed downward trend and
-	# z >= +sigma; SELL requires a confirmed upward trend and z <= −sigma.
-	# A zero/unknown directional-change state is intentionally not tradable.
-	if not trend.empty:
-		mom_z = pd.to_numeric(trend["momentum_zscore"], errors="coerce")
-		trend_state = pd.to_numeric(trend.get("trend_state"), errors="coerce").fillna(0.0)
-		buy_mask = trend_state.lt(0.0) & mom_z.ge(z_thd)
-		sell_mask = trend_state.gt(0.0) & mom_z.le(-z_thd)
-		trend = trend.loc[buy_mask | sell_mask].copy()
-		if not trend.empty:
-			trend.loc[buy_mask.loc[trend.index], "direction"] = "BUY"
-			trend.loc[sell_mask.loc[trend.index], "direction"] = "SELL"
+	# Enrich with regression slope + 3m rolling vol, then score + rank
+	mr = _enrich_candidates_with_regression(mr, scoring_series_map)
+	trend = _enrich_candidates_with_regression(trend, scoring_series_map)
+	trend = _add_momentum_ma_zscore(trend, scoring_series_map)
 
 	mr = _add_unified_score_preview(mr)
 	trend = _add_unified_score_preview(trend)
 
-	# _add_unified_score_preview derives a generic P&L direction.  Restore the
-	# mandatory Momentum/Carry execution direction and score that side only.
-	if not trend.empty and {"trend_state", "momentum_zscore"}.issubset(trend.columns):
-		mom_z = pd.to_numeric(trend["momentum_zscore"], errors="coerce")
-		trend_state = pd.to_numeric(trend["trend_state"], errors="coerce").fillna(0.0)
-		buy_mask = trend_state.lt(0.0) & mom_z.ge(z_thd)
-		trend.loc[buy_mask, "direction"] = "BUY"
-		trend.loc[~buy_mask, "direction"] = "SELL"
-		if {"mtm_H", "carry_H", "roll_H", "risk"}.issubset(trend.columns):
-			dir_sign = trend["direction"].map({"BUY": 1.0, "SELL": -1.0})
-			pnl = trend["mtm_H"].fillna(0.0) + trend["carry_H"].fillna(0.0) + trend["roll_H"].fillna(0.0)
-			expected_return = (dir_sign * pnl).clip(lower=0.0)
-			risk = trend["risk"].replace(0, np.nan).fillna(1.0)
-			trend["expected_return_H"] = expected_return
-			trend["score"] = (expected_return / risk).fillna(0.0)
+	# Mean-reversion direction follows the platform's economic convention:
+	# BUY profits when the spread falls, so an extreme high z-score is a BUY;
+	# SELL profits when the spread rises, so an extreme low z-score is a SELL.
+	# Carry/trend rows retain the direction selected by their shared ranker.
+	if not mr.empty:
+		mr_zscore = pd.to_numeric(mr["Zscore"], errors="coerce")
+		mr.loc[mr_zscore.ge(z_thd), "direction"] = "BUY"
+		mr.loc[mr_zscore.le(-z_thd), "direction"] = "SELL"
 
 	# ── Execution-feasibility filters ──────────────────────────────────────────
 	_SELL_RESTRICTED_CATEGORIES = {"Bond-Swap", "Bond-Curve"}

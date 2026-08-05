@@ -81,16 +81,15 @@ def register_scan_callbacks(app) -> None:
             else pd.Series('', index=df_display.index, dtype=str)
         )
 
-        mr_by_regime = regime_s.eq('mean_reverting')
-        trend_by_regime = regime_s.eq('trending')
-        uncertain_mask = regime_s.eq('uncertain')
-        no_regime = ~mr_by_regime & ~trend_by_regime & ~uncertain_mask
-        style_mr = (no_regime | uncertain_mask) & style_s.isin({'meanreversion', 'mean-reverting', 'mean_reverting', 'mr'})
-        style_trend = (no_regime | uncertain_mask) & style_s.isin({'carry', 'trend', 'trendfollowing', 'momentum', 'mixed'})
-        uncertain_unmapped = uncertain_mask & ~style_mr & ~style_trend
+        # Candidate ``style`` selects the strategy card. The statistical
+        # ``regime`` remains a diagnostic column and must not move a Carry
+        # candidate into the Mean-Reversion section.
+        style_mr = style_s.isin({'meanreversion', 'mean-reverting', 'mean_reverting', 'mr'})
+        style_trend = style_s.isin({'carry', 'trend', 'trendfollowing', 'momentum', 'mixed'})
+        uncertain_unmapped = ~style_mr & ~style_trend
 
-        df_mr = df_display[mr_by_regime | style_mr][_mr_avail].copy()
-        df_trend = df_display[trend_by_regime | style_trend][_trend_avail].copy()
+        df_mr = df_display[style_mr][_mr_avail].copy()
+        df_trend = df_display[style_trend][_trend_avail].copy()
         df_uncertain = df_display[uncertain_unmapped][_mr_avail].copy()
 
         regime_counts = regime_s.value_counts(dropna=False)
@@ -534,7 +533,16 @@ def register_scan_callbacks(app) -> None:
                     )
 
         table_out, candidate_data, regime_store = _render_candidates_from_df(df_all)
-        status = f"Found {len(df_all)} candidates at {scanned_time}"
+        style_counts = (
+            df_all.get('style', pd.Series(dtype=str))
+            .astype(str).str.strip().str.lower().value_counts()
+        )
+        mr_count = int(style_counts.get('meanreversion', 0))
+        trend_count = int(style_counts.reindex(['carry', 'trend', 'trendfollowing', 'momentum', 'mixed']).fillna(0).sum())
+        status = (
+            f"Found {len(df_all)} candidates at {scanned_time} "
+            f"[MR={mr_count}, Momentum/Carry={trend_count}]"
+        )
 
         return table_out, status, candidate_data, regime_store
 

@@ -138,7 +138,7 @@ def run_spread_backtest(
                 trades.append({
                     'entry_date': entry_date,
                     'exit_date': date,
-                    'direction': 'LONG' if position == 1 else 'SHORT',
+                    'direction': 'SELL' if position == 1 else 'BUY',
                     'entry_price': entry_price,
                     'exit_price': price,
                     'entry_z': entry_zscore,
@@ -156,13 +156,14 @@ def run_spread_backtest(
 
         if position == 0:
             if trade_style == 'mr':
-                if z <= -entry_z:
-                    position = 1
+                # BUY profits when the spread falls; SELL profits when it rises.
+                if z >= entry_z:
+                    position = -1
                     entry_date = date
                     entry_price = price
                     entry_zscore = z
-                elif z >= entry_z:
-                    position = -1
+                elif z <= -entry_z:
+                    position = 1
                     entry_date = date
                     entry_price = price
                     entry_zscore = z
@@ -210,7 +211,7 @@ def run_spread_backtest(
         open_carry_bp = open_cr_sum * position / 90.0 * 100.0
         open_trade = {
             'entry_date': entry_date,
-            'direction': 'LONG' if position == 1 else 'SHORT',
+            'direction': 'SELL' if position == 1 else 'BUY',
             'entry_price': entry_price,
             'entry_z': entry_zscore,
             'current_date': last_date,
