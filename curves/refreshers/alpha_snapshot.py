@@ -335,12 +335,17 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		df_irs = df_irs[~df_irs.index.astype(str).str.endswith(".IR")].copy()
 		df_irs = df_irs[_exclude_swapspread_butterflies(df_irs.index)].copy()
 		df_irs = _ensure_numeric(df_irs, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+		# irsSpreadComposite builds Carry/Roll as +leg1(paid, long tenor) minus
+		# leg2(received, short tenor) — i.e. pay-long/receive-short, which is
+		# this platform's SELL convention. Negate here so carry_3m_bp/roll_3m_bp/
+		# carry_roll are BUY-side like every other spread type, matching the
+		# downstream SELL-flip and unified P&L scorer assumption.
 		if "Carry(3m,bp)" in df_irs.columns:
-			df_irs["carry_3m_bp"] = pd.to_numeric(df_irs["Carry(3m,bp)"], errors="coerce")
+			df_irs["carry_3m_bp"] = -pd.to_numeric(df_irs["Carry(3m,bp)"], errors="coerce")
 		if "Roll(3m,bp)" in df_irs.columns:
-			df_irs["roll_3m_bp"] = pd.to_numeric(df_irs["Roll(3m,bp)"], errors="coerce")
+			df_irs["roll_3m_bp"] = -pd.to_numeric(df_irs["Roll(3m,bp)"], errors="coerce")
 		if "Carry(3m,bp)" in df_irs.columns and "Roll(3m,bp)" in df_irs.columns:
-			df_irs["carry_roll"] = df_irs["Carry(3m,bp)"] + df_irs["Roll(3m,bp)"]
+			df_irs["carry_roll"] = -(df_irs["Carry(3m,bp)"] + df_irs["Roll(3m,bp)"])
 		df_irs["spread_type"] = "SwapSpread"
 		df_irs["category"] = "Swap-Spread"
 		# Merge stationary from historical StatInfo (not present in real-time spreads)

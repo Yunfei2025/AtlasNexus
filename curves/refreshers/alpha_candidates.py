@@ -294,6 +294,7 @@ def build_alpha_candidates(
 	dir_input: str | Path = DIR_INPUT,
 	allowed_categories: Optional[list[str]] = None,
 	zscore_threshold: float = 2.0,
+	momentum_stretch_mult: float = 1.5,
 	max_per_style: int = 20,
 	lookback_days: int = 252,
 	max_abs_corr: float = 0.6,
@@ -304,6 +305,10 @@ def build_alpha_candidates(
 	- Limits to max 40 total (20 MR + 20 Trend/Carry)
 	- MeanReversion requires stationary == "YES" (hard requirement)
 	- Uses historical spread time series to compute correlation (diff-based)
+	- Momentum/Carry entries require z_t opposite in sign to trend_state (a
+	  mild pullback against the established trend, leaving room to continue);
+	  the pullback is capped at ``zscore_threshold * momentum_stretch_mult``
+	  so it reads as a retracement, not an incipient reversal.
 	"""
 	snap = load_alpha_spreads_snapshot(dir_input=dir_input, refresh=False)
 
@@ -433,11 +438,27 @@ def build_alpha_candidates(
 	# Mean-reversion direction follows the platform's economic convention:
 	# BUY profits when the spread falls, so an extreme high z-score is a BUY;
 	# SELL profits when the spread rises, so an extreme low z-score is a SELL.
-	# Carry/trend rows retain the direction selected by their shared ranker.
+	# Momentum/Carry direction: trend_state sets the established direction
+	# (BUY=downtrend/expect fall, SELL=uptrend/expect rise); z_t must be the
+	# OPPOSITE sign — a mild pullback against that trend — so there is still
+	# room left to continue. z_t agreeing in sign with trend_state means the
+	# move already ran recently (chase risk, limited margin/low odds) and is
+	# excluded; a pullback beyond the stretch cap is excluded too (that size
+	# of countertrend move risks being a reversal, not a retracement).
 	if not mr.empty:
 		mr_zscore = pd.to_numeric(mr["Zscore"], errors="coerce")
 		mr.loc[mr_zscore.ge(z_thd), "direction"] = "BUY"
 		mr.loc[mr_zscore.le(-z_thd), "direction"] = "SELL"
+
+	if not trend.empty:
+		trend_state = pd.to_numeric(trend.get("trend_state", pd.Series(np.nan, index=trend.index)), errors="coerce")
+		trend_zt = pd.to_numeric(trend.get("trend_momentum", trend.get("Zscore", pd.Series(np.nan, index=trend.index))), errors="coerce")
+		stretch_cap = abs(z_thd * float(momentum_stretch_mult))
+		trend_dir = pd.Series("", index=trend.index, dtype=str)
+		trend_dir.loc[trend_state.lt(0) & trend_zt.gt(0) & trend_zt.lt(stretch_cap)] = "BUY"
+		trend_dir.loc[trend_state.gt(0) & trend_zt.lt(0) & trend_zt.gt(-stretch_cap)] = "SELL"
+		trend["direction"] = trend_dir
+		trend = trend[trend["direction"].isin(["BUY", "SELL"])].copy()
 
 	# ── Execution-feasibility filters ──────────────────────────────────────────
 	_SELL_RESTRICTED_CATEGORIES = {"Bond-Swap", "Bond-Curve"}
@@ -480,6 +501,7 @@ def build_alpha_candidates(
 		"params": {
 			"allowed_categories": allowed_categories,
 			"zscore_threshold": z_thd,
+			"momentum_stretch_mult": float(momentum_stretch_mult),
 			"max_per_style": int(max_per_style),
 			"lookback_days": int(lookback_days),
 			"max_abs_corr": float(max_abs_corr),
@@ -496,6 +518,7 @@ def save_alpha_candidates(
 	dir_input: str | Path = DIR_INPUT,
 	allowed_categories: Optional[list[str]] = None,
 	zscore_threshold: float = 2.0,
+	momentum_stretch_mult: float = 1.5,
 	max_per_style: int = 20,
 	lookback_days: int = 252,
 	max_abs_corr: float = 0.6,
@@ -508,6 +531,7 @@ def save_alpha_candidates(
 		dir_input=paths.dir_input,
 		allowed_categories=allowed_categories,
 		zscore_threshold=zscore_threshold,
+		momentum_stretch_mult=momentum_stretch_mult,
 		max_per_style=max_per_style,
 		lookback_days=lookback_days,
 		max_abs_corr=max_abs_corr,
@@ -523,6 +547,7 @@ def load_alpha_candidates(
 	refresh: bool = False,
 	allowed_categories: Optional[list[str]] = None,
 	zscore_threshold: float = 2.0,
+	momentum_stretch_mult: float = 1.5,
 	max_per_style: int = 20,
 	lookback_days: int = 252,
 	max_abs_corr: float = 0.6,
@@ -539,6 +564,7 @@ def load_alpha_candidates(
 		dir_input=paths.dir_input,
 		allowed_categories=allowed_categories,
 		zscore_threshold=zscore_threshold,
+		momentum_stretch_mult=momentum_stretch_mult,
 		max_per_style=max_per_style,
 		lookback_days=lookback_days,
 		max_abs_corr=max_abs_corr,

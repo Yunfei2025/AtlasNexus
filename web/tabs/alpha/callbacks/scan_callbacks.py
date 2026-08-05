@@ -58,7 +58,12 @@ def register_scan_callbacks(app) -> None:
         candidate_data = df_display.to_dict('records')
 
         if 'carry_roll' in df_display.columns and 'direction' in df_display.columns:
+            # Snapshot carry is BUY-oriented; flip sign for SELL in card display.
+            # TenorSpread carry_roll is already resolved per-direction upstream
+            # (direction-specific borrow cost), so it must not be flipped again.
             _sell_mask = df_display['direction'].astype(str).str.strip().str.upper().eq('SELL')
+            if 'spread_type' in df_display.columns:
+                _sell_mask = _sell_mask & ~df_display['spread_type'].astype(str).eq('TenorSpread')
             df_display.loc[_sell_mask, 'carry_roll'] = (
                 pd.to_numeric(df_display.loc[_sell_mask, 'carry_roll'], errors='coerce').multiply(-1)
             )
@@ -179,7 +184,33 @@ def register_scan_callbacks(app) -> None:
                         'verticalAlign': 'middle', 'cursor': 'default',
                     })
 
+                carry_tag = None
+                carry_raw = row.get('carry_roll', None)
+                try:
+                    carry_bp = float(carry_raw)
+                except (TypeError, ValueError):
+                    carry_bp = np.nan
+                if pd.notna(carry_bp):
+                    carry_color = THEME['success'] if carry_bp >= 0 else THEME['danger']
+                    carry_tag = html.Span(
+                        f'{carry_bp:+.1f}bp',
+                        title='Carry (bp, 3m)',
+                        style={
+                            'fontSize': '9px',
+                            'fontWeight': '700',
+                            'color': carry_color,
+                            'marginLeft': '6px',
+                            'verticalAlign': 'middle',
+                            'padding': '1px 5px',
+                            'borderRadius': '3px',
+                            'border': f'1px solid {carry_color}55',
+                            'backgroundColor': f'{carry_color}1A',
+                        },
+                    )
+
                 right_cluster = [z_bar, z_label]
+                if carry_tag is not None:
+                    right_cluster.append(carry_tag)
                 if seas_tag is not None:
                     right_cluster.append(seas_tag)
 
@@ -285,8 +316,14 @@ def register_scan_callbacks(app) -> None:
         if not sections:
             sections = [html.Div("No candidates found.", style=_empty_style)]
 
+        metric_legend = html.Div(
+            "Card metrics: left = Z-score, right = Carry (bp,3m)",
+            style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginBottom': '6px'}
+        )
+
         table_out = html.Div([
             style_summary_div,
+            metric_legend,
             html.Div(sections, style={'maxHeight': '500px', 'overflowY': 'auto', 'paddingRight': '4px'}),
         ])
 
@@ -364,23 +401,52 @@ def register_scan_callbacks(app) -> None:
                 f"Scanned at {scanned_time}", [], {},
             )
 
-        if 'Zscore' in df_all.columns and 'style' in df_all.columns:
-            style_s = df_all['style'].astype(str).str.strip().str.lower()
-            is_mr_row = style_s.eq('meanreversion')
-            if direction == 'buy':
-                df_all = df_all[(~is_mr_row) | (df_all['Zscore'] <= -z_thd)].copy()
-            elif direction == 'sell':
-                df_all = df_all[(~is_mr_row) | (df_all['Zscore'] >= z_thd)].copy()
+        if direction in {'buy', 'sell'}:
+            target_dir = direction.upper()
+            if 'direction' in df_all.columns:
+                dir_s = df_all['direction'].astype(str).str.strip().str.upper()
+                df_all = df_all[dir_s.eq(target_dir)].copy()
+            elif 'Zscore' in df_all.columns and 'style' in df_all.columns:
+                z_s = pd.to_numeric(df_all['Zscore'], errors='coerce')
+                style_s = df_all['style'].astype(str).str.strip().str.lower()
+                is_mr_row = style_s.eq('meanreversion')
+                if direction == 'buy':
+                    df_all = df_all[(is_mr_row & z_s.ge(z_thd)) | ((~is_mr_row) & z_s.ge(0))].copy()
+                else:
+                    df_all = df_all[(is_mr_row & z_s.le(-z_thd)) | ((~is_mr_row) & z_s.lt(0))].copy()
 
         if df_all.empty:
             return (
-                html.Div(f"Candidates exist, but none match direction filter at zscore≥{z_thd:g}.", style={'color': THEME['warning']}),
+                html.Div("Candidates exist, but none match direction filter.", style={'color': THEME['warning']}),
                 f"Scanned at {scanned_time}", [], {},
             )
 
         if 'direction' not in df_all.columns and 'Zscore' in df_all.columns:
             df_all = df_all.copy()
-            df_all['direction'] = df_all['Zscore'].apply(lambda z: 'BUY' if float(z) < 0 else 'SELL')
+            z_s = pd.to_numeric(df_all['Zscore'], errors='coerce')
+            style_s = (
+                df_all['style'].astype(str).str.strip().str.lower()
+                if 'style' in df_all.columns
+                else pd.Series('', index=df_all.index, dtype=str)
+            )
+            is_mr_row = style_s.eq('meanreversion')
+            inferred_dir = pd.Series('', index=df_all.index, dtype=str)
+            inferred_dir.loc[is_mr_row & z_s.ge(0)] = 'BUY'
+            inferred_dir.loc[is_mr_row & z_s.lt(0)] = 'SELL'
+
+            trend_state_s = pd.to_numeric(
+                df_all.get('trend_state', pd.Series(np.nan, index=df_all.index)),
+                errors='coerce',
+            )
+            trend_zt_s = pd.to_numeric(
+                df_all.get('trend_momentum', z_s),
+                errors='coerce',
+            )
+            trend_buy = (~is_mr_row) & trend_state_s.lt(0) & trend_zt_s.gt(0)
+            trend_sell = (~is_mr_row) & trend_state_s.gt(0) & trend_zt_s.lt(0)
+            inferred_dir.loc[trend_buy] = 'BUY'
+            inferred_dir.loc[trend_sell] = 'SELL'
+            df_all['direction'] = inferred_dir
 
         if 'style' in df_all.columns:
             inferred_regime = df_all['style'].map(_style_to_regime)
@@ -490,8 +556,11 @@ def register_scan_callbacks(app) -> None:
             if 'carry_roll' in df_all.columns:
                 _cr_be = pd.to_numeric(df_all['carry_roll'], errors='coerce')
                 _dir_be = df_all.get('direction', pd.Series('', index=df_all.index)).astype(str).str.strip().str.upper()
+                # TenorSpread carry_roll is already resolved per-direction above;
+                # only flip sign for other spread types still stored BUY-oriented.
+                _is_tenor_be = df_all.get('spread_type', pd.Series('', index=df_all.index)).astype(str).eq('TenorSpread')
                 _dir_sign_be = pd.Series(1.0, index=df_all.index, dtype=float)
-                _dir_sign_be[_dir_be.eq('SELL')] = -1.0
+                _dir_sign_be[_dir_be.eq('SELL') & ~_is_tenor_be] = -1.0
                 _cr_disp_be = _cr_be * _dir_sign_be
                 _ttm_be = pd.to_numeric(df_all['ttm_display'], errors='coerce').replace(0, np.nan)
                 _be_raw = (-_cr_disp_be / _ttm_be).where(_cr_disp_be.lt(0) & _ttm_be.notna())

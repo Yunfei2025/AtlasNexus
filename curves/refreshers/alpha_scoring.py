@@ -453,22 +453,8 @@ def _add_unified_score_preview(
 	out["expected_return_H"] = expected_return_H
 	score = (expected_return_H / risk_return).replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
-	# ── Regime-conditional score adjustment ────────────────────────────────────
-	regime_col = out["regime"] if "regime" in out.columns else pd.Series("unknown", index=out.index)
-	trend_st = pd.to_numeric(
-		out["trend_state"] if "trend_state" in out.columns else pd.Series(0.0, index=out.index),
-		errors="coerce",
-	).fillna(0.0)
-
-	is_trending = regime_col.eq("trending")
-	is_uncertain = regime_col.eq("uncertain")
-	trend_agrees = (trend_st * dir_sign) < 0
-	trend_boost = pd.Series(1.0, index=out.index)
-	trend_boost.loc[is_trending & trend_agrees] = 1.3
-	trend_boost.loc[is_trending & ~trend_agrees & trend_st.ne(0)] = 0.6
-	trend_boost.loc[is_uncertain] = 0.5
-
-	score = score * trend_boost
-	out["regime_boost"] = trend_boost
+	# `regime`/`trend_state` remain diagnostic columns only (used for notes and
+	# the trend-following direction override downstream); no score adjustment.
+	out["regime_boost"] = 1.0
 	out["score"] = score
 	return out

@@ -20,66 +20,12 @@ def _tuple_to_matrix(matrix_tuple, rows, cols):
     return sp.Matrix(matrix_tuple)
 
 
-def _project_to_psd(matrix, min_eigenvalue=1e-10):
-    """Project a symmetric matrix onto the positive-semidefinite cone."""
-    matrix = np.asarray(matrix, dtype=float)
-    matrix = 0.5 * (matrix + matrix.T)
-    eigenvalues, eigenvectors = np.linalg.eigh(matrix)
-    eigenvalues = np.clip(eigenvalues, min_eigenvalue, None)
-    projected = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
-    return 0.5 * (projected + projected.T)
-
-
-def _solve_regularized_system(B_mat, rhs, ridge_scale=1e-8, rcond=1e-6, max_abs_factor=1e6):
-    """Solve a small affine factor system with Tikhonov regularization."""
-    B_mat = np.asarray(B_mat, dtype=float)
-    rhs = np.asarray(rhs, dtype=float)
-
-    BtB = B_mat.T @ B_mat
-    scale = np.trace(BtB) / max(1, BtB.shape[0])
-    lam = max(float(ridge_scale * scale), 1e-10)
-
-    try:
-        x = np.linalg.solve(BtB + lam * np.eye(BtB.shape[0]), B_mat.T @ rhs)
-    except np.linalg.LinAlgError:
-        x, _, _, _ = np.linalg.lstsq(B_mat, rhs, rcond=rcond)
-
-    if not np.isfinite(x).all():
-        x = np.nan_to_num(x, nan=0.0, posinf=max_abs_factor, neginf=-max_abs_factor)
-
-    return np.clip(x, -max_abs_factor, max_abs_factor)
-
-
-def _solve_regularized_factors(B_mat_all, rhs_all, ridge_scale=1e-8, max_abs_factor=1e6):
-    """Solve per-date affine factors with light Tikhonov regularization.
-
-    The previous batched pseudo-inverse path could explode when the 12x3
-    loading matrix was nearly rank deficient. This routine stabilizes the solve
-    by adding a small ridge to ``B.T @ B`` and clipping pathological outputs.
-    """
-    n_dates = B_mat_all.shape[0]
-    x_arr = np.empty((n_dates, 3), dtype=float)
-
-    for d in range(n_dates):
-        B = np.asarray(B_mat_all[d], dtype=float)
-        rhs = np.asarray(rhs_all[d], dtype=float)
-        x_arr[d] = _solve_regularized_system(
-            B,
-            rhs,
-            ridge_scale=ridge_scale,
-            rcond=1e-6,
-            max_abs_factor=max_abs_factor,
-        )
-
-    return x_arr
-
-
 def calAffineCov(term, spot, gamma, mtype, caltype):
     """Iterative fixed-point calibration of the 3x3 factor covariance matrix S2.
 
     Key optimisation: B (factor loadings) and I (drift integrals) depend only on
-    (gamma, tau), NOT on S2. We therefore pre-compute them once before the
-    convergence loop and cache them via _compute_IB_cached. Each iteration is
+    (gamma, tau), NOT on S2.  We therefore pre-compute them once before the
+    convergence loop and cache them via _compute_IB_cached.  Each iteration is
     then a pure NumPy einsum + batched pseudo-inverse multiply — no Python loops.
     """
     gamma_f = float(gamma)
@@ -119,9 +65,14 @@ def calAffineCov(term, spot, gamma, mtype, caltype):
     S2_np = np.eye(3)
     nstep = 20
     for ns in range(1, nstep + 1):
+        # a_vec: contract S2 with pre-computed I matrices — no Python loop
         a_vec_all = np.einsum('ij,dkij->dk', S2_np, I_mat_all)  # (n_dates, k)
+
         rhs_all = y_all - a_vec_all  # (n_dates, k)
+
+        # Batched solve via pre-computed pseudo-inverse — no per-date loop
         x_arr = (B_pinv_all @ rhs_all[:, :, None]).squeeze(-1)  # (n_dates, 3)
+
         S2_new = np.cov(x_arr, rowvar=False)  # (3, 3)
         S_err = abs(np.linalg.det(S2_np) - np.linalg.det(S2_new))
         print(f'\rIteration: {ns}, Residual of Covariance Matrix {S_err:.4f}', end='')
@@ -134,7 +85,7 @@ def calAffineCov(term, spot, gamma, mtype, caltype):
     # Return as sympy matrix for full backward compatibility
     return sp.Matrix(S2_np.tolist())
         
-def getAffineFactors(dfi,S2,gamma,mtype,caltype):
+def getAffineFactors(dfi,S2,gamma,mtype,caltype): 
     k = dfi.shape[0]
     y0 = dfi.values.astype(float)          # (k,)
     taus0 = dfi.index
@@ -146,6 +97,7 @@ def getAffineFactors(dfi,S2,gamma,mtype,caltype):
     for i in range(k):
         a_vec[i], B_mat[i] = calAB_np(gamma_f, float(taus0[i]), S2_flat, mtype)
 
+    # Least-squares solve: B_mat @ x = (y0 - a_vec)
     rhs = y0 - a_vec
     x, _, _, _ = np.linalg.lstsq(B_mat, rhs, rcond=None)
     return sp.Matrix(x.tolist())  # keep return type compatible
