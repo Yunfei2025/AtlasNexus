@@ -22,13 +22,24 @@ are only flagged when the relationship is statistically stable.
 Stationarity/cointegration testing rigor, lookback choice for the regression window,
 and stability of the hedge ratio through regime shifts.
 
-\subsection{30Y CGB On/Off-the-Run Relative Value within \texttt{TBondCurve}}
+\subsection{OTR/OFR Relative Value and New-Issue Event Strategies}
 \label{sec:pairs-tbondcurve-otr-ofr}
 
-The 30Y China Government Bond (CGB) on/off-the-run (OTR/OFR) trade is represented as
-a \texttt{TBondCurve} sub-strategy, rather than as an extrapolation of the fitted
-1--10Y model curve.  Its economic object is the 30Y liquidity premium: the current,
-most liquid eligible 30Y CGB (OTR) is compared with a liquid prior 30Y issue (OFR).
+The OTR/OFR initiative is split into two strategy families that share the same
+economic setup but not the same statistical contract.
+
+Mature-pair relative value (\texttt{otr\_ofr\_rv}) remains within
+\texttt{TBondCurve}/\texttt{CBondCurve} because it has a genuine pair-specific
+time series suitable for z-score and MR/trend routing. The new-issue roll-pressure
+strategy is represented as a unified spread type, \texttt{BondNewIssue}, with
+asset distinction carried by metadata fields (for example
+\texttt{asset\_class=TBond|CBond}, \texttt{issuer\_class=CGB|CDB}, and
+\texttt{tenor\_bucket}).
+
+For mature-pair RV, the trade is not an extrapolation of the fitted 1--10Y model
+curve. Its economic object is the liquidity premium between current OTR and a prior
+OFR issue in the same bucket.
+
 For an OFR-minus-OTR yield spread,
 \begin{equation}
 	s_t = y^{\mathrm{OFR}}_t - y^{\mathrm{OTR}}_t,
@@ -45,7 +56,7 @@ strategy.  Candidate eligibility requires live two-sided quotes, adequate turnov
 short/borrow availability for the OTR leg, and an all-in expected benefit that exceeds
 bid--offer, funding, borrow, and execution buffers.
 
-\paragraph{OTR rolls and new-issue cold start.}
+\paragraph{OTR rolls and cold start policy.}
 The OTR identifier changes at issuance, so a new OTR/OFR pair has no pair-specific
 history on its first day.  Historical spread data remain useful, but must not be
 treated as if they were observations of the new pair.  The production history is a
@@ -66,6 +77,9 @@ analogue percentile, liquidity diagnostics, and accumulated live history.  A new
 also causes any predecessor pair to close or be explicitly rolled at the known
 roll-date observation; the two histories are not silently concatenated.
 
+This cold-start ladder applies to mature \texttt{otr\_ofr\_rv}. It is intentionally
+separate from \texttt{BondNewIssue} eligibility.
+
 \paragraph{Mean reversion versus trend.}
 The default economic hypothesis is mean reversion after the post-issuance liquidity
 premium has stabilized: OFR cheapness relative to OTR is expected to normalize as
@@ -78,13 +92,24 @@ point-in-time regime classifier may route a mature eligible pair to the trend en
 when it identifies a trending regime.  An uncertain or cold-start pair is not forced
 into either engine and is not traded.
 
+\paragraph{New-issue event strategy (\texttt{BondNewIssue}).}
+\texttt{BondNewIssue} is a dedicated event-driven strategy, not a
+\texttt{TBondCurve} signal variant. Its instrument is role-based and rebinds across
+rolls (new OTR, first OFR, optional second OFR control), so it does not have the
+continuous pair history needed for MR/trend z-score entry. Entry is based on a
+walk-forward issuance-cohort percentile indexed by OTR age.
+
+The strategy is generalized across CGB and CDB buckets (5Y/10Y/30Y and future
+eligible tenors) via \texttt{asset\_class} and \texttt{tenor\_bucket}. Release and
+risk gates are evaluated independently per \texttt{(asset\_class, tenor\_bucket)};
+approval for one bucket does not unlock any other bucket.
+
 \paragraph{Scope boundary.}
 This sub-strategy does not extend the affine curve calibration beyond its validated
-1--10Y range.  It shares the \texttt{TBondCurve} data, risk, candidate, allocation,
-and backtest plumbing, but has an explicit \texttt{otr\_ofr} signal variant so that
-pair selection, spread sign, DV01 hedge ratio, roll handling, history sufficiency,
-and transaction-cost assumptions remain distinguishable from the model-curve
-residual variant.
+1--10Y range.  Mature RV shares \texttt{TBondCurve}/\texttt{CBondCurve} data, risk,
+candidate, allocation, and backtest plumbing via \texttt{signal\_variant=otr\_ofr\_rv}.
+\texttt{BondNewIssue} has its own loader/backtest path but shares portfolio-level
+risk aggregation and execution controls.
 
 \section{Alpha Portfolio $\rightarrow$ Backtest: Style-routed Spread Strategies}
 

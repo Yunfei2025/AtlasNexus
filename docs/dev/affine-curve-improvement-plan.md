@@ -58,6 +58,25 @@ coupon-frequency-dependent "mispricing" of several bp — exactly the kind of
 false signal a similar-tenor RV strategy would trade on and bleed on. **This is
 the single highest-impact fix.**
 
+**Target convention — corrected 2026-08-05.** For coupon-bearing CNY rates
+instruments, the target convention here should be the same one already used in
+`pricingYield.py`: discount off the bond's own coupon frequency, not annual or
+continuous compounding. The repo's plain bond pricer and `pricingAffine` both
+already follow that logic via `1 / (1 + y/freq/100)` raised over the remaining
+coupon periods. So the model-side repricing convention is the right target,
+and the real defect sits in `bootstrap.py`, which solves reference zero/spot
+yields under a flat `(1+r)^-T` with `freq` ignored. Those bootstrapped yields
+are the affine calibration targets, so reference bonds with different coupon
+frequencies are being normalized onto the wrong basis before factor extraction.
+
+There is one short-end caveat: true discount / zero-coupon instruments are a
+separate convention bucket. The current code already hints at that split —
+`pricingYield.py` treats `f == 0` or names containing `贴现` as a two-date
+schedule. So the Phase 1 fix should be: keep coupon-bearing instruments on the
+existing freq-compounded YTM convention end-to-end, and handle genuine
+discount instruments explicitly as their own short-end case rather than folding
+them into the coupon-bearing bootstrap formula.
+
 **F2. `S2` is the covariance of factor *levels*, not innovations.**
 `calAffineCov` (`affine.py:125`) computes `np.cov(x_arr)` over the factor
 *levels* in the window. The AFNS yield-adjustment term is a convexity
@@ -68,6 +87,21 @@ persistent, and (b) makes `a(τ)` jump when the window's trend changes, moving
 the whole fitted curve and every residual with it. Minimum fix: `np.cov(np.diff
 (x_arr, axis=0)) × annualization`; better: estimate from an explicit VAR(1)/
 Kalman step (see Plan P2).
+
+**Why this fix matters — summary.** `a(τ)` is meant to be a small, smooth
+convexity correction driven by how much the factors *jump day to day*, not by
+how spread out their *levels* happen to be over a rolling window. Interest-rate
+factors (especially the level factor) are highly persistent, so level variance
+accumulates over a window and is typically much larger than the annualized
+daily-innovation variance the AFNS formula actually calls for — on top of that,
+the current code never annualizes at all. Left uncorrected, `a(τ)` is likely
+overstated and shape-distorted (worst at long tenors, where the level-factor
+loading grows with `τ²`), and it re-jumps whenever the window's trend shifts
+rather than only when volatility genuinely changes. The fix won't visibly
+change how well reference/anchor bonds are refit (least squares still solves
+`x` to match them), but it should materially change the fitted curve's shape
+away from anchors — which is exactly where the RV residual is computed — and
+should make the curve/factors noticeably more stable day to day.
 
 **F3. Convergence test compares determinants, and the regularized solver is
 dead code.**
@@ -119,6 +153,23 @@ Also nothing beyond 10Y, so the 20/30Y ultra-long sector (where structural
 rich/cheap is often largest) is out of scope. Add a 7Y bucket ([6.0, 8.0]) at
 minimum; consider 15/20/30Y buckets as a separate long-end extension with its
 own liquidity caveats.
+
+**On the 7Y bucket's liquidity — is that a good reason to leave it out?**
+Partly, but not on its own. `get_most_liquid_bond`/`filter_bonds_by_term`
+already select *whichever* bond in a band has the highest turnover — if the 7Y
+sector is thin, that selection can still land on a genuinely low-volume bond,
+and anchoring the curve to a stale/thin quote is worse than not anchoring it
+at all (it can inject noise and reference-switch instability, F6). That's a
+real argument for caution, not for omission: 7Y CGB is a regularly auctioned,
+quoted benchmark tenor, so the *sector* isn't illiquid, only sometimes the
+day's cheapest-to-anchor bond is. The 2.5Y-wide unanchored gap this leaves
+behind is the bigger, structural problem — it affects every bond in that band,
+every day, regardless of that day's liquidity. Recommended approach: add the
+7Y bucket but gate it on the same liquidity/staleness quality check proposed
+for F9 (min turnover or max quote age) — use the bucket when a
+liquid-enough candidate exists that day, and fall back to model interpolation
+(today's behavior) only on the days it doesn't, rather than choosing between
+"always anchor" and "never anchor."
 
 ### 2.2 Important for market-making use
 
@@ -200,7 +251,7 @@ parallel after Phase 1.
 
 | # | Item | Files | Finding |
 |---|------|-------|---------|
-| 1.1 | Unify discounting: make `pricingAffine` discount every cashflow with the same convention the bootstrap uses to produce reference spots (recommend: pick continuous compounding end-to-end; convert bootstrap output once). Add a round-trip test: bootstrap a synthetic flat curve, reprice the input bonds, assert < 0.1bp error. | `pricingYield.py`, `bootstrap.py`, `tests/` | F1 |
+| 1.1 | Unify discounting around the repo's current CNY bond pricing convention: rewrite `bootstrap.py` so coupon-bearing instruments bootstrap zero/spot rates with the same bond-frequency compounding already used by `pricingYield.py` / `pricingAffine` (`(1 + r/freq)^(-freq·T)` in year terms, or the equivalent period-based formula). Keep genuine discount / zero-coupon short instruments as an explicit separate short-end case rather than forcing them through the coupon-bearing formula. Add a round-trip test: bootstrap a synthetic flat curve, reprice the input bonds, assert < 0.1bp error. | `bootstrap.py`, `pricingYield.py`, `tests/` | F1 |
 | 1.2 | Use actual schedule dates in `pricingAffine` instead of `i·TS + dres`. | `pricingYield.py` | F10 |
 | 1.3 | Fix `filter_bonds_by_term`: symmetric widening, iteration cap, empty-result warning; extend duplicate check to all previously selected buckets. | `selector.py` | F5, F12 |
 | 1.4 | Replace `SystemExit` with a domain exception; resolve the zero-coupon filter comment/code mismatch. | `selector.py` | F12 |
@@ -220,7 +271,7 @@ parallel after Phase 1.
 
 | # | Item | Files | Finding |
 |---|------|-------|---------|
-| 3.1 | Add a 7Y bucket ([6.0, 8.0]); re-run the curve backtest to confirm 6–8.5Y residuals tighten. | `settings/fixed_income.py` | F7 |
+| 3.1 | Add a 7Y bucket ([6.0, 8.0]) gated on a liquidity/staleness quality check (reuse F9's turnover/quote-age concept) so a thin-volume day falls back to today's model-interpolation behavior instead of anchoring on a stale bond; re-run the curve backtest to confirm 6–8.5Y residuals tighten on the days it's active. | `settings/fixed_income.py`, `selector.py` | F7 |
 | 3.2 | Reference-change event series in the `cvref` artifact; residual z-score engine resets/adjusts at switch dates. | `selector.py`, signal layer | F6 |
 | 3.3 | Residual analytics per bond: rolling z-score of `ytm_act − ytm_quo`, mean-reversion half-life (AR(1) fit), and carry/rolldown from the fitted forward curve, so the tradeable signal is *residual net of carry, scaled by half-life*. | new module under `curves/calibration/` or `pairs/` | goal 1 |
 | 3.4 | Cost-aware ranking: net expected P&L after bid-ofr crossing (from F8's spread model) and borrow cost (`BondConfig.BORROW_COST` — extend beyond 5Y/10Y). Pair construction: long cheap / short rich within a tenor neighbourhood, DV01-neutral via existing Greek1 hedge machinery (`calibration/hedge.py`). | signal layer | goal 1 |
