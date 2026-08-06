@@ -265,6 +265,13 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
                     return (otr, f'FR007S{tenor_token}.IR')
         return ('', '')
 
+    # Mature OTR/OFR relative value (signal_variant=otr_ofr_rv), merged into
+    # TBondCurve/CBondCurve as pair-format IDs "<otr_id>|<ofr1_id>" (see
+    # docs/dev/tbondcurve-30y-otr-ofr-plan.md). Long OTR, short 1st-OFR.
+    if stype in ('TBondCurve', 'CBondCurve') and '|' in str(tid):
+        otr_id, _, ofr1_id = str(tid).partition('|')
+        return (otr_id, ofr1_id)
+
     # Bond-Curve: leg1 is the bond, leg2 is nearest duration reference bond
     if stype == 'TBondCurve':
         return (tid, _nearest_ref(duration, ref_cgb))
@@ -308,3 +315,12 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
     # Generic IRS spreads
     elif stype == 'IRS':
         return _parse_repo_spread_legs(tid)
+
+    # BondNewIssue: tid = "<tenor_bucket>:<otr_id>|<ofr1_id>" (see
+    # docs/dev/tbondcurve-30y-otr-ofr-plan.md). Default position is long OTR,
+    # short 1st-OFR — leg1 is the bond bought, leg2 the bond sold.
+    elif stype == 'BondNewIssue':
+        m = re.match(r'^[^:]+:([^|]+)\|(.+)$', str(tid))
+        if m:
+            return (m.group(1), m.group(2))
+        return ('', '')

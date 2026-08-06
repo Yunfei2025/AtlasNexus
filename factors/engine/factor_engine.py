@@ -17,7 +17,6 @@ from multiprocessing import Pool
 # Environment setup
 os.environ['NUMPY_EXPERIMENTAL_DTYPE_API'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Try relative imports first (when run as module)
 from ..config import config_manager

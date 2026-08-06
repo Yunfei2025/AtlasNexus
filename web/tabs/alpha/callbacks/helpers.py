@@ -136,7 +136,7 @@ def _style_to_regime(style: object) -> str:
     style_value = str(style or '').strip().lower()
     if style_value in {'meanreversion', 'mean_reverting', 'mean-reverting'}:
         return 'mean-reverting'
-    if style_value in {'trend', 'trendfollowing', 'trend_following', 'trending', 'carry', 'mixed', 'momentum'}:
+    if style_value in {'trend', 'trendfollowing', 'trend_following', 'trending', 'carry', 'mixed', 'momentum', 'eventdriven'}:
         return 'momentum'
     return 'uncertain'
 

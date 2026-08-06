@@ -78,6 +78,7 @@ class BondConfig:
         'TermBasis': 'Term Basis between Futures Contracts',
         'BinarySpread': 'Spread Regression',
         'TenorSpread': 'Curve & Cross-Asset Spreads',
+        'BondNewIssue': 'New-Issue OTR/OFR Event',
     }
     COLUMNS_EN = [
         'NAME', 'FULLNAME', 'SEC_TYPE', 'OUTSTANDINGBALANCE', 'CARRYDATE','MATURITYDATE',
@@ -120,7 +121,11 @@ class BondConfig:
     #     i.e. no real quote on that side, OR
     #   - The bid-offer YTM spread exceeds REF_BID_OFR_MAX_BP.
     REF_BID_OFR_MAX_BP = 15.0
-    
+    # signal_variant options for the TBondCurve/CBondCurve spread_type (see
+    # docs/dev/tbondcurve-30y-otr-ofr-plan.md). "otr_ofr_rv" is the mature
+    # OTR/OFR relative-value pair, distinct from the BondNewIssue event strategy.
+    TBOND_CURVE_VARIANTS = {"model_curve", "otr_ofr_rv"}
+
     @classmethod
     def get_column_mapping(cls) -> Dict[str, str]:
         return dict(zip(cls.COLUMNS_EN, cls.COLUMNS_CN))
@@ -134,6 +139,57 @@ class BondConfig:
             else:
                 units[k] = "Spread, bp"
         return units
+
+
+class NewIssueConfig:
+    """Config for the BondNewIssue new-issue roll-pressure event strategy.
+
+    Unlike ``otr_ofr_rv`` (a signal_variant under TBondCurve/CBondCurve),
+    BondNewIssue is a dedicated event-driven spread type whose instrument is
+    role-based (OTR / 1st-OFR / 2nd-OFR) and rebinds at every auction roll.
+    Asset distinction is carried by metadata (asset_class, issuer_class,
+    tenor_bucket), not by separate spread type names.
+    See docs/dev/tbondcurve-30y-otr-ofr-plan.md for the full design.
+    """
+    ISSUER_CLASS_MAP = {"TBond": "CGB", "CBond": "CDB"}
+
+    # Tenor buckets for OTR/OFR identity selection, keyed by *original* issuance
+    # term (BondConfig.COLUMNS_CN '期限'), not remaining maturity. This is
+    # intentionally separate from BondConfig.TERM_BUCKETS, which is capped at
+    # 10Y for affine curve calibration and must not be extended to cover 30Y.
+    TENOR_BUCKETS: Dict[str, List[float]] = {
+        "5Y": [4.0, 6.0],
+        "10Y": [8.5, 10.0],
+        "30Y": [25.0, 30.0],
+    }
+
+    # (asset_class, tenor_bucket) pairs the universe builder may construct.
+    # Building the universe artifact for a bucket is independent from granting
+    # it trading eligibility — see DATA_READY_BUCKETS and the plan's gates.
+    ACTIVE_BUCKETS = {
+        ("TBond", "5Y"), ("TBond", "10Y"), ("TBond", "30Y"),
+        ("CBond", "5Y"), ("CBond", "10Y"), ("CBond", "30Y"),
+    }
+
+    # Buckets audited enough for prototype research as of 2026-07-31 (see plan).
+    # A pass for one bucket never unlocks any other bucket.
+    DATA_READY_BUCKETS = {("TBond", "30Y")}
+
+    # OTR issuance-age entry window (calendar days) for BondNewIssue eligibility.
+    ENTRY_AGE_MIN_DAYS = 0
+    ENTRY_AGE_MAX_DAYS = 90
+
+    @classmethod
+    def issuer_class(cls, asset_class: str) -> str:
+        return cls.ISSUER_CLASS_MAP.get(asset_class, asset_class)
+
+    @classmethod
+    def active_tenor_buckets(cls, asset_class: str) -> List[str]:
+        return [tb for (ac, tb) in cls.ACTIVE_BUCKETS if ac == asset_class]
+
+    @classmethod
+    def is_data_ready(cls, asset_class: str, tenor_bucket: str) -> bool:
+        return (asset_class, tenor_bucket) in cls.DATA_READY_BUCKETS
 
 
 class SpreadConfig:

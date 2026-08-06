@@ -374,6 +374,12 @@ def _build_spread_ts() -> dict:
     out["NetBasis"] = futspds["NetBasis"]
     out["NetIRR"] = futspds["NetIRR"]
     out["TermBasis"] = futspds["TermBasis"]
+
+    # New-issue OTR/OFR event strategy (see docs/dev/tbondcurve-30y-otr-ofr-plan.md)
+    newissue_spds = _load_pickle_optional(pathlib.Path(DIR_INPUT) / "BondNewIssue-spds.pkl")
+    if isinstance(newissue_spds, dict) and "BondNewIssue" in newissue_spds:
+        out["BondNewIssue"] = newissue_spds["BondNewIssue"]
+
     return out
 
 def _load_bond_refs(btypes):

@@ -111,6 +111,19 @@ candidate, allocation, and backtest plumbing via \texttt{signal\_variant=otr\_of
 \texttt{BondNewIssue} has its own loader/backtest path but shares portfolio-level
 risk aggregation and execution controls.
 
+\paragraph{Implementation status (2026-08-06).} Config/schema
+(\texttt{NewIssueConfig}, \texttt{BondConfig.TBOND\_CURVE\_VARIANTS}), the
+point-in-time OTR/OFR universe builder, the \texttt{BondNewIssue-spds.pkl}
+artifact, loader/legs wiring, a walk-forward cohort-percentile
+\texttt{EventDriven} backtest engine, and the mandatory-gate state machine
+(\texttt{DISCOVERED}$\to$\texttt{ORDER\_ELIGIBLE}) are implemented and unit
+tested. There is no live order-management/execution venue in this codebase,
+so the state machine only certifies up to \texttt{ORDER\_ELIGIBLE}; it does
+not submit, fill, or route orders. As documented above, only 30Y CGB has
+enough issuance episodes for prototype cohort scoring — all other buckets
+remain \texttt{insufficient\_episodes}/\texttt{insufficient\_bucket\_bonds}
+by design until independently audited.
+
 \section{Alpha Portfolio $\rightarrow$ Backtest: Style-routed Spread Strategies}
 
 \paragraph{Implementation status (2026-08-03).} The following sections distinguish

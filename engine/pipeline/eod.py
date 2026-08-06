@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 # Each interface module exposes ``calibrate(cfg, store) -> Any``.
 _EOD_STEPS: list[tuple[str, str, str]] = [
     ("curves",      "curves.interface",      "calibrate"),
+    ("otr_ofr",     "curves.interface",      "calibrate_otr_ofr"),
     ("factors",     "factors.interface",      "calibrate"),
     ("futures",     "futures.interface",      "calibrate"),
     ("multiasset",  "multiasset.interface",   "calibrate"),

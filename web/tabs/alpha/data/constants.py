@@ -90,6 +90,15 @@ SPREAD_CATEGORIES = {
         'description': 'Pairwise bond spread regression',
         'style': 'MeanReversion',
     },
+    'New-Issue': {
+        'label': 'New-Issue OTR/OFR Event',
+        'types': ['BondNewIssue'],
+        'description': (
+            'OTR vs 1st off-the-run new-issue roll-pressure event, gated per '
+            '(asset_class, tenor_bucket); see docs/dev/tbondcurve-30y-otr-ofr-plan.md'
+        ),
+        'style': 'EventDriven',
+    },
 }
 
 # Flatten for dropdown
@@ -111,7 +120,7 @@ for _cat, _info in SPREAD_CATEGORIES.items():
 YIELD_BASED_SPREAD_TYPES = {
     'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap',
     'SwapSpread', 'TenorSpread', 'NetBasis', 'FuturesSwap',
-    'PCASpread', 'BinarySpread',
+    'PCASpread', 'BinarySpread', 'BondNewIssue',
 }
 
 # Default z-score thresholds

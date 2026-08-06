@@ -40,6 +40,7 @@ def build_spreads_layout():
         {"label": "— Bonds —",             "value": "__bonds__",    "disabled": True},
         {"label": "Treasury Bond",          "value": "TBondCurve"},
         {"label": "Policybank Bond",        "value": "CBondCurve"},
+        {"label": "New-Issue OTR/OFR Event", "value": "BondNewIssue"},
         {"label": "Local Treasury Bond",    "value": "LBondSpread"},
         {"label": "Corporate Bank Bond",    "value": "BBondSpread"},
         {"label": "Government-backed Bond", "value": "GBondSpread"},

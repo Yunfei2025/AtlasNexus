@@ -117,3 +117,46 @@ def refresh_all(cfg: RunConfig, store: ArtifactStore) -> None:
     refresh_credit(cfg, store)
     refresh_irs(cfg, store)
     refresh_stat(cfg, store)
+
+
+# ── OTR/OFR (mature RV + BondNewIssue event strategy) ────────────────────
+
+def calibrate_otr_ofr(cfg: RunConfig, store: ArtifactStore) -> dict:
+    """Refresh both OTR/OFR strategies (see docs/dev/tbondcurve-30y-otr-ofr-plan.md).
+
+    Runs independently per sub-step (best-effort): a failure in one asset
+    class or artifact never blocks the others.
+      1. Live daily universe append (BondRT) for TBond/CBond.
+      2. BondNewIssue-spds.pkl aggregation (event strategy StatInfo/Spread).
+      3. otr_ofr_rv merge of mature pairs into TBond-spds.pkl/CBond-spds.pkl.
+    """
+    status: dict[str, str] = {}
+    from curves.calibration.otr_ofr_universe import refresh_new_issue_universe
+
+    for asset_class in ("TBond", "CBond"):
+        try:
+            refresh_new_issue_universe(asset_class, daily=True, update=True)
+            status[f"universe_{asset_class}"] = "ok"
+        except Exception:
+            logger.exception("[curves] OTR/OFR universe refresh failed for %s", asset_class)
+            status[f"universe_{asset_class}"] = "failed"
+
+    try:
+        from curves.refreshers.newissue_spreads import refresh_new_issue_spreads
+        refresh_new_issue_spreads(refresh_universe=False, update=True, daily=True)
+        status["newissue_spreads"] = "ok"
+    except Exception:
+        logger.exception("[curves] BondNewIssue-spds.pkl refresh failed")
+        status["newissue_spreads"] = "failed"
+
+    for asset_class in ("TBond", "CBond"):
+        try:
+            from curves.refreshers.otr_ofr_rv import refresh_otr_ofr_rv_spreads, refresh_otr_ofr_rv_realtime
+            refresh_otr_ofr_rv_spreads(asset_class, update=True)
+            refresh_otr_ofr_rv_realtime(asset_class, update=True)
+            status[f"otr_ofr_rv_{asset_class}"] = "ok"
+        except Exception:
+            logger.exception("[curves] otr_ofr_rv merge failed for %s", asset_class)
+            status[f"otr_ofr_rv_{asset_class}"] = "failed"
+
+    return status

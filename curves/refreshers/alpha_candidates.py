@@ -345,6 +345,7 @@ def build_alpha_candidates(
 		"Bond-Curve": "MeanReversion",
 		#"Swap-Spread": "MeanReversion", # HANDLED DYNAMICALLY BELOW
 		"Bond-Swap": "Carry",
+		"New-Issue": "EventDriven",
 	}
 	if "style" not in df_all.columns:
 		df_all["style"] = df_all["category"].map(cat_to_style)
@@ -381,7 +382,7 @@ def build_alpha_candidates(
 	else:
 		mr = mr.iloc[0:0].copy()
 
-	trend = work[work["style"].str.lower().isin({"carry", "trend", "trendfollowing"})].copy()
+	trend = work[work["style"].str.lower().isin({"carry", "trend", "trendfollowing", "eventdriven"})].copy()
 
 	# Apply z-score threshold to both buckets
 	try:

@@ -127,6 +127,10 @@ class AlphaSnapshotPaths:
 		return self.dir_input / "futures-spds.pkl"
 
 	@property
+	def bond_newissue_spds(self) -> Path:
+		return self.dir_input / "BondNewIssue-spds.pkl"
+
+	@property
 	def source_pickles(self) -> tuple[Path, ...]:
 		return (
 			self.tbond_spds,
@@ -136,6 +140,7 @@ class AlphaSnapshotPaths:
 			self.cbond_spdsrt,
 			self.irs_spdsrt,
 			self.cnbd_data,
+			self.bond_newissue_spds,
 		)
 
 
@@ -261,11 +266,46 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 
 	out: Dict[str, pd.DataFrame] = {}
 
+	def _otr_ofr_rv_snapshot_rows(asset_class: str) -> pd.DataFrame:
+		"""Mature OTR/OFR RV pair rows (signal_variant=otr_ofr_rv), merged into
+		the live TBondCurve/CBondCurve snapshot so they are selectable the same
+		way as ordinary bond-vs-curve instruments (see
+		docs/dev/tbondcurve-30y-otr-ofr-plan.md). Index is pair-format
+		"<otr_id>|<ofr1_id>"; each pair's mean/vol/stationary/halflife come from
+		its own spread history only (never spliced across OTR rolls).
+		"""
+		try:
+			from curves.refreshers.otr_ofr_rv import build_otr_ofr_rv_rows
+			pairs = build_otr_ofr_rv_rows(asset_class)
+		except Exception:
+			return pd.DataFrame()
+		if not pairs:
+			return pd.DataFrame()
+		rows: Dict[str, dict] = {}
+		for pair_id, series in pairs.items():
+			sp = series.get("Spread")
+			if not isinstance(sp, pd.Series) or sp.empty:
+				continue
+			stat = OU_calibrate(pd.DataFrame({pair_id: sp}))
+			row = stat.loc[pair_id].to_dict() if pair_id in stat.index else {}
+			row["spread"] = float(sp.iloc[-1])
+			rows[pair_id] = row
+		if not rows:
+			return pd.DataFrame()
+		df = pd.DataFrame(rows).T
+		df.index.name = "ID"
+		return df
+
 	# -----------------------
 	# BondCurve (mean reversion)
 	# -----------------------
 	for prefix, spdrt in [("TBond", tbond_spdrt), ("CBond", cbond_spdrt)]:
 		df_bc = spdrt.get("BondCurve")
+		if not isinstance(df_bc, pd.DataFrame):
+			df_bc = pd.DataFrame()
+		rv_rows = _otr_ofr_rv_snapshot_rows(prefix)
+		if not rv_rows.empty:
+			df_bc = pd.concat([df_bc, rv_rows]) if not df_bc.empty else rv_rows
 		if isinstance(df_bc, pd.DataFrame) and not df_bc.empty:
 			df_bc = _normalize_index(df_bc)
 			df_bc = _ensure_numeric(df_bc, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
@@ -397,6 +437,32 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		df_tenor["spread_type"] = "TenorSpread"
 		df_tenor["category"] = "Tenor-Spread"
 		out["TenorSpread"] = df_tenor
+
+	# -----------------------
+	# New-Issue event spreads (BondNewIssue)
+	# -----------------------
+	try:
+		newissue_spd = _read_pickle(paths.bond_newissue_spds)
+		if isinstance(newissue_spd, dict):
+			ni = newissue_spd.get("BondNewIssue", {})
+			if isinstance(ni, dict):
+				df_ni = ni.get("StatInfo")
+				if isinstance(df_ni, pd.DataFrame) and not df_ni.empty:
+					df_ni = _normalize_index(df_ni)
+					df_ni = _ensure_numeric(df_ni, ["spread", "mean", "vol", "carry_roll", "halflife", "event_age_days"])
+					if "Zscore" not in df_ni.columns:
+						df_ni["Zscore"] = np.nan
+					df_ni["spread_type"] = "BondNewIssue"
+					df_ni["category"] = "New-Issue"
+					if "style" not in df_ni.columns:
+						df_ni["style"] = "EventDriven"
+					if "direction" not in df_ni.columns:
+						df_ni["direction"] = "BUY"
+					if "stationary" not in df_ni.columns:
+						df_ni["stationary"] = "NO"
+					out["BondNewIssue"] = df_ni
+	except Exception:
+		pass  # optional artifact
 
 	# -----------------------
 	# Futures spreads: NetBasis, TermBasis, FuturesSwap

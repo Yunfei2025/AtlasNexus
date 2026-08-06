@@ -122,6 +122,12 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
             return None
         return data.get('BinarySpread', {}).get('StatInfo')
 
+    elif spread_type == 'BondNewIssue':
+        data = _load_pickle_safe(dir_input / 'BondNewIssue-spds.pkl')
+        if data is None:
+            return None
+        return data.get('BondNewIssue', {}).get('StatInfo')
+
     return None
 
 
@@ -362,6 +368,13 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                 if isinstance(sp, pd.DataFrame) and not sp.empty:
                     frames.append(sp)
         return pd.concat(frames, axis=1) if frames else None
+
+    elif spread_type == 'BondNewIssue':
+        data = _load_pickle_safe(dir_input / 'BondNewIssue-spds.pkl')
+        if data is None:
+            return None
+        sp = data.get('BondNewIssue', {}).get('Spread')
+        return sp if isinstance(sp, pd.DataFrame) and not sp.empty else None
 
     return None
 
