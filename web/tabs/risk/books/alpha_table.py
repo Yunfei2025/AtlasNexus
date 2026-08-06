@@ -251,6 +251,7 @@ def register_alpha_book_table_callbacks(app):
                     carry_roll_val = _resolve_alpha_metric(spread_type, trade_id, 'carry_roll', fallback=_coerce_float(row.get('carry_roll')))
                     breakeven_val = _resolve_alpha_metric(spread_type, trade_id, 'breakeven_3m', fallback=_coerce_float(row.get('breakeven_3m')))
                     notional   = float(row.get('notional_mm', 0) or 0)
+                    margin_mm  = _coerce_float(row.get('margin_mm'))
                     dv01_k     = float(row.get('DV01_k', 0) or 0)
                     risk_contribution = _coerce_float(row.get('risk_contribution'))
                     _dur_raw   = row.get('_duration', None)
@@ -336,6 +337,7 @@ def register_alpha_book_table_callbacks(app):
                         'Leg 2':                  leg2,
                         'Ratio (V2/V1)':          leg_ratio,
                         'Target Volume Leg2 (MM CNY)': f"{leg2_target_volume:,.1f}" if leg2_target_volume is not None else '',
+                        'Margin (MM)':            f"{margin_mm:,.2f}" if margin_mm is not None else '',
                         'Spread Type':            spread_type,
                         'Style':                  row.get('style', ''),
                         'Direction':              row.get('direction', ''),
@@ -364,6 +366,23 @@ def register_alpha_book_table_callbacks(app):
                         '_target_level':          f"{target_level:.4f}" if target_level is not None else '',
                     })
     
+            for r in display_rows:
+                if r.get('ID') == 'TOTAL':
+                    continue
+                try:
+                    row_volume = float(str(r.get('Volume (mm)', '') or '').replace(',', '').strip()) if str(r.get('Volume (mm)', '') or '').strip() else None
+                except (ValueError, TypeError):
+                    row_volume = None
+                try:
+                    target_volume = float(str(r.get('Target Volume (MM CNY)', '') or '').replace(',', '').strip()) if str(r.get('Target Volume (MM CNY)', '') or '').strip() else None
+                except (ValueError, TypeError):
+                    target_volume = None
+                if row_volume is not None and row_volume > 0 and target_volume not in (None, 0):
+                    scale = row_volume / abs(target_volume)
+                    margin_val = _coerce_float(r.get('Margin (MM)'))
+                    if margin_val is not None:
+                        r['Margin (MM)'] = f"{margin_val * scale:,.2f}"
+
             total_vol = 0.0
             for r in display_rows:
                 try:
@@ -397,6 +416,7 @@ def register_alpha_book_table_callbacks(app):
     
             _s_vol    = _sum_col('Volume (mm)',            _BOND_OUTRIGHT_TYPES)
             _s_tvol   = _sum_col('Target Volume (MM CNY)', _BOND_OUTRIGHT_TYPES)
+            _s_margin = _sum_col('Margin (MM)')
             _s_dv01   = _sum_col('DV01 (k CNY/bp)')
             _s_carry  = _sum_col('MtM Carry (MM CNY)')
             _s_mtm    = _sum_col('MtM Value (MM CNY)')
@@ -408,6 +428,7 @@ def register_alpha_book_table_callbacks(app):
             total_row['ID']                     = 'TOTAL'
             total_row['Volume (mm)']            = f"{_s_vol:,.1f}"    if _s_vol    is not None else ''
             total_row['Target Volume (MM CNY)'] = f"{_s_tvol:,.1f}"   if _s_tvol   is not None else ''
+            total_row['Margin (MM)']            = f"{_s_margin:,.2f}" if _s_margin is not None else ''
             total_row['DV01 (k CNY/bp)']        = f"{_s_dv01:.1f}"    if _s_dv01   is not None else ''
             total_row['MtM Carry (MM CNY)']     = f"{_s_carry:,.4f}"  if _s_carry  is not None else ''
             total_row['MtM Value (MM CNY)']     = f"{_s_mtm:,.4f}"    if _s_mtm    is not None else ''
@@ -480,7 +501,7 @@ def register_alpha_book_table_callbacks(app):
             total_rows = [r for r in display_rows if r.get('ID') == 'TOTAL']
             _numeric_cols = {
                 'Duration', 'Open price (bp)', 'Volume (mm)', 'Z-Score', 'Close Price (bp)',
-                'Target Volume (MM CNY)', 'Target Volume Leg2 (MM CNY)', 'DV01 (k CNY/bp)', 'Carry+Roll (3m,bp)',
+                'Target Volume (MM CNY)', 'Target Volume Leg2 (MM CNY)', 'Margin (MM)', 'DV01 (k CNY/bp)', 'Carry+Roll (3m,bp)',
                 'Breakeven (3m,bp)', 'Stop (bp)', 'Target (bp)', 'MTM spd (bp)',
                 'MtM Carry (MM CNY)', 'MtM Value (MM CNY)', 'Target Weight (%)', 'RC (%)', 'Weight (%)',
             }
@@ -491,7 +512,7 @@ def register_alpha_book_table_callbacks(app):
                 ('Style', 'left'), ('Direction', 'center'), ('Duration', 'right'),
                 ('Open price (bp)', 'right'), ('Volume (mm)', 'right'), ('Open date', 'right'),
                 ('Z-Score', 'right'), ('Close Price (bp)', 'right'), ('Progress', 'left'),
-                ('Target Volume (MM CNY)', 'right'), ('Target Volume Leg2 (MM CNY)', 'right'),
+                ('Target Volume (MM CNY)', 'right'), ('Target Volume Leg2 (MM CNY)', 'right'), ('Margin (MM)', 'right'),
                 ('DV01 (k CNY/bp)', 'right'),
                 ('Carry+Roll (3m,bp)', 'right'), ('Breakeven (3m,bp)', 'right'),
                 ('Stop (bp)', 'right'), ('Target (bp)', 'right'), ('MTM spd (bp)', 'right'),

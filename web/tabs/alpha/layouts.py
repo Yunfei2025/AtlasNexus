@@ -354,8 +354,8 @@ def build_candidates_layout() -> html.Div:
         dcc.Store(id='alpha-corr-pairs-store', data=[]),
         dcc.Store(id='alpha-corr-matrix-store', storage_type='memory', data={}),
         dcc.Store(id='alpha-curated-instruments-store', storage_type='memory', data=[]),
-        dcc.Store(id='alpha-book-positions-store', storage_type='session', data=[]),
-        dcc.Store(id='alpha-regime-store', storage_type='session', data={}),
+        dcc.Store(id='alpha-book-positions-store', storage_type='memory', data=[]),
+        dcc.Store(id='alpha-regime-store', storage_type='memory', data={}),
 
     ], style={'padding': '10px', 'display': 'flex', 'flexDirection': 'column', 'gap': '4px'})
 

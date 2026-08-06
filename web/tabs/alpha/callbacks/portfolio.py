@@ -41,7 +41,7 @@ def _reserve_existing_capacity(
     repo_margin_rate: float,
     swap_margin_rate: float,
 ) -> tuple[float, float, float, int]:
-    """Return capital/DV01 already committed by saved Alpha-book positions.
+    """Return margin/DV01 already committed by saved Alpha-book positions.
 
     Only a positive manually entered ``volume_mm`` denotes an executed holding.
     The saved margin and DV01 are scaled proportionally from its prior target,
@@ -63,6 +63,8 @@ def _reserve_existing_capacity(
 
     leg_exposure: dict[str, float] = {}
     leg_is_bond: dict[str, bool] = {}
+    margin_used_mm = 0.0
+    has_snapshot_margin = False
     buy_dv01_k = 0.0
     sell_dv01_k = 0.0
     held_count = 0
@@ -78,6 +80,10 @@ def _reserve_existing_capacity(
         actual_notional = executed_volume
 
         scale = actual_notional / saved_notional if saved_notional else 1.0
+        saved_margin_mm = _as_positive_float(snapshot_row.get('margin_mm'))
+        if saved_margin_mm is not None:
+            margin_used_mm += saved_margin_mm * scale
+            has_snapshot_margin = True
         saved_dv01_k = _as_positive_float(snapshot_row.get('DV01_k'))
         if saved_dv01_k is None:
             # A live manually-entered holding with no usable allocation snapshot
@@ -110,6 +116,10 @@ def _reserve_existing_capacity(
             buy_dv01_k += saved_dv01_k * scale
         held_count += 1
 
+    if has_snapshot_margin:
+        return margin_used_mm, buy_dv01_k, sell_dv01_k, held_count
+
+    # Legacy fallback for older snapshots that do not persist per-trade margin.
     net_bond_mm = sum(abs(exposure) for leg, exposure in leg_exposure.items() if leg_is_bond[leg])
     net_derivative_mm = sum(abs(exposure) for leg, exposure in leg_exposure.items() if not leg_is_bond[leg])
     capital_used = net_bond_mm * repo_margin_rate + net_derivative_mm * swap_margin_rate
@@ -409,10 +419,19 @@ def register_portfolio_callbacks(app) -> None:
                 )
 
             if _available_capital_mm <= 0 or _available_dv01_k <= 0:
+                _issues: list[str] = []
+                if _available_capital_mm <= 0:
+                    _issues.append(
+                        f"capital exhausted (available {max(_available_capital_mm, 0.0):,.1f} MM; reserved {_reserved_capital_mm:,.1f} MM of {total_capital_mm:,.1f} MM)"
+                    )
+                if _available_dv01_k <= 0:
+                    _issues.append(
+                        f"single-side DV01 exhausted (available {max(_available_dv01_k, 0.0) / 1000.0:,.3f} MM/bp; reserved BUY {_reserved_buy_dv01_k / 1000.0:,.3f} MM/bp, SELL {_reserved_sell_dv01_k / 1000.0:,.3f} MM/bp, limit {total_dv01_budget:,.3f} MM/bp)"
+                    )
                 return (
                     html.Div(
-                        "No uncommitted capital or single-side DV01 capacity is available. "
-                        "Close an existing position or increase a portfolio limit before allocating new trades.",
+                        "Cannot allocate new trades because " + "; ".join(_issues) + ". "
+                        "Close an existing position or increase the corresponding portfolio limit.",
                         style={'color': THEME['warning'], 'padding': '10px'},
                     ),
                     html.Div(), html.Div(), [], None, html.Div(),

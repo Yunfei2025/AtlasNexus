@@ -310,7 +310,9 @@ def build_alpha_candidates(
 	  the pullback is capped at ``zscore_threshold * momentum_stretch_mult``
 	  so it reads as a retracement, not an incipient reversal.
 	"""
-	snap = load_alpha_spreads_snapshot(dir_input=dir_input, refresh=False)
+	# Force rebuild so each scan uses the latest spread snapshot, avoiding
+	# stale candidate rows when upstream realtime pickles were refreshed.
+	snap = load_alpha_spreads_snapshot(dir_input=dir_input, refresh=True)
 
 	# Build unified table
 	frames = []

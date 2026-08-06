@@ -207,10 +207,24 @@ def register_scan_callbacks(app) -> None:
                             'backgroundColor': f'{carry_color}1A',
                         },
                     )
+                else:
+                    carry_tag = html.Span(
+                        'Carry n/a',
+                        title='Carry (bp, 3m) unavailable for this row',
+                        style={
+                            'fontSize': '9px',
+                            'fontWeight': '700',
+                            'color': THEME['text_sub'],
+                            'marginLeft': '6px',
+                            'verticalAlign': 'middle',
+                            'padding': '1px 5px',
+                            'borderRadius': '3px',
+                            'border': f'1px solid {THEME["text_sub"]}55',
+                            'backgroundColor': f'{THEME["text_sub"]}12',
+                        },
+                    )
 
-                right_cluster = [z_bar, z_label]
-                if carry_tag is not None:
-                    right_cluster.append(carry_tag)
+                right_cluster = [z_bar, z_label, carry_tag]
                 if seas_tag is not None:
                     right_cluster.append(seas_tag)
 

@@ -130,6 +130,15 @@ app = _Dash(
 
 app.title = "AtlasNexus Daily Console"
 
+
+@app.server.after_request
+def _disable_http_cache(response):
+    """Disable HTTP caching so layout/data are always requested fresh."""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
 # Serve the cover page (AtlasNexus landing page)
 @app.server.route("/")
 def _serve_cover():

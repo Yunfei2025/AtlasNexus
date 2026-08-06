@@ -10,6 +10,27 @@ import sympy as sp
 import math
 from functools import lru_cache
 
+
+def _project_to_psd(matrix):
+    """Project a symmetric matrix to the nearest positive-semidefinite matrix."""
+    arr = np.asarray(matrix, dtype=float)
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+        raise ValueError(f"Expected a square matrix, got shape {arr.shape}")
+
+    # Symmetrize to avoid tiny asymmetries from numerical noise.
+    arr = 0.5 * (arr + arr.T)
+
+    # Eigen-decomposition based projection: clip tiny/negative eigenvalues to 0.
+    eigvals, eigvecs = np.linalg.eigh(arr)
+    eigvals = np.clip(eigvals, 0.0, None)
+    projected = (eigvecs * eigvals) @ eigvecs.T
+    return projected
+
+
+# Backward-compatible alias used by older callers.
+project_to_psd = _project_to_psd
+
+
 # Convert matrices to hashable tuples for caching
 def _matrix_to_tuple(matrix):
     """Convert sympy matrix to hashable tuple for caching"""
