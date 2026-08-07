@@ -13,7 +13,7 @@ from dash.dependencies import Input, Output, State, ALL
 from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
 
-from ..data import THEME, SPREAD_CATEGORIES, _get_input_dir, _load_pickle_safe, load_spread_data, load_spread_timeseries, display_key
+from ..data import THEME, SPREAD_CATEGORIES, _get_input_dir, _load_pickle_safe, load_spread_data, load_spread_timeseries, display_key, _get_duration_mult
 from ..scoring import compute_spread_correlation, rank_low_correlation_pairs, select_diverse_instruments
 from .helpers import _ALPHA_CORR_COLORSCALE, _get_upstream_regime, _load_alpha_book_positions, _merge_curated_entries, _normalize_corr_labels, _build_heatmap, _style_to_regime
 
@@ -48,6 +48,7 @@ def register_correlation_callbacks(app) -> None:
             if 'ID' in df_candidates.columns and 'spread_type' in df_candidates.columns:
                 _ts_cache: dict[str, pd.DataFrame | None] = {}
                 all_spreads = {}
+                duration_by_key: dict[str, float] = {}
                 for _, row in df_candidates.iterrows():
                     trade_id = row.get('ID', '')
                     spread_type = row.get('spread_type', '')
@@ -59,6 +60,10 @@ def register_correlation_callbacks(app) -> None:
                     if ts is not None and isinstance(ts, pd.DataFrame) and trade_id in ts.columns:
                         col_key = display_key(spread_type, trade_id)
                         all_spreads[col_key] = ts[trade_id]
+                        duration_by_key[col_key] = max(
+                            0.01,
+                            float(_get_duration_mult(str(trade_id), str(spread_type))),
+                        )
 
                 if len(all_spreads) >= 2:
                     for key in all_spreads:
@@ -66,7 +71,9 @@ def register_correlation_callbacks(app) -> None:
                     df_spreads = pd.DataFrame(all_spreads).tail(lookback)
                     df_changes = df_spreads.diff().dropna()
                     if len(df_changes) >= 20:
-                        corr_matrix = df_changes.corr()
+                        duration_s = pd.Series(duration_by_key).reindex(df_changes.columns).fillna(1.0)
+                        price_changes = df_changes.mul(duration_s, axis='columns')
+                        corr_matrix = price_changes.corr()
                     else:
                         corr_matrix = None
                 else:
@@ -117,7 +124,7 @@ def register_correlation_callbacks(app) -> None:
             corr_vals = sub_corr.values.copy()
             mask_upper = np.triu(np.ones(corr_vals.shape), k=0).astype(bool)
             corr_vals[mask_upper] = np.nan
-            heatmap_div = dcc.Graph(figure=_build_heatmap(corr_vals, title=f'Spread Correlation Matrix — {len(heatmap_assets)} instruments (max |corr| ≤ {max_corr})', height=max(350, 28 * len(heatmap_assets) + 100)), config={'displayModeBar': False}, style={'height': f'{max(350, 28 * len(heatmap_assets) + 100)}px'})
+            heatmap_div = dcc.Graph(figure=_build_heatmap(corr_vals, title=f'Duration-Adjusted Correlation Matrix — {len(heatmap_assets)} instruments (max |corr| ≤ {max_corr})', height=max(350, 28 * len(heatmap_assets) + 100)), config={'displayModeBar': False}, style={'height': f'{max(350, 28 * len(heatmap_assets) + 100)}px'})
         else:
             heatmap_div = html.Div("Not enough assets passed the correlation filter.", style={'color': THEME['text_sub']})
 

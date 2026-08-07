@@ -15,15 +15,27 @@ def compute_spread_correlation(
     spread_types: List[str],
     lookback_days: int = 252,
 ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
-    """Compute correlation matrix of spread changes across selected types."""
+    """Compute duration-adjusted correlation matrix across selected types.
+
+    The return matrix is computed from duration-scaled spread changes, matching
+    the risk space used by the risk-parity allocator.
+    """
     all_spreads = {}
+    duration_by_key: dict[str, float] = {}
 
     for stype in spread_types:
         ts = load_spread_timeseries(stype)
         if ts is not None and isinstance(ts, pd.DataFrame):
             ts = ts.tail(lookback_days)
             for col in ts.columns:
-                all_spreads[display_key(stype, str(col))] = ts[col]
+                col_key = display_key(stype, str(col))
+                series = ts[col].copy()
+                series.index = series.index.astype(str)
+                all_spreads[col_key] = series
+                duration_by_key[col_key] = max(
+                    0.01,
+                    float(_get_duration_mult(str(col), str(stype))),
+                )
 
     if len(all_spreads) < 2:
         return None, None
@@ -34,7 +46,9 @@ def compute_spread_correlation(
     if df_changes.shape[0] < 20:
         return None, None
 
-    corr_matrix = df_changes.corr()
+    duration_s = pd.Series(duration_by_key).reindex(df_changes.columns).fillna(1.0)
+    price_changes = df_changes.mul(duration_s, axis='columns')
+    corr_matrix = price_changes.corr()
     return corr_matrix, df_changes
 
 

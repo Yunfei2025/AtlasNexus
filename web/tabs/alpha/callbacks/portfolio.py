@@ -180,6 +180,7 @@ def register_portfolio_callbacks(app) -> None:
 
         seen: set = set()
         all_spreads = {}
+        duration_by_key: dict[str, float] = {}
         for entry in all_entries:
             inst = entry.get('instrument', '')
             spread_type = entry.get('spread_type', '')
@@ -194,6 +195,10 @@ def register_portfolio_callbacks(app) -> None:
                 s = ts[inst].copy()
                 s.index = s.index.astype(str)
                 all_spreads[col_key] = s
+                duration_by_key[col_key] = max(
+                    0.01,
+                    float(_get_duration_mult(str(inst), str(spread_type))),
+                )
 
         if len(all_spreads) < 2:
             return no_update, "⚠ Need ≥ 2 instruments with time-series data."
@@ -204,9 +209,11 @@ def register_portfolio_callbacks(app) -> None:
         if len(df_changes) < 20:
             return no_update, "⚠ Insufficient history (< 20 days)."
 
-        corr_matrix = df_changes.corr()
+        duration_s = pd.Series(duration_by_key).reindex(df_changes.columns).fillna(1.0)
+        price_changes = df_changes.mul(duration_s, axis='columns')
+        corr_matrix = price_changes.corr()
         ts_now = pd.Timestamp.now().strftime('%H:%M:%S')
-        status = f"✓ Recalculated at {ts_now} ({len(all_spreads)} instruments, {len(df_changes)} days)"
+        status = f"✓ Duration-adjusted matrix recalculated at {ts_now} ({len(all_spreads)} instruments, {len(df_changes)} days)"
         return corr_matrix.to_dict(), status
 
     # -------------------------------------------------------------------------
