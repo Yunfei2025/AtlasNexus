@@ -32,13 +32,13 @@ def build_parser() -> argparse.ArgumentParser:
     intra.add_argument("--update-data", action="store_true", help="Run intraday retrieve.py updater before computing")
 
     # ── Refresh ────────────────────────────────────────────────────────
-    refresh = sub.add_parser("refresh", help="Run intraday refresh pipeline (rates/credit/irs/stat)")
+    refresh = sub.add_parser("refresh", help="Run intraday refresh pipeline (rates/otr_ofr/credit/irs/stat)")
     refresh.add_argument("--asof", type=_parse_date, default=None, help="As-of date YYYY-MM-DD")
     refresh.add_argument(
         "--steps",
         nargs="*",
         default=None,
-        help="Refresh step names to run (default: all). Choices: rates, credit, irs, stat",
+        help="Refresh step names to run (default: all). Choices: rates, otr_ofr, credit, irs, stat",
     )
 
     # ── Scheduler ──────────────────────────────────────────────────────

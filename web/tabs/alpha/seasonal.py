@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """Seasonal analysis helpers for the Alpha Book Spread subtab.
 
-Three pure, unit-testable functions:
+Pure, unit-testable functions:
   seasonal_pivot            -- reshape a spread series onto a day-of-year grid
   monthly_seasonal_stats    -- per-month edge table with binomial significance
   build_seasonal_overlay_figure  -- plotly year-overlay chart
+  episode_pivot             -- reshape per-episode series onto a days-since-start grid
+  build_episode_overlay_figure   -- plotly episode-overlay chart (BondNewIssue)
 """
 
 from __future__ import annotations
@@ -429,3 +431,209 @@ def build_seasonal_overlay_figure(
         )
 
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Episode-relative overlay (BondNewIssue: day-since-roll, not calendar year)
+# ---------------------------------------------------------------------------
+
+def episode_pivot(episodes: list[tuple["pd.Timestamp", str, pd.Series]]) -> pd.DataFrame:
+    """Reshape per-episode series onto a days-since-start × episode grid.
+
+    Parameters
+    ----------
+    episodes :
+        Output of ``load_newissue_episode_series`` — one (start_date,
+        leg1_bond_code, series) tuple per contiguous issuance/roll episode,
+        series indexed by integer days since that episode began (already
+        re-based to 0 at day 0).
+
+    Returns
+    -------
+    DataFrame with index = days since episode start, columns = leg1 bond code
+    (the newly-issued leg of the pair), chronologically ordered. If the same
+    bond code recurs across non-adjacent episodes, later occurrences are
+    suffixed with the start date to keep columns unique.
+    """
+    if not episodes:
+        return pd.DataFrame()
+
+    result: dict[str, pd.Series] = {}
+    for start_date, leg1_code, s in episodes:
+        if s is None or s.empty:
+            continue
+        col = leg1_code
+        if col in result:
+            col = f"{leg1_code} ({start_date.strftime('%Y-%m-%d')})"
+        result[col] = s
+
+    if not result:
+        return pd.DataFrame()
+
+    pivot = pd.DataFrame(result)
+    pivot.index.name = "days_since_start"
+    return pivot.sort_index()
+
+
+def build_episode_overlay_figure(
+    pivot: pd.DataFrame,
+    title: str = "",
+) -> "go.Figure":
+    """Build a Plotly episode-overlay chart: x=days since roll, one line per
+    historical issuance/roll episode (see ``episode_pivot``). The most recent
+    (ongoing) episode is highlighted; older ones fade with age.
+    """
+    import plotly.graph_objects as go
+
+    empty_layout = dict(
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=THEME["text_main"]),
+    )
+
+    if pivot is None or pivot.empty:
+        return go.Figure(layout=empty_layout)
+
+    episode_cols = list(pivot.columns)  # already chronologically ordered
+    n_episodes = len(episode_cols)
+
+    traces = []
+    for i, col in enumerate(episode_cols):
+        s = pivot[col].dropna()
+        if s.empty:
+            continue
+
+        is_latest = (i == n_episodes - 1)
+        if is_latest:
+            color = THEME["accent"]
+            width = 2.5
+            opacity = 1.0
+        else:
+            palette_idx = i % len(_YEAR_COLORS)
+            color = _YEAR_COLORS[palette_idx]
+            age_frac = i / max(n_episodes - 1, 1)  # 0=oldest, 1=newest-past
+            width = 1.2
+            opacity = 0.45 + age_frac * 0.45
+
+        traces.append(go.Scatter(
+            x=s.index.tolist(),
+            y=s.values.tolist(),
+            mode="lines",
+            name=col,
+            line=dict(color=color, width=width),
+            opacity=opacity,
+            hovertemplate=f"<b>{col}</b><br>Day: %{{x}}<br>Δ: %{{y:.2f}}<extra></extra>",
+        ))
+
+    # Historical mean across all-but-latest episodes (smoothed)
+    past_cols = episode_cols[:-1] if n_episodes > 1 else []
+    if len(past_cols) >= 2:
+        past_pivot = pivot[past_cols]
+        mean_raw = past_pivot.mean(axis=1)
+        mean_s = mean_raw.rolling(window=3, center=True, min_periods=1).mean()
+        traces.append(go.Scatter(
+            x=mean_s.index.tolist(),
+            y=mean_s.values.tolist(),
+            mode="lines",
+            name="Hist. Mean",
+            line=dict(color="rgba(52,152,219,0.80)", width=2.0, dash="dash"),
+            hovertemplate="Hist. Mean<br>Day: %{x}<br>Δ: %{y:.2f}<extra></extra>",
+        ))
+
+    layout = go.Layout(
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=THEME["text_main"], size=11),
+        title=dict(text=title, font=dict(size=12, color=THEME["text_sub"])) if title else None,
+        xaxis=dict(
+            title="Days since issuance/roll",
+            gridcolor="#1a3a6a",
+            zerolinecolor="#1a3a6a",
+        ),
+        yaxis=dict(
+            title="Δ spread (re-based to day 0)",
+            gridcolor="#1a3a6a",
+            zerolinecolor="#2a5a9a",
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom", y=1.02,
+            xanchor="right", x=1,
+            font=dict(size=10),
+        ),
+        margin=dict(l=50, r=20, t=40, b=40),
+        hovermode="x unified",
+    )
+    return go.Figure(data=traces, layout=layout)
+
+
+_ISSUANCE_DAY_BUCKETS = (10, 20, 30, 60, 90, 120, 150, 180, 270, 360)
+
+
+def episode_bucket_stats(
+    pivot: pd.DataFrame,
+    buckets: tuple[int, ...] = _ISSUANCE_DAY_BUCKETS,
+    min_episodes: int = 3,
+) -> pd.DataFrame:
+    """Cross-episode issuance-day statistics for BondNewIssue (analogue of
+    ``monthly_seasonal_stats``, but bucketed by days since issuance/roll
+    instead of calendar month).
+
+    For each day bucket *d*, uses the last available Δ (re-based to day 0) at
+    or before day *d* from every episode that has run at least that long, and
+    reports the cross-episode consistency/direction of that Δ.
+
+    Returns
+    -------
+    DataFrame indexed by day bucket, columns: n_episodes, avg_chg_bp,
+    consistency, direction, p_value, max_chg_bp, min_chg_bp. Buckets with
+    fewer than *min_episodes* qualifying episodes are omitted.
+    """
+    from scipy.stats import binomtest
+
+    if pivot is None or pivot.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for d in buckets:
+        vals = []
+        for col in pivot.columns:
+            s = pivot[col].dropna()
+            if s.empty or s.index.max() < d:
+                continue
+            asof_idx = s.index[s.index <= d]
+            if len(asof_idx) == 0:
+                continue
+            vals.append(float(s.loc[asof_idx.max()]))
+
+        n = len(vals)
+        if n < min_episodes:
+            continue
+
+        vals_s = pd.Series(vals)
+        up_count = int((vals_s > 0).sum())
+        dn_count = int((vals_s < 0).sum())
+        if up_count > dn_count:
+            direction, consistency, n_match = "up", up_count / n, up_count
+        elif dn_count > up_count:
+            direction, consistency, n_match = "down", dn_count / n, dn_count
+        else:
+            direction, consistency, n_match = "neutral", 0.5, n // 2
+
+        p_value = binomtest(n_match, n, 0.5, alternative="greater").pvalue
+
+        rows.append({
+            "day":         d,
+            "n_episodes":  n,
+            "avg_chg_bp":  float(vals_s.mean()),
+            "consistency": float(consistency),
+            "direction":   direction,
+            "p_value":     float(p_value),
+            "max_chg_bp":  float(vals_s.max()),
+            "min_chg_bp":  float(vals_s.min()),
+        })
+
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).set_index("day")
+

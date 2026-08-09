@@ -93,30 +93,75 @@ def getInfo(b: str, df: Union[pd.Series, pd.DataFrame], dfts: Mapping[str, Any],
     df_stat = dfts['StatInfo']
     start = df.index[-1] - relativedelta(months=GeneralConfig.STAT_WINDOW)
     end = df.index[-1]
-    std = df_stat.loc[b,'vol']*100
-    vmax = df_stat.loc[b,'max']*100
-    vmin = df_stat.loc[b,'min']*100
-    mean = df_stat.loc[b,'mean']*100
-    stationary = df_stat.loc[b, 'stationary']
+
+    # Some fallback datasets ship partial StatInfo tables; derive stats from
+    # the plotted series when a stat column (e.g. vol) is missing.
+    if isinstance(df, pd.DataFrame):
+        spread_values = pd.to_numeric(df.squeeze(), errors='coerce').dropna()
+    else:
+        spread_values = pd.to_numeric(df, errors='coerce').dropna()
+
+    def _stat_raw(name: str):
+        if not isinstance(df_stat, pd.DataFrame):
+            return None
+        if b not in df_stat.index or name not in df_stat.columns:
+            return None
+        value = pd.to_numeric(pd.Series([df_stat.loc[b, name]]), errors='coerce').iloc[0]
+        if pd.isna(value):
+            return None
+        return float(value)
+
+    def _stat_bp(name: str) -> float:
+        raw = _stat_raw(name)
+        if raw is not None:
+            return raw * 100
+        if spread_values.empty:
+            return 0.0
+        if name == 'vol':
+            return float(spread_values.std()) if len(spread_values) > 1 else 0.0
+        if name == 'max':
+            return float(spread_values.max())
+        if name == 'min':
+            return float(spread_values.min())
+        if name == 'mean':
+            return float(spread_values.mean())
+        return 0.0
+
+    std = _stat_bp('vol')
+    vmax = _stat_bp('max')
+    vmin = _stat_bp('min')
+    mean = _stat_bp('mean')
+
+    stationary = 'NO'
+    if isinstance(df_stat, pd.DataFrame) and b in df_stat.index and 'stationary' in df_stat.columns:
+        stationary = str(df_stat.loc[b, 'stationary'])
     ttm = extractTTM(b, stype, df_stat)
 
     # halflife
-    if (df_stat.loc[b,'halflife']=='')|(df_stat.loc[b,'stationary']=='NO'):
+    halflife_raw = None
+    if isinstance(df_stat, pd.DataFrame) and b in df_stat.index and 'halflife' in df_stat.columns:
+        halflife_raw = df_stat.loc[b, 'halflife']
+    if pd.isna(halflife_raw) or halflife_raw == '' or stationary == 'NO':
         halflife = 'NA'
     else:
-        halflife = '%.1f days'%df_stat.loc[b,'halflife']
+        halflife = '%.1f days' % float(halflife_raw)
 
     # title
     if stype == 'BinarySpread':
-        term = df_stat.loc[b, 'label']
+        term = None
+        if isinstance(df_stat, pd.DataFrame) and b in df_stat.index and 'label' in df_stat.columns:
+            term = df_stat.loc[b, 'label']
         if pd.isna(term):
             ticker = b
         else:
             yt = term[5:]
-            anchor = dfts['Anchor'][yt]
+            anchor = dfts.get('Anchor', {}).get(yt, '')
             ticker = b+'-'+anchor
     elif stype == 'NetBasis':
-        ticker = b + '-' + df_stat.loc[b, 'futures']
+        futures_code = ''
+        if isinstance(df_stat, pd.DataFrame) and b in df_stat.index and 'futures' in df_stat.columns:
+            futures_code = str(df_stat.loc[b, 'futures'])
+        ticker = b + '-' + futures_code if futures_code else b
     else:
         ticker = b
     title = "<b>%s Ticker: %s </b><br> \
@@ -147,9 +192,15 @@ def getTraceStat(df: Union[pd.Series, pd.DataFrame], stype: str) -> go.Bar:
     if isinstance(df, pd.DataFrame) and 'spread' in df.columns:
         hovertext = [f"Spread: {value :.2f}bp" for value in df['spread']]
 
+    labels = df.index
+    custom_ids = df.index
+    if isinstance(df, pd.DataFrame) and 'label' in df.columns:
+        labels = df['label']
+
     trace = go.Bar(
-        x=df.index,
+        x=labels,
         y=df['Zscore'],
+        customdata=custom_ids,
         marker=dict(color=df['color'], line=dict(width=0)),
         hovertext=hovertext,
         name='Zscore',
@@ -424,7 +475,10 @@ def extractTTM(b: str, stype: str, df_stat: pd.DataFrame) -> str:
     if stype == 'AssetPCASpread':
         ttm = ''
     elif stype == 'TermSpread':
-        ttm = '%.2fY' % df_stat.loc[b, 'TermSpreadTTM']
+        try:
+            ttm = '%.2fY' % float(df_stat.loc[b, 'TermSpreadTTM'])
+        except (KeyError, TypeError, ValueError):
+            ttm = ''
     elif stype == 'SectorPCASpread':
         if '-' in b:
             ttm = b.split('-')[1]
@@ -449,7 +503,10 @@ def extractTTM(b: str, stype: str, df_stat: pd.DataFrame) -> str:
     elif stype == 'TenorSpread':
         ttm = b  # instrument name (e.g. CGB-5s10s) encodes the tenor range
     elif stype == 'BinarySpread':
-        ttm = df_stat.loc[b, 'label']
+        try:
+            ttm = df_stat.loc[b, 'label']
+        except KeyError:
+            ttm = ''
     elif stype == 'TermBasis':
         ttm = ''
     else:

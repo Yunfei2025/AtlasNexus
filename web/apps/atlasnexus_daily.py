@@ -39,7 +39,7 @@ import pathlib
 from web.services.artifacts import find_latest_run, format_run_meta, get_data_generation_date
 from web.services.jobs import (
     start_engine_job, tail_log, get_job_status,
-    list_running_jobs, finalize_job_if_done, _cmd_type,
+    list_running_jobs, finalize_job_if_done, latest_job_status, _cmd_type,
 )
 
 from web.tabs.fixed_income import (
@@ -1259,7 +1259,15 @@ def _update_run_center(n, job_id):
         className="rc-status-bar",
     )
 
-    log_text = tail_log(active_job_id, max_lines=200) if active_job_id else ""
+    # Keep showing the latest EOD logs after a run completes. The empty
+    # placeholder is shown only when there has never been any EOD job log.
+    log_job_id = active_job_id
+    if not log_job_id:
+        latest_eod = latest_job_status(job_types={"eod"})
+        if latest_eod:
+            log_job_id = latest_eod.get("job_id")
+
+    log_text = tail_log(log_job_id, max_lines=200) if log_job_id else ""
     lines = [ln for ln in log_text.splitlines() if ln.strip()]
     if lines:
         log_children = [_render_log_line(ln) for ln in lines]

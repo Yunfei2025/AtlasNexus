@@ -432,6 +432,17 @@ class StatRefresher:
         self.refresh_other_bonds()
         self.refresh_misc_spreads()
 
+        # Keep mature OTR/OFR RV pair rows in sync with the realtime BondCurve
+        # snapshots consumed by Spread Analysis and alpha snapshot builders.
+        try:
+            from curves.refreshers.otr_ofr_rv import refresh_otr_ofr_rv_realtime
+
+            for asset_class in ('TBond', 'CBond'):
+                refresh_otr_ofr_rv_realtime(asset_class, update=True)
+            print('INFO: Merged otr_ofr_rv rows into TBond/CBond-spdsrt.pkl')
+        except Exception as e:
+            print(f'WARN: Failed to merge otr_ofr_rv realtime rows: {e}')
+
         # Build normalized alpha snapshot for Atlas UI candidate scanning.
         # Keep this non-fatal to avoid breaking the refresh pipeline.
         try:

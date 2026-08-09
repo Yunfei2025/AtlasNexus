@@ -29,7 +29,7 @@ python main.py intraday-web # intraday console → http://localhost:8081
 python main.py eod          # run daily EOD pipeline
 python main.py eod --update-data  # pull fresh data then run EOD
 python main.py update-data  # data retrieval only
-python main.py refresh      # intraday refresh (rates → credit → IRS → stat)
+python main.py refresh      # intraday refresh (rates → OTR/OFR → credit → IRS → stat)
 python main.py scheduler    # periodic refresh during trading hours
 python main.py curve-backtest --btype IRS --start 2024-01-01 --end 2024-12-31
 ```

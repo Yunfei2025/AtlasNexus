@@ -16,10 +16,11 @@ logger = logging.getLogger(__name__)
 
 # Ordered refresh steps.  Each tuple is (step_name, module_path, function_name).
 _REFRESH_STEPS: list[tuple[str, str, str]] = [
-    ("rates",  "curves.interface", "refresh_rates"),
-    ("credit", "curves.interface", "refresh_credit"),
-    ("irs",    "curves.interface", "refresh_irs"),
-    ("stat",   "curves.interface", "refresh_stat"),
+    ("rates",   "curves.interface", "refresh_rates"),
+    ("otr_ofr", "curves.interface", "calibrate_otr_ofr"),
+    ("credit",  "curves.interface", "refresh_credit"),
+    ("irs",     "curves.interface", "refresh_irs"),
+    ("stat",    "curves.interface", "refresh_stat"),
 ]
 
 

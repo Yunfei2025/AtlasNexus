@@ -1,67 +1,99 @@
 # -*- coding: utf-8 -*-
-"""Point-in-time OTR/OFR universe builder for the BondNewIssue event strategy.
+"""Point-in-time NIB/OTR/OFR-ladder universe builder for BondNewIssue and
+mature otr_ofr_rv (see docs/dev/tbondcurve-30y-otr-ofr-plan.md).
 
-Phase 2 of docs/dev/tbondcurve-30y-otr-ofr-plan.md. Builds and persists, per
-(asset_class, tenor_bucket), the daily OTR / 1st-OFR / 2nd-OFR identities used
-by the BondNewIssue event strategy. This is deliberately separate from
-``RefBondSelector`` (curves/calibration/selector.py): that selector buckets by
-*remaining* maturity and picks the most-liquid/off-the-run bond for affine
-curve calibration, whereas OTR/OFR identity here is ranked by *issuance
-recency* within a fixed *original*-tenor bucket, independent of curve fitting.
+Three distinct identities are tracked per (asset_class, tenor_bucket), never
+conflated (see the plan's "Rank Definitions"):
+
+- NIB (new-issue bond): newest issuance, ranked by `起息日期` descending. Stable
+  identity — issuance order never changes.
+- OTR (on-the-run): highest-turnover bond in the bucket, i.e. the same
+  liquidity definition ``RefBondSelector`` uses for curve calibration
+  (``get_most_liquid_bond`` in ``curves/calibration/selector.py``).
+- OFR-ladder (OFR1..OFR{depth}): turnover ranks below OTR, via
+  ``get_offtherun_bond(turnover, n_exclude=k)``.
+
+NIB and OTR are usually, but not always, different bonds — a new issue only
+becomes OTR once its turnover overtakes the incumbent. OTR/OFR identities are
+confirmed via a persistence rule (a challenger must lead for
+``NewIssueConfig.OTR_RANK_PERSISTENCE_DAYS`` consecutive observations) so a
+single noisy trade cannot flip the ladder and splice pair history.
+
+This is deliberately separate from ``RefBondSelector``: that selector buckets
+by *remaining* maturity for affine curve calibration, whereas this module
+buckets by fixed *original* issuance tenor, independent of curve fitting.
 
 Persists to ``{bond_type}-newissue.pkl`` under DIR_INPUT as
-``{tenor_bucket: DataFrame}``, one row per processed date, with columns:
-    asset_class, issuer_class, tenor_bucket,
-    otr_id, ofr1_id, ofr2_id, otr_start_date, event_age_days, roll_flag,
-    dv01_ratio_ofr1_otr, dv01_ratio_ofr2_otr,
-    otr_turnover, ofr1_turnover, quote_ok_otr, quote_ok_ofr1, rejection_reason,
-    ytm_otr, ytm_ofr1, ytm_ofr2, spread, instrument_id
+``{tenor_bucket: DataFrame}``, one row per processed date. See
+``UNIVERSE_ROW_COLUMNS`` for the full column set.
 """
 
 from __future__ import annotations
 
 import os
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
-from settings.paths import DIR_INPUT
+from settings.paths import DIR_INPUT, DIR_DATA
 from settings.general import DateConfig
 from settings.fixed_income import NewIssueConfig
 from curves.utils.loader import loadInstrumentDefinition
 from curves.utils.retrieve import retrieveEnvRT
 from curves.utils.file import loadPKL, updatePKL
-from curves.calibration.selector import filter_bonds_by_type, _as_scalar_bond_id
+from curves.calibration.selector import (
+    filter_bonds_by_type, _as_scalar_bond_id, get_most_liquid_bond, get_offtherun_bond,
+)
 
 from utils.log_window import get_logger
 logger = get_logger(__name__)
 
 
+# rank 0 = OTR (turnover leader), rank k>=1 = OFR{k} (k-th turnover runner-up).
+_RANK_NAMES: Dict[int, str] = {0: 'otr'}
+_RANK_NAMES.update({k: f'ofr{k}' for k in range(1, NewIssueConfig.OFR_LADDER_DEPTH + 1)})
+
+
+def _ofr_rank_columns() -> List[str]:
+    cols: List[str] = []
+    for rank, name in _RANK_NAMES.items():
+        cols += [
+            f'{name}_raw_id', f'{name}_id', f'{name}_since_date', f'{name}_rank_age_days',
+            f'{name}_turnover', f'quote_ok_{name}', f'ytm_{name}',
+        ]
+    return cols
+
+
 UNIVERSE_ROW_COLUMNS = [
     'asset_class', 'issuer_class', 'tenor_bucket',
-    'otr_id', 'ofr1_id', 'ofr2_id', 'otr_start_date', 'event_age_days', 'roll_flag',
-    'dv01_ratio_ofr1_otr', 'dv01_ratio_ofr2_otr',
-    'otr_turnover', 'ofr1_turnover', 'quote_ok_otr', 'quote_ok_ofr1', 'rejection_reason',
-    'ytm_otr', 'ytm_ofr1', 'ytm_ofr2', 'spread', 'instrument_id',
+    'nib_id', 'nib_start_date', 'nib_age_days', 'quote_ok_nib', 'nib_turnover', 'ytm_nib',
+    *_ofr_rank_columns(),
+    'otr_roll_flag', 'lag_gap', 'lag_exists',
+    'dv01_ratio_otr_nib', 'dv01_ratio_ofr1_otr',
+    'spread_nib_otr', 'spread_otr_ofr1',
+    'instrument_id_nib_otr', 'instrument_id_otr_ofr1',
+    'rejection_reason',
 ]
 
 
-def instrument_id(tenor_bucket: str, otr_id: Any, ofr1_id: Any) -> str:
-    """Canonical BondNewIssue instrument label: ``<tenor_bucket>:<otr_id>|<ofr1_id>``."""
-    return f'{tenor_bucket}:{otr_id}|{ofr1_id}'
+def instrument_id(tenor_bucket: str, stage: str, leg1_id: Any, leg2_id: Any) -> str:
+    """Canonical BondNewIssue instrument label:
+    ``<tenor_bucket>:<stage>:<leg1_id>|<leg2_id>``, where ``stage`` is
+    ``nib_otr`` or ``otr_ofr1``."""
+    return f'{tenor_bucket}:{stage}:{leg1_id}|{leg2_id}'
 
 
 def _empty_row(asset_class: str, tenor_bucket: str, rejection_reason: str) -> Dict[str, Any]:
     row = {c: np.nan for c in UNIVERSE_ROW_COLUMNS}
+    bool_fields = ['quote_ok_nib', 'otr_roll_flag', 'lag_exists']
+    bool_fields += [f'quote_ok_{name}' for name in _RANK_NAMES.values()]
+    row.update({f: False for f in bool_fields})
     row.update({
         'asset_class': asset_class,
         'issuer_class': NewIssueConfig.issuer_class(asset_class),
         'tenor_bucket': tenor_bucket,
-        'roll_flag': False,
-        'quote_ok_otr': False,
-        'quote_ok_ofr1': False,
         'rejection_reason': rejection_reason,
     })
     return row
@@ -142,62 +174,157 @@ def _dv01_proxy(df_def: pd.DataFrame, bond_id: Any) -> float:
     return float(mdur) * float(price) / 100.0
 
 
+def _rank_ladder_raw(turnover: pd.Series, depth: int) -> Dict[int, Any]:
+    """Raw (unconfirmed) turnover-rank ladder for one date: 0=OTR challenger,
+    1..depth=OFR{k} challengers. Sparse buckets (fewer bonds than a given rank
+    needs) return NaN for that rank rather than aliasing to a lower rank."""
+    if turnover.empty:
+        return {r: np.nan for r in range(depth + 1)}
+    raw: Dict[int, Any] = {0: get_most_liquid_bond(turnover)}
+    for k in range(1, depth + 1):
+        raw[k] = get_offtherun_bond(turnover, n_exclude=k) if len(turnover) > k else np.nan
+    return raw
+
+
+def _confirm_rank_id(
+    history_df: Optional[pd.DataFrame],
+    raw_col: str,
+    confirmed_col: str,
+    since_col: str,
+    candidate_id: Any,
+    calc_date: date,
+    persistence_days: int,
+) -> Tuple[Any, Optional[pd.Timestamp], bool]:
+    """Confirm a turnover-ranked identity (OTR or an OFR rung) using a simple
+    persistence rule: a challenger only replaces the incumbent once its raw
+    turnover-leader rank has held for `persistence_days` consecutive prior
+    observations (see docs/dev/tbondcurve-30y-otr-ofr-plan.md "Rank
+    Definitions"). Returns (confirmed_id, since_date, changed)."""
+    if pd.isna(candidate_id):
+        return np.nan, pd.NaT, False
+
+    prev_confirmed = None
+    prev_since = None
+    if history_df is not None and len(history_df) > 0 and confirmed_col in history_df.columns:
+        last = history_df.iloc[-1]
+        prev_confirmed = last.get(confirmed_col)
+        prev_since = last.get(since_col)
+
+    if prev_confirmed is None or pd.isna(prev_confirmed):
+        # No prior confirmed identity — accept the first observed candidate immediately.
+        return candidate_id, pd.Timestamp(calc_date), True
+
+    if candidate_id == prev_confirmed:
+        since = pd.Timestamp(prev_since) if pd.notna(prev_since) else pd.Timestamp(calc_date)
+        return prev_confirmed, since, False
+
+    since = pd.Timestamp(prev_since) if pd.notna(prev_since) else pd.Timestamp(calc_date)
+    if persistence_days <= 1 or history_df is None or raw_col not in history_df.columns:
+        return candidate_id, pd.Timestamp(calc_date), True
+
+    recent_raw = history_df[raw_col].tail(persistence_days - 1)
+    if len(recent_raw) < persistence_days - 1 or not bool((recent_raw == candidate_id).all()):
+        # Challenger not yet persisted long enough — keep the incumbent.
+        return prev_confirmed, since, False
+
+    confirmed_since = pd.Timestamp(calc_date) - pd.Timedelta(days=persistence_days - 1)
+    return candidate_id, confirmed_since, True
+
+
 def _select_otr_ofr_for_date(
     df_def: pd.DataFrame,
     bond_rt: Optional[pd.DataFrame],
     asset_class: str,
     tenor_bucket: str,
     calc_date: date,
-    prev_otr_id: Any = None,
+    history_df: Optional[pd.DataFrame] = None,
 ) -> Dict[str, Any]:
-    """Compute one date's OTR/1st-OFR/2nd-OFR row for a single (asset_class, tenor_bucket)."""
+    """Compute one date's NIB / OTR / OFR-ladder row for a single
+    (asset_class, tenor_bucket). NIB is ranked by issuance recency; OTR and the
+    OFR ladder are ranked by turnover and confirmed via a persistence rule
+    against `history_df` (the bucket's prior rows) so a single noisy trade
+    cannot flip the ladder (see plan's "Rank Definitions")."""
     candidates = _bucket_candidates(df_def, asset_class, tenor_bucket, calc_date)
     if len(candidates) == 0:
         return _empty_row(asset_class, tenor_bucket, 'no_bonds_in_bucket')
     if len(candidates) < 2:
         return _empty_row(asset_class, tenor_bucket, 'insufficient_bucket_bonds')
 
-    # Rank by issuance recency (newest first): OTR is the most recently issued
-    # bond still outstanding in the bucket; 1st/2nd-OFR are the next most recent.
+    # NIB: newest issuance, independent of liquidity.
     start_dates = pd.to_datetime(df_def.loc[candidates, '起息日期'])
-    ranked = start_dates.sort_values(ascending=False).index
-    otr_id = _as_scalar_bond_id(ranked[0])
-    ofr1_id = _as_scalar_bond_id(ranked[1])
-    ofr2_id = _as_scalar_bond_id(ranked[2]) if len(ranked) > 2 else np.nan
+    issuance_ranked = start_dates.sort_values(ascending=False).index
+    nib_id = _as_scalar_bond_id(issuance_ranked[0])
+    nib_start = pd.Timestamp(start_dates.loc[nib_id])
+    nib_age_days = int((pd.Timestamp(calc_date) - nib_start).days)
 
-    otr_start = pd.Timestamp(start_dates.loc[otr_id])
-    event_age_days = int((pd.Timestamp(calc_date) - otr_start).days)
-    roll_flag = bool(prev_otr_id is not None and pd.notna(prev_otr_id) and prev_otr_id != otr_id)
-
-    row = {
+    row: Dict[str, Any] = {
         'asset_class': asset_class,
         'issuer_class': NewIssueConfig.issuer_class(asset_class),
         'tenor_bucket': tenor_bucket,
-        'otr_id': otr_id,
-        'ofr1_id': ofr1_id,
-        'ofr2_id': ofr2_id,
-        'otr_start_date': otr_start,
-        'event_age_days': event_age_days,
-        'roll_flag': roll_flag,
-        'dv01_ratio_ofr1_otr': _safe_ratio(_dv01_proxy(df_def, ofr1_id), _dv01_proxy(df_def, otr_id)),
-        'dv01_ratio_ofr2_otr': _safe_ratio(_dv01_proxy(df_def, ofr2_id), _dv01_proxy(df_def, otr_id)),
-        'otr_turnover': _turnover_ratio(df_def, otr_id),
-        'ofr1_turnover': _turnover_ratio(df_def, ofr1_id),
-        'quote_ok_otr': _quote_ok(df_def, bond_rt, otr_id),
-        'quote_ok_ofr1': _quote_ok(df_def, bond_rt, ofr1_id),
+        'nib_id': nib_id,
+        'nib_start_date': nib_start,
+        'nib_age_days': nib_age_days,
+        'quote_ok_nib': _quote_ok(df_def, bond_rt, nib_id),
+        'ytm_nib': _mid_yield(df_def, bond_rt, nib_id),
         'rejection_reason': None,
     }
-    ytm_otr = _mid_yield(df_def, bond_rt, otr_id)
-    ytm_ofr1 = _mid_yield(df_def, bond_rt, ofr1_id)
-    ytm_ofr2 = _mid_yield(df_def, bond_rt, ofr2_id)
-    row.update({
-        'ytm_otr': ytm_otr,
-        'ytm_ofr1': ytm_ofr1,
-        'ytm_ofr2': ytm_ofr2,
-        # Canonical BondNewIssue spread: ytm_1ofr - ytm_otr (see plan doc).
-        'spread': (ytm_ofr1 - ytm_otr) if (pd.notna(ytm_ofr1) and pd.notna(ytm_otr)) else np.nan,
-        'instrument_id': instrument_id(tenor_bucket, otr_id, ofr1_id),
-    })
+
+    # OTR / OFR ladder: turnover-ranked, confirmed via persistence.
+    turnover = pd.Series({b: _turnover_ratio(df_def, b) for b in candidates}).dropna()
+    row['nib_turnover'] = turnover.get(nib_id, np.nan)
+    depth = NewIssueConfig.OFR_LADDER_DEPTH
+    persistence_days = NewIssueConfig.OTR_RANK_PERSISTENCE_DAYS
+    raw_ladder = _rank_ladder_raw(turnover, depth)
+
+    confirmed: Dict[int, Any] = {}
+    prev_otr_id = history_df.iloc[-1].get('otr_id') if (history_df is not None and len(history_df) > 0) else None
+    for rank, raw_id in raw_ladder.items():
+        name = _RANK_NAMES[rank]
+        confirmed_id, since, changed = _confirm_rank_id(
+            history_df, f'{name}_raw_id', f'{name}_id', f'{name}_since_date',
+            raw_id, calc_date, persistence_days,
+        )
+        confirmed[rank] = confirmed_id
+        rank_age = int((pd.Timestamp(calc_date) - since).days) if pd.notna(since) else np.nan
+        row[f'{name}_raw_id'] = raw_id
+        row[f'{name}_id'] = confirmed_id
+        row[f'{name}_since_date'] = since
+        row[f'{name}_rank_age_days'] = rank_age
+        row[f'{name}_turnover'] = turnover.get(confirmed_id, np.nan) if pd.notna(confirmed_id) else np.nan
+        row[f'quote_ok_{name}'] = _quote_ok(df_def, bond_rt, confirmed_id) if pd.notna(confirmed_id) else False
+        row[f'ytm_{name}'] = _mid_yield(df_def, bond_rt, confirmed_id) if pd.notna(confirmed_id) else np.nan
+        if rank == 0:
+            row['otr_roll_flag'] = bool(changed and prev_otr_id is not None and pd.notna(prev_otr_id))
+
+    otr_id = confirmed[0]
+    ofr1_id = confirmed.get(1, np.nan)
+
+    # Existence-of-lag gate input (Stage 1 precondition): some auctions are
+    # absorbed into liquidity immediately, so NIB and OTR already coincide —
+    # that cohort has no migration lag to trade.
+    otr_turnover = row.get('otr_turnover', np.nan)
+    nib_turnover = row['nib_turnover']
+    lag_gap = (otr_turnover - nib_turnover) if (pd.notna(otr_turnover) and pd.notna(nib_turnover)) else np.nan
+    lag_exists = bool(
+        pd.notna(lag_gap) and nib_id != otr_id and lag_gap > NewIssueConfig.LAG_TURNOVER_GAP_THRESHOLD
+    )
+    row['lag_gap'] = lag_gap
+    row['lag_exists'] = lag_exists
+
+    ytm_nib = row['ytm_nib']
+    ytm_otr = row.get('ytm_otr', np.nan)
+    ytm_ofr1 = row.get('ytm_ofr1', np.nan)
+    row['dv01_ratio_otr_nib'] = _safe_ratio(_dv01_proxy(df_def, otr_id), _dv01_proxy(df_def, nib_id))
+    row['dv01_ratio_ofr1_otr'] = (
+        _safe_ratio(_dv01_proxy(df_def, ofr1_id), _dv01_proxy(df_def, otr_id)) if pd.notna(ofr1_id) else np.nan
+    )
+    # Stage 1 (nib_otr): y_NIB - y_OTR. Stage 2 (otr_ofr1): y_OTR - y_OFR1 (see plan doc).
+    row['spread_nib_otr'] = (ytm_nib - ytm_otr) if (pd.notna(ytm_nib) and pd.notna(ytm_otr)) else np.nan
+    row['spread_otr_ofr1'] = (ytm_otr - ytm_ofr1) if (pd.notna(ytm_otr) and pd.notna(ytm_ofr1)) else np.nan
+    row['instrument_id_nib_otr'] = instrument_id(tenor_bucket, 'nib_otr', nib_id, otr_id)
+    row['instrument_id_otr_ofr1'] = (
+        instrument_id(tenor_bucket, 'otr_ofr1', otr_id, ofr1_id) if pd.notna(ofr1_id) else np.nan
+    )
     return row
 
 
@@ -263,9 +390,7 @@ class OTROFRUniverseBuilder:
 
             new_rows: Dict[Any, Dict[str, Any]] = {}
             for current_date in dates_to_process:
-                prev_dates = existing_df.index[existing_df.index < pd.Timestamp(current_date)]
-                prev_otr_id = existing_df.loc[prev_dates[-1], 'otr_id'] if len(prev_dates) > 0 else None
-                row = _select_otr_ofr_for_date(df_def, bond_rt, asset_class, tenor_bucket, current_date, prev_otr_id)
+                row = _select_otr_ofr_for_date(df_def, bond_rt, asset_class, tenor_bucket, current_date, existing_df)
                 new_rows[pd.Timestamp(current_date)] = row
 
             new_df = pd.DataFrame(new_rows).T
@@ -279,8 +404,9 @@ class OTROFRUniverseBuilder:
 
             if self.verbose:
                 logger.info(
-                    "BondNewIssue universe %s/%s: OTR=%s rejection=%s",
+                    "BondNewIssue universe %s/%s: NIB=%s OTR=%s rejection=%s",
                     asset_class, tenor_bucket,
+                    new_df.iloc[-1]['nib_id'] if len(new_df) else None,
                     new_df.iloc[-1]['otr_id'] if len(new_df) else None,
                     new_df.iloc[-1]['rejection_reason'] if len(new_df) else None,
                 )
@@ -304,16 +430,19 @@ def refresh_new_issue_universe(
 
 
 def _rank_otr_ofr(df_def: pd.DataFrame, asset_class: str, tenor_bucket: str, calc_date: date) -> Optional[Dict[str, Any]]:
-    """Point-in-time OTR/1st-OFR/2nd-OFR identity only (no live quotes)."""
+    """Point-in-time issuance-recency identity only (no live quotes, no turnover
+    history). Used by the close-yield backfill path only, where NIB and OTR
+    cannot be distinguished (no historical turnover panel) so OTR is a naive
+    stand-in for NIB — never used for live gating (see `rejection_reason`)."""
     candidates = _bucket_candidates(df_def, asset_class, tenor_bucket, calc_date)
     if len(candidates) < 2:
         return None
     start_dates = pd.to_datetime(df_def.loc[candidates, '起息日期'])
     ranked = start_dates.sort_values(ascending=False).index
-    otr_id = _as_scalar_bond_id(ranked[0])
+    nib_id = _as_scalar_bond_id(ranked[0])
     ofr1_id = _as_scalar_bond_id(ranked[1])
     ofr2_id = _as_scalar_bond_id(ranked[2]) if len(ranked) > 2 else np.nan
-    return {'otr_id': otr_id, 'ofr1_id': ofr1_id, 'ofr2_id': ofr2_id, 'otr_start': pd.Timestamp(start_dates.loc[otr_id])}
+    return {'nib_id': nib_id, 'ofr1_id': ofr1_id, 'ofr2_id': ofr2_id, 'nib_start': pd.Timestamp(start_dates.loc[nib_id])}
 
 
 def backfill_new_issue_universe(
@@ -369,30 +498,36 @@ def backfill_new_issue_universe(
             ident = _rank_otr_ofr(df_def, asset_class, tenor_bucket, calc_date.date())
             if ident is None:
                 continue
-            otr_id, ofr1_id, ofr2_id = ident['otr_id'], ident['ofr1_id'], ident['ofr2_id']
+            nib_id, ofr1_id, ofr2_id = ident['nib_id'], ident['ofr1_id'], ident['ofr2_id']
+            # No historical turnover panel exists, so OTR/OFR1 are naive
+            # issuance-rank stand-ins here (nib_id doubles as otr_id) — flagged
+            # via rejection_reason, never used for live gating.
+            otr_id = nib_id
             ytm_otr = float(close.loc[calc_date, otr_id]) if otr_id in close.columns else np.nan
             ytm_ofr1 = float(close.loc[calc_date, ofr1_id]) if ofr1_id in close.columns else np.nan
             ytm_ofr2 = float(close.loc[calc_date, ofr2_id]) if (pd.notna(ofr2_id) and ofr2_id in close.columns) else np.nan
             if pd.isna(ytm_otr) or pd.isna(ytm_ofr1):
                 continue
-            event_age_days = int((calc_date - ident['otr_start']).days)
+            nib_age_days = int((calc_date - ident['nib_start']).days)
             roll_flag = bool(prev_otr_id is not None and prev_otr_id != otr_id)
             rows[calc_date] = {
                 'asset_class': asset_class,
                 'issuer_class': NewIssueConfig.issuer_class(asset_class),
                 'tenor_bucket': tenor_bucket,
-                'otr_id': otr_id, 'ofr1_id': ofr1_id, 'ofr2_id': ofr2_id,
-                'otr_start_date': ident['otr_start'],
-                'event_age_days': event_age_days,
-                'roll_flag': roll_flag,
+                'nib_id': nib_id, 'otr_id': otr_id, 'ofr1_id': ofr1_id, 'ofr2_id': ofr2_id,
+                'nib_start_date': ident['nib_start'], 'nib_age_days': nib_age_days,
+                'otr_roll_flag': roll_flag,
+                'dv01_ratio_otr_nib': 1.0,
                 'dv01_ratio_ofr1_otr': _safe_ratio(_dv01_proxy(df_def, ofr1_id), _dv01_proxy(df_def, otr_id)),
-                'dv01_ratio_ofr2_otr': _safe_ratio(_dv01_proxy(df_def, ofr2_id), _dv01_proxy(df_def, otr_id)),
-                'otr_turnover': np.nan, 'ofr1_turnover': np.nan,
-                'quote_ok_otr': False, 'quote_ok_ofr1': False,
+                'nib_turnover': np.nan, 'otr_turnover': np.nan, 'ofr1_turnover': np.nan,
+                'quote_ok_nib': False, 'quote_ok_otr': False, 'quote_ok_ofr1': False,
+                'lag_exists': False, 'lag_gap': np.nan,
                 'rejection_reason': 'backfilled_close_yield_only',
-                'ytm_otr': ytm_otr, 'ytm_ofr1': ytm_ofr1, 'ytm_ofr2': ytm_ofr2,
-                'spread': ytm_ofr1 - ytm_otr,
-                'instrument_id': instrument_id(tenor_bucket, otr_id, ofr1_id),
+                'ytm_nib': ytm_otr, 'ytm_otr': ytm_otr, 'ytm_ofr1': ytm_ofr1, 'ytm_ofr2': ytm_ofr2,
+                'spread_nib_otr': 0.0,
+                'spread_otr_ofr1': ytm_ofr1 - ytm_otr,
+                'instrument_id_nib_otr': instrument_id(tenor_bucket, 'nib_otr', nib_id, otr_id),
+                'instrument_id_otr_ofr1': instrument_id(tenor_bucket, 'otr_ofr1', otr_id, ofr1_id),
             }
             prev_otr_id = otr_id
 
@@ -405,6 +540,220 @@ def backfill_new_issue_universe(
         # Backfilled rows never override a live (BondRT-quoted) row for the same date.
         if isinstance(existing_df, pd.DataFrame) and len(existing_df) > 0:
             combined = pd.concat([new_df, existing_df])
+            combined = combined[~combined.index.duplicated(keep='last')].sort_index()
+        else:
+            combined = new_df.sort_index()
+        result[tenor_bucket] = combined
+
+    if update and result:
+        merged = dict(existing_data) if isinstance(existing_data, dict) else {}
+        merged.update(result)
+        updatePKL(merged, out_file)
+
+    return result
+
+
+def _load_balance_history(asset_class: str) -> pd.DataFrame:
+    """Point-in-time outstanding-balance history (date-indexed, columns=bond_id,
+    values=债券余额:亿 in 100mm CNY units).
+
+    Reconstructed from periodic ``{asset_class}-bondpool_<start>-<end>.pkl``
+    snapshot files (as-of the end date encoded in the filename) plus the
+    current ``{asset_class}-bondpool.pkl`` (as-of today). Balance only moves
+    on redemption/reopening events (observed cadence: roughly quarterly), so
+    callers should asof-match (forward-fill from the latest snapshot <= date)
+    rather than interpolate.
+    """
+    import glob
+    import re as _re
+
+    db_dir = str(DIR_DATA)
+    snapshots: Dict[pd.Timestamp, pd.Series] = {}
+
+    for path in glob.glob(os.path.join(db_dir, f'{asset_class}-bondpool_*.pkl')):
+        m = _re.search(r'(\d{8})-(\d{8})\.pkl$', os.path.basename(path))
+        if not m:
+            continue
+        asof = pd.Timestamp(m.group(2))
+        df = loadPKL(path)
+        if not isinstance(df, pd.DataFrame) or '债券余额:亿' not in df.columns:
+            continue
+        snapshots[asof] = pd.to_numeric(df['债券余额:亿'], errors='coerce')
+
+    current_path = os.path.join(db_dir, f'{asset_class}-bondpool.pkl')
+    if os.path.exists(current_path):
+        df = loadPKL(current_path)
+        if isinstance(df, pd.DataFrame) and '债券余额:亿' in df.columns:
+            snapshots[pd.Timestamp.today().normalize()] = pd.to_numeric(df['债券余额:亿'], errors='coerce')
+
+    if not snapshots:
+        return pd.DataFrame()
+
+    panel = pd.DataFrame(snapshots).T.sort_index()
+    panel.index.name = 'asof_date'
+    return panel
+
+
+def _balance_asof(balance_panel: pd.DataFrame, calc_date: pd.Timestamp) -> pd.Series:
+    """Latest balance snapshot at or before ``calc_date``; falls back to the
+    earliest available snapshot for dates older than any snapshot on file."""
+    if balance_panel.empty:
+        return pd.Series(dtype=float)
+    prior = balance_panel.index[balance_panel.index <= calc_date]
+    return balance_panel.loc[prior.max()] if len(prior) else balance_panel.iloc[0]
+
+
+def backfill_new_issue_universe_turnover(
+    asset_class: str,
+    tenor_buckets: Optional[List[str]] = None,
+    start: Optional[pd.Timestamp] = None,
+    end: Optional[pd.Timestamp] = None,
+    update: bool = True,
+) -> Dict[str, pd.DataFrame]:
+    """Reconstruct historical NIB/OTR/OFR-ladder identities using REAL
+    historical turnover (daily volume / asof outstanding-balance), instead of
+    the naive issuance-recency stand-in used by ``backfill_new_issue_universe``.
+
+    Data sources (all under DIR_DATA, the raw database — not DIR_INPUT):
+      - ``{asset_class}-px.pkl['Volume']``: daily traded volume per bond (CNY).
+      - ``{asset_class}-bondpool_<start>-<end>.pkl`` / ``{asset_class}-bondpool.pkl``:
+        periodic outstanding-balance snapshots (亿), asof-matched per date.
+
+    OTR/OFR ranks are confirmed via the same persistence rule as the live
+    daily builder (``_confirm_rank_id``) so a single noisy trading day cannot
+    flip the ladder — this makes NIB (issuance-recency) and OTR (turnover
+    leader) genuinely distinct bonds historically, unlike the naive
+    close-yield-only backfill.
+    """
+    from curves.utils.loader import _read_pickle_compat
+
+    if tenor_buckets is None:
+        tenor_buckets = NewIssueConfig.active_tenor_buckets(asset_class)
+    else:
+        active = set(NewIssueConfig.active_tenor_buckets(asset_class))
+        tenor_buckets = [tb for tb in tenor_buckets if tb in active]
+    if not tenor_buckets:
+        return {}
+
+    env = loadInstrumentDefinition(asset_class)
+    df_def = env['Def']
+
+    px_path = os.path.join(str(DIR_DATA), f'{asset_class}-px.pkl')
+    px = _read_pickle_compat(px_path, f'{asset_class}-px.pkl')
+    close = px['Close']
+    close.index = pd.to_datetime(close.index)
+    volume = px['Volume']
+    volume.index = pd.to_datetime(volume.index)
+
+    balance_panel = _load_balance_history(asset_class)
+    if balance_panel.empty:
+        logger.warning("No balance-history snapshots for %s; cannot compute historical turnover.", asset_class)
+        return {}
+
+    dates = close.index.sort_values()
+    if start is not None:
+        dates = dates[dates >= pd.Timestamp(start)]
+    if end is not None:
+        dates = dates[dates <= pd.Timestamp(end)]
+
+    out_file = os.path.join(DIR_INPUT, f'{asset_class}-newissue.pkl')
+    existing_data = loadPKL(out_file)
+
+    depth = NewIssueConfig.OFR_LADDER_DEPTH
+    persistence_days = NewIssueConfig.OTR_RANK_PERSISTENCE_DAYS
+
+    result: Dict[str, pd.DataFrame] = {}
+    for tenor_bucket in tenor_buckets:
+        rows: Dict[pd.Timestamp, Dict[str, Any]] = {}
+        recent_window: List[Dict[str, Any]] = []  # rolling tail, bounded by persistence_days
+
+        for calc_date in dates:
+            candidates = _bucket_candidates(df_def, asset_class, tenor_bucket, calc_date.date())
+            if len(candidates) < 2 or calc_date not in volume.index:
+                continue
+
+            vol_cols = [c for c in candidates if c in volume.columns]
+            vol_row = pd.to_numeric(volume.loc[calc_date, vol_cols], errors='coerce')
+            bal_row = _balance_asof(balance_panel, calc_date).reindex(vol_row.index)
+            turnover = (vol_row / pd.to_numeric(bal_row, errors='coerce') / 1e8).dropna()
+            if turnover.empty:
+                continue
+
+            start_dates = pd.to_datetime(df_def.loc[candidates, '起息日期'])
+            issuance_ranked = start_dates.sort_values(ascending=False).index
+            nib_id = _as_scalar_bond_id(issuance_ranked[0])
+            nib_start = pd.Timestamp(start_dates.loc[nib_id])
+            ytm_nib = float(close.loc[calc_date, nib_id]) if nib_id in close.columns else np.nan
+
+            raw_ladder = _rank_ladder_raw(turnover, depth)
+            history_df = pd.DataFrame(recent_window) if recent_window else None
+            prev_otr_id = recent_window[-1].get('otr_id') if recent_window else None
+
+            row: Dict[str, Any] = {
+                'asset_class': asset_class,
+                'issuer_class': NewIssueConfig.issuer_class(asset_class),
+                'tenor_bucket': tenor_bucket,
+                'nib_id': nib_id, 'nib_start_date': nib_start,
+                'nib_age_days': int((calc_date - nib_start).days),
+                'ytm_nib': ytm_nib, 'nib_turnover': turnover.get(nib_id, np.nan),
+                'quote_ok_nib': False,
+            }
+            for rank, raw_id in raw_ladder.items():
+                name = _RANK_NAMES[rank]
+                confirmed_id, since, changed = _confirm_rank_id(
+                    history_df, f'{name}_raw_id', f'{name}_id', f'{name}_since_date',
+                    raw_id, calc_date.date(), persistence_days,
+                )
+                row[f'{name}_raw_id'] = raw_id
+                row[f'{name}_id'] = confirmed_id
+                row[f'{name}_since_date'] = since
+                row[f'{name}_rank_age_days'] = int((calc_date - since).days) if pd.notna(since) else np.nan
+                row[f'{name}_turnover'] = turnover.get(confirmed_id, np.nan) if pd.notna(confirmed_id) else np.nan
+                row[f'quote_ok_{name}'] = False
+                row[f'ytm_{name}'] = (
+                    float(close.loc[calc_date, confirmed_id])
+                    if (pd.notna(confirmed_id) and confirmed_id in close.columns) else np.nan
+                )
+                if rank == 0:
+                    row['otr_roll_flag'] = bool(changed and prev_otr_id is not None and pd.notna(prev_otr_id))
+
+            otr_id, ofr1_id = row['otr_id'], row.get('ofr1_id', np.nan)
+
+            otr_turnover, nib_turnover = row.get('otr_turnover', np.nan), row['nib_turnover']
+            lag_gap = (otr_turnover - nib_turnover) if (pd.notna(otr_turnover) and pd.notna(nib_turnover)) else np.nan
+            row['lag_gap'] = lag_gap
+            row['lag_exists'] = bool(
+                pd.notna(lag_gap) and nib_id != otr_id and lag_gap > NewIssueConfig.LAG_TURNOVER_GAP_THRESHOLD
+            )
+            row['dv01_ratio_otr_nib'] = _safe_ratio(_dv01_proxy(df_def, otr_id), _dv01_proxy(df_def, nib_id))
+            row['dv01_ratio_ofr1_otr'] = (
+                _safe_ratio(_dv01_proxy(df_def, ofr1_id), _dv01_proxy(df_def, otr_id)) if pd.notna(ofr1_id) else np.nan
+            )
+            ytm_otr, ytm_ofr1 = row.get('ytm_otr', np.nan), row.get('ytm_ofr1', np.nan)
+            row['spread_nib_otr'] = (ytm_nib - ytm_otr) if (pd.notna(ytm_nib) and pd.notna(ytm_otr)) else np.nan
+            row['spread_otr_ofr1'] = (ytm_otr - ytm_ofr1) if (pd.notna(ytm_otr) and pd.notna(ytm_ofr1)) else np.nan
+            row['instrument_id_nib_otr'] = instrument_id(tenor_bucket, 'nib_otr', nib_id, otr_id)
+            row['instrument_id_otr_ofr1'] = (
+                instrument_id(tenor_bucket, 'otr_ofr1', otr_id, ofr1_id) if pd.notna(ofr1_id) else np.nan
+            )
+            row['rejection_reason'] = 'backfilled_with_turnover'
+
+            rows[calc_date] = row
+            recent_window.append(row)
+            if len(recent_window) > persistence_days:
+                recent_window.pop(0)
+
+        if not rows:
+            continue
+        new_df = pd.DataFrame(rows).T
+        new_df.index.name = 'date'
+
+        existing_df = existing_data.get(tenor_bucket)
+        if isinstance(existing_df, pd.DataFrame) and len(existing_df) > 0:
+            # Turnover-based rows are strictly better than both the naive
+            # close-yield-only backfill and any pre-existing row for the same
+            # date — they win on overlap.
+            combined = pd.concat([existing_df, new_df])
             combined = combined[~combined.index.duplicated(keep='last')].sort_index()
         else:
             combined = new_df.sort_index()

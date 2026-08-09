@@ -177,7 +177,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--steps",
         nargs="*",
         default=None,
-        help="Refresh step names to run (default: all). Choices: rates, credit, irs, stat",
+        help="Refresh step names to run (default: all). Choices: rates, otr_ofr, credit, irs, stat",
     )
 
     sched = sub.add_parser("scheduler", help="Start periodic refresh scheduler during trading hours")

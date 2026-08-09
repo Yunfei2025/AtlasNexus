@@ -11,7 +11,7 @@ avoid triggering heavy data loads from `web.core.load`.
 from __future__ import annotations
 
 from dash import dcc, html
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 
 from .common import _fi_card_header
 
@@ -174,9 +174,18 @@ def build_spreads_layout():
 
         # ── Seasonal Pattern (right) + Monthly Statistics (left, narrower) ─────
         html.Div([
-            # Monthly Statistics — left, narrower
+            # Monthly Statistics / Issuance Statistics (BondNewIssue) — left, narrower
             html.Div([
-                _fi_card_header("Monthly Statistics", badge_text="Directional bias"),
+                html.Div([
+                    html.Span(id="spread-seasonal-stats-title", children="Monthly Statistics",
+                              style={'fontSize': '13px', 'fontWeight': '600', 'color': 'var(--text-primary)'}),
+                    html.Span(id="spread-seasonal-stats-badge", children="Directional bias", style={
+                        'fontSize': '9px', 'color': 'var(--text-muted)', 'background': 'var(--surface-input)',
+                        'padding': '2px 7px', 'borderRadius': '3px', 'border': '1px solid var(--border-default)',
+                    }),
+                ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
+                          'padding': '11px 16px', 'background': 'var(--surface-panel)',
+                          'borderBottom': '1px solid var(--border-strong)'}),
                 html.Div(id="spread-seasonal-stats", style={'padding': '12px 16px', 'overflow': 'auto', 'maxHeight': '340px'}),
             ], style={'flex': '0 0 300px', 'border': '1px solid var(--border-strong)', 'borderRadius': '8px',
                       'overflow': 'hidden', 'backgroundColor': 'transparent'}),
@@ -442,6 +451,84 @@ def register_spreads_callbacks(app) -> None:
         fig.update_layout(**layout_kwargs)
         return fig
 
+    def _newissue_ts_figure(ticker_label: str):
+        """Render canonical BondNewIssue stage time series (e.g. NIB_OTR-5Y)."""
+        from dateutil.relativedelta import relativedelta
+        from settings.general import GeneralConfig
+        from web.tabs.alpha.data import load_spread_timeseries, to_newissue_stage_label
+
+        ts = load_spread_timeseries('BondNewIssue')
+        if not isinstance(ts, pd.DataFrame) or ts.empty:
+            return _fut_empty("Waiting for data: BondNewIssue...")
+
+        def _best_default_column() -> str:
+            ordered = [c for c in ts.columns if str(c).startswith('OTROFR1-')]
+            if not ordered:
+                ordered = list(ts.columns)
+            return max(ordered, key=lambda c: int(pd.to_numeric(ts[c], errors='coerce').notna().sum()))
+
+        actual_pair_id = ticker_label
+        if actual_pair_id and ':' in str(actual_pair_id):
+            ticker_label = to_newissue_stage_label(actual_pair_id)
+
+        if not ticker_label or ticker_label not in ts.columns:
+            ticker_label = _best_default_column()
+
+        s = pd.to_numeric(ts[ticker_label], errors='coerce').dropna()
+        if len(s) < 2 and str(ticker_label).startswith('NIBOTR-'):
+            tenor = str(ticker_label).split('-', 1)[-1]
+            fallback_col = f'OTROFR1-{tenor}'
+            if fallback_col in ts.columns:
+                s = pd.to_numeric(ts[fallback_col], errors='coerce').dropna()
+                ticker_label = fallback_col
+        if s.empty:
+            return _fut_empty(f"No data for {ticker_label}")
+
+        mean = float(s.mean()) if len(s) else None
+        vol = float(s.std(ddof=1)) if len(s) > 1 else None
+        vmax = float(s.max()) if len(s) else None
+        vmin = float(s.min()) if len(s) else None
+
+        window = getattr(GeneralConfig, "STAT_WINDOW", 12)
+        start = s.index[-1] - relativedelta(months=window)
+
+        fig = go.Figure(data=[go.Scatter(
+            name="Spread",
+            x=s.index,
+            y=s.values,
+            line={"width": 3, "color": "#2a6fd3"},
+        )])
+
+        if mean is not None:
+            bands = [(mean, "mean", "solid", "#aaaaaa")]
+            if vol and vol > 0:
+                bands += [
+                    (mean + vol, "+1σ", "dot", "#f39c12"),
+                    (mean - vol, "-1σ", "dot", "#f39c12"),
+                    (mean + 2 * vol, "+2σ", "dash", "#ef553b"),
+                    (mean - 2 * vol, "-2σ", "dash", "#ef553b"),
+                ]
+            for val, label, dash, color in bands:
+                fig.add_hline(y=val, line_dash=dash, line_color=color,
+                              annotation_text=label, annotation_position="right")
+
+        title = (
+            f"<b>{ticker_label}</b><br>"
+            f"Latest: {float(s.iloc[-1]):.2f}bp, Mean: {mean:.2f}bp, "
+            f"Vol: {(vol if vol is not None else float('nan')):.2f}bp, "
+            f"Max: {vmax:.2f}bp, Min: {vmin:.2f}bp"
+        )
+        fig.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color="#ffffff"), title=title,
+            xaxis=dict(range=[start, s.index[-1]]),
+            yaxis=dict(title='Spread, bp'),
+            showlegend=False,
+            margin=dict(l=50, r=20, t=60, b=40),
+            hovermode='x unified',
+        )
+        return fig
+
     # Realtime data refresh callback
     @app.callback(
         Output("realtime-data", "data"),
@@ -469,6 +556,16 @@ def register_spreads_callbacks(app) -> None:
     )
     def _update_spread_timestamp(_interval, _stype, _refresh_clicks):
         return f"Updated: {datetime.datetime.now().strftime('%H:%M:%S')}"
+
+    @app.callback(
+        Output("spread-seasonal-stats-title", "children"),
+        Output("spread-seasonal-stats-badge", "children"),
+        Input("spread-type", "value"),
+    )
+    def _update_seasonal_stats_header(stype):
+        if stype == 'BondNewIssue':
+            return "Issuance Statistics", "Days since issuance/roll"
+        return "Monthly Statistics", "Directional bias"
 
     @app.callback(
         Output("graph-spread-bar", "figure"),
@@ -570,23 +667,35 @@ def register_spreads_callbacks(app) -> None:
     @app.callback(
         Output("ticker", "children", allow_duplicate=True),
         Input("graph-spread-bar", "clickData"),
+        State("spread-type", "value"),
         prevent_initial_call=True,
     )
-    def _display_click_data(clickData):
+    def _display_click_data(clickData, stype):
         """Handle click events on spread bar chart."""
         from dash.exceptions import PreventUpdate
         if not clickData or "points" not in clickData or not clickData["points"]:
             raise PreventUpdate
         point = clickData["points"][0]
-        ticker = point.get("x")
-        if ticker is None:
-            ticker = point.get("label")
-        if ticker is None:
+        if stype == 'BondNewIssue':
             customdata = point.get("customdata")
             if isinstance(customdata, (list, tuple)) and customdata:
                 ticker = customdata[0]
             elif customdata is not None:
                 ticker = customdata
+            else:
+                ticker = point.get("x")
+                if ticker is None:
+                    ticker = point.get("label")
+        else:
+            customdata = point.get("customdata")
+            if isinstance(customdata, (list, tuple)) and customdata:
+                ticker = customdata[0]
+            elif customdata is not None:
+                ticker = customdata
+            else:
+                ticker = point.get("x")
+                if ticker is None:
+                    ticker = point.get("label")
         if not ticker:
             raise PreventUpdate
         return ticker
@@ -632,6 +741,9 @@ def register_spreads_callbacks(app) -> None:
             if stype in _FUT_SPREADS:
                 return _fit_to_frame(_futures_ts_figure(stype, ticker))
 
+            if stype == 'BondNewIssue':
+                return _fit_to_frame(_newissue_ts_figure(ticker))
+
             # Handle empty/None ticker gracefully
             if not ticker:
                 return _fit_to_frame(go.Figure(data=[], layout=dict(
@@ -668,6 +780,9 @@ def register_spreads_callbacks(app) -> None:
             seasonal_pivot,
             monthly_seasonal_stats,
             build_seasonal_overlay_figure,
+            episode_pivot,
+            build_episode_overlay_figure,
+            episode_bucket_stats,
         )
 
         _empty_fig = go.Figure(layout=dict(
@@ -680,6 +795,70 @@ def register_spreads_callbacks(app) -> None:
             return _empty_fig, html.Div()
 
         n_years = int(n_years or 5)
+
+        # BondNewIssue: episode-relative overlay (day-since-issuance/roll, one
+        # line per historical episode) instead of a calendar-year overlay —
+        # each pair identity only lives from one roll to the next (quarter,
+        # at most a year), so "day of year" is not meaningful here.
+        if stype == 'BondNewIssue':
+            from web.tabs.alpha.data import load_newissue_episode_series, to_newissue_stage_label
+            label = to_newissue_stage_label(ticker) if ':' in str(ticker) else ticker
+            try:
+                episodes = load_newissue_episode_series(label)
+                pivot = episode_pivot(episodes)
+            except Exception as e:
+                print(f"[seasonal] BondNewIssue episode error for {label}: {e}")
+                return _empty_fig, html.Div()
+
+            if pivot.empty:
+                return _empty_fig, html.Div(
+                    f"No episode history for {label}",
+                    style={"color": "#8fb3d9", "fontSize": "11px", "padding": "4px"},
+                )
+
+            fig = build_episode_overlay_figure(pivot, title=f"{label} — episode overlay (day since roll)")
+
+            stats_children = html.Div()
+            try:
+                bucket_stats = episode_bucket_stats(pivot)
+                if not bucket_stats.empty:
+                    _arrow = {"up": "↑", "down": "↓", "neutral": "—"}
+                    _dir_color = {"up": "#00cc96", "down": "#ef553b", "neutral": "#aab0c0"}
+                    header = html.Div([
+                        html.Span("Day",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
+                        html.Span("Dir",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "16px"}),
+                        html.Span("Cons%", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
+                        html.Span("AvgΔ",  style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
+                        html.Span("Obs",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
+                        html.Span("p-val", style={"fontSize": "10px", "color": "#8fb3d9"}),
+                    ], style={"display": "flex", "gap": "12px", "padding": "2px 6px",
+                               "borderBottom": "1px solid #1a3a7a", "marginBottom": "2px"})
+                    rows = []
+                    for day, row in bucket_stats.iterrows():
+                        p = row["p_value"]
+                        sig = "**" if p < 0.05 else ("*" if p < 0.10 else "")
+                        dir_c = _dir_color[row["direction"]]
+                        rows.append(html.Div([
+                            html.Span(f"D+{day}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "34px"}),
+                            html.Span(f"{_arrow[row['direction']]}",
+                                      style={"fontSize": "11px", "color": dir_c, "minWidth": "16px"}),
+                            html.Span(f"{row['consistency']*100:.0f}%{sig}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "44px"}),
+                            html.Span(f"{row['avg_chg_bp']:+.2f}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "44px"}),
+                            html.Span(f"n={row['n_episodes']}", style={"fontSize": "11px", "color": "#aab0c0", "minWidth": "34px"}),
+                            html.Span(f"p={p:.2f}", style={"fontSize": "11px", "color": "#aab0c0"}),
+                        ], style={"display": "flex", "gap": "12px", "padding": "2px 6px"}))
+                    note = html.Div(
+                        "* p<0.10  ** p<0.05  (one-sided binomial; no FDR correction applied)",
+                        style={"fontSize": "9px", "color": "#8fb3d9", "marginTop": "4px", "padding": "0 6px"},
+                    )
+                    stats_children = html.Div([header] + rows + [note],
+                                              style={"background": "transparent", "borderRadius": "4px",
+                                                     "padding": "6px 0", "marginBottom": "8px"})
+            except Exception as e:
+                print(f"[seasonal] BondNewIssue episode stats error: {e}")
+
+            return fig, stats_children
+
 
         # --- Acquire the spread series ---
         series: pd.Series | None = None
@@ -717,11 +896,15 @@ def register_spreads_callbacks(app) -> None:
 
         # --- Build overlay figure ---
         try:
+            title_ticker = ticker
+            if stype == 'BondNewIssue' and ':' in str(ticker):
+                from web.tabs.alpha.data import to_newissue_stage_label
+                title_ticker = to_newissue_stage_label(ticker)
             fig = build_seasonal_overlay_figure(
                 pivot,
                 highlight_month=int(highlight_month) if highlight_month else None,
                 stats=stats,
-                title=f"{ticker} — seasonal year overlay",
+                title=f"{title_ticker} — seasonal year overlay",
                 raw_series=series,
                 spread_type=stype,
             )

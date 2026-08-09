@@ -203,6 +203,48 @@ def list_running_jobs() -> list[dict[str, Any]]:
     return running
 
 
+def latest_job_status(*, job_types: set[str] | None = None) -> dict[str, Any] | None:
+    """Return the most recent job status, optionally filtered by job type.
+
+    Recency is based on ended_at, then started_at, then created_at.
+    """
+    jd = jobs_dir()
+    if not jd.exists():
+        return None
+
+    latest: dict[str, Any] | None = None
+    latest_ts: datetime | None = None
+
+    for job_dir in jd.iterdir():
+        if not job_dir.is_dir():
+            continue
+        status_path = job_dir / "status.json"
+        if not status_path.exists():
+            continue
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        jtype = _cmd_type(status.get("cmd", []))
+        if job_types is not None and jtype not in job_types:
+            continue
+
+        ts = (
+            _parse_status_time(status.get("ended_at"))
+            or _parse_status_time(status.get("started_at"))
+            or _parse_status_time(status.get("created_at"))
+        )
+        if ts is None:
+            continue
+
+        if latest_ts is None or ts > latest_ts:
+            latest_ts = ts
+            latest = status
+
+    return latest
+
+
 def _cmd_type(cmd: list[str]) -> str | None:
     """Extract the subcommand type from a cmd list like ['python', 'main.py', 'eod', ...]."""
     for i, arg in enumerate(cmd):

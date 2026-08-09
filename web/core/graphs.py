@@ -118,6 +118,46 @@ def _tenor_spread_sort_key(ticker: str) -> tuple:
     return (_TENOR_SPREAD_RANK.get(ticker, len(_TENOR_SPREAD_ORDER)), ticker)
 
 
+def _current_ofr1_ids(asset_class: str) -> set[str]:
+    """Return latest OFR1 IDs across active tenor buckets for an asset class."""
+    path = os.path.join(DIR_INPUT, f"{asset_class}-newissue.pkl")
+    data = _load_pickle_cached(path)
+    if not isinstance(data, dict):
+        return set()
+
+    out: set[str] = set()
+    for df in data.values():
+        if not isinstance(df, pd.DataFrame) or df.empty or 'ofr1_id' not in df.columns:
+            continue
+        series = df['ofr1_id'].dropna()
+        if series.empty:
+            continue
+        latest = str(series.iloc[-1]).strip()
+        if latest:
+            out.add(latest)
+    return out
+
+
+def _filter_current_ofr1_mature_rv(stype: str, spread: pd.DataFrame) -> pd.DataFrame:
+    """Keep only mature RV OFRk/OFR1 pairs for TBondCurve/CBondCurve bars."""
+    if stype not in {"TBondCurve", "CBondCurve"} or spread.empty:
+        return spread
+
+    idx = spread.index.astype(str)
+    pair_mask = idx.str.contains('|', regex=False)
+    pair_spread = spread.loc[pair_mask].copy()
+    if pair_spread.empty:
+        return pair_spread
+
+    asset_class = "TBond" if stype == "TBondCurve" else "CBond"
+    current_ofr1 = _current_ofr1_ids(asset_class)
+    if not current_ofr1:
+        return pair_spread
+
+    right_leg = pair_spread.index.to_series().astype(str).str.rsplit('|', n=1).str[-1]
+    return pair_spread.loc[right_leg.isin(current_ofr1).values]
+
+
 # Thresholds and type groupings
 ZSCORE_ALERT_THRESHOLD: float = 2.0
 TYPES_SIMPLE_ONLY: set[str] = set()
@@ -667,7 +707,14 @@ def statistics(interval, data_rt_js, stype, season):
         raise PreventUpdate
     df_ = pd.DataFrame(df_raw)
     yunit = "Z-score"
-    spread = df_[['spread', 'Zscore']].dropna().copy()
+    keep_cols = ['spread', 'Zscore']
+    if 'label' in df_.columns:
+        keep_cols.append('label')
+    spread = df_[keep_cols].dropna(subset=['spread', 'Zscore']).copy()
+    spread = _filter_current_ofr1_mature_rv(stype, spread)
+    if spread.empty:
+        empty_layout = layout_stat(yunit)
+        return go.Figure(data=[], layout=empty_layout)
     spread['color'] = spread['Zscore'].apply(_zscore_color)
 
     # Sort by index (ticker code) for better readability

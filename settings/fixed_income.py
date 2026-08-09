@@ -179,6 +179,21 @@ class NewIssueConfig:
     ENTRY_AGE_MIN_DAYS = 0
     ENTRY_AGE_MAX_DAYS = 90
 
+    # Depth of the turnover-ranked off-the-run ladder built per bucket: OFR1..OFR{depth}.
+    # OFR1 feeds Stage 2 (otr_ofr1) of BondNewIssue; OFR1..OFR{depth} feed mature RV.
+    OFR_LADDER_DEPTH = 3
+
+    # A turnover-rank challenger (new OTR or new OFR-k) only replaces the confirmed
+    # incumbent once it has held the raw turnover lead for this many consecutive
+    # observations — avoids splicing mature-RV/event history across noise-driven
+    # rank flips (see docs/dev/tbondcurve-30y-otr-ofr-plan.md "Rank Definitions").
+    OTR_RANK_PERSISTENCE_DAYS = 3
+
+    # Minimum turnover-ratio gap (OTR - NIB) required to treat a cohort as having
+    # a live NIB->OTR migration lag worth trading (Stage 1 existence-of-lag gate).
+    # Units match `_turnover_ratio` (volume / balance, fractional).
+    LAG_TURNOVER_GAP_THRESHOLD = 0.01
+
     @classmethod
     def issuer_class(cls, asset_class: str) -> str:
         return cls.ISSUER_CLASS_MAP.get(asset_class, asset_class)

@@ -316,11 +316,11 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
     elif stype == 'IRS':
         return _parse_repo_spread_legs(tid)
 
-    # BondNewIssue: tid = "<tenor_bucket>:<otr_id>|<ofr1_id>" (see
-    # docs/dev/tbondcurve-30y-otr-ofr-plan.md). Default position is long OTR,
-    # short 1st-OFR — leg1 is the bond bought, leg2 the bond sold.
+    # BondNewIssue: tid = "<tenor_bucket>:<stage>:<leg1_id>|<leg2_id>" (see
+    # docs/dev/tbondcurve-30y-otr-ofr-plan.md). stage=nib_otr -> leg1=NIB,
+    # leg2=OTR; stage=otr_ofr1 -> leg1=OTR, leg2=OFR1.
     elif stype == 'BondNewIssue':
-        m = re.match(r'^[^:]+:([^|]+)\|(.+)$', str(tid))
+        m = re.match(r'^[^:]+:[^:]+:([^|]+)\|(.+)$', str(tid))
         if m:
             return (m.group(1), m.group(2))
         return ('', '')

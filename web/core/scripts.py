@@ -55,6 +55,21 @@ _PICKLE_CACHE: dict[str, tuple[float, Any]] = {}
 
 BOND_TYPES = ("TBond", "CBond")
 
+
+def _short_newissue_label(ticker: str) -> str:
+    """Map '<tenor>:<stage>:<leg1>|<leg2>' -> compact NewIssue label."""
+    m = re.match(r'^([^:]+):([^:]+):([^|]+)\|(.+)$', str(ticker))
+    if not m:
+        return str(ticker)
+    tenor, stage, leg1, leg2 = m.group(1), m.group(2), m.group(3), m.group(4)
+    if leg1 == leg2:
+        return f"{stage.replace('_', '').upper()}-{tenor}"
+    stage_map = {
+        'nib_otr': 'NIBOTR',
+        'otr_ofr1': 'OTROFR1',
+    }
+    return f"{stage_map.get(stage, stage.upper())}-{tenor}"
+
 _locks = {
     "initialise": threading.Lock(),
     "autoruns1": threading.Lock(),
@@ -499,10 +514,55 @@ def refresh(interval):
                 if (_spread is not None and isinstance(_spread, pd.DataFrame) and not _spread.empty
                         and isinstance(_stat, pd.DataFrame) and not _stat.empty):
                     _current = _spread.iloc[-1].rename('spread').to_frame()
-                    _current = _current.join(_stat[['mean', 'vol']], how='inner')
+                    _mean_src = _stat['mean'] if 'mean' in _stat.columns else pd.Series(index=_stat.index, dtype=float)
+                    _vol_src = _stat['vol'] if 'vol' in _stat.columns else pd.Series(index=_stat.index, dtype=float)
+                    _current = _current.join(
+                        pd.DataFrame({'mean': _mean_src, 'vol': _vol_src}),
+                        how='left',
+                    )
+                    _current['spread'] = pd.to_numeric(_current['spread'], errors='coerce')
+                    _current['mean'] = pd.to_numeric(_current['mean'], errors='coerce')
+                    _current['vol'] = pd.to_numeric(_current['vol'], errors='coerce')
+
+                    # BondNewIssue is event-driven; on short history windows mean/vol
+                    # may be unavailable. Fall back to per-instrument history stats so
+                    # bars still render instead of disappearing.
+                    for _col in _current.index:
+                        if pd.notna(_current.at[_col, 'mean']) and pd.notna(_current.at[_col, 'vol']) and _current.at[_col, 'vol'] != 0:
+                            continue
+                        if _col in _spread.columns:
+                            _hist = pd.to_numeric(_spread[_col], errors='coerce').dropna()
+                            if _hist.shape[0] >= 2:
+                                _current.at[_col, 'mean'] = float(_hist.mean())
+                                _current.at[_col, 'vol'] = float(_hist.std(ddof=1))
+                            elif _hist.shape[0] == 1:
+                                _current.at[_col, 'mean'] = float(_hist.iloc[-1])
+                                _current.at[_col, 'vol'] = float('nan')
+
                     _vol = pd.to_numeric(_current['vol'], errors='coerce').replace(0, float('nan'))
                     _mean = pd.to_numeric(_current['mean'], errors='coerce')
                     _current['Zscore'] = (pd.to_numeric(_current['spread'], errors='coerce') - _mean) / _vol
+                    _current['Zscore'] = pd.to_numeric(_current['Zscore'], errors='coerce').fillna(0.0)
+
+                    # Drop invalid same-leg synthetic IDs, e.g. 260010.IB|260010.IB.
+                    _idx = _current.index.to_series().astype(str)
+                    _same_leg = _idx.str.extract(r'^[^:]+:[^:]+:([^|]+)\|(.+)$')
+                    if _same_leg.shape[1] == 2:
+                        _valid = (_same_leg[0] != _same_leg[1]).values
+                        _current = _current.loc[_valid]
+
+                    # If all z-scores are flat (common when only 1 observation exists
+                    # per instrument), derive a cross-sectional z-score from current
+                    # spread so bars remain visible and rankable.
+                    if not _current.empty:
+                        _z = pd.to_numeric(_current['Zscore'], errors='coerce').fillna(0.0)
+                        _spr = pd.to_numeric(_current['spread'], errors='coerce')
+                        if _z.abs().sum() == 0 and _spr.notna().sum() >= 2:
+                            _spr_std = float(_spr.std(ddof=1))
+                            if pd.notna(_spr_std) and _spr_std > 0:
+                                _current['Zscore'] = (_spr - float(_spr.mean())) / _spr_std
+
+                    _current['label'] = [_short_newissue_label(i) for i in _current.index]
                     _current['color'] = 'grey'
                     data_rt['BondNewIssue'] = _current
     except Exception:

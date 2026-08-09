@@ -2,16 +2,21 @@
 """Mature-pair relative value (``otr_ofr_rv``) under existing ``TBondCurve`` /
 ``CBondCurve`` (see docs/dev/tbondcurve-30y-otr-ofr-plan.md).
 
-Reuses the same point-in-time OTR/1st-OFR history already captured by
-``curves.calibration.otr_ofr_universe`` (``{asset_class}-newissue.pkl``).
-Every historical (otr_id, ofr1_id) episode with enough own history is
-exposed as an extra pair-instrument row/column merged into the existing
-``{asset_class}-spds.pkl['BondCurve']`` structure, so it shows up in the
-same TBondCurve/CBondCurve dropdown as ordinary bond-vs-curve instruments
-(distinguished by ``|`` in the ID: ``<otr_id>|<ofr1_id>``).
+Restricted to the turnover-ranked OFR ladder only (OFR1..OFR{depth}) — this
+module never touches NIB or OTR, so it cannot overlap with the BondNewIssue
+rotation-ladder event strategy by construction (see the plan's "Overlap
+Avoidance and Portfolio Netting"). Reuses the same point-in-time OFR-ladder
+history already captured by ``curves.calibration.otr_ofr_universe``
+(``{asset_class}-newissue.pkl``). Every historical (ofr1_id, ofrk_id) episode
+with enough own history is exposed as an extra pair-instrument row/column
+merged into the existing ``{asset_class}-spds.pkl['BondCurve']`` structure,
+so it shows up in the same TBondCurve/CBondCurve dropdown as ordinary
+bond-vs-curve instruments (distinguished by ``|`` in the ID:
+``<ofrk_id>|<ofr1_id>``).
 
 Each episode's mean/vol/halflife/stationary is computed from its own spread
-history only — never spliced across OTR rolls (see plan's cold-start policy).
+history only — never spliced across a rank-ladder promotion (see plan's
+cold-start policy and turnover-rank persistence rule).
 """
 from __future__ import annotations
 
@@ -34,33 +39,44 @@ MIN_EPISODE_ROWS = 20  # matches OU_calibrate's own stationarity-test floor
 
 
 def _episode_rows_to_pair_frames(df: pd.DataFrame) -> Dict[str, Dict[str, pd.Series]]:
-    """Group a per-bucket universe history by (otr_id, ofr1_id) episode."""
+    """Group a per-bucket universe history into OFR-ladder pair episodes.
+
+    For each rung k = 2..OFR_LADDER_DEPTH, groups rows by the (ofr1_id, ofrk_id)
+    identity pair (an "episode" persists while both rungs' confirmed identity
+    stays the same) and exposes ``ofr{k} - ofr1`` as the mature-RV spread.
+    """
     out: Dict[str, Dict[str, pd.Series]] = {}
-    if df is None or df.empty or 'instrument_id' not in df.columns:
+    if df is None or df.empty or 'ofr1_id' not in df.columns:
         return out
-    for inst_id, group in df.groupby('instrument_id'):
-        if pd.isna(inst_id) or not inst_id:
+    depth = NewIssueConfig.OFR_LADDER_DEPTH
+    for k in range(2, depth + 1):
+        id_col, ytm_col = f'ofr{k}_id', f'ytm_ofr{k}'
+        if id_col not in df.columns or ytm_col not in df.columns:
             continue
-        g = group.sort_index()
-        otr = pd.to_numeric(g['ytm_otr'], errors='coerce')
-        ofr1 = pd.to_numeric(g['ytm_ofr1'], errors='coerce')
-        spread = (ofr1 - otr).dropna()
-        if len(spread) < MIN_EPISODE_ROWS:
-            continue
-        otr_id = str(g['otr_id'].iloc[-1])
-        ofr1_id = str(g['ofr1_id'].iloc[-1])
-        pair_id = f'{otr_id}|{ofr1_id}'
-        out[pair_id] = {
-            'otr_id': otr_id, 'ofr1_id': ofr1_id,
-            'CloseYield': ofr1.reindex(spread.index),
-            'CurveYield': otr.reindex(spread.index),
-            'Spread': spread,
-        }
+        pair_key = df['ofr1_id'].astype(str) + '|' + df[id_col].astype(str)
+        for _pair, group in df.groupby(pair_key):
+            g = group.sort_index()
+            ofr1 = pd.to_numeric(g['ytm_ofr1'], errors='coerce')
+            ofrk = pd.to_numeric(g[ytm_col], errors='coerce')
+            spread = (ofrk - ofr1).dropna()
+            if len(spread) < MIN_EPISODE_ROWS:
+                continue
+            ofr1_id = str(g['ofr1_id'].iloc[-1])
+            ofrk_id = str(g[id_col].iloc[-1])
+            if pd.isna(ofr1_id) or ofr1_id in ('nan', '') or pd.isna(ofrk_id) or ofrk_id in ('nan', ''):
+                continue
+            pair_id = f'{ofrk_id}|{ofr1_id}'
+            out[pair_id] = {
+                'ofr1_id': ofr1_id, 'ofrk_id': ofrk_id,
+                'CloseYield': ofrk.reindex(spread.index),
+                'CurveYield': ofr1.reindex(spread.index),
+                'Spread': spread,
+            }
     return out
 
 
 def build_otr_ofr_rv_rows(asset_class: str) -> Dict[str, Dict[str, pd.Series]]:
-    """Collect mature-pair rows across all active tenor buckets for one asset_class."""
+    """Collect mature OFR-ladder pair rows across all active tenor buckets for one asset_class."""
     out_file = os.path.join(DIR_INPUT, f'{asset_class}-newissue.pkl')
     data = loadPKL(out_file)
     merged: Dict[str, Dict[str, pd.Series]] = {}
@@ -72,8 +88,9 @@ def build_otr_ofr_rv_rows(asset_class: str) -> Dict[str, Dict[str, pd.Series]]:
     return merged
 
 
+
 def refresh_otr_ofr_rv_spreads(asset_class: str, update: bool = True) -> Dict[str, pd.DataFrame]:
-    """Merge mature OTR/OFR pair rows into ``{asset_class}-spds.pkl['BondCurve']``.
+    """Merge mature OFR-ladder pair rows into ``{asset_class}-spds.pkl['BondCurve']``.
 
     Any previously-merged pair rows (index containing ``|``) are dropped and
     rebuilt fresh each call so stale/closed episodes do not linger.
@@ -128,10 +145,10 @@ def refresh_otr_ofr_rv_spreads(asset_class: str, update: bool = True) -> Dict[st
 
         stat = OU_calibrate(pd.DataFrame({pair_id: series['Spread']}))
         row = stat.loc[pair_id].to_dict() if pair_id in stat.index else {}
-        otr_id = series['otr_id']
+        ofr1_id = series['ofr1_id']
         ttm = np.nan
-        if otr_id in df_def.index:
-            ttm = pd.to_numeric(df_def.loc[otr_id].get('剩余期限'), errors='coerce')
+        if ofr1_id in df_def.index:
+            ttm = pd.to_numeric(df_def.loc[ofr1_id].get('剩余期限'), errors='coerce')
         row['ttm'] = float(ttm) if pd.notna(ttm) else np.nan
         row['vol_ratio'] = np.nan
         row['close'] = float(series['CurveYield'].iloc[-1] + row.get('mean', np.nan)) if pd.notna(row.get('mean', np.nan)) else np.nan
@@ -156,7 +173,7 @@ def refresh_otr_ofr_rv_spreads(asset_class: str, update: bool = True) -> Dict[st
 
 
 def refresh_otr_ofr_rv_realtime(asset_class: str, update: bool = True) -> pd.DataFrame:
-    """Merge mature OTR/OFR pair rows into ``{asset_class}-spdsrt.pkl['BondCurve']``.
+    """Merge mature OFR-ladder pair rows into ``{asset_class}-spdsrt.pkl['BondCurve']``.
 
     This is the file the legacy "Spread Analysis" bar chart
     (web/core/scripts.py::refresh) reads directly, so pairs must be merged
@@ -186,8 +203,8 @@ def refresh_otr_ofr_rv_realtime(asset_class: str, update: bool = True) -> pd.Dat
         sp = series['Spread']
         stat = OU_calibrate(pd.DataFrame({pair_id: sp}))
         row = stat.loc[pair_id].to_dict() if pair_id in stat.index else {}
-        otr_id = series['otr_id']
-        ttm = pd.to_numeric(df_def.loc[otr_id].get('剩余期限'), errors='coerce') if otr_id in df_def.index else np.nan
+        ofr1_id = series['ofr1_id']
+        ttm = pd.to_numeric(df_def.loc[ofr1_id].get('剩余期限'), errors='coerce') if ofr1_id in df_def.index else np.nan
         row['ttm'] = float(ttm) if pd.notna(ttm) else np.nan
         row['CloseYield'] = float(series['CloseYield'].iloc[-1])
         row['CurveYield'] = float(series['CurveYield'].iloc[-1])

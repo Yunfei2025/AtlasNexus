@@ -4,11 +4,164 @@
 from __future__ import annotations
 
 from typing import Optional
+import re
 
 import pandas as pd
 
 from .constants import _build_tenor_spread_timeseries, _exclude_swapspread_butterflies, SPREAD_CATEGORIES
 from .io import _get_input_dir, _load_pickle_safe, _normalize_repo_frame
+
+
+def to_newissue_stage_label(ticker: str) -> str:
+    """Convert NewIssue ticker to canonical compact label (e.g. NIBOTR-5Y)."""
+    m = re.match(r'^([^:]+):([^:]+):([^|]+)\|(.+)$', str(ticker))
+    if not m:
+        return str(ticker)
+    tenor, stage = m.group(1), m.group(2)
+    stage_map = {
+        'nib_otr': 'NIBOTR',
+        'otr_ofr1': 'OTROFR1',
+    }
+    return f"{stage_map.get(stage, stage.upper())}-{tenor}"
+
+
+def load_newissue_stage_timeseries() -> Optional[pd.DataFrame]:
+    """Load canonical BondNewIssue stage series stitched across episode history.
+
+    This reconstructs a continuous per-stage history from the backfilled
+    ``TBond-newissue.pkl`` / ``CBond-newissue.pkl`` universe files so seasonal
+    analytics can plot year-over-year overlays even though the dashboard-facing
+    ``BondNewIssue-spds.pkl`` summary is only a compact snapshot.
+
+    Output columns are concise stage keys such as ``NIB_OTR-5Y`` and
+    ``OTR_OFR1-10Y``.
+    """
+    dir_input = _get_input_dir()
+
+    def _read_history(asset_class: str) -> list[pd.DataFrame]:
+        data = _load_pickle_safe(dir_input / f'{asset_class}-newissue.pkl')
+        if not isinstance(data, dict):
+            return []
+        out: list[pd.DataFrame] = []
+        for tenor_bucket, df in data.items():
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                continue
+            frame = df.copy()
+            frame.index = pd.to_datetime(frame.index)
+
+            # OTR/OFR1 has the long-lived history we want for year-over-year overlays.
+            if {'ytm_otr', 'ytm_ofr1'}.issubset(frame.columns):
+                tmp = frame[['ytm_otr', 'ytm_ofr1']].copy()
+                tmp['spread'] = pd.to_numeric(tmp['ytm_otr'], errors='coerce') - pd.to_numeric(tmp['ytm_ofr1'], errors='coerce')
+                tmp = tmp.dropna(subset=['spread'])
+                if not tmp.empty:
+                    tmp['label'] = f'OTROFR1-{tenor_bucket}'
+                    tmp['date'] = tmp.index
+                    out.append(tmp[['label', 'spread', 'date']])
+
+            # NIB/OTR is typically sparse because the NIB is new; keep any valid points.
+            if {'ytm_nib', 'ytm_otr'}.issubset(frame.columns):
+                tmp = frame[['ytm_nib', 'ytm_otr', 'instrument_id_nib_otr']].copy()
+                tmp['spread'] = pd.to_numeric(tmp['ytm_nib'], errors='coerce') - pd.to_numeric(tmp['ytm_otr'], errors='coerce')
+                tmp = tmp.dropna(subset=['spread'])
+                if not tmp.empty:
+                    tmp['label'] = f'NIBOTR-{tenor_bucket}'
+                    tmp['date'] = tmp.index
+                    out.append(tmp[['label', 'spread', 'date']])
+        return out
+
+    frames = _read_history('TBond') + _read_history('CBond')
+    if not frames:
+        # Fallback to the compact summary artifact if universe history is missing.
+        data = _load_pickle_safe(dir_input / 'BondNewIssue-spds.pkl')
+        if not isinstance(data, dict):
+            return None
+        spread = data.get('BondNewIssue', {}).get('Spread') if isinstance(data.get('BondNewIssue'), dict) else None
+        if not isinstance(spread, pd.DataFrame) or spread.empty:
+            return None
+        spread = spread.apply(pd.to_numeric, errors='coerce')
+        return spread
+
+    long_df = pd.concat(frames, axis=0, ignore_index=True)
+    if long_df.empty:
+        return None
+
+    long_df['date'] = pd.to_datetime(long_df['date'])
+    pivot = long_df.pivot_table(index='date', columns='label', values='spread', aggfunc='last').sort_index()
+    pivot = pivot.apply(pd.to_numeric, errors='coerce')
+    pivot = pivot.dropna(axis=1, how='all')
+    return pivot if not pivot.empty else None
+
+
+def _parse_newissue_stage_label(label: str) -> Optional[tuple[str, str]]:
+    """Reverse of ``to_newissue_stage_label``: 'OTROFR1-10Y' -> ('otr_ofr1', '10Y')."""
+    m = re.match(r'^(NIBOTR|OTROFR1)-(.+)$', str(label))
+    if not m:
+        return None
+    stage = 'nib_otr' if m.group(1) == 'NIBOTR' else 'otr_ofr1'
+    return stage, m.group(2)
+
+
+def load_newissue_episode_series(label: str) -> list[tuple[pd.Timestamp, str, pd.Series]]:
+    """Per-episode BondNewIssue spread paths, indexed by days since the
+    episode's identity (leg1/leg2 bond pair) was established.
+
+    Unlike ``load_newissue_stage_timeseries`` (a single calendar-indexed
+    column), this splits the history into one series per contiguous run of a
+    stable (leg1_id, leg2_id) pair — i.e. one series per issuance/roll episode
+    — so callers can overlay "day 0 = new pair" through to the next roll
+    (typically a quarter, at most a year) instead of a full calendar year.
+
+    Returns a list of (start_date, leg1_bond_code, series) tuples, sorted
+    chronologically. ``leg1_bond_code`` is the newly-issued leg of the pair
+    (NIB for nib_otr, OTR for otr_ofr1) — used as the episode legend/label
+    since it identifies the bond, unlike the start date.
+    """
+    parsed = _parse_newissue_stage_label(label)
+    if parsed is None:
+        return []
+    stage, tenor_bucket = parsed
+    leg1_col, leg2_col, id1_col, id2_col = (
+        ('ytm_otr', 'ytm_ofr1', 'otr_id', 'ofr1_id') if stage == 'otr_ofr1'
+        else ('ytm_nib', 'ytm_otr', 'nib_id', 'otr_id')
+    )
+
+    dir_input = _get_input_dir()
+    episodes: list[tuple[pd.Timestamp, str, pd.Series]] = []
+    for asset_class in ('TBond', 'CBond'):
+        data = _load_pickle_safe(dir_input / f'{asset_class}-newissue.pkl')
+        if not isinstance(data, dict):
+            continue
+        df = data.get(tenor_bucket)
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+        needed = {leg1_col, leg2_col, id1_col, id2_col}
+        if not needed.issubset(df.columns):
+            continue
+
+        frame = df.copy()
+        frame.index = pd.to_datetime(frame.index)
+        sub = frame[[leg1_col, leg2_col, id1_col, id2_col]].copy()
+        sub['spread'] = pd.to_numeric(sub[leg1_col], errors='coerce') - pd.to_numeric(sub[leg2_col], errors='coerce')
+        sub = sub.dropna(subset=['spread', id1_col, id2_col])
+        if sub.empty:
+            continue
+
+        pair_key = sub[id1_col].astype(str) + '|' + sub[id2_col].astype(str)
+        episode_id = (pair_key != pair_key.shift()).cumsum()
+        for _, grp in sub.groupby(episode_id):
+            if len(grp) < 2:
+                continue
+            start_date = grp.index[0]
+            leg1_code = str(grp[id1_col].iloc[0])
+            days_since_start = (grp.index - start_date).days
+            rebased = grp['spread'].to_numpy() - grp['spread'].iloc[0]
+            s = pd.Series(rebased, index=days_since_start)
+            s = s[~s.index.duplicated(keep='last')].sort_index()
+            episodes.append((start_date, leg1_code, s))
+
+    episodes.sort(key=lambda item: item[0])
+    return episodes
 
 
 def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
@@ -370,11 +523,7 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         return pd.concat(frames, axis=1) if frames else None
 
     elif spread_type == 'BondNewIssue':
-        data = _load_pickle_safe(dir_input / 'BondNewIssue-spds.pkl')
-        if data is None:
-            return None
-        sp = data.get('BondNewIssue', {}).get('Spread')
-        return sp if isinstance(sp, pd.DataFrame) and not sp.empty else None
+        return load_newissue_stage_timeseries()
 
     return None
 
