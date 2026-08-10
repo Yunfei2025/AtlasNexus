@@ -308,6 +308,17 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 			df_bc = pd.concat([df_bc, rv_rows]) if not df_bc.empty else rv_rows
 		if isinstance(df_bc, pd.DataFrame) and not df_bc.empty:
 			df_bc = _normalize_index(df_bc)
+			# Defensive cleanup for realtime artifacts produced before the
+			# mature-RV builder rejected identical OTR/OFR identifiers.
+			_bc_idx = df_bc.index.astype(str)
+			_bc_parts = _bc_idx.to_series().str.split('|', n=1, expand=True)
+			_bc_self_pair = (
+				_bc_idx.str.contains('|', regex=False)
+				& _bc_parts[0].eq(_bc_parts[1].fillna(''))
+			)
+			df_bc = df_bc.loc[~_bc_self_pair.values].copy()
+			if df_bc.empty:
+				continue
 			df_bc = _ensure_numeric(df_bc, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
 			df_bc["Zscore"] = (
 				pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce") -

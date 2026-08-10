@@ -65,6 +65,11 @@ def _episode_rows_to_pair_frames(df: pd.DataFrame) -> Dict[str, Dict[str, pd.Ser
             ofrk_id = str(g[id_col].iloc[-1])
             if pd.isna(ofr1_id) or ofr1_id in ('nan', '') or pd.isna(ofrk_id) or ofrk_id in ('nan', ''):
                 continue
+            # A mature RV pair must contain two distinct instruments.  A
+            # repeated identifier creates a synthetic self-spread with zero
+            # economic leg difference and must never enter the candidate set.
+            if ofrk_id == ofr1_id:
+                continue
             pair_id = f'{ofrk_id}|{ofr1_id}'
             out[pair_id] = {
                 'ofr1_id': ofr1_id, 'ofrk_id': ofrk_id,
