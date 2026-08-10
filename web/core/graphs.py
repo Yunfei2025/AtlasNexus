@@ -139,23 +139,27 @@ def _current_ofr1_ids(asset_class: str) -> set[str]:
 
 
 def _filter_current_ofr1_mature_rv(stype: str, spread: pd.DataFrame) -> pd.DataFrame:
-    """Keep only mature RV OFRk/OFR1 pairs for TBondCurve/CBondCurve bars."""
+    """Keep ordinary bond-curve rows and append current mature RV OFRk/OFR1 pairs."""
     if stype not in {"TBondCurve", "CBondCurve"} or spread.empty:
         return spread
 
     idx = spread.index.astype(str)
     pair_mask = idx.str.contains('|', regex=False)
+    base_spread = spread.loc[~pair_mask].copy()
     pair_spread = spread.loc[pair_mask].copy()
     if pair_spread.empty:
-        return pair_spread
+        return base_spread
 
     asset_class = "TBond" if stype == "TBondCurve" else "CBond"
     current_ofr1 = _current_ofr1_ids(asset_class)
     if not current_ofr1:
-        return pair_spread
+        return pd.concat([base_spread, pair_spread], axis=0)
 
     right_leg = pair_spread.index.to_series().astype(str).str.rsplit('|', n=1).str[-1]
-    return pair_spread.loc[right_leg.isin(current_ofr1).values]
+    pair_spread = pair_spread.loc[right_leg.isin(current_ofr1).values]
+    if pair_spread.empty:
+        return base_spread
+    return pd.concat([base_spread, pair_spread], axis=0)
 
 
 # Thresholds and type groupings

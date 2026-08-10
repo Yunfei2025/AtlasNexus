@@ -533,8 +533,9 @@ def register_spreads_callbacks(app) -> None:
     @app.callback(
         Output("realtime-data", "data"),
         Input("data-refresh", "n_intervals"),
+        Input("alpha-spread-refresh-btn", "n_clicks"),
     )
-    def _refresh_realtime_data(interval):
+    def _refresh_realtime_data(interval, _refresh_clicks):
         """Load realtime spread data using the core script."""
         if not GRAPHS_AVAILABLE or orig_refresh is None:
             print("Realtime data refresh skipped: web.core.scripts not available")

@@ -218,6 +218,36 @@ separate leaderboards or as one pooled cross-sectional list before allocation. T
 baseline starts with separate within-regime ranking and validates the pooled
 alternative only via family-level walk-forward evidence.
 
+\subsection{Tenor-aware derivative margin proxy}
+\label{sec:alpha-tenor-aware-margin}
+
+The portfolio allocator does not have access to a CCP initial-margin file or a
+bilateral SIMM engine. A flat percentage of derivative notional is therefore
+used only as a fallback for unrecognised leg codes. Recognised IRS legs use a
+simple, transparent proxy based on gross leg DV01:
+\begin{equation}
+ M_{\mathrm{IRS}} = \max\left(
+ \frac{\mathrm{DV01}_{\mathrm{gross}}\,s_{\mathrm{tenor}}}{1000},
+ \; q_{\min}N_{\mathrm{gross}}
+ \right),
+\end{equation}
+where $M_{\mathrm{IRS}}$ and $N_{\mathrm{gross}}$ are in MM CNY,
+$\mathrm{DV01}_{\mathrm{gross}}$ is in thousand CNY per basis point, and
+$s_{\mathrm{tenor}}$ is a conservative stress in basis points. The current
+prototype buckets use 10, 20, 35, 50, and 75 bp for maximum leg tenors up to
+1Y, 3Y, 5Y, 10Y, and longer, respectively, with a 0.25\% gross-notional
+liquidity floor. For example, a 6M--1Y spread is charged against the short
+end's gross DV01 rather than against the same flat 3\% notional rate used for
+all swap spreads.
+
+This is a capital-allocation proxy, not a market quotation. Cleared swaps
+should ultimately use the relevant CCP initial-margin model; bilateral swaps
+should use the applicable SIMM sensitivities, tenor buckets, correlations,
+netting set, liquidity add-ons, and collateral terms. The allocator's
+duration-adjusted covariance remains a separate risk-parity input and is not
+reused as a margin requirement. Unrecognised derivative legs retain the
+legacy flat-rate fallback and should be reviewed before production use.
+
 After ranking, an extreme-score filter removes candidates that imply buying an
 already-rich level or selling an already-cheap level relative to assigned direction.
 This is the monthly universe-level counterpart of daily chase-prevention bounds.

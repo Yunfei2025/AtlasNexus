@@ -40,8 +40,18 @@ def _suppress_curve_yield_outliers(
 ANCHORS = ['FR007.IR','FR007S3M.IR','FR007S6M.IR','FR007S9M.IR','FR007S1Y.IR','FR007S2Y.IR','FR007S5Y.IR']
 TERMS = [0, 1/4, 1/2, 3/4, 1, 2, 5]
 
+
+def _is_constant_series(series: pd.Series) -> bool:
+    values = pd.to_numeric(series, errors='coerce').replace([np.inf, -np.inf], np.nan).dropna()
+    if values.empty:
+        return False
+    return values.nunique() <= 1
+
 def _adf_result(series: pd.Series):
     """Run ADF test for a 1D series and return (pvalue, stationary:str, stats, crit)"""
+    if _is_constant_series(series):
+        crit = {'1%': 'nan', '5%': 'nan', '10%': 'nan'}
+        return 0.0, 'YES', 'nan', crit
     try:
         from statsmodels.tsa.stattools import adfuller
     except Exception as e:

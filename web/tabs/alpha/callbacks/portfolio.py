@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -22,10 +23,68 @@ from ..data import (
     load_spread_data, load_spread_timeseries, display_key,
     _get_duration_mult, resolve_legs, _load_leg_data,
 )
+from ..data.duration import _tenor_to_duration
 from ..scoring import _compute_risk_parity_weights
 
 
 _SUMMARY_ALPHA_PARQUET = str(_DIR_INPUT / 'summary_alpha_portfolio.parquet')
+
+# Simple conservative proxy for derivative initial margin when a CCP/SIMM
+# calculation is not available. These are model assumptions, not quoted
+# market margin requirements; they are deliberately tenor-sensitive so a
+# short-end swap spread is not charged the same flat percentage as a long-end
+# spread. The notional floor preserves a minimum liquidity/operational charge.
+_SWAP_MARGIN_TENOR_STRESS_BP = (
+    (1.0, 10.0),
+    (3.0, 20.0),
+    (5.0, 35.0),
+    (10.0, 50.0),
+    (float('inf'), 75.0),
+)
+_SWAP_MARGIN_MIN_RATE = 0.0025
+
+
+def _swap_leg_tenor_duration(leg: Any) -> tuple[float, float] | None:
+    """Return (tenor years, duration) parsed from an IRS leg code."""
+    match = re.search(r'(\d+(?:\.\d+)?)([mMyY])', str(leg or ''))
+    if match is None:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2).lower()
+    tenor_years = value / 12.0 if unit == 'm' else value
+    return tenor_years, max(0.01, float(_tenor_to_duration(f'{value:g}{unit}')))
+
+
+def _swap_derivative_margin_mm(
+    leg1: Any,
+    leg2: Any,
+    leg1_notional_mm: float,
+    leg2_notional_mm: float,
+    fallback_notional_mm: float,
+    fallback_rate: float,
+) -> float:
+    """Estimate derivative margin from leg DV01 plus a liquidity floor.
+
+    This is a transparent proxy for environments without CCP/SIMM margin
+    files. It uses gross leg DV01 rather than net notional, then applies a
+    tenor-bucket stress and a small gross-notional floor. Unknown leg codes
+    retain the legacy flat-rate fallback.
+    """
+    leg1_info = _swap_leg_tenor_duration(leg1)
+    leg2_info = _swap_leg_tenor_duration(leg2)
+    if leg1_info is None or leg2_info is None:
+        return abs(float(fallback_notional_mm)) * float(fallback_rate)
+
+    max_tenor = max(leg1_info[0], leg2_info[0])
+    stress_bp = next(stress for tenor, stress in _SWAP_MARGIN_TENOR_STRESS_BP if max_tenor <= tenor)
+    gross_notional_mm = abs(float(leg1_notional_mm)) + abs(float(leg2_notional_mm))
+    gross_dv01_k = (
+        abs(float(leg1_notional_mm)) * leg1_info[1] / 10.0
+        + abs(float(leg2_notional_mm)) * leg2_info[1] / 10.0
+    )
+    dv01_margin_mm = gross_dv01_k * stress_bp / 1000.0
+    notional_floor_mm = gross_notional_mm * _SWAP_MARGIN_MIN_RATE
+    return round(max(dv01_margin_mm, notional_floor_mm), 2)
 
 
 def _as_positive_float(value: Any) -> float | None:
@@ -619,12 +678,27 @@ def register_portfolio_callbacks(app) -> None:
                 _both_unresolved = (~_leg1_exists) & (~_leg2_exists)
                 _fallback = leg1_signed.abs().where(_both_unresolved, 0.0)
 
+                derivative_margin = pd.Series(0.0, index=df_scored.index, dtype=float)
+                for _idx in df_scored.index:
+                    _is_derivative = bool(
+                        (_leg1_exists.at[_idx] and not _leg1_is_bond.at[_idx])
+                        or (_leg2_exists.at[_idx] and not _leg2_is_bond.at[_idx])
+                    )
+                    if not _is_derivative:
+                        continue
+                    _leg1_mm = float(leg1_signed.at[_idx])
+                    _leg2_mm = float(leg2_signed.at[_idx])
+                    derivative_margin.at[_idx] = _swap_derivative_margin_mm(
+                        _leg1.at[_idx],
+                        _leg2.at[_idx],
+                        _leg1_mm,
+                        _leg2_mm,
+                        float(swapfut_net.at[_idx]),
+                        swap_margin_rate,
+                    )
+
                 net_notional = (leg1_signed + leg2_signed).round(1)
-                margin = (
-                    bond_gross * repo_margin_rate
-                    + swapfut_net.abs() * swap_margin_rate
-                    + _fallback * swap_margin_rate
-                ).round(2)
+                margin = (bond_gross * repo_margin_rate + derivative_margin + _fallback * swap_margin_rate).round(2)
                 return net_notional, margin
 
             df_scored['net_notional_mm'], df_scored['margin_mm'] = _compute_net_and_margin(df_scored['notional_mm'])

@@ -349,6 +349,11 @@ def build_alpha_candidates(
 	}
 	if "style" not in df_all.columns:
 		df_all["style"] = df_all["category"].map(cat_to_style)
+	else:
+		style_existing = df_all["style"].astype(str).str.strip()
+		style_missing = df_all["style"].isna() | style_existing.eq("") | style_existing.str.lower().isin({"nan", "none", "unknown"})
+		if style_missing.any():
+			df_all.loc[style_missing, "style"] = df_all.loc[style_missing, "category"].map(cat_to_style)
 
 	# Dynamic style for mixed categories: MR if stationary, else Carry.
 	# Bond-Futures is always Carry (defined as carry trade in SPREAD_CATEGORIES).
