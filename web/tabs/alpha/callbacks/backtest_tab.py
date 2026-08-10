@@ -127,6 +127,16 @@ def _apply_monthly_style_schedule(monthly_schedule):
     return month_to_style, schedule
 
 
+def _allow_short_enabled(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value == 'allow'
+    if isinstance(value, (list, tuple, set)):
+        return 'allow' in value
+    return False
+
+
 def _run_monthly_style_switch_backtest(
     ts: pd.Series,
     spread_type: str,
@@ -189,7 +199,7 @@ def _run_monthly_style_switch_backtest(
                 theta=float(theta) if theta is not None else 1.25,
                 vol_window=int(vol_window) if vol_window is not None else 60,
                 trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
-                allow_short=bool(allow_short and 'allow' in allow_short),
+                allow_short=_allow_short_enabled(allow_short),
                 carry_roll_ts=carry_roll_ts,
                 carry_roll_bp=carry_roll_bp,
                 duration_mult=duration_mult,
@@ -255,7 +265,11 @@ def _run_monthly_style_switch_backtest(
             'sharpe': 0.0,
             'max_drawdown': 0.0,
             'monthly_style_schedule': schedule,
-            'monthly_regime_ts': pd.Series([m for m, _ in month_style_trace], index=[m for _, _ in month_style_trace], dtype=object),
+            'monthly_regime_ts': pd.Series(
+                [style for _, style in month_style_trace],
+                index=[month for month, _ in month_style_trace],
+                dtype=object,
+            ),
             'style_mode': 'auto_monthly',
             'style_effective': 'auto_monthly',
             'uncertain_policy': 'skip',
@@ -671,7 +685,7 @@ def register_backtest_callbacks(app) -> None:
                 duration_mult=duration_mult,
                 borrow_cost_long_bp=bc_long,
                 borrow_cost_short_bp=bc_short,
-                allow_short=bool(allow_short and 'allow' in allow_short),
+                allow_short=_allow_short_enabled(allow_short),
                 carry_roll_sell_ts=_cr_sell_for_backtest,
                 mom_window=int(mom_window) if mom_window is not None else 20,
             )
