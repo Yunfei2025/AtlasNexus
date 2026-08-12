@@ -385,7 +385,19 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		# Exclude IDs ending with ".IR"
 		df_irs = df_irs[~df_irs.index.astype(str).str.endswith(".IR")].copy()
 		df_irs = df_irs[_exclude_swapspread_butterflies(df_irs.index)].copy()
-		df_irs = _ensure_numeric(df_irs, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+		df_irs = _ensure_numeric(df_irs, ["Zscore", "spread", "QtPx", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+		# Swap-spread opportunities and their z-scores must be based on the
+		# current executable mid quote. The realtime refresh also carries the
+		# model/curve ``spread`` value, which can diverge materially from QtPx.
+		# Use QtPx for the visible signal so the current price and z-score share
+		# the same series definition.
+		if "QtPx" in df_irs.columns:
+			df_irs["spread"] = pd.to_numeric(df_irs["QtPx"], errors="coerce")
+			if {"mean", "vol"}.issubset(df_irs.columns):
+				df_irs["Zscore"] = (
+					(df_irs["spread"] - pd.to_numeric(df_irs["mean"], errors="coerce")) /
+					pd.to_numeric(df_irs["vol"], errors="coerce").replace(0, np.nan)
+				)
 		# irsSpreadComposite builds Carry/Roll as +leg1(paid, long tenor) minus
 		# leg2(received, short tenor) — i.e. pay-long/receive-short, which is
 		# this platform's SELL convention. Negate here so carry_3m_bp/roll_3m_bp/

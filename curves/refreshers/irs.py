@@ -373,18 +373,10 @@ class IRSRefresher:
 			except Exception as exc:
 				logger.warning(f"Could not derive IRS spread bid/ofr quotes: {exc}")
 		
-		# Calculate spreads and Z-scores
+		# The live spread is always the current quote mid.  CvPx is a fitted
+		# curve/model value and must not be exposed as the current spread or used
+		# to manufacture a signal for either outright or spread instruments.
 		spreads['spread'] = spreads['QtPx']
-		irs_idx = [i for i in IRSConfig.IRS_LIST if i in spreads.index]
-		if irs_idx:
-			spreads.loc[irs_idx, 'spread'] = spreads.loc[irs_idx, 'QtPx'] - spreads.loc[irs_idx, 'CvPx']
-		# Historical spread series and StatInfo are based on curve/fixing values
-		# (CvPx), not the executable crossed-side quote composite (QtPx).  Using
-		# QtPx here mixes the current bid/offer market with the historical curve
-		# series and can create fictitious extreme z-scores for spread instruments.
-		spreads_idx = [s for s in self.spreads_list if s in spreads.index]
-		if spreads_idx:
-			spreads.loc[spreads_idx, 'spread'] = spreads.loc[spreads_idx, 'CvPx']
 		spreads['Zscore'] = (spreads['spread'] - spreads['mean']) / spreads['vol']
 
 		# Update changes in basis points

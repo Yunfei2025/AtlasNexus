@@ -575,7 +575,10 @@ def load_realtime_spreads(spread_type: str) -> Optional[pd.DataFrame]:
         return _normalize_repo_frame(data.get(key))
 
     elif spread_type == 'SwapSpread':
-        return _normalize_repo_frame(_load_pickle_safe(dir_input / 'IRS-spdsrt.pkl'))
+        data = _load_pickle_safe(dir_input / 'IRS-spdsrt.pkl')
+        if not isinstance(data, dict):
+            return None
+        return _normalize_repo_frame(data.get('spreads'))
 
     elif spread_type in ['NetBasis', 'TermBasis']:
         return _load_pickle_safe(dir_input / 'futures-spdsrt.pkl')
@@ -601,6 +604,39 @@ def load_realtime_spreads(spread_type: str) -> Optional[pd.DataFrame]:
             return data.get(spread_type)
 
     return None
+
+
+def get_realtime_spread_bp(spread_type: str, instrument: str) -> Optional[float]:
+    """Return the latest quote spread in basis points.
+
+    Prefer bid/ofr-derived mid quotes. For close-yield spread products such as
+    TenorSpread, use the latest close-yield spread when no realtime mid-quote
+    artifact exists. Keep this separate from ``load_spread_data`` so UI labels
+    do not accidentally use a statistical/model spread.
+    """
+    try:
+        realtime = load_realtime_spreads(spread_type)
+        if isinstance(realtime, pd.DataFrame) and instrument in realtime.index:
+            row = realtime.loc[instrument]
+            # IRS-spdsrt keeps both the statistical spread and the current quote
+            # spread. Always use the latter for live labels.
+            value_column = 'QtPx' if spread_type == 'SwapSpread' else 'spread'
+            value = pd.to_numeric(row.get(value_column), errors='coerce')
+            if pd.notna(value):
+                return float(value) * 100.0
+
+        if spread_type == 'TenorSpread':
+            from curves.utils.loader import loadCNBDTS
+
+            tenor_ts = _build_tenor_spread_timeseries(loadCNBDTS())
+            series = tenor_ts.get(instrument)
+            if isinstance(series, pd.Series):
+                close_value = pd.to_numeric(series, errors='coerce').dropna()
+                if not close_value.empty:
+                    return float(close_value.iloc[-1]) * 100.0
+        return None
+    except Exception:
+        return None
 
 
 def get_spread_style(spread_type: str) -> str:

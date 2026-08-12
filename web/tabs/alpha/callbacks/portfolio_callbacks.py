@@ -11,7 +11,7 @@ from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
 
-from ..data import THEME, display_key
+from ..data import THEME, display_key, get_realtime_spread_bp
 from .helpers import _ALPHA_CORR_COLORSCALE, _get_upstream_regime, _load_alpha_book_positions, _merge_curated_entries
 
 
@@ -133,6 +133,22 @@ def register_portfolio_callbacks(app) -> None:
                 return html.Span('S↓', title='Seasonal headwind (consistency ≥60% against)', style={'backgroundColor': '#4a1a1a', 'color': '#d09090', 'fontSize': '9px', 'fontWeight': 'bold', 'padding': '1px 4px', 'borderRadius': '3px', 'cursor': 'default'})
             return None
 
+        def _realtime_spread_chip(stype, inst):
+            spread_bp = get_realtime_spread_bp(str(stype), str(inst))
+            if spread_bp is None or not np.isfinite(spread_bp):
+                return None
+            return html.Span(
+                f'{spread_bp:.1f}bp',
+                title='Realtime yield spread from current bid/ofr mid quotes',
+                style={
+                    'color': THEME['accent'], 'fontSize': '9px', 'fontWeight': '700',
+                    'padding': '1px 5px', 'borderRadius': '3px',
+                    'border': f"1px solid {THEME['accent']}55",
+                    'backgroundColor': f"{THEME['accent']}1A", 'marginLeft': '6px',
+                    'flexShrink': '0',
+                },
+            )
+
         curated_cards = []
         for entry_id, entry in enumerate(instruments):
             stype = entry.get('spread_type', '')
@@ -170,7 +186,8 @@ def register_portfolio_callbacks(app) -> None:
 
             curated_cards.append(html.Div([
                 html.Div([
-                    html.Span(display_key(stype, inst), style={'color': THEME['text_main'], 'fontSize': '11px', 'fontWeight': '600', 'flex': '1', 'overflow': 'hidden', 'textOverflow': 'ellipsis', 'whiteSpace': 'nowrap'}),
+                    html.Span(display_key(stype, inst), style={'color': THEME['text_main'], 'fontSize': '11px', 'fontWeight': '600', 'overflow': 'hidden', 'textOverflow': 'ellipsis', 'whiteSpace': 'nowrap'}),
+                    _realtime_spread_chip(stype, inst),
                     _matrix_dot(inst, stype),
                     html.Button('×', id={'type': 'curated-del', 'stype': stype, 'inst': inst}, n_clicks=0, style={'background': 'none', 'border': f"1px solid {THEME['danger']}", 'color': THEME['danger'], 'borderRadius': '3px', 'cursor': 'pointer', 'padding': '0px 4px', 'fontSize': '11px', 'lineHeight': '1.3', 'marginLeft': '4px', 'flexShrink': '0'}),
                 ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px'}),
@@ -201,7 +218,8 @@ def register_portfolio_callbacks(app) -> None:
             seas_label = entry.get('seasonal_label', '')
             pos_cards.append(html.Div([
                 html.Div([
-                    html.Span(display_key(stype, inst), style={'color': THEME['text_main'], 'fontSize': '11px', 'fontWeight': '600', 'flex': '1', 'overflow': 'hidden', 'textOverflow': 'ellipsis', 'whiteSpace': 'nowrap'}),
+                    html.Span(display_key(stype, inst), style={'color': THEME['text_main'], 'fontSize': '11px', 'fontWeight': '600', 'overflow': 'hidden', 'textOverflow': 'ellipsis', 'whiteSpace': 'nowrap'}),
+                    _realtime_spread_chip(stype, inst),
                     _matrix_dot(inst, stype),
                 ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px'}),
                 html.Div([

@@ -13,7 +13,7 @@ from dash import dcc, html, callback_context
 from dash.dependencies import Input, Output, State, ALL
 from dash.exceptions import PreventUpdate
 
-from ..data import THEME, ZSCORE_ENTRY_THRESHOLD, _get_input_dir, load_spread_data, display_key, _get_borrow_cost_annual_bp, _get_ttm_display, _get_current_fr007_bp
+from ..data import THEME, ZSCORE_ENTRY_THRESHOLD, _get_input_dir, load_spread_data, display_key, get_realtime_spread_bp, _get_borrow_cost_annual_bp, _get_ttm_display, _get_current_fr007_bp
 from ..scoring import compute_scan_score
 from .helpers import (
     _ALPHA_CORR_COLORSCALE,
@@ -107,6 +107,7 @@ def register_scan_callbacks(app) -> None:
                 inst = str(row.get('ID', '') or '')
                 stype = str(row.get('spread_type', '') or '')
                 label = display_key(stype, inst)
+                realtime_spread_bp = get_realtime_spread_bp(stype, inst)
                 direction = str(row.get('direction', '') or '').upper()
                 z_raw = row.get('Zscore', None)
                 try:
@@ -224,6 +225,25 @@ def register_scan_callbacks(app) -> None:
                         },
                     )
 
+                spread_tag = None
+                if realtime_spread_bp is not None and np.isfinite(realtime_spread_bp):
+                    spread_color = THEME['accent']
+                    spread_tag = html.Span(
+                        f'{realtime_spread_bp:.1f}bp',
+                        title='Realtime yield spread from current bid/ofr mid quotes',
+                        style={
+                            'fontSize': '10px',
+                            'fontWeight': '700',
+                            'color': spread_color,
+                            'marginLeft': '7px',
+                            'verticalAlign': 'middle',
+                            'padding': '1px 5px',
+                            'borderRadius': '3px',
+                            'border': f'1px solid {spread_color}55',
+                            'backgroundColor': f'{spread_color}1A',
+                        },
+                    )
+
                 right_cluster = [z_bar, z_label, carry_tag]
                 if seas_tag is not None:
                     right_cluster.append(seas_tag)
@@ -255,6 +275,7 @@ def register_scan_callbacks(app) -> None:
                                 'color': THEME['text_main'], 'fontSize': '12px',
                                 'fontWeight': '500', 'marginLeft': '10px',
                             }),
+                            spread_tag,
                         ], style={
                             'display': 'flex', 'alignItems': 'center',
                             'flex': '1', 'minWidth': '0', 'overflow': 'hidden',

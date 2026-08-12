@@ -308,30 +308,57 @@ def register_portfolio_callbacks(app) -> None:
             # Fall back to saved positions instead of blocking
             saved = list(book_positions or []) + list(curated_instruments or [])
             if not saved:
-                return (
-                    html.Div("No candidates or saved positions. Run scan in Candidates tab first.", style={'color': THEME['warning']}),
-                    html.Div(), html.Div(), [], None, html.Div()
-                )
+                # The candidate store is session-scoped and can be lost after a
+                # refresh or tab reload even though the scan artifact still exists.
+                # Rebuild the latest low-correlation set so Generate Portfolio is
+                # usable without requiring the user to repeat the entire workflow.
+                try:
+                    from curves.refreshers.alpha import load_alpha_candidates
+
+                    latest = load_alpha_candidates(
+                        dir_input=_DIR_INPUT,
+                        refresh=True,
+                        zscore_threshold=2.0,
+                        max_per_style=20,
+                        lookback_days=252,
+                        max_abs_corr=0.6,
+                        top_n_low_corr=10,
+                    )
+                    latest_df = latest.get('selected_lowcorr')
+                    if not isinstance(latest_df, pd.DataFrame) or latest_df.empty:
+                        latest_df = latest.get('candidates')
+                    if isinstance(latest_df, pd.DataFrame) and not latest_df.empty:
+                        candidates = latest_df.to_dict('records')
+                except Exception as exc:
+                    print(f"[portfolio] Could not recover latest candidates: {exc}")
+
             # Build minimal candidate rows from saved positions so the rest of the
             # pipeline can proceed without a prior scan.
-            _seen: set = set()
-            candidates = []
-            for _e in saved:
-                _inst = _e.get('instrument', '')
-                if not _inst or _inst in _seen:
-                    continue
-                _seen.add(_inst)
-                _row = {
-                    'ID': _inst,
-                    'spread_type': _e.get('spread_type', ''),
-                    'direction': _e.get('direction', 'BUY'),
-                    'style': _e.get('regime', _e.get('style', '')),
-                    'score': float(_e.get('score', 0.01)),
-                }
-                _z = pd.to_numeric(_e.get('Zscore', _e.get('zscore', None)), errors='coerce')
-                if pd.notna(_z):
-                    _row['Zscore'] = float(_z)
-                candidates.append(_row)
+            if saved and not candidates:
+                _seen: set = set()
+                candidates = []
+                for _e in saved:
+                    _inst = _e.get('instrument', '')
+                    if not _inst or _inst in _seen:
+                        continue
+                    _seen.add(_inst)
+                    _row = {
+                        'ID': _inst,
+                        'spread_type': _e.get('spread_type', ''),
+                        'direction': _e.get('direction', 'BUY'),
+                        'style': _e.get('regime', _e.get('style', '')),
+                        'score': float(_e.get('score', 0.01)),
+                    }
+                    _z = pd.to_numeric(_e.get('Zscore', _e.get('zscore', None)), errors='coerce')
+                    if pd.notna(_z):
+                        _row['Zscore'] = float(_z)
+                    candidates.append(_row)
+
+            if not candidates:
+                return (
+                    html.Div("No candidates or saved positions available. Run Scan Candidates first.", style={'color': THEME['warning']}),
+                    html.Div(), html.Div(), [], None, html.Div()
+                )
 
         try:
             total_capital = float(total_capital) if total_capital is not None else 1000.0
@@ -788,27 +815,10 @@ def register_portfolio_callbacks(app) -> None:
             available_cols = [c for c in display_cols if c in df_scored.columns]
             df_display = df_scored[available_cols].copy()
 
-            # Display-only ID rename:
-            #   NetBasis  → "<code>-CTD"  (long CTD bond, short futures)
-            #   TermBasis → "<code>-Cal"  (front/next calendar spread)
-            #   FuturesSwap keeps its raw code (T / TL / TF / TS)
-            # df_scored['ID'] stays raw throughout — renaming it in place would
-            # break risk-parity lookups and snapshot persistence.
-            _FUTURES_CODES = {'T', 'TL', 'TF', 'TS'}
-
-            def _display_trade_id(row):
-                trade_id = str(row.get('ID', ''))
-                spread_type = str(df_scored.loc[row.name, 'spread_type']) if 'spread_type' in df_scored.columns else ''
-                if trade_id in _FUTURES_CODES and 'NetBasis' in spread_type:
-                    return f'{trade_id}-CTD'
-                elif trade_id in _FUTURES_CODES and 'TermBasis' in spread_type:
-                    return f'{trade_id}-Cal'
-                elif trade_id in _FUTURES_CODES and 'FuturesSwap' in spread_type:
-                    return f'{trade_id}-FtSwp'
-                return trade_id
-
+            # Keep the ID column as the raw ticker only.  The raw ID is also the
+            # identifier used by downstream risk, allocation, and persistence code.
             if 'ID' in df_display.columns:
-                df_display['ID'] = df_display.apply(_display_trade_id, axis=1)
+                df_display['ID'] = df_scored.loc[df_display.index, 'ID'].astype(str).to_numpy()
 
             if 'style' in df_display.columns:
                 def _style_to_regime_label(value):
@@ -881,6 +891,7 @@ def register_portfolio_callbacks(app) -> None:
             conditional_style += [
                 {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgba(255,255,255,0.015)'},
                 {'if': {'row_index': last_row_idx}, 'fontWeight': 'bold', 'borderTop': f'1px solid {THEME["accent"]}'},
+                {'if': {'column_id': 'ID'}, 'whiteSpace': 'pre-line', 'lineHeight': '1.35', 'minWidth': '170px'},
             ]
 
             _port_col_labels = {
@@ -956,11 +967,7 @@ def register_portfolio_callbacks(app) -> None:
             risk_chart = html.Div()
             if 'risk_contribution' in df_scored.columns and 'weight' in df_scored.columns:
                 fig = go.Figure()
-                # df_display['ID'] (display alias) shares df_scored's unique
-                # RangeIndex (reset above), so a plain index lookup is safe here.
-                _chart_ids = df_display['ID'] if 'ID' in df_display.columns else df_scored['ID']
                 df_chart = df_scored.nlargest(15, 'weight')[['ID', 'weight', 'risk_contribution']].copy()
-                df_chart['ID'] = _chart_ids.reindex(df_chart.index)
                 fig.add_trace(go.Bar(x=df_chart['ID'], y=df_chart['weight'] * 100, name='Weight (%)', marker_color=THEME['accent'], yaxis='y'))
                 fig.add_trace(go.Bar(x=df_chart['ID'], y=df_chart['risk_contribution'], name='Risk Contribution (%)', marker_color=THEME['success'], yaxis='y'))
                 fig.update_layout(

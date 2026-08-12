@@ -44,6 +44,7 @@ from .loaders import (
     load_newissue_episode_series,
     load_macro_series,
     load_realtime_spreads,
+    get_realtime_spread_bp,
     get_spread_style,
 )
 from .duration import (
@@ -79,6 +80,7 @@ __all__ = [
     'load_newissue_episode_series',
     'load_macro_series',
     'load_realtime_spreads',
+    'get_realtime_spread_bp',
     'get_spread_style',
     'resolve_legs',
 ]
