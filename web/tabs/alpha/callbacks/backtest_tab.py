@@ -24,6 +24,7 @@ from ..layouts import build_individual_backtest_panel, build_portfolio_backtest_
 from ..backtest import (
     run_spread_backtest, run_trend_backtest_dc,
     build_backtest_results_display,
+    build_monthly_style_schedule, canonical_style, run_monthly_style_backtest,
 )
 
 
@@ -35,95 +36,71 @@ def _default_style_for_spread(spread_type: str) -> str:
     return 'mr'
 
 
-def _build_monthly_style_schedule(spread_ts: pd.Series, spread_type: str) -> tuple[pd.DataFrame, pd.Series]:
-    """Compute point-in-time monthly style assignment and daily regime strip."""
-    from curves.calibration.regime import DEFAULT_REGIME_WINDOW, compute_regime_features
-
-    s = pd.to_numeric(spread_ts, errors='coerce').dropna().copy()
-    if not isinstance(s.index, pd.DatetimeIndex):
-        s.index = pd.to_datetime(s.index)
-    if getattr(s.index, 'tz', None) is not None:
-        s.index = s.index.tz_localize(None)
-    s = s.sort_index()
-
-    if len(s) == 0:
-        return pd.DataFrame(), pd.Series(dtype=object)
-
-    review_dates = s.groupby(s.index.to_period('M')).apply(lambda x: x.index.min())
-    if review_dates is None or len(review_dates) == 0:
-        return pd.DataFrame(), pd.Series(dtype=object)
-
-    prev_style = None
-    rows = []
-
-    for rd in review_dates.sort_values().tolist():
-        hist = s.loc[:rd].dropna()
-        fallback_reason = ''
-        regime = 'uncertain'
-        score = np.nan
-
-        if len(hist) >= DEFAULT_REGIME_WINDOW + 5:
-            info = compute_regime_features(hist, window=DEFAULT_REGIME_WINDOW)
-            regime = str(info.get('regime', 'uncertain') or 'uncertain').strip().lower()
-            score = float(info.get('regime_score', np.nan))
-            if regime == 'trending':
-                assigned_style = 'trend'
-            elif regime == 'mean_reverting':
-                assigned_style = 'mr'
-            else:
-                assigned_style = 'skip'
-                fallback_reason = 'uncertain->skip'
-        else:
-            regime = 'insufficient_history'
-            assigned_style = 'skip'
-            fallback_reason = 'insufficient->skip'
-
-        rows.append({
-            'review_date': pd.Timestamp(rd),
-            'regime': regime,
-            'regime_score': score,
-            'assigned_style': assigned_style,
-            'fallback_reason': fallback_reason,
-        })
-        if assigned_style != 'skip':
-            prev_style = assigned_style
-
-    schedule = pd.DataFrame(rows)
+def _build_monthly_style_schedule(
+    spread_ts: pd.Series,
+    spread_type: str,
+    uncertain_policy: str = 'carry_forward',
+) -> tuple[pd.DataFrame, pd.Series]:
+    """Compute point-in-time monthly style assignment and a daily style strip."""
+    schedule, month_to_style = build_monthly_style_schedule(
+        spread_ts,
+        _default_style_for_spread(spread_type),
+        uncertain_policy=uncertain_policy,
+    )
     if schedule.empty:
         return schedule, pd.Series(dtype=object)
 
-    month_to_style = {
-        pd.Timestamp(r['review_date']).to_period('M'): str(r['assigned_style'])
-        for r in rows
-    }
-    monthly_style = s.index.to_period('M').map(lambda m: month_to_style.get(m, 'skip'))
-    regime_strip = pd.Series(monthly_style, index=s.index).map({'trend': 'trending', 'mr': 'mean_reverting'}).fillna('uncertain')
+    s = pd.to_numeric(spread_ts, errors='coerce').dropna()
+    if not isinstance(s.index, pd.DatetimeIndex):
+        s.index = pd.to_datetime(s.index, errors='coerce')
+    if getattr(s.index, 'tz', None) is not None:
+        s.index = s.index.tz_localize(None)
+    s = s[~s.index.isna()].sort_index()
+
+    styles = [month_to_style.get(p, 'skip') for p in s.index.to_period('M')]
+    regime_strip = pd.Series(styles, index=s.index, dtype=object).map(
+        {'trend': 'trending', 'mr': 'mean_reverting'}
+    ).fillna('uncertain')
 
     return schedule, regime_strip
 
 
-def _apply_monthly_style_schedule(monthly_schedule):
-    """Return tradeable monthly style assignments; uncertain regimes are skipped."""
+def _apply_monthly_style_schedule(monthly_schedule, default_style: str = 'mr',
+                                  uncertain_style: str = 'manual'):
+    """Return the tradeable ``{Period: style}`` map from an audit schedule.
 
+    ``uncertain_style`` controls what a month with no tradeable classification
+    becomes: a canonical style name (``mr``/``trend``/``trending``/``momentum``…)
+    overrides it, ``manual`` keeps whatever the schedule already assigned, and
+    ``skip`` leaves the month untradeable.
+    """
     if not isinstance(monthly_schedule, pd.DataFrame) or monthly_schedule.empty:
         return {}, pd.DataFrame()
 
     schedule = monthly_schedule.copy()
-    schedule['regime_key'] = schedule['regime'].astype(str).str.lower()
-
     if 'assigned_style' not in schedule.columns:
-        schedule['assigned_style'] = 'skip'
+        schedule['assigned_style'] = default_style
+    schedule['regime_key'] = schedule.get('regime', '').astype(str).str.lower()
 
-    schedule['assigned_style'] = schedule['assigned_style'].astype(str).str.lower()
-    schedule.loc[~schedule['assigned_style'].isin({'mr', 'trend'}), 'assigned_style'] = 'skip'
-
-    month_to_style = {}
+    override = canonical_style(uncertain_style)
+    resolved = []
     for _, row in schedule.iterrows():
-        assigned_style = str(row.get('assigned_style', 'skip')).strip().lower()
-        if assigned_style in {'mr', 'trend'}:
-            month_key = pd.Timestamp(row['review_date']).to_period('M')
-            month_to_style[month_key] = assigned_style
+        style = canonical_style(row.get('assigned_style'))
+        regime = canonical_style(row.get('regime'))
+        if regime == 'skip' and override != 'skip':
+            # Regime was uncertain/insufficient: apply the caller's override.
+            style = override
+        if style == 'skip' and str(uncertain_style).strip().lower() == 'manual':
+            style = canonical_style(default_style)
+        resolved.append(style)
 
+    schedule['assigned_style'] = resolved
+
+    month_to_style = {
+        pd.Timestamp(row['review_date']).to_period('M'): row['assigned_style']
+        for _, row in schedule.iterrows()
+        if row['assigned_style'] in ('mr', 'trend')
+    }
     return month_to_style, schedule
 
 
@@ -155,144 +132,55 @@ def _run_monthly_style_switch_backtest(
     allow_short: bool,
     carry_roll_sell_ts: Optional[pd.Series],
     mom_window: int = 20,
+    uncertain_policy: str = 'carry_forward',
 ):
-    """Run a monthly style-switching backtest by applying MR/trend per month and stitching equity curves."""
-    ts = pd.to_numeric(ts, errors='coerce').dropna().copy()
-    if not isinstance(ts.index, pd.DatetimeIndex):
-        parsed_index = pd.to_datetime(ts.index, errors='coerce')
-        valid_mask = ~parsed_index.isna()
-        ts = ts.loc[valid_mask]
-        ts.index = parsed_index[valid_mask]
-    if getattr(ts.index, 'tz', None) is not None:
-        ts.index = ts.index.tz_localize(None)
-    ts = ts.sort_index()
+    """Run one continuous backtest whose entry style is routed by the monthly review.
 
-    if ts.empty:
+    The monthly regime classification decides *which* engine may open a trade in a
+    given month; the position itself is carried across month boundaries by
+    :func:`run_monthly_style_backtest`, so signals keep their full warm-up and a
+    trade opened in one month can run until its own exit fires.
+    """
+    schedule, month_to_style = build_monthly_style_schedule(
+        ts, _default_style_for_spread(spread_type), uncertain_policy=uncertain_policy,
+    )
+    if schedule.empty:
         return {'error': 'No valid datetime observations for monthly style backtest.'}
 
-    monthly_schedule, _ = _build_monthly_style_schedule(ts, spread_type)
-    month_to_style, schedule = _apply_monthly_style_schedule(monthly_schedule)
+    results = run_monthly_style_backtest(
+        ts,
+        month_to_style,
+        entry_z=entry_z if entry_z is not None else 2.0,
+        exit_z=exit_z if exit_z is not None else 0.5,
+        stop_z=stop_z if stop_z is not None else 4.0,
+        min_hold=int(min_hold) if min_hold is not None else 7,
+        theta_z=float(theta) if theta is not None else 1.25,
+        mom_window=int(mom_window) if mom_window is not None else 20,
+        vol_window=int(vol_window) if vol_window is not None else 60,
+        trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
+        allow_short=_allow_short_enabled(allow_short),
+        carry_roll_ts=carry_roll_ts,
+        carry_roll_bp=carry_roll_bp,
+        duration_mult=duration_mult,
+        borrow_cost_long_bp=borrow_cost_long_bp,
+        borrow_cost_short_bp=borrow_cost_short_bp,
+        spread_type=spread_type,
+        carry_roll_sell_ts=carry_roll_sell_ts,
+    )
 
-    month_periods = sorted(pd.Index(ts.index.to_period('M').unique()).tolist())
-    combined_eqs = []
-    combined_trades = []
-    cumulative_equity = 0.0
-    month_style_trace = []
-
-    for month_period in month_periods:
-        month_start = pd.Timestamp(month_period.to_timestamp())
-        month_end = month_start + pd.offsets.MonthEnd(0)
-        warmup_start = month_start - pd.DateOffset(days=180)
-        seg = ts.loc[(ts.index >= warmup_start) & (ts.index <= month_end)].copy()
-        if len(seg) < 60:
-            continue
-
-        style_for_month = month_to_style.get(month_period, 'skip')
-        month_style_trace.append((month_period, style_for_month))
-
-        if style_for_month == 'skip':
-            continue
-
-        if style_for_month == 'trend':
-            res = run_trend_backtest_dc(
-                spread_ts=seg,
-                theta=float(theta) if theta is not None else 1.25,
-                vol_window=int(vol_window) if vol_window is not None else 60,
-                trailing_mult=float(trailing_mult) if trailing_mult is not None else 1.5,
-                allow_short=_allow_short_enabled(allow_short),
-                carry_roll_ts=carry_roll_ts,
-                carry_roll_bp=carry_roll_bp,
-                duration_mult=duration_mult,
-                borrow_cost_long_bp=borrow_cost_long_bp,
-                borrow_cost_short_bp=borrow_cost_short_bp,
-                spread_type=spread_type,
-                min_hold=int(min_hold) if min_hold is not None else 7,
-                adaptive_theta=True,
-                theta_min_mult=0.5,
-                theta_max_mult=2.5,
-            )
+    if isinstance(results, dict) and 'error' not in results:
+        results['monthly_style_schedule'] = schedule
+        style_ts = results.get('style_ts')
+        if isinstance(style_ts, pd.Series) and not style_ts.empty:
+            results['monthly_regime_ts'] = style_ts.map(
+                {'trend': 'trending', 'mr': 'mean_reverting'}
+            ).fillna('uncertain')
         else:
-            res = run_spread_backtest(
-                spread_ts=seg,
-                entry_z=entry_z or 2.0,
-                exit_z=exit_z or 0.5,
-                stop_z=stop_z or 4.0,
-                min_hold=int(min_hold) if min_hold is not None else 7,
-                trade_style=style_for_month,
-                carry_roll_ts=carry_roll_ts,
-                carry_roll_bp=carry_roll_bp,
-                duration_mult=duration_mult,
-                borrow_cost_long_bp=borrow_cost_long_bp,
-                borrow_cost_short_bp=borrow_cost_short_bp,
-                spread_type=spread_type,
-                carry_roll_sell_ts=carry_roll_sell_ts,
-            )
-
-        if 'error' in res:
-            continue
-
-        eq = res.get('equity_ts')
-        if isinstance(eq, pd.Series):
-            eq = eq.copy()
-            eq.index = pd.to_datetime(eq.index)
-            eq = eq[(eq.index >= month_start) & (eq.index <= month_end)]
-            if not eq.empty:
-                eq = eq + cumulative_equity
-                cumulative_equity = float(eq.iloc[-1])
-                combined_eqs.append(eq)
-
-        trades = res.get('trades', []) or []
-        for trade in trades:
-            entry_date = trade.get('entry_date')
-            exit_date = trade.get('exit_date')
-            if entry_date is not None and entry_date >= month_start and entry_date <= month_end:
-                combined_trades.append(trade)
-            elif exit_date is not None and exit_date >= month_start and exit_date <= month_end:
-                combined_trades.append(trade)
-
-    if combined_eqs:
-        combined_eq = pd.concat(combined_eqs).sort_index()
-        combined_eq = combined_eq.groupby(level=0).last().sort_index()
-        out = {
-            'equity_ts': combined_eq,
-            'trades': combined_trades,
-            'trades_df': pd.DataFrame(combined_trades),
-            'n_trades': len(combined_trades),
-            'total_pnl': float(combined_eq.iloc[-1]) if not combined_eq.empty else 0.0,
-            'win_rate': 0.0,
-            'avg_pnl': 0.0,
-            'avg_hold': 0.0,
-            'sharpe': 0.0,
-            'max_drawdown': 0.0,
-            'monthly_style_schedule': schedule,
-            'monthly_regime_ts': pd.Series(
-                [style for _, style in month_style_trace],
-                index=[month for month, _ in month_style_trace],
-                dtype=object,
-            ),
-            'style_mode': 'auto_monthly',
-            'style_effective': 'auto_monthly',
-            'uncertain_policy': 'skip',
-        }
-        return out
-
-    return {
-        'equity_ts': pd.Series(dtype=float),
-        'trades': [],
-        'trades_df': pd.DataFrame(),
-        'n_trades': 0,
-        'total_pnl': 0.0,
-        'win_rate': 0.0,
-        'avg_pnl': 0.0,
-        'avg_hold': 0.0,
-        'sharpe': 0.0,
-        'max_drawdown': 0.0,
-        'monthly_style_schedule': schedule,
-        'monthly_regime_ts': pd.Series(dtype=object),
-        'style_mode': 'auto_monthly',
-        'style_effective': 'auto_monthly',
-        'uncertain_policy': 'skip',
-    }
+            results['monthly_regime_ts'] = pd.Series(dtype=object)
+        results['style_mode'] = 'auto_monthly'
+        results['style_effective'] = 'auto_monthly'
+        results['uncertain_policy'] = uncertain_policy
+    return results
 
 
 def register_backtest_callbacks(app) -> None:
@@ -315,86 +203,6 @@ def register_backtest_callbacks(app) -> None:
             pass
 
         return optimized_data or []
-
-    def _default_style_for_spread(spread_type: str) -> str:
-        """Return category default style in canonical form: mr or trend."""
-        for _, info in SPREAD_CATEGORIES.items():
-            if spread_type in info.get('types', []):
-                return 'trend' if info.get('style', 'MeanReversion') == 'Trend' else 'mr'
-        return 'mr'
-
-    def _build_monthly_style_schedule(spread_ts: pd.Series, spread_type: str) -> tuple[pd.DataFrame, pd.Series]:
-        """Compute point-in-time monthly style assignment and daily regime strip."""
-        from curves.calibration.regime import DEFAULT_REGIME_WINDOW, compute_regime_features
-
-        s = pd.to_numeric(spread_ts, errors='coerce').dropna().copy()
-        if not isinstance(s.index, pd.DatetimeIndex):
-            s.index = pd.to_datetime(s.index)
-        if getattr(s.index, 'tz', None) is not None:
-            s.index = s.index.tz_localize(None)
-        s = s.sort_index()
-
-        if len(s) == 0:
-            return pd.DataFrame(), pd.Series(dtype=object)
-
-        review_dates = s.groupby(s.index.to_period('M')).apply(lambda x: x.index.min())
-        if review_dates is None or len(review_dates) == 0:
-            return pd.DataFrame(), pd.Series(dtype=object)
-
-        default_style = _default_style_for_spread(spread_type)
-        prev_style = None
-        rows = []
-
-        for rd in review_dates.sort_values().tolist():
-            hist = s.loc[:rd].dropna()
-            fallback_reason = ''
-            regime = 'uncertain'
-            score = np.nan
-
-            if len(hist) >= DEFAULT_REGIME_WINDOW + 5:
-                info = compute_regime_features(hist, window=DEFAULT_REGIME_WINDOW)
-                regime = str(info.get('regime', 'uncertain') or 'uncertain').strip().lower()
-                score = float(info.get('regime_score', np.nan))
-                if regime == 'trending':
-                    assigned_style = 'trend'
-                elif regime == 'mean_reverting':
-                    assigned_style = 'mr'
-                elif prev_style is not None:
-                    assigned_style = prev_style
-                    fallback_reason = 'uncertain->previous_style'
-                else:
-                    assigned_style = default_style
-                    fallback_reason = 'uncertain->default_style'
-            else:
-                regime = 'insufficient_history'
-                if prev_style is not None:
-                    assigned_style = prev_style
-                    fallback_reason = 'insufficient->previous_style'
-                else:
-                    assigned_style = default_style
-                    fallback_reason = 'insufficient->default_style'
-
-            rows.append({
-                'review_date': pd.Timestamp(rd),
-                'regime': regime,
-                'regime_score': score,
-                'assigned_style': assigned_style,
-                'fallback_reason': fallback_reason,
-            })
-            prev_style = assigned_style
-
-        schedule = pd.DataFrame(rows)
-        if schedule.empty:
-            return schedule, pd.Series(dtype=object)
-
-        month_to_style = {
-            pd.Timestamp(r['review_date']).to_period('M'): str(r['assigned_style'])
-            for r in rows
-        }
-        monthly_style = s.index.to_period('M').map(lambda m: month_to_style.get(m, default_style))
-        regime_strip = pd.Series(monthly_style, index=s.index).map({'trend': 'trending', 'mr': 'mean_reverting'}).fillna('uncertain')
-
-        return schedule, regime_strip
 
     # -------------------------------------------------------------------------
     # BACKTEST: Mode Tab Selector
@@ -727,22 +535,22 @@ def register_backtest_callbacks(app) -> None:
         if isinstance(results, dict) and _cr_sell_for_chart is not None:
             results['carry_roll_sell_ts'] = _cr_sell_for_chart
         if isinstance(results, dict):
+            # The style schedule is produced inside the runner from the same
+            # (sign-normalised) series the engines see — do not recompute it here
+            # from the raw series, which would classify yield-based spreads on the
+            # opposite orientation.
             results['spread_type'] = spread_type
-            results['style_mode'] = 'auto_monthly'
-            results['style_effective'] = 'auto_monthly'
-            results['uncertain_policy'] = 'skip'
-            try:
-                monthly_schedule, monthly_regime_ts = _build_monthly_style_schedule(ts, spread_type)
-                if not monthly_schedule.empty:
-                    results['monthly_style_schedule'] = monthly_schedule
-                    results['monthly_regime_ts'] = monthly_regime_ts
-            except Exception:
-                # Keep display resilient even if monthly schedule computation fails.
-                pass
+
+        n_reviews = 0
+        n_tradeable = 0
+        _sched = results.get('monthly_style_schedule') if isinstance(results, dict) else None
+        if isinstance(_sched, pd.DataFrame) and not _sched.empty:
+            n_reviews = int(len(_sched))
+            n_tradeable = int(_sched['assigned_style'].isin(['mr', 'trend']).sum())
 
         status = (
             f"Backtest completed at {datetime.now().strftime('%H:%M:%S')} "
-            "[automatic monthly regime; uncertain months skipped]"
+            f"[monthly regime routing; {n_tradeable}/{n_reviews} months tradeable]"
         )
         try:
             display = build_backtest_results_display(results, title=f"Backtest: {display_instrument} ({spread_type})")
