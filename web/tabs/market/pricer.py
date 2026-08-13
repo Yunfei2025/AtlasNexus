@@ -465,6 +465,11 @@ def _build_bond_rows(btype: str, term_range: str) -> list[dict]:
 
     rows: list[dict] = []
     for bond_id in bc.index:
+        # BondCurve statistics may also contain pair-series identifiers such as
+        # ``230203.IB|250203.IB``. Those are analytical pair instruments, not
+        # individual bonds, and do not belong in the single-bond pricer table.
+        if '|' in str(bond_id):
+            continue
         row_bc = bc.loc[bond_id]
 
         # ── Instrument attributes ──────────────────────────────────────────
