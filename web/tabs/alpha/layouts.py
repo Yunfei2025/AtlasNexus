@@ -537,10 +537,10 @@ def build_portfolio_layout() -> html.Div:
                 id='loading-portfolio', type='circle',
                 color=THEME['accent'],
                 style={'minHeight': '80px'},
-                children=html.Div([
+                    children=html.Div([
                     html.Div(id='alpha-scored-table-container', style={'overflowX': 'auto'}),
                     html.Div(id='alpha-risk-chart-container'),
-                ]),
+                    ]),
             ),
         ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden'}),
 
