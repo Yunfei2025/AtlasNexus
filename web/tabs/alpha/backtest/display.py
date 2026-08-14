@@ -86,7 +86,19 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
     ], style={'background': 'var(--surface-panel)', 'border': '1px solid var(--border-strong)',
               'borderRadius': '6px', 'padding': '12px 16px', 'marginBottom': '15px'})
 
+    # A monthly style-routed run carries *both* signal series, so presence of
+    # 'trend_state_ts' alone no longer implies a trend chart. Pick the panel from
+    # the styles actually traded (falling back to the schedule, then to the key).
     is_trend = 'trend_state_ts' in results
+    _style_ts = results.get('style_ts')
+    if isinstance(_style_ts, pd.Series) and not _style_ts.empty:
+        _traded = results.get('trades_df')
+        if isinstance(_traded, pd.DataFrame) and 'style' in _traded.columns and not _traded.empty:
+            _styles = set(_traded['style'].dropna().astype(str))
+        else:
+            _styles = set(_style_ts.dropna().astype(str)) - {'skip'}
+        # Show the trend panel only when trend is the dominant/only style traded.
+        is_trend = bool(_styles) and _styles.issubset({'trend'})
     is_yield_based = results.get('spread_type') in YIELD_BASED_SPREAD_TYPES
     is_bondswap = results.get('spread_type') in ('TBondSwap', 'CBondSwap', 'BondSwap')
     trades_df = results.get('trades_df')
@@ -474,7 +486,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
 
         # Reorder columns for readability
         cols = list(df.columns)
-        desired = ['entry_date', 'exit_date', 'direction', 'entry_price', 'exit_price',
+        desired = ['entry_date', 'exit_date', 'direction', 'style', 'entry_price', 'exit_price',
                    'spd_chg', 'cr_acc', 'pnl_trade', 'capital_cum', 'carry_cum', 'pnl_cum',
                    'duration', 'days_held', 'exit_reason']
         new_cols = [c for c in desired if c in cols] + [c for c in cols if c not in desired]
@@ -498,4 +510,49 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             ),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px', 'borderRadius': '5px'})
 
-    return html.Div([metrics_div, instrument_div, score_div, equity_div, trades_table])
+    review_table = html.Div()
+    if isinstance(monthly_style_schedule, pd.DataFrame) and not monthly_style_schedule.empty:
+        try:
+            sched = monthly_style_schedule.copy()
+            sched['review_date'] = pd.to_datetime(sched['review_date'])
+            # Next review = the following month's first observation; for the last
+            # row it is not yet known, so show the upcoming month start.
+            next_reviews = sched['review_date'].shift(-1)
+            last_review = sched['review_date'].iloc[-1]
+            next_reviews.iloc[-1] = (last_review + pd.offsets.MonthBegin(1))
+            sched['next_review'] = next_reviews.dt.strftime('%Y-%m-%d')
+            sched['review_date'] = sched['review_date'].dt.strftime('%Y-%m-%d')
+            if 'regime_score' in sched.columns:
+                sched['regime_score'] = pd.to_numeric(sched['regime_score'], errors='coerce').round(2)
+            sched = sched.reindex(columns=[c for c in [
+                'review_date', 'next_review', 'regime', 'regime_score',
+                'assigned_style', 'fallback_reason'] if c in sched.columns])
+            sched = sched.iloc[::-1]  # newest review first
+
+            n_reviews = len(sched)
+            n_tradeable = int(monthly_style_schedule['assigned_style'].isin(['mr', 'trend']).sum())
+            review_table = html.Div([
+                html.H6(
+                    f"Monthly Style Review ({n_tradeable}/{n_reviews} months tradeable)",
+                    style={'color': THEME['text_main'], 'marginBottom': '10px'},
+                ),
+                dash_table.DataTable(
+                    columns=[{'name': c, 'id': c} for c in sched.columns],
+                    data=sched.to_dict('records'),
+                    style_table={'overflowX': 'auto', 'maxHeight': '250px', 'overflowY': 'auto'},
+                    style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'], 'fontWeight': 'bold'},
+                    style_cell={'backgroundColor': THEME['bg_card'], 'color': THEME['text_main'], 'fontSize': '11px', 'padding': '5px'},
+                    style_data_conditional=[
+                        {'if': {'filter_query': '{assigned_style} = "trend"'}, 'color': THEME['accent']},
+                        {'if': {'filter_query': '{assigned_style} = "mr"'}, 'color': THEME['success']},
+                        {'if': {'filter_query': '{assigned_style} = "skip"'}, 'color': THEME['warning']},
+                    ],
+                    page_size=12,
+                    sort_action='native',
+                ),
+            ], style={'backgroundColor': THEME['bg_card'], 'padding': '15px',
+                      'borderRadius': '5px', 'marginTop': '15px'})
+        except Exception:
+            review_table = html.Div()
+
+    return html.Div([metrics_div, instrument_div, score_div, equity_div, trades_table, review_table])

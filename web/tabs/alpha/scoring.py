@@ -347,32 +347,80 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
         marginal_risk = cov @ w
         return (w * marginal_risk) / port_var
 
-    def _objective(w, cov):
-        rc = _risk_contribution(w, cov)
-        target = 1.0 / len(w)
-        return np.sum((rc - target) ** 2)
+    target_rc = 1.0 / n
+    # Diversifying/hedge assets (near-zero or negative marginal risk against
+    # the rest of the book at equal weight) can sit at a squared-error optimum
+    # far below target_rc — the objective alone doesn't force them up, it just
+    # trades off small gains there against small losses elsewhere. RC is also
+    # non-monotonic in weight for a diversifier (raising its weight can push
+    # RC further negative before it turns and climbs), so a hard inequality
+    # constraint routinely fails SLSQP's line search. A soft penalty on floor
+    # violations avoids that failure mode and lets multiple starting points
+    # search past the bad local optimum near equal weight.
+    rc_floor = 0.5 * target_rc
 
-    constraints = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
-    min_w = 1.0 / (3 * n)
+    def _objective_penalized(w, cov, floor_penalty):
+        rc = _risk_contribution(w, cov)
+        err = np.sum((rc - target_rc) ** 2)
+        violation = np.clip(rc_floor - rc, 0.0, None)
+        return err + floor_penalty * np.sum(violation ** 2)
+
+    eq_constraint = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
+    # A floor that's too high (e.g. the old 1/(3n)) forces low-duration trades
+    # (short-tenor SwapSpreads such as Repo7d-6m1y) to hold more weight than
+    # their true ERC solution wants, clamping their RC far below the 1/n
+    # target instead of letting the optimizer equalize risk properly. Keep a
+    # small floor only to avoid near-zero/degenerate weights.
+    min_w = 1.0 / (10 * n)
     max_w = min(0.5, 1.0 - min_w * (n - 1))
     bounds = [(min_w, max_w) for _ in range(n)]
-    w0 = np.ones(n) / n
+    w_equal = np.ones(n) / n
 
-    result = minimize(
-        _objective,
-        w0,
-        args=(cov,),
-        method='SLSQP',
-        bounds=bounds,
-        constraints=constraints,
-        options={'maxiter': 1000, 'ftol': 1e-9}
-    )
+    starts = [w_equal]
+    below_floor = np.where(_risk_contribution(w_equal, cov) < rc_floor)[0]
+    # Push each below-floor name up individually, and (if more than one) all
+    # together — these are the starting basins that reach the true
+    # high-weight region a diversifier needs to clear the floor from.
+    push_combos = [[i] for i in below_floor]
+    if len(below_floor) > 1:
+        push_combos.append(list(below_floor))
+    for combo in push_combos:
+        w_start = np.full(n, min_w)
+        remaining = 1.0 - min_w * (n - len(combo))
+        share = min(max_w, remaining / len(combo))
+        for idx in combo:
+            w_start[idx] = share
+        leftover = 1.0 - w_start[combo].sum() - min_w * (n - len(combo))
+        fill_idx = [i for i in range(n) if i not in combo]
+        if leftover > 0 and fill_idx:
+            w_start[fill_idx] = min_w + leftover / len(fill_idx)
+        starts.append(w_start / w_start.sum())
 
-    if not result.success:
-        print(f"WARNING: Risk parity optimization did not converge: {result.message}")
-        weights_array = np.ones(n) / n
+    best_weights, best_violation = None, np.inf
+    for floor_penalty in (10.0, 100.0, 1000.0):
+        for w_start in starts:
+            result = minimize(
+                _objective_penalized,
+                w_start,
+                args=(cov, floor_penalty),
+                method='SLSQP',
+                bounds=bounds,
+                constraints=eq_constraint,
+                options={'maxiter': 500, 'ftol': 1e-10}
+            )
+            if not result.success:
+                continue
+            w_candidate = np.clip(result.x, min_w, max_w)
+            w_candidate = w_candidate / w_candidate.sum()
+            violation = np.sum(np.clip(rc_floor - _risk_contribution(w_candidate, cov), 0.0, None) ** 2)
+            if violation < best_violation - 1e-12:
+                best_weights, best_violation = w_candidate, violation
+
+    if best_weights is None:
+        print("WARNING: Risk parity optimization did not converge, using equal weights")
+        weights_array = w_equal
     else:
-        weights_array = result.x
+        weights_array = best_weights
 
     weights_array = np.clip(weights_array, min_w, max_w)
     weights_array = weights_array / weights_array.sum()

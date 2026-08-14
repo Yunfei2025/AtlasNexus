@@ -584,8 +584,16 @@ def register_portfolio_callbacks(app) -> None:
                 else pd.Series(1.0, index=df_scored.index)
             )
 
+            # Rounding notional to a fixed 10mm lot silently zeroes out any row
+            # whose dollar allocation is under 10mm — routine once capital is
+            # split across 10+ names on a modest book (e.g. 150mm / 15 trades
+            # averages 10mm/row before any single row even gets there). Scale
+            # the lot size down so a typical row still rounds to a non-zero,
+            # displayable notional; 10mm remains the ceiling for large books.
+            _lot_mm = min(10.0, max(0.1, round(total_capital_mm / max(n_trades, 1) / 5, 1)))
+
             # Step A: initial unsigned notional from weights
-            df_scored['notional_mm'] = np.floor(df_scored['weight'] * total_capital_mm / 10) * 10
+            df_scored['notional_mm'] = np.floor(df_scored['weight'] * total_capital_mm / _lot_mm) * _lot_mm
 
             # Step B: capital constraint for bond/swap/tenor spreads
             _CAPITAL_TYPES = {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap', 'TenorSpread', 'BondCurve', 'BondSwap'}
@@ -599,7 +607,7 @@ def register_portfolio_callbacks(app) -> None:
                 if abs(_raw_signed) > 1e-6:
                     _cap_scale = total_capital_mm / _raw_signed
                     df_scored.loc[_is_bond, 'notional_mm'] = (
-                        np.floor(df_scored.loc[_is_bond, 'notional_mm'] * _cap_scale / 10) * 10
+                        np.floor(df_scored.loc[_is_bond, 'notional_mm'] * _cap_scale / _lot_mm) * _lot_mm
                     )
 
             # Step C: apply direction sign to all notionals
@@ -638,7 +646,7 @@ def register_portfolio_callbacks(app) -> None:
             _single_side_dv01 = max(_buy_dv01, _sell_dv01) if (_buy_dv01 > 0 and _sell_dv01 > 0) else (_buy_dv01 + _sell_dv01)
             if _single_side_dv01 > 1e-6 and _dv01_budget_k > 0:
                 _dv01_scale = _dv01_budget_k / _single_side_dv01
-                df_scored['notional_mm'] = np.floor(df_scored['notional_mm'] * _dv01_scale / 10) * 10
+                df_scored['notional_mm'] = np.floor(df_scored['notional_mm'] * _dv01_scale / _lot_mm) * _lot_mm
                 df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)
 
             # Step F: Resolve underlying instrument legs for each trade
@@ -769,7 +777,7 @@ def register_portfolio_callbacks(app) -> None:
             _, _, _capital_with_repo_mm = _portfolio_financing(df_scored['notional_mm'])
             if _capital_with_repo_mm > total_capital_mm and _capital_with_repo_mm > 1e-6:
                 _margin_scale = total_capital_mm / _capital_with_repo_mm
-                df_scored['notional_mm'] = np.floor(df_scored['notional_mm'] * _margin_scale / 10) * 10
+                df_scored['notional_mm'] = np.floor(df_scored['notional_mm'] * _margin_scale / _lot_mm) * _lot_mm
                 df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)
                 df_scored['net_notional_mm'], df_scored['margin_mm'] = _compute_net_and_margin(df_scored['notional_mm'])
 
