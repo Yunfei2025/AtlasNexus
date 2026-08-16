@@ -10,6 +10,8 @@ import pandas as pd
 
 from ._carry import _carry_accrual
 
+MR_VOL_SPAN = 60
+
 
 def run_spread_backtest(
     spread_ts: pd.Series,
@@ -26,6 +28,7 @@ def run_spread_backtest(
     spread_type: Optional[str] = None,
     tenor_ratio: float = 1.0,
     carry_roll_sell_ts: Optional[pd.Series] = None,
+    mr_vol_span: int = MR_VOL_SPAN,
 ) -> Dict[str, Any]:
     """Run backtest on a single spread time series."""
     if spread_ts is None or len(spread_ts) < 130:
@@ -39,8 +42,13 @@ def run_spread_backtest(
 
     lookback = 120
     rolling_mean = spread_ts.rolling(lookback).mean()
-    rolling_std = spread_ts.rolling(lookback).std()
-    zscore = (spread_ts - rolling_mean) / rolling_std
+    # EWMA volatility (short span) rather than a flat rolling(120) std: a fixed
+    # long window blends in whatever vol regime sits in the trailing year, so
+    # once the market settles into a materially quieter range the same
+    # absolute swing can no longer clear a fixed entry_z threshold and entries
+    # silently stop. EWMA tracks the current regime instead of stale history.
+    ewm_std = spread_ts.ewm(span=max(int(mr_vol_span), 2), min_periods=max(int(mr_vol_span), 2)).std()
+    zscore = (spread_ts - rolling_mean) / ewm_std
 
     composite_signal = zscore.copy()
 

@@ -24,6 +24,7 @@ from ._carry import _carry_accrual
 from .engine_trend import _z_momentum_state
 
 MR_LOOKBACK = 120
+MR_VOL_SPAN = 60
 
 _STYLE_ALIASES = {
     'mr': 'mr',
@@ -154,6 +155,7 @@ def run_monthly_style_backtest(
     spread_type: Optional[str] = None,
     tenor_ratio: float = 1.0,
     carry_roll_sell_ts: Optional[pd.Series] = None,
+    mr_vol_span: int = MR_VOL_SPAN,
 ) -> Dict[str, Any]:
     """Run a continuous backtest whose entry style is routed by month.
 
@@ -176,9 +178,18 @@ def run_monthly_style_backtest(
         styles[key] = canonical_style(value)
 
     # ---- Signals, computed once on the whole history -------------------------
+    # Fair-value anchor stays a plain rolling mean over MR_LOOKBACK (needs the
+    # long window to be a meaningful "typical level"), but the scale is an EWMA
+    # volatility over the shorter mr_vol_span. A flat rolling(120) std blends in
+    # whatever vol regime sits in the trailing year, so once the market settles
+    # into a materially quieter range the same absolute price swing can no
+    # longer clear a fixed entry_z threshold -- entries silently stop even
+    # though the spread is still moving in relative terms. EWMA reacts within
+    # its span instead of carrying stale high-vol history, which keeps the
+    # z-score's entry rate roughly stable across vol regimes.
     rolling_mean = s.rolling(MR_LOOKBACK).mean()
-    rolling_std = s.rolling(MR_LOOKBACK).std()
-    zscore = (s - rolling_mean) / rolling_std.replace(0, np.nan)
+    ewm_std = s.ewm(span=max(int(mr_vol_span), 2), min_periods=max(int(mr_vol_span), 2)).std()
+    zscore = (s - rolling_mean) / ewm_std.replace(0, np.nan)
     zscore = zscore.replace([np.inf, -np.inf], np.nan)
 
     trend_state, z_mom, _sigma_mad = _z_momentum_state(

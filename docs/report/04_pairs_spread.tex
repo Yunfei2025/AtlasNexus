@@ -269,8 +269,11 @@ $\Delta s$ (or, for the efficiency ratio, on the corresponding $w$-step level ch
 \text{Hurst exponent (single-scale R/S): } && Y_i &= \sum_{k=1}^{i}\bigl(\Delta s_k - \overline{\Delta s}\bigr),\quad
 R = \max_i Y_i - \min_i Y_i,\quad S = \operatorname{sd}(\Delta s), \\
 && H_t &= \frac{\ln(R/S)}{\ln w}, \\[4pt]
-\text{Variance ratio: } && w_{\mathrm{short}} &= \max\!\left(\left\lfloor w/4\right\rfloor,\,2\right),\quad
-VR_t = \frac{\operatorname{Var}_{w_{\mathrm{short}}}(\Delta s)\,\bigl(w / w_{\mathrm{short}}\bigr)}{\operatorname{Var}_{w}(\Delta s)}, \\[4pt]
+\text{Variance ratio (Lo-MacKinlay): } && k &= \max\!\left(\left\lfloor w/12\right\rfloor,\,2\right),\quad
+\hat\mu = \overline{\Delta s},\quad \hat\sigma_a^2 = \frac{1}{w-1}\sum_{i=t-w+1}^{t}(\Delta s_i - \hat\mu)^2, \\
+&& \hat\sigma_b^2(k) &= \frac{1}{m}\sum_{i=t-w+k}^{t}\Bigl(\textstyle\sum_{j=0}^{k-1}\Delta s_{i-j} - k\hat\mu\Bigr)^{\!2},\quad
+m = k(w-k+1)\Bigl(1-\tfrac{k}{w}\Bigr), \\
+&& VR_t &= \hat\sigma_b^2(k)\big/\hat\sigma_a^2, \\[4pt]
 \text{Lag-1 autocorrelation: } && AC_t &= \operatorname{corr}\!\left(\Delta s_i,\ \Delta s_{i-1}\right) \text{ over the trailing } w \text{ observations}.
 \end{aligned}
 \end{equation}
@@ -285,17 +288,28 @@ churn relative to the net move (choppy/range-bound, favors mean reversion).
 be followed by another up-move --- trending); $H_t=0.5$ is consistent with a random
 walk (no memory); $H_t<0.5$ indicates anti-persistence (moves tend to reverse ---
 mean-reverting).
-\item \textbf{Variance ratio $VR_t$}: compares variance realized over the short window,
-rescaled to the long window's horizon, against the actual long-window variance. $VR_t>1$
-means variance is growing faster than a random walk would imply (trending/momentum);
-$VR_t<1$ means it grows slower (mean-reverting, i.e.\ moves get walked back).
+\item \textbf{Variance ratio $VR_t$}: the Lo-MacKinlay (1988) unbiased overlapping
+estimator, comparing the per-period variance of $k$-step sums against the 1-step
+variance. $VR_t>1$ means variance is growing faster than a random walk would imply
+(trending/momentum); $VR_t<1$ means it grows slower (mean-reverting, i.e.\ moves get
+walked back). $k$ is kept at $\lfloor w/12\rfloor$ (not $\lfloor w/4\rfloor$) so the
+estimator retains enough independent overlapping blocks to stay unbiased at $w=60$.
 \item \textbf{Lag-1 autocorrelation $AC_t$}: positive autocorrelation of daily changes
 indicates momentum/continuation; negative autocorrelation indicates a reversal
 tendency (mean reversion).
 \end{itemize}
 
 \paragraph{Voting thresholds.} Each indicator casts one vote in $\{-1, 0, +1\}$
-(mean-reverting, neutral, trending):
+(mean-reverting, neutral, trending). The efficiency ratio and Hurst thresholds are set
+\emph{relative to their random-walk null}, not as fixed constants, because both
+statistics' expected value under i.i.d.\ noise depends on $w$:
+$\mathbb{E}[ER_t \mid \text{i.i.d.}] \approx \sqrt{2/(\pi w)}$ shrinks as $w$ grows, and
+$\mathbb{E}[H_t \mid \text{i.i.d.}]$ (the finite-sample R/S bias, calibrated by Monte
+Carlo simulation of the same estimator rather than a closed-form correction, since the
+classic Anis-Lloyd formula does not track this exact R/S convention closely enough to
+be reliable) drifts upward from $0.5$ with $w$. Anchoring the gate to the null keeps a
+window change (or a change of instrument, since realised volatility and observation
+frequency both shift the effective null) from silently relabeling a flat series:
 
 {\small
 \setlength{\LTleft}{0pt}
@@ -303,7 +317,7 @@ tendency (mean reversion).
 \setlength{\tabcolsep}{5pt}
 \renewcommand{\arraystretch}{1.15}
 \begin{longtable}{p{0.24\textwidth} p{0.22\textwidth} p{0.22\textwidth} p{0.24\textwidth}}
-\caption{Regime-vote thresholds per indicator.}\label{tab:pairs-regime-votes-overleaf} \\
+\caption{Regime-vote thresholds per indicator (window-relative; values shown for $w=60$).}\label{tab:pairs-regime-votes-overleaf} \\
 \toprule
 \textbf{Indicator} & \textbf{Trending vote ($+1$)} & \textbf{Mean-reverting vote ($-1$)} & \textbf{Otherwise} \\
 \midrule
@@ -318,12 +332,16 @@ tendency (mean reversion).
 \endfoot
 \bottomrule
 \endlastfoot
-Efficiency ratio $ER_t$ & $> 0.35$ & $< 0.20$ & neutral ($0$) \\
-Hurst exponent $H_t$ & $> 0.55$ & $< 0.45$ & neutral ($0$) \\
+Efficiency ratio $ER_t$ & $> 1.6\,\mathbb{E}[ER\mid\mathrm{iid}]$ ($\approx 0.16$ at $w{=}60$) & $< 0.7\,\mathbb{E}[ER\mid\mathrm{iid}]$ ($\approx 0.07$) & neutral ($0$) \\
+Hurst exponent $H_t$ & $> \mathbb{E}[H\mid\mathrm{iid}] + 0.05$ ($\approx 0.57$) & $< \mathbb{E}[H\mid\mathrm{iid}] - 0.05$ ($\approx 0.47$) & neutral ($0$) \\
 Variance ratio $VR_t$ & $> 1.05$ & $< 0.95$ & neutral ($0$) \\
 Lag-1 autocorrelation $AC_t$ & $> 0.05$ & $< -0.05$ & neutral ($0$) \\
 \end{longtable}
 }
+
+The variance ratio and autocorrelation nulls are window-invariant ($1.0$ and $0.0$
+respectively once $VR_t$ uses the bias-corrected estimator above), so their bands stay
+fixed constants; only $ER_t$ and $H_t$ use window-relative gates.
 
 The four votes are summed and normalized to a \texttt{regime\_score} $\in [-1, +1]$ (sum
 divided by $4$); \texttt{regime\_confidence} is $\left|\texttt{regime\_score}\right|$. The
@@ -333,6 +351,29 @@ $\{-1, 0, +1\}$ is reported as \texttt{uncertain}. This ensemble-voting design m
 least two of the four indicators must agree in the same direction before a definite
 regime is assigned; a single strong indicator outvoted by the others yields
 \texttt{uncertain} rather than a confident call.
+
+\paragraph{Calibration fix (2026-08-16).} An earlier version of this classifier used
+fixed thresholds ($ER>0.35$/$<0.20$, $H>0.55$/$<0.45$) and an uncorrected overlapping
+variance-ratio estimator with $k=\lfloor w/4\rfloor$. Simulating a pure random walk
+(no genuine trend or mean-reversion signal by construction) through that version showed
+it was mislabeled \texttt{mean\_reverting} in roughly 60\% of draws, with a mean net vote
+of $-1.25$ out of a possible $[-4,+4]$ range that should average to $0$ on noise. Two of
+the four voters were responsible: the efficiency-ratio gate sat above the random-walk
+null at $w=60$ (making the trending branch almost unreachable in practice), and the
+uncorrected variance-ratio estimator was downward-biased to a mean of $\approx 0.72$
+instead of $1.0$ at $k=\lfloor w/4\rfloor=15$. Both defects scaled with $w$, so the bias
+was not specific to any one spread or window choice --- it affected every family running
+through \texttt{compute\_regime\_features}/\texttt{compute\_regime\_features\_series},
+including the monthly style router of \S\ref{sec:pairs-regime-selection} and the hybrid
+backtest engine's daily regime gate. The fix above (Lo-MacKinlay variance ratio at
+$k=\lfloor w/12\rfloor$, window-relative $ER$/$H$ gates calibrated against each
+statistic's random-walk null) reduces the mean vote on simulated random walks to
+approximately $-0.2$ and is covered by
+\texttt{tests/test\_regime\_hybrid.py::test\_regime\_classifier\_is\_unbiased\_on\_random\_walk}.
+Re-running the fixed classifier against several years of CGB-10s30s history now assigns
+\texttt{trending} through 2022H2--2023H1 and late 2023 through most of 2024, and returns
+to \texttt{trending} from late 2025, consistent with the qualitative trending/mean-reverting
+pattern visible in the raw spread chart over that period.
 
 \paragraph{Not a Markov/HMM model.} Both \texttt{compute\_regime\_features} and the
 trend-state signal of \S\ref{sec:pairs-trend-model} are deterministic,
@@ -347,12 +388,14 @@ stateless helper functions from that module (\texttt{\_estimate\_hurst} and
 HMM class.
 
 \subsection{Mean-reversion Model and Defaults}
+\label{sec:pairs-mr-model}
 
-For a spread level $s_t$, the MR engine uses a fixed internal lookback of 120
-observations:
+For a spread level $s_t$, the MR engine anchors to a 120-observation rolling mean but
+scales deviations by a shorter-span EWMA volatility rather than the rolling standard
+deviation over the same 120-observation window:
 
 \begin{equation}
-z_t = \frac{s_t - \operatorname{mean}_{120}(s)}{\operatorname{sd}_{120}(s)}.
+z_t = \frac{s_t - \operatorname{mean}_{120}(s)}{\operatorname{ewmstd}_{\mathrm{span}=60}(s)}.
 \end{equation}
 
 The engine enters long when $z_t \le -z_{entry}$ and short when
@@ -383,13 +426,39 @@ change an MR entry or exit decision.
 \endfoot
 \bottomrule
 \endlastfoot
-Internal z-score lookback & 120 observations & 120 observations & Local equilibrium and dispersion; not UI-configurable. \\
+Rolling-mean anchor window & 120 observations & 120 observations & Local equilibrium (fair-value) level; not UI-configurable. \\
+EWMA volatility span (\texttt{mr\_vol\_span}) & 60 observations & 60 observations & Dispersion scale for $z_t$; not UI-configurable, but reacts to the current vol regime within its span instead of blending in up to a year of trailing history. \\
 \texttt{entry\_z} & 2.0 & 2.5 & Absolute z-score entry threshold. \\
 \texttt{exit\_z} & 0.5 & 0.25 & Reversion band used after the minimum hold. \\
 \texttt{stop\_z} & 4.0 & 5.0 & Adverse z-score stop. \\
 \texttt{min\_hold} & 7 calendar days & 10 calendar days & Minimum holding period for signal exits; stop remains active. \\
 \end{longtable}
 }
+
+\paragraph{Volatility-scale fix (2026-08-16).} An earlier version scaled $z_t$ by a
+plain rolling standard deviation over the same 120-observation window used for the
+mean, i.e.\ $z_t = (s_t - \operatorname{mean}_{120}(s))/\operatorname{sd}_{120}(s)$.
+Because that window is long enough to span more than one volatility regime, once a
+spread's realised volatility fell materially below its trailing-year level, the
+rolling std kept the entry threshold anchored to the \emph{old}, higher-vol regime,
+so daily moves that were large relative to \emph{current} conditions no longer
+produced $|z_t| \ge z_{entry}$ and entries silently stopped even though the spread
+remained active in relative terms. Observed on \texttt{LGBCGB-30y}: with the
+\texttt{TenorSpread} preset (\texttt{entry\_z}$=2.5$), the rolling-std $z_t$ reached
+$|z_t|\ge 2.5$ on 13 days in 2023 but 0 days in 2026, even though the mean 120-day
+rolling volatility itself was essentially unchanged between the two years ($\approx$0.028
+in both). Replacing the denominator with a 60-span EWMA
+volatility, together with lowering \texttt{entry\_z} to $2.0$, raised the full-history
+trade count on \texttt{LGBCGB-30y} through \texttt{run\_monthly\_style\_backtest} from
+37 to 47 trades and restored entries in 2026 (0 $\to$ 2). The mean anchor is left on
+the 120-observation rolling window: an equally short-span EWMA mean was evaluated and
+rejected, since a fast-adapting mean chases the level and \emph{reduces} the measured
+deviation, which made the effect worse rather than better in exactly the low-vol
+periods this fix targets. This applies to both
+\texttt{engine\_mr.py::run\_spread\_backtest} (the portfolio-level MR sleeve) and
+\texttt{engine\_monthly.py::run\_monthly\_style\_backtest} (the regime-routed
+individual-spread and monthly-switch backtest of \S\ref{sec:pairs-regime-selection}),
+which previously duplicated the same fixed-window computation independently.
 
 \subsection{Trend Model and Defaults}
 \label{sec:pairs-trend-model}
@@ -623,10 +692,16 @@ and the rejected alternatives in Table \ref{tab:pairs-model-comparison-overleaf}
 
 \item \textbf{Calibrate the monthly classifier and trend threshold by family.} The
 variance-ratio proxy and single-scale 60-day R/S Hurst estimate have finite-sample
-limitations. Calibrate classifier votes and the trend hysteresis threshold
-($\theta_z$) to instrument-family null distributions and walk-forward results. The
-review output must always report confidence, fallback reason, robust scale summary,
-and effective threshold configuration.
+limitations; as of the 2026-08-16 fix described in
+\S\ref{sec:pairs-regime-selection}, the classifier corrects for the resulting
+random-walk bias generically (Lo-MacKinlay variance ratio, window-relative $ER$/$H$
+gates), but the underlying single-scale R/S Hurst estimator and a $60$-day window's
+limited power to resolve multi-month regime swings remain approximations. Calibrate
+classifier votes and the trend hysteresis threshold ($\theta_z$) to instrument-family
+null distributions and walk-forward results, and consider a longer window (120--250
+days) for families where multi-month regimes dominate. The review output must always
+report confidence, fallback reason, robust scale summary, and effective threshold
+configuration.
 
 \item \textbf{Enforce one causal trend-state implementation.} All trend paths must
 call the same hysteresis-banded z-momentum signal generator. Test positive,
