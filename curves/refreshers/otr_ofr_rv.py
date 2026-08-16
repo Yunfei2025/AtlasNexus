@@ -214,7 +214,13 @@ def refresh_otr_ofr_rv_realtime(asset_class: str, update: bool = True) -> pd.Dat
         row['CloseYield'] = float(series['CloseYield'].iloc[-1])
         row['CurveYield'] = float(series['CurveYield'].iloc[-1])
         row['spread'] = float(sp.iloc[-1])
-        mean_v, vol_v = row.get('mean', np.nan), row.get('vol', np.nan)
+        mean_v = row.get('mean', np.nan)
+        # Prefer ewm_vol (EWMA(60), matches the backtest engines' entry-signal
+        # scale) over the static full-sample 'vol'; see alpha_snapshot.py's
+        # BondCurve block for the full rationale.
+        vol_v = row.get('ewm_vol', np.nan)
+        if not pd.notna(vol_v):
+            vol_v = row.get('vol', np.nan)
         row['Zscore'] = float((row['spread'] - mean_v) / vol_v) if pd.notna(mean_v) and pd.notna(vol_v) and vol_v else np.nan
         rows[pair_id] = row
 

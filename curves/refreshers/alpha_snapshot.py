@@ -319,11 +319,18 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 			df_bc = df_bc.loc[~_bc_self_pair.values].copy()
 			if df_bc.empty:
 				continue
-			df_bc = _ensure_numeric(df_bc, ["Zscore", "spread", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+			df_bc = _ensure_numeric(df_bc, ["Zscore", "spread", "mean", "vol", "ewm_vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+			# Prefer ewm_vol (EWMA(60), matches the backtest engines' entry-signal
+			# scale) over the static full-sample 'vol' so a live snapshot z-score
+			# and a historical backtest z-score agree on what "extreme" means
+			# under the current volatility regime.
+			_bc_zvol = df_bc["ewm_vol"] if "ewm_vol" in df_bc.columns else df_bc.get("vol", pd.Series(np.nan, index=df_bc.index))
+			_bc_zvol = pd.to_numeric(_bc_zvol, errors="coerce")
+			_bc_zvol = _bc_zvol.where(_bc_zvol.notna(), pd.to_numeric(df_bc.get("vol", pd.Series(np.nan, index=df_bc.index)), errors="coerce"))
 			df_bc["Zscore"] = (
 				pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce") -
 				pd.to_numeric(df_bc.get("mean", pd.Series(0.0, index=df_bc.index)), errors="coerce")
-			) / pd.to_numeric(df_bc.get("vol", pd.Series(np.nan, index=df_bc.index)), errors="coerce").replace(0, np.nan)
+			) / _bc_zvol.replace(0, np.nan)
 			spread_bp = pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce") * 100.0
 			borrow_cost_bp = pd.Series(
 				_BOND_CURVE_BORROW_COST_BP_ANNUAL * (_CARRY_BASIS_DAYS / _ANNUAL_CARRY_BASIS_DAYS),
@@ -347,11 +354,14 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		if not isinstance(df_rt, pd.DataFrame) or df_rt.empty:
 			return None
 		df_rt = _normalize_index(df_rt)
-		df_rt = _ensure_numeric(df_rt, ["Zscore", "spread", "mean", "vol"])
+		df_rt = _ensure_numeric(df_rt, ["Zscore", "spread", "mean", "vol", "ewm_vol"])
 		if {"spread", "mean", "vol"}.issubset(df_rt.columns):
 			_df_spread = pd.to_numeric(df_rt["spread"], errors="coerce")
 			_df_mean = pd.to_numeric(df_rt["mean"], errors="coerce")
-			_df_vol = pd.to_numeric(df_rt["vol"], errors="coerce").replace(0, np.nan)
+			# Prefer ewm_vol (matches the backtest engines' EWMA entry-signal
+			# scale) over the static full-sample 'vol'; see BondCurve block above.
+			_df_vol = pd.to_numeric(df_rt.get("ewm_vol"), errors="coerce") if "ewm_vol" in df_rt.columns else pd.Series(np.nan, index=df_rt.index)
+			_df_vol = _df_vol.where(_df_vol.notna(), pd.to_numeric(df_rt["vol"], errors="coerce")).replace(0, np.nan)
 			_df_z = (_df_spread - _df_mean) / _df_vol
 			df_rt["Zscore"] = _df_z.where(_df_z.notna(), df_rt["Zscore"])
 
@@ -385,7 +395,7 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		# Exclude IDs ending with ".IR"
 		df_irs = df_irs[~df_irs.index.astype(str).str.endswith(".IR")].copy()
 		df_irs = df_irs[_exclude_swapspread_butterflies(df_irs.index)].copy()
-		df_irs = _ensure_numeric(df_irs, ["Zscore", "spread", "QtPx", "mean", "vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+		df_irs = _ensure_numeric(df_irs, ["Zscore", "spread", "QtPx", "mean", "vol", "ewm_vol", "Carry(3m,bp)", "Roll(3m,bp)"])
 		# Swap-spread opportunities and their z-scores must be based on the
 		# current executable mid quote. The realtime refresh also carries the
 		# model/curve ``spread`` value, which can diverge materially from QtPx.
@@ -394,9 +404,13 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		if "QtPx" in df_irs.columns:
 			df_irs["spread"] = pd.to_numeric(df_irs["QtPx"], errors="coerce")
 			if {"mean", "vol"}.issubset(df_irs.columns):
+				# Prefer ewm_vol (matches the backtest engines' EWMA entry-signal
+				# scale) over the static full-sample 'vol'; see BondCurve block above.
+				_irs_vol = pd.to_numeric(df_irs.get("ewm_vol"), errors="coerce") if "ewm_vol" in df_irs.columns else pd.Series(np.nan, index=df_irs.index)
+				_irs_vol = _irs_vol.where(_irs_vol.notna(), pd.to_numeric(df_irs["vol"], errors="coerce")).replace(0, np.nan)
 				df_irs["Zscore"] = (
 					(df_irs["spread"] - pd.to_numeric(df_irs["mean"], errors="coerce")) /
-					pd.to_numeric(df_irs["vol"], errors="coerce").replace(0, np.nan)
+					_irs_vol
 				)
 		# irsSpreadComposite builds Carry/Roll as +leg1(paid, long tenor) minus
 		# leg2(received, short tenor) — i.e. pay-long/receive-short, which is
@@ -438,7 +452,7 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		latest = df_hist.ffill().iloc[-1].rename("spread")
 
 		df_tenor = stat_info.join(latest, how="right")
-		for col in ["mean", "vol", "halflife"]:
+		for col in ["mean", "vol", "ewm_vol", "halflife"]:
 			if col not in df_tenor.columns:
 				df_tenor[col] = np.nan
 		if "stationary" not in df_tenor.columns:
@@ -447,9 +461,17 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		df_tenor["spread"] = pd.to_numeric(df_tenor["spread"], errors="coerce")
 		df_tenor["mean"] = pd.to_numeric(df_tenor["mean"], errors="coerce")
 		df_tenor["vol"] = pd.to_numeric(df_tenor["vol"], errors="coerce")
+		df_tenor["ewm_vol"] = pd.to_numeric(df_tenor["ewm_vol"], errors="coerce")
+		# Prefer ewm_vol (EWMA(60), matches the backtest engines' entry-signal
+		# scale) over the static 252-day 'vol'; see BondCurve block above. This
+		# is the exact counterpart of the entry_z fix for TenorSpread families
+		# (e.g. LGBCGB-30y, CGB-10s30s): a spread whose current volatility has
+		# dropped below its trailing-year average previously understated its
+		# Zscore against a stale, blended scale.
+		_ts_zvol = df_tenor["ewm_vol"].where(df_tenor["ewm_vol"].notna(), df_tenor["vol"])
 		df_tenor["Zscore"] = (
 			(df_tenor["spread"] - df_tenor["mean"]) /
-			df_tenor["vol"].replace(0, np.nan)
+			_ts_zvol.replace(0, np.nan)
 		)
 		# Use the tenor spread level itself as annual BUY-side carry+roll proxy.
 		# Spread is stored in yield %, so convert to annual bp.
@@ -513,15 +535,19 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 				if frames:
 					df_netbasis = pd.concat(frames)
 					df_netbasis = _normalize_index(df_netbasis)
-					for col in ["mean", "vol", "spread"]:
+					for col in ["mean", "vol", "ewm_vol", "spread"]:
 						if col not in df_netbasis.columns:
 							df_netbasis[col] = np.nan
 					df_netbasis["mean"]  = pd.to_numeric(df_netbasis["mean"],  errors="coerce")
-					df_netbasis["vol"]   = pd.to_numeric(df_netbasis["vol"],   errors="coerce").replace(0, np.nan)
+					df_netbasis["vol"]   = pd.to_numeric(df_netbasis["vol"],   errors="coerce")
 					df_netbasis["spread"] = pd.to_numeric(df_netbasis["spread"], errors="coerce")
+					# Prefer ewm_vol over the static full-sample 'vol'; see
+					# BondCurve block above.
+					_nb_zvol = pd.to_numeric(df_netbasis["ewm_vol"], errors="coerce")
+					_nb_zvol = _nb_zvol.where(_nb_zvol.notna(), df_netbasis["vol"]).replace(0, np.nan)
 					df_netbasis["Zscore"] = (
 						(df_netbasis["spread"] - df_netbasis["mean"]) /
-						df_netbasis["vol"]
+						_nb_zvol
 					)
 					# Carry: annualised (price terms basis, ~3m)
 					if "carry_3m_bp" in df_netbasis.columns:
@@ -541,13 +567,17 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 					if isinstance(sp_tb, pd.DataFrame) and not sp_tb.empty:
 						latest_tb = sp_tb.ffill().iloc[-1]
 						df_tb["spread"] = latest_tb.reindex(df_tb.index)
-					for col in ["mean", "vol", "spread"]:
+					for col in ["mean", "vol", "ewm_vol", "spread"]:
 						if col not in df_tb.columns:
 							df_tb[col] = np.nan
 					df_tb["mean"]   = pd.to_numeric(df_tb["mean"],   errors="coerce")
-					df_tb["vol"]    = pd.to_numeric(df_tb["vol"],    errors="coerce").replace(0, np.nan)
+					df_tb["vol"]    = pd.to_numeric(df_tb["vol"],    errors="coerce")
 					df_tb["spread"] = pd.to_numeric(df_tb["spread"], errors="coerce")
-					df_tb["Zscore"] = (df_tb["spread"] - df_tb["mean"]) / df_tb["vol"]
+					# Prefer ewm_vol over the static full-sample 'vol'; see
+					# BondCurve block above.
+					_tb_zvol = pd.to_numeric(df_tb["ewm_vol"], errors="coerce")
+					_tb_zvol = _tb_zvol.where(_tb_zvol.notna(), df_tb["vol"]).replace(0, np.nan)
+					df_tb["Zscore"] = (df_tb["spread"] - df_tb["mean"]) / _tb_zvol
 					df_tb["spread_type"] = "TermBasis"
 					df_tb["category"]    = "Futures-Term"
 					out["TermBasis"] = df_tb
@@ -573,13 +603,17 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 				if fs_frames:
 					df_fswap = pd.concat(fs_frames)
 					df_fswap = _normalize_index(df_fswap)
-					for col in ["mean", "vol", "spread"]:
+					for col in ["mean", "vol", "ewm_vol", "spread"]:
 						if col not in df_fswap.columns:
 							df_fswap[col] = np.nan
 					df_fswap["mean"]   = pd.to_numeric(df_fswap["mean"],   errors="coerce")
-					df_fswap["vol"]    = pd.to_numeric(df_fswap["vol"],    errors="coerce").replace(0, np.nan)
+					df_fswap["vol"]    = pd.to_numeric(df_fswap["vol"],    errors="coerce")
 					df_fswap["spread"] = pd.to_numeric(df_fswap["spread"], errors="coerce")
-					df_fswap["Zscore"] = (df_fswap["spread"] - df_fswap["mean"]) / df_fswap["vol"]
+					# Prefer ewm_vol over the static full-sample 'vol'; see
+					# BondCurve block above.
+					_fs_zvol = pd.to_numeric(df_fswap["ewm_vol"], errors="coerce")
+					_fs_zvol = _fs_zvol.where(_fs_zvol.notna(), df_fswap["vol"]).replace(0, np.nan)
+					df_fswap["Zscore"] = (df_fswap["spread"] - df_fswap["mean"]) / _fs_zvol
 					df_fswap["spread_type"] = "FuturesSwap"
 					df_fswap["category"]    = "Futures-Swap"
 					out["FuturesSwap"] = df_fswap

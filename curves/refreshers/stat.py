@@ -307,9 +307,15 @@ class StatRefresher:
             spreads['BondSwap']['spread'] = self.px_bond_rt[btype] - px_bs_rt
 
             for k, df_k in spreads.items():
-                vol_ = pd.to_numeric(df_k['vol'], errors='coerce') if 'vol' in df_k.columns else pd.Series(np.nan, index=df_k.index)
+                # Prefer ewm_vol (EWMA(60), matches the backtest engines'
+                # entry-signal scale) over the static full-sample 'vol'; see
+                # curves/refreshers/alpha_snapshot.py's BondCurve block for
+                # the full rationale.
+                vol_ = pd.to_numeric(df_k['ewm_vol'], errors='coerce') if 'ewm_vol' in df_k.columns else pd.Series(np.nan, index=df_k.index)
                 if not isinstance(vol_, pd.Series):
                     vol_ = pd.Series(vol_, index=df_k.index)
+                _static_vol = pd.to_numeric(df_k['vol'], errors='coerce') if 'vol' in df_k.columns else pd.Series(np.nan, index=df_k.index)
+                vol_ = vol_.where(vol_.notna(), _static_vol)
                 vol_ = vol_.where(vol_.abs() > 1e-6)
                 if k == 'BondCurve':
                     # CurveYield already incorporates the historical mean adjustment
@@ -361,7 +367,15 @@ class StatRefresher:
             spreads_all[obtype + 'Spread']['spread'] = self.px_bond_rt[obtype] - cvpx
             for t in spreads_all.keys():
                 mean_ = spreads_all[t]['mean'] if 'mean' in spreads_all[t].columns else 0
-                spreads_all[t]['Zscore'] = (spreads_all[t]['spread'] - mean_) / spreads_all[t]['vol']
+                # Prefer ewm_vol over the static full-sample 'vol'; see
+                # curves/refreshers/alpha_snapshot.py's BondCurve block for
+                # the full rationale.
+                if 'ewm_vol' in spreads_all[t].columns:
+                    _vol = pd.to_numeric(spreads_all[t]['ewm_vol'], errors='coerce')
+                    _vol = _vol.where(_vol.notna(), spreads_all[t]['vol'])
+                else:
+                    _vol = spreads_all[t]['vol']
+                spreads_all[t]['Zscore'] = (spreads_all[t]['spread'] - mean_) / _vol
             spreads_all[obtype + 'Spread']['bondtype'] = obtype
             self._write_pickle(spreads_all[obtype + 'Spread'], f'{obtype}-spdsrt.pkl')
 
@@ -414,7 +428,15 @@ class StatRefresher:
         spreads['PCASpread']['spread'] = stat['SpreadTS'].loc[spread_dp_key].loc[spot.index] + spot - spot0
 
         for t in spreads.keys():
-            spreads[t]['Zscore'] = (spreads[t]['spread'] - spreads[t]['mean']) / spreads[t]['vol']
+            # Prefer ewm_vol over the static full-sample 'vol'; see
+            # curves/refreshers/alpha_snapshot.py's BondCurve block for the
+            # full rationale.
+            if 'ewm_vol' in spreads[t].columns:
+                _vol = pd.to_numeric(spreads[t]['ewm_vol'], errors='coerce')
+                _vol = _vol.where(_vol.notna(), spreads[t]['vol'])
+            else:
+                _vol = spreads[t]['vol']
+            spreads[t]['Zscore'] = (spreads[t]['spread'] - spreads[t]['mean']) / _vol
             if t != 'PCASpread':
                 spreads[t].sort_index(inplace=True)
 

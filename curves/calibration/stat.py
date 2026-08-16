@@ -12,6 +12,11 @@ from curves.calibration.irscurves import irsSpreads
 
 MAX_BOND_CURVE_ADJUSTMENT = 10.0  # percent; prevents corrupt historical stats from exploding CvBid/CvOfr
 
+# Matches web/tabs/alpha/backtest/engine_monthly.py::MR_VOL_SPAN and
+# engine_mr.py::MR_VOL_SPAN. Kept as an independent constant (rather than an
+# import) to avoid a curves/ -> web/ dependency; see OU_calibrate's ewm_vol.
+ZSCORE_EWM_VOL_SPAN = 60
+
 
 def _suppress_curve_yield_outliers(
     curve_yield: pd.Series,
@@ -124,7 +129,19 @@ def OU_calibrate(ts):
     # formula reference: https://www.zhihu.com/question/268075949/answer/1531412127
     # spreadvalues between pca and actual spot rate
     # unit is %
-    statvs = ['halflife', 'mean', 'vol', 'max', 'min']
+    #
+    # 'vol' is the static full-sample std -- kept as-is since it also feeds
+    # portfolio-level risk sizing (web/tabs/alpha/scoring.py, portfolio.py),
+    # not just the Z-score. 'ewm_vol' is a separate, EWMA(span=60) volatility
+    # estimate intended for Zscore = (spread - mean) / vol scaling only, so a
+    # live candidate snapshot uses the same "current regime" vol scale as the
+    # backtest engines (engine_mr.py / engine_monthly.py, MR_VOL_SPAN=60)
+    # instead of a static vol blended across the full history/lookback. Using
+    # the static 'vol' for Zscore was the candidate-selection counterpart of
+    # the entry-timing bias fixed in those engines: once realised volatility
+    # drops well below its long-run level, a spread's current moves no longer
+    # register as statistically extreme against a stale full-sample scale.
+    statvs = ['halflife', 'mean', 'vol', 'ewm_vol', 'max', 'min']
     stat_info = pd.DataFrame(index=ts.columns, columns=['stationary'] + statvs)
     stat_info.index.name = 'ID'
     for b in ts.columns:
@@ -132,6 +149,9 @@ def OU_calibrate(ts):
         if sp.shape[0] > 20:
             _, stationary, _, _ = _adf_result(sp)
             stat_info.loc[b, 'stationary'] = stationary
+            ewm_span = min(ZSCORE_EWM_VOL_SPAN, sp.shape[0])
+            ewm_vol = sp.ewm(span=max(ewm_span, 2), min_periods=max(min(ewm_span, sp.shape[0]), 2)).std().iloc[-1]
+            stat_info.loc[b, 'ewm_vol'] = ewm_vol
             if stationary == 'YES':
                 A, B, C = _fit_ar1_params(sp)
                 if np.isfinite(A) and (1 - A) != 0 and A > 0:

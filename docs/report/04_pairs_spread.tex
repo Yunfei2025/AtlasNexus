@@ -458,7 +458,12 @@ periods this fix targets. This applies to both
 \texttt{engine\_mr.py::run\_spread\_backtest} (the portfolio-level MR sleeve) and
 \texttt{engine\_monthly.py::run\_monthly\_style\_backtest} (the regime-routed
 individual-spread and monthly-switch backtest of \S\ref{sec:pairs-regime-selection}),
-which previously duplicated the same fixed-window computation independently.
+which previously duplicated the same fixed-window computation independently. This fix
+covers backtest \emph{entry timing} only; the separate candidate-\emph{selection}
+\texttt{Zscore} computed for the scan/ranking table had the same structural weakness
+via a different code path and required its own fix -- see the
+``Candidate-selection Zscore volatility fix'' paragraph in
+\S\ref{sec:pairs-model-comparison}.
 
 \subsection{Trend Model and Defaults}
 \label{sec:pairs-trend-model}
@@ -545,6 +550,7 @@ Re-entry cooldown & 3 bars & 3 bars & Blocks immediate same-direction re-entry a
 }
 
 \subsection{Model Comparison and Deliberate Exclusions}
+\label{sec:pairs-model-comparison}
 
 The selected design separates two decisions: monthly style selection and daily
 trend-state timing via hysteresis-banded normalized momentum. Table
@@ -621,6 +627,49 @@ value under the key \texttt{"trend\_state"}. The lookup therefore fell back to i
 default of \texttt{0.0} for effectively every candidate, silently suppressing the
 trend-state signal shown in the candidate scan even when a trend was
 confirmed. The key has been corrected.
+
+\paragraph{Candidate-selection Zscore volatility fix (2026-08-16).} The
+volatility-scale fix of \S\ref{sec:pairs-mr-model} corrected the backtest engines'
+entry-signal scale, but candidate selection computes its own, independent
+\texttt{Zscore} for scan/ranking display -- it does not read the backtest engines'
+$z_t$ at all. That candidate-side \texttt{Zscore} is \texttt{(spread - mean) / vol},
+where \texttt{mean}/\texttt{vol} come from
+\texttt{curves/calibration/stat.py::OU\_calibrate} (directly, or via the
+\texttt{statAnalysis\_BC}/\texttt{statAnalysis\_BS}/\texttt{statAnalysis\_IRS}
+wrappers built on it), computed across roughly ten call sites spanning
+\texttt{curves/refreshers/alpha\_snapshot.py}, \texttt{stat.py}, \texttt{irs.py}, and
+\texttt{otr\_ofr\_rv.py} for the BondCurve, BondSwap, SwapSpread, TenorSpread,
+NetBasis, TermBasis, and FuturesSwap families. \texttt{OU\_calibrate}'s \texttt{vol}
+is a \emph{static} standard deviation over the full series passed to it (up to a
+252-observation lookback for most families), so it carried the same structural
+weakness as the pre-fix backtest engines: once a spread's realised volatility drops
+materially below its trailing-year level, its \texttt{Zscore} understates how extreme
+the current level actually is, potentially keeping a live candidate below a
+\texttt{abs\_zscore}-based ranking/entry bar even though the corrected, EWMA-scaled
+backtest $z_t$ for the same instrument on the same day would clear it -- i.e.\ the
+present-day snapshot and the historical backtest disagreed about what ``$2\sigma$''
+meant for the same spread.
+
+\texttt{OU\_calibrate} now also returns an \texttt{ewm\_vol} column -- an
+EWMA(span=$60$) volatility on the same input series, matching
+\texttt{MR\_VOL\_SPAN} in \S\ref{sec:pairs-mr-model} -- computed alongside the
+existing static \texttt{vol}. The static \texttt{vol} is left unchanged, since it is
+also reused for portfolio-level risk sizing (\texttt{web/tabs/alpha/scoring.py},
+\texttt{portfolio.py}) where a slower-moving scale is appropriate and redefining it
+would have a much larger blast radius than the ranking-consistency issue being fixed
+here. Every \texttt{Zscore = (spread - mean) / vol} call site listed above now prefers
+\texttt{ewm\_vol}, falling back to the static \texttt{vol} only when \texttt{ewm\_vol}
+is unavailable (e.g.\ pre-existing persisted artifacts from before this fix). Verified
+on \texttt{LGBCGB-30y}: at the same as-of date, the old static-\texttt{vol} snapshot
+\texttt{Zscore} was $-1.79$ against the fixed backtest engine's own $z_t=-1.69$ at that
+date; the \texttt{ewm\_vol}-based snapshot \texttt{Zscore} is $-1.73$, materially closer.
+The residual gap reflects a separate, intentional difference in the \emph{mean}
+anchor -- \texttt{OU\_calibrate} uses the AR(1)/OU-fitted mean when the series tests
+stationary, while the backtest engines use a plain rolling(120) mean -- which is not
+in scope here. \texttt{curves/refreshers/alpha\_scoring.py}'s regression-residual
+\texttt{Zscore} fallback (\texttt{reg\_vol\_resid}, a $30$-day window) was left as-is:
+it is only used when the snapshot \texttt{Zscore} is unavailable, and its window is
+already short enough not to exhibit the stale-regime bias being corrected.
 
 \subsection{Portfolio Aggregation and Measurement Limitations}
 

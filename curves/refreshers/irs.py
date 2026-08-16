@@ -377,7 +377,13 @@ class IRSRefresher:
 		# curve/model value and must not be exposed as the current spread or used
 		# to manufacture a signal for either outright or spread instruments.
 		spreads['spread'] = spreads['QtPx']
-		spreads['Zscore'] = (spreads['spread'] - spreads['mean']) / spreads['vol']
+		# ewm_vol (EWMA(60) volatility from OU_calibrate) rather than the static
+		# full-sample 'vol': keeps the live Zscore's entry-signal scale
+		# consistent with the backtest engines' EWMA vol, so a candidate's
+		# snapshot z-score and its historical backtest z-score mean the same
+		# thing under the current volatility regime, not a blended one.
+		_zvol = spreads['ewm_vol'] if 'ewm_vol' in spreads.columns else spreads['vol']
+		spreads['Zscore'] = (spreads['spread'] - spreads['mean']) / _zvol.replace(0, np.nan)
 
 		# Update changes in basis points
 		irs_idx = [i for i in IRSConfig.IRS_LIST if i in spreads.index]
