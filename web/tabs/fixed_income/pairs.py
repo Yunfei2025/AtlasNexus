@@ -192,6 +192,7 @@ def _build_pair_card(leg1, leg2, stats, figure=None):
     z = stats.get('last_z', 0.0)
     slope = stats.get('slope', 0.0)
     last_bp = stats.get('last_bp', 0.0)
+    realtime_bp = stats.get('realtime_bp')
 
     # Determine z-score color based on thresholds (see _z_score_color docs)
     z_color = _z_score_color(z)
@@ -220,6 +221,10 @@ def _build_pair_card(leg1, leg2, stats, figure=None):
                     'z ',
                     html.Span(f'{sign_z}{z:.1f}σ', style={'color': z_color, 'fontWeight': '700'}),
                 ]),
+                *([html.Span([
+                    '● realtime ',
+                    html.B(f"{'+' if realtime_bp >= 0 else ''}{realtime_bp:.1f} bp"),
+                ], style={'color': '#ffd166'})] if realtime_bp is not None else []),
             ], style={
                 'display': 'flex',
                 'gap': '16px',
@@ -391,6 +396,21 @@ def register_pairs_callbacks(app) -> None:
                             'last_z': float(last_z),
                         }
 
+                        # Realtime mid-quote spread (bid/ofr mid YTM) for the current-point
+                        # marker. Falls back to no marker if a live quote isn't available
+                        # for either leg.
+                        realtime_point = None
+                        try:
+                            from pairs.data import get_realtime_mid_ytm
+                            leg1_mid = get_realtime_mid_ytm(pair.leg1, pair.leg1_type)
+                            leg2_mid = get_realtime_mid_ytm(pair.leg2, pair.leg2_type)
+                            if leg1_mid is not None and leg2_mid is not None:
+                                realtime_point = (leg1_mid - leg2_mid) * 100
+                        except Exception:
+                            realtime_point = None
+
+                        stats['realtime_bp'] = realtime_point
+
                         # Build Plotly figure
                         fig = go.Figure()
 
@@ -430,6 +450,20 @@ def register_pairs_callbacks(app) -> None:
                             name='Trend (OLS)',
                             line=dict(color='#45b6e6', width=2.5),
                         ))
+
+                        # Current point — realtime bid/ofr mid-quote YTM spread,
+                        # highlighted distinctly from the historical close-based points.
+                        if realtime_point is not None:
+                            fig.add_trace(go.Scatter(
+                                x=[datetime.datetime.now()], y=[realtime_point],
+                                mode='markers',
+                                name='Current (realtime mid)',
+                                marker=dict(
+                                    color='#ffd166', size=12, symbol='star',
+                                    line=dict(color='#0e1d3a', width=1.5),
+                                ),
+                                hovertemplate='Realtime mid spread: %{y:.1f} bp<extra></extra>',
+                            ))
 
                         # Update layout with AtlasNexus theme
                         fig.update_layout(

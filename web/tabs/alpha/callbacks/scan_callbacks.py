@@ -578,7 +578,10 @@ def register_scan_callbacks(app) -> None:
                     _snap_ttm_cache[stype] = load_spread_data(stype)
                 snap = _snap_ttm_cache[stype]
                 if isinstance(snap, pd.DataFrame) and inst in snap.index and 'ttm' in snap.columns:
-                    v = float(snap.loc[inst, 'ttm'])
+                    _ttm_val = snap.loc[inst, 'ttm']
+                    if isinstance(_ttm_val, pd.Series):
+                        _ttm_val = _ttm_val.iloc[0]
+                    v = float(_ttm_val)
                     return round(v, 1) if v > 0 else None
                 return None
             return _get_ttm_display(stype, inst)

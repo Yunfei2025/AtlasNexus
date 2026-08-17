@@ -56,19 +56,39 @@ _PICKLE_CACHE: dict[str, tuple[float, Any]] = {}
 BOND_TYPES = ("TBond", "CBond")
 
 
-def _short_newissue_label(ticker: str) -> str:
-    """Map '<tenor>:<stage>:<leg1>|<leg2>' -> compact NewIssue label."""
+def _newissue_issuer_from_ticker(ticker: str) -> str | None:
+    """Resolve 'CGB'/'CDB' for a NewIssue ticker from its leg bond codes."""
+    m = re.match(r'^[^:]+:[^:]+:([^|]+)\|(.+)$', str(ticker))
+    if not m:
+        return None
+    try:
+        from web.tabs.alpha.data.loaders import _issuer_class_for_bond_id
+    except Exception:
+        return None
+    return _issuer_class_for_bond_id(m.group(1)) or _issuer_class_for_bond_id(m.group(2))
+
+
+def _short_newissue_label(ticker: str, issuer_class: str | None = None) -> str:
+    """Map '<tenor>:<stage>:<leg1>|<leg2>' -> compact NewIssue label.
+
+    *issuer_class* ('CGB'/'CDB', from the StatInfo row) qualifies the label as
+    e.g. ``OTROFR1-CGB10Y`` so the CGB and CDB cohorts of one tenor stay
+    distinct bars — they are different instruments. Omitted only when the
+    issuer is unknown.
+    """
     m = re.match(r'^([^:]+):([^:]+):([^|]+)\|(.+)$', str(ticker))
     if not m:
         return str(ticker)
     tenor, stage, leg1, leg2 = m.group(1), m.group(2), m.group(3), m.group(4)
+    issuer = str(issuer_class) if issuer_class and pd.notna(issuer_class) else ''
+    bucket = f"{issuer}{tenor}"
     if leg1 == leg2:
-        return f"{stage.replace('_', '').upper()}-{tenor}"
+        return f"{stage.replace('_', '').upper()}-{bucket}"
     stage_map = {
         'nib_otr': 'NIBOTR',
         'otr_ofr1': 'OTROFR1',
     }
-    return f"{stage_map.get(stage, stage.upper())}-{tenor}"
+    return f"{stage_map.get(stage, stage.upper())}-{bucket}"
 
 _locks = {
     "initialise": threading.Lock(),
@@ -562,7 +582,19 @@ def refresh(interval):
                             if pd.notna(_spr_std) and _spr_std > 0:
                                 _current['Zscore'] = (_spr - float(_spr.mean())) / _spr_std
 
-                    _current['label'] = [_short_newissue_label(i) for i in _current.index]
+                    # Issuer class comes from StatInfo for live cohorts; for
+                    # historical episodes not in StatInfo, resolve it from the
+                    # leg bond code so the label is still issuer-qualified.
+                    _issuers = (_stat['issuer_class'].astype(str)
+                                if 'issuer_class' in _stat.columns
+                                else pd.Series(dtype=str))
+                    _labels = []
+                    for _i in _current.index:
+                        _issuer = _issuers.get(_i)
+                        if not _issuer or _issuer == 'nan':
+                            _issuer = _newissue_issuer_from_ticker(_i)
+                        _labels.append(_short_newissue_label(_i, _issuer))
+                    _current['label'] = _labels
                     _current['color'] = 'grey'
                     data_rt['BondNewIssue'] = _current
     except Exception:

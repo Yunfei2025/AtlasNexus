@@ -318,8 +318,9 @@ class StatRefresher:
                 vol_ = vol_.where(vol_.notna(), _static_vol)
                 vol_ = vol_.where(vol_.abs() > 1e-6)
                 if k == 'BondCurve':
-                    # CurveYield already incorporates the historical mean adjustment
-                    # (affine model output), so normalise the raw spread directly.
+                    # CurveYield (CvBid/CvOfr) already has mean_adj baked in by statAdjust
+                    # (curves/refreshers/rates.py), i.e. spread = spread_raw - mean here.
+                    # Subtracting 'mean' again would double-count it, so normalise directly.
                     df_k['Zscore'] = df_k['spread'] / vol_
                 else:
                     # BondSwap: the IRS rate is market-observed without mean adjustment,

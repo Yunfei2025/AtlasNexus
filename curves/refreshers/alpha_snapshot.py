@@ -325,7 +325,8 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 			# and a historical backtest z-score agree on what "extreme" means
 			# under the current volatility regime. BondCurve's CurveYield is the
 			# affine model yield, which already contains the historical mean
-			# adjustment; keep this formula identical to StatRefresher.
+			# adjustment (mean_adj baked in by statAdjust, curves/refreshers/rates.py);
+			# keep this formula identical to StatRefresher.
 			_bc_zvol = df_bc["ewm_vol"] if "ewm_vol" in df_bc.columns else df_bc.get("vol", pd.Series(np.nan, index=df_bc.index))
 			_bc_zvol = pd.to_numeric(_bc_zvol, errors="coerce")
 			_bc_zvol = _bc_zvol.where(_bc_zvol.notna(), pd.to_numeric(df_bc.get("vol", pd.Series(np.nan, index=df_bc.index)), errors="coerce"))

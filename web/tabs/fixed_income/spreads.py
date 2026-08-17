@@ -817,11 +817,20 @@ def register_spreads_callbacks(app) -> None:
                     style={"color": "#8fb3d9", "fontSize": "11px", "padding": "4px"},
                 )
 
-            fig = build_episode_overlay_figure(pivot, title=f"{label} — episode overlay (day since roll)")
+            bucket_stats = pd.DataFrame()
+            try:
+                bucket_stats = episode_bucket_stats(pivot)
+            except Exception as e:
+                print(f"[seasonal] BondNewIssue episode stats error: {e}")
+
+            fig = build_episode_overlay_figure(
+                pivot,
+                title=f"{label} — episode overlay (day since roll)",
+                bucket_stats=bucket_stats,
+            )
 
             stats_children = html.Div()
             try:
-                bucket_stats = episode_bucket_stats(pivot)
                 if not bucket_stats.empty:
                     _arrow = {"up": "↑", "down": "↓", "neutral": "—"}
                     _dir_color = {"up": "#00cc96", "down": "#ef553b", "neutral": "#aab0c0"}

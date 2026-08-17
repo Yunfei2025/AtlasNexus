@@ -475,13 +475,48 @@ def episode_pivot(episodes: list[tuple["pd.Timestamp", str, pd.Series]]) -> pd.D
     return pivot.sort_index()
 
 
+def _episode_median_band(pivot: pd.DataFrame, cols: list[str]) -> Optional[pd.DataFrame]:
+    """Per-day cross-episode median and IQR (25th/75th pct) across *cols*.
+
+    Only days with at least 3 contributing episodes are kept, matching the
+    ``min_episodes`` floor used by :func:`episode_bucket_stats` so the band
+    never implies confidence the underlying sample doesn't support.
+    """
+    if len(cols) < 3:
+        return None
+    sub = pivot[cols]
+    counts = sub.count(axis=1)
+    q25 = sub.quantile(0.25, axis=1)
+    q50 = sub.quantile(0.50, axis=1)
+    q75 = sub.quantile(0.75, axis=1)
+    out = pd.DataFrame({"n": counts, "q25": q25, "q50": q50, "q75": q75})
+    out = out[out["n"] >= 3]
+    return out if not out.empty else None
+
+
 def build_episode_overlay_figure(
     pivot: pd.DataFrame,
     title: str = "",
+    bucket_stats: Optional[pd.DataFrame] = None,
 ) -> "go.Figure":
     """Build a Plotly episode-overlay chart: x=days since roll, one line per
-    historical issuance/roll episode (see ``episode_pivot``). The most recent
-    (ongoing) episode is highlighted; older ones fade with age.
+    historical issuance/roll episode (see ``episode_pivot``), overlaid with a
+    cross-episode median + IQR band.
+
+    Individual episode lines are drawn thin and translucent — with 30-100+
+    episodes typical for this event type, spaghetti-style overlays at full
+    opacity make the dominant tendency (or lack of one) unreadable. The
+    median/IQR band is the primary read; the "is there a pattern" question
+    this chart answers is best judged from the band's slope and width, not
+    from tracing individual lines.
+
+    Parameters
+    ----------
+    bucket_stats :
+        Output of :func:`episode_bucket_stats` for the same *pivot*. When
+        given, day buckets with p < 0.10 get a marker on the median line so
+        statistically-supported decay/widening points are visible at a
+        glance instead of requiring a separate look at the stats table.
     """
     import plotly.graph_objects as go
 
@@ -506,14 +541,15 @@ def build_episode_overlay_figure(
         is_latest = (i == n_episodes - 1)
         if is_latest:
             color = THEME["accent"]
-            width = 2.5
-            opacity = 1.0
+            width = 2.0
+            opacity = 0.95
         else:
             palette_idx = i % len(_YEAR_COLORS)
             color = _YEAR_COLORS[palette_idx]
-            age_frac = i / max(n_episodes - 1, 1)  # 0=oldest, 1=newest-past
-            width = 1.2
-            opacity = 0.45 + age_frac * 0.45
+            # Thin and faint: these are context, not the primary read — the
+            # median/IQR band below carries the "is there a pattern" answer.
+            width = 0.75
+            opacity = 0.18
 
         traces.append(go.Scatter(
             x=s.index.tolist(),
@@ -522,22 +558,45 @@ def build_episode_overlay_figure(
             name=col,
             line=dict(color=color, width=width),
             opacity=opacity,
+            showlegend=is_latest,
             hovertemplate=f"<b>{col}</b><br>Day: %{{x}}<br>Δ: %{{y:.2f}}<extra></extra>",
         ))
 
-    # Historical mean across all-but-latest episodes (smoothed)
+    # Cross-episode median + IQR band, computed over all-but-latest episodes
+    # so the ongoing episode isn't scored against its own history.
     past_cols = episode_cols[:-1] if n_episodes > 1 else []
-    if len(past_cols) >= 2:
-        past_pivot = pivot[past_cols]
-        mean_raw = past_pivot.mean(axis=1)
-        mean_s = mean_raw.rolling(window=3, center=True, min_periods=1).mean()
+    band = _episode_median_band(pivot, past_cols)
+    if band is not None:
         traces.append(go.Scatter(
-            x=mean_s.index.tolist(),
-            y=mean_s.values.tolist(),
-            mode="lines",
-            name="Hist. Mean",
-            line=dict(color="rgba(52,152,219,0.80)", width=2.0, dash="dash"),
-            hovertemplate="Hist. Mean<br>Day: %{x}<br>Δ: %{y:.2f}<extra></extra>",
+            x=band.index.tolist() + band.index.tolist()[::-1],
+            y=band["q75"].tolist() + band["q25"].tolist()[::-1],
+            fill="toself",
+            fillcolor="rgba(52,152,219,0.15)",
+            line=dict(color="rgba(0,0,0,0)"),
+            hoverinfo="skip",
+            name="IQR (25-75%)",
+            showlegend=True,
+        ))
+
+        sig_days = set()
+        if bucket_stats is not None and not bucket_stats.empty:
+            sig_days = set(bucket_stats.index[bucket_stats["p_value"] < 0.10])
+
+        marker_days = [d for d in band.index if d in sig_days]
+        traces.append(go.Scatter(
+            x=band.index.tolist(),
+            y=band["q50"].tolist(),
+            mode="lines+markers" if marker_days else "lines",
+            name="Median",
+            line=dict(color="#3498db", width=3.0),
+            marker=dict(
+                size=[9 if d in sig_days else 0 for d in band.index],
+                color="#f1c40f",
+                symbol="diamond",
+                line=dict(color="#3498db", width=1),
+            ),
+            customdata=band["n"].tolist(),
+            hovertemplate="Median<br>Day: %{x}<br>Δ: %{y:.2f}<br>n=%{customdata}<extra></extra>",
         ))
 
     layout = go.Layout(
@@ -563,6 +622,11 @@ def build_episode_overlay_figure(
         ),
         margin=dict(l=50, r=20, t=40, b=40),
         hovermode="x unified",
+        annotations=[dict(
+            text="◆ = day bucket with p<0.10 (see Issuance Statistics)",
+            xref="paper", yref="paper", x=0, y=-0.14,
+            showarrow=False, font=dict(size=9, color=THEME["text_sub"]),
+        )] if band is not None else None,
     )
     return go.Figure(data=traces, layout=layout)
 

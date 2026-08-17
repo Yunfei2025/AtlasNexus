@@ -10,6 +10,8 @@ from functools import lru_cache
 from typing import Optional
 import pandas as pd
 
+from settings.paths import DIR_INPUT
+
 
 class DataCache:
     """Singleton class for managing data cache"""
@@ -60,3 +62,51 @@ class DataCache:
     def cache_size(self) -> int:
         """Get current cache size"""
         return len(self._cache)
+
+
+def get_realtime_mid_ytm(instrument: str, inst_type: str) -> Optional[float]:
+    """Return the latest bid/ofr mid-quote YTM for a single bond or IRS leg.
+
+    Bond legs (TBond/CBond) read Bid/Ofr from ``{btype}-rtquo.pkl``.
+    IRS legs read QtPx (falling back to Bid/Ofr mid) from ``IRS-spdsrt.pkl``.
+    Returns None if no realtime quote is currently available.
+    """
+    try:
+        if inst_type == 'IRS':
+            data = pd.read_pickle(str(DIR_INPUT / 'IRS-spdsrt.pkl'))
+            if not isinstance(data, dict):
+                return None
+            df = data.get('spreads')
+            if not isinstance(df, pd.DataFrame) or instrument not in df.index:
+                return None
+            row = df.loc[instrument]
+            qt_px = pd.to_numeric(row.get('QtPx'), errors='coerce')
+            if pd.notna(qt_px):
+                return float(qt_px)
+            bid = pd.to_numeric(row.get('Bid'), errors='coerce')
+            ofr = pd.to_numeric(row.get('Ofr'), errors='coerce')
+            if pd.notna(bid) and pd.notna(ofr):
+                return float((bid + ofr) / 2)
+            return None
+
+        if inst_type in ('TBond', 'CBond'):
+            pxrt = pd.read_pickle(str(DIR_INPUT / f'{inst_type}-rtquo.pkl'))
+            if not isinstance(pxrt, dict):
+                return None
+            quote = pxrt.get('Quote')
+            if not isinstance(quote, pd.DataFrame):
+                return None
+            if 'ID' in quote.columns:
+                quote = quote.set_index('ID')
+            if instrument not in quote.index:
+                return None
+            row = quote.loc[instrument]
+            bid = pd.to_numeric(row.get('Bid'), errors='coerce')
+            ofr = pd.to_numeric(row.get('Ofr'), errors='coerce')
+            if pd.notna(bid) and pd.notna(ofr):
+                return float((bid + ofr) / 2)
+            return None
+
+        return None
+    except Exception:
+        return None

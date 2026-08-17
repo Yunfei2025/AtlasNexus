@@ -12,17 +12,102 @@ from .constants import _build_tenor_spread_timeseries, _exclude_swapspread_butte
 from .io import _get_input_dir, _load_pickle_safe, _normalize_repo_frame
 
 
+_NEWISSUE_STAGE_LABELS = {
+    'nib_otr': 'NIBOTR',
+    'otr_ofr1': 'OTROFR1',
+}
+
+# Reverse of ``NewIssueConfig.ISSUER_CLASS_MAP``: which universe artifact a
+# label's issuer class comes from. Kept local so the web layer does not need a
+# settings import for a two-entry mapping.
+_ISSUER_ASSET_CLASSES = {
+    'CGB': 'TBond',
+    'CDB': 'CBond',
+}
+
+_ASSET_ISSUER_CLASSES = {asset: issuer for issuer, asset in _ISSUER_ASSET_CLASSES.items()}
+
+
+_NEWISSUE_ID_COLS = ('nib_id', 'otr_id', 'ofr1_id', 'ofr2_id', 'ofr3_id')
+
+# {bond_code: issuer_class}, rebuilt when either universe artifact changes.
+# Keyed by the (mtime, mtime) pair of the two source pickles.
+_BOND_ISSUER_INDEX: dict[str, str] = {}
+_BOND_ISSUER_INDEX_KEY: Optional[tuple] = None
+
+
+def _bond_issuer_index() -> dict[str, str]:
+    """Build (once per artifact revision) a {bond_code: issuer_class} index.
+
+    Codes appearing under more than one issuer are dropped rather than
+    arbitrarily assigned, so an ambiguous code resolves to None downstream.
+    """
+    global _BOND_ISSUER_INDEX, _BOND_ISSUER_INDEX_KEY
+
+    dir_input = _get_input_dir()
+    paths = {issuer: dir_input / f'{asset}-newissue.pkl'
+             for issuer, asset in _ISSUER_ASSET_CLASSES.items()}
+    key = tuple(sorted(
+        (issuer, p.stat().st_mtime if p.exists() else None) for issuer, p in paths.items()
+    ))
+    if key == _BOND_ISSUER_INDEX_KEY:
+        return _BOND_ISSUER_INDEX
+
+    by_code: dict[str, set[str]] = {}
+    for issuer_class, path in paths.items():
+        data = _load_pickle_safe(path)
+        if not isinstance(data, dict):
+            continue
+        for df in data.values():
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                continue
+            for col in _NEWISSUE_ID_COLS:
+                if col not in df.columns:
+                    continue
+                for code in df[col].dropna().astype(str).unique():
+                    by_code.setdefault(code, set()).add(issuer_class)
+
+    _BOND_ISSUER_INDEX = {code: next(iter(issuers))
+                          for code, issuers in by_code.items() if len(issuers) == 1}
+    _BOND_ISSUER_INDEX_KEY = key
+    return _BOND_ISSUER_INDEX
+
+
+def _issuer_class_for_bond_id(bond_id: str) -> Optional[str]:
+    """Resolve the issuer class ('CGB'/'CDB') that a bond code belongs to.
+
+    Looks the code up in the per-asset-class universe artifacts rather than
+    parsing the code convention, so it stays correct if issuance numbering
+    changes. Returns None when the code appears in neither (or both).
+    """
+    bond_id = str(bond_id).strip()
+    if not bond_id:
+        return None
+    return _bond_issuer_index().get(bond_id)
+
+
 def to_newissue_stage_label(ticker: str) -> str:
-    """Convert NewIssue ticker to canonical compact label (e.g. NIBOTR-5Y)."""
+    """Convert NewIssue ticker to canonical compact label.
+
+    The raw ticker is ``<tenor>:<stage>:<leg1_id>|<leg2_id>`` and carries no
+    issuer information, so the issuer class is resolved from the leg bond codes
+    against the universe artifacts. Labels are issuer-qualified — e.g.
+    ``OTROFR1-CGB10Y`` / ``NIBOTR-CDB5Y`` — because a CGB and a CDB cohort of
+    the same tenor and stage are distinct instruments and must never share a
+    column or a chart.
+
+    Falls back to the unqualified ``OTROFR1-10Y`` form only when the issuer
+    cannot be resolved.
+    """
     m = re.match(r'^([^:]+):([^:]+):([^|]+)\|(.+)$', str(ticker))
     if not m:
         return str(ticker)
-    tenor, stage = m.group(1), m.group(2)
-    stage_map = {
-        'nib_otr': 'NIBOTR',
-        'otr_ofr1': 'OTROFR1',
-    }
-    return f"{stage_map.get(stage, stage.upper())}-{tenor}"
+    tenor, stage, leg1, leg2 = m.group(1), m.group(2), m.group(3), m.group(4)
+    stage_label = _NEWISSUE_STAGE_LABELS.get(stage, stage.upper())
+    issuer = _issuer_class_for_bond_id(leg1) or _issuer_class_for_bond_id(leg2)
+    if issuer:
+        return f"{stage_label}-{issuer}{tenor}"
+    return f"{stage_label}-{tenor}"
 
 
 def load_newissue_stage_timeseries() -> Optional[pd.DataFrame]:
@@ -33,8 +118,10 @@ def load_newissue_stage_timeseries() -> Optional[pd.DataFrame]:
     analytics can plot year-over-year overlays even though the dashboard-facing
     ``BondNewIssue-spds.pkl`` summary is only a compact snapshot.
 
-    Output columns are concise stage keys such as ``NIB_OTR-5Y`` and
-    ``OTR_OFR1-10Y``.
+    Output columns are issuer-qualified stage keys such as ``NIBOTR-CGB5Y``
+    and ``OTROFR1-CDB10Y``. The issuer qualifier is required: without it the
+    CGB and CDB cohorts of the same tenor collapse into one column under the
+    pivot below, silently mixing two unrelated instruments.
     """
     dir_input = _get_input_dir()
 
@@ -49,13 +136,22 @@ def load_newissue_stage_timeseries() -> Optional[pd.DataFrame]:
             frame = df.copy()
             frame.index = pd.to_datetime(frame.index)
 
+            issuer = None
+            if 'issuer_class' in frame.columns:
+                issuers = frame['issuer_class'].dropna().astype(str)
+                if not issuers.empty:
+                    issuer = issuers.iloc[-1]
+            if not issuer:
+                issuer = _ASSET_ISSUER_CLASSES.get(asset_class, asset_class)
+            bucket_key = f'{issuer}{tenor_bucket}'
+
             # OTR/OFR1 has the long-lived history we want for year-over-year overlays.
             if {'ytm_otr', 'ytm_ofr1'}.issubset(frame.columns):
                 tmp = frame[['ytm_otr', 'ytm_ofr1']].copy()
                 tmp['spread'] = pd.to_numeric(tmp['ytm_otr'], errors='coerce') - pd.to_numeric(tmp['ytm_ofr1'], errors='coerce')
                 tmp = tmp.dropna(subset=['spread'])
                 if not tmp.empty:
-                    tmp['label'] = f'OTROFR1-{tenor_bucket}'
+                    tmp['label'] = f'OTROFR1-{bucket_key}'
                     tmp['date'] = tmp.index
                     out.append(tmp[['label', 'spread', 'date']])
 
@@ -65,7 +161,7 @@ def load_newissue_stage_timeseries() -> Optional[pd.DataFrame]:
                 tmp['spread'] = pd.to_numeric(tmp['ytm_nib'], errors='coerce') - pd.to_numeric(tmp['ytm_otr'], errors='coerce')
                 tmp = tmp.dropna(subset=['spread'])
                 if not tmp.empty:
-                    tmp['label'] = f'NIBOTR-{tenor_bucket}'
+                    tmp['label'] = f'NIBOTR-{bucket_key}'
                     tmp['date'] = tmp.index
                     out.append(tmp[['label', 'spread', 'date']])
         return out
@@ -93,13 +189,18 @@ def load_newissue_stage_timeseries() -> Optional[pd.DataFrame]:
     return pivot if not pivot.empty else None
 
 
-def _parse_newissue_stage_label(label: str) -> Optional[tuple[str, str]]:
-    """Reverse of ``to_newissue_stage_label``: 'OTROFR1-10Y' -> ('otr_ofr1', '10Y')."""
-    m = re.match(r'^(NIBOTR|OTROFR1)-(.+)$', str(label))
+def _parse_newissue_stage_label(label: str) -> Optional[tuple[str, str, Optional[str]]]:
+    """Reverse of ``to_newissue_stage_label``.
+
+    ``'OTROFR1-CGB10Y'`` -> ``('otr_ofr1', '10Y', 'CGB')``.
+    The legacy unqualified form ``'OTROFR1-10Y'`` still parses, with issuer
+    ``None`` meaning "issuer unknown — match every asset class".
+    """
+    m = re.match(r'^(NIBOTR|OTROFR1)-(CGB|CDB)?(.+)$', str(label))
     if not m:
         return None
     stage = 'nib_otr' if m.group(1) == 'NIBOTR' else 'otr_ofr1'
-    return stage, m.group(2)
+    return stage, m.group(3), m.group(2)
 
 
 def load_newissue_episode_series(label: str) -> list[tuple[pd.Timestamp, str, pd.Series]]:
@@ -116,19 +217,30 @@ def load_newissue_episode_series(label: str) -> list[tuple[pd.Timestamp, str, pd
     chronologically. ``leg1_bond_code`` is the newly-issued leg of the pair
     (NIB for nib_otr, OTR for otr_ofr1) — used as the episode legend/label
     since it identifies the bond, unlike the start date.
+
+    Only the issuer named by *label* is read: an ``OTROFR1-CGB10Y`` request
+    returns CGB episodes alone, never the CDB 10Y cohort's. A legacy label
+    without an issuer qualifier still spans both, preserving old behaviour.
     """
     parsed = _parse_newissue_stage_label(label)
     if parsed is None:
         return []
-    stage, tenor_bucket = parsed
+    stage, tenor_bucket, issuer_class = parsed
     leg1_col, leg2_col, id1_col, id2_col = (
         ('ytm_otr', 'ytm_ofr1', 'otr_id', 'ofr1_id') if stage == 'otr_ofr1'
         else ('ytm_nib', 'ytm_otr', 'nib_id', 'otr_id')
     )
 
+    if issuer_class:
+        asset_classes = (_ISSUER_ASSET_CLASSES.get(issuer_class),)
+        if asset_classes[0] is None:
+            return []
+    else:
+        asset_classes = ('TBond', 'CBond')
+
     dir_input = _get_input_dir()
     episodes: list[tuple[pd.Timestamp, str, pd.Series]] = []
-    for asset_class in ('TBond', 'CBond'):
+    for asset_class in asset_classes:
         data = _load_pickle_safe(dir_input / f'{asset_class}-newissue.pkl')
         if not isinstance(data, dict):
             continue
