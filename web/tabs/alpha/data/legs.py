@@ -272,9 +272,11 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
         otr_id, _, ofr1_id = str(tid).partition('|')
         return (otr_id, ofr1_id)
 
-    # Bond-Curve: leg1 is the bond, leg2 is nearest duration reference bond
+    # Bond-Curve: leg1 is the bond, leg2 is the current OTR for the nearest
+    # supported tenor category.  The OTR categories intentionally jump from
+    # 5Y to 10Y; do not use the legacy 7Y cvref column here.
     if stype == 'TBondCurve':
-        return (tid, _nearest_ref(duration, ref_cgb))
+        return (tid, otr_cgb.get(_t_label(duration), ''))
 
     elif stype == 'CBondCurve':
         return (tid, _nearest_ref(duration, ref_cdb))

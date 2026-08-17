@@ -323,14 +323,16 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 			# Prefer ewm_vol (EWMA(60), matches the backtest engines' entry-signal
 			# scale) over the static full-sample 'vol' so a live snapshot z-score
 			# and a historical backtest z-score agree on what "extreme" means
-			# under the current volatility regime.
+			# under the current volatility regime. BondCurve's CurveYield is the
+			# affine model yield, which already contains the historical mean
+			# adjustment; keep this formula identical to StatRefresher.
 			_bc_zvol = df_bc["ewm_vol"] if "ewm_vol" in df_bc.columns else df_bc.get("vol", pd.Series(np.nan, index=df_bc.index))
 			_bc_zvol = pd.to_numeric(_bc_zvol, errors="coerce")
 			_bc_zvol = _bc_zvol.where(_bc_zvol.notna(), pd.to_numeric(df_bc.get("vol", pd.Series(np.nan, index=df_bc.index)), errors="coerce"))
 			df_bc["Zscore"] = (
-				pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce") -
-				pd.to_numeric(df_bc.get("mean", pd.Series(0.0, index=df_bc.index)), errors="coerce")
-			) / _bc_zvol.replace(0, np.nan)
+				pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce") /
+				_bc_zvol.replace(0, np.nan)
+			)
 			spread_bp = pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce") * 100.0
 			borrow_cost_bp = pd.Series(
 				_BOND_CURVE_BORROW_COST_BP_ANNUAL * (_CARRY_BASIS_DAYS / _ANNUAL_CARRY_BASIS_DAYS),

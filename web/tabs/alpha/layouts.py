@@ -487,10 +487,10 @@ def build_portfolio_layout() -> html.Div:
                     ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
                 ]),
                 html.Div([
-                    html.Label("Total Single Side DV01", style=_label_style),
+                    html.Label("Max Single Side DV01", style=_label_style),
                     html.Div([
                         dcc.Input(
-                            id='alpha-dv01-budget', type='text', value='5', inputMode='decimal',
+                            id='alpha-dv01-budget', type='text', value='10', inputMode='decimal',
                             style={'width': '70px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',
                                    'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',

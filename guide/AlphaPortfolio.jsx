@@ -73,7 +73,7 @@ function AlphaPortfolio() {
   const [spreadType, setSpreadType] = useState('TBondCurve');
   const [instrument, setInstrument] = useState('210011.IB');
   const [capital, setCapital] = useState(10);
-  const [dv01, setDv01] = useState(5);
+  const [dv01, setDv01] = useState(10);
   const [method, setMethod] = useState('Risk Parity');
 
   const toggle = k => setOpen(o => ({ ...o, [k]: !o[k] }));
@@ -248,7 +248,7 @@ function AlphaPortfolio() {
           <div style={{ padding:'14px 16px', display:'flex', flexWrap:'wrap', gap:'20px', alignItems:'flex-end' }}>
             {[
               { label:'Total Capital', value:capital, set:setCapital, unit:'Billion CNY', min:1, max:100 },
-              { label:'Total Single Side DV01', value:dv01, set:setDv01, unit:'Million CNY', min:1, max:50 },
+              { label:'Max Single Side DV01', value:dv01, set:setDv01, unit:'Million CNY', min:1, max:50 },
             ].map(({ label, value, set, unit, min, max }) => (
               <div key={label} style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
                 <div style={{ font:'var(--type-label)', fontSize:'9px', color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.06em' }}>{label}</div>
@@ -290,7 +290,7 @@ function AlphaPortfolio() {
             {/* Stats bar */}
             <div style={{ padding:'10px 16px', background:'rgba(255,255,255,0.02)', borderBottom:'1px solid var(--border-strong)',
               display:'flex', flexWrap:'wrap', gap:'6px 28px', alignItems:'center' }}>
-              {[['Total Trades','22'],['Capital Allocated','10.0 B CNY'],['DV01 Budget','5.0 MM CNY'],['Avg Score','3.354'],['Risk Parity','σ(RC)=0.188'],['BUY/SELL','21 / 1']].map(([k,v]) => (
+              {[['Total Trades','22'],['Capital Allocated','10.0 B CNY'],['DV01 Budget','10.0 MM CNY'],['Avg Score','3.354'],['Risk Parity','σ(RC)=0.188'],['BUY/SELL','21 / 1']].map(([k,v]) => (
                 <span key={k} style={{ font:'var(--type-meta)', fontSize:'10px' }}>
                   <span style={{ color:'var(--text-muted)' }}>{k}: </span>
                   <span style={{ color:'var(--text-primary)', fontWeight:600 }}>{v}</span>

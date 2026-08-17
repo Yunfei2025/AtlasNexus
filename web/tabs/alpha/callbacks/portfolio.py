@@ -363,7 +363,7 @@ def register_portfolio_callbacks(app) -> None:
         try:
             total_capital = float(total_capital) if total_capital is not None else 1000.0
             total_capital_mm = total_capital
-            total_dv01_budget = float(total_dv01_budget) if total_dv01_budget is not None else 5.0
+            total_dv01_budget = float(total_dv01_budget) if total_dv01_budget is not None else 10.0
             bond_margin_rate = (float(bond_margin_rate) if bond_margin_rate is not None else 5.0) / 100.0
             swap_margin_rate = (float(swap_margin_rate) if swap_margin_rate is not None else 3.0) / 100.0
             repo_leverage = max(1.0, float(repo_leverage) if repo_leverage is not None else 15.0)
