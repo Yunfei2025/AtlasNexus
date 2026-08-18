@@ -129,6 +129,10 @@ class CurveManager:
         Returns:
             Dictionary of curve objects by date
         """
+        if not price_range:
+            logger.warning(f"No {self.bond_type} dates supplied; skipping curve initialization.")
+            return {}
+
         curve_obj_file = os.path.join(DIR_INPUT, f'{self.bond_type}-cvobj.pkl')
         curve_data_file = os.path.join(DIR_INPUT, f'{self.bond_type}-cvdata.pkl')
 
@@ -186,8 +190,11 @@ class CurveManager:
         # Extend start backwards by 3 months for calibration windows
         end_date = max(price_range)
         start_date = min(price_range)
-        extended_start = (pd.Timestamp(start_date) - relativedelta(months=self.lookback)).date()
-        window_range = [extended_start, end_date]
+        extended_start = pd.Timestamp(start_date) - relativedelta(months=self.lookback)
+        # The source price pickles use DatetimeIndex. Keep this internal
+        # selector window timestamp-based; passing datetime.date values makes
+        # pandas reject comparisons on newer versions.
+        window_range = [extended_start, pd.Timestamp(end_date)]
         logger.info("Precomputing reference bonds & spot/term panels (single pass)...")
         selector = RefBondSelector()
         botr_full = selector.select_reference_bonds(
@@ -205,6 +212,12 @@ class CurveManager:
             price_type="hist",
             update=True,
         )
+        # Keep the backtest's date-key contract stable even when source
+        # pickles use pandas timestamps.
+        for key in ('RefBond', 'RefSpot', 'RefTerm'):
+            if key in ref_full and ref_full[key] is not None:
+                ref_full[key].index = pd.to_datetime(ref_full[key].index).date
+        botr_full.index = pd.to_datetime(botr_full.index).date
         # import pdb; pdb.set_trace()
         self._cache.update({
             'botr': botr_full,

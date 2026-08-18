@@ -104,7 +104,8 @@ class Backtestor:
         """Load environment data (caching removed)."""
         if self.btype == 'IRS':
             env = loadCNBDTS()['SwapTS']
-            prange = [ d for d in prange if d in env.index ]
+            env.index = pd.to_datetime(env.index).date
+            prange = [d for d in prange if d in env.index]
             return env, prange
         
         # Caching removed: always load fresh data
@@ -127,7 +128,19 @@ class Backtestor:
                 except Exception:
                     pass
         env = loadBacktestingInputs(self.btype, window_range, database)
-        prange = [ d for d in prange if d in env['Close'].index ] 
+        # Backtest dates are datetime.date values, while pandas loaders commonly
+        # return a DatetimeIndex. Comparing a date to a DatetimeIndex is false
+        # even when the calendar day is present, which previously emptied prange
+        # and caused CurveManager._precompute_reference() to call max([]).
+        for value in env.values():
+            if isinstance(value, (pd.DataFrame, pd.Series)):
+                # ``Def`` is indexed by bond code (for example ``210011.IB``),
+                # not by trading date. Leave non-temporal indexes unchanged.
+                try:
+                    value.index = pd.to_datetime(value.index).date
+                except (TypeError, ValueError):
+                    continue
+        prange = [d for d in prange if d in env['Close'].index]
         return env, prange
 
     def _init_curve(self, env, prange):
@@ -239,6 +252,12 @@ class Backtestor:
             
             with self._time_operation("Load Environment"):
                 env, prange = self._load_env(prange)
+            if not prange:
+                logger.warning(
+                    f"No {self.btype} price data is available between "
+                    f"{self.start} and {self.end}; skipping curve backfill."
+                )
+                return
                 datelist = [d.strftime("%Y-%m-%d") for d in prange]
             print("Compute following days: ", ', '.join(datelist))
             
