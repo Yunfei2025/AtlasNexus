@@ -361,12 +361,16 @@ def register_portfolio_callbacks(app) -> None:
                 )
 
         try:
-            total_capital = float(total_capital) if total_capital is not None else 1000.0
+            # Total Capital and DV01 Budget are free-text inputs (to allow
+            # comma/space-tolerant typing), so a cleared or non-numeric value
+            # must fall back to the default rather than raising and blanking
+            # the whole results panel.
+            total_capital = _as_positive_float(total_capital) or 1000.0
             total_capital_mm = total_capital
-            total_dv01_budget = float(total_dv01_budget) if total_dv01_budget is not None else 10.0
-            bond_margin_rate = (float(bond_margin_rate) if bond_margin_rate is not None else 5.0) / 100.0
-            swap_margin_rate = (float(swap_margin_rate) if swap_margin_rate is not None else 3.0) / 100.0
-            repo_leverage = max(1.0, float(repo_leverage) if repo_leverage is not None else 15.0)
+            total_dv01_budget = _as_positive_float(total_dv01_budget) or 10.0
+            bond_margin_rate = (_as_positive_float(bond_margin_rate) or 5.0) / 100.0
+            swap_margin_rate = (_as_positive_float(swap_margin_rate) or 3.0) / 100.0
+            repo_leverage = max(1.0, _as_positive_float(repo_leverage) or 15.0)
             repo_margin_rate = 1.0 / repo_leverage
 
             # Merge all instruments from correlation matrix (curated_instruments) with saved positions (book_positions).
@@ -1020,11 +1024,15 @@ def register_portfolio_callbacks(app) -> None:
 
         except Exception as e:
             import traceback
-            error_msg = f"Error in portfolio optimization: {str(e)}"
+            error_msg = f"Error in portfolio optimization: {str(e) or type(e).__name__}"
             print(f"[ERROR] {error_msg}")
             print(traceback.format_exc())
             return (
-                html.Div(error_msg, style={'color': THEME['warning'], 'padding': '10px'}),
+                html.Div(error_msg, style={
+                    'color': THEME['warning'], 'padding': '10px 14px', 'margin': '10px 16px',
+                    'border': f"1px solid {THEME['warning']}", 'borderRadius': '4px',
+                    'backgroundColor': 'rgba(224,162,60,0.08)', 'fontWeight': '600',
+                }),
                 html.Div(),
                 html.Div(f"Details: {str(e)[:100]}", style={'color': THEME['warning'], 'fontSize': '11px'}),
                 [],
