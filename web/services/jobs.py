@@ -327,6 +327,7 @@ def start_engine_job(*, argv: list[str], extra_env: dict | None = None) -> JobIn
             cmd,
             cwd=str(root),
             env=child_env,
+            stdin=subprocess.DEVNULL,
             stdout=log_f,
             stderr=subprocess.STDOUT,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform.startswith("win") else 0,

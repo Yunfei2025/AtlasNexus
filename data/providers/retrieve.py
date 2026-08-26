@@ -125,7 +125,8 @@ def _wind_start(log_msg: str = "Failed to start") -> bool:
         return False
     try:
         from WindPy import w
-        w.start()
+        if not w.isconnected():
+            w.start()
         _WIND_AVAILABLE = True
         return True
     except Exception as e:
@@ -136,6 +137,14 @@ def _wind_start(log_msg: str = "Failed to start") -> bool:
 
 def _ensure_wind() -> bool:
     """Ensure Wind connection is available. Returns True on success."""
+    try:
+        from WindPy import w
+        if w.isconnected():
+            global _WIND_AVAILABLE
+            _WIND_AVAILABLE = True
+            return True
+    except Exception:
+        pass
     return _wind_start("Failed to start")
 
 

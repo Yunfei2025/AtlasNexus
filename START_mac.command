@@ -44,7 +44,7 @@ echo ""
 # ── 2. Dash server (background) ──────────────────────────────────
 echo "[2/3] Starting Dash server on port 8080..."
 export FI_SHOW_LOG_WINDOW=0
-python main.py daily-web &
+python main.py daily-web </dev/null &
 SERVER_PID=$!
 echo "      PID $SERVER_PID — waiting for server to be ready..."
 sleep 4

@@ -284,7 +284,7 @@ def build_tabs_panel():
                                 first_day_of_week=1,
                                 style={'fontSize': '13px', 'width': '100%'},
                             ),
-                        ], style={'marginBottom': '14px', 'position': 'relative', 'zIndex': '1001'}),
+                        ], style={'marginBottom': '14px', 'position': 'relative', 'zIndex': '1002'}),
                         html.Div([
                             html.Div([
                                 html.Button("Update Data", id="an-btn-update", n_clicks=0,

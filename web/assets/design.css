@@ -1205,7 +1205,7 @@ textarea {
 .dash-datepicker-content {
   position: absolute !important;
   overflow: visible !important;
-  z-index: 1000 !important;
+  z-index: 5000 !important;
 }
 .dash-datepicker-calendar-month-header,
 .dash-datepicker-controls,
