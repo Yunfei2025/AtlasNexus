@@ -147,6 +147,7 @@ def run_monthly_style_backtest(
     trailing_mult: float = 1.5,
     allow_short: bool = True,
     reentry_cooldown: int = 3,
+    trend_max_flip_age: int = 15,
     carry_roll_ts: Optional[pd.Series] = None,
     carry_roll_bp: float = 0.0,
     duration_mult: float = 1.0,
@@ -198,6 +199,22 @@ def run_monthly_style_backtest(
     trend_state = trend_state.reindex(s.index).ffill().fillna(0.0)
     z_mom = z_mom.reindex(s.index)
     trend_vol = s.diff().rolling(int(vol_window)).std()
+
+    # Bars since trend_state last flipped. The monthly router can grant 'trend'
+    # permission weeks after the underlying flip actually happened (state changed
+    # mid-month but the month wasn't reviewed/assigned trend until the next
+    # review date) -- entering fresh on a flip that is already stale risks buying
+    # a move that is largely over. flip_age gates *new* entries to flips still
+    # within a freshness window; it does not affect exits or open positions.
+    _flip = trend_state.ne(trend_state.shift()).to_numpy().copy()
+    _flip[0] = True
+    flip_age = np.zeros(len(trend_state), dtype=float)
+    _since = 0
+    for _i in range(len(trend_state)):
+        if _flip[_i]:
+            _since = 0
+        flip_age[_i] = _since
+        _since += 1
 
     def _align(ts: Optional[pd.Series]) -> Optional[pd.Series]:
         if ts is None:
@@ -363,7 +380,7 @@ def run_monthly_style_backtest(
                     if position != 0:
                         entry_date, entry_price, entry_zscore, entry_style = date, px, z, 'mr'
             else:
-                if i >= trend_start:
+                if i >= trend_start and flip_age[i] <= trend_max_flip_age:
                     can_long = not (last_exit_dir == 1 and (i - last_exit_index) <= cooldown)
                     can_short = not (last_exit_dir == -1 and (i - last_exit_index) <= cooldown)
                     if st > 0 and can_long:
@@ -443,6 +460,7 @@ def run_monthly_style_backtest(
         'exit_z': exit_z,
         'stop_z': stop_z,
         'theta_z': float(theta_z),
+        'trend_max_flip_age': int(trend_max_flip_age),
         'open_trade': open_trade,
     }
 

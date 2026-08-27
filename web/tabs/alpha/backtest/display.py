@@ -300,31 +300,32 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         signal_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
 
         if is_trend:
+            _theta = float(results.get('theta_z', 1.25) or 1.25)
             if is_yield_based:
                 signal_fig.add_hline(
-                    y=0.5,
+                    y=_theta,
                     line_dash='dash',
                     line_color='rgba(239,85,59,0.55)',
-                    annotation_text='+0.5σ short entry',
+                    annotation_text=f'+{_theta:g}σ short entry',
                 )
                 signal_fig.add_hline(
-                    y=-0.5,
+                    y=-_theta,
                     line_dash='dash',
                     line_color='rgba(0,204,150,0.55)',
-                    annotation_text='-0.5σ long entry',
+                    annotation_text=f'-{_theta:g}σ long entry',
                 )
             else:
                 signal_fig.add_hline(
-                    y=0.5,
+                    y=_theta,
                     line_dash='dash',
                     line_color='rgba(0,204,150,0.55)',
-                    annotation_text='+0.5σ long entry',
+                    annotation_text=f'+{_theta:g}σ long entry',
                 )
                 signal_fig.add_hline(
-                    y=-0.5,
+                    y=-_theta,
                     line_dash='dash',
                     line_color='rgba(239,85,59,0.55)',
-                    annotation_text='-0.5σ short entry',
+                    annotation_text=f'-{_theta:g}σ short entry',
                 )
         else:
             _ez = float(results.get('entry_z', 2.0))
@@ -390,6 +391,48 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             legend=dict(orientation='h', yanchor='bottom', y=1.10, xanchor='right', x=1, font=dict(size=10)),
         )
         score_div = html.Div([dcc.Graph(figure=signal_fig, config={'displayModeBar': False}, style={'height': '230px'})], style={'marginBottom': '15px'})
+
+    # ---- Position History: reconstruct daily +1/0/-1 exposure from trades_df
+    # (entry_date/exit_date/direction) plus any still-open trade, aligned to the
+    # same date axis as equity_ts so it lines up with the Score History chart above.
+    position_div = html.Div()
+    _equity_idx = _equity_raw.index if isinstance(_equity_raw, pd.Series) else None
+    if _equity_idx is not None and len(_equity_idx) > 0:
+        _pos = pd.Series(0.0, index=_equity_idx)
+        _dir_sign = {'LONG': 1, 'BUY': 1, 'SHORT': -1, 'SELL': -1}
+        if trades_df is not None and len(trades_df) > 0:
+            for _, _tr in trades_df.iterrows():
+                _sign = _dir_sign.get(str(_tr.get('direction')))
+                if _sign is None:
+                    continue
+                _en = pd.Timestamp(_tr.get('entry_date'))
+                _ex = pd.Timestamp(_tr.get('exit_date'))
+                _mask = (_pos.index >= _en) & (_pos.index < _ex)
+                _pos.loc[_mask] = _sign
+        if open_trade is not None:
+            _sign = _dir_sign.get(str(open_trade.get('direction')))
+            _en = pd.Timestamp(open_trade.get('entry_date'))
+            if _sign is not None:
+                _pos.loc[_pos.index >= _en] = _sign
+
+        position_fig = go.Figure()
+        position_fig.add_trace(go.Scatter(
+            x=_pos.index, y=_pos.values,
+            mode='lines', name='Position',
+            line=dict(color=THEME['accent'], width=1.2, shape='hv'),
+            fill='tozeroy', fillcolor='rgba(99,164,255,0.12)',
+            showlegend=False,
+        ))
+        position_fig.add_hline(y=0, line_dash='dot', line_color=THEME['text_sub'])
+        position_fig.update_layout(
+            title='Position History', height=160,
+            margin=dict(l=50, r=20, t=40, b=40),
+            plot_bgcolor=THEME['bg_main'], paper_bgcolor=THEME['bg_main'],
+            font=dict(color=THEME['text_main']),
+            xaxis=dict(gridcolor=THEME['bg_card'], tickformat='%b\n%Y', hoverformat='%Y-%m-%d', **_xaxis_range),
+            yaxis=dict(title='Position', gridcolor=THEME['bg_card'], tickvals=[-1, 0, 1], range=[-1.2, 1.2]),
+        )
+        position_div = html.Div([dcc.Graph(figure=position_fig, config={'displayModeBar': False}, style={'height': '160px'})], style={'marginBottom': '15px'})
 
     equity_fig = go.Figure()
     equity_ts  = results.get('equity_ts')
@@ -555,4 +598,4 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
         except Exception:
             review_table = html.Div()
 
-    return html.Div([metrics_div, instrument_div, score_div, equity_div, trades_table, review_table])
+    return html.Div([metrics_div, instrument_div, score_div, position_div, equity_div, trades_table, review_table])
