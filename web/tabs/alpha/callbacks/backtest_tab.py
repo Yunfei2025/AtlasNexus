@@ -133,6 +133,7 @@ def _run_monthly_style_switch_backtest(
     carry_roll_sell_ts: Optional[pd.Series],
     mom_window: int = 20,
     uncertain_policy: str = 'carry_forward',
+    ou_mean: Optional[float] = None,
 ):
     """Run one continuous backtest whose entry style is routed by the monthly review.
 
@@ -140,6 +141,12 @@ def _run_monthly_style_switch_backtest(
     given month; the position itself is carried across month boundaries by
     :func:`run_monthly_style_backtest`, so signals keep their full warm-up and a
     trade opened in one month can run until its own exit fires.
+
+    ``ou_mean``: static ADF/OU-calibrated long-run mean for this instrument
+    (``StatInfo['mean']``, only passed when ``StatInfo['stationary']=='YES'``),
+    forwarded as the MR fair-value anchor so the backtest's mean-reversion
+    signal uses the same mean the live Scan screener's ADF test already
+    validated, instead of an independently-computed rolling(120) mean.
     """
     schedule, month_to_style = build_monthly_style_schedule(
         ts, _default_style_for_spread(spread_type), uncertain_policy=uncertain_policy,
@@ -166,6 +173,7 @@ def _run_monthly_style_switch_backtest(
         borrow_cost_short_bp=borrow_cost_short_bp,
         spread_type=spread_type,
         carry_roll_sell_ts=carry_roll_sell_ts,
+        ou_mean=ou_mean,
     )
 
     if isinstance(results, dict) and 'error' not in results:
@@ -378,6 +386,8 @@ def register_backtest_callbacks(app) -> None:
 
         carry_roll_ts_instrument: Optional[pd.Series] = None
         carry_roll_bp = 0.0
+        ou_mean: Optional[float] = None
+        is_stationary = False
         if not (isinstance(instrument, str) and instrument.startswith(MACRO_PREFIX)):
             try:
                 cr_df = load_carry_roll_timeseries(spread_type)
@@ -407,9 +417,21 @@ def register_backtest_callbacks(app) -> None:
                                 if v is not None and np.isfinite(float(v)):
                                     carry_roll_bp = float(v)
                                     break
+                        # ADF-confirmed stationary → use the OU long-run mean
+                        # (StatInfo['mean']) as the MR fair-value anchor instead
+                        # of a plain rolling(120) mean, so the backtest's entry
+                        # signal is consistent with the same stationarity test
+                        # that qualifies this spread for mean-reversion trading
+                        # in the live Scan screener.
+                        is_stationary = str(row.get('stationary', '')).strip().upper() == 'YES'
+                        if is_stationary and 'mean' in row.index:
+                            _m_val = row.get('mean')
+                            if _m_val is not None and np.isfinite(float(_m_val)):
+                                ou_mean = float(_m_val)
             except Exception:
                 carry_roll_ts_instrument = None
                 carry_roll_bp = 0.0
+                ou_mean = None
 
             # YTM-based spreads: stored carry/snapshot carry is computed on the raw
             # spread value. Flip so LONG = expecting the spread to fall/narrow
@@ -418,6 +440,8 @@ def register_backtest_callbacks(app) -> None:
                 if carry_roll_ts_instrument is not None:
                     carry_roll_ts_instrument = -carry_roll_ts_instrument
                 carry_roll_bp = -carry_roll_bp
+                if ou_mean is not None:
+                    ou_mean = -ou_mean
 
         try:
             duration_mult = _get_duration_mult(instrument, spread_type)
@@ -496,6 +520,7 @@ def register_backtest_callbacks(app) -> None:
                 allow_short=_allow_short_enabled(allow_short),
                 carry_roll_sell_ts=_cr_sell_for_backtest,
                 mom_window=int(mom_window) if mom_window is not None else 20,
+                ou_mean=ou_mean,
             )
 
             # For YTM-based spreads: restore original display signs after internal inversion.
@@ -710,6 +735,7 @@ def register_backtest_callbacks(app) -> None:
                 ts_bt = -ts if is_yield_based else ts
 
                 _cr_ts, _cr_bp = None, 0.0
+                _ou_mean: Optional[float] = None
                 try:
                     _cr_df = load_carry_roll_timeseries(spread_type)
                     if isinstance(_cr_df, pd.DataFrame) and asset in _cr_df.columns:
@@ -723,6 +749,13 @@ def register_backtest_callbacks(app) -> None:
                                 if _v is not None and np.isfinite(float(_v)):
                                     _cr_bp = float(_v)
                                     break
+                        # Same ADF-gated OU-mean anchor as the individual backtest
+                        # path (see engine_mr.run_spread_backtest's ou_mean docstring)
+                        # — only used for MR-style assets below.
+                        if str(_row.get('stationary', '')).strip().upper() == 'YES' and 'mean' in _row.index:
+                            _mv = _row.get('mean')
+                            if _mv is not None and np.isfinite(float(_mv)):
+                                _ou_mean = float(_mv)
                 except Exception:
                     pass
 
@@ -732,6 +765,8 @@ def register_backtest_callbacks(app) -> None:
                     if _cr_ts is not None:
                         _cr_ts = -_cr_ts
                     _cr_bp = -_cr_bp
+                    if _ou_mean is not None:
+                        _ou_mean = -_ou_mean
 
                 dur = _get_duration_mult(asset, spread_type)
                 _bc_long, _bc_short = _get_borrow_cost_annual_bp(spread_type, asset)
@@ -766,6 +801,7 @@ def register_backtest_callbacks(app) -> None:
                             exit_z=_exit_z,
                             stop_z=_stop_z,
                             min_hold=_min_hold,
+                            ou_mean=_ou_mean,
                         )
                 except Exception:
                     continue

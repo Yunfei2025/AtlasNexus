@@ -235,6 +235,10 @@ def _select_layout(
         return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, shape=True)
     if spread_type == "BinarySpread":
         return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, xmulti=True)
+    if spread_type == "TenorSpread":
+        # Rolling z-score trace (yaxis4) replaces the flat mean/±1σ shape
+        # lines, which only reflected the latest calibration window's stats.
+        return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, ymulti=True, shape=False, y4_title="Z-score")
     return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, ymulti=True, shape=True)
 
 
@@ -355,6 +359,19 @@ def build_spread_series(b: str, season: int, stype: str) -> Dict[str, Any]:
                     extra['cr_buy'] = cr3m[tenor]   # 3m % BUY carry (×100 for bp in trace)
                     extra['cr_sell'] = -cr3m[tenor]
             except Exception:
+                pass
+            # Z-score using the SAME OU-calibrated mean/vol (StatInfo, ×100 for
+            # bp) that the Daily Spread Statistics bar chart joins via
+            # `_current.join(_stat[['mean', 'vol']])` — so the chart's latest
+            # point matches the bar chart's Zscore exactly, instead of a
+            # differently-defined rolling window that only looks similar.
+            try:
+                stat_row = d["StatInfo"].loc[tenor]
+                ou_mean = 100 * float(stat_row["mean"])
+                ou_vol = 100 * float(stat_row["vol"])
+                if ou_vol:
+                    extra['zscore'] = ((primary_series - ou_mean) / ou_vol).dropna()
+            except (KeyError, TypeError, ValueError):
                 pass
             extra[0] = pd.Series(dtype=float)
             return extra

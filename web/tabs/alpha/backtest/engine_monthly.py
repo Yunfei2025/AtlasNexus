@@ -22,6 +22,7 @@ import pandas as pd
 
 from ._carry import _carry_accrual
 from .engine_trend import _z_momentum_state
+from ._ou_mean import blended_mr_mean
 
 MR_LOOKBACK = 120
 MR_VOL_SPAN = 60
@@ -157,6 +158,7 @@ def run_monthly_style_backtest(
     tenor_ratio: float = 1.0,
     carry_roll_sell_ts: Optional[pd.Series] = None,
     mr_vol_span: int = MR_VOL_SPAN,
+    ou_mean: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Run a continuous backtest whose entry style is routed by month.
 
@@ -165,6 +167,15 @@ def run_monthly_style_backtest(
     already-open position is *not* force-closed by the absence of a style — only a
     genuine change from one tradeable style to a different tradeable style closes
     it, with ``exit_reason='monthly_style_change'``.
+
+    ``ou_mean``: static OU long-run mean (``StatInfo['mean']``) used as the MR
+    fair-value anchor in place of the plain rolling mean when the caller has
+    established via ADF that the series is stationary — see the matching
+    parameter/rationale in ``engine_mr.run_spread_backtest``. Note the monthly
+    regime router (``compute_regime_features``) already independently decides
+    *when* MR-style entries are allowed via its own trend/mean-reversion
+    voting ensemble; ``ou_mean`` only changes *where* the MR anchor sits during
+    those months, it does not change which months are eligible.
     """
     s = _clean_series(spread_ts)
     if s is None or len(s) < 60:
@@ -179,16 +190,20 @@ def run_monthly_style_backtest(
         styles[key] = canonical_style(value)
 
     # ---- Signals, computed once on the whole history -------------------------
-    # Fair-value anchor stays a plain rolling mean over MR_LOOKBACK (needs the
-    # long window to be a meaningful "typical level"), but the scale is an EWMA
-    # volatility over the shorter mr_vol_span. A flat rolling(120) std blends in
-    # whatever vol regime sits in the trailing year, so once the market settles
-    # into a materially quieter range the same absolute price swing can no
-    # longer clear a fixed entry_z threshold -- entries silently stop even
-    # though the spread is still moving in relative terms. EWMA reacts within
-    # its span instead of carrying stale high-vol history, which keeps the
-    # z-score's entry rate roughly stable across vol regimes.
-    rolling_mean = s.rolling(MR_LOOKBACK).mean()
+    # Fair-value anchor: the OU long-run mean for the trailing STAT_WINDOW
+    # months when the caller supplies one (ADF-confirmed stationary series,
+    # see ``ou_mean`` docstring above), blended with a plain rolling(120) mean
+    # for older history (``_ou_mean.blended_mr_mean`` — the OU mean is a
+    # current-regime estimate and should not be projected back over years of
+    # history it was never calibrated on). Either way the scale is an EWMA
+    # volatility over the shorter mr_vol_span: a flat rolling(120) std blends
+    # in whatever vol regime sits in the trailing year, so once the market
+    # settles into a materially quieter range the same absolute price swing
+    # can no longer clear a fixed entry_z threshold -- entries silently stop
+    # even though the spread is still moving in relative terms. EWMA reacts
+    # within its span instead of carrying stale high-vol history, which keeps
+    # the z-score's entry rate roughly stable across vol regimes.
+    rolling_mean = blended_mr_mean(s, ou_mean, lookback=MR_LOOKBACK)
     ewm_std = s.ewm(span=max(int(mr_vol_span), 2), min_periods=max(int(mr_vol_span), 2)).std()
     zscore = (s - rolling_mean) / ewm_std.replace(0, np.nan)
     zscore = zscore.replace([np.inf, -np.inf], np.nan)

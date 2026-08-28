@@ -348,26 +348,33 @@ def _build_spread_ts() -> dict:
     except Exception:
         pass
 
-    fb = _build_tenor_spread_fallback()
-    if not fb:
-        try:
-            from curves.utils.loader import loadCNBDTS
-            from web.tabs.alpha.data.constants import _build_tenor_spread_timeseries
+    # Only synthesize fallback data when Tenor-spds.pkl didn't already give us
+    # the real {'Spread','CarryRoll3m','StatInfo'} dict (OU-calibrated stats) —
+    # otherwise this unconditionally clobbered the real dict with a plain
+    # full-history-stats DataFrame, silently discarding StatInfo/CarryRoll3m
+    # and making the "Spread Time Series" chart disagree with the "Daily
+    # Spread Statistics" bar chart (which reads Tenor-spds.pkl directly).
+    if tenor_loaded is None:
+        fb = _build_tenor_spread_fallback()
+        if not fb:
+            try:
+                from curves.utils.loader import loadCNBDTS
+                from web.tabs.alpha.data.constants import _build_tenor_spread_timeseries
 
-            tenor_ts = _build_tenor_spread_timeseries(loadCNBDTS())
-            if tenor_ts:
-                fb = pd.DataFrame(tenor_ts).apply(pd.to_numeric, errors='coerce') * (90.0 / 360.0)
-                for col in fb.columns:
-                    if re.search(r'\d+s\d+', col, re.IGNORECASE):
-                        fb[col] = -fb[col]
-        except Exception:
-            pass
-    if fb is not None and not fb.empty:
-        if "TenorSpread" in out and isinstance(out["TenorSpread"], pd.DataFrame):
-            current = out["TenorSpread"]
-            out["TenorSpread"] = current.reindex(columns=current.columns.union(fb.columns)).combine_first(fb)
-        else:
-            out["TenorSpread"] = fb
+                tenor_ts = _build_tenor_spread_timeseries(loadCNBDTS())
+                if tenor_ts:
+                    fb = pd.DataFrame(tenor_ts).apply(pd.to_numeric, errors='coerce') * (90.0 / 360.0)
+                    for col in fb.columns:
+                        if re.search(r'\d+s\d+', col, re.IGNORECASE):
+                            fb[col] = -fb[col]
+            except Exception:
+                pass
+        if fb is not None and not fb.empty:
+            if "TenorSpread" in out and isinstance(out["TenorSpread"], pd.DataFrame):
+                current = out["TenorSpread"]
+                out["TenorSpread"] = current.reindex(columns=current.columns.union(fb.columns)).combine_first(fb)
+            else:
+                out["TenorSpread"] = fb
 
     # futures
     futspds = _load_pickle(os.path.join(DIR_INPUT,"futures-spds.pkl"))

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from ._carry import _carry_accrual
+from ._ou_mean import blended_mr_mean
 
 MR_VOL_SPAN = 60
 
@@ -29,8 +30,24 @@ def run_spread_backtest(
     tenor_ratio: float = 1.0,
     carry_roll_sell_ts: Optional[pd.Series] = None,
     mr_vol_span: int = MR_VOL_SPAN,
+    ou_mean: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Run backtest on a single spread time series."""
+    """Run backtest on a single spread time series.
+
+    ``ou_mean``: static OU long-run mean (``StatInfo['mean']`` from
+    ``curves.calibration.stat.OU_calibrate``), used as the fair-value anchor
+    for the trailing ``GeneralConfig.STAT_WINDOW`` months only — the same
+    window OU_calibrate itself was fit over — when the caller has established
+    via ADF that the series is stationary. Older history keeps the plain
+    rolling(120) mean, since a stationary-series rolling mean over the recent
+    window adds lag/noise without adding information (there is no drift for it
+    to track there), but the OU mean is a current-regime estimate that should
+    not be projected backward over years of history it was never fit on (see
+    ``_ou_mean.blended_mr_mean``). The rolling mean is the sole anchor for
+    callers that haven't run/passed a stationarity test (e.g. non-stationary
+    spreads, where a fixed long-run mean would misread a level shift as an
+    extreme reading).
+    """
     if spread_ts is None or len(spread_ts) < 130:
         return {'error': 'Insufficient data'}
 
@@ -41,7 +58,7 @@ def run_spread_backtest(
         spread_ts.index = pd.to_datetime(spread_ts.index)
 
     lookback = 120
-    rolling_mean = spread_ts.rolling(lookback).mean()
+    rolling_mean = blended_mr_mean(spread_ts, ou_mean, lookback=lookback)
     # EWMA volatility (short span) rather than a flat rolling(120) std: a fixed
     # long window blends in whatever vol regime sits in the trailing year, so
     # once the market settles into a materially quieter range the same

@@ -295,6 +295,15 @@ def getTraceAdd(df1: Mapping[int, pd.Series], stype: str) -> List[Any]:
                     line={"width": 1, "color": "rgba(239,85,59,0.85)", "dash": "dash"},
                 ),
             ]
+        zscore_s = df1.get('zscore')
+        if zscore_s is not None and hasattr(zscore_s, 'dropna') and not zscore_s.dropna().empty:
+            trace2.append(go.Scatter(
+                name='Z-score',
+                x=zscore_s.index,
+                y=zscore_s.values,
+                yaxis='y4',
+                line={"width": 1.5, "color": ACCENT},
+            ))
     elif stype == 'SwapSpread':
         trace2 = [go.Scatter(
             name = 'CR(3m,bp)',
@@ -418,7 +427,7 @@ def _make_stat_shapes(lineinfo: Mapping[str, Any]) -> List[Dict[str, Any]]:
         },
     ]
 
-def layout_ts_line(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[str, Any], lineinfo: Mapping[str, Any] = {}, xmulti: bool = False, ymulti: bool = False, shape: bool = False) -> Dict[str, Any]:
+def layout_ts_line(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[str, Any], lineinfo: Mapping[str, Any] = {}, xmulti: bool = False, ymulti: bool = False, shape: bool = False, y4_title: str = "") -> Dict[str, Any]:
     """Layout for time series chart with optional extra axes and shapes."""
     layout = layout_ts(title,yunit,xrg,yrg)
     layout["yaxis2"]={
@@ -457,15 +466,28 @@ def layout_ts_line(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[
                 "zerolinewidth": 1,
                 "title":"%"
                 }
-        layout["yaxis4"]={
-                "showgrid": False,
-                "showline": False,
-                "anchor":'x',
-                "overlaying":'y',
-                "side":'right',
-                "zeroline": False,
-                "tickvals": [],
-            }
+        if y4_title:
+            layout["yaxis4"]={
+                    "showgrid": False,
+                    "showline": True,
+                    "anchor":'x',
+                    "overlaying":'y',
+                    "side":'right',
+                    "zeroline": True,
+                    "zerolinecolor": SHAPE_COLOR,
+                    "zerolinewidth": 1,
+                    "title": y4_title,
+                }
+        else:
+            layout["yaxis4"]={
+                    "showgrid": False,
+                    "showline": False,
+                    "anchor":'x',
+                    "overlaying":'y',
+                    "side":'right',
+                    "zeroline": False,
+                    "tickvals": [],
+                }
     if shape:
         layout["shapes"] = _make_stat_shapes(lineinfo)
     return layout
