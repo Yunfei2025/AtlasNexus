@@ -465,6 +465,50 @@ via a different code path and required its own fix -- see the
 ``Candidate-selection Zscore volatility fix'' paragraph in
 \S\ref{sec:pairs-model-comparison}.
 
+\paragraph{OU-mean consistency fix (2026-08-27).} The volatility-scale fix above left
+one inconsistency unaddressed: \texttt{OU\_calibrate} runs an ADF stationarity test on
+the raw spread level and, when the series tests stationary, anchors its
+candidate-selection \texttt{Zscore} to the AR(1)/OU long-run mean $\theta$ rather than
+a sample average -- but \texttt{engine\_mr.py::run\_spread\_backtest} and
+\texttt{engine\_monthly.py::run\_monthly\_style\_backtest} computed $z_t$ against a
+plain $\operatorname{mean}_{120}(s)$ regardless of that same ADF result, with no
+stationarity test of their own. For a genuinely stationary spread this is not merely a
+different convention: a rolling mean of a mean-reverting series adds lag and noise
+without adding information, since there is no drift for it to track, so the ADF-
+qualified OU mean is the statistically appropriate anchor whenever it is available.
+This was also the direct cause of the entry-point inconsistency reported against
+\texttt{CGB-5s10s} on 2026-08-27, where the live Daily Spread Statistics
+\texttt{Zscore} (OU mean, $1.15$) and a chart-level rolling-mean \texttt{Zscore}
+disagreed in both magnitude and sign at the same date ($\approx-1$).
+
+Both engines now accept an optional \texttt{ou\_mean} parameter
+(\texttt{StatInfo['mean']}, passed by the callback only when
+\texttt{StatInfo['stationary']=='YES'}) and blend it with the existing rolling mean via
+\texttt{web/tabs/alpha/backtest/\_ou\_mean.py::blended\_mr\_mean}: the OU mean overrides
+$\operatorname{mean}_{120}(s)$ for the trailing \texttt{GeneralConfig.STAT\_WINDOW}
+(12) months -- the same window \texttt{OU\_calibrate} itself was fit over -- and older
+history keeps the plain rolling mean unchanged. A single static OU mean projected
+across a spread's \emph{entire} multi-year backtest history was evaluated and
+rejected: on \texttt{CGB-5s10s}, whose full history trended well beyond the range the
+trailing-12-month OU fit ever saw ($\operatorname{mean}_{120}(s)$ ranged
+$0.02$--$0.35$ over the full sample against an OU mean of $0.27$), applying the OU mean
+uniformly turned $36$ trades into $643$ by scoring years-old spread levels against
+today's fair value. The trailing-window blend keeps that recent-period correction
+(the latest $z_t$ moves from $0.45$ under the old rolling-mean anchor to $1.39$, now
+consistent with the live snapshot) while leaving older history's trade count
+essentially unchanged ($36\to34$). Non-stationary spreads are unaffected: \texttt{ou\_mean}
+is only ever passed by the callback when \texttt{stationary=='YES'}, so a trending
+series -- where a fixed long-run mean would misread a level shift as an extreme
+reading -- keeps the plain rolling-mean anchor exactly as before.
+
+The portfolio-loop backtest (\S\ref{sec:pairs-model-comparison}) receives the same
+\texttt{ou\_mean} wiring for its MR-routed assets. Its trend-vs-MR engine choice
+remains a static \texttt{style} tag on the persisted allocation snapshot, independent
+of \texttt{StatInfo['stationary']} and of the monthly regime classifier in
+\S\ref{sec:pairs-regime-selection} -- whether that choice should itself be gated by
+stationarity is a separate, larger design question left open for follow-up, not
+addressed by this fix.
+
 \subsection{Trend Model and Defaults}
 \label{sec:pairs-trend-model}
 
