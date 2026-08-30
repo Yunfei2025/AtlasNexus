@@ -131,6 +131,11 @@ def getInfo(b: str, df: Union[pd.Series, pd.DataFrame], dfts: Mapping[str, Any],
     vmax = _stat_bp('max')
     vmin = _stat_bp('min')
     mean = _stat_bp('mean')
+    # EWMA(span=60) vol tracks the current regime, not a static full-window
+    # blend, so it's the right denominator for a live entry/exit Z-score. Falls
+    # back to the static 'vol' when a StatInfo table has no ewm_vol column yet.
+    ewm_vol = _stat_raw('ewm_vol')
+    ewm_vol = ewm_vol * 100 if ewm_vol is not None else std
 
     stationary = 'NO'
     if isinstance(df_stat, pd.DataFrame) and b in df_stat.index and 'stationary' in df_stat.columns:
@@ -169,22 +174,40 @@ def getInfo(b: str, df: Union[pd.Series, pd.DataFrame], dfts: Mapping[str, Any],
         Mean: %.1fbp, Vol: %.1fbp \
         Max:  %.1fbp, Min: %.1fbp "%(BondConfig.SPREAD_MAP[stype],ticker,ttm,\
             stationary,halflife,mean,std,vmax,vmin)
-    lineinfo = dict(mean=mean, std=std, start=start,end=end)
+    lineinfo = dict(mean=mean, std=std, ewm_vol=ewm_vol, start=start, end=end)
     return dict(title = title,line=lineinfo)
 
 def getTrace(df: Union[pd.Series, pd.DataFrame], stype: str) -> List[Any]:
-    """Create main time-series trace for the spread panel."""
+    """Create main time-series trace for the spread panel.
+
+    Demoted to the secondary y5 axis: Z-score (getZscoreTrace) is the primary
+    entry/exit signal and owns the main y axis -- see build_spread_series.
+    """
     trace1 = [go.Scatter(
         name='Spread',
         x=df.index,
         y=df.values,
-        yaxis='y',
+        yaxis='y5',
         line={
-            "width": 3,
-            "color": "#2a6fd3"
+            "width": 1.5,
+            "color": "rgba(42,111,211,0.55)"
         }
     )]
     return trace1
+
+def getZscoreTrace(zscore: pd.Series) -> List[Any]:
+    """Bold primary-axis Z-score trace -- the entry/exit signal a mean-reversion
+    trade actually watches, so it gets top visual priority over the raw spread
+    (see getTrace, demoted to yaxis5)."""
+    if zscore is None or zscore.empty:
+        return []
+    return [go.Scatter(
+        name='Z-score',
+        x=zscore.index,
+        y=zscore.values,
+        yaxis='y',
+        line={"width": 3, "color": "#2a6fd3"},
+    )]
 
 def getTraceStat(df: Union[pd.Series, pd.DataFrame], stype: str) -> go.Bar:
     """Create bar trace for statistical overview chart."""
@@ -295,15 +318,8 @@ def getTraceAdd(df1: Mapping[int, pd.Series], stype: str) -> List[Any]:
                     line={"width": 1, "color": "rgba(239,85,59,0.85)", "dash": "dash"},
                 ),
             ]
-        zscore_s = df1.get('zscore')
-        if zscore_s is not None and hasattr(zscore_s, 'dropna') and not zscore_s.dropna().empty:
-            trace2.append(go.Scatter(
-                name='Z-score',
-                x=zscore_s.index,
-                y=zscore_s.values,
-                yaxis='y4',
-                line={"width": 1.5, "color": ACCENT},
-            ))
+        # Z-score now plotted on the primary axis for every spread type (see
+        # getZscoreTrace in spreadts()) instead of this y4 overlay.
     elif stype == 'SwapSpread':
         trace2 = [go.Scatter(
             name = 'CR(3m,bp)',
@@ -368,15 +384,19 @@ def layout_stat(yunit: str) -> Dict[str, Any]:
         ))
     return layout
 
-def layout_ts(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[str, Any]) -> Dict[str, Any]:
-    """Base layout for time-series panels."""
+def layout_ts(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[str, Any], has_zscore: bool = False) -> Dict[str, Any]:
+    """Base layout for time-series panels.
+
+    When `has_zscore` is set, the primary y axis shows the Z-score signal
+    (unitless, std devs) instead of the raw spread -- see spreadts()/getTrace.
+    """
     layout = _base_layout(title=title, height=600)
     layout.update(dict(
         legend=dict(yanchor="top", y=1.2, xanchor="right", x=1.),
         xaxis={
             "range": [xrg["start"],xrg["end"]],
             "showline": True,
-            "gridcolor": GRID_COLOR,  
+            "gridcolor": GRID_COLOR,
             "zeroline": False,
             "fixedrange": True,
             "title": "Time",
@@ -385,51 +405,101 @@ def layout_ts(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[str, 
             "range": [yrg["low"],yrg["up"]],
             "showgrid": True,
             "showline": True,
-            "gridcolor": GRID_COLOR,  
+            "gridcolor": GRID_COLOR,
             "fixedrange": True,
             "zeroline": False,
-            "title": yunit,
+            "title": "Z-score" if has_zscore else yunit,
         }))
     return layout
 
-def _make_stat_shapes(lineinfo: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    """Helper to create mean and ±std overlay line shapes."""
+SIGMA1_COLOR: str = "#f39c12"  # ±1σ overlay lines
+SIGMA2_COLOR: str = "#ef553b"  # ±2σ overlay lines
+
+def _make_stat_shapes(lineinfo: Mapping[str, Any], has_zscore: bool = False) -> List[Dict[str, Any]]:
+    """Helper to create mean and ±1σ/±2σ overlay line shapes.
+
+    When `has_zscore` is set, the plotted series IS the Z-score, so ±1σ/±2σ
+    are simply the fixed lines y=±1/±2 rather than bp offsets from `mean`.
+    """
+    x0 = lineinfo["start"]
+    x1 = lineinfo["end"]
+
+    def _hline(y: float, dash: str, color: str) -> Dict[str, Any]:
+        return {
+            "xref": "x",
+            "yref": "y",
+            "x0": x0,
+            "x1": x1,
+            "y0": y,
+            "y1": y,
+            "type": "line",
+            "line": {"dash": dash, "color": color, "width": 2},
+        }
+
+    if has_zscore:
+        return [
+            _hline(0, "dash", SHAPE_COLOR),
+            _hline(-1, "dot", SIGMA1_COLOR),
+            _hline(1, "dot", SIGMA1_COLOR),
+            _hline(-2, "dash", SIGMA2_COLOR),
+            _hline(2, "dash", SIGMA2_COLOR),
+        ]
+
+    mean = lineinfo["mean"]
+    std = lineinfo["std"]
     return [
-        {
-            "xref": "x",
-            "yref": "y",
-            "x1": lineinfo["end"],
-            "x0": lineinfo["start"],
-            "y0": lineinfo["mean"],
-            "y1": lineinfo["mean"],
-            "type": "line",
-            "line": {"dash": "dash", "color": SHAPE_COLOR, "width": 2},
-        },
-        {
-            "xref": "x",
-            "yref": "y",
-            "x1": lineinfo["end"],
-            "x0": lineinfo["start"],
-            "y0": lineinfo["mean"]-lineinfo["std"],
-            "y1": lineinfo["mean"]-lineinfo["std"],
-            "type": "line",
-            "line": {"dash": "dot", "color": SHAPE_COLOR, "width": 2},
-        },
-        {
-            "xref": "x",
-            "yref": "y",
-            "x1": lineinfo["end"],
-            "x0": lineinfo["start"],
-            "y0": lineinfo["mean"]+lineinfo["std"],
-            "y1": lineinfo["mean"]+lineinfo["std"],
-            "type": "line",
-            "line": {"dash": "dot", "color": SHAPE_COLOR, "width": 2},
-        },
+        _hline(mean, "dash", SHAPE_COLOR),
+        _hline(mean - std, "dot", SIGMA1_COLOR),
+        _hline(mean + std, "dot", SIGMA1_COLOR),
+        _hline(mean - 2 * std, "dash", SIGMA2_COLOR),
+        _hline(mean + 2 * std, "dash", SIGMA2_COLOR),
     ]
 
-def layout_ts_line(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[str, Any], lineinfo: Mapping[str, Any] = {}, xmulti: bool = False, ymulti: bool = False, shape: bool = False, y4_title: str = "") -> Dict[str, Any]:
+def _make_stat_annotations(lineinfo: Mapping[str, Any], has_zscore: bool = False) -> List[Dict[str, Any]]:
+    """Helper to label mean and ±1σ/±2σ overlay lines at the right edge of the chart."""
+    x1 = lineinfo["end"]
+    mean = 0 if has_zscore else lineinfo["mean"]
+    std = 1 if has_zscore else lineinfo["std"]
+
+    def _label(y: float, text: str, color: str) -> Dict[str, Any]:
+        return {
+            "xref": "x",
+            "yref": "y",
+            "x": x1,
+            "y": y,
+            "xanchor": "left",
+            "yanchor": "middle",
+            "text": text,
+            "showarrow": False,
+            "font": {"size": 9, "color": color},
+        }
+
+    return [
+        _label(mean, "mean", SHAPE_COLOR),
+        _label(mean - std, "-1σ", SIGMA1_COLOR),
+        _label(mean + std, "+1σ", SIGMA1_COLOR),
+        _label(mean - 2 * std, "-2σ", SIGMA2_COLOR),
+        _label(mean + 2 * std, "+2σ", SIGMA2_COLOR),
+    ]
+
+def layout_ts_line(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[str, Any], lineinfo: Mapping[str, Any] = {}, xmulti: bool = False, ymulti: bool = False, shape: bool = False, y4_title: str = "", has_zscore: bool = False) -> Dict[str, Any]:
     """Layout for time series chart with optional extra axes and shapes."""
-    layout = layout_ts(title,yunit,xrg,yrg)
+    layout = layout_ts(title,yunit,xrg,yrg,has_zscore=has_zscore)
+    if has_zscore:
+        # Raw spread demoted off the primary axis (see getTrace/getZscoreTrace);
+        # give it its own dedicated right-side axis rather than reusing y3/y4,
+        # which other overlays (fixing rate, curve yield, carry/roll) already own.
+        layout["yaxis5"] = {
+            "showgrid": False,
+            "showline": True,
+            "anchor": 'x',
+            "overlaying": 'y',
+            "side": 'right',
+            "zeroline": False,
+            "title": yunit,
+            "tickfont": {"color": "rgba(170,176,192,0.8)"},
+            "titlefont": {"color": "rgba(170,176,192,0.8)"},
+        }
     layout["yaxis2"]={
                 "showgrid": False,
                 "showline": True,
@@ -489,7 +559,8 @@ def layout_ts_line(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[
                     "tickvals": [],
                 }
     if shape:
-        layout["shapes"] = _make_stat_shapes(lineinfo)
+        layout["shapes"] = _make_stat_shapes(lineinfo, has_zscore=has_zscore)
+        layout["annotations"] = _make_stat_annotations(lineinfo, has_zscore=has_zscore)
     return layout
 
 def extractTTM(b: str, stype: str, df_stat: pd.DataFrame) -> str:

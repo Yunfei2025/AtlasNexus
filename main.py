@@ -426,10 +426,9 @@ def main():
         from curves.generators.stat import StatGenerator
         # fs_asof arrives as 'YYYY-MM-DD' string (or None).
         asof = _dt.datetime.strptime(args.fs_asof, "%Y-%m-%d").date() if args.fs_asof else _dt.date.today()
-        asof_str = asof.strftime('%Y%m%d')
         logger.info(f"futures-stats-update: computing futures spreads for {asof}...")
         try:
-            gen = StatGenerator(date=asof_str)
+            gen = StatGenerator(asof=asof)
             gen.compute_futures_stats()
             logger.info("futures-stats-update: done.")
         except Exception as exc:

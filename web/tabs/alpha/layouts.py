@@ -663,7 +663,7 @@ def build_individual_backtest_panel() -> html.Div:
                         html.Div([html.Label("Theta z", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-theta', type='number', value=1.25, min=0.25, max=4.0, step=0.05, style=_inp_mono)]),
                         html.Div([html.Label("Mom window", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style=_inp_mono)]),
                         html.Div([html.Label("Vol window", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style=_inp_mono)]),
-                        html.Div([html.Label("Trail mult", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-trailing-mult', type='number', value=1.5, min=0.5, max=5.0, step=0.1, style=_inp_mono)]),
+                        html.Div([html.Label("Trail mult", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-trailing-mult', type='number', value=3.0, min=0.5, max=5.0, step=0.1, style=_inp_mono)]),
                         html.Div([html.Label("Legacy buffer (unused)", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-carry-buffer', type='number', value=0.0, step=0.0001, style={**_inp_mono, 'opacity': 0.55})]),
                     ], className='alpha-trend-params', style={'marginBottom': '10px'}),
                     dcc.Checklist(
@@ -679,7 +679,7 @@ def build_individual_backtest_panel() -> html.Div:
                         html.Div([html.Label("Stop Loss (σ)", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style=_inp_mono)]),
                         html.Div([
                             html.Label("Backtest Period", style={**_lbl, 'fontSize': '8px'}),
-                            dcc.Dropdown(id='bt-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}], value=504, clearable=False, style={'fontSize': '12px'}),
+                            dcc.Dropdown(id='bt-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}, {'label': '10 Years', 'value': 2520}], value=504, clearable=False, style={'fontSize': '12px'}),
                         ]),
                     ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(130px, 1fr))', 'gap': '10px'}),
                 ], style={**_card, 'flex': '1', 'minWidth': '460px'}),
@@ -737,7 +737,7 @@ def build_portfolio_backtest_panel() -> html.Div:
                 html.Div([
                     html.Div([
                         html.Label("Backtest Period", style=_lbl),
-                        dcc.Dropdown(id='bt-port-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}], value=504, clearable=False, style={'fontSize': '13px'}),
+                        dcc.Dropdown(id='bt-port-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}, {'label': '10 Years', 'value': 2520}], value=504, clearable=False, style={'fontSize': '13px'}),
                     ]),
                     html.Div([
                         html.Label("Initial Capital (MM)", style=_lbl),

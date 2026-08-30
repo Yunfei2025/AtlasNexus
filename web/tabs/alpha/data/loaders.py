@@ -276,6 +276,72 @@ def load_newissue_episode_series(label: str) -> list[tuple[pd.Timestamp, str, pd
     return episodes
 
 
+def load_newissue_current_episode(label: str) -> Optional[pd.Series]:
+    """Calendar-indexed spread series for *only* the current (leg1, leg2) pair.
+
+    Unlike ``load_newissue_stage_timeseries`` (one column stitched across every
+    historical bond pair for a stage/bucket) or ``load_newissue_episode_series``
+    (every past episode, rebased and indexed by days-since-start), this returns
+    just the still-open episode identified by the pair on the most recent row,
+    on real calendar dates with un-rebased spread levels — what a "since this
+    bond/stage was established" time series chart should plot. A brand-new NIB
+    (e.g. issued days ago) will correctly return a short series starting at its
+    own issue date, not several years of an unrelated predecessor bond's history.
+    """
+    parsed = _parse_newissue_stage_label(label)
+    if parsed is None:
+        return None
+    stage, tenor_bucket, issuer_class = parsed
+    leg1_col, leg2_col, id1_col, id2_col = (
+        ('ytm_otr', 'ytm_ofr1', 'otr_id', 'ofr1_id') if stage == 'otr_ofr1'
+        else ('ytm_nib', 'ytm_otr', 'nib_id', 'otr_id')
+    )
+
+    if issuer_class:
+        asset_classes = (_ISSUER_ASSET_CLASSES.get(issuer_class),)
+        if asset_classes[0] is None:
+            return None
+    else:
+        asset_classes = ('TBond', 'CBond')
+
+    dir_input = _get_input_dir()
+    best: Optional[pd.Series] = None
+    for asset_class in asset_classes:
+        data = _load_pickle_safe(dir_input / f'{asset_class}-newissue.pkl')
+        if not isinstance(data, dict):
+            continue
+        df = data.get(tenor_bucket)
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+        needed = {leg1_col, leg2_col, id1_col, id2_col}
+        if not needed.issubset(df.columns):
+            continue
+
+        frame = df.copy()
+        frame.index = pd.to_datetime(frame.index)
+        sub = frame[[leg1_col, leg2_col, id1_col, id2_col]].copy()
+        sub['spread'] = pd.to_numeric(sub[leg1_col], errors='coerce') - pd.to_numeric(sub[leg2_col], errors='coerce')
+        sub = sub.dropna(subset=['spread', id1_col, id2_col])
+        if sub.empty:
+            continue
+
+        pair_key = sub[id1_col].astype(str) + '|' + sub[id2_col].astype(str)
+        current_pair = pair_key.iloc[-1]
+        episode_id = (pair_key != pair_key.shift()).cumsum()
+        current_episode = episode_id.iloc[-1]
+        grp = sub[(episode_id == current_episode) & (pair_key == current_pair)]
+        if grp.empty:
+            continue
+        s = grp['spread'].sort_index()
+        s = s[~s.index.duplicated(keep='last')]
+        if best is None or s.index[0] > best.index[0]:
+            # Prefer whichever asset class's episode actually started most
+            # recently -- the other's stale bucket (if issuer-unqualified) would
+            # otherwise dominate the plotted window.
+            best = s
+    return best
+
+
 def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
     """Load spread data for a given type and return DataFrame with required columns."""
     dir_input = _get_input_dir()

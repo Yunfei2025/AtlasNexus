@@ -174,15 +174,26 @@ def _dv01_proxy(df_def: pd.DataFrame, bond_id: Any) -> float:
     return float(mdur) * float(price) / 100.0
 
 
-def _rank_ladder_raw(turnover: pd.Series, depth: int) -> Dict[int, Any]:
+def _rank_ladder_raw(turnover: pd.Series, depth: int, nib_id: Any = None) -> Dict[int, Any]:
     """Raw (unconfirmed) turnover-rank ladder for one date: 0=OTR challenger,
     1..depth=OFR{k} challengers. Sparse buckets (fewer bonds than a given rank
-    needs) return NaN for that rank rather than aliasing to a lower rank."""
+    needs) return NaN for that rank rather than aliasing to a lower rank.
+
+    NIB may legitimately win OTR (rank 0) once its turnover overtakes the
+    incumbent -- but it is always excluded from the OFR-ladder pool (ranks
+    1+), even when it also happens to be OTR: a bond fresh off auction can
+    spike to high turnover for a few days without being a genuine off-the-run
+    rung, and NIB/OFR must stay distinct identities per this module's design
+    (see module docstring).
+    """
     if turnover.empty:
         return {r: np.nan for r in range(depth + 1)}
-    raw: Dict[int, Any] = {0: get_most_liquid_bond(turnover)}
+    otr_id = get_most_liquid_bond(turnover)
+    raw: Dict[int, Any] = {0: otr_id}
+    exclude_ids = {i for i in (nib_id, otr_id) if i is not None and pd.notna(i)}
+    ofr_pool = turnover.drop(index=[i for i in exclude_ids if i in turnover.index])
     for k in range(1, depth + 1):
-        raw[k] = get_offtherun_bond(turnover, n_exclude=k) if len(turnover) > k else np.nan
+        raw[k] = get_offtherun_bond(ofr_pool, n_exclude=k - 1) if len(ofr_pool) > k - 1 else np.nan
     return raw
 
 
@@ -274,7 +285,7 @@ def _select_otr_ofr_for_date(
     row['nib_turnover'] = turnover.get(nib_id, np.nan)
     depth = NewIssueConfig.OFR_LADDER_DEPTH
     persistence_days = NewIssueConfig.OTR_RANK_PERSISTENCE_DAYS
-    raw_ladder = _rank_ladder_raw(turnover, depth)
+    raw_ladder = _rank_ladder_raw(turnover, depth, nib_id=nib_id)
 
     confirmed: Dict[int, Any] = {}
     prev_otr_id = history_df.iloc[-1].get('otr_id') if (history_df is not None and len(history_df) > 0) else None

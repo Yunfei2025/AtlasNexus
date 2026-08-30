@@ -25,6 +25,15 @@ from typing import Dict, Optional, Tuple
 
 DEFAULT_REGIME_WINDOW = 60
 
+# A multi-month/multi-year curve trend (e.g. a steepener running for 1-2
+# years) routinely has multi-week consolidations inside it. Any 60-day slice
+# landing inside one of those pauses looks like noise to ER/Hurst/VR/autocorr
+# even though the multi-month trajectory is clearly directional -- the short
+# window structurally cannot see trends longer than a few times its own
+# length. ~1 trading year gives the same four-indicator vote a long enough
+# lookback to recognise a persistent multi-quarter move.
+LONG_REGIME_WINDOW = 250
+
 # Reuse the Hurst helper from the futures regime module; the classic R/S
 # formula it returns is bias-corrected below via _hurst_null_mean().
 from futures.backtest.regime import _estimate_hurst
@@ -238,6 +247,65 @@ def compute_regime_features(
         out["regime"] = "uncertain"
 
     return out
+
+
+def compute_regime_features_dual(
+    spread_series: pd.Series,
+    *,
+    short_window: int = DEFAULT_REGIME_WINDOW,
+    long_window: int = LONG_REGIME_WINDOW,
+) -> Dict[str, float]:
+    """Combine a short- and long-window regime vote for one series.
+
+    The short window (``DEFAULT_REGIME_WINDOW``, ~3 months) reacts quickly to
+    genuinely new regimes but cannot see a trend that spans multiple quarters:
+    any 60-day slice landing inside a consolidation pause inside that trend
+    votes 'mean_reverting'/'uncertain' on its own. The long window (~1yr)
+    smooths over those pauses and sees the persistent trajectory instead.
+
+    Combination rule, applied in priority order:
+      1. Long window trending -> 'trending'. A trend visible over a full year
+         should not be vetoed by a short-window pause inside it.
+      2. Both windows agree on mean-reverting -> 'mean_reverting'. Requiring
+         agreement avoids calling mean-reversion off a short window's noise
+         alone, since the short window is the one biased toward that vote.
+      3. Short window trending (long window not mean-reverting) -> 'trending'.
+         Lets a *new* trend that the long window hasn't accumulated enough
+         history for yet still be recognised early.
+      4. Otherwise -> 'uncertain'.
+
+    Falls back to the short-window-only result when there isn't enough
+    history for ``long_window`` yet (so callers don't need a separate warm-up
+    branch), tagged via ``long_window_available=False``.
+
+    Returns a dict with the short-window feature keys (``efficiency_ratio``,
+    ``hurst``, ``variance_ratio``, ``autocorr``, ``regime_score``, ``regime``)
+    plus ``regime_score_long``, ``regime_long``, and ``long_window_available``.
+    """
+    short = compute_regime_features(spread_series, window=short_window)
+
+    s = pd.to_numeric(spread_series, errors="coerce").dropna()
+    if len(s) < long_window + 5:
+        short["regime_score_long"] = np.nan
+        short["regime_long"] = "uncertain"
+        short["long_window_available"] = False
+        return short
+
+    long = compute_regime_features(spread_series, window=long_window)
+    short["regime_score_long"] = long.get("regime_score", np.nan)
+    short["regime_long"] = long.get("regime", "uncertain")
+    short["long_window_available"] = True
+
+    if long["regime"] == "trending":
+        short["regime"] = "trending"
+    elif long["regime"] == "mean_reverting" and short["regime"] == "mean_reverting":
+        short["regime"] = "mean_reverting"
+    elif short["regime"] == "trending":
+        short["regime"] = "trending"
+    else:
+        short["regime"] = "uncertain"
+
+    return short
 
 
 def compute_regime_features_series(

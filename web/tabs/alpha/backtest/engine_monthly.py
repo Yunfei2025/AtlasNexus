@@ -75,7 +75,7 @@ def build_monthly_style_schedule(
 
     Returns the audit schedule and a ``{Period: style}`` routing map.
     """
-    from curves.calibration.regime import DEFAULT_REGIME_WINDOW, compute_regime_features
+    from curves.calibration.regime import DEFAULT_REGIME_WINDOW, compute_regime_features_dual
 
     s = _clean_series(spread_ts)
     if len(s) == 0:
@@ -98,11 +98,20 @@ def build_monthly_style_schedule(
         score = np.nan
 
         if len(hist) >= DEFAULT_REGIME_WINDOW + 5:
-            info = compute_regime_features(hist, window=DEFAULT_REGIME_WINDOW)
+            # A ~1yr long window is layered on top of the ~3mo short window
+            # (compute_regime_features_dual) so a multi-quarter trend isn't
+            # vetoed by a short-window consolidation pause inside it -- see
+            # the combination rule in curves.calibration.regime. Falls back
+            # to the short window alone until enough history accumulates.
+            info = compute_regime_features_dual(hist)
             regime = str(info.get('regime', 'uncertain') or 'uncertain').strip().lower()
             score = float(info.get('regime_score', np.nan))
+            regime_long = str(info.get('regime_long', 'uncertain') or 'uncertain').strip().lower()
+            score_long = float(info.get('regime_score_long', np.nan))
         else:
             regime = 'insufficient_history'
+            regime_long = 'insufficient_history'
+            score_long = np.nan
 
         assigned_style = canonical_style(regime)
         if assigned_style == 'skip':
@@ -119,6 +128,8 @@ def build_monthly_style_schedule(
             'review_date': pd.Timestamp(review_date),
             'regime': regime,
             'regime_score': score,
+            'regime_long': regime_long,
+            'regime_score_long': score_long,
             'assigned_style': assigned_style,
             'fallback_reason': fallback_reason,
         })
@@ -145,10 +156,15 @@ def run_monthly_style_backtest(
     theta_z: float = 1.25,
     mom_window: int = 20,
     vol_window: int = 60,
-    trailing_mult: float = 1.5,
+    trailing_mult: float = 3.0,
     allow_short: bool = True,
     reentry_cooldown: int = 3,
-    trend_max_flip_age: int = 15,
+    # ~5 trading weeks. The monthly router only re-reviews once per calendar
+    # month, so a trend_state flip that happens early in a month can already
+    # be 2-4 weeks stale by the time that month's review grants 'trend'
+    # permission -- 15 (3 weeks) was tight enough to silently block entry
+    # into a still-fresh trend leg for a full review cycle.
+    trend_max_flip_age: int = 25,
     carry_roll_ts: Optional[pd.Series] = None,
     carry_roll_bp: float = 0.0,
     duration_mult: float = 1.0,
@@ -166,7 +182,8 @@ def run_monthly_style_backtest(
     absent from the map (or mapped to anything else) open no new position, but an
     already-open position is *not* force-closed by the absence of a style — only a
     genuine change from one tradeable style to a different tradeable style closes
-    it, with ``exit_reason='monthly_style_change'``.
+    it, with ``exit_reason='monthly_style_change'``, and only once the position
+    has cleared ``min_hold`` (same holding-period protection as the other exits).
 
     ``ou_mean``: static OU long-run mean (``StatInfo['mean']``) used as the MR
     fair-value anchor in place of the plain rolling mean when the caller has
@@ -215,20 +232,36 @@ def run_monthly_style_backtest(
     z_mom = z_mom.reindex(s.index)
     trend_vol = s.diff().rolling(int(vol_window)).std()
 
-    # Bars since trend_state last flipped. The monthly router can grant 'trend'
-    # permission weeks after the underlying flip actually happened (state changed
-    # mid-month but the month wasn't reviewed/assigned trend until the next
-    # review date) -- entering fresh on a flip that is already stale risks buying
-    # a move that is largely over. flip_age gates *new* entries to flips still
-    # within a freshness window; it does not affect exits or open positions.
+    # Bars since trend_state last flipped, and which flip "run" each bar
+    # belongs to. The monthly router can grant 'trend' permission weeks after
+    # the underlying flip actually happened (state changed mid-month but the
+    # month wasn't reviewed/assigned trend until the next review date) --
+    # entering fresh on a flip that is already stale, with no prior position
+    # taken on it, risks buying a move that is largely over. flip_age gates
+    # this *first* entry on a flip to a freshness window.
+    #
+    # It must NOT gate a *re*-entry on a flip we already traded: a position
+    # opened promptly on a fresh flip and then stopped out on a pullback
+    # (trailing stop) still has a live, correctly-directioned trend_state --
+    # the "stale, already-over move" risk the age check exists for does not
+    # apply, since we were already in the trade before it went stale. Without
+    # this distinction, a signal that stays valid for months (as directional
+    # curve trends often do) but gets trailing-stopped once early can lock
+    # the strategy flat for the rest of the run: age keeps climbing past the
+    # threshold and no re-entry is ever allowed until the state flips again,
+    # even in the wrong direction.
     _flip = trend_state.ne(trend_state.shift()).to_numpy().copy()
     _flip[0] = True
     flip_age = np.zeros(len(trend_state), dtype=float)
+    flip_run_id = np.zeros(len(trend_state), dtype=int)
     _since = 0
+    _run = -1
     for _i in range(len(trend_state)):
         if _flip[_i]:
             _since = 0
+            _run += 1
         flip_age[_i] = _since
+        flip_run_id[_i] = _run
         _since += 1
 
     def _align(ts: Optional[pd.Series]) -> Optional[pd.Series]:
@@ -279,6 +312,7 @@ def run_monthly_style_backtest(
     cooldown = max(int(reentry_cooldown), 0)
     last_exit_index = -10 ** 9
     last_exit_dir = 0
+    last_exit_flip_run = -1  # flip_run_id of the trend trade we last closed, if any
     realized_pnl = 0.0
     realized_capital = 0.0
     realized_carry = 0.0
@@ -292,7 +326,7 @@ def run_monthly_style_backtest(
     def _close(i: int, date, px: float, reason: str, exit_z_val: float) -> None:
         nonlocal position, entry_date, entry_price, entry_zscore, entry_style, best_fav
         nonlocal realized_pnl, realized_capital, realized_carry, open_cr_sum
-        nonlocal last_exit_index, last_exit_dir
+        nonlocal last_exit_index, last_exit_dir, last_exit_flip_run
 
         days_held = (date - entry_date).days if entry_date is not None else 0
         price_pnl = (px - entry_price) * position * duration_mult
@@ -327,6 +361,7 @@ def run_monthly_style_backtest(
         })
         last_exit_index = i
         last_exit_dir = position
+        last_exit_flip_run = int(flip_run_id[i]) if entry_style == 'trend' else -1
         position = 0
         entry_date = None
         entry_price = None
@@ -345,9 +380,16 @@ def run_monthly_style_backtest(
 
         # ---- Monthly style change: close an open position that no longer
         # matches its month's assigned style.  A month with no tradeable style
-        # ('skip') does not force a close; it only blocks new entries.
-        if position != 0 and style in ('mr', 'trend') and entry_style != style and style != prev_style:
-            _close(i, date, px, 'monthly_style_change', z)
+        # ('skip') does not force a close; it only blocks new entries. Gated by
+        # min_hold like the other trend/MR exits below -- otherwise a single
+        # review month where the 60d regime vote dips into 'mean_reverting' or
+        # 'uncertain' during a pullback inside a persistent trend force-closes
+        # the position days into the trade, regardless of holding period.
+        if position != 0:
+            days_held = (date - entry_date).days if entry_date is not None else 0
+            if (style in ('mr', 'trend') and entry_style != style and style != prev_style
+                    and days_held >= min_hold):
+                _close(i, date, px, 'monthly_style_change', z)
 
         # ---- Exits, evaluated with the style that opened the trade -----------
         if position != 0:
@@ -361,7 +403,12 @@ def run_monthly_style_backtest(
                 trailing_stop = False
                 if np.isfinite(vol) and vol > 0 and trailing_mult > 0:
                     move = (best_fav - px) if position == 1 else (px - best_fav)
-                    trailing_stop = move >= trailing_mult * vol
+                    # Gated by min_hold like the other trend exits: a trailing
+                    # stop this tight (multiples of a 60d daily-change std)
+                    # otherwise fires on ordinary pullbacks days into a trade
+                    # that is part of a multi-year trend, well before the
+                    # trend itself has actually turned.
+                    trailing_stop = days_held >= min_hold and move >= trailing_mult * vol
 
                 flip = (position == 1 and st < 0) or (position == -1 and st > 0)
                 if trailing_stop:
@@ -395,7 +442,14 @@ def run_monthly_style_backtest(
                     if position != 0:
                         entry_date, entry_price, entry_zscore, entry_style = date, px, z, 'mr'
             else:
-                if i >= trend_start and flip_age[i] <= trend_max_flip_age:
+                # Freshness only gates the *first* entry taken on a given
+                # trend_state flip. A re-entry on the same still-active flip
+                # (e.g. after a trailing-stop pullback exit) is not "chasing
+                # a stale move" -- we were already in that exact trade, so it
+                # bypasses the age check and only waits out reentry_cooldown.
+                same_flip_reentry = last_exit_flip_run == flip_run_id[i]
+                fresh_enough = same_flip_reentry or flip_age[i] <= trend_max_flip_age
+                if i >= trend_start and fresh_enough:
                     can_long = not (last_exit_dir == 1 and (i - last_exit_index) <= cooldown)
                     can_short = not (last_exit_dir == -1 and (i - last_exit_index) <= cooldown)
                     if st > 0 and can_long:

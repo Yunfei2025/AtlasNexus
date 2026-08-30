@@ -27,6 +27,7 @@ from web.core.styles import (
     getTraceStat,
     getFixingType,
     getTrace,
+    getZscoreTrace,
     getTraceAdd,
 )
 from web.core.load import spread_ts, fixing_ts, DATA_PATH
@@ -230,16 +231,13 @@ def _select_layout(
     x_range: Dict[str, Any],
     y_range: Dict[str, Any],
     lineinfo: Optional[Dict[str, Any]] = None,
+    has_zscore: bool = False,
 ) -> Dict[str, Any]:
     if spread_type == "SectorPCASpread":
-        return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, shape=True)
+        return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, shape=True, has_zscore=has_zscore)
     if spread_type == "BinarySpread":
-        return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, xmulti=True)
-    if spread_type == "TenorSpread":
-        # Rolling z-score trace (yaxis4) replaces the flat mean/±1σ shape
-        # lines, which only reflected the latest calibration window's stats.
-        return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, ymulti=True, shape=False, y4_title="Z-score")
-    return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, ymulti=True, shape=True)
+        return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, xmulti=True, has_zscore=has_zscore)
+    return layout_ts_line(title, y_unit, x_range, y_range, lineinfo, ymulti=True, shape=True, has_zscore=has_zscore)
 
 
 def build_spread_series(b: str, season: int, stype: str) -> Dict[str, Any]:
@@ -360,25 +358,22 @@ def build_spread_series(b: str, season: int, stype: str) -> Dict[str, Any]:
                     extra['cr_sell'] = -cr3m[tenor]
             except Exception:
                 pass
-            # Z-score using the SAME OU-calibrated mean/vol (StatInfo, ×100 for
-            # bp) that the Daily Spread Statistics bar chart joins via
-            # `_current.join(_stat[['mean', 'vol']])` — so the chart's latest
-            # point matches the bar chart's Zscore exactly, instead of a
-            # differently-defined rolling window that only looks similar.
-            try:
-                stat_row = d["StatInfo"].loc[tenor]
-                ou_mean = 100 * float(stat_row["mean"])
-                ou_vol = 100 * float(stat_row["vol"])
-                if ou_vol:
-                    extra['zscore'] = ((primary_series - ou_mean) / ou_vol).dropna()
-            except (KeyError, TypeError, ValueError):
-                pass
             extra[0] = pd.Series(dtype=float)
             return extra
         extra[0] = pd.Series(dtype=float)
         return extra
 
     additional_series: Dict[Union[int, str], Any] = _build_additional_series(stype, dfts, b, season)
+
+    # Z-score = (spread - mean) / ewm_vol, using the same EWMA(span=60) vol
+    # `getInfo` already resolved into `figinfo["line"]` -- current-regime scale
+    # rather than a static full-window blend, so a quiet-then-active spread
+    # still registers as statistically extreme. Computed generically for every
+    # spread type (not just TenorSpread) so the Z-score overlay is available
+    # everywhere on the Spread Time Series chart.
+    _li = figinfo["line"]
+    if _li.get("ewm_vol"):
+        additional_series['zscore'] = ((primary_series - _li["mean"]) / _li["ewm_vol"]).dropna()
 
     date_common = fixing_ts.index.intersection(primary_series.index)
     fs = fixing_ts.loc[date_common, ftype]
@@ -767,7 +762,9 @@ def spreadts(stype, season, b):
     title = figinfo["title"]
     lineinfo = figinfo["line"]
 
+    zscore = df1.get('zscore') if isinstance(df1, dict) else None
     trace_main = getTrace(df, stype)
+    trace_zscore = getZscoreTrace(zscore)
     trace_add = getTraceAdd(df1, stype)
     trace_fs = _build_fixing_trace(fs)
 
@@ -776,17 +773,23 @@ def spreadts(stype, season, b):
     elif stype in TYPES_SIMPLE_ONLY:
         data = trace_main
     elif stype in TYPES_WITH_FS:
-        data = trace_main + trace_fs
+        data = trace_zscore + trace_main + trace_fs
     else:
-        data = trace_main + trace_fs + trace_add
+        data = trace_zscore + trace_main + trace_fs + trace_add
 
     xrg = _compute_x_range(stype, df)
-    yrg = _compute_y_range(stype, df, x_range=xrg)
-    layout = _select_layout(stype, title, yunits[stype], xrg, yrg, lineinfo)
+    # Z-score owns the primary axis when available (see getZscoreTrace); the
+    # raw spread range only matters for its own demoted y5 axis, scoped below.
+    if zscore is not None and not zscore.empty:
+        yrg = _compute_y_range(stype, zscore, x_range=xrg)
+    else:
+        yrg = _compute_y_range(stype, df, x_range=xrg)
+    layout = _select_layout(stype, title, yunits[stype], xrg, yrg, lineinfo, has_zscore=bool(zscore is not None and not zscore.empty))
 
-    # Explicitly scope yaxis2 (fixing overlay), yaxis3 and yaxis4 (CR 3m) ranges
-    # to the visible x-window so right axes scale to 1Y data, not full history.
-    _axis_sources = [("yaxis2", trace_fs), ("yaxis3", trace_add), ("yaxis4", trace_add)]
+    # Explicitly scope yaxis2 (fixing overlay), yaxis3/yaxis4 (CR 3m) and yaxis5
+    # (demoted raw spread) ranges to the visible x-window so right axes scale
+    # to 1Y data, not full history.
+    _axis_sources = [("yaxis2", trace_fs), ("yaxis3", trace_add), ("yaxis4", trace_add), ("yaxis5", trace_main)]
     for axis_key, traces in _axis_sources:
         if axis_key not in layout:
             continue

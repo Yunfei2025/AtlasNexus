@@ -57,6 +57,30 @@ def _suppress_model_jumps(
     return df_clean
 
 
+import calendar
+
+
+def _cffex_last_trade_date(contract_code) -> Optional[pd.Timestamp]:
+    """CFFEX treasury-futures last trading day: the 2nd Friday of the
+    delivery month, derived from the contract code (e.g. 'TL2612.CFE' ->
+    Dec 2026). Verified against Wind LASTTRADE_DATE for live contracts
+    (T/TF/TS/TL2609/2612/2703) -- exact match, no per-contract Wind lookup
+    needed for historical dates.
+    """
+    if not isinstance(contract_code, str):
+        return None
+    m = re.match(r'^[A-Z]+(\d{2})(\d{2})\.', contract_code)
+    if not m:
+        return None
+    yy, mm = int(m.group(1)), int(m.group(2))
+    year = 2000 + yy
+    fridays = [d for d in calendar.Calendar().itermonthdates(year, mm)
+               if d.month == mm and d.weekday() == 4]
+    if len(fridays) < 2:
+        return None
+    return pd.Timestamp(fridays[1])
+
+
 class StatGenerator:
 
     """Generate daily statistics with OOP structure and performance improvements."""
@@ -555,6 +579,26 @@ class StatGenerator:
         spreads: dict = {'NetBasis': {}, 'NetIRR': {}, 'TermBasis': {}, 'FuturesSwap': {}}
         nb_cols: dict[str, pd.Series] = {}   # for the flat NetIRR mirror
         tb_cols: dict[str, pd.Series] = {}
+        pb_cols: dict[str, pd.Series] = {}   # TermBasis price-basis (futures_close - next_close)
+        roll_cols: dict[str, pd.Series] = {}  # TermBasis roll-progress (next_oi / (front_oi + next_oi))
+        dtm_cols: dict[str, pd.Series] = {}   # TermBasis days-to-maturity of the front contract
+        tb_contracts: dict[str, tuple] = {}  # ctype -> (front_contract, next_contract), latest row
+
+        # Open-interest lookup for roll-progress: futures-px.pkl['position'] is a
+        # dict of {NQ1,NQ2,NQ3: DataFrame(date x contract_code)} built by
+        # retrieveFuturesTS (Wind 'oi' field). A contract code can appear in more
+        # than one bucket while windows overlap, so we combine_first across
+        # buckets (NQ1 -> NQ2 -> NQ3) into one wide date x contract_code frame.
+        futures_px = _loadPKL(os.path.join(DIR_INPUT, 'futures-px.pkl')) or {}
+        _oi_buckets = futures_px.get('position', {}) if isinstance(futures_px, dict) else {}
+        oi_wide: Optional[pd.DataFrame] = None
+        if isinstance(_oi_buckets, dict) and _oi_buckets:
+            for _bucket_df in _oi_buckets.values():
+                if not isinstance(_bucket_df, pd.DataFrame) or _bucket_df.empty:
+                    continue
+                _bdf = _bucket_df.copy()
+                _bdf.index = pd.DatetimeIndex(_bdf.index)
+                oi_wide = _bdf if oi_wide is None else _bdf.combine_first(oi_wide)
 
         start_ts = pd.Timestamp(self.start)
         da_ts    = pd.Timestamp(self.da)
@@ -602,6 +646,61 @@ class StatGenerator:
 
             if term_full.notna().sum() > 20:
                 tb_cols[ctype] = term_full
+
+            # ── Term Basis price leg: front − next-season settlement price ────
+            # Raw price basis (yuan/100 face), the actual calendar-spread P&L
+            # measure, alongside the yield-based term_full above.
+            _fclose_full = pd.to_numeric(df_full.get('futures_close', pd.Series(dtype=float)), errors='coerce')
+            _nclose_full = pd.to_numeric(df_full.get('next_close', pd.Series(dtype=float)), errors='coerce')
+            price_basis_full = (_fclose_full - _nclose_full).where(~_irr_bad_full)
+            if price_basis_full.notna().sum() > 20:
+                pb_cols[ctype] = price_basis_full
+
+            # ── Term Basis latest contract pair (for chart labeling) ──────────
+            if 'contract_code' in df_full.columns:
+                _last_codes = df_full.dropna(subset=['contract_code']).iloc[-1] if df_full['contract_code'].notna().any() else None
+                if _last_codes is not None:
+                    tb_contracts[ctype] = (
+                        _last_codes.get('contract_code'),
+                        _last_codes.get('next_contract_code'),
+                    )
+
+            # ── Term Basis roll-progress: next_oi / (front_oi + next_oi) ──────
+            # 0 = all open interest still in the front contract, 1 = fully
+            # rolled to the next contract. Front OI dropping / next OI rising
+            # as delivery approaches is the structural driver of term basis.
+            if oi_wide is not None and 'contract_code' in df_full.columns:
+                front_codes = df_full['contract_code']
+                next_codes = df_full.get('next_contract_code')
+                if next_codes is not None:
+                    front_oi = pd.Series(
+                        [oi_wide.at[d, c] if (c in oi_wide.columns and d in oi_wide.index) else np.nan
+                         for d, c in zip(df_full.index, front_codes)],
+                        index=df_full.index,
+                    )
+                    next_oi = pd.Series(
+                        [oi_wide.at[d, c] if isinstance(c, str) and c in oi_wide.columns and d in oi_wide.index else np.nan
+                         for d, c in zip(df_full.index, next_codes)],
+                        index=df_full.index,
+                    )
+                    denom = (front_oi + next_oi).replace(0, np.nan)
+                    roll_progress = (next_oi / denom).dropna()
+                    if roll_progress.notna().sum() > 5:
+                        roll_cols[ctype] = roll_progress
+
+            # ── Term Basis days-to-maturity: trading-day-agnostic calendar
+            # days from each date to the front contract's last trading day
+            # (2nd Friday of its delivery month). Used to bucket the seasonal
+            # roll pattern by proximity-to-maturity instead of calendar month.
+            if 'contract_code' in df_full.columns:
+                _ltd = df_full['contract_code'].map(_cffex_last_trade_date)
+                dtm = pd.Series(
+                    [(ltd - d).days if pd.notna(ltd) else np.nan
+                     for d, ltd in zip(df_full.index, _ltd)],
+                    index=df_full.index,
+                ).dropna()
+                if dtm.notna().sum() > 5:
+                    dtm_cols[ctype] = dtm
 
             # ── Bond-Futures: IRR − repo (FR007 + funding), in bp ─────────────
             if fr007_ts is not None:
@@ -657,10 +756,21 @@ class StatGenerator:
             tb_df_full = pd.DataFrame(tb_cols).apply(pd.to_numeric, errors='coerce')  # full history
             tb_df_stats = tb_df_full.loc[start_ts:da_ts]  # rolling window for calibration
             stat_result = st.statAnalysis(tb_df_stats.dropna(how='all'))  # calibrate on rolling window
+            tb_stat_info = stat_result['StatInfo']
+            for ctype, (front_code, next_code) in tb_contracts.items():
+                if ctype in tb_stat_info.index:
+                    tb_stat_info.loc[ctype, 'front_contract'] = front_code
+                    tb_stat_info.loc[ctype, 'next_contract']  = next_code
             spreads['TermBasis'] = {
                 'Spread': tb_df_full.dropna(how='all'),      # full history for seasonal chart
-                'StatInfo': stat_result['StatInfo'],          # calibrated on rolling window
+                'StatInfo': tb_stat_info,                     # calibrated on rolling window
             }
+            if pb_cols:
+                spreads['TermBasis']['PriceBasis'] = pd.DataFrame(pb_cols).apply(pd.to_numeric, errors='coerce').dropna(how='all')
+            if roll_cols:
+                spreads['TermBasis']['RollProgress'] = pd.DataFrame(roll_cols).apply(pd.to_numeric, errors='coerce').dropna(how='all')
+            if dtm_cols:
+                spreads['TermBasis']['DaysToMaturity'] = pd.DataFrame(dtm_cols).apply(pd.to_numeric, errors='coerce').dropna(how='all')
 
         # NetIRR: flat DataFrame mirror of the Bond-Futures (IRR−repo) spread,
         # kept for legacy web/core consumers that read futures-spds['NetIRR'].

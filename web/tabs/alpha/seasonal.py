@@ -701,3 +701,261 @@ def episode_bucket_stats(
         return pd.DataFrame()
     return pd.DataFrame(rows).set_index("day")
 
+
+# ---------------------------------------------------------------------------
+# Roll-cycle overlay (Futures TermBasis: days-to-maturity of the front
+# contract, not calendar year or days-since-start) — same "one line per
+# historical cycle + median/IQR band" shape as the BondNewIssue episode
+# overlay above, but keyed by proximity to the front contract's roll instead
+# of proximity to issuance.
+# ---------------------------------------------------------------------------
+
+_ROLL_DTM_BUCKETS = (90, 60, 45, 30, 20, 10, 5, 2, 0)
+
+
+def roll_cycle_pivot(dtm: "pd.Series", value: "pd.Series") -> "pd.DataFrame":
+    """Reshape a (days-to-maturity, value) pair onto a DTM × roll-cycle grid.
+
+    Parameters
+    ----------
+    dtm :
+        Days-to-maturity of the front contract, one value per date (from
+        ``futures-spds.pkl['TermBasis']['DaysToMaturity']``). Decreases toward
+        0 within a cycle, then jumps back up when the front contract rolls —
+        that jump is used to split the series into per-cycle segments.
+    value :
+        The series to bucket the same way (term basis, price basis, or roll
+        progress), same DatetimeIndex as *dtm*.
+
+    Returns
+    -------
+    DataFrame with index = days-to-maturity (descending toward 0), columns =
+    cycle label (front contract's expiry year-month, chronologically
+    ordered). Each cycle's *value* is NOT re-based -- levels are directly
+    comparable across cycles (unlike the BondNewIssue Δ-from-day-0 overlay).
+    """
+    dtm = dtm.dropna()
+    value = value.reindex(dtm.index).dropna()
+    dtm = dtm.reindex(value.index)
+    if dtm.empty:
+        return pd.DataFrame()
+
+    # A cycle boundary is a date where DTM increases vs. the prior date
+    # (front contract just rolled to the next quarter).
+    jump = dtm.diff() > 0
+    cycle_id = jump.cumsum()
+
+    result: dict[str, pd.Series] = {}
+    for cid, idx in dtm.groupby(cycle_id).groups.items():
+        d_seg = dtm.loc[idx]
+        v_seg = value.loc[idx]
+        if d_seg.empty:
+            continue
+        # Label each cycle by its target maturity month (last date + its own
+        # DTM gives the maturity date directly) so consecutive cycles never
+        # collide on a shared "last observed date" month.
+        maturity = d_seg.index[-1] + pd.Timedelta(days=int(d_seg.iloc[-1]))
+        label = maturity.strftime('%Y-%m')
+        if label in result:
+            label = f"{label} ({d_seg.index[0].strftime('%Y-%m-%d')})"
+        seg = pd.Series(v_seg.values, index=d_seg.values.astype(int))
+        seg = seg.groupby(seg.index).last()
+        result[label] = seg
+
+    if not result:
+        return pd.DataFrame()
+
+    pivot = pd.DataFrame(result)
+    pivot.index.name = "days_to_maturity"
+    return pivot.sort_index(ascending=False)
+
+
+def roll_cycle_bucket_stats(
+    pivot: "pd.DataFrame",
+    buckets: tuple[int, ...] = _ROLL_DTM_BUCKETS,
+    min_cycles: int = 3,
+) -> "pd.DataFrame":
+    """Cross-cycle statistics at fixed days-to-maturity checkpoints.
+
+    Analogue of :func:`episode_bucket_stats` but for a descending
+    days-to-maturity axis: for each checkpoint *d*, uses the first available
+    observation at or before DTM=d (i.e. the closest approach to maturity
+    without going past it) from every cycle that reached that far.
+
+    Returns
+    -------
+    DataFrame indexed by DTM bucket, columns: n_cycles, avg_level,
+    consistency, direction (of level vs. 0), p_value, max_level, min_level.
+    """
+    from scipy.stats import binomtest
+
+    if pivot is None or pivot.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for d in buckets:
+        vals = []
+        for col in pivot.columns:
+            s = pivot[col].dropna()
+            if s.empty or s.index.min() > d:
+                continue
+            asof_idx = s.index[s.index <= d]
+            if len(asof_idx) == 0:
+                continue
+            # Closest-to-maturity observation at or before DTM=d.
+            vals.append(float(s.loc[asof_idx.max()]))
+
+        n = len(vals)
+        if n < min_cycles:
+            continue
+
+        vals_s = pd.Series(vals)
+        up_count = int((vals_s > 0).sum())
+        dn_count = int((vals_s < 0).sum())
+        if up_count > dn_count:
+            direction, consistency, n_match = "up", up_count / n, up_count
+        elif dn_count > up_count:
+            direction, consistency, n_match = "down", dn_count / n, dn_count
+        else:
+            direction, consistency, n_match = "neutral", 0.5, n // 2
+
+        p_value = binomtest(n_match, n, 0.5, alternative="greater").pvalue
+
+        rows.append({
+            "dtm":         d,
+            "n_cycles":    n,
+            "avg_level":   float(vals_s.mean()),
+            "consistency": float(consistency),
+            "direction":   direction,
+            "p_value":     float(p_value),
+            "max_level":   float(vals_s.max()),
+            "min_level":   float(vals_s.min()),
+        })
+
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).set_index("dtm")
+
+
+def build_roll_cycle_figure(
+    pivot: "pd.DataFrame",
+    title: str = "",
+    bucket_stats: Optional["pd.DataFrame"] = None,
+    roll_progress_pivot: Optional["pd.DataFrame"] = None,
+) -> "go.Figure":
+    """Build the days-to-maturity roll-cycle overlay for Futures TermBasis.
+
+    Same visual language as :func:`build_episode_overlay_figure` (thin
+    translucent per-cycle lines, latest cycle highlighted, median+IQR band)
+    but the x-axis is days-to-maturity (descending, reversed so maturity is
+    on the right) instead of days-since-start.
+
+    Parameters
+    ----------
+    pivot :
+        Output of :func:`roll_cycle_pivot` for the basis/price-basis series.
+    roll_progress_pivot :
+        Optional second pivot (same DTM axis) for OI roll-progress (0..1),
+        overlaid on a secondary axis using only the cross-cycle median so the
+        "does basis move with the roll" relationship reads at a glance.
+    """
+    import plotly.graph_objects as go
+
+    empty_layout = dict(
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=THEME["text_main"]),
+    )
+
+    if pivot is None or pivot.empty:
+        return go.Figure(layout=empty_layout)
+
+    cycle_cols = list(pivot.columns)
+    n_cycles = len(cycle_cols)
+
+    traces = []
+    for i, col in enumerate(cycle_cols):
+        s = pivot[col].dropna()
+        if s.empty:
+            continue
+        is_latest = (i == n_cycles - 1)
+        if is_latest:
+            color, width, opacity = THEME["accent"], 2.0, 0.95
+        else:
+            palette_idx = i % len(_YEAR_COLORS)
+            color = _YEAR_COLORS[palette_idx]
+            width, opacity = 0.75, 0.18
+
+        traces.append(go.Scatter(
+            x=s.index.tolist(), y=s.values.tolist(),
+            mode="lines", name=col,
+            line=dict(color=color, width=width),
+            opacity=opacity, showlegend=is_latest,
+            hovertemplate=f"<b>{col}</b><br>DTM: %{{x}}<br>Level: %{{y:.2f}}<extra></extra>",
+        ))
+
+    past_cols = cycle_cols[:-1] if n_cycles > 1 else []
+    band = _episode_median_band(pivot, past_cols)
+    if band is not None:
+        traces.append(go.Scatter(
+            x=band.index.tolist() + band.index.tolist()[::-1],
+            y=band["q75"].tolist() + band["q25"].tolist()[::-1],
+            fill="toself", fillcolor="rgba(52,152,219,0.15)",
+            line=dict(color="rgba(0,0,0,0)"), hoverinfo="skip",
+            name="IQR (25-75%)", showlegend=True,
+        ))
+        sig_days = set()
+        if bucket_stats is not None and not bucket_stats.empty:
+            sig_days = set(bucket_stats.index[bucket_stats["p_value"] < 0.10])
+        marker_days = [d for d in band.index if d in sig_days]
+        traces.append(go.Scatter(
+            x=band.index.tolist(), y=band["q50"].tolist(),
+            mode="lines+markers" if marker_days else "lines",
+            name="Median",
+            line=dict(color="#3498db", width=3.0),
+            marker=dict(size=[9 if d in sig_days else 0 for d in band.index],
+                        color="#f1c40f", symbol="diamond",
+                        line=dict(color="#3498db", width=1)),
+            customdata=band["n"].tolist(),
+            hovertemplate="Median<br>DTM: %{x}<br>Level: %{y:.2f}<br>n=%{customdata}<extra></extra>",
+        ))
+
+    _yaxis2 = None
+    if roll_progress_pivot is not None and not roll_progress_pivot.empty:
+        rp_median = roll_progress_pivot.median(axis=1, skipna=True).dropna()
+        if not rp_median.empty:
+            traces.append(go.Scatter(
+                x=rp_median.index.tolist(), y=rp_median.values.tolist(),
+                mode="lines", name="Median roll progress (OI share)",
+                line=dict(color="#e05c5c", width=2.0, dash="dashdot"),
+                yaxis="y2",
+                hovertemplate="Median roll progress<br>DTM: %{x}<br>%{y:.2f}<extra></extra>",
+            ))
+            _yaxis2 = dict(title="OI share", overlaying="y", side="right",
+                           range=[0, 1], showgrid=False, zeroline=False,
+                           tickfont=dict(color="#e05c5c"), title_font=dict(color="#e05c5c"))
+
+    layout = go.Layout(
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color=THEME["text_main"], size=11),
+        title=dict(text=title, font=dict(size=12, color=THEME["text_sub"])) if title else None,
+        xaxis=dict(
+            title="Days to front-contract maturity",
+            autorange="reversed",
+            gridcolor="#1a3a6a", zerolinecolor="#2a5a9a",
+        ),
+        yaxis=dict(title="Level", gridcolor="#1a3a6a", zerolinecolor="#2a5a9a"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10)),
+        margin=dict(l=50, r=50, t=40, b=40),
+        hovermode="x unified",
+        annotations=[dict(
+            text="◆ = DTM checkpoint with p<0.10 (see Roll Statistics)",
+            xref="paper", yref="paper", x=0, y=-0.14,
+            showarrow=False, font=dict(size=9, color=THEME["text_sub"]),
+        )] if band is not None else None,
+    )
+    if _yaxis2 is not None:
+        layout.yaxis2 = _yaxis2
+    return go.Figure(data=traces, layout=layout)
+

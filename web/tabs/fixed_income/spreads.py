@@ -35,7 +35,6 @@ def build_spreads_layout():
     _spread_options = [
         {"label": "— Sectors —",           "value": "__sectors__",  "disabled": True},
         {"label": "Sector PCA",             "value": "SectorPCASpread"},
-        {"label": "Spread Regression",      "value": "BinarySpread"},
         {"label": "Curve & Cross-Asset Spreads", "value": "TenorSpread"},
         {"label": "— Bonds —",             "value": "__bonds__",    "disabled": True},
         {"label": "Treasury Bond",          "value": "TBondCurve"},
@@ -288,7 +287,16 @@ def register_spreads_callbacks(app) -> None:
             return None
 
     def _fut_stat_bucket(stype):
-        """Return {ticker: (spread_series, mean, vol, max, min)} for a futures type."""
+        """Return {ticker: (spread_series, mean, vol, max, min, ewm_vol, extra)} for a futures type.
+
+        StatInfo here is already bp-scaled (compute_futures_stats calibrates
+        OU_calibrate directly on the bp spread), unlike web/core/styles.getInfo's
+        percent-scaled StatInfo -- no ×100 needed for ewm_vol.
+
+        ``extra`` is a dict of type-specific extras, empty for NetBasis/FuturesSwap.
+        For TermBasis it carries: price_basis (Series, price points),
+        front_contract/next_contract (contract codes), roll_progress (Series, 0..1).
+        """
         spd = _load_pickle_cached(os.path.join(DIR_INPUT, "futures-spds.pkl")) or {}
         out = {}
         if stype in ("NetBasis", "FuturesSwap"):
@@ -306,11 +314,16 @@ def register_spreads_callbacks(app) -> None:
                     if s.empty:
                         continue
                     out[tk] = (s, _fnum(si.loc[tk, "mean"]), _fnum(si.loc[tk, "vol"]),
-                               _fnum(si.loc[tk, "max"]), _fnum(si.loc[tk, "min"]))
+                               _fnum(si.loc[tk, "max"]), _fnum(si.loc[tk, "min"]),
+                               _fnum(si.loc[tk, "ewm_vol"]) if "ewm_vol" in si.columns else None,
+                               {})
         elif stype == "TermBasis":
             tb = spd.get("TermBasis", {})
             si = tb.get("StatInfo") if isinstance(tb, dict) else None
             sp = tb.get("Spread") if isinstance(tb, dict) else None
+            pb = tb.get("PriceBasis") if isinstance(tb, dict) else None
+            rp = tb.get("RollProgress") if isinstance(tb, dict) else None
+            dtm = tb.get("DaysToMaturity") if isinstance(tb, dict) else None
             if isinstance(si, pd.DataFrame) and isinstance(sp, pd.DataFrame) and not si.empty:
                 for tk in si.index:
                     if tk not in sp.columns:
@@ -318,8 +331,27 @@ def register_spreads_callbacks(app) -> None:
                     s = pd.to_numeric(sp[tk], errors="coerce").dropna()
                     if s.empty:
                         continue
+                    extra = {}
+                    if "front_contract" in si.columns:
+                        extra["front_contract"] = si.loc[tk, "front_contract"]
+                    if "next_contract" in si.columns:
+                        extra["next_contract"] = si.loc[tk, "next_contract"]
+                    if isinstance(pb, pd.DataFrame) and tk in pb.columns:
+                        pb_s = pd.to_numeric(pb[tk], errors="coerce").dropna()
+                        if not pb_s.empty:
+                            extra["price_basis"] = pb_s
+                    if isinstance(rp, pd.DataFrame) and tk in rp.columns:
+                        rp_s = pd.to_numeric(rp[tk], errors="coerce").dropna()
+                        if not rp_s.empty:
+                            extra["roll_progress"] = rp_s
+                    if isinstance(dtm, pd.DataFrame) and tk in dtm.columns:
+                        dtm_s = pd.to_numeric(dtm[tk], errors="coerce").dropna()
+                        if not dtm_s.empty:
+                            extra["days_to_maturity"] = dtm_s
                     out[tk] = (s, _fnum(si.loc[tk, "mean"]), _fnum(si.loc[tk, "vol"]),
-                               _fnum(si.loc[tk, "max"]), _fnum(si.loc[tk, "min"]))
+                               _fnum(si.loc[tk, "max"]), _fnum(si.loc[tk, "min"]),
+                               _fnum(si.loc[tk, "ewm_vol"]) if "ewm_vol" in si.columns else None,
+                               extra)
         return out
 
     def _fut_empty(title):
@@ -336,9 +368,10 @@ def register_spreads_callbacks(app) -> None:
         unit = _FUT_UNIT[stype]
         rows = []
         for tk in sorted(bucket):
-            s, mean, vol, _, _ = bucket[tk]
+            s, mean, vol, _, _, ewm_vol, _ = bucket[tk]
             last = float(s.iloc[-1])
-            z = (last - mean) / vol if (mean is not None and vol) else None
+            zvol = ewm_vol if ewm_vol else vol
+            z = (last - mean) / zvol if (mean is not None and zvol) else None
             color = "grey"
             if z is not None and z >= _FUT_ZTHD:
                 color = "green"
@@ -371,18 +404,83 @@ def register_spreads_callbacks(app) -> None:
             return _fut_empty(f"Waiting for data: {stype}...")
         if ticker not in bucket:
             ticker = sorted(bucket)[0]   # default to first when none clicked yet
-        s, mean, vol, vmax, vmin = bucket[ticker]
+        s, mean, vol, vmax, vmin, ewm_vol, extra = bucket[ticker]
         unit = _FUT_UNIT[stype]
         window = getattr(GeneralConfig, "STAT_WINDOW", 12)
         start = s.index[-1] - relativedelta(months=window)
 
-        traces = [go.Scatter(
-            name="Spread (bp)", x=s.index, y=s.values,
-            line={"width": 3, "color": "#2a6fd3"},
-        )]
+        # TermBasis's Spread series is stitched across every historical
+        # quarterly roll (T→TF, TL2609|2612, TL2612|2703, ...), so a fixed
+        # calendar lookback shows several unrelated contract pairs concatenated
+        # together. Clip both the plotted series and the window start to the
+        # current pair's own start (last DTM roll-up jump), same idea as the
+        # BondNewIssue episode window below -- clipping only xaxis.range would
+        # still leave the older pairs' data reachable via hover/zoom.
+        if stype == "TermBasis":
+            dtm_s = extra.get("days_to_maturity")
+            if isinstance(dtm_s, pd.Series) and not dtm_s.empty:
+                _jump = dtm_s.diff() > 0
+                if _jump.any():
+                    cycle_start = dtm_s.index[_jump][-1]
+                    start = max(start, cycle_start)
+                    s = s.loc[s.index >= cycle_start]
+
+        # Z-score = (spread - mean) / ewm_vol is the primary entry/exit signal
+        # for a mean-reversion trade -- EWMA(span=60) vol tracks the current
+        # regime instead of a static full-window blend (see OU_calibrate).
+        # Promoted to the primary axis; the raw spread is demoted below.
+        zvol = ewm_vol if ewm_vol else vol
+        zscore = ((s - mean) / zvol).dropna() if (mean is not None and zvol) else None
+        has_zscore = zscore is not None and not zscore.empty
+
+        traces = []
+        if has_zscore:
+            traces.append(go.Scatter(
+                name="Z-score", x=zscore.index, y=zscore.values,
+                line={"width": 3, "color": "#2a6fd3"},
+            ))
+            traces.append(go.Scatter(
+                name="Spread (bp)", x=s.index, y=s.values,
+                yaxis="y5",
+                line={"width": 1.5, "color": "rgba(42,111,211,0.55)"},
+            ))
+        else:
+            traces.append(go.Scatter(
+                name="Spread (bp)", x=s.index, y=s.values,
+                line={"width": 3, "color": "#2a6fd3"},
+            ))
 
         # For NetBasis: overlay IRR and Repo (%) on a secondary y-axis
+        # For TermBasis: overlay the raw price basis (pts) and OI roll-progress (0-1)
         _yaxis2 = None
+        _yaxis3 = None
+        if stype == "TermBasis":
+            price_basis = extra.get("price_basis")
+            if isinstance(price_basis, pd.Series) and not price_basis.empty:
+                _pb = price_basis.loc[price_basis.index >= start]
+                if not _pb.empty:
+                    traces.append(go.Scatter(
+                        name="Price basis (pts)", x=_pb.index, y=_pb.values,
+                        line={"width": 1.5, "color": "#2ecc71", "dash": "dot"},
+                        yaxis="y2",
+                    ))
+                    _yaxis2 = dict(title="pts", overlaying="y", side="right",
+                                   position=0.93,
+                                   showgrid=False, zeroline=False,
+                                   tickfont=dict(color="#2ecc71"), title_font=dict(color="#2ecc71"))
+            roll_progress = extra.get("roll_progress")
+            if isinstance(roll_progress, pd.Series) and not roll_progress.empty:
+                _rp = roll_progress.loc[roll_progress.index >= start]
+                if not _rp.empty:
+                    traces.append(go.Scatter(
+                        name="Roll progress (next OI share)", x=_rp.index, y=_rp.values,
+                        line={"width": 1.5, "color": "#e05c5c", "dash": "dashdot"},
+                        yaxis="y3",
+                    ))
+                    _yaxis3 = dict(title="OI share", overlaying="y", side="right",
+                                   position=0.86, range=[0, 1],
+                                   showgrid=False, zeroline=False,
+                                   tickfont=dict(color="#e05c5c"), title_font=dict(color="#e05c5c"))
         if stype == "NetBasis":
             try:
                 from settings.futures import FuturesConfig
@@ -420,7 +518,13 @@ def register_spreads_callbacks(app) -> None:
                 pass
 
         fig = go.Figure(data=traces)
-        if mean is not None:
+        if has_zscore:
+            # Plotted series IS the Z-score, so ±1σ/±2σ are just fixed lines
+            # at y=±1/±2 rather than bp offsets from mean.
+            bands = [(0, "mean", "solid", "#aaaaaa"),
+                     (1, "+1σ", "dot", "#f39c12"), (-1, "-1σ", "dot", "#f39c12"),
+                     (2, "+2σ", "dash", "#ef553b"), (-2, "-2σ", "dash", "#ef553b")]
+        elif mean is not None:
             bands = [(mean, "mean", "solid", "#aaaaaa")]
             if vol:
                 bands += [
@@ -429,33 +533,58 @@ def register_spreads_callbacks(app) -> None:
                     (mean + 2 * vol, "+2σ", "dash", "#ef553b"),
                     (mean - 2 * vol, "-2σ", "dash", "#ef553b"),
                 ]
-            for val, label, dash, color in bands:
-                fig.add_hline(y=val, line_dash=dash, line_color=color,
-                              annotation_text=label, annotation_position="right")
+        else:
+            bands = []
+        for val, label, dash, color in bands:
+            fig.add_hline(y=val, line_dash=dash, line_color=color,
+                          annotation_text=label, annotation_position="right")
         _fmt = lambda v: f"{v:.2f}{unit}" if v is not None else "NA"
-        title = (f"<b>{_FUT_TITLE[stype]} — {ticker}</b><br>"
+        _label = ticker
+        if stype == "TermBasis":
+            _front, _next = extra.get("front_contract"), extra.get("next_contract")
+            if isinstance(_front, str) and isinstance(_next, str) and _front and _next:
+                _label = f"{_front.replace('.CFE', '')}|{_next.replace('.CFE', '')}"
+        title = (f"<b>{_FUT_TITLE[stype]} — {_label}</b><br>"
                  f"Latest: {_fmt(float(s.iloc[-1]))}, Mean: {_fmt(mean)}, "
                  f"Vol: {_fmt(vol)}, Max: {_fmt(vmax)}, Min: {_fmt(vmin)}")
         layout_kwargs = dict(
             plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
             font=dict(color="#ffffff"), title=title,
             xaxis=dict(range=[start, s.index[-1]]),
-            yaxis=dict(title=unit),
-            showlegend=(_yaxis2 is not None),
-            legend=dict(orientation="h", x=0, y=1.08, font=dict(size=11)),
+            yaxis=dict(title="Z-score" if has_zscore else unit),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=11)),
             margin=dict(l=50, r=50, t=60, b=40),
             hovermode='x unified',
         )
         if _yaxis2 is not None:
             layout_kwargs["yaxis2"] = _yaxis2
+        if _yaxis3 is not None:
+            layout_kwargs["yaxis3"] = _yaxis3
+        if has_zscore:
+            layout_kwargs["yaxis5"] = dict(
+                title=unit, overlaying="y", side="right", showgrid=False, zeroline=False,
+                tickfont=dict(color="rgba(170,176,192,0.8)"), title_font=dict(color="rgba(170,176,192,0.8)"),
+            )
         fig.update_layout(**layout_kwargs)
         return fig
 
     def _newissue_ts_figure(ticker_label: str):
-        """Render canonical BondNewIssue stage time series (e.g. NIB_OTR-5Y)."""
+        """Render canonical BondNewIssue stage time series (e.g. NIB_OTR-5Y).
+
+        Plots only the current (leg1, leg2) episode -- e.g. the still-open
+        NIB-vs-OTR pair -- rather than a series stitched across every past
+        bond pair for the stage/tenor bucket, so a freshly-issued NIB starts
+        the chart at its own issue date instead of showing years of an
+        unrelated predecessor bond's history.
+        """
         from dateutil.relativedelta import relativedelta
         from settings.general import GeneralConfig
-        from web.tabs.alpha.data import load_spread_timeseries, to_newissue_stage_label
+        from web.tabs.alpha.data import (
+            load_spread_timeseries,
+            to_newissue_stage_label,
+            load_newissue_current_episode,
+        )
 
         ts = load_spread_timeseries('BondNewIssue')
         if not isinstance(ts, pd.DataFrame) or ts.empty:
@@ -474,12 +603,18 @@ def register_spreads_callbacks(app) -> None:
         if not ticker_label or ticker_label not in ts.columns:
             ticker_label = _best_default_column()
 
-        s = pd.to_numeric(ts[ticker_label], errors='coerce').dropna()
+        s = load_newissue_current_episode(ticker_label)
+        if s is None or s.empty:
+            # Legacy/unqualified label or fallback summary artifact: fall back
+            # to the stitched cross-episode column rather than showing nothing.
+            s = pd.to_numeric(ts[ticker_label], errors='coerce').dropna()
         if len(s) < 2 and str(ticker_label).startswith('NIBOTR-'):
             tenor = str(ticker_label).split('-', 1)[-1]
             fallback_col = f'OTROFR1-{tenor}'
             if fallback_col in ts.columns:
-                s = pd.to_numeric(ts[fallback_col], errors='coerce').dropna()
+                s = load_newissue_current_episode(fallback_col)
+                if s is None or s.empty:
+                    s = pd.to_numeric(ts[fallback_col], errors='coerce').dropna()
                 ticker_label = fallback_col
         if s.empty:
             return _fut_empty(f"No data for {ticker_label}")
@@ -489,8 +624,13 @@ def register_spreads_callbacks(app) -> None:
         vmax = float(s.max()) if len(s) else None
         vmin = float(s.min()) if len(s) else None
 
+        # Anchor the visible window to the episode's own start date rather than
+        # a fixed calendar lookback -- a short-lived episode (e.g. a NIB from
+        # a couple of weeks ago) should not be padded with empty axis space,
+        # and a long-running stitched fallback series should still be capped.
         window = getattr(GeneralConfig, "STAT_WINDOW", 12)
-        start = s.index[-1] - relativedelta(months=window)
+        capped_start = s.index[-1] - relativedelta(months=window)
+        start = max(s.index[0], capped_start)
 
         fig = go.Figure(data=[go.Scatter(
             name="Spread",
@@ -566,6 +706,8 @@ def register_spreads_callbacks(app) -> None:
     def _update_seasonal_stats_header(stype):
         if stype == 'BondNewIssue':
             return "Issuance Statistics", "Days since issuance/roll"
+        if stype == 'TermBasis':
+            return "Roll Statistics", "Days to front-contract maturity"
         return "Monthly Statistics", "Directional bias"
 
     @app.callback(
@@ -869,6 +1011,94 @@ def register_spreads_callbacks(app) -> None:
 
             return fig, stats_children
 
+        # TermBasis: roll-cycle overlay (days-to-maturity of the front
+        # contract, one line per historical quarterly roll) instead of a
+        # calendar-year overlay — term basis is structurally driven by
+        # proximity to the front contract's roll, not the calendar month.
+        if stype == 'TermBasis':
+            from web.tabs.alpha.seasonal import (
+                roll_cycle_pivot,
+                roll_cycle_bucket_stats,
+                build_roll_cycle_figure,
+            )
+            tb = (_load_pickle_cached(os.path.join(DIR_INPUT, "futures-spds.pkl")) or {}).get("TermBasis", {})
+            dtm_df = tb.get("DaysToMaturity") if isinstance(tb, dict) else None
+            basis_df = tb.get("Spread") if isinstance(tb, dict) else None
+            roll_df = tb.get("RollProgress") if isinstance(tb, dict) else None
+            if not isinstance(dtm_df, pd.DataFrame) or not isinstance(basis_df, pd.DataFrame) \
+                    or ticker not in dtm_df.columns or ticker not in basis_df.columns:
+                return _empty_fig, html.Div(
+                    f"No roll-cycle history for {ticker}",
+                    style={"color": "#8fb3d9", "fontSize": "11px", "padding": "4px"},
+                )
+
+            pivot = roll_cycle_pivot(dtm_df[ticker], basis_df[ticker])
+            if pivot.empty:
+                return _empty_fig, html.Div(
+                    f"No roll-cycle history for {ticker}",
+                    style={"color": "#8fb3d9", "fontSize": "11px", "padding": "4px"},
+                )
+
+            bucket_stats = pd.DataFrame()
+            try:
+                bucket_stats = roll_cycle_bucket_stats(pivot)
+            except Exception as e:
+                print(f"[seasonal] TermBasis roll-cycle stats error: {e}")
+
+            roll_pivot = pd.DataFrame()
+            if isinstance(roll_df, pd.DataFrame) and ticker in roll_df.columns:
+                try:
+                    roll_pivot = roll_cycle_pivot(dtm_df[ticker], roll_df[ticker])
+                except Exception as e:
+                    print(f"[seasonal] TermBasis roll-progress pivot error: {e}")
+
+            fig = build_roll_cycle_figure(
+                pivot,
+                title=f"{ticker} — roll-cycle overlay (days to maturity)",
+                bucket_stats=bucket_stats,
+                roll_progress_pivot=roll_pivot if not roll_pivot.empty else None,
+            )
+
+            stats_children = html.Div()
+            try:
+                if not bucket_stats.empty:
+                    _arrow = {"up": "↑", "down": "↓", "neutral": "—"}
+                    _dir_color = {"up": "#00cc96", "down": "#ef553b", "neutral": "#aab0c0"}
+                    header = html.Div([
+                        html.Span("DTM",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
+                        html.Span("Dir",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "16px"}),
+                        html.Span("Cons%", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
+                        html.Span("AvgLvl",style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
+                        html.Span("Obs",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
+                        html.Span("p-val", style={"fontSize": "10px", "color": "#8fb3d9"}),
+                    ], style={"display": "flex", "gap": "12px", "padding": "2px 6px",
+                               "borderBottom": "1px solid #1a3a7a", "marginBottom": "2px"})
+                    rows = []
+                    for dtm_val, row in bucket_stats.iterrows():
+                        p = row["p_value"]
+                        sig = "**" if p < 0.05 else ("*" if p < 0.10 else "")
+                        dir_c = _dir_color[row["direction"]]
+                        rows.append(html.Div([
+                            html.Span(f"{dtm_val}d", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "34px"}),
+                            html.Span(f"{_arrow[row['direction']]}",
+                                      style={"fontSize": "11px", "color": dir_c, "minWidth": "16px"}),
+                            html.Span(f"{row['consistency']*100:.0f}%{sig}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "44px"}),
+                            html.Span(f"{row['avg_level']:+.2f}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "44px"}),
+                            html.Span(f"n={row['n_cycles']}", style={"fontSize": "11px", "color": "#aab0c0", "minWidth": "34px"}),
+                            html.Span(f"p={p:.2f}", style={"fontSize": "11px", "color": "#aab0c0"}),
+                        ], style={"display": "flex", "gap": "12px", "padding": "2px 6px"}))
+                    note = html.Div(
+                        "* p<0.10  ** p<0.05  (one-sided binomial; no FDR correction applied)",
+                        style={"fontSize": "9px", "color": "#8fb3d9", "marginTop": "4px", "padding": "0 6px"},
+                    )
+                    stats_children = html.Div([header] + rows + [note],
+                                              style={"background": "transparent", "borderRadius": "4px",
+                                                     "padding": "6px 0", "marginBottom": "8px"})
+            except Exception as e:
+                print(f"[seasonal] TermBasis roll-cycle stats error: {e}")
+
+            return fig, stats_children
+
 
         # --- Acquire the spread series ---
         series: pd.Series | None = None
@@ -876,7 +1106,7 @@ def register_spreads_callbacks(app) -> None:
             if stype in _FUT_SPREADS:
                 bucket = _fut_stat_bucket(stype)
                 if ticker in bucket:
-                    series = bucket[ticker][0]  # (series, mean, vol, max, min)
+                    series = bucket[ticker][0]  # (series, mean, vol, max, min, ewm_vol, extra)
                 elif bucket:
                     series = next(iter(bucket.values()))[0]
             else:

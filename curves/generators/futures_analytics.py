@@ -7,16 +7,17 @@ from Wind bond-futures analytics fields (no local CTD reconstruction).
 
 Output columns per ctype:
 
-============== ======================================================
-Column         Description
-============== ======================================================
-contract_code  Front (main) contract code on that date (e.g. T2606.CFE)
-ctd_code       CTD bond code (Wind tbf_ctd02)
-futures_close  Front contract settlement price (per 100 face)
-next_close     Next-season contract settlement price (per 100 face)
-irr            Implied repo rate of the CTD (%, Wind tbf_irr02)
-fytm           Futures implied YTM (%, Wind tbf_fytm02)
-============== ======================================================
+==================== ==============================================
+Column               Description
+==================== ==============================================
+contract_code        Front (main) contract code on that date (e.g. T2606.CFE)
+next_contract_code   Next-season contract code on that date (e.g. T2609.CFE)
+ctd_code             CTD bond code (Wind tbf_ctd02)
+futures_close        Front contract settlement price (per 100 face)
+next_close           Next-season contract settlement price (per 100 face)
+irr                  Implied repo rate of the CTD (%, Wind tbf_irr02)
+fytm                 Futures implied YTM (%, Wind tbf_fytm02)
+==================== ==============================================
 
 Data source: ``DIR_DATA/futures-db.pkl`` for full-history backfill, and an
 incremental Wind window (``fetchFuturesDatabaseWindow``) for daily EOD updates.
@@ -89,13 +90,14 @@ def _reshape_db(db: Optional[dict]) -> dict:
         if futures_close is None:
             continue
         frame = pd.DataFrame({
-            'contract_code': _col('contract', col),
-            'ctd_code':      _col('ctd', col),
-            'futures_close': futures_close,
-            'next_close':    _col('contract1_cls', col),
-            'irr':           _col('irr', col),
-            'fytm':          _col('ytm', col),
-            'next_fytm':     _col('next_ytm', col),
+            'contract_code':      _col('contract', col),
+            'next_contract_code': _col('contract1', col),
+            'ctd_code':           _col('ctd', col),
+            'futures_close':      futures_close,
+            'next_close':         _col('contract1_cls', col),
+            'irr':                _col('irr', col),
+            'fytm':               _col('ytm', col),
+            'next_fytm':          _col('next_ytm', col),
         })
         frame.index = pd.DatetimeIndex(frame.index)
         frame.index.name = 'date'
