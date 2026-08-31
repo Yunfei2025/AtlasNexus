@@ -1,5 +1,1 @@
-Alpha Portfolio -> Spread, Daily Spread Statistics, I selected ticker like CDB-5s10s, but found in Spread Time Series it shows: ¡°Please select a ticker from the bar ...¡±. Why? check and fix.
-
-
-2 Hidden Terminals
-Portfolio Summary -> Books, Portfolio Allocation Snapshot, beta panel, I want to add a delete button at the front of each row, just like what we have in alpha panel.
+Alpha Portfolio -> Portfolio, Portfolio Allocation Results£¬ why leg 2 contains less liquid bonds like: 230210.IB 220022.IB, which is not in the  table ON-THE-RUN BONDS in Market  Monitor-> Data. Leg2 should always use most liquid bonds.
