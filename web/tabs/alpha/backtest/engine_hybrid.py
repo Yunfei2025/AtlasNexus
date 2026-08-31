@@ -11,6 +11,7 @@ import pandas as pd
 from curves.calibration.regime import compute_regime_features_series
 
 from ._carry import _carry_accrual
+from ._metrics import annualized_sharpe, per_trade_sharpe
 from .engine_trend import _dc_trend_state
 
 
@@ -286,7 +287,8 @@ def run_regime_hybrid_backtest(
         'win_rate': float((pnls > 0).mean() * 100.0) if len(pnls) else 0.0,
         'avg_pnl': float(np.nanmean(pnls)) if len(pnls) else 0.0,
         'avg_hold': float(trades_df['days_held'].mean()) if not trades_df.empty else 0.0,
-        'sharpe': float(np.nanmean(pnls) / np.nanstd(pnls) * np.sqrt(min(len(pnls), 20))) if len(pnls) and np.nanstd(pnls) > 0 else 0.0,
+        'sharpe': annualized_sharpe(equity_ts),
+        'sharpe_per_trade': per_trade_sharpe(pnls, len(pnls)),
         'max_drawdown': max_drawdown, 'spread_ts': s, 'zscore_ts': zscore,
         'composite_signal_ts': composite_signal, 'trend_state_ts': trend_state,
         'norm_mom_ts': norm_mom, 'regime_ts': regime_ts, 'regime_score_ts': regime_scores,

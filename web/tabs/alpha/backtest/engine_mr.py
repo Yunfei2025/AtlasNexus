@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 
 from ._carry import _carry_accrual
+from ._metrics import annualized_sharpe, per_trade_sharpe
+from ._direction import _direction_label
 from ._ou_mean import blended_mr_mean
 
 MR_VOL_SPAN = 60
@@ -163,7 +165,7 @@ def run_spread_backtest(
                 trades.append({
                     'entry_date': entry_date,
                     'exit_date': date,
-                    'direction': 'SELL' if position == 1 else 'BUY',
+                    'direction': _direction_label(position),
                     'entry_price': entry_price,
                     'exit_price': price,
                     'entry_z': entry_zscore,
@@ -236,7 +238,7 @@ def run_spread_backtest(
         open_carry_bp = open_cr_sum * position / 90.0 * 100.0
         open_trade = {
             'entry_date': entry_date,
-            'direction': 'SELL' if position == 1 else 'BUY',
+            'direction': _direction_label(position),
             'entry_price': entry_price,
             'entry_z': entry_zscore,
             'current_date': last_date,
@@ -257,6 +259,7 @@ def run_spread_backtest(
             'avg_pnl': 0,
             'avg_hold': 0,
             'sharpe': 0,
+            'sharpe_per_trade': 0,
             'max_drawdown': 0,
             'spread_ts': spread_ts,
             'zscore_ts': zscore,
@@ -287,10 +290,7 @@ def run_spread_backtest(
     avg_pnl = pnls.mean() if n_trades > 0 else 0
     avg_hold = trades_df['days_held'].mean() if not trades_df.empty else 0
 
-    if pnls.std() > 0:
-        sharpe = (pnls.mean() / pnls.std()) * np.sqrt(min(n_trades, 20))
-    else:
-        sharpe = 0
+    sharpe_pt = per_trade_sharpe(pnls, n_trades)
 
     cum_pnl = np.cumsum(pnls)
     trades_out = trades_df.to_dict('records') if not trades_df.empty else []
@@ -315,7 +315,8 @@ def run_spread_backtest(
         'win_rate': win_rate,
         'avg_pnl': avg_pnl,
         'avg_hold': avg_hold,
-        'sharpe': sharpe,
+        'sharpe': annualized_sharpe(equity_ts),
+        'sharpe_per_trade': sharpe_pt,
         'max_drawdown': max_drawdown,
         'spread_ts': spread_ts,
         'zscore_ts': zscore,

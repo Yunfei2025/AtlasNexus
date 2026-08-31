@@ -21,11 +21,29 @@ import numpy as np
 import pandas as pd
 
 from ._carry import _carry_accrual
+from ._direction import _direction_label
+from ._metrics import annualized_sharpe, per_trade_sharpe
 from .engine_trend import _z_momentum_state
 from ._ou_mean import blended_mr_mean
 
 MR_LOOKBACK = 120
 MR_VOL_SPAN = 60
+
+# Route 'trending' months to the trend engine?  Default False.
+#
+# Measured on the TenorSpread universe (2016-2026, unit positions, fixed
+# preset parameters): momentum on these spreads is *negatively*
+# autocorrelated at the horizon the trend engine trades -- corr(past 60d
+# move, next 60d move) = -0.36 on CGB-10s30s, with a 43.9% directional hit
+# rate at 60d.  The spreads do trend at 5-20 days (variance ratio ~1.2) and
+# mean-revert beyond 60 days (VR ~0.54); the engine's ~16-day median hold
+# with mom_window=30 sits in the crossover dead zone where neither effect is
+# live.  Consequently the trend leg lost 509bp (Sharpe -0.37) on CGB-10s30s
+# over 10y while the same book traded mean-reversion only returned +219bp,
+# and across 14 instruments plain MR was positive on 13 with median Sharpe
+# 0.49.  Routing 'trending' months to MR is therefore the default; set True
+# to restore the previous behaviour.
+ALLOW_TREND_STYLE_DEFAULT = False
 
 _STYLE_ALIASES = {
     'mr': 'mr',
@@ -62,6 +80,7 @@ def build_monthly_style_schedule(
     default_style: str = 'mr',
     *,
     uncertain_policy: str = 'carry_forward',
+    allow_trend_style: bool = ALLOW_TREND_STYLE_DEFAULT,
 ) -> tuple[pd.DataFrame, Dict[pd.Period, str]]:
     """Classify each month's regime point-in-time and assign a fixed style.
 
@@ -72,6 +91,13 @@ def build_monthly_style_schedule(
         ``carry_forward`` — hold the previous month's style; before any valid
         classification, fall back to ``default_style`` (the plan's rule 3).
         ``skip`` — assign no tradeable style, so the month opens no new position.
+
+    ``allow_trend_style``: when False (the default, see
+    ``ALLOW_TREND_STYLE_DEFAULT``), months classified 'trending' are routed to
+    the MR engine instead of the trend engine.  The classification itself is
+    unchanged and still recorded in the returned schedule (``regime``,
+    ``regime_score``), so the audit trail and any regime display stay intact;
+    only the *routing* decision changes.
 
     Returns the audit schedule and a ``{Period: style}`` routing map.
     """
@@ -114,6 +140,13 @@ def build_monthly_style_schedule(
             score_long = np.nan
 
         assigned_style = canonical_style(regime)
+        if assigned_style == 'trend' and not allow_trend_style:
+            # Trend routing is disabled: these spreads' momentum is negatively
+            # autocorrelated at the horizon the trend engine trades, so a
+            # 'trending' month is still traded mean-reversion. See
+            # ALLOW_TREND_STYLE_DEFAULT for the measured rationale.
+            assigned_style = 'mr'
+            fallback_reason = 'trend->mr (trend routing disabled)'
         if assigned_style == 'skip':
             if uncertain_policy == 'skip':
                 fallback_reason = f'{regime}->skip'
@@ -340,10 +373,7 @@ def run_monthly_style_backtest(
         realized_capital += price_pnl * 100.0
         realized_carry += carry_income * 100.0
         open_cr_sum = 0.0
-        if entry_style == 'trend':
-            direction = 'LONG' if position == 1 else 'SHORT'
-        else:
-            direction = 'SELL' if position == 1 else 'BUY'
+        direction = _direction_label(position)
         trades.append({
             'entry_date': entry_date,
             'exit_date': date,
@@ -496,10 +526,7 @@ def run_monthly_style_backtest(
         days_open = (last_date - entry_date).days if entry_date else 0
         open_cap_bp = (last_price - entry_price) * position * duration_mult * 100.0
         open_carry_bp = open_cr_sum * position / 90.0 * 100.0
-        if entry_style == 'trend':
-            direction = 'LONG' if position == 1 else 'SHORT'
-        else:
-            direction = 'SELL' if position == 1 else 'BUY'
+        direction = _direction_label(position)
         open_trade = {
             'entry_date': entry_date,
             'direction': direction,
@@ -575,7 +602,8 @@ def run_monthly_style_backtest(
         'win_rate': float((pnls > 0).sum() / n_trades * 100.0),
         'avg_pnl': float(np.nanmean(pnls)),
         'avg_hold': float(trades_df['days_held'].mean()),
-        'sharpe': float(np.nanmean(pnls) / std * np.sqrt(min(n_trades, 20))) if std > 0 else 0.0,
+        'sharpe': annualized_sharpe(equity_ts),
+        'sharpe_per_trade': per_trade_sharpe(pnls, n_trades),
         'max_drawdown': max_dd,
         'cum_pnl': np.nancumsum(pnls),
         'equity_ts': equity_ts,

@@ -39,6 +39,27 @@ def _stat_pair(label: str, value: str, color: str) -> html.Div:
     ])
 
 
+def _entries_by_side(trades_df):
+    """Split trades into (long-side, short-side) entries.
+
+    The engines label a position's direction differently by style: the trend
+    path emits ``LONG``/``SHORT`` while the mean-reversion path emits
+    ``SELL``/``BUY`` for the same underlying ``position`` of ``+1``/``-1``
+    (see ``engine_monthly._close``).  Filtering on ``LONG``/``SHORT`` alone
+    silently dropped every MR trade's marker from the charts -- which is now
+    *all* trades, since trend routing is disabled by default.
+
+    ``position=+1`` is labelled ``LONG`` (trend) or ``SELL`` (MR); ``-1`` is
+    ``SHORT`` or ``BUY``.  Group by the position sign, not the label.
+    """
+    empty = pd.DataFrame(columns=['entry_date', 'entry_price'])
+    if trades_df is None or len(trades_df) == 0 or 'direction' not in trades_df.columns:
+        return empty, empty
+    d = trades_df['direction'].astype(str).str.upper()
+    return (trades_df[d.isin(('LONG', 'SELL'))].copy(),
+            trades_df[d.isin(('SHORT', 'BUY'))].copy())
+
+
 def build_backtest_results_display(results: Dict[str, Any], title: str = "Backtest Results") -> html.Div:
     """Build the display for backtest results."""
     import plotly.graph_objects as go
@@ -70,7 +91,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             _stat_pair("Total PnL", f"{results['total_pnl']:.1f} bp", 'var(--accent-green)' if results['total_pnl'] > 0 else 'var(--negative)'),
             _stat_pair("Avg PnL", f"{results['avg_pnl']:.2f} bp", 'var(--text-primary)'),
             _stat_pair("Avg Hold", f"{results['avg_hold']:.0f} days", 'var(--text-primary)'),
-            _stat_pair("Sharpe", f"{results['sharpe']:.2f}", 'var(--accent-green)' if results['sharpe'] > 1 else 'var(--text-primary)'),
+            _stat_pair("Sharpe (ann.)", f"{results['sharpe']:.2f}", 'var(--accent-green)' if results['sharpe'] > 1 else 'var(--text-primary)'),
             _stat_pair("Max DD", f"{results['max_drawdown']:.1f} bp", 'var(--accent-amber)'),
         ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '20px'}),
         html.Div(
@@ -160,17 +181,18 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
             ), row=1)
 
     if trades_df is not None and len(trades_df) > 0:
-        long_entries = trades_df[trades_df['direction'] == 'LONG'].copy() if trades_df is not None and len(trades_df) > 0 else pd.DataFrame(columns=['entry_date', 'entry_price'])
-        short_entries = trades_df[trades_df['direction'] == 'SHORT'].copy() if trades_df is not None and len(trades_df) > 0 else pd.DataFrame(columns=['entry_date', 'entry_price'])
+        long_entries, short_entries = _entries_by_side(trades_df)
         # Color exits by actual P&L sign so trend exits (flip/trailing/carry)
         # are not all shown as losses when they may be profitable.
         _pnl_col = trades_df.get('pnl_trade', pd.Series(0.0, index=trades_df.index)) if trades_df is not None and len(trades_df) > 0 else pd.Series(dtype=float)
         profit_exits = trades_df[_pnl_col > 0] if trades_df is not None and len(trades_df) > 0 else pd.DataFrame()
         loss_exits = trades_df[_pnl_col <= 0] if trades_df is not None and len(trades_df) > 0 else pd.DataFrame()
+        _lbl_long = '/'.join(sorted(set(long_entries['direction'].astype(str).str.upper()))) or 'Long'
+        _lbl_short = '/'.join(sorted(set(short_entries['direction'].astype(str).str.upper()))) or 'Short'
         if len(long_entries) > 0:
-            _add_to_fig(go.Scatter(x=long_entries['entry_date'], y=long_entries['entry_price'] * 100.0, mode='markers', name='Long Entry', marker=dict(symbol='triangle-up', size=10, color=THEME['success'], line=dict(width=1, color='white')), showlegend=True), row=1)
+            _add_to_fig(go.Scatter(x=long_entries['entry_date'], y=long_entries['entry_price'] * 100.0, mode='markers', name=f'{_lbl_long} Entry', marker=dict(symbol='triangle-up', size=10, color=THEME['success'], line=dict(width=1, color='white')), showlegend=True), row=1)
         if len(short_entries) > 0:
-            _add_to_fig(go.Scatter(x=short_entries['entry_date'], y=short_entries['entry_price'] * 100.0, mode='markers', name='Short Entry', marker=dict(symbol='triangle-down', size=10, color=THEME['danger'], line=dict(width=1, color='white')), showlegend=True), row=1)
+            _add_to_fig(go.Scatter(x=short_entries['entry_date'], y=short_entries['entry_price'] * 100.0, mode='markers', name=f'{_lbl_short} Entry', marker=dict(symbol='triangle-down', size=10, color=THEME['danger'], line=dict(width=1, color='white')), showlegend=True), row=1)
         if len(profit_exits) > 0:
             _add_to_fig(go.Scatter(x=profit_exits['exit_date'], y=profit_exits['exit_price'] * 100.0, mode='markers', name='Exit (profit)', marker=dict(symbol='circle', size=7, color=THEME['success'], opacity=0.85), showlegend=True), row=1)
         if len(loss_exits) > 0:
@@ -347,8 +369,7 @@ def build_backtest_results_display(results: Dict[str, Any], title: str = "Backte
                 dates = pd.DatetimeIndex(pd.to_datetime(df[date_col]))
                 return score_ts_display.clip(-4, 4).reindex(dates, method='nearest').values
 
-            long_e  = trades_df[trades_df['direction'] == 'LONG'].copy() if trades_df is not None and len(trades_df) > 0 else pd.DataFrame(columns=['entry_date'])
-            short_e = trades_df[trades_df['direction'] == 'SHORT'].copy() if trades_df is not None and len(trades_df) > 0 else pd.DataFrame(columns=['entry_date'])
+            long_e, short_e = _entries_by_side(trades_df)
             _pnl_score = trades_df.get('pnl_trade', pd.Series(0.0, index=trades_df.index)) if trades_df is not None and len(trades_df) > 0 else pd.Series(dtype=float)
             prof_x = trades_df[_pnl_score > 0] if trades_df is not None and len(trades_df) > 0 else pd.DataFrame()
             loss_x = trades_df[_pnl_score <= 0] if trades_df is not None and len(trades_df) > 0 else pd.DataFrame()

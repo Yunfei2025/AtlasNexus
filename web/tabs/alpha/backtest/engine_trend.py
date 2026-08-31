@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from ._carry import _carry_accrual
+from ._metrics import annualized_sharpe, per_trade_sharpe
 
 
 def _robust_daily_scale(diff_s: pd.Series, window: int) -> pd.Series:
@@ -267,6 +268,7 @@ def run_trend_backtest(
             'avg_pnl': 0.0,
             'avg_hold': 0.0,
             'sharpe': 0.0,
+            'sharpe_per_trade': 0.0,
             'max_drawdown': 0.0,
             'spread_ts': s,
             'trend_state_ts': trend_state,
@@ -295,7 +297,7 @@ def run_trend_backtest(
     win_rate = float((pnls > 0).sum() / n_trades * 100.0) if n_trades > 0 else 0.0
     avg_pnl = float(np.nanmean(pnls)) if pnls.size > 0 else 0.0
     avg_hold = float(trades_df['days_held'].mean()) if 'days_held' in trades_df.columns else 0.0
-    sharpe = float((np.nanmean(pnls) / np.nanstd(pnls)) * np.sqrt(min(n_trades, 20))) if (pnls.size > 0 and np.nanstd(pnls) > 0) else 0.0
+    sharpe_pt = per_trade_sharpe(pnls, n_trades)
 
     cum_pnl = np.nancumsum(pnls) if pnls.size > 0 else np.array([])
     trades_out = trades_df.to_dict('records') if not trades_df.empty else []
@@ -320,7 +322,8 @@ def run_trend_backtest(
         'win_rate': win_rate,
         'avg_pnl': avg_pnl,
         'avg_hold': avg_hold,
-        'sharpe': sharpe,
+        'sharpe': annualized_sharpe(equity_ts),
+        'sharpe_per_trade': sharpe_pt,
         'max_drawdown': max_drawdown,
         'spread_ts': s,
         'trend_state_ts': trend_state,
