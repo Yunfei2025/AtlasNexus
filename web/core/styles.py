@@ -6,6 +6,7 @@ to improve readability and maintenance.
 """
 
 from typing import Any, Dict, List, Mapping, Union
+import re
 import sys
 from pathlib import Path
 
@@ -169,11 +170,15 @@ def getInfo(b: str, df: Union[pd.Series, pd.DataFrame], dfts: Mapping[str, Any],
         ticker = b + '-' + futures_code if futures_code else b
     else:
         ticker = b
-    title = "<b>%s Ticker: %s </b><br> \
-        Term to Maturity: %s,    Stationary: %s,    Halflife: %s <br> \
-        Mean: %.1fbp, Vol: %.1fbp \
-        Max:  %.1fbp, Min: %.1fbp "%(BondConfig.SPREAD_MAP[stype],ticker,ttm,\
-            stationary,halflife,mean,std,vmax,vmin)
+    # The ticker/category is already shown above the chart (the "#ticker"
+    # header in the Spread Time Series card), so the in-chart title only
+    # needs the analytical stats, not a restatement of "<category> Ticker:
+    # <id>". Two compact lines, sized down from Plotly's headline default
+    # (which assumes a single short title, not a dense stats block).
+    title = (
+        "Term: %s &nbsp;·&nbsp; Stationary: %s &nbsp;·&nbsp; Halflife: %s<br>"
+        "Mean: %.1fbp &nbsp;·&nbsp; Vol: %.1fbp &nbsp;·&nbsp; Max: %.1fbp &nbsp;·&nbsp; Min: %.1fbp"
+    ) % (ttm, stationary, halflife, mean, std, vmax, vmin)
     lineinfo = dict(mean=mean, std=std, ewm_vol=ewm_vol, start=start, end=end)
     return dict(title = title,line=lineinfo)
 
@@ -357,7 +362,15 @@ def _base_layout(title: Union[str, None] = None, height: Union[int, None] = None
         paper_bgcolor="rgba(0,0,0,0)",
     )
     if title is not None:
-        base["title"] = title
+        # A small, left-aligned stats caption, not a centered headline — the
+        # ticker itself is already shown above the chart. Muted/smaller than
+        # Plotly's title default, which is sized for one short line.
+        base["title"] = {
+            "text": title,
+            "x": 0.0,
+            "xanchor": "left",
+            "font": {"size": 11, "color": "rgba(170,176,192,0.85)"},
+        }
     if height is not None:
         base["height"] = height
     return base
@@ -412,37 +425,52 @@ def layout_ts(title: str, yunit: str, xrg: Mapping[str, Any], yrg: Mapping[str, 
         }))
     return layout
 
-SIGMA1_COLOR: str = "#f39c12"  # ±1σ overlay lines
-SIGMA2_COLOR: str = "#ef553b"  # ±2σ overlay lines
+SIGMA1_COLOR: str = "#f39c12"  # ±1σ zone wash + edge line
+SIGMA2_COLOR: str = "#ef553b"  # ±2σ zone wash + edge line
 
 def _make_stat_shapes(lineinfo: Mapping[str, Any], has_zscore: bool = False) -> List[Dict[str, Any]]:
-    """Helper to create mean and ±1σ/±2σ overlay line shapes.
+    """Helper to create mean/±1σ/±2σ reference shapes.
 
-    When `has_zscore` is set, the plotted series IS the Z-score, so ±1σ/±2σ
-    are simply the fixed lines y=±1/±2 rather than bp offsets from `mean`.
+    Z-score row: shaded darkness bands instead of 4 competing dashed/dotted
+    lines — a light ±1σ wash and a slightly darker ±1σ→±2σ wash, each with a
+    thin edge line at its outer boundary only, plus a single mean line at 0.
+    Bands read as "zones" at a glance and don't crowd the z-score line itself
+    the way 4 parallel threshold lines did.
+
+    Raw-spread row (has_zscore=False): unchanged — bp-based mean/±1σ/±2σ
+    lines, since this series varies by instrument rather than being a fixed
+    ±1/±2 scale.
     """
     x0 = lineinfo["start"]
     x1 = lineinfo["end"]
 
     def _hline(y: float, dash: str, color: str) -> Dict[str, Any]:
         return {
-            "xref": "x",
-            "yref": "y",
-            "x0": x0,
-            "x1": x1,
-            "y0": y,
-            "y1": y,
+            "xref": "x", "yref": "y",
+            "x0": x0, "x1": x1, "y0": y, "y1": y,
             "type": "line",
-            "line": {"dash": dash, "color": color, "width": 2},
+            "line": {"dash": dash, "color": color, "width": 1.5},
+        }
+
+    def _band(y0: float, y1: float, color: str, opacity: float) -> Dict[str, Any]:
+        return {
+            "xref": "x", "yref": "y",
+            "x0": x0, "x1": x1, "y0": y0, "y1": y1,
+            "type": "rect",
+            "fillcolor": color,
+            "opacity": opacity,
+            "line": {"width": 0},
+            "layer": "below",
         }
 
     if has_zscore:
         return [
+            _band(-2, -1, SIGMA2_COLOR, 0.07),
+            _band(-1, 1, SIGMA1_COLOR, 0.10),
+            _band(1, 2, SIGMA2_COLOR, 0.07),
+            _hline(-2, "solid", SIGMA2_COLOR),
+            _hline(2, "solid", SIGMA2_COLOR),
             _hline(0, "dash", SHAPE_COLOR),
-            _hline(-1, "dot", SIGMA1_COLOR),
-            _hline(1, "dot", SIGMA1_COLOR),
-            _hline(-2, "dash", SIGMA2_COLOR),
-            _hline(2, "dash", SIGMA2_COLOR),
         ]
 
     mean = lineinfo["mean"]
@@ -456,10 +484,8 @@ def _make_stat_shapes(lineinfo: Mapping[str, Any], has_zscore: bool = False) -> 
     ]
 
 def _make_stat_annotations(lineinfo: Mapping[str, Any], has_zscore: bool = False) -> List[Dict[str, Any]]:
-    """Helper to label mean and ±1σ/±2σ overlay lines at the right edge of the chart."""
+    """Helper to label mean/±1σ/±2σ reference shapes at the right edge of the chart."""
     x1 = lineinfo["end"]
-    mean = 0 if has_zscore else lineinfo["mean"]
-    std = 1 if has_zscore else lineinfo["std"]
 
     def _label(y: float, text: str, color: str) -> Dict[str, Any]:
         return {
@@ -474,6 +500,17 @@ def _make_stat_annotations(lineinfo: Mapping[str, Any], has_zscore: bool = False
             "font": {"size": 9, "color": color},
         }
 
+    if has_zscore:
+        # Only label the outer ±2σ edges and the mean — the ±1σ boundary is
+        # already legible as the wash's own edge, no line/label needed there.
+        return [
+            _label(0, "mean", SHAPE_COLOR),
+            _label(-2, "-2σ", SIGMA2_COLOR),
+            _label(2, "+2σ", SIGMA2_COLOR),
+        ]
+
+    mean = lineinfo["mean"]
+    std = lineinfo["std"]
     return [
         _label(mean, "mean", SHAPE_COLOR),
         _label(mean - std, "-1σ", SIGMA1_COLOR),
@@ -594,7 +631,13 @@ def extractTTM(b: str, stype: str, df_stat: pd.DataFrame) -> str:
         else:
             ttm = b.split('.')[0][-2:]
     elif stype == 'TenorSpread':
-        ttm = b  # instrument name (e.g. CGB-5s10s) encodes the tenor range
+        # Flies (NsMsLs, e.g. CGB-2s5s10s) -> the belly (middle) tenor, e.g.
+        # "2y" for CGB-2s5s10s. 2-leg slopes (CGB-5s10s) have no true middle,
+        # so fall back to the full instrument name for those, matching prior
+        # behavior; cross-curve IDs (CDBCGB-10y, etc.) never match \d+s and
+        # also fall back.
+        tenors = re.findall(r'(\d+)s', b, re.IGNORECASE)
+        ttm = f"{tenors[len(tenors) // 2]}y" if len(tenors) >= 3 else b
     elif stype == 'BinarySpread':
         try:
             ttm = df_stat.loc[b, 'label']

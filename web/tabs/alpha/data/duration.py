@@ -49,6 +49,10 @@ def _get_duration_mult(
         Pair       (2 tenors): duration of the last (longer) tenor.
         Fly        (3 tenors): duration of the middle tenor.
 
+    TenorSpread (CGB-*, CDB-*)
+        Pair (2 tenors): duration of the shorter (first) tenor.
+        Fly  (3 tenors): duration of the middle (belly) tenor.
+
     TBondCurve / TBondSwap / CBondCurve / CBondSwap
         Bond IDs. Look up ttm from snapshot; duration ≈ ttm × 0.92.
         Pass *snap* (pre-loaded via ``load_spread_data``) to avoid a pickle
@@ -93,6 +97,8 @@ def _get_duration_mult(
             return _tenor_to_duration(tenors_my[0].lower())
         # Fall back to 's' suffix: treat Ns as Ny (N years)
         tenors_s = re.findall(r'(\d+(?:\.\d+)?)s', tenor_part, re.IGNORECASE)
+        if len(tenors_s) >= 3:
+            return _tenor_to_duration(tenors_s[1] + 'y')  # belly, for flies
         if tenors_s:
             return _tenor_to_duration(tenors_s[0] + 'y')
         return 1.0
@@ -127,6 +133,8 @@ def _get_borrow_cost_annual_bp(spread_type: str, instrument: str) -> tuple[float
     TenorSpread XsYs (e.g. CGB-5s10s, CDB-5s10s) — flattener convention:
         LONG  the spread = short the SHORTER-tenor bond → long_borrow_bp  = BORROW_COST[shorter]
         SHORT the spread = short the LONGER-tenor bond  → short_borrow_bp = BORROW_COST[longer]
+    TenorSpread fly (NsMsLs, e.g. CGB-2s5s10s) — belly/long-wing proxy:
+        Matches the resolve_legs() 2-leg proxy: (BORROW_COST[belly], BORROW_COST[long_wing]).
     BondCurve / BondSwap:
         Symmetric — same cost for both directions based on the bond's ttm bucket.
     Others:
@@ -149,6 +157,12 @@ def _get_borrow_cost_annual_bp(spread_type: str, instrument: str) -> tuple[float
             return float(bc.get(30, 120))
 
     if spread_type == 'TenorSpread':
+        # 'CGB-2s5s10s' → belly=5, long_wing=10 (matches resolve_legs() proxy)
+        m3 = re.search(r'(\d+)s(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
+        if m3:
+            belly = float(m3.group(2))
+            long_wing = float(m3.group(3))
+            return _bucket(belly), _bucket(long_wing)
         # 'CGB-5s10s' → shorter=5, longer=10
         m = re.search(r'(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
         if m:
@@ -242,8 +256,14 @@ def _get_tenor_yields_for_spread(instrument: str) -> tuple[Optional[float], Opti
             tenor_data = env.get(bond_type, {})
 
             # Extract tenor values
+            m3 = re.search(r'(\d+)s(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
             m = re.search(r'(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
-            if m:
+            if m3:
+                # Fly (NsMsLs): belly and long-wing yields, matching the
+                # resolve_legs() 2-leg proxy convention.
+                short_tenor = f"中债{'国债' if bond_type == 'CGB' else '国开'}到期收益率:{m3.group(2)}年"
+                long_tenor = f"中债{'国债' if bond_type == 'CGB' else '国开'}到期收益率:{m3.group(3)}年"
+            elif m:
                 short_tenor = f"中债{'国债' if bond_type == 'CGB' else '国开'}到期收益率:{m.group(1)}年"
                 long_tenor = f"中债{'国债' if bond_type == 'CGB' else '国开'}到期收益率:{m.group(2)}年"
             else:
@@ -298,7 +318,8 @@ def _get_ttm_display(spread_type: str, instrument: str) -> Optional[float]:
     """Return TTM (years) for the Candidates table TTM column.
 
     BondCurve / BondSwap : bond TTM from snapshot.
-    TenorSpread           : first-leg tenor (e.g. 5 for CGB-5s10s, 10 for CDBCGB-10y).
+    TenorSpread           : first-leg tenor (e.g. 5 for CGB-5s10s, 10 for CDBCGB-10y);
+                            belly tenor for flies (e.g. 5 for CGB-2s5s10s).
     SwapSpread            : second-leg tenor for pairs and flies (e.g. 2 for Repo7d-1y2y,
                             2 for Repo7d-1y2y, 0.75 for Shi3M-6m9m).
     All other types       : None.
@@ -323,6 +344,10 @@ def _get_ttm_display(spread_type: str, instrument: str) -> Optional[float]:
         return None
 
     if spread_type == 'TenorSpread':
+        # CGB-2s5s10s (fly) → belly leg = 5
+        m3 = re.search(r'(\d+)s(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
+        if m3:
+            return float(m3.group(2))
         # CGB-5s10s → first leg = 5
         m = re.search(r'(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
         if m:

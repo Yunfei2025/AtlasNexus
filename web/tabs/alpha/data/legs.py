@@ -230,12 +230,23 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
                 t = _t_label(float(m.group(1)))
                 return (otr_cdb.get(t, ''), otr_cgb.get(t, ''))
         elif upper.startswith('CGB-'):
+            m3 = re.search(r'(\d+)S(\d+)S(\d+)S', upper)
+            if m3:
+                # Fly (NsMsLs): lossy 2-leg proxy — long belly, short long wing.
+                belly = _t_label(float(m3.group(2)))
+                long_wing = _t_label(float(m3.group(3)))
+                return (otr_cgb.get(belly, ''), otr_cgb.get(long_wing, ''))
             m = re.search(r'(\d+)S(\d+)S', upper)
             if m:
                 t1 = _t_label(float(m.group(1)))
                 t2 = _t_label(float(m.group(2)))
                 return (otr_cgb.get(t2, ''), otr_cgb.get(t1, ''))
         elif upper.startswith('CDB-'):
+            m3 = re.search(r'(\d+)S(\d+)S(\d+)S', upper)
+            if m3:
+                belly = _t_label(float(m3.group(2)))
+                long_wing = _t_label(float(m3.group(3)))
+                return (otr_cdb.get(belly, ''), otr_cdb.get(long_wing, ''))
             m = re.search(r'(\d+)S(\d+)S', upper)
             if m:
                 t1 = _t_label(float(m.group(1)))

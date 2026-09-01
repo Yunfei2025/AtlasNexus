@@ -355,6 +355,25 @@ def _leg_duration_years(
     if spread_type == 'TenorSpread':
         upper_tid = str(trade_id or '').upper()
 
+        # CGB-2s5s10s / CDB-5s7s10s style flies: leg1 = belly, leg2 = long wing
+        # (lossy 2-leg proxy — see _resolve_legs).
+        m_fly = re.search(r'(\d+(?:\.\d+)?)S(\d+(?:\.\d+)?)S(\d+(?:\.\d+)?)S', upper_tid)
+        if m_fly:
+            belly_t = float(m_fly.group(2))
+            long_wing_t = float(m_fly.group(3))
+            try:
+                ld = snap_cache.get('__leg_data')
+                if ld is None:
+                    ld = _load_leg_data()
+                    snap_cache['__leg_data'] = ld
+                resolved_leg1, resolved_leg2 = _resolve_legs(spread_type, trade_id, trade_duration or 0.0, ld)
+                if leg_str == resolved_leg1:
+                    return float(_tenor_to_duration(f"{belly_t}y"))
+                if leg_str == resolved_leg2:
+                    return float(_tenor_to_duration(f"{long_wing_t}y"))
+            except Exception:
+                pass
+
         # CGB-10s30s / CDB-5s10s style pairs: leg1 = longer tenor, leg2 = shorter tenor
         m_pair = re.search(r'(\d+(?:\.\d+)?)S(\d+(?:\.\d+)?)S', upper_tid)
         if m_pair:
@@ -574,11 +593,20 @@ def _resolve_legs(stype: str, tid: str, duration: float, ld: dict) -> tuple:
                 t = _t_label(float(m.group(1)))
                 return (otr_cdb.get(t, ''), otr_cgb.get(t, ''))
         elif upper.startswith('CGB-'):
+            m3 = _re.search(r'(\d+)S(\d+)S(\d+)S', upper)
+            if m3:
+                # Fly (NsMsLs): lossy 2-leg proxy — long belly, short long wing.
+                return (otr_cgb.get(_t_label(float(m3.group(2))), ''),
+                        otr_cgb.get(_t_label(float(m3.group(3))), ''))
             m = _re.search(r'(\d+)S(\d+)S', upper)
             if m:
                 return (otr_cgb.get(_t_label(float(m.group(2))), ''),
                         otr_cgb.get(_t_label(float(m.group(1))), ''))
         elif upper.startswith('CDB-'):
+            m3 = _re.search(r'(\d+)S(\d+)S(\d+)S', upper)
+            if m3:
+                return (otr_cdb.get(_t_label(float(m3.group(2))), ''),
+                        otr_cdb.get(_t_label(float(m3.group(3))), ''))
             m = _re.search(r'(\d+)S(\d+)S', upper)
             if m:
                 return (otr_cdb.get(_t_label(float(m.group(2))), ''),

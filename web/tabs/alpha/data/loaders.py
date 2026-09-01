@@ -520,8 +520,9 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         # Annual carry for each structure:
         #   XsYs (CGB-5s10s, CDB-5s10s)  BUY=steepener: carry = Y_short - Y_long = -spread_%
         #   CDBCGB cross-sector      BUY=long CDB : carry = Y_CDB - Y_CGB   = +spread_%
+        #   Fly (NsMsLs, 3 tenors)   BUY=long belly: carry = 2*Y_belly - Y_short - Y_long = +spread_%
         # Convert annual % → 3m %: multiply by 90/360.
-        # Negate XsYs (\d+s\d+) columns; CDBCGB stays positive.
+        # Negate XsYs (\d+s\d+) columns; CDBCGB and flies stay positive.
         try:
             import re
             db = _load_pickle_safe(dir_input / 'database-px.pkl')
@@ -530,6 +531,8 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                 if tenor_ts:
                     df = pd.DataFrame(tenor_ts).apply(pd.to_numeric, errors='coerce') * (90.0 / 360.0)
                     for col in df.columns:
+                        if len(re.findall(r'\d+s', col, re.IGNORECASE)) >= 3:
+                            continue  # fly: carry = +spread, no negation
                         if re.search(r'\d+s\d+', col, re.IGNORECASE):
                             df[col] = -df[col]
                     return df

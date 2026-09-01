@@ -34,8 +34,8 @@ def build_spreads_layout():
     # Dropdown options for spread type with disabled group headers
     _spread_options = [
         {"label": "— Sectors —",           "value": "__sectors__",  "disabled": True},
-        {"label": "Sector PCA",             "value": "SectorPCASpread"},
         {"label": "Curve & Cross-Asset Spreads", "value": "TenorSpread"},
+        {"label": "Sector PCA",             "value": "SectorPCASpread"},
         {"label": "— Bonds —",             "value": "__bonds__",    "disabled": True},
         {"label": "Treasury Bond",          "value": "TBondCurve"},
         {"label": "Policybank Bond",        "value": "CBondCurve"},
@@ -81,7 +81,7 @@ def build_spreads_layout():
                         html.Label("Spread Type", style=_label_style),
                         dcc.Dropdown(
                             options=_spread_options,
-                            value="SectorPCASpread",
+                            value="TenorSpread",
                             id="spread-type",
                             clearable=False,
                             style=_DD_STYLE,
@@ -164,7 +164,11 @@ def build_spreads_layout():
                             config={"displayModeBar": False, "responsive": True},
                             style={'height': '100%', 'width': '100%'},
                         ),
-                        style={'padding': '8px', 'height': '350px'},
+                        # Now a 2-row subplot (Z-score + spread/overlays, each on
+                        # its own axis — see _split_zscore_subplot in
+                        # web/core/graphs.py); 350px was already tight for one
+                        # panel, so two legible rows need more headroom.
+                        style={'padding': '8px', 'height': '520px'},
                     ),
                 ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden',
                           'backgroundColor': 'transparent', 'flex': '1'}),

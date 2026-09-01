@@ -154,10 +154,20 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
             'CGB-5s10s': cnbd_data['CGB']['中债国债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
             'CGB-10s30s': cnbd_data['CGB']['中债国债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
             'CDB-5s10s': cnbd_data['CDB']['中债国开债到期收益率:10年'] - cnbd_data['CDB']['中债国开债到期收益率:5年'],
-            'CDB-10s30s': cnbd_data['CDB']['中债国开债到期收益率:30年'] - cnbd_data['CDB']['中债国开债到期收益率:10年'],
+            # No CDB-10s30s / CDBCGB-30y — no tradeable CDB 30y bond exists,
+            # even though the CNBD curve carries a yield at that tenor.
             'CDBCGB-5y': cnbd_data['CDB']['中债国开债到期收益率:5年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
             'CDBCGB-10y': cnbd_data['CDB']['中债国开债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
-            'CDBCGB-30y': cnbd_data['CDB']['中债国开债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:30年'],
+            # Curve flies (butterflies): equal-weighted -1/+2/-1 on short/belly/long
+            # wings. CDB capped at 10y — no tradeable CDB 20y/30y bond.
+            'CGB-1s2s5s': -cnbd_data['CGB']['中债国债到期收益率:1年'] + 2*cnbd_data['CGB']['中债国债到期收益率:2年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
+            'CGB-2s5s10s': -cnbd_data['CGB']['中债国债到期收益率:2年'] + 2*cnbd_data['CGB']['中债国债到期收益率:5年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
+            'CGB-5s7s10s': -cnbd_data['CGB']['中债国债到期收益率:5年'] + 2*cnbd_data['CGB']['中债国债到期收益率:7年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
+            'CGB-5s10s20s': -cnbd_data['CGB']['中债国债到期收益率:5年'] + 2*cnbd_data['CGB']['中债国债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:20年'],
+            'CGB-10s20s30s': -cnbd_data['CGB']['中债国债到期收益率:10年'] + 2*cnbd_data['CGB']['中债国债到期收益率:20年'] - cnbd_data['CGB']['中债国债到期收益率:30年'],
+            'CDB-1s2s5s': -cnbd_data['CDB']['中债国开债到期收益率:1年'] + 2*cnbd_data['CDB']['中债国开债到期收益率:2年'] - cnbd_data['CDB']['中债国开债到期收益率:5年'],
+            'CDB-2s5s10s': -cnbd_data['CDB']['中债国开债到期收益率:2年'] + 2*cnbd_data['CDB']['中债国开债到期收益率:5年'] - cnbd_data['CDB']['中债国开债到期收益率:10年'],
+            'CDB-5s7s10s': -cnbd_data['CDB']['中债国开债到期收益率:5年'] + 2*cnbd_data['CDB']['中债国开债到期收益率:7年'] - cnbd_data['CDB']['中债国开债到期收益率:10年'],
         }
 
         # LGB (local government bond) vs CGB cross-sector spreads.

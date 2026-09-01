@@ -801,8 +801,15 @@ class StatGenerator:
               'TenorSpread'
                 'Spread'       : pd.DataFrame  — annual yield diff in %  (index=date, cols=instruments)
                 'CarryRoll3m'  : pd.DataFrame  — 3m carry in % for a BUY trade
-                                               (XsYs: negated; cross-curve: positive)
+                                               (XsYs: negated; cross-curve: positive;
+                                                fly (3-tenor, "NsMsLs"): positive —
+                                                BUY = long 2x belly, short 1x each wing)
                 'StatInfo'     : pd.DataFrame  — OU statistics per instrument
+
+        CDB tenor coverage is capped at 1/2/3/5/7/10y — there is no tradeable
+        CDB 20y/30y bond, so CDB-10s30s and any CDB fly using a 20y/30y leg
+        are intentionally not built even though the CNBD curve carries yield
+        data at those tenors.
         """
         env_ts = self._ensure_cgb_cdb_timeseries()
         if not isinstance(env_ts, dict) or 'CGB' not in env_ts or 'CDB' not in env_ts:
@@ -839,8 +846,8 @@ class StatGenerator:
             col = f'FR007S{tag}.IR'
             return col if col in swap_ts.columns else None
 
-        cgb_cols = self._resolve_curve_column_map(cgb, [1, 2, 3, 5, 10, 20, 30])
-        cdb_cols = self._resolve_curve_column_map(cdb, [5, 10, 30])
+        cgb_cols = self._resolve_curve_column_map(cgb, [1, 2, 3, 5, 7, 10, 20, 30])
+        cdb_cols = self._resolve_curve_column_map(cdb, [1, 2, 3, 5, 7, 10])
         lgb_cols = self._resolve_curve_column_map(lgb, [5, 10, 30]) if lgb is not None else {}
         mtn_cols = self._resolve_curve_column_map(mtn, [1, 3, 5]) if mtn is not None else {}
 
@@ -848,12 +855,15 @@ class StatGenerator:
         cgb2  = _series(cgb, cgb_cols.get(2))
         cgb3  = _series(cgb, cgb_cols.get(3))
         cgb5  = _series(cgb, cgb_cols.get(5))
+        cgb7  = _series(cgb, cgb_cols.get(7))
         cgb10 = _series(cgb, cgb_cols.get(10))
         cgb20 = _series(cgb, cgb_cols.get(20))
         cgb30 = _series(cgb, cgb_cols.get(30))
+        cdb1  = _series(cdb, cdb_cols.get(1))
+        cdb2  = _series(cdb, cdb_cols.get(2))
         cdb5  = _series(cdb, cdb_cols.get(5))
+        cdb7  = _series(cdb, cdb_cols.get(7))
         cdb10 = _series(cdb, cdb_cols.get(10))
-        cdb30 = _series(cdb, cdb_cols.get(30))
         lgb5  = _series(lgb, lgb_cols.get(5))  if lgb is not None else None
         lgb10 = _series(lgb, lgb_cols.get(10)) if lgb is not None else None
         lgb30 = _series(lgb, lgb_cols.get(30)) if lgb is not None else None
@@ -879,9 +889,25 @@ class StatGenerator:
         if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30  - cgb10
         if cgb10 is not None and cgb20 is not None: instruments['CGB-10s20s'] = cgb20  - cgb10
         if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10  - cdb5
-        if cdb10 is not None and cdb30 is not None: instruments['CDB-10s30s'] = cdb30  - cdb10
+        # Note: no CDB-10s30s — no tradeable CDB 30y bond exists, even though
+        # the CNBD curve carries a yield at that tenor.
         if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5   - cgb5
         if cdb10 is not None and cgb10 is not None: instruments['CDBCGB-10y'] = cdb10  - cgb10
+
+        # Curve flies (butterflies): equal-weighted -1/+2/-1 on short/belly/long
+        # wings. BUY <ID> = long 2x belly, short 1x each wing -> carry = +spread
+        # (see carry-sign loop below, which does not negate 3-tenor IDs).
+        # CGB: full curve 1-30y available and tradeable.
+        if cgb1 is not None and cgb2  is not None and cgb5  is not None: instruments['CGB-1s2s5s']    = -cgb1 + 2*cgb2  - cgb5
+        if cgb2 is not None and cgb5  is not None and cgb10 is not None: instruments['CGB-2s5s10s']   = -cgb2 + 2*cgb5  - cgb10
+        if cgb5 is not None and cgb7  is not None and cgb10 is not None: instruments['CGB-5s7s10s']   = -cgb5 + 2*cgb7  - cgb10
+        if cgb5 is not None and cgb10 is not None and cgb20 is not None: instruments['CGB-5s10s20s']  = -cgb5 + 2*cgb10 - cgb20
+        if cgb10 is not None and cgb20 is not None and cgb30 is not None: instruments['CGB-10s20s30s'] = -cgb10 + 2*cgb20 - cgb30
+        # CDB: capped at 10y — no tradeable CDB 20y/30y bond, so no CDB fly
+        # uses a 20y or 30y leg.
+        if cdb1 is not None and cdb2 is not None and cdb5  is not None: instruments['CDB-1s2s5s']  = -cdb1 + 2*cdb2 - cdb5
+        if cdb2 is not None and cdb5 is not None and cdb10 is not None: instruments['CDB-2s5s10s'] = -cdb2 + 2*cdb5 - cdb10
+        if cdb5 is not None and cdb7 is not None and cdb10 is not None: instruments['CDB-5s7s10s'] = -cdb5 + 2*cdb7 - cdb10
 
         # LGB (local government bond) vs CGB cross-sector spreads.
         if lgb5  is not None and cgb5  is not None: instruments['LGBCGB-5y']  = lgb5   - cgb5
@@ -919,8 +945,12 @@ class StatGenerator:
         #     → carry = Y_short − Y_long = −spread  → CR3m = −spread × 0.25
         #   Cross-curve (CDBCGB, *Repo7d-*) BUY = long the bond/CD leg, short the swap/CGB leg
         #     → carry = Y_leg1 − Y_leg2 = +spread   → CR3m = +spread × 0.25
+        #   Fly (NsMsLs, 3 tenors)  BUY = long 2x belly, short 1x each wing
+        #     → carry = 2*Y_belly − Y_short − Y_long = +spread  → CR3m = +spread × 0.25
         df_cr3m_full = df_spread_full.copy() * (90.0 / 360.0)
         for col in df_cr3m_full.columns:
+            if len(re.findall(r'\d+s', col, re.IGNORECASE)) >= 3:
+                continue  # fly: carry = +spread, no negation
             if re.search(r'\d+s\d+', col, re.IGNORECASE):
                 df_cr3m_full[col] = -df_cr3m_full[col]
 

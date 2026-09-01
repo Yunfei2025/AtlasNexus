@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
+from plotly.subplots import make_subplots
 from dash import html
 from dash.dependencies import Input, Output
 from dash.exceptions import PreventUpdate
@@ -216,7 +217,18 @@ def _compute_y_range(
 ) -> Dict[str, Any]:
     if x_range is not None:
         try:
-            filtered = series.loc[x_range["start"]:x_range["end"]].dropna()
+            # series.index may be plain datetime.date (TenorSpread) while
+            # x_range's bounds are always datetime.datetime (_compute_x_range)
+            # — comparing the two raises inside .loc[] and used to be silently
+            # swallowed here, leaking the full multi-year history into what
+            # should be a 1-year-windowed min/max. Normalize both sides to
+            # pandas Timestamps before slicing so the window filter actually
+            # takes effect.
+            idx = pd.to_datetime(series.index)
+            start = pd.Timestamp(x_range["start"])
+            end = pd.Timestamp(x_range["end"])
+            mask = (idx >= start) & (idx <= end)
+            filtered = series.loc[mask].dropna()
             if len(filtered) > 0:
                 series = filtered
         except Exception:
@@ -767,11 +779,14 @@ def spreadts(stype, season, b):
     trace_zscore = getZscoreTrace(zscore)
     trace_add = getTraceAdd(df1, stype)
     trace_fs = _build_fixing_trace(fs)
+    has_zscore = bool(zscore is not None and not zscore.empty)
 
     if stype in TYPES_BINARY:
         data = trace_main + trace_add
+        has_zscore = False  # trace_zscore is never included for this type
     elif stype in TYPES_SIMPLE_ONLY:
         data = trace_main
+        has_zscore = False
     elif stype in TYPES_WITH_FS:
         data = trace_zscore + trace_main + trace_fs
     else:
@@ -780,11 +795,11 @@ def spreadts(stype, season, b):
     xrg = _compute_x_range(stype, df)
     # Z-score owns the primary axis when available (see getZscoreTrace); the
     # raw spread range only matters for its own demoted y5 axis, scoped below.
-    if zscore is not None and not zscore.empty:
+    if has_zscore:
         yrg = _compute_y_range(stype, zscore, x_range=xrg)
     else:
         yrg = _compute_y_range(stype, df, x_range=xrg)
-    layout = _select_layout(stype, title, yunits[stype], xrg, yrg, lineinfo, has_zscore=bool(zscore is not None and not zscore.empty))
+    layout = _select_layout(stype, title, yunits[stype], xrg, yrg, lineinfo, has_zscore=has_zscore)
 
     # Explicitly scope yaxis2 (fixing overlay), yaxis3/yaxis4 (CR 3m) and yaxis5
     # (demoted raw spread) ranges to the visible x-window so right axes scale
@@ -806,4 +821,115 @@ def spreadts(stype, season, b):
         if _vals:
             layout[axis_key]["range"] = [min(_vals) - 1, max(_vals) + 1]
 
-    return dict(data=data, layout=layout)
+    if not has_zscore:
+        return dict(data=data, layout=layout)
+
+    return _split_zscore_subplot(data, layout)
+
+
+# Row-2 axis re-anchoring: the flat single-panel layout puts the demoted
+# spread on y5 and type-specific overlays on y2/y3/y4, all "overlaying: y"
+# (the primary axis, which z-score occupies). Splitting z-score into its own
+# row means row 2's own primary axis takes the 'y' slot instead, so every
+# other axis's "overlaying" target moves from 'y' to row 2's primary axis
+# name and its domain is clipped to row 2's vertical span.
+_ROW2_OVERLAY_AXES = ("yaxis2", "yaxis3", "yaxis4", "yaxis5")
+
+# layout_ts_line() dicts (a) use the legacy Plotly.js "titlefont" key, invalid
+# on the modern graph_objs axis schema used by update_yaxes/update_xaxes
+# below, and (b) hardcode anchor='x' for the old single-x-axis panel — wrong
+# once row 1/row 2 have their own x-axes; make_subplots already computes the
+# correct anchor per row, so it must not be clobbered by the copied dict.
+def _sanitize_axis_dict(d: Dict[str, Any]) -> Dict[str, Any]:
+    d = dict(d)
+    d.pop("anchor", None)
+    font = d.pop("titlefont", None)
+    if font and isinstance(d.get("title"), str):
+        d["title"] = {"text": d["title"], "font": font}
+    return d
+
+
+def _split_zscore_subplot(data: List[Any], layout: Dict[str, Any]) -> Dict[str, Any]:
+    """Rebuild a flat one-panel {data, layout} dict as a 2-row subplot figure.
+
+    Row 1 (top): Z-score + its mean/±1σ/±2σ threshold lines — the actual
+    entry/exit signal, on its own clean axis (one axis, per the "never a
+    dual-axis chart" rule: overlaying it with the raw spread invents a
+    scale relationship that isn't there).
+    Row 2 (bottom): everything else (raw spread + any type-specific
+    overlays), keeping their existing relative right-side axes but rebased
+    onto row 2's own primary axis instead of sharing row 1's.
+    """
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        row_heights=[0.38, 0.62],
+    )
+
+    # Row 2's own primary axis takes over the 'y' slot that z-score vacates;
+    # every other flat-layout axis (y2..y5) is renamed once, up front, to a
+    # fixed target so trace tags and axis names are computed from the same
+    # single mapping — never mutated and re-scanned (a trace on y5, once
+    # promoted to y2, must not then be swept up by a later y2->y3 rename).
+    _axis_tag_map = {"y": "y2", "y5": "y2", "y2": "y3", "y3": "y4", "y4": "y5"}
+
+    zscore_traces = [t for t in data if getattr(t, "yaxis", "y") in (None, "y")]
+    other_traces = [t for t in data if getattr(t, "yaxis", "y") not in (None, "y")]
+
+    for t in zscore_traces:
+        fig.add_trace(t, row=1, col=1)
+    for t in other_traces:
+        # fig.add_trace(row=, col=) overwrites .yaxis to match the subplot's
+        # base axis, so the target axis must be reapplied on the trace
+        # already inside fig.data — not on `t` before it's added.
+        target = _axis_tag_map.get(t.yaxis or "y", t.yaxis or "y")
+        fig.add_trace(t, row=2, col=1)
+        fig.data[-1].update(yaxis=target)
+
+    # --- Row 1: Z-score axis + threshold shapes/annotations ---
+    y1_layout = _sanitize_axis_dict(layout.get("yaxis", {}))
+    y1_layout["fixedrange"] = True
+    fig.update_yaxes(y1_layout, row=1, col=1)
+
+    shapes = list(layout.get("shapes", []) or [])
+    annotations = list(layout.get("annotations", []) or [])
+    for shp in shapes:
+        shp["yref"] = "y1"
+    for ann in annotations:
+        ann["yref"] = "y1"
+    fig.update_layout(shapes=shapes, annotations=annotations)
+
+    # --- Row 2: main spread axis + any type-specific overlay axes ---
+    # The main "Spread" trace was on y5 in the flat layout (see getTrace) —
+    # promote it to row 2's own primary axis ('y2' in the 2-row figure).
+    y2_layout = _sanitize_axis_dict(layout.get("yaxis5", layout.get("yaxis", {})))
+    y2_layout.pop("overlaying", None)
+    y2_layout.pop("side", None)
+    y2_layout["fixedrange"] = True
+    fig.update_yaxes(y2_layout, row=2, col=1)
+
+    # Any remaining type-specific overlay axes (fixing rate / CR buy-sell /
+    # curve yield) keep overlaying row 2's own axis, positioned further out
+    # on the right so they don't collide with row 2's primary axis line.
+    # Row-2 axes are named yaxis3/yaxis4/yaxis5 in the 2-row figure (yaxis and
+    # yaxis2 are already taken by row 1's primary and row 2's primary axes),
+    # matching the trace-tag renames in _axis_tag_map above.
+    _right_positions = {"yaxis3": 0.97, "yaxis4": 0.90, "yaxis5": 0.83}
+    _source_of = {"yaxis3": "yaxis2", "yaxis4": "yaxis3", "yaxis5": "yaxis4"}
+    for new_name, right_pos in _right_positions.items():
+        src_key = _source_of[new_name]
+        if src_key not in layout:
+            continue
+        axis_layout = _sanitize_axis_dict(layout[src_key])
+        axis_layout["overlaying"] = "y2"
+        axis_layout["position"] = right_pos
+        axis_layout["anchor"] = "free"
+        fig.layout[new_name] = axis_layout
+
+    fig.update_xaxes(_sanitize_axis_dict(layout.get("xaxis", {})), row=2, col=1)
+
+    base = {k: v for k, v in layout.items()
+            if k not in ("shapes", "annotations", "xaxis", "yaxis", "yaxis2", "yaxis3", "yaxis4", "yaxis5")}
+    fig.update_layout(**base)
+    return fig
