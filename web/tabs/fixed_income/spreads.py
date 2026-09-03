@@ -433,26 +433,25 @@ def register_spreads_callbacks(app) -> None:
         # for a mean-reversion trade -- EWMA(span=60) vol tracks the current
         # regime instead of a static full-window blend (see OU_calibrate).
         # Promoted to the primary axis; the raw spread is demoted below.
+        # Same layout/shading/subplot-split as the Treasury Bond (TBondCurve)
+        # and BondNewIssue Spread Time Series charts -- see
+        # web/core/graphs.py::spreadts / _split_zscore_subplot.
+        from web.core.styles import getTrace, getZscoreTrace, layout_ts_line
+        from web.core.graphs import _compute_y_range, _split_zscore_subplot
+
         zvol = ewm_vol if ewm_vol else vol
         zscore = ((s - mean) / zvol).dropna() if (mean is not None and zvol) else None
         has_zscore = zscore is not None and not zscore.empty
 
-        traces = []
         if has_zscore:
-            traces.append(go.Scatter(
-                name="Z-score", x=zscore.index, y=zscore.values,
-                line={"width": 3, "color": "#2a6fd3"},
-            ))
-            traces.append(go.Scatter(
-                name="Spread (bp)", x=s.index, y=s.values,
-                yaxis="y5",
-                line={"width": 1.5, "color": "rgba(42,111,211,0.55)"},
-            ))
+            # getTrace() always demotes its series to the y5 axis, which only
+            # exists in the layout when has_zscore=True (see layout_ts_line) --
+            # so it must not be used to plot the spread on its own as a
+            # primary-axis trace below.
+            traces = getZscoreTrace(zscore) + getTrace(s, stype)
         else:
-            traces.append(go.Scatter(
-                name="Spread (bp)", x=s.index, y=s.values,
-                line={"width": 3, "color": "#2a6fd3"},
-            ))
+            traces = [go.Scatter(name="Spread (bp)", x=s.index, y=s.values,
+                                  line={"width": 3, "color": "#2a6fd3"})]
 
         # For NetBasis: overlay IRR and Repo (%) on a secondary y-axis
         # For TermBasis: overlay the raw price basis (pts) and OI roll-progress (0-1)
@@ -521,27 +520,6 @@ def register_spreads_callbacks(app) -> None:
             except Exception:
                 pass
 
-        fig = go.Figure(data=traces)
-        if has_zscore:
-            # Plotted series IS the Z-score, so ±1σ/±2σ are just fixed lines
-            # at y=±1/±2 rather than bp offsets from mean.
-            bands = [(0, "mean", "solid", "#aaaaaa"),
-                     (1, "+1σ", "dot", "#f39c12"), (-1, "-1σ", "dot", "#f39c12"),
-                     (2, "+2σ", "dash", "#ef553b"), (-2, "-2σ", "dash", "#ef553b")]
-        elif mean is not None:
-            bands = [(mean, "mean", "solid", "#aaaaaa")]
-            if vol:
-                bands += [
-                    (mean + vol, "+1σ", "dot", "#f39c12"),
-                    (mean - vol, "-1σ", "dot", "#f39c12"),
-                    (mean + 2 * vol, "+2σ", "dash", "#ef553b"),
-                    (mean - 2 * vol, "-2σ", "dash", "#ef553b"),
-                ]
-        else:
-            bands = []
-        for val, label, dash, color in bands:
-            fig.add_hline(y=val, line_dash=dash, line_color=color,
-                          annotation_text=label, annotation_position="right")
         _fmt = lambda v: f"{v:.2f}{unit}" if v is not None else "NA"
         _label = ticker
         if stype == "TermBasis":
@@ -551,36 +529,35 @@ def register_spreads_callbacks(app) -> None:
         title = (f"<b>{_FUT_TITLE[stype]} — {_label}</b><br>"
                  f"Latest: {_fmt(float(s.iloc[-1]))}, Mean: {_fmt(mean)}, "
                  f"Vol: {_fmt(vol)}, Max: {_fmt(vmax)}, Min: {_fmt(vmin)}")
-        layout_kwargs = dict(
-            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-            font=dict(color="#ffffff"), title=title,
-            xaxis=dict(range=[start, s.index[-1]]),
-            yaxis=dict(title="Z-score" if has_zscore else unit),
-            showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=11)),
-            margin=dict(l=50, r=50, t=60, b=40),
-            hovermode='x unified',
-        )
+
+        xrg = dict(start=start, end=s.index[-1])
+        yrg = _compute_y_range(stype, zscore if has_zscore else s, x_range=xrg)
+        lineinfo = dict(start=start, end=s.index[-1], mean=mean or 0.0, std=vol or 0.0)
+        layout = layout_ts_line(title, unit, xrg, yrg, lineinfo, shape=True, has_zscore=has_zscore)
         if _yaxis2 is not None:
-            layout_kwargs["yaxis2"] = _yaxis2
+            layout["yaxis2"] = _yaxis2
         if _yaxis3 is not None:
-            layout_kwargs["yaxis3"] = _yaxis3
-        if has_zscore:
-            layout_kwargs["yaxis5"] = dict(
-                title=unit, overlaying="y", side="right", showgrid=False, zeroline=False,
-                tickfont=dict(color="rgba(170,176,192,0.8)"), title_font=dict(color="rgba(170,176,192,0.8)"),
-            )
-        fig.update_layout(**layout_kwargs)
-        return fig
+            layout["yaxis3"] = _yaxis3
+        layout["showlegend"] = True
+        layout["legend"] = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=11))
+
+        if not has_zscore:
+            return go.Figure(data=traces, layout=layout)
+
+        return _split_zscore_subplot(traces, layout)
 
     def _newissue_ts_figure(ticker_label: str):
         """Render canonical BondNewIssue stage time series (e.g. NIB_OTR-5Y).
 
-        Plots only the current (leg1, leg2) episode -- e.g. the still-open
-        NIB-vs-OTR pair -- rather than a series stitched across every past
-        bond pair for the stage/tenor bucket, so a freshly-issued NIB starts
-        the chart at its own issue date instead of showing years of an
-        unrelated predecessor bond's history.
+        Plots the current episode's two specific bonds' full yield-spread
+        history (back to whenever both first quote together), not just the
+        days the pipeline's daily rank snapshot happened to label this exact
+        pair as OTR/OFR1 -- a bond freshly promoted into that rank can hold
+        it for only a day or two even though both legs have months of
+        overlapping history under their previous ranks. A vertical marker
+        shows where the rank pairing was actually confirmed, so the
+        before/after can still be compared. Falls back to the rank-episode
+        window only when the bond-level history lookup finds nothing.
         """
         from dateutil.relativedelta import relativedelta
         from settings.general import GeneralConfig
@@ -588,6 +565,7 @@ def register_spreads_callbacks(app) -> None:
             load_spread_timeseries,
             to_newissue_stage_label,
             load_newissue_current_episode,
+            load_newissue_pair_history,
         )
 
         ts = load_spread_timeseries('BondNewIssue')
@@ -607,7 +585,14 @@ def register_spreads_callbacks(app) -> None:
         if not ticker_label or ticker_label not in ts.columns:
             ticker_label = _best_default_column()
 
-        s = load_newissue_current_episode(ticker_label)
+        switch_date = None
+        pair_history = load_newissue_pair_history(ticker_label)
+        if pair_history is not None:
+            s, _pair_label, switch_date = pair_history
+        else:
+            s = None
+        if s is None or s.empty:
+            s = load_newissue_current_episode(ticker_label)
         if s is None or s.empty:
             # Legacy/unqualified label or fallback summary artifact: fall back
             # to the stitched cross-episode column rather than showing nothing.
@@ -616,7 +601,13 @@ def register_spreads_callbacks(app) -> None:
             tenor = str(ticker_label).split('-', 1)[-1]
             fallback_col = f'OTROFR1-{tenor}'
             if fallback_col in ts.columns:
-                s = load_newissue_current_episode(fallback_col)
+                fallback_pair_history = load_newissue_pair_history(fallback_col)
+                if fallback_pair_history is not None:
+                    s, _pair_label, switch_date = fallback_pair_history
+                else:
+                    s = None
+                if s is None or s.empty:
+                    s = load_newissue_current_episode(fallback_col)
                 if s is None or s.empty:
                     s = pd.to_numeric(ts[fallback_col], errors='coerce').dropna()
                 ticker_label = fallback_col
@@ -636,41 +627,57 @@ def register_spreads_callbacks(app) -> None:
         capped_start = s.index[-1] - relativedelta(months=window)
         start = max(s.index[0], capped_start)
 
-        fig = go.Figure(data=[go.Scatter(
-            name="Spread",
-            x=s.index,
-            y=s.values,
-            line={"width": 3, "color": "#2a6fd3"},
-        )])
-
-        if mean is not None:
-            bands = [(mean, "mean", "solid", "#aaaaaa")]
-            if vol and vol > 0:
-                bands += [
-                    (mean + vol, "+1σ", "dot", "#f39c12"),
-                    (mean - vol, "-1σ", "dot", "#f39c12"),
-                    (mean + 2 * vol, "+2σ", "dash", "#ef553b"),
-                    (mean - 2 * vol, "-2σ", "dash", "#ef553b"),
-                ]
-            for val, label, dash, color in bands:
-                fig.add_hline(y=val, line_dash=dash, line_color=color,
-                              annotation_text=label, annotation_position="right")
-
         title = (
             f"<b>{ticker_label}</b><br>"
             f"Latest: {float(s.iloc[-1]):.2f}bp, Mean: {mean:.2f}bp, "
             f"Vol: {(vol if vol is not None else float('nan')):.2f}bp, "
             f"Max: {vmax:.2f}bp, Min: {vmin:.2f}bp"
         )
-        fig.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-            font=dict(color="#ffffff"), title=title,
-            xaxis=dict(range=[start, s.index[-1]]),
-            yaxis=dict(title='Spread, bp'),
-            showlegend=False,
-            margin=dict(l=50, r=20, t=60, b=40),
-            hovermode='x unified',
-        )
+
+        # Match the Treasury Bond (TBondCurve) spread chart's look: a bold
+        # Z-score line on its own row with shaded +-1sigma/+-2sigma bands,
+        # plus the raw spread on a second row below (see
+        # web/core/graphs.py::spreadts / _split_zscore_subplot).
+        from web.core.styles import getTrace, getZscoreTrace, layout_ts_line
+        from web.core.graphs import _compute_y_range, _split_zscore_subplot
+
+        if vol and vol > 0:
+            zscore = ((s - mean) / vol).dropna()
+        else:
+            zscore = pd.Series(dtype=float)
+        has_zscore = not zscore.empty
+
+        if has_zscore:
+            # getTrace() always demotes its series to the y5 axis, which only
+            # exists in the layout when has_zscore=True (see layout_ts_line) --
+            # so it must not be used to plot the spread on its own as a
+            # primary-axis trace below.
+            data = getZscoreTrace(zscore) + getTrace(s, 'BondNewIssue')
+        else:
+            data = [go.Scatter(name="Spread", x=s.index, y=s.values,
+                                line={"width": 3, "color": "#2a6fd3"})]
+
+        xrg = dict(start=start, end=s.index[-1])
+        yrg = _compute_y_range('BondNewIssue', zscore if has_zscore else s, x_range=xrg)
+        lineinfo = dict(start=start, end=s.index[-1], mean=mean, std=vol or 0.0)
+        layout = layout_ts_line(title, 'bp', xrg, yrg, lineinfo, shape=True, has_zscore=has_zscore)
+
+        fig = go.Figure(data=data, layout=layout) if not has_zscore else _split_zscore_subplot(data, layout)
+
+        # Mark where the OTR/OFR1 (or NIB/OTR) rank pairing was actually
+        # confirmed -- the plotted history extends earlier using the bonds'
+        # own quote history (see load_newissue_pair_history), so this line
+        # is the only visual cue for "before this date the pair wasn't yet
+        # the official rank pairing."
+        if switch_date is not None and start <= switch_date <= s.index[-1]:
+            # add_vline's own annotation_position on a datetime x-axis raises
+            # inside plotly's shapeannotation helper (int/Timestamp math), so
+            # the line and its label are added separately.
+            fig.add_vline(x=switch_date, line_width=1.5, line_dash="dash",
+                          line_color="#aab0c0", row="all", col="all")
+            fig.add_annotation(x=switch_date, y=1, yref="paper", yanchor="bottom",
+                               text="rank confirmed", showarrow=False,
+                               font=dict(size=9, color="#aab0c0"))
         return fig
 
     # Realtime data refresh callback

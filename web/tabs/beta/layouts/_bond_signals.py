@@ -42,6 +42,9 @@ def _load_bond_signal_frame(bond_type: str):
         return None, f"{file_name} does not contain usable bond signals."
 
     frame = data.copy()
+    frame = frame.loc[['|' not in str(idx) for idx in frame.index]]
+    if frame.empty:
+        return None, f"{file_name} does not contain usable bond signals."
     frame['Code'] = frame.index.astype(str)
     return frame, source_key
 

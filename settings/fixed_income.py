@@ -121,6 +121,15 @@ class BondConfig:
     #     i.e. no real quote on that side, OR
     #   - The bid-offer YTM spread exceeds REF_BID_OFR_MAX_BP.
     REF_BID_OFR_MAX_BP = 15.0
+    # EWMA blend weight for the realtime curve refit (weight on the NEW fit;
+    # 1-alpha stays on the previously-fitted factors). Each intraday refresh
+    # re-fits the 3-factor (level/slope/curvature) affine curve from scratch
+    # with no memory of the prior fit, so a reference point flipping across
+    # the MAD-outlier or REF_BID_OFR_MAX_BP gate between refreshes can rotate
+    # the whole curve and swing an unrelated bond's fitted yield by several bp.
+    # alpha=0.5 damps that discrete refresh-to-refresh jump while still
+    # tracking genuine intraday yield moves within one refresh.
+    RT_FACTOR_EWM_ALPHA = 0.5
     # signal_variant options for the TBondCurve/CBondCurve spread_type (see
     # docs/dev/tbondcurve-30y-otr-ofr-plan.md). "otr_ofr_rv" is the mature
     # OTR/OFR relative-value pair, distinct from the BondNewIssue event strategy.

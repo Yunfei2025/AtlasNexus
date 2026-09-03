@@ -342,6 +342,88 @@ def load_newissue_current_episode(label: str) -> Optional[pd.Series]:
     return best
 
 
+def load_newissue_pair_history(label: str) -> Optional[tuple[pd.Series, Optional[str], Optional[pd.Timestamp]]]:
+    """Full yield-spread history for the current episode's two specific bonds.
+
+    ``load_newissue_current_episode`` only returns the days this exact
+    (leg1_id, leg2_id) pair held the OTR/OFR1 (or NIB/OTR) rank together --
+    a bond freshly promoted into that rank (e.g. an OFR2 bond becoming OFR1)
+    can show only a day or two even though both bonds have long, overlapping
+    quote histories under their *previous* ranks. This instead resolves the
+    two bond codes from the current episode, then reads their own
+    ``ytm_quo`` history from ``{asset_class}-cvpx.pkl`` directly -- computing
+    ``spread = ytm(leg1) - ytm(leg2)`` for every day both bonds quote,
+    regardless of which rank either held that day.
+
+    Returns ``(spread_series, switch_label, switch_date)`` where
+    ``switch_date`` is the first date the current episode's rank pairing was
+    confirmed (for a chart marker showing "the OTR/OFR1 label switched here"),
+    and ``switch_label`` is the leg codes for that annotation. Returns None
+    if the label doesn't parse or no bond-level history is found.
+    """
+    parsed = _parse_newissue_stage_label(label)
+    if parsed is None:
+        return None
+    stage, tenor_bucket, issuer_class = parsed
+    leg1_id_col, leg2_id_col = (
+        ('otr_id', 'ofr1_id') if stage == 'otr_ofr1' else ('nib_id', 'otr_id')
+    )
+
+    if issuer_class:
+        asset_classes = (_ISSUER_ASSET_CLASSES.get(issuer_class),)
+        if asset_classes[0] is None:
+            return None
+    else:
+        asset_classes = ('TBond', 'CBond')
+
+    dir_input = _get_input_dir()
+    for asset_class in asset_classes:
+        data = _load_pickle_safe(dir_input / f'{asset_class}-newissue.pkl')
+        if not isinstance(data, dict):
+            continue
+        df = data.get(tenor_bucket)
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+        if not {leg1_id_col, leg2_id_col}.issubset(df.columns):
+            continue
+
+        frame = df.copy()
+        frame.index = pd.to_datetime(frame.index)
+        ids = frame[[leg1_id_col, leg2_id_col]].dropna().astype(str)
+        # A row where both rank columns momentarily resolve to the same bond
+        # code is a data quirk, not a real pair -- guard the same way
+        # curves/refreshers/otr_ofr_rv.py's episode builder does, since a
+        # self-spread is meaningless and also breaks the column selection
+        # below (two same-named columns select as a DataFrame, not a Series).
+        ids = ids[ids[leg1_id_col] != ids[leg2_id_col]]
+        if ids.empty:
+            continue
+        leg1_id, leg2_id = ids.iloc[-1][leg1_id_col], ids.iloc[-1][leg2_id_col]
+
+        # First date this exact pair identity was confirmed, for the marker.
+        pair_key = ids[leg1_id_col] + '|' + ids[leg2_id_col]
+        current_pair = pair_key.iloc[-1]
+        episode_id = (pair_key != pair_key.shift()).cumsum()
+        current_episode = episode_id.iloc[-1]
+        switch_date = ids.index[(episode_id == current_episode) & (pair_key == current_pair)][0]
+
+        bond_px = _load_pickle_safe(dir_input / f'{asset_class}-cvpx.pkl')
+        ytm_quo = bond_px.get('ytm_quo') if isinstance(bond_px, dict) else None
+        if not isinstance(ytm_quo, pd.DataFrame) or leg1_id not in ytm_quo.columns or leg2_id not in ytm_quo.columns:
+            continue
+
+        panel = ytm_quo[[leg1_id, leg2_id]].copy()
+        panel.index = pd.to_datetime(panel.index)
+        leg1 = pd.to_numeric(panel[leg1_id], errors='coerce')
+        leg2 = pd.to_numeric(panel[leg2_id], errors='coerce')
+        s = (leg1 - leg2).dropna().sort_index()
+        s = s[~s.index.duplicated(keep='last')]
+        if s.empty:
+            continue
+        return s, f'{leg1_id}|{leg2_id}', pd.Timestamp(switch_date)
+    return None
+
+
 def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
     """Load spread data for a given type and return DataFrame with required columns."""
     dir_input = _get_input_dir()

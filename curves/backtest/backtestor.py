@@ -258,7 +258,7 @@ class Backtestor:
                     f"{self.start} and {self.end}; skipping curve backfill."
                 )
                 return
-                datelist = [d.strftime("%Y-%m-%d") for d in prange]
+            datelist = [d.strftime("%Y-%m-%d") for d in prange]
             print("Compute following days: ", ', '.join(datelist))
             
             with self._time_operation("Initialize Curves"):

@@ -212,19 +212,30 @@ class RefBondSelector:
         else:
             column_names = [f'Term near {t}Y' for t in term_buckets.keys()]
             result_df = pd.DataFrame(columns=column_names, dtype=object)
+        # date_range and the indexes loaded from pickles may mix datetime.date
+        # and pd.Timestamp depending on the caller/cache, and pandas rejects
+        # comparisons across those types on newer versions. Compare via a
+        # Timestamp-coerced copy but keep the original index values (and
+        # dtype) flowing downstream, since later code compares them against
+        # date-typed data in `bonds`/`env`.
+        range_start = pd.Timestamp(date_range[0])
+        range_end = pd.Timestamp(date_range[1])
+
         # Determine dates to process
         if daily:
             dates_to_process = [DateConfig.get_date_mappings()['dp'].date()]
         else:
             px_file = os.path.join(DIR_DATA, f'{bond_type}-px.pkl')
             datelist = loadPKL(px_file)['Close'].index
-            mask = (datelist >= date_range[0]) & (datelist <= date_range[1])
+            datelist_ts = pd.DatetimeIndex(datelist)
+            mask = (datelist_ts >= range_start) & (datelist_ts <= range_end)
             dates_to_process = datelist[mask]
 
         if update and len(result_df) > 0:
+            result_index_ts = pd.DatetimeIndex(result_df.index)
             refresh_mask = (
-                (result_df.index >= date_range[0])
-                & (result_df.index <= date_range[1])
+                (result_index_ts >= range_start)
+                & (result_index_ts <= range_end)
             )
             existing_result_df = result_df.drop(
                 index=result_df.index[refresh_mask],
@@ -497,11 +508,14 @@ def compute_spot_term_panels(
     update: bool = True,
 ):
     """Compute spot and term panels for a date range."""
-    # Determine dates to compute
-    start = price_range[0]
-    end = price_range[1]
+    # Determine dates to compute. price_range and botr.index may mix
+    # datetime.date and pd.Timestamp depending on the caller/cache, so
+    # compare via Timestamp-coerced copies (see select_reference_bonds).
+    start = pd.Timestamp(price_range[0])
+    end = pd.Timestamp(price_range[1])
 
-    mask = (botr.index >= start) & (botr.index <= end)
+    botr_index_ts = pd.DatetimeIndex(botr.index)
+    mask = (botr_index_ts >= start) & (botr_index_ts <= end)
     date_index = botr.index[mask]
     columns = list(botr.columns)
     

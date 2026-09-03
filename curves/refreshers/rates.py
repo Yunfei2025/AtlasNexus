@@ -12,6 +12,7 @@ import pickle
 import pathlib
 import numpy as np
 import pandas as pd
+import sympy as sp
 from datetime import datetime, date
 from multiprocessing import Pool
 from typing import Dict, Any, Tuple, List, Optional, cast
@@ -326,8 +327,24 @@ class BondCurveRefresher:
         # Drop reference points whose live quote is stale (no live data, side fell
         # back to CNBD valuation, or bid-ofr spread > REF_BID_OFR_MAX_BP).
         ref_series = self._drop_stale_refs(ref_series, price_type)
+        # Snapshot the previously-fitted factors (from the last intraday refresh, or
+        # the prior EOD fit on the first refresh of the day) before refitting. The
+        # 3-factor (level/slope/curvature) fit is a single closed-form regression on
+        # the reference-bond set with no memory of its own; a reference point crossing
+        # the MAD-outlier or REF_BID_OFR_MAX_BP staleness gate between refreshes can
+        # discretely change that set and rotate/tilt the whole curve, moving the fitted
+        # yield at maturities far from the reference cluster by several bp even though
+        # the market barely moved. EWMA-blending the new fit with the prior one damps
+        # that refresh-to-refresh noise without changing the regression itself.
+        prev_factors = getattr(self.curve, 'factors', None)
         self.curve.extractFactorsRobust(ref_series, self.curve.reference, k_mad=2.0, min_points=4)
-        
+        if prev_factors is not None:
+            alpha = BondConfig.RT_FACTOR_EWM_ALPHA
+            new = np.array(self.curve.factors, dtype=float).ravel()
+            old = np.array(prev_factors, dtype=float).ravel()
+            if new.shape == old.shape:
+                self.curve.factors = sp.Matrix((alpha * new + (1 - alpha) * old).tolist())
+
         # build buckets
         total = len(self.env_quo)
         if total == 0:

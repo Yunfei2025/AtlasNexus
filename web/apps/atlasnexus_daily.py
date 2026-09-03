@@ -1259,13 +1259,14 @@ def _update_run_center(n, job_id):
         className="rc-status-bar",
     )
 
-    # Keep showing the latest EOD logs after a run completes. The empty
-    # placeholder is shown only when there has never been any EOD job log.
+    # Keep showing the latest job's logs after a run completes, regardless of
+    # job type (eod, backtest, ...). The empty placeholder is shown only when
+    # there has never been any job log.
     log_job_id = active_job_id
     if not log_job_id:
-        latest_eod = latest_job_status(job_types={"eod"})
-        if latest_eod:
-            log_job_id = latest_eod.get("job_id")
+        latest_job = latest_job_status()
+        if latest_job:
+            log_job_id = latest_job.get("job_id")
 
     log_text = tail_log(log_job_id, max_lines=200) if log_job_id else ""
     lines = [ln for ln in log_text.splitlines() if ln.strip()]

@@ -17,7 +17,7 @@ from dash.exceptions import PreventUpdate
 
 from settings.general import DateConfig
 from settings.futures import FuturesConfig
-from settings.fixed_income import BondConfig,  SpreadConfig
+from settings.fixed_income import BondConfig,  SpreadConfig, NewIssueConfig
 from settings.paths import DIR_INPUT
 
 from web.core.server import app
@@ -120,28 +120,48 @@ def _tenor_spread_sort_key(ticker: str) -> tuple:
     return (_TENOR_SPREAD_RANK.get(ticker, len(_TENOR_SPREAD_ORDER)), ticker)
 
 
-def _current_ofr1_ids(asset_class: str) -> set[str]:
-    """Return latest OFR1 IDs across active tenor buckets for an asset class."""
+def _current_ofr_pair_ids(asset_class: str) -> set[str]:
+    """Return the live ``{ofrk_id}|{ofr1_id}`` pair IDs across active tenor buckets.
+
+    Mirrors the episode identity used to build these pairs in
+    ``curves.refreshers.otr_ofr_rv._episode_rows_to_pair_frames``: a pair is
+    only "current" while its most recent row still confirms that exact
+    ``(ofr1_id, ofrk_id)`` combination. Matching on the right leg (OFR1)
+    alone is not enough — a stale left leg can keep re-appearing paired with
+    a since-promoted OFR1 even though the two are no longer actually paired.
+    """
     path = os.path.join(DIR_INPUT, f"{asset_class}-newissue.pkl")
     data = _load_pickle_cached(path)
     if not isinstance(data, dict):
         return set()
 
+    depth = NewIssueConfig.OFR_LADDER_DEPTH
     out: set[str] = set()
     for df in data.values():
         if not isinstance(df, pd.DataFrame) or df.empty or 'ofr1_id' not in df.columns:
             continue
-        series = df['ofr1_id'].dropna()
-        if series.empty:
+        ofr1_series = df['ofr1_id'].dropna()
+        if ofr1_series.empty:
             continue
-        latest = str(series.iloc[-1]).strip()
-        if latest:
-            out.add(latest)
+        ofr1_id = str(ofr1_series.iloc[-1]).strip()
+        if not ofr1_id or ofr1_id == 'nan':
+            continue
+        for k in range(2, depth + 1):
+            id_col = f'ofr{k}_id'
+            if id_col not in df.columns:
+                continue
+            ofrk_series = df[id_col].dropna()
+            if ofrk_series.empty:
+                continue
+            ofrk_id = str(ofrk_series.iloc[-1]).strip()
+            if not ofrk_id or ofrk_id == 'nan' or ofrk_id == ofr1_id:
+                continue
+            out.add(f'{ofrk_id}|{ofr1_id}')
     return out
 
 
 def _filter_current_ofr1_mature_rv(stype: str, spread: pd.DataFrame) -> pd.DataFrame:
-    """Keep ordinary bond-curve rows and append current mature RV OFRk/OFR1 pairs."""
+    """Keep ordinary bond-curve rows and append only still-live mature RV pairs."""
     if stype not in {"TBondCurve", "CBondCurve"} or spread.empty:
         return spread
 
@@ -153,12 +173,11 @@ def _filter_current_ofr1_mature_rv(stype: str, spread: pd.DataFrame) -> pd.DataF
         return base_spread
 
     asset_class = "TBond" if stype == "TBondCurve" else "CBond"
-    current_ofr1 = _current_ofr1_ids(asset_class)
-    if not current_ofr1:
-        return pd.concat([base_spread, pair_spread], axis=0)
+    current_pairs = _current_ofr_pair_ids(asset_class)
+    if not current_pairs:
+        return base_spread
 
-    right_leg = pair_spread.index.to_series().astype(str).str.rsplit('|', n=1).str[-1]
-    pair_spread = pair_spread.loc[right_leg.isin(current_ofr1).values]
+    pair_spread = pair_spread.loc[pair_spread.index.astype(str).isin(current_pairs)]
     if pair_spread.empty:
         return base_spread
     return pd.concat([base_spread, pair_spread], axis=0)
