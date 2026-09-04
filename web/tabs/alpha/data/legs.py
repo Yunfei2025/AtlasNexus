@@ -59,7 +59,6 @@ def _load_leg_data() -> dict:
 
     ld: dict = {
         'otr_cgb': {}, 'otr_cdb': {},
-        'ref_cgb': pd.Series(dtype=object), 'ref_cdb': pd.Series(dtype=object),
         'nb': {}, 'tb_stat': None, 'futs_def': pd.DataFrame(),
         'fs_irs': {
             'TS': 'FR007S2Y.IR',
@@ -107,16 +106,6 @@ def _load_leg_data() -> dict:
     ld['otr_cgb'] = _pick_otr('TBond')
     ld['otr_cdb'] = _pick_otr('CBond')
 
-    for key, fname in [('ref_cgb', 'TBond-cvref.pkl'), ('ref_cdb', 'CBond-cvref.pkl')]:
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                cv = pd.read_pickle(str(Path(DIR_INPUT) / fname))
-            rb = cv.get('RefBond', pd.DataFrame()) if isinstance(cv, dict) else pd.DataFrame()
-            ld[key] = rb.iloc[-1] if not rb.empty else pd.Series(dtype=object)
-        except Exception:
-            pass
-
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -155,8 +144,6 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
 
     otr_cgb = ld.get('otr_cgb', {})
     otr_cdb = ld.get('otr_cdb', {})
-    ref_cgb = ld.get('ref_cgb', pd.Series(dtype=object))
-    ref_cdb = ld.get('ref_cdb', pd.Series(dtype=object))
     nb = ld.get('nb', {})
     futs_def = ld.get('futs_def', pd.DataFrame())
     fs_irs = ld.get('fs_irs', {})
@@ -193,17 +180,6 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
         if unit == 'm':
             return (f"{int(n)}M", n / 12.0)
         return (f"{int(n)}Y", n)
-
-    # Duration → nearest reference bond from cvref series
-    _REF_TENORS = [
-        (0.3, '0.3Y'), (0.5, '0.5Y'), (0.7, '0.7Y'), (1.0, '1Y'), (1.5, '1.5Y'),
-        (2.0, '2Y'), (3.0, '3Y'), (5.0, '5Y'), (7.0, '7Y'), (10.0, '10Y'),
-        (20.0, '20Y'), (30.0, '30Y')
-    ]
-    def _nearest_ref(dur: float, ref_s: pd.Series) -> str:
-        best = min(_REF_TENORS, key=lambda x: abs(x[0] - dur))
-        v = ref_s.get(f'Term near {best[1]}', '')
-        return str(v) if v and str(v) not in ('nan', 'None', '—') else ''
 
     # Front and next futures contract codes for a given contract type
     def _futs_front_next(ctype: str) -> tuple[str, str]:
@@ -290,7 +266,7 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
         return (tid, otr_cgb.get(_t_label(duration), ''))
 
     elif stype == 'CBondCurve':
-        return (tid, _nearest_ref(duration, ref_cdb))
+        return (tid, otr_cdb.get(_t_label(duration), ''))
 
     # Bond-Swap: leg1 is the bond, leg2 is FR007 IRS with matching tenor
     elif stype == 'TBondSwap':
