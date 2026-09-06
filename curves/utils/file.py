@@ -119,7 +119,7 @@ def loadPKL(file_path: str) -> dict:
 #: Dict keys holding actually-observed (not model-derived) data. Forward-filling
 #: these would fabricate quotes on dates where no real observation exists, so
 #: updatePKL must leave gaps as NaN instead of carrying the last value forward.
-_NO_FFILL_KEYS = {'ytm_act'}
+_NO_FFILL_KEYS = {'ytm_act', 'RefBondChange'}
 
 
 def updatePKL(dictn, file_path, rewrite=False):

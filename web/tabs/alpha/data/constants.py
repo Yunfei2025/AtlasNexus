@@ -61,13 +61,13 @@ SPREAD_CATEGORIES = {
         'style': 'Mixed',
     },
     'Bond-Futures': {
-        'label': 'Bond vs Futures (IRR − Repo)',
+        'label': 'Cash-and-Carry (IRR − Repo)',
         'types': ['NetBasis'],
         'description': 'CTD implied repo (IRR) minus FR007 funding cost',
         'style': 'Carry',
     },
     'Futures-Term': {
-        'label': 'Futures Term Basis',
+        'label': 'Calendar Spread',
         'types': ['TermBasis'],
         'description': 'Near vs far futures contract spread',
         'style': 'MeanReversion',
@@ -151,8 +151,12 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
         return {}
     try:
         result = {
+            'CGB-1s2s': cnbd_data['CGB']['中债国债到期收益率:2年'] - cnbd_data['CGB']['中债国债到期收益率:1年'],
+            'CGB-2s5s': cnbd_data['CGB']['中债国债到期收益率:5年'] - cnbd_data['CGB']['中债国债到期收益率:2年'],
             'CGB-5s10s': cnbd_data['CGB']['中债国债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
             'CGB-10s30s': cnbd_data['CGB']['中债国债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
+            'CDB-1s2s': cnbd_data['CDB']['中债国开债到期收益率:2年'] - cnbd_data['CDB']['中债国开债到期收益率:1年'],
+            'CDB-2s5s': cnbd_data['CDB']['中债国开债到期收益率:5年'] - cnbd_data['CDB']['中债国开债到期收益率:2年'],
             'CDB-5s10s': cnbd_data['CDB']['中债国开债到期收益率:10年'] - cnbd_data['CDB']['中债国开债到期收益率:5年'],
             # No CDB-10s30s / CDBCGB-30y — no tradeable CDB 30y bond exists,
             # even though the CNBD curve carries a yield at that tenor.

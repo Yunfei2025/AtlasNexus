@@ -255,3 +255,169 @@ def test_evaluate_gates_nib_otr_passes_with_lag():
     assert result['state'] == 'ORDER_ELIGIBLE'
     assert result['rejections'] == []
 
+
+
+def test_add_ofr_ladder_spreads_computes_each_rung_vs_ofr1():
+    """spread_ofr{k}_ofr1 = ytm_ofr{k} - ytm_ofr1 for every rung k=2..depth,
+    with instrument_id following the same <tenor>:<stage>:<leg1>|<leg2>
+    convention as spread_otr_ofr1."""
+    from curves.calibration.otr_ofr_universe import _add_ofr_ladder_spreads
+    from settings.fixed_income import NewIssueConfig
+
+    row = {'ytm_ofr1': 2.0}
+    confirmed = {1: 'OFR1_BOND'}
+    for k in range(2, NewIssueConfig.OFR_LADDER_DEPTH + 1):
+        row[f'ytm_ofr{k}'] = 2.0 + 0.1 * k
+        confirmed[k] = f'OFR{k}_BOND'
+
+    _add_ofr_ladder_spreads(row, confirmed, '30Y')
+
+    for k in range(2, NewIssueConfig.OFR_LADDER_DEPTH + 1):
+        assert row[f'spread_ofr{k}_ofr1'] == pytest.approx(0.1 * k)
+        assert row[f'instrument_id_ofr{k}_ofr1'] == f'30Y:ofr{k}_ofr1:OFR{k}_BOND|OFR1_BOND'
+
+
+def test_add_ofr_ladder_spreads_skips_self_match_and_missing_rungs():
+    """A rung that collapses onto OFR1 itself, or has no confirmed bond yet,
+    must contribute NaN -- never a synthetic self-spread."""
+    from curves.calibration.otr_ofr_universe import _add_ofr_ladder_spreads
+
+    row = {'ytm_ofr1': 2.0, 'ytm_ofr2': 2.0}  # ofr2 collapses onto ofr1's yield too
+    confirmed = {1: 'SAME_BOND', 2: 'SAME_BOND'}  # and the SAME bond id
+    _add_ofr_ladder_spreads(row, confirmed, '30Y')
+    assert pd.isna(row['spread_ofr2_ofr1'])
+    assert pd.isna(row['instrument_id_ofr2_ofr1'])
+
+    row2 = {'ytm_ofr1': 2.0}  # ofr3 never confirmed (no ytm_ofr3, no id)
+    confirmed2 = {1: 'OFR1_BOND'}
+    _add_ofr_ladder_spreads(row2, confirmed2, '30Y')
+    assert pd.isna(row2['spread_ofr3_ofr1'])
+    assert pd.isna(row2['instrument_id_ofr3_ofr1'])
+
+
+def test_ofr_ladder_bucket_excluded_from_tbondcurve_pairs():
+    """(TBond, 30Y) must never contribute mature-RV pair rows to TBondCurve --
+    that data moved to the New-Issue OTR/OFR Event tab as its own
+    OFR{k}OFR1-CGB30Y stage family (curves/refreshers/newissue_spreads.py)."""
+    from curves.refreshers.otr_ofr_rv import _EXCLUDED_BUCKETS
+    assert ('TBond', '30Y') in _EXCLUDED_BUCKETS
+
+
+def test_ofr_ladder_stage_scoped_to_tbond_30y_only():
+    """ofr{k}_ofr1 stages must be gated to (TBond, 30Y) -- 5Y/10Y TBond and
+    every CBond bucket keep using the old TBondCurve/CBondCurve mature-RV
+    pairs unchanged."""
+    from curves.refreshers.newissue_spreads import _stage_scope_ok, _STAGES
+    from settings.fixed_income import NewIssueConfig
+
+    assert 'ofr2_ofr1' in _STAGES
+    assert _stage_scope_ok('ofr2_ofr1', 'TBond', '30Y') is True
+    assert _stage_scope_ok('ofr2_ofr1', 'TBond', '10Y') is False
+    assert _stage_scope_ok('ofr2_ofr1', 'CBond', '30Y') is False
+    # The original two stages are unscoped (every active bucket).
+    assert _stage_scope_ok('otr_ofr1', 'TBond', '10Y') is True
+    assert _stage_scope_ok('nib_otr', 'CBond', '5Y') is True
+
+
+def test_ofr_ladder_label_round_trip():
+    """to_newissue_stage_label / _parse_newissue_stage_label must round-trip
+    OFR{k}OFR1-{issuer}{tenor} labels the same way OTROFR1/NIBOTR already do."""
+    from web.tabs.alpha.data.loaders import (
+        to_newissue_stage_label, _parse_newissue_stage_label, _newissue_stage_columns,
+    )
+
+    raw = '30Y:ofr2_ofr1:2500006.IB|2600002.IB'
+    label = to_newissue_stage_label(raw)
+    assert label == 'OFR2OFR1-CGB30Y'
+
+    parsed = _parse_newissue_stage_label(label)
+    assert parsed == ('ofr2_ofr1', '30Y', 'CGB')
+
+    # OFR1 is always the reference leg (leg2), matching spread_ofr{k}_ofr1's
+    # ytm_ofr{k} - ytm_ofr1 convention in otr_ofr_universe.py.
+    leg1_ytm, leg2_ytm, leg1_id, leg2_id = _newissue_stage_columns('ofr3_ofr1')
+    assert (leg1_ytm, leg2_ytm, leg1_id, leg2_id) == ('ytm_ofr3', 'ytm_ofr1', 'ofr3_id', 'ofr1_id')
+
+
+def test_ofr_ladder_label_unqualified_issuer():
+    from web.tabs.alpha.data.loaders import _parse_newissue_stage_label
+    parsed = _parse_newissue_stage_label('OFR5OFR1-30Y')
+    assert parsed == ('ofr5_ofr1', '30Y', None)
+
+
+def test_short_newissue_label_ofr_ladder_no_underscore():
+    """web/core/scripts.py's _short_newissue_label is a SEPARATE implementation
+    from web/tabs/alpha/data/loaders.py's to_newissue_stage_label (used by the
+    Daily Spread Statistics bar chart, not the Spread Time Series chart) and
+    had its own stage_map that only knew nib_otr/otr_ofr1, falling back to
+    stage.replace('_','').upper()/stage.upper() for anything else -- for
+    'ofr2_ofr1' that gave 'OFR2_OFR1' (underscore kept from stage.upper()
+    alone) instead of the intended 'OFR2OFR1'."""
+    from web.core.scripts import _short_newissue_label
+
+    label = _short_newissue_label('30Y:ofr2_ofr1:2500006.IB|2600002.IB', 'CGB')
+    assert label == 'OFR2OFR1-CGB30Y'
+    assert '_' not in label
+
+    for k in (3, 4, 5):
+        label_k = _short_newissue_label(f'30Y:ofr{k}_ofr1:A.IB|B.IB', 'CGB')
+        assert label_k == f'OFR{k}OFR1-CGB30Y'
+
+
+def test_load_newissue_current_episode_returns_pair_label(tmp_path, monkeypatch):
+    """load_newissue_current_episode must return (series, 'leg1|leg2') so
+    callers (the Spread Time Series chart) can show the actual bond codes
+    even when load_newissue_pair_history's richer cvpx.pkl lookup comes up
+    empty -- which it always does for legs outside the standard pricing
+    universe (e.g. 30Y OFR-ladder bonds, capped at
+    BondConfig.PRICING_MAX_TTM=10.0)."""
+    import web.tabs.alpha.data.loaders as loaders
+
+    idx = pd.date_range('2026-08-01', periods=5, freq='D')
+    df = pd.DataFrame({
+        'ofr2_id': ['A.IB', 'A.IB', 'A.IB', 'A.IB', 'A.IB'],
+        'ofr1_id': ['B.IB', 'B.IB', 'B.IB', 'B.IB', 'B.IB'],
+        'ytm_ofr2': [2.0, 2.0, 2.0, 2.0, 2.0],
+        'ytm_ofr1': [1.9, 1.9, 1.9, 1.9, 1.9],
+    }, index=idx)
+
+    monkeypatch.setattr(loaders, '_load_pickle_safe',
+                        lambda path: {'30Y': df} if 'TBond-newissue' in str(path) else None)
+
+    result = loaders.load_newissue_current_episode('OFR2OFR1-CGB30Y')
+    assert result is not None
+    s, pair_label = result
+    assert pair_label == 'A.IB|B.IB'
+    assert len(s) == 5
+
+
+def test_load_newissue_current_episode_skips_self_match():
+    """A trailing run where the OFR rung has collapsed onto OFR1 itself
+    (leg1_id == leg2_id) must not be reported as the 'current episode' --
+    the function should resolve to the last genuinely distinct pairing
+    instead of a meaningless self-spread."""
+    import web.tabs.alpha.data.loaders as loaders
+
+    idx = pd.date_range('2026-08-01', periods=6, freq='D')
+    df = pd.DataFrame({
+        'ofr2_id':  ['A.IB', 'A.IB', 'A.IB', 'A.IB', 'C.IB', 'C.IB'],
+        'ofr1_id':  ['B.IB', 'B.IB', 'B.IB', 'B.IB', 'C.IB', 'C.IB'],
+        'ytm_ofr2': [2.0,    2.0,    2.0,    2.0,    2.1,    2.1],
+        'ytm_ofr1': [1.9,    1.9,    1.9,    1.9,    2.1,    2.1],
+    }, index=idx)
+
+    import types
+    def _fake_load(path):
+        return {'30Y': df} if 'TBond-newissue' in str(path) else None
+
+    orig = loaders._load_pickle_safe
+    loaders._load_pickle_safe = _fake_load
+    try:
+        result = loaders.load_newissue_current_episode('OFR2OFR1-CGB30Y')
+    finally:
+        loaders._load_pickle_safe = orig
+
+    assert result is not None
+    s, pair_label = result
+    assert pair_label == 'A.IB|B.IB'
+    assert len(s) == 4

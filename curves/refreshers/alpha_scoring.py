@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from curves.calibration.regime import SpreadRegimeClassifier
+from curves.calibration.stat import ZSCORE_EWM_VOL_SPAN
 from curves.refreshers.alpha_snapshot import (
     _append_snapshot_spread_to_series,
     _HORIZON_DAYS,
@@ -203,7 +204,13 @@ def _add_momentum_ma_zscore(
 	ma_window: int = 20,
 	z_window: int = 63,
 ) -> pd.DataFrame:
-	"""Add a MAD-normalized medium-horizon momentum z-score for diagnostics."""
+	"""Add an EWMA-vol-normalized medium-horizon momentum z-score for diagnostics.
+
+	Uses EWMA(span=ZSCORE_EWM_VOL_SPAN) std of the momentum series as the
+	denominator, matching the ewm_vol convention used for spread-level Zscore
+	elsewhere (OU_calibrate / alpha_snapshot.py) so Momentum/Carry candidates
+	are scaled by the same "current regime" vol logic as MR candidates.
+	"""
 	out = df.copy()
 	if out.empty or "ID" not in out.columns or "spread_type" not in out.columns:
 		out["level_zscore"] = out.get("Zscore", np.nan)
@@ -230,11 +237,10 @@ def _add_momentum_ma_zscore(
 			continue
 		ma = s_clean.rolling(ma_window).mean()
 		momentum = s_clean.diff(ma_window)
-		median = momentum.rolling(z_window).median()
-		mad = (momentum - median).abs().rolling(z_window).median()
-		sigma_mad = 1.4826 * mad
+		ewm_span = min(ZSCORE_EWM_VOL_SPAN, momentum.dropna().shape[0])
+		sigma_ewm = momentum.ewm(span=max(ewm_span, 2), min_periods=max(min(ewm_span, momentum.dropna().shape[0]), 2)).std()
 		last_ma = ma.iloc[-1]
-		last_sigma = sigma_mad.iloc[-1]
+		last_sigma = sigma_ewm.iloc[-1]
 		if pd.isna(last_ma) or pd.isna(last_sigma) or float(last_sigma) <= 0:
 			zscores.append(np.nan)
 			mas.append(float(last_ma) if pd.notna(last_ma) else np.nan)

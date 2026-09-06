@@ -101,6 +101,27 @@ def _pricing_date_mappings(date_value: Optional[str] = None) -> Dict[str, dateti
         'd10y': pricing_dt - relativedelta(years=10),
     }
 
+def _short_end_weights(ttm_index, bond_type: str) -> Optional[pd.Series]:
+    """Least-squares weights that downweight sub-FIT_SHORT_TTM reference points.
+
+    The <=1y points stay in the fit (they pin the L + S short-rate asymptote
+    and without them the front end inverts spuriously), but carry reduced
+    weight so the >1y points -- where pricing and RV actually happen -- drive
+    the 3-factor fit. See BondConfig.FIT_SHORT_WEIGHT for the calibration.
+
+    Returns None when the weight is 1.0 (or the bond type has no entry), so
+    callers fall back to the unweighted fit unchanged.
+    """
+    w_short = BondConfig.FIT_SHORT_WEIGHT.get(bond_type, 1.0)
+    if w_short == 1.0:
+        return None
+    ttm = pd.to_numeric(pd.Series(ttm_index), errors='coerce').to_numpy(dtype=float)
+    w = np.where(ttm <= BondConfig.FIT_SHORT_TTM, w_short, 1.0)
+    # Any non-finite TTM would poison the weighted solve; treat it as a normal point.
+    w[~np.isfinite(ttm)] = 1.0
+    return pd.Series(w, index=ttm_index)
+
+
 @dataclass
 class CurveConfig:
     """曲线配置类"""
@@ -185,7 +206,10 @@ class BondCurveGenerator:
             )
             df_ref_fit = ref
 
-        curve.extractFactorsRobust(df_ref_fit, bond_ref, k_mad=2.0, min_points=4)
+        weights = _short_end_weights(df_ref_fit.index, self.config.bond_type)
+        curve.extractFactorsRobust(
+            df_ref_fit, bond_ref, k_mad=2.0, min_points=4, weights=weights
+        )
     
     def load_data(self) -> Dict:
         """load data and reference data"""
@@ -392,6 +416,9 @@ class BondCurveGenerator:
             # corrupt the S2 covariance matrix and produce NaN factors/prices.
             # Very long-end buckets (> FIT_MAX_TTM) are outside the affine
             # model's tenor range.  Apply the same band used for factor extraction.
+            # NB: FIT_MIN_TTM must stay low enough to keep the sub-1y buckets in
+            # -- they pin the L + S short-rate asymptote.  See the FIT_MIN_TTM
+            # comment in settings/fixed_income.py before changing it.
             _fit_min = BondConfig.FIT_MIN_TTM
             _fit_max = BondConfig.FIT_MAX_TTM
             latest_ttm = term.iloc[-1].dropna()

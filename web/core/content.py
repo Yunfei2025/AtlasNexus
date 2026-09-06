@@ -72,8 +72,8 @@ def build_spread_tab():
                             {'label': 'Swaps', 'value': 'SwapSpread'},
                             {'label': 'Treasury BondSwap', 'value': 'TBondSwap'},
                             {'label': ['Policybank BondSwap', html.H6('Futures', style={"padding-top": "20px"})], 'value': 'CBondSwap'},
-                            {'label': 'Futures Term Basis', 'value': 'TermBasis'},
-                            {'label': ['Futures Net Basis'], 'value': 'NetBasis'},
+                            {'label': 'Calendar Spread', 'value': 'TermBasis'},
+                            {'label': ['Cash-and-Carry'], 'value': 'NetBasis'},
                         ], id="spread-type", value='SectorPCASpread'),
                         dcc.Dropdown(
                             options=list(FuturesConfig.SEASONS.keys()),

@@ -17,7 +17,7 @@ sys.path.insert(0, str(PATH))
 from curves.utils.loader import loadInstrumentDefinition, loadCNBDTS, loadRefData
 import curves.calibration.stat as st
 from curves.calibration import irscurves as irs
-from curves.utils.file import updatePKL
+from curves.utils.file import updatePKL, loadPKL
 from settings.paths import DIR_INPUT, DIR_OUTPUT 
 from settings.fixed_income import BondConfig, IRSConfig
 from settings.general import GeneralConfig, DateConfig 
@@ -187,8 +187,20 @@ class StatGenerator:
             # all available history for seasonal charting; statAnalysis_BC/_BS
             # internally restrict OU/z-score calibration to a rolling window.
             bonds = bond_px['ytm_quo'].columns.intersection(env['Def'].index)
-            df_act = bond_px['ytm_act'].loc[:self.da, bonds].drop_duplicates()
-            df_quo = bond_px['ytm_quo'].loc[:self.da, bonds].drop_duplicates()
+            # De-duplicate by DATE, not by row content. The previous
+            # .drop_duplicates() dropped any date whose whole yield row happened
+            # to repeat an earlier one -- which on a quiet market silently
+            # deletes real trading days (measured: 5 TBond dates including
+            # 2026-09-02..09-05, and 863 of 1696 CBond dates). Because
+            # statAnalysis_BC indexes off df_act, those dates then vanished from
+            # CurveYield/Spread, and the stale values already in {btype}-spds.pkl
+            # survived the updatePKL merge because the fresh frame had no row to
+            # overwrite them with. The intent here is only to guard against a
+            # repeated index entry, of which these frames have none.
+            df_act = bond_px['ytm_act'].loc[:self.da, bonds]
+            df_quo = bond_px['ytm_quo'].loc[:self.da, bonds]
+            df_act = df_act[~df_act.index.duplicated(keep='last')]
+            df_quo = df_quo[~df_quo.index.duplicated(keep='last')]
             
             # Clean data to handle byte strings and invalid values before statistical analysis
             df_act = df_act.apply(pd.to_numeric, errors='coerce')
@@ -211,8 +223,26 @@ class StatGenerator:
                 if _avail:
                     bond_key_ts_df = pd.DataFrame(_avail).loc[df_act.index[0]:df_act.index[-1]]
 
+            # Reference-roll dates (item 3.2 / F6). When a bucket's reference
+            # bond rolls, the fitted curve level steps and every residual
+            # steps with it -- an identity change, not a market move, which
+            # inflates the rolling vol every z-score divides by (measured
+            # 1.5-6.6x) and so SUPPRESSES genuine dislocations. Splicing the
+            # step out of the stats input keeps the full history usable; a
+            # hard reset would starve the estimator (see stat.py's
+            # splice_reference_rolls docstring).
+            _roll_dates = None
+            try:
+                _cvref = loadPKL(os.path.join(DIR_INPUT, f'{btype}-cvref.pkl'))
+                _events = _cvref.get('RefBondChange') if isinstance(_cvref, dict) else None
+                if isinstance(_events, pd.DataFrame) and not _events.empty:
+                    _roll_dates = _events.index.get_level_values('date').unique()
+            except Exception as _e:
+                print(f'WARN {btype}: could not load RefBondChange ({_e}); '
+                      'proceeding without roll splicing')
+
             # Compute and persist spread stats
-            stat_bc = st.statAnalysis_BC(env, df_act, df_quo)
+            stat_bc = st.statAnalysis_BC(env, df_act, df_quo, roll_dates=_roll_dates)
             stat_bs = st.statAnalysis_BS(env, df_act, irs_key_ts, bond_key_ts=bond_key_ts_df)
             bond_spd = {'BondCurve': stat_bc, 'BondSwap': stat_bs}
             
@@ -265,12 +295,17 @@ class StatGenerator:
     def compute_irs_spreads(self, full_history: bool = False) -> None:
         btype = 'IRS'
         irs_px = updatePKL({}, os.path.join(DIR_INPUT, f'{btype}-cvpx.pkl'))
+        # De-duplicate by DATE, not row content -- see the note in
+        # compute_bond_and_swap_spreads(); dropping rows whose values repeat
+        # silently deletes real trading days on a quiet market.
         if full_history:
-            df_act_irs = irs_px['ytm_act'].reindex(columns=IRSConfig.IRS_LIST).drop_duplicates()
-            df_quo_irs = irs_px['ytm_quo'].reindex(columns=IRSConfig.IRS_LIST).drop_duplicates()
+            df_act_irs = irs_px['ytm_act'].reindex(columns=IRSConfig.IRS_LIST)
+            df_quo_irs = irs_px['ytm_quo'].reindex(columns=IRSConfig.IRS_LIST)
         else:
-            df_act_irs = irs_px['ytm_act'].loc[self.start:self.da, IRSConfig.IRS_LIST].drop_duplicates()
-            df_quo_irs = irs_px['ytm_quo'].loc[self.start:self.da, IRSConfig.IRS_LIST].drop_duplicates()
+            df_act_irs = irs_px['ytm_act'].loc[self.start:self.da, IRSConfig.IRS_LIST]
+            df_quo_irs = irs_px['ytm_quo'].loc[self.start:self.da, IRSConfig.IRS_LIST]
+        df_act_irs = df_act_irs[~df_act_irs.index.duplicated(keep='last')]
+        df_quo_irs = df_quo_irs[~df_quo_irs.index.duplicated(keep='last')]
 
         # Clean data to handle byte strings and invalid values
         df_act_irs = df_act_irs.apply(pd.to_numeric, errors='coerce')
@@ -393,8 +428,12 @@ class StatGenerator:
             # available history for seasonal charting; statAnalysis_BC internally
             # restricts OU/z-score calibration to a rolling window.
             bonds_obond = obond_px['ytm_quo'].columns.intersection(env_obond['Def'].index)
-            df_act_obond = obond_px['ytm_act'].loc[:self.da, bonds_obond].drop_duplicates()
-            df_quo_obond = obond_px['ytm_quo'].loc[:self.da, bonds_obond].drop_duplicates()
+            # De-duplicate by DATE, not row content -- see the note in
+            # compute_bond_and_swap_spreads().
+            df_act_obond = obond_px['ytm_act'].loc[:self.da, bonds_obond]
+            df_quo_obond = obond_px['ytm_quo'].loc[:self.da, bonds_obond]
+            df_act_obond = df_act_obond[~df_act_obond.index.duplicated(keep='last')]
+            df_quo_obond = df_quo_obond[~df_quo_obond.index.duplicated(keep='last')]
             
             # Clean data to handle byte strings and invalid values
             df_act_obond = df_act_obond.apply(pd.to_numeric, errors='coerce')
@@ -598,7 +637,13 @@ class StatGenerator:
                     continue
                 _bdf = _bucket_df.copy()
                 _bdf.index = pd.DatetimeIndex(_bdf.index)
-                oi_wide = _bdf if oi_wide is None else _bdf.combine_first(oi_wide)
+                # combine_first keeps self's non-null values, falling back to
+                # other only where self is null -- so oi_wide (the
+                # higher-priority buckets already accumulated) must be self,
+                # or a later, staler bucket (e.g. NQ3) silently overwrites an
+                # earlier, fresher one (e.g. NQ1/NQ2) for any shared contract
+                # code/date instead of the intended NQ1 > NQ2 > NQ3 priority.
+                oi_wide = _bdf if oi_wide is None else oi_wide.combine_first(_bdf)
 
         start_ts = pd.Timestamp(self.start)
         da_ts    = pd.Timestamp(self.da)
@@ -885,9 +930,13 @@ class StatGenerator:
         repo9m  = _series(swap_ts, _swap_col('9M'))  if swap_ts is not None else None
 
         instruments = {}
+        if cgb1  is not None and cgb2  is not None: instruments['CGB-1s2s']   = cgb2   - cgb1
+        if cgb2  is not None and cgb5  is not None: instruments['CGB-2s5s']   = cgb5   - cgb2
         if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10  - cgb5
         if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30  - cgb10
         if cgb10 is not None and cgb20 is not None: instruments['CGB-10s20s'] = cgb20  - cgb10
+        if cdb1  is not None and cdb2  is not None: instruments['CDB-1s2s']   = cdb2   - cdb1
+        if cdb2  is not None and cdb5  is not None: instruments['CDB-2s5s']   = cdb5   - cdb2
         if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10  - cdb5
         # Note: no CDB-10s30s — no tradeable CDB 30y bond exists, even though
         # the CNBD curve carries a yield at that tenor.

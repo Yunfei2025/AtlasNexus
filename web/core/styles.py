@@ -5,7 +5,7 @@ This module preserves its public API while adding docstrings and type hints
 to improve readability and maintenance.
 """
 
-from typing import Any, Dict, List, Mapping, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 import re
 import sys
 from pathlib import Path
@@ -223,7 +223,10 @@ def getTraceStat(df: Union[pd.Series, pd.DataFrame], stype: str) -> go.Bar:
     labels = df.index
     custom_ids = df.index
     if isinstance(df, pd.DataFrame) and 'label' in df.columns:
-        labels = df['label']
+        # Rows without their own label (e.g. ordinary bond-vs-curve rows
+        # alongside OFR-ladder pair rows in the same TBondCurve/CBondCurve
+        # table) fall back to the real index so the x-axis never blanks out.
+        labels = df['label'].where(df['label'].notna(), df.index.to_series(index=df.index))
 
     trace = go.Bar(
         x=labels,
@@ -235,7 +238,7 @@ def getTraceStat(df: Union[pd.Series, pd.DataFrame], stype: str) -> go.Bar:
     )
     return trace
 
-def getTraceAdd(df1: Mapping[int, pd.Series], stype: str) -> List[Any]:
+def getTraceAdd(df1: Mapping[int, pd.Series], stype: str, ticker: Optional[str] = None) -> List[Any]:
     """Create additional traces depending on the spread type."""
     if stype == 'BinarySpread':
         trace2 = [
@@ -250,7 +253,14 @@ def getTraceAdd(df1: Mapping[int, pd.Series], stype: str) -> List[Any]:
                 })
         ]
     elif stype in ['TBondCurve','CBondCurve']+OSPREAD:
-        label = {0: 'Close Yield', 1: 'Curve Yield'}
+        if stype in ('TBondCurve', 'CBondCurve') and isinstance(ticker, str) and '|' in ticker:
+            # OFR-ladder pair row (otr_ofr_rv.py): both series are real bond
+            # yields -- CloseYield is the OFRk leg, CurveYield is the OFR1
+            # reference leg it's priced against -- not a fitted curve.
+            ofrk_id, _, ofr1_id = ticker.partition('|')
+            label = {0: f'{ofrk_id} Yield', 1: f'{ofr1_id} Yield (OFR1)'}
+        else:
+            label = {0: 'Close Yield', 1: 'Curve Yield'}
         width = {0: 3, 1: 1}
         color = {0: WHITE, 1: ACCENT}
         if stype == 'SwapSpread':

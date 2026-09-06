@@ -28,6 +28,7 @@ from settings.paths import DIR_INPUT
 from settings.general import GeneralConfig, DateConfig
 from settings.fixed_income import BondConfig
 from curves.calibration.stat import statAdjust
+import curves.affine.affine as af
 from curves.utils.plot import plotCurve
 from curves.calibration.selector import RefBondSelector, compute_spot_term_panels, _as_scalar_bond_id
 
@@ -290,9 +291,13 @@ class BondCurveRefresher:
             return ref_series
         stale_ttms = np.array([t for (t, _) in info.values()], dtype=float)
         ref_ttms = ref_series.index.values.astype(float)
+        if ref_ttms.size == 0:
+            return ref_series
         # match each ref-point TTM to a stale-bond TTM within ~2 days
         tol = 2.0 / 365.0
-        keep = np.array([not np.any(np.abs(stale_ttms - t) < tol) for t in ref_ttms])
+        keep = np.array(
+            [not np.any(np.abs(stale_ttms - t) < tol) for t in ref_ttms], dtype=bool
+        )
         n_dropped = int((~keep).sum())
         if n_dropped == 0:
             return ref_series
@@ -308,52 +313,253 @@ class BondCurveRefresher:
         )
         return ref_series[keep]
 
-    # ---- Pricing ----
-    def _price_one_side(self, price_type: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        logger.info(f"Processing {price_type} curve...")
-        # update curve factors for the side; sanitize NaNs
+    # ---- Mid-curve fit (item 4.1: single fit replacing independent Bid/Ofr fits) ----
+    def _build_mid_ref_series(self) -> pd.Series:
+        """Build the mid reference series the curve is fit to.
+
+        Per bond: mid = average of its Bid/Ofr reference YTM. Where a side
+        has no genuine live quote, ``curves/calibration/selector.py``'s
+        ``extract_yield`` has already substituted the bond's CNBD valuation
+        (``估价收益率:%(中债)``), so every reference bucket still carries a
+        usable level and the realtime fit spans the SAME bonds as the EOD
+        fit.
+
+        Stale points are deliberately NOT dropped (2026-09-06 decision).
+        The previous behaviour ran ``_drop_stale_refs`` on each side, which
+        removed exactly the points ``extract_yield`` had just back-filled
+        from CNBD -- the two layers worked against each other. On a day with
+        few live quotes that starved the fit: measured 2026-09-04, EOD fit 8
+        reference points while realtime fit only 4 (the bare
+        ``min_points=4`` floor for a 3-factor model, with the entire sub-0.6y
+        short end gone). Curvature is barely identified from 4 points, so it
+        came out -1.01 vs EOD's -1.98, moving a 6.2y bond's fitted yield by
+        ~6.4bp and its Z-score from -2.3 to -7.7 against the same
+        mean/vol. A CNBD-valued anchor is a far better input than a missing
+        tenor. ``_drop_stale_refs``/``_stale_reference_info`` are retained:
+        the staleness signal still feeds the per-bond quote-quality weights
+        (``_mid_ref_quality_weights``) and the published bid/ofr half-spread
+        (``_quoted_bid_ofr_quotes``), so a stale point now counts for less
+        rather than not at all.
+
+        Replaces the previous two-independent-curve-fit architecture (F8):
+        fitting bid_curve and ofr_curve as separate 3-factor regressions on
+        ~9 noisy points each gives no guarantee ofr_curve(tau) >= bid_curve
+        (tau), and a bond's model bid/ofr spread was an artifact of which
+        reference bonds happened to be noisy that day, not of that bond's
+        own liquidity. See docs/dev/affine-curve-improvement-plan.md item 4.1.
+        """
+        if self.bond_ref_df is None:
+            return pd.Series(dtype=float)
+
+        bid_series = self.bond_ref_df['Bid'].dropna()
+        ofr_series = self.bond_ref_df['Ofr'].dropna()
+
+        _ttm_idx_bid = pd.to_numeric(pd.Series(bid_series.index), errors='coerce')
+        _fit_mask_bid = (_ttm_idx_bid >= BondConfig.FIT_MIN_TTM) & (_ttm_idx_bid <= BondConfig.FIT_MAX_TTM)
+        if int(_fit_mask_bid.sum()) >= 3:
+            bid_series = bid_series.loc[_fit_mask_bid.to_numpy(dtype=bool)]
+
+        _ttm_idx_ofr = pd.to_numeric(pd.Series(ofr_series.index), errors='coerce')
+        _fit_mask_ofr = (_ttm_idx_ofr >= BondConfig.FIT_MIN_TTM) & (_ttm_idx_ofr <= BondConfig.FIT_MAX_TTM)
+        if int(_fit_mask_ofr.sum()) >= 3:
+            ofr_series = ofr_series.loc[_fit_mask_ofr.to_numpy(dtype=bool)]
+
+        # Log what WOULD have been dropped, so a day where most reference
+        # quotes are CNBD fallbacks is still visible in the run log even
+        # though the points are now kept.
+        for _side, _series in (('Bid', bid_series), ('Ofr', ofr_series)):
+            _kept = self._drop_stale_refs(_series, _side)
+            _n_stale = len(_series) - len(_kept)
+            if _n_stale:
+                logger.info(
+                    "%s: keeping %d stale reference point(s) (CNBD fallback) that the "
+                    "old filter would have dropped; fitting %d point(s).",
+                    _side, _n_stale, len(_series),
+                )
+
+        mid = pd.concat([bid_series, ofr_series], axis=1, keys=['Bid', 'Ofr']).mean(axis=1, skipna=True)
+        return mid.dropna()
+
+    def _factors_repriced_worse(
+        self,
+        old: np.ndarray,
+        new: np.ndarray,
+        ref_series: pd.Series,
+        tolerance_bp: float = 25.0,
+    ) -> bool:
+        """True when `old` factors reprice today's anchors materially worse
+        than `new` does, i.e. blending toward them would corrupt a good fit.
+
+        Compares anchor-fit RMSE under each factor vector against the SAME
+        S2/gamma/model. `tolerance_bp` is the allowed RMSE degradation: normal
+        intraday drift keeps the previous fit within a few bp of the fresh
+        one (which is exactly when the damping blend is useful), while a
+        stale or degenerate persisted vector shows up as a far larger gap.
+        """
+        if self.curve is None or ref_series is None or ref_series.empty:
+            return False
+        try:
+            S2 = np.asarray(self.curve.S2, dtype=float)
+            S2_flat = tuple(S2.ravel())
+            gamma_f = float(self.curve.gamma)
+            taus = pd.to_numeric(pd.Series(ref_series.index), errors='coerce').to_numpy(dtype=float)
+            actual = ref_series.to_numpy(dtype=float)
+
+            def _rmse(x_arr: np.ndarray) -> float:
+                fitted = np.array([
+                    (lambda ab: ab[0] + ab[1] @ x_arr)(af.calAB_np(gamma_f, float(t), S2_flat, self.curve.mtype))
+                    for t in taus
+                ])
+                return float(np.sqrt(np.nanmean((fitted - actual) ** 2)))
+
+            rmse_old, rmse_new = _rmse(old), _rmse(new)
+            if not (np.isfinite(rmse_old) and np.isfinite(rmse_new)):
+                return False
+            return (rmse_old - rmse_new) * 100.0 > tolerance_bp
+        except Exception as exc:  # never let a diagnostic guard break the refresh
+            logger.warning("Factor-staleness check failed (%s); keeping the EWMA blend.", exc)
+            return False
+
+    def _mid_ref_quality_weights(self, ref_series: pd.Series) -> Optional[pd.Series]:
+        """Per-reference-point quality weight for the mid fit (item 2.3),
+        indexed like ``ref_series`` (by TTM). Built from the same BondRT
+        live/CNBD, bid-ofr spread, and volume signals ``_stale_reference_info``
+        already reads, mapped from bond_id to TTM. Returns None if the
+        required BondRT/RefBond/Def columns aren't available, so callers can
+        fall back to the unweighted fit unchanged.
+        """
+        from curves.affine.curve import quote_quality_weights
+
+        if self.env is None or self.ref is None:
+            return None
+        bond_rt = self.env.get('BondRT')
+        df_def = self.env.get('Def', pd.DataFrame())
+        if bond_rt is None or 'RefBond' not in self.ref or len(self.ref['RefBond']) == 0:
+            return None
+        if '剩余期限' not in df_def.columns or '估价收益率:%(中债)' not in df_def.columns:
+            return None
+
+        bond_ref_today = self.ref['RefBond'].iloc[-1]
+        bid_col, ofr_col = '买价收益率', '卖价收益率'
+        # Volume/turnover lives in env['Def'] (instrument definition), not
+        # BondRT -- BondRT (see curves/utils/retrieve.py::_normalize_bondrt_frame)
+        # only ever carries 买价收益率/卖价收益率/成交收益率.
+        vol_col = '成交量' if '成交量' in df_def.columns else None
+        eps = 1e-6
+
+        ttms, is_live, spread_bp, volume = [], [], [], []
+        for bond_id in bond_ref_today.values:
+            bond_id = _as_scalar_bond_id(bond_id)
+            if pd.isna(bond_id) or bond_id not in df_def.index:
+                continue
+            ttm = float(df_def.loc[bond_id, '剩余期限'])
+            cnbd = pd.to_numeric(df_def.loc[bond_id, '估价收益率:%(中债)'], errors='coerce')
+
+            live = False
+            sb = np.nan
+            vol = pd.to_numeric(df_def.loc[bond_id, vol_col], errors='coerce') if vol_col else np.nan
+            if bond_id in bond_rt.index:
+                row = bond_rt.loc[bond_id]
+                bid_ytm = pd.to_numeric(row.get(bid_col), errors='coerce')
+                ofr_ytm = pd.to_numeric(row.get(ofr_col), errors='coerce')
+                mid_ytm = np.nanmean([bid_ytm, ofr_ytm]) if (pd.notna(bid_ytm) or pd.notna(ofr_ytm)) else np.nan
+                live = pd.notna(mid_ytm) and not (pd.notna(cnbd) and abs(float(mid_ytm) - float(cnbd)) < eps)
+                if pd.notna(bid_ytm) and pd.notna(ofr_ytm):
+                    sb = abs(float(ofr_ytm) - float(bid_ytm)) * 100.0
+
+            ttms.append(ttm)
+            is_live.append(live)
+            spread_bp.append(sb)
+            volume.append(vol)
+
+        if not ttms:
+            return None
+
+        idx = pd.Index(ttms, name='ttm')
+        weights_by_ttm = quote_quality_weights(
+            is_live=pd.Series(is_live, index=idx),
+            spread_bp=pd.Series(spread_bp, index=idx),
+            volume=pd.Series(volume, index=idx),
+            max_spread_bp=BondConfig.REF_BID_OFR_MAX_BP,
+        )
+        # Collapse to one weight per TTM (duplicates shouldn't occur, but be
+        # defensive) and align to ref_series's actual TTM index.
+        weights_by_ttm = weights_by_ttm.groupby(level=0).mean()
+        aligned = weights_by_ttm.reindex(pd.to_numeric(pd.Series(ref_series.index), errors='coerce').to_numpy())
+        if aligned.isna().any():
+            # A ref_series point with no matching quality info (e.g. it came
+            # from the fallback single-side average and its TTM didn't
+            # exactly match) gets neutral weight 1.0 rather than being
+            # silently dropped from the weighted fit.
+            aligned = aligned.fillna(1.0)
+        aligned.index = ref_series.index
+        return aligned
+
+    def _price_mid(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Fit ONE mid curve from filtered bid/ofr reference YTMs and price
+        the full universe once off it (item 4.1). Replaces the previous
+        per-side ``_price_one_side`` calls in ``run()``."""
+        logger.info("Processing mid curve...")
 
         if self.bond_ref_df is None or self.curve is None or self.env is None or self.env_quo is None:
             raise ValueError("Pricing inputs are not initialized")
 
-        ref_series = self.bond_ref_df[price_type].dropna()
-        # Mirror the generator: keep reference points within the FIT TTM band
-        # (decoupled from PRICING window — includes <1.5y points for short-end stability,
-        # skips only the last few weeks before maturity where price→YTM noise blows up).
-        _ttm_idx = pd.to_numeric(pd.Series(ref_series.index), errors='coerce')
-        _fit_mask = (_ttm_idx >= BondConfig.FIT_MIN_TTM) & (_ttm_idx <= BondConfig.FIT_MAX_TTM)
-        if int(_fit_mask.sum()) >= 3:
-            ref_series = ref_series.loc[_fit_mask.to_numpy(dtype=bool)]
-        # Drop reference points whose live quote is stale (no live data, side fell
-        # back to CNBD valuation, or bid-ofr spread > REF_BID_OFR_MAX_BP).
-        ref_series = self._drop_stale_refs(ref_series, price_type)
-        # Snapshot the previously-fitted factors (from the last intraday refresh, or
-        # the prior EOD fit on the first refresh of the day) before refitting. The
-        # 3-factor (level/slope/curvature) fit is a single closed-form regression on
-        # the reference-bond set with no memory of its own; a reference point crossing
-        # the MAD-outlier or REF_BID_OFR_MAX_BP staleness gate between refreshes can
-        # discretely change that set and rotate/tilt the whole curve, moving the fitted
-        # yield at maturities far from the reference cluster by several bp even though
-        # the market barely moved. EWMA-blending the new fit with the prior one damps
-        # that refresh-to-refresh noise without changing the regression itself.
+        ref_series = self._build_mid_ref_series()
+        # Item 2.3: weight each reference point by quote quality (live vs
+        # CNBD, bid-ofr spread width, volume) instead of the binary
+        # keep/drop of the MAD screen alone -- a slightly stale/wide point
+        # now counts for less rather than either 100% or 0%. Falls back to
+        # the unweighted fit (weights=None) if quality info isn't available.
+        quality_weights = self._mid_ref_quality_weights(ref_series)
+
+        # Downweight the sub-1y points so the >1y curve (where pricing and RV
+        # happen) drives the fit, while keeping them in to pin the short-rate
+        # asymptote. Multiplied into the quality weights so both effects apply.
+        from curves.generators.rates import _short_end_weights
+        short_weights = _short_end_weights(ref_series.index, self.bond_type)
+        if short_weights is not None:
+            quality_weights = (
+                short_weights if quality_weights is None
+                else quality_weights * short_weights
+            )
+
+        # Same EWMA-blend rationale as the previous per-side fit: damp
+        # refresh-to-refresh discrete jumps from a reference point crossing
+        # the MAD-outlier or staleness gate between refreshes.
         prev_factors = getattr(self.curve, 'factors', None)
-        self.curve.extractFactorsRobust(ref_series, self.curve.reference, k_mad=2.0, min_points=4)
+        self.curve.extractFactorsRobust(ref_series, self.curve.reference, k_mad=2.0, min_points=4, weights=quality_weights)
         if prev_factors is not None:
             alpha = BondConfig.RT_FACTOR_EWM_ALPHA
             new = np.array(self.curve.factors, dtype=float).ravel()
             old = np.array(prev_factors, dtype=float).ravel()
             if new.shape == old.shape:
-                self.curve.factors = sp.Matrix((alpha * new + (1 - alpha) * old).tolist())
+                # Only blend against PREVIOUS factors that still reprice
+                # today's anchors reasonably. The blend exists to damp
+                # refresh-to-refresh noise, but it is a plain average: if the
+                # persisted factors are stale or came from a degenerate fit,
+                # it drags today's good fit toward them (observed: a run whose
+                # reference set was empty persisted a level factor of ~0.46,
+                # and the next run's correct 2.39 got averaged down to 1.42 --
+                # a ~40-70bp error at every tenor). Worse, the blended result
+                # is re-persisted, so one bad run poisons every later one.
+                # Skip the blend when the old factors misprice the current
+                # anchors far worse than the new ones do.
+                if self._factors_repriced_worse(old, new, ref_series):
+                    logger.warning(
+                        "Previous factors reprice today's anchors far worse than the "
+                        "fresh fit; skipping the EWMA blend for this refresh "
+                        "(stale or degenerate persisted factors)."
+                    )
+                else:
+                    self.curve.factors = sp.Matrix((alpha * new + (1 - alpha) * old).tolist())
 
-        # build buckets
         total = len(self.env_quo)
         if total == 0:
             return pd.DataFrame(), pd.DataFrame(), self.curve.fitting()
-        
+
         worker_count = max(1, min(self.max_workers, total))
         buckets = self._make_buckets(self.env_quo, worker_count)
-        
-        # small tasks: use sequential to avoid overhead
+
         if total <= 500 or worker_count == 1 or len(buckets) <= 1:
             dict_p = [self.curve.affinePricing(self.env['Def'], b) for b in buckets]
         else:
@@ -364,18 +570,59 @@ class BondCurveRefresher:
                 logger.warning(f"Parallel pricing failed ({e}), falling back to sequential")
                 dict_p = [self.curve.affinePricing(self.env['Def'], b) for b in buckets]
 
-        # merge results
         dict_quote = {i: dict_p[i][0] for i in range(len(dict_p))}
         dict_sen = {i: dict_p[i][1] for i in range(len(dict_p))}
         quote_df = pd.concat(dict_quote).droplevel(0).sort_index()
         sen_df = pd.concat(dict_sen).droplevel(0).sort_index()
 
-        # ensure numeric and clean
         quote_df = quote_df.apply(pd.to_numeric, errors='coerce').dropna()
         sen_df = sen_df.apply(pd.to_numeric, errors='coerce').dropna()
 
-        logger.info(f"Finished computing {price_type} curve at: {datetime.now().strftime('%H:%M:%S')}")
+        logger.info(f"Finished computing mid curve at: {datetime.now().strftime('%H:%M:%S')}")
         return quote_df, sen_df, self.curve.fitting()
+
+    def _quoted_bid_ofr_quotes(self, mid_quote_df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+        """Apply the item 4.2 half-spread model to the mid quote to publish
+        non-crossing Bid/Ofr yield quotes per bond, in the same
+        {'Bid': df, 'Ofr': df} shape ``statAdjust``/downstream code expects
+        from the old two-independent-curve pricing.
+        """
+        from curves.calibration.spread import apply_spread_to_mid
+
+        if mid_quote_df.empty:
+            return {'Bid': pd.DataFrame(), 'Ofr': pd.DataFrame()}
+
+        mid_ytm = pd.to_numeric(mid_quote_df['收益率'], errors='coerce')
+
+        reference_bonds = pd.Index([], dtype=object)
+        if self.curve is not None and hasattr(self.curve, 'reference') and isinstance(self.curve.reference, pd.Series):
+            reference_bonds = pd.Index(
+                [_as_scalar_bond_id(b) for b in self.curve.reference.dropna().tolist()],
+                dtype=object,
+            )
+        is_reference = pd.Series(mid_ytm.index.isin(reference_bonds), index=mid_ytm.index)
+
+        df_def = self.env.get('Def', pd.DataFrame()) if self.env is not None else pd.DataFrame()
+        tenor = pd.to_numeric(df_def.reindex(mid_ytm.index).get('剩余期限'), errors='coerce') \
+            if '剩余期限' in df_def.columns else pd.Series(np.nan, index=mid_ytm.index)
+        tenor = tenor.fillna(tenor.median() if tenor.notna().any() else 1.0)
+
+        # Per-bond staleness: True only where the bond is a reference point
+        # that is stale on BOTH sides this refresh (mirrors _build_mid_ref_series
+        # dropping it from the mid fit entirely); other bonds have no direct
+        # staleness signal here so default to not-stale.
+        stale_bid = set(self._stale_reference_info('Bid', BondConfig.REF_BID_OFR_MAX_BP).keys())
+        stale_ofr = set(self._stale_reference_info('Ofr', BondConfig.REF_BID_OFR_MAX_BP).keys())
+        stale_both = stale_bid & stale_ofr
+        is_stale = pd.Series(mid_ytm.index.isin(stale_both), index=mid_ytm.index)
+
+        spread_df = apply_spread_to_mid(mid_ytm, tenor, is_reference, is_stale)
+
+        bid_quote = mid_quote_df.copy()
+        bid_quote['收益率'] = spread_df['Bid']
+        ofr_quote = mid_quote_df.copy()
+        ofr_quote['收益率'] = spread_df['Ofr']
+        return {'Bid': bid_quote, 'Ofr': ofr_quote}
 
     # ---- Orchestration ----
     def run(self) -> Dict[str, Any]:
@@ -392,25 +639,22 @@ class BondCurveRefresher:
         # self.bond_ref_df = pd.Series(spoti.values, index=termi.values) #create_bond_reference(spoti, termi)
         self.compute_quoted_bonds()
 
-        # price both sides
-        quotedict: Dict[str, pd.DataFrame] = {}
-        sendict: Dict[str, pd.DataFrame] = {}
-        curvedict: Dict[str, pd.DataFrame] = {}
-        
-        for side in ['Bid', 'Ofr']:
-            q, s, cfit = self._price_one_side(side)
-            quotedict[side] = q
-            sendict[side] = s
-            curvedict[side] = cfit
+        # Item 4.1: fit ONE mid curve (replacing two independent Bid/Ofr
+        # fits) and price the universe once off it; item 4.2 then publishes
+        # non-crossing Bid/Ofr quotes around that single mid via the spread
+        # model, preserving the {'Bid': ..., 'Ofr': ...} shape statAdjust
+        # and downstream CvBid/CvOfr consumers expect. See
+        # docs/dev/affine-curve-improvement-plan.md F8.
+        mid_quote_df, mid_sen_df, mid_curve_fit = self._price_mid()
 
         if self.bond_ref_df is None:
             raise ValueError("Bond reference data is not initialized")
 
-        sen = (sendict.get('Bid', pd.DataFrame()) + sendict.get('Ofr', pd.DataFrame())) / 2
-        sen = self._ensure_reference_sensitivities(sen)
+        quotedict = self._quoted_bid_ofr_quotes(mid_quote_df)
+        sen = self._ensure_reference_sensitivities(mid_sen_df)
         refspot_avg = self.bond_ref_df[['Bid', 'Ofr']].mean(axis=1, skipna=True).to_frame()
         pxrt = {
-            'Curve': (curvedict['Bid'] + curvedict['Ofr']) / 2,
+            'Curve': mid_curve_fit,
             'RefSpot': refspot_avg,
             'Quote': statAdjust(quotedict, env, stat['BondCurve']),
             'Sen': sen

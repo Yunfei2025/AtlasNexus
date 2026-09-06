@@ -163,6 +163,59 @@ Rules:
   accepting an OFR-ladder rank change; a rank flip that fails persistence is
   not an `otr_roll` event.
 
+## EOD vs. Intraday Z-Score Staleness (Mature RV Only)
+
+`otr_ofr_rv`'s z-score has two independent inputs, refreshed on different
+schedules:
+
+- **Ladder identity + calibration history** (`{asset_class}-newissue.pkl`,
+  written by `refresh_new_issue_universe`): appended **once per day**, keyed
+  to `DateConfig`'s `dp` (the last *completed* CN business day), and wired
+  only into the EOD pipeline (`engine/pipeline/eod.py` ->
+  `curves.interface.calibrate_otr_ofr`). `daily=True` always resolves to a
+  finished trading day, never "today mid-session" — this function cannot be
+  used to append a same-day row before the session closes.
+- **Live spread level** (`refresh_otr_ofr_rv_realtime`, called from
+  `StatRefresher.run_all` on every intraday refresh /
+  `python main.py refresh` / `scheduler`): recomputes today's live
+  `CloseYield`/`CurveYield`/spread from current `BondRT` quotes, but reads
+  the ladder identity and `CalibrationSpread` mean/vol from whatever
+  `-newissue.pkl` already holds on disk — i.e. as of last night's EOD run.
+
+Consequence: during the trading session, the realtime z-score is
+(today's live spread) scored against (mean/vol, and OFR-ladder identity,
+frozen at last EOD). Two situations follow from this, and only the first is
+now fixed:
+
+1. **Short-episode calibration noise right after a roll** (a real bug): fixed
+   by the `CalibrationSpread` fallback in
+   `curves/refreshers/otr_ofr_rv.py::_episode_rows_to_pair_frames` — EOD and
+   realtime now call `OU_calibrate` on the same series, sourced from the same
+   `build_otr_ofr_rv_rows()`, so a young episode no longer calibrates on a
+   handful of noisy rows differently between the two paths.
+2. **T-1 calibration lag** (structural, not yet fixed): if an OFR-ladder rank
+   change happens *intraday* (a turnover flip that would pass the persistence
+   rule), the realtime path keeps scoring against the pre-roll identity and
+   calibration until the next EOD run reprocesses `-newissue.pkl`. This shows
+   up as a genuine EOD-vs-realtime z-score difference around roll days, and
+   as intraday z-scores generally trailing EOD by up to one session even
+   without a roll (mean/vol drift priced in at last close, not intraday).
+
+Options to close gap 2 (not yet implemented):
+
+- Have the intraday refresh path call a same-day-safe variant of
+  `refresh_new_issue_universe` (`daily` mode keyed to the in-progress session
+  rather than `dp`) before `refresh_otr_ofr_rv_realtime`, so ladder identity
+  and calibration history are current intraday. Requires sourcing intraday
+  turnover/BondRT consistently with the persistence rule so a same-day flip
+  isn't accepted on noise the EOD path would reject.
+  - **This document does not decide this option is correct — the tradeoff
+    (same-day turnover-persistence risk vs. staleness) needs sign-off before
+    implementation.**
+- Or, accept gap 2 as by-design and surface it explicitly in the UI (e.g. a
+  "calibrated as of `<EOD date>`" annotation next to the realtime z-score) so
+  it reads as expected lag, not a discrepancy to debug.
+
 ## BondNewIssue Model
 
 ### Event Hypothesis and Sign

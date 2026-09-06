@@ -20,6 +20,7 @@ sys.path.insert(0, str(PATH))
 from curves.utils.file import updatePKL
 from curves.backtest import database as db
 from curves.utils.loader import loadBacktestingInputs, loadCNBDTS
+from curves.utils.cn_calendar import is_cn_workday
 from settings.paths import DIR_INPUT
 
 # Import core backtest functionality
@@ -107,26 +108,11 @@ class Backtestor:
             env.index = pd.to_datetime(env.index).date
             prange = [d for d in prange if d in env.index]
             return env, prange
-        
+
         # Caching removed: always load fresh data
         from dateutil.relativedelta import relativedelta
-        # Allow backtest to explicitly retrieve data outside trading hours
-        # (e.g., weekends) while keeping normal auto-retrieval gated.
-        try:
-            from data.providers import retrieve as dp_retrieve
-            dp_retrieve.set_allow_nontrading_retrieval(True)
-        except Exception:
-            dp_retrieve = None
-
         window_range = [prange[0], prange[-1]]
-        try:
-            database = db.loadDB(self.btype, window_range, self.update_flags)
-        finally:
-            if 'dp_retrieve' in locals() and dp_retrieve is not None:
-                try:
-                    dp_retrieve.set_allow_nontrading_retrieval(False)
-                except Exception:
-                    pass
+        database = db.loadDB(self.btype, window_range, self.update_flags)
         env = loadBacktestingInputs(self.btype, window_range, database)
         # Backtest dates are datetime.date values, while pandas loaders commonly
         # return a DatetimeIndex. Comparing a date to a DatetimeIndex is false
@@ -141,6 +127,16 @@ class Backtestor:
                 except (TypeError, ValueError):
                     continue
         prange = [d for d in prange if d in env['Close'].index]
+        # Also drop weekends/CN holidays even when the source data has a row
+        # for them. The bond-price pickles can carry a forward-filled or
+        # partial row for a non-trading day (observed: 2026-09-05, a
+        # Saturday, had only 126 of the prior day's 205 bonds, all identical
+        # to Friday's close) -- fitting a curve on that thin, non-market
+        # cross-section produces a real but spurious factor jump (level
+        # 2.226 -> 2.348 on 2026-09-05) that then contaminates every bond's
+        # CurveYield/spread/Zscore priced off it, with no trading activity
+        # to justify the move. See docs/dev/affine-curve-improvement-plan.md.
+        prange = [d for d in prange if is_cn_workday(d)]
         return env, prange
 
     def _init_curve(self, env, prange):
@@ -246,32 +242,54 @@ class Backtestor:
     
     def run(self):
         """Main execution with performance monitoring."""
-        with self._time_operation("Total Backtest"):
-            with self._time_operation("Build Periods"):
-                test_period, periods, prange = self._build_periods()
-            
-            with self._time_operation("Load Environment"):
-                env, prange = self._load_env(prange)
-            if not prange:
-                logger.warning(
-                    f"No {self.btype} price data is available between "
-                    f"{self.start} and {self.end}; skipping curve backfill."
-                )
-                return
-            datelist = [d.strftime("%Y-%m-%d") for d in prange]
-            print("Compute following days: ", ', '.join(datelist))
-            
-            with self._time_operation("Initialize Curves"):
-                dict_curve = self._init_curve(env, prange)
-            
-            with self._time_operation("Save Curve Objects"):
-                dict_curve = updatePKL(dict_curve, os.path.join(DIR_INPUT, self.btype + '-cvobj.pkl'))
-            
-            with self._time_operation("Run Pricing"):
-                bond_px = self._run_pricing(dict_curve, env, test_period, periods)
-                # import pdb; pdb.set_trace()
-            with self._time_operation("Save Pricing Results"):
-                bond_px = updatePKL(bond_px, os.path.join(DIR_INPUT, self.btype + '-cvpx.pkl'))
+        # Allow the ENTIRE backtest (env loading, curve fitting, and pricing --
+        # not just the initial loadDB call) to retrieve data outside trading
+        # hours. Previously this was only enabled around _load_env(), then
+        # reset to False before _init_curve()/_run_pricing() ran -- so any
+        # Wind call made during curve fitting or pricing was still gated,
+        # which silently starved calAffineCov of data (measured: "too few
+        # valid dates" / non-convergence, and a 2023-03-31..2023-06-30
+        # backtest run that made the fit WORSE, 41.6bp -> 80.7bp mean
+        # model-vs-market error) whenever the backtest was run outside
+        # trading hours, which is the normal case for a historical backfill.
+        try:
+            from data.providers import retrieve as dp_retrieve
+            dp_retrieve.set_allow_nontrading_retrieval(True)
+        except Exception:
+            dp_retrieve = None
+        try:
+            with self._time_operation("Total Backtest"):
+                with self._time_operation("Build Periods"):
+                    test_period, periods, prange = self._build_periods()
+
+                with self._time_operation("Load Environment"):
+                    env, prange = self._load_env(prange)
+                if not prange:
+                    logger.warning(
+                        f"No {self.btype} price data is available between "
+                        f"{self.start} and {self.end}; skipping curve backfill."
+                    )
+                    return
+                datelist = [d.strftime("%Y-%m-%d") for d in prange]
+                print("Compute following days: ", ', '.join(datelist))
+
+                with self._time_operation("Initialize Curves"):
+                    dict_curve = self._init_curve(env, prange)
+
+                with self._time_operation("Save Curve Objects"):
+                    dict_curve = updatePKL(dict_curve, os.path.join(DIR_INPUT, self.btype + '-cvobj.pkl'))
+
+                with self._time_operation("Run Pricing"):
+                    bond_px = self._run_pricing(dict_curve, env, test_period, periods)
+                    # import pdb; pdb.set_trace()
+                with self._time_operation("Save Pricing Results"):
+                    bond_px = updatePKL(bond_px, os.path.join(DIR_INPUT, self.btype + '-cvpx.pkl'))
+        finally:
+            if dp_retrieve is not None:
+                try:
+                    dp_retrieve.set_allow_nontrading_retrieval(False)
+                except Exception:
+                    pass
         
         # Print performance summary
         logger.info("=== Performance Summary ===")

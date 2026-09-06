@@ -17,85 +17,6 @@ from settings.fixed_income import IRSConfig, BondConfig
 from curves.utils.cn_calendar import getScheduleDays
 
 
-def quote_quality_weights(
-    is_live: pd.Series,
-    spread_bp: pd.Series = None,
-    volume: pd.Series = None,
-    max_spread_bp: float = 15.0,
-    min_weight: float = 0.1,
-) -> pd.Series:
-    """Map per-reference-point quote-quality signals into a factor-extraction
-    weight, for use with ``Curve.extractFactorsRobust(..., weights=...)``.
-
-    Args:
-        is_live: True where the point's YTM comes from a genuine live/traded
-            quote; False where it fell back to a CNBD model valuation
-            (`估价收益率:%(中债)`), which for illiquid off-the-run refs can lag
-            the market by days (see F9). Required.
-        spread_bp: bid-ofr YTM spread in bp, where available. A wider spread
-            means a less certain price, so it should count for less.
-        volume: recent traded volume/turnover, where available. Larger
-            volume means a more reliable print.
-        max_spread_bp: spread at or above which the spread factor bottoms
-            out at ``min_weight`` (same scale as BondConfig.REF_BID_OFR_MAX_BP).
-        min_weight: floor for any individual quality factor, so a single bad
-            signal never fully zeroes out a point the way the binary MAD
-            screen would -- it should count for less, not nothing (that is
-            still ultimately possible via the separate MAD screen if the
-            point is a genuine outlier once fit).
-
-    Returns:
-        Weight per point (same index as the inputs), in (0, 1], product of
-        the individual quality factors that have data. A point missing all
-        optional signals (spread_bp, volume) gets weight 1.0 if live, or the
-        live/CNBD factor alone if not.
-
-    See docs/dev/affine-curve-improvement-plan.md F9 / item 2.3.
-    """
-    idx = is_live.index
-    live_factor = pd.Series(np.where(is_live.to_numpy(dtype=bool), 1.0, min_weight), index=idx)
-
-    weight = live_factor.copy()
-
-    if spread_bp is not None:
-        s = pd.to_numeric(spread_bp.reindex(idx), errors='coerce')
-        # Linear ramp from weight 1.0 at spread=0 down to min_weight at
-        # spread=max_spread_bp, floored at min_weight beyond that. Missing
-        # spread info does not penalize the point (factor of 1.0).
-        spread_factor = 1.0 - (1.0 - min_weight) * (s.clip(lower=0.0, upper=max_spread_bp) / max_spread_bp)
-        spread_factor = spread_factor.fillna(1.0)
-        weight = weight * spread_factor
-
-    if volume is not None:
-        v = pd.to_numeric(volume.reindex(idx), errors='coerce')
-        v_valid = v.dropna()
-        if not v_valid.empty and v_valid.max() > 0:
-            # Rank-based, not raw-magnitude: turnover distributions are
-            # heavy-tailed across a reference set of very different tenors,
-            # so a linear or log scaling would let one very liquid point
-            # dominate. Rank into [min_weight, 1.0] instead.
-            ranks = v.rank(method='average', na_option='keep')
-            n_valid = v_valid.shape[0]
-            volume_factor = min_weight + (1.0 - min_weight) * ((ranks - 1.0) / max(n_valid - 1, 1))
-            volume_factor = volume_factor.fillna(1.0)
-        else:
-            volume_factor = pd.Series(1.0, index=idx)
-        weight = weight * volume_factor
-
-    # Floor at min_weight, NOT min_weight**2. Three independent factors
-    # (live/CNBD, spread width, volume rank) multiply together, so a bond
-    # that looks mediocre on each -- very common, since outside live Wind
-    # hours BondRT falls back to the CNBD mark and EVERY bond scores
-    # live=False -- compounded to ~0.03 and effectively dropped out of the
-    # fit. That both defeats the purpose of graded weighting (the whole
-    # point of item 2.3 was "count less", not "count as nothing") and
-    # measurably degraded the fit: on real TBond data the compounded
-    # weights nearly doubled anchor-fit RMSE (3.7bp -> 6.3bp) versus the
-    # unweighted fit. min_weight is the intended worst case for any single
-    # point; clip the product there.
-    return weight.clip(lower=min_weight, upper=1.0)
-
-
 def _instantaneous_forward_from_log_discount(log_discount, tenors):
     log_discount = np.asarray(log_discount, dtype=float)
     tau = np.asarray(tenors, dtype=float)
@@ -148,14 +69,10 @@ class Curve:
         self.gamma = GeneralConfig.GAMMA
         self.mtype = GeneralConfig.MODEL_TYPE
         self.caltype = GeneralConfig.CALC_TYPE
-        # Curve-quality flags, populated by calibrate()/fitting(); see F3,
-        # F12 / item 1.5 in docs/dev/affine-curve-improvement-plan.md.
-        self.affine_cov_converged = None
-        self.affine_unstable = None
-
+        
     def calibrate(self,term,spot):
         print('Update S2 Matrix on ',self.day.strftime("%Y-%m-%d"))
-        self.S2, self.affine_cov_converged = af.calAffineCov(term,spot,self.gamma,self.mtype,self.caltype)
+        self.S2 = af.calAffineCov(term,spot,self.gamma,self.mtype,self.caltype)
         return self
     
     def extractFactors(self,df_bs,bond_ref):
@@ -163,56 +80,17 @@ class Curve:
         self.reference = bond_ref
         return self
 
-    def extractFactorsRobust(self, df_bs, bond_ref, k_mad=2.0, min_points=4, weights=None):
-        """3-factor extraction with MAD-based outlier screening, and optional
-        per-point quality weighting.
+    def extractFactorsRobust(self, df_bs, bond_ref, k_mad=2.0, min_points=4):
+        """3-factor extraction with MAD-based outlier screening.
 
-        First-pass (weighted, if `weights` given) OLS, then drop reference
-        points whose residual exceeds k_mad × scaled-MAD; re-fit (again
-        weighted) on the survivors. Falls back to the first-pass fit if
-        fewer than `min_points` survive.
+        First-pass OLS, then drop reference points whose residual exceeds
+        k_mad × scaled-MAD; re-fit on the survivors. Falls back to the
+        first-pass fit if fewer than `min_points` survive.
 
-        Args:
-            weights: optional per-reference-point quality weight (same
-                order/index as ``df_bs``), e.g. from
-                ``quote_quality_weights`` below. A weighted point still
-                counts in proportion to its weight rather than only ever
-                being fully believed or fully dropped by the binary MAD
-                screen. None (default) reproduces the previous unweighted
-                behavior exactly. See
-                docs/dev/affine-curve-improvement-plan.md F9 / item 2.3.
-
-        Diagnostics: self._fit_residuals, self._fit_kept, self._fit_dropped,
-        self._fit_weights (the weights actually used, or None).
-
-        Raises:
-            ValueError: if fewer than 3 usable reference points are supplied.
-                A 3-factor fit needs at least 3 anchors; an empty/near-empty
-                df_bs previously slipped through np.linalg.lstsq and returned
-                a garbage near-zero factor vector, yielding a degenerate
-                near-flat curve (~0.25% at every tenor) that no downstream
-                guard caught -- `fitting()`'s affine_unstable check itself
-                requires len(ref_input) >= 3, so it never even ran. Fail
-                loudly here instead of publishing a silently-wrong curve.
+        Diagnostics: self._fit_residuals, self._fit_kept, self._fit_dropped.
         """
-        df_bs = pd.to_numeric(pd.Series(df_bs), errors='coerce').dropna()
-        if len(df_bs) < 3:
-            raise ValueError(
-                f"extractFactorsRobust: need >=3 usable reference points for a "
-                f"3-factor fit, got {len(df_bs)}. Upstream reference/yield "
-                f"lookup most likely returned no data (see "
-                f"curves/calibration/selector.py::extract_yield)."
-            )
-
-        weights_arr = None
-        if weights is not None:
-            weights_arr = pd.Series(weights).reindex(df_bs.index).to_numpy(dtype=float)
-            if not np.isfinite(weights_arr).all():
-                raise ValueError("extractFactorsRobust: weights must be finite and cover every point in df_bs")
-        self._fit_weights = pd.Series(weights_arr, index=df_bs.index) if weights_arr is not None else None
-
         # First-pass fit
-        self.factors = af.getAffineFactors(df_bs, self.S2, self.gamma, self.mtype, self.caltype, weights=weights_arr)
+        self.factors = af.getAffineFactors(df_bs, self.S2, self.gamma, self.mtype, self.caltype)
         self.reference = bond_ref
 
         taus = df_bs.index.values.astype(float)
@@ -245,8 +123,7 @@ class Curve:
         self._fit_ref_input = df_bs
         if keep.sum() >= min_points and keep.sum() < len(residuals):
             df_kept = df_bs.iloc[keep]
-            weights_kept = weights_arr[keep] if weights_arr is not None else None
-            self.factors = af.getAffineFactors(df_kept, self.S2, self.gamma, self.mtype, self.caltype, weights=weights_kept)
+            self.factors = af.getAffineFactors(df_kept, self.S2, self.gamma, self.mtype, self.caltype)
             self._fit_kept = keep
             self._fit_dropped = self._fit_residuals[~keep]
         else:
@@ -273,16 +150,13 @@ class Curve:
             # TBond and CDB quotes are both generated directly from the affine
             # curve without adding a coupon-specific tax premium.
             tax = 0.
-            # Genuine discount / zero-coupon bonds (freq == 0) are priced on
-            # their own simple-interest short-end formula (pricing.py /
-            # pricingAffine); never fabricate a synthetic freq to force them
-            # through the coupon-bearing path (see affine plan F1 / item 1.1).
             if freq == 0.:
                 coup = 0.
+                freq = round((365/(mate-mats).days),0)
             else:
                 coup = row['票面利率:%']
-                if np.isnan(freq):
-                    freq = 1.
+            if np.isnan(freq):
+                freq = 1.       
             if mats < self.day:
                 if b not in schedule:
                     schedule[b] = yd.scheduleDate(mats, mate, name, freq)
@@ -332,14 +206,13 @@ class Curve:
                 else:
                     ytm  = row['成交收益率']
                     
-            # See affine plan F1 / item 1.1: never fabricate a synthetic freq
-            # for genuine discount/zero-coupon bonds.
             if freq == 0.:
                 coup = 0.
+                freq = round((365/(mate-mats).days),0)
             else:
                 coup = row['票面利率:%']
-                if np.isnan(freq):
-                    freq = 1.
+            if np.isnan(freq):
+                freq = 1.       
             if mats < self.day:
                 if np.isnan(ytm):
                     quote.loc[b,'收益率'] = np.nan
@@ -377,14 +250,13 @@ class Curve:
             mate = row['到期日期']
             freq = row['每年付息次数']
             price  = bond_price.loc[b]
-            # See affine plan F1 / item 1.1: never fabricate a synthetic freq
-            # for genuine discount/zero-coupon bonds.
             if freq == 0.:
                 coup = 0.
+                freq = round((365/(mate-mats).days),0)
             else:
                 coup = row['票面利率:%']
-                if np.isnan(freq):
-                    freq = 1.
+            if np.isnan(freq):
+                freq = 1.       
             if mats < self.day:
                 if b not in schedule:
                     schedule[b] = yd.scheduleDate(mats,mate,name,freq)      
@@ -455,11 +327,6 @@ class Curve:
                 or anchor_fit_error > 5.0
             )
 
-            # Surface the instability flag on the curve object itself (F12,
-            # item 1.5) so trading logic can refuse to signal off a degraded
-            # curve, not just fall back silently in this display path.
-            self.affine_unstable = affine_unstable
-
             if affine_unstable:
                 diag_cap = 1e-4
                 max_diag = float(np.max(np.diag(S2_eff))) if S2_eff.size else 0.0
@@ -471,8 +338,6 @@ class Curve:
                 x_display = af.getAffineFactors(ref_input, sp.Matrix(S2_display.tolist()), self.gamma, self.mtype, self.caltype)
                 x_display = np.asarray(x_display, dtype=float).ravel()
                 df_curve = _evaluate_curve(S2_display, x_display)
-        else:
-            self.affine_unstable = False
 
         exponent = -df_curve.values * df_curve.index.values.astype(float) / 100
         exponent = np.clip(exponent, -700, 700)
@@ -489,9 +354,7 @@ class IRSCurve:
         self.gamma = GeneralConfig.GAMMA
         self.mtype = GeneralConfig.MODEL_TYPE
         self.caltype = GeneralConfig.CALC_TYPE
-        self.affine_cov_converged = None
-
-
+    
     def extractKeySpot(self,df):    
         days_del = self.schedule.diff(1)
         days_del.iloc[0] = self.schedule.iloc[0]
@@ -550,7 +413,7 @@ class IRSCurve:
     
     def calibrate(self,term,spot):
         print('Update S2 Matrix on ',self.day.strftime("%Y-%m-%d"))
-        self.S2, self.affine_cov_converged = af.calAffineCov(term,spot,self.gamma,self.mtype,self.caltype)
+        self.S2 = af.calAffineCov(term,spot,self.gamma,self.mtype,self.caltype)
         return self
     
     def extractFactors(self,df_ref):

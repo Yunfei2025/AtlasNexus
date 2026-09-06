@@ -13,11 +13,16 @@ from ._metrics import annualized_sharpe, per_trade_sharpe
 
 
 def _robust_daily_scale(diff_s: pd.Series, window: int) -> pd.Series:
-    """Rolling robust scale of daily changes via MAD (same units as diff_s)."""
+    """EWMA(span=window) scale of daily changes (same units as diff_s).
+
+    Matches the ewm_vol convention used for spread-level Zscore elsewhere
+    (OU_calibrate / alpha_snapshot.py / alpha_scoring.py's momentum zscore),
+    so the trend backtest engine's entry-signal scale is consistent with the
+    live Candidates scanner's momentum Zscore for the same instrument.
+    """
     d = pd.to_numeric(diff_s, errors='coerce')
-    med = d.rolling(window).median()
-    mad = (d - med).abs().rolling(window).median()
-    return 1.4826 * mad
+    span = max(int(window), 2)
+    return d.ewm(span=span, min_periods=min(span, max(d.dropna().shape[0], 2))).std()
 
 
 def _z_momentum_state(
@@ -32,7 +37,7 @@ def _z_momentum_state(
     Returns:
         trend_state: +1 / -1 / 0 state series
         z_mom: z-scored momentum series
-        sigma_mad: rolling robust volatility scale used for normalization
+        sigma_ewm: rolling EWMA volatility scale used for normalization
     """
     s = pd.to_numeric(series, errors='coerce').dropna().copy()
     if s.empty:
@@ -44,8 +49,8 @@ def _z_momentum_state(
     z_thr = abs(float(theta_z)) if np.isfinite(theta_z) else 1.25
 
     momentum = s.diff(k)
-    sigma_mad = _robust_daily_scale(momentum, w)
-    z_mom = momentum / sigma_mad.replace(0, np.nan)
+    sigma_ewm = _robust_daily_scale(momentum, w)
+    z_mom = momentum / sigma_ewm.replace(0, np.nan)
     z_mom = z_mom.replace([np.inf, -np.inf], np.nan)
 
     raw = pd.Series(np.nan, index=s.index, dtype=float)
@@ -54,8 +59,8 @@ def _z_momentum_state(
     state = raw.ffill().fillna(0.0)
     state.name = 'trend_state'
     z_mom.name = 'z_mom'
-    sigma_mad.name = 'sigma_mad'
-    return state, z_mom, sigma_mad
+    sigma_ewm.name = 'sigma_ewm'
+    return state, z_mom, sigma_ewm
 
 
 def run_trend_backtest(
@@ -86,7 +91,7 @@ def run_trend_backtest(
     if len(s) < max(60, vol_window + 5, mom_window + 5):
         return {'error': 'Insufficient data'}
 
-    trend_state, z_mom, sigma_mad = _z_momentum_state(
+    trend_state, z_mom, sigma_ewm = _z_momentum_state(
         s,
         theta_z=float(theta_z),
         mom_window=int(mom_window),

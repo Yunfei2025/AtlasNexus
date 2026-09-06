@@ -66,6 +66,21 @@ def _ofr_rank_columns() -> List[str]:
     return cols
 
 
+def _ofr_ladder_stage_columns() -> List[str]:
+    """Per-rung OFR{k}-vs-OFR1 spread/instrument columns for k=2..depth.
+
+    OFR1 vs itself (k=1) is meaningless and excluded, matching the same
+    ofrk_id == ofr1_id guard used elsewhere (see curves/refreshers/
+    otr_ofr_rv.py). These mirror spread_otr_ofr1/instrument_id_otr_ofr1's
+    shape exactly so curves/refreshers/newissue_spreads.py's _STAGES dict can
+    treat 'ofr{k}_ofr1' like any other stage.
+    """
+    cols: List[str] = []
+    for k in range(2, NewIssueConfig.OFR_LADDER_DEPTH + 1):
+        cols += [f'spread_ofr{k}_ofr1', f'instrument_id_ofr{k}_ofr1']
+    return cols
+
+
 UNIVERSE_ROW_COLUMNS = [
     'asset_class', 'issuer_class', 'tenor_bucket',
     'nib_id', 'nib_start_date', 'nib_age_days', 'quote_ok_nib', 'nib_turnover', 'ytm_nib',
@@ -74,6 +89,7 @@ UNIVERSE_ROW_COLUMNS = [
     'dv01_ratio_otr_nib', 'dv01_ratio_ofr1_otr',
     'spread_nib_otr', 'spread_otr_ofr1',
     'instrument_id_nib_otr', 'instrument_id_otr_ofr1',
+    *_ofr_ladder_stage_columns(),
     'rejection_reason',
 ]
 
@@ -81,8 +97,34 @@ UNIVERSE_ROW_COLUMNS = [
 def instrument_id(tenor_bucket: str, stage: str, leg1_id: Any, leg2_id: Any) -> str:
     """Canonical BondNewIssue instrument label:
     ``<tenor_bucket>:<stage>:<leg1_id>|<leg2_id>``, where ``stage`` is
-    ``nib_otr`` or ``otr_ofr1``."""
+    ``nib_otr``, ``otr_ofr1``, or ``ofr{k}_ofr1`` (k=2..OFR_LADDER_DEPTH)."""
     return f'{tenor_bucket}:{stage}:{leg1_id}|{leg2_id}'
+
+
+def _add_ofr_ladder_spreads(row: Dict[str, Any], confirmed: Dict[int, Any], tenor_bucket: str) -> None:
+    """Populate spread_ofr{k}_ofr1 / instrument_id_ofr{k}_ofr1 for k=2..depth.
+
+    Mirrors the otr_ofr1 stage's own convention: spread is leg1 - leg2 with
+    OFR1 as the reference leg (row['spread_otr_ofr1'] = ytm_otr - ytm_ofr1,
+    i.e. incumbent minus successor), so here spread = ytm_ofr{k} - ytm_ofr1.
+    A rung with no confirmed bond yet (still NaN this early in the ladder's
+    life) or one that collapses onto OFR1 itself contributes NaN/None rather
+    than a synthetic self-spread, matching curves/refreshers/otr_ofr_rv.py's
+    ofrk_id == ofr1_id guard.
+    """
+    ofr1_id = confirmed.get(1, np.nan)
+    ytm_ofr1 = row.get('ytm_ofr1', np.nan)
+    for k in range(2, NewIssueConfig.OFR_LADDER_DEPTH + 1):
+        ofrk_id = confirmed.get(k, np.nan)
+        ytm_ofrk = row.get(f'ytm_ofr{k}', np.nan)
+        valid = (
+            pd.notna(ofrk_id) and pd.notna(ofr1_id) and str(ofrk_id) != str(ofr1_id)
+            and pd.notna(ytm_ofrk) and pd.notna(ytm_ofr1)
+        )
+        row[f'spread_ofr{k}_ofr1'] = (ytm_ofrk - ytm_ofr1) if valid else np.nan
+        row[f'instrument_id_ofr{k}_ofr1'] = (
+            instrument_id(tenor_bucket, f'ofr{k}_ofr1', ofrk_id, ofr1_id) if valid else np.nan
+        )
 
 
 def _empty_row(asset_class: str, tenor_bucket: str, rejection_reason: str) -> Dict[str, Any]:
@@ -336,6 +378,7 @@ def _select_otr_ofr_for_date(
     row['instrument_id_otr_ofr1'] = (
         instrument_id(tenor_bucket, 'otr_ofr1', otr_id, ofr1_id) if pd.notna(ofr1_id) else np.nan
     )
+    _add_ofr_ladder_spreads(row, confirmed, tenor_bucket)
     return row
 
 
@@ -746,6 +789,10 @@ def backfill_new_issue_universe_turnover(
             row['instrument_id_nib_otr'] = instrument_id(tenor_bucket, 'nib_otr', nib_id, otr_id)
             row['instrument_id_otr_ofr1'] = (
                 instrument_id(tenor_bucket, 'otr_ofr1', otr_id, ofr1_id) if pd.notna(ofr1_id) else np.nan
+            )
+            _add_ofr_ladder_spreads(
+                row, {rank: row.get(f'{name}_id') for rank, name in _RANK_NAMES.items() if name != 'otr'},
+                tenor_bucket,
             )
             row['rejection_reason'] = 'backfilled_with_turnover'
 

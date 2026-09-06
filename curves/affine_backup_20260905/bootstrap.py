@@ -8,7 +8,6 @@ Created on Mon Aug 29 22:47:32 2022
 
 """ Bootstrapping the yield curve """
 import math
-import warnings
 import numpy as np
 from functools import lru_cache
 from scipy.optimize import brentq
@@ -32,44 +31,10 @@ class BootstrapYieldCurve(object):
         """Cached zero coupon spot rate calculation."""
         return math.exp(math.log(par/price)/T) - 1
         
-    def add_instrument(self, par, T, coup, price, freq, flow_times=None,
-                       redemption_time=None):
-        """Save instrument info by maturity (tax-agnostic).
-
-        Args:
-            flow_times: optional explicit coupon times (in years from the
-                pricing date, ascending, EXCLUDING the redemption at T) taken
-                from the bond's real payment schedule. When omitted the
-                coupon dates are reconstructed from (T, freq) as
-                ``T - n/freq + k/freq``, which silently invents a coupon just
-                after the pricing date whenever T leaves a small remainder --
-                exactly what happens on a bond's coupon anniversary, when it
-                has just gone ex-coupon and the dirty price handed in here has
-                already dropped by the full coupon. The solver then has to
-                raise the terminal zero to reconcile a phantom cashflow with
-                that lower price: CBond 10Y 250215.IB printed 1.7931 -> 2.0016
-                -> 1.7975 across its 2026-06-18 coupon date, a ~21bp spike and
-                full reversal on a 1.8bp move in the underlying yield.
-                Passing the real schedule removes the phantom coupon.
-        """
-        # `T` is the curve NODE LABEL (and the interpolation grid key).
-        # `redemption_time` is when the final cashflow actually pays, which
-        # differs from T by 1-2 days whenever getNextTradingDate shifts the
-        # maturity off a weekend/holiday -- 24.6% of reference bond-days,
-        # worth up to ~0.8bp of implied zero at the short end (error scales
-        # as 1/T). Defaults to T so existing callers are unchanged.
-        if redemption_time is None:
-            redemption_time = T
-        if T in self.instruments:
-            # Previously a silent overwrite. The upstream duplicate guard
-            # (F5 / item 1.3) should prevent this; surface it if it ever
-            # slips through rather than losing a reference bond quietly.
-            warnings.warn(
-                f"BootstrapYieldCurve: duplicate maturity key T={T!r}; "
-                f"the earlier instrument is being overwritten."
-            )
+    def add_instrument(self, par, T, coup, price, freq):
+        """Save instrument info by maturity (tax-agnostic)."""
         # Store instrument without tax treatment (market/pre-tax cashflows)
-        self.instruments[T] = (par, coup, price, freq, flow_times, redemption_time)
+        self.instruments[T] = (par, coup, price, freq)
         # Invalidate caches when new instruments are added
         self._maturities_cache = None
         self._zero_rates_arrays = None
@@ -112,7 +77,7 @@ class BootstrapYieldCurve(object):
         # Batch process zero coupon bonds
         zero_coupon_instruments = []
         for T in maturities:
-            (par, coup, price, freq, _flow_times, _redemption_t) = self.instruments[T]
+            (par, coup, price, freq) = self.instruments[T]
             if coup == 0:
                 zero_coupon_instruments.append((T, par, price))
         
@@ -145,14 +110,14 @@ class BootstrapYieldCurve(object):
                 
     def __calculate_bond_spot_rate__(self, T, instrument):
         """Get spot rate of a bond by bootstrapping with performance optimizations."""
-        (par, coup, price, freq, flow_times, redemption_time) = instrument
-        if coup == 0:  # Zero coupon / discount bond -- check before dividing by freq
-            return self._zero_coupon_spot_rate_cached(par, price, T)
-
+        (par, coup, price, freq) = instrument
         periods = T * freq  # Number of coupon payments
         value = price
         per_coupon = coup / freq  # Coupon per period (currency per 100 par)
-
+              
+        if coup == 0:  # Zero coupon bond
+            return self._zero_coupon_spot_rate_cached(par, price, T)
+        
         # Build interpolation arrays more efficiently
         if self.zero_rates:
             # Use cached arrays if possible
@@ -172,22 +137,12 @@ class BootstrapYieldCurve(object):
         dt = 1.0 / freq  # Avoid repeated division
         n = int(periods)
         
-        if flow_times is not None:
-            # Real payment schedule supplied: use it verbatim rather than
-            # reconstructing dates from (T, freq). Keep only the intermediate
-            # coupons -- the redemption leg at T is added separately below.
-            coupon_times = np.asarray(flow_times, dtype=np.float64).ravel()
-            coupon_times = coupon_times[np.isfinite(coupon_times)]
-            coupon_times = np.sort(coupon_times[coupon_times < T - 1e-10])
-            n = coupon_times.size
-
         if n > 0:
-            if flow_times is None:
-                # Pre-calculate coupon payment times using numpy
-                # Align with bootstrap0: times from 0, dt, 2dt, ..., T-dt (+ remainder), excluding 0
-                remainder = T - n * dt
-                coupon_times = remainder + np.arange(n, dtype=np.float64) * dt  # length n, last < T
-
+            # Pre-calculate coupon payment times using numpy
+            # Align with bootstrap0: times from 0, dt, 2dt, ..., T-dt (+ remainder), excluding 0
+            remainder = T - n * dt
+            coupon_times = remainder + np.arange(n, dtype=np.float64) * dt  # length n, last < T
+            
             # Exclude times extremely close to 0
             mask = coupon_times > 1e-10
             if np.any(mask):
@@ -242,10 +197,8 @@ class BootstrapYieldCurve(object):
                         disc_post = np.power(1.0 + z_t, -post_ct)
                         pv_coupons = per_coupon * np.sum(disc_post)
                         
-                        # Final cash flow: discount at the time the
-                        # redemption ACTUALLY pays (business-day adjusted),
-                        # not at the node label T.
-                        dT = (1.0 + r) ** (-redemption_time)
+                        # Final cash flow at T
+                        dT = (1.0 + r) ** (-T)
                         pv_final = (par + per_coupon) * dT
                         return pv_coupons + pv_final
                     
@@ -270,7 +223,7 @@ class BootstrapYieldCurve(object):
                         if x.size > 0:
                             disc_last = np.power(1.0 + y_last, -post_ct)
                             value -= per_coupon * np.sum(disc_last)
-                        return math.exp(math.log((par + per_coupon) / value) / redemption_time) - 1
+                        return math.exp(math.log((par + per_coupon) / value) / T) - 1
                     
                     try:
                         return brentq(lambda r: pv_with_r(r) - value, r_lo, r_hi, xtol=1e-12, rtol=1e-12)
@@ -278,7 +231,7 @@ class BootstrapYieldCurve(object):
                         return 0.5 * (r_lo + r_hi)
         
         # Final spot rate calculation (optimized)
-        return math.exp(math.log((par + per_coupon) / value) / redemption_time) - 1
+        return math.exp(math.log((par + per_coupon) / value) / T) - 1
             
     def zero_coupon_spot_rate(self, par, price, T):
         """Get zero rate of a zero-coupon bond (pre-tax) - kept for backward compatibility."""

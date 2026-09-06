@@ -57,6 +57,36 @@ _STAGES = {
         'dv01_ratio_col': 'dv01_ratio_ofr1_otr', 'direction': 'SELL',
     },
 }
+for _k in range(2, NewIssueConfig.OFR_LADDER_DEPTH + 1):
+    # OFR{k}-vs-OFR1: bets the k-th turnover runner-up's discount to the
+    # immediate off-the-run (OFR1) narrows as it climbs the ladder (long
+    # OFR{k}, short OFR1) -- same directional logic as otr_ofr1 one rung
+    # further down. Scoped to (TBond, 30Y) only (see _stage_scope_ok below);
+    # this was previously exposed as mature-RV pair rows under TBondCurve
+    # (curves/refreshers/otr_ofr_rv.py) and is moved here per the 2026-09-06
+    # decision to give the OFR ladder its own home in BondNewIssue rather
+    # than living alongside ordinary bond-vs-curve spreads.
+    _STAGES[f'ofr{_k}_ofr1'] = {
+        'instrument_col': f'instrument_id_ofr{_k}_ofr1', 'spread_col': f'spread_ofr{_k}_ofr1',
+        'age_col': f'ofr{_k}_rank_age_days', 'leg1_col': f'ofr{_k}_id', 'leg2_col': 'ofr1_id',
+        'dv01_ratio_col': None, 'direction': 'SELL',
+    }
+del _k
+
+# Scoping restricts which (asset_class, tenor_bucket) combos a stage may
+# appear for. None (the default, via .get(stage)) means "every active
+# bucket" -- nib_otr/otr_ofr1's existing behaviour. The ofr{k}_ofr1 stages
+# are (TBond, 30Y)-only per the 2026-09-06 decision (see _STAGES comment
+# above): 5Y/10Y TBond and every CBond bucket keep using TBondCurve/
+# CBondCurve's mature-RV pairs (curves/refreshers/otr_ofr_rv.py) unchanged.
+_STAGE_SCOPE = {
+    f'ofr{_k}_ofr1': {('TBond', '30Y')} for _k in range(2, NewIssueConfig.OFR_LADDER_DEPTH + 1)
+}
+
+
+def _stage_scope_ok(stage: str, asset_class: str, tenor_bucket: str) -> bool:
+    allowed = _STAGE_SCOPE.get(stage)
+    return allowed is None or (asset_class, tenor_bucket) in allowed
 
 STAT_INFO_COLUMNS = [
     'asset_class', 'issuer_class', 'tenor_bucket', 'stage',
@@ -91,6 +121,8 @@ def build_stat_info(universe_by_asset: Dict[str, Dict[str, pd.DataFrame]]) -> pd
                 continue
             last = df.sort_index().iloc[-1]
             for stage, cfg in _STAGES.items():
+                if not _stage_scope_ok(stage, asset_class, tenor_bucket):
+                    continue
                 inst = last.get(cfg['instrument_col'])
                 if pd.isna(inst) or not inst:
                     continue
@@ -105,7 +137,7 @@ def build_stat_info(universe_by_asset: Dict[str, Dict[str, pd.DataFrame]]) -> pd
                     'event_age_days': last.get(cfg['age_col']),
                     'lag_exists': last.get('lag_exists'), 'lag_gap': last.get('lag_gap'),
                     'otr_roll_flag': last.get('otr_roll_flag'),
-                    'dv01_ratio': last.get(cfg['dv01_ratio_col']),
+                    'dv01_ratio': last.get(cfg['dv01_ratio_col']) if cfg['dv01_ratio_col'] else np.nan,
                     'quote_ok_nib': last.get('quote_ok_nib'), 'quote_ok_otr': last.get('quote_ok_otr'),
                     'quote_ok_ofr1': last.get('quote_ok_ofr1'),
                     'rejection_reason': last.get('rejection_reason'),
@@ -130,6 +162,8 @@ def build_spread_panel(universe_by_asset: Dict[str, Dict[str, pd.DataFrame]]) ->
             if df is None or df.empty:
                 continue
             for stage, cfg in _STAGES.items():
+                if not _stage_scope_ok(stage, _asset_class, _tenor_bucket):
+                    continue
                 inst_col, spread_col = cfg['instrument_col'], cfg['spread_col']
                 if inst_col not in df.columns or spread_col not in df.columns:
                     continue

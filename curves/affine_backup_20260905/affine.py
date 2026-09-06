@@ -8,10 +8,7 @@ import pandas as pd
 import numpy as np
 import sympy as sp
 import math
-import logging
 from functools import lru_cache
-
-logger = logging.getLogger(__name__)
 
 
 def _project_to_psd(matrix):
@@ -34,52 +31,23 @@ def _project_to_psd(matrix):
 project_to_psd = _project_to_psd
 
 
-ANNUALIZATION_DAYS = 252  # trading-day convention for annualizing daily covariance
+# Convert matrices to hashable tuples for caching
+def _matrix_to_tuple(matrix):
+    """Convert sympy matrix to hashable tuple for caching"""
+    return tuple(tuple(row) for row in matrix.tolist())
+
+def _tuple_to_matrix(matrix_tuple, rows, cols):
+    """Convert tuple back to sympy matrix"""
+    return sp.Matrix(matrix_tuple)
 
 
-def calAffineCov(term, spot, gamma, mtype, caltype, use_innovations: bool = False):
+def calAffineCov(term, spot, gamma, mtype, caltype):
     """Iterative fixed-point calibration of the 3x3 factor covariance matrix S2.
 
     Key optimisation: B (factor loadings) and I (drift integrals) depend only on
     (gamma, tau), NOT on S2.  We therefore pre-compute them once before the
     convergence loop and cache them via _compute_IB_cached.  Each iteration is
     then a pure NumPy einsum + batched pseudo-inverse multiply — no Python loops.
-
-    Args:
-        use_innovations: when True, S2 is estimated from the covariance of
-            daily factor CHANGES (annualized by ANNUALIZATION_DAYS trading
-            days/year), matching the AFNS convexity term's actual
-            theoretical basis -- a(tau) is an Ito integral of the
-            INSTANTANEOUS (diffusion) covariance over [0, tau], not of the
-            level covariance over some historical window (see
-            docs/dev/affine-curve-improvement-plan.md F2 / item 2.1).
-
-            **NOT SAFE FOR PRODUCTION AS OF 2026-09-05.** Verified against 5
-            real 63-day historical windows from TBond-cvref.pkl: the
-            fixed-point iteration (S2 -> x(S2) -> S2(x) -> ...) diverges to
-            NaN/Inf in 4 of 5 windows, because innovation covariance is
-            dominated by day-to-day noise in a 9-point cross-sectional
-            inversion, and feeding that noisy estimate back through the same
-            circular solve amplifies rather than damps. Even the one window
-            that converged moved the fitted curve by 10-36bp across the term
-            structure -- far too large for what should be a small, smooth
-            convexity correction. Needs a stabilizing fix (e.g. shrinkage
-            toward a diagonal target, decoupling the S2 estimation from the
-            x-solve iteration, or a damped/regularized update step) before
-            this can default to True. Kept as an explicit opt-in for
-            research/comparison only; default remains False (the previous,
-            stable but un-annualized covariance-of-levels estimate:
-            np.cov(x_arr)) until that follow-up work lands.
-
-            Levels are highly persistent (the level factor especially), so
-            their covariance over a rolling window overstates the true
-            day-to-day diffusion variance the AFNS formula calls for, and
-            reacts to the window's TREND rather than only to genuine
-            volatility changes -- moving a(tau), and with it the whole
-            fitted curve and every RV residual, whenever the window's trend
-            shifts. This remains a real, documented defect (F2); the
-            innovations-based S2 above is the theoretically correct fix, it
-            just isn't numerically safe yet in this naive form.
     """
     gamma_f = float(gamma)
     k = term.shape[1]
@@ -93,12 +61,8 @@ def calAffineCov(term, spot, gamma, mtype, caltype, use_innovations: bool = Fals
     tau_all = tau_all[valid_mask]
     y_all   = y_all[valid_mask]
     n_dates = tau_all.shape[0]
-    min_dates = 5 if use_innovations else 4
-    if n_dates < min_dates:
-        raise ValueError(
-            f"calAffineCov: too few valid dates ({n_dates}) after NaN filter "
-            f"(need >= {min_dates} for {'innovation' if use_innovations else 'level'}-based S2)."
-        )
+    if n_dates < 4:
+        raise ValueError(f"calAffineCov: too few valid dates ({n_dates}) after NaN filter.")
 
     # ------------------------------------------------------------------
     # Pre-compute I matrices and B vectors — done ONCE, S2-independent.
@@ -121,11 +85,6 @@ def calAffineCov(term, spot, gamma, mtype, caltype, use_innovations: bool = Fals
 
     S2_np = np.eye(3)
     nstep = 20
-    converged = False
-    # Relative Frobenius-norm convergence test (F3 / item 1.5): the previous
-    # |det(S2)-det(S2_new)| test compares determinants, which two very
-    # different matrices can share, and is scale-dependent.
-    convergence_tol = 1e-4
     for ns in range(1, nstep + 1):
         # a_vec: contract S2 with pre-computed I matrices — no Python loop
         a_vec_all = np.einsum('ij,dkij->dk', S2_np, I_mat_all)  # (n_dates, k)
@@ -135,50 +94,19 @@ def calAffineCov(term, spot, gamma, mtype, caltype, use_innovations: bool = Fals
         # Batched solve via pre-computed pseudo-inverse — no per-date loop
         x_arr = (B_pinv_all @ rhs_all[:, :, None]).squeeze(-1)  # (n_dates, 3)
 
-        if use_innovations:
-            # Covariance of daily factor CHANGES, annualized -- see F2 /
-            # item 2.1 docstring above for the rationale. Rows are assumed
-            # (approximately) consecutive business days, as constructed by
-            # every current caller (a calendar-date slice of a daily
-            # history), so a simple diff + trading-day annualization applies
-            # without needing an explicit per-row day-count.
-            x_diff = np.diff(x_arr, axis=0)  # (n_dates-1, 3)
-            S2_new = np.cov(x_diff, rowvar=False) * ANNUALIZATION_DAYS
-        else:
-            S2_new = np.cov(x_arr, rowvar=False)  # (3, 3)
-        denom = np.linalg.norm(S2_np, ord='fro')
-        S_err = np.linalg.norm(S2_new - S2_np, ord='fro') / denom if denom > 0 else np.inf
-        print(f'\rIteration: {ns}, Relative Frobenius change {S_err:.6f}', end='')
+        S2_new = np.cov(x_arr, rowvar=False)  # (3, 3)
+        S_err = abs(np.linalg.det(S2_np) - np.linalg.det(S2_new))
+        print(f'\rIteration: {ns}, Residual of Covariance Matrix {S_err:.4f}', end='')
 
-        S2_np = S2_new
-        if S_err < convergence_tol:
-            converged = True
+        if S_err < 0.001:
+            S2_np = S2_new
             break
+        S2_np = S2_new
 
-    if not converged:
-        logger.warning(
-            "calAffineCov: S2 fixed-point iteration did not converge within "
-            "%d steps (relative Frobenius change %.6f >= tol %.6f); using the "
-            "last iterate.", nstep, S_err, convergence_tol
-        )
-
-    # Return as sympy matrix for full backward compatibility, plus a
-    # convergence flag so callers can surface curve quality (see F3, item 1.5).
-    return sp.Matrix(S2_np.tolist()), converged
+    # Return as sympy matrix for full backward compatibility
+    return sp.Matrix(S2_np.tolist())
         
-def getAffineFactors(dfi, S2, gamma, mtype, caltype, weights=None):
-    """Extract the 3 affine factors (level/slope/curvature) by least squares
-    against the reference cross-section.
-
-    Args:
-        weights: optional per-reference-point weight (same order/index as
-            ``dfi``), e.g. from quote quality (live vs CNBD, bid-ofr width,
-            volume). None (default) reproduces the previous unweighted OLS
-            fit exactly. Implemented as standard weighted least squares via
-            row scaling (sqrt(w) * B, sqrt(w) * rhs) -- mathematically
-            equivalent to minimizing sum(w_i * residual_i^2). See
-            docs/dev/affine-curve-improvement-plan.md F9 / item 2.3.
-    """
+def getAffineFactors(dfi,S2,gamma,mtype,caltype): 
     k = dfi.shape[0]
     y0 = dfi.values.astype(float)          # (k,)
     taus0 = dfi.index
@@ -192,15 +120,6 @@ def getAffineFactors(dfi, S2, gamma, mtype, caltype, weights=None):
 
     # Least-squares solve: B_mat @ x = (y0 - a_vec)
     rhs = y0 - a_vec
-    if weights is not None:
-        w = np.asarray(weights, dtype=float).ravel()
-        if w.shape[0] != k:
-            raise ValueError(f"getAffineFactors: weights length {w.shape[0]} != {k} reference points")
-        if not np.isfinite(w).all() or (w < 0).any():
-            raise ValueError("getAffineFactors: weights must be finite and non-negative")
-        sqrt_w = np.sqrt(w)
-        B_mat = B_mat * sqrt_w[:, None]
-        rhs = rhs * sqrt_w
     x, _, _, _ = np.linalg.lstsq(B_mat, rhs, rcond=None)
     return sp.Matrix(x.tolist())  # keep return type compatible
 
@@ -225,6 +144,115 @@ def Affine(tau,x,S2,gamma,mtype,caltype):
     b_sp = sp.Matrix([B.tolist()])
     return y, b_sp
 
+@lru_cache(maxsize=128)
+def _calAB_analytic_cached(gamma_val, tau_val, S2_tuple, mtype):
+    """Cached version of calAB_analytic for numeric values"""
+    S2 = _tuple_to_matrix(S2_tuple, 3, 3)
+    
+    I = sp.zeros(3,3)    
+    if mtype == 'Model A':       
+        I[0,0] = -tau_val**2/6
+        I[1,1] = (2*_intI_cached(0,gamma_val,tau_val)-_intI_cached(0,2*gamma_val,tau_val)-1)/(2*gamma_val**2)
+        I[2,2] = I[1,1]+(2*_intI_cached(1,gamma_val,tau_val)-_intI_cached(1,2*gamma_val,tau_val)-0.25*_intI_cached(2,2*gamma_val,tau_val))/(2*gamma_val**2)
+        I[0,1] = I[1,0] = -0.25*tau_val/gamma_val+_intI_cached(1,gamma_val,tau_val)/(2*gamma_val**2)
+        I[0,2] = I[2,0] = I[0,1]+_intI_cached(2,gamma_val,tau_val)/(2*gamma_val**2)
+        I[1,2] = I[2,1] = 0.25*tau_val/gamma_val+I[1,1]+_intI_cached(1,2*gamma_val,tau_val)/(4*gamma_val**2)
+    elif mtype == 'Model B': 
+        G = 0.5*gamma_val*tau_val-_intI_cached(1,gamma_val,tau_val)
+        I01 = -0.25*tau_val/gamma_val+_intI_cached(1,gamma_val,tau_val)/(2*gamma_val**2)
+        I11 = (2*_intI_cached(0,gamma_val,tau_val)-_intI_cached(0,2*gamma_val,tau_val)-1)/(2*gamma_val**2)    
+        II = _intI_cached(1,gamma_val,tau_val)-4*_intI_cached(3,gamma_val,tau_val)-0.5*_intI_cached(1,2*gamma_val,tau_val) \
+            -3/8*_intI_cached(2,2*gamma_val,tau_val)+_intI_cached(3,2*gamma_val,tau_val)/4+_intI_cached(4,2*gamma_val,tau_val)/8-2*G
+        I[0,0] = -tau_val**2/6
+        I[1,1] = G/(gamma_val**2)+I[0,0]+I01
+        I[2,2] = -2/3*tau_val**2+I11-II/(gamma_val**2)
+        I[0,1] = I[1,0] = I[0,0]-I01
+        I[0,2] = I[2,0] = I01-2*I[0,0]-(_intI_cached(1,gamma_val,tau_val)+2*_intI_cached(2,gamma_val,tau_val))/(2*gamma_val**2)
+        I[1,2] = I[2,1] = -0.5*tau_val/gamma_val+I[0,2]-I11 \
+            -(3*_intI_cached(1,gamma_val,tau_val)+2*_intI_cached(2,gamma_val,tau_val)-0.5*_intI_cached(1,2*gamma_val,tau_val)-0.5*_intI_cached(2,2*gamma_val,tau_val))/(2*gamma_val**2)
+    else:
+        raise ValueError(f'Model type {mtype} not implemented')
+        
+    a = sum(S2[i,j]*I[i,j] for i in range(3) for j in range(3))
+
+    x = gamma_val*tau_val
+    I1 = (1-sp.exp(-x))/x
+    
+    B = sp.zeros(1,3)
+    if mtype == 'Model A':
+        B[0,0] = 1
+        B[0,1] = I1
+        B[0,2] = I1-sp.exp(-x)
+    elif mtype == 'Model B': 
+        B[0,0] = 1
+        B[0,1] = 1-I1
+        B[0,2] = I1+(1+2*x)*sp.exp(-x)-2
+    else:
+        raise ValueError(f'Model type {mtype} not implemented')
+        
+    return float(a), _matrix_to_tuple(B)
+
+def calAB_analytic(gamma,tau,S2,mtype):
+    try:
+        gamma_val = float(gamma)
+        tau_val = float(tau)
+        S2_tuple = _matrix_to_tuple(S2)
+        
+        a_val, B_tuple = _calAB_analytic_cached(gamma_val, tau_val, S2_tuple, mtype)
+        B = _tuple_to_matrix(B_tuple, 1, 3)
+        return a_val, B
+    except (TypeError, ValueError):
+        # Fallback to original computation for symbolic expressions
+        I = sp.zeros(3,3)    
+        if mtype == 'Model A':       
+            I[0,0] = -tau**2/6
+            I[1,1] = (2*intI(0,gamma,tau)-intI(0,2*gamma,tau)-1)/(2*gamma**2)
+            I[2,2] = I[1,1]+(2*intI(1,gamma,tau)-intI(1,2*gamma,tau)-0.25*intI(2,2*gamma,tau))/(2*gamma**2)
+            I[0,1] = I[1,0] = -0.25*tau/gamma+intI(1,gamma,tau)/(2*gamma**2)
+            I[0,2] = I[2,0] = I[0,1]+intI(2,gamma,tau)/(2*gamma**2)
+            I[1,2] = I[2,1] = 0.25*tau/gamma+I[1,1]+intI(1,2*gamma,tau)/(4*gamma**2)
+        elif mtype == 'Model B': 
+            G = 0.5*gamma*tau-intI(1,gamma,tau)
+            I01 = -0.25*tau/gamma+intI(1,gamma,tau)/(2*gamma**2)
+            I11 = (2*intI(0,gamma,tau)-intI(0,2*gamma,tau)-1)/(2*gamma**2)    
+            II = intI(1,gamma,tau)-4*intI(3,gamma,tau)-0.5*intI(1,2*gamma,tau) \
+                -3/8*intI(2,2*gamma,tau)+intI(3,2*gamma,tau)/4+intI(4,2*gamma,tau)/8-2*G
+            I[0,0] = -tau**2/6
+            I[1,1] = G/(gamma**2)+I[0,0]+I01
+            I[2,2] = -2/3*tau**2+I11-II/(gamma**2)
+            I[0,1] = I[1,0] = I[0,0]-I01
+            I[0,2] = I[2,0] = I01-2*I[0,0]-(intI(1,gamma,tau)+2*intI(2,gamma,tau))/(2*gamma**2)
+            I[1,2] = I[2,1] = -0.5*tau/gamma+I[0,2]-I11 \
+                -(3*intI(1,gamma,tau)+2*intI(2,gamma,tau)-0.5*intI(1,2*gamma,tau)-0.5*intI(2,2*gamma,tau))/(2*gamma**2)
+        else:
+            print('Implement ',mtype)        
+        a = 0
+        for i in range(3):
+            for j in range(3):
+                a += S2[i,j]*I[i,j]
+
+        x = gamma*tau
+        I1 = (1-sp.exp(-x))/x
+        
+        B = sp.zeros(1,3)
+        if mtype == 'Model A':
+            B[0,0] = 1
+            B[0,1] = I1
+            B[0,2] = I1-sp.exp(-x)
+        elif mtype == 'Model B': 
+            B[0,0] = 1
+            B[0,1] = 1-I1
+            B[0,2] = I1+(1+2*x)*sp.exp(-x)-2
+        else:
+            print('Implement ',mtype)        
+        return a, B
+
+def calAB_matrix(tau, S2, gamma, mtype):
+    """Delegates to calAB_analytic — the diagonalization-based Matrix path was
+    numerically unstable for the defective Jordan-block K (Model A / Model B)."""
+    return calAB_analytic(gamma, tau, S2, mtype)
+
+
 @lru_cache(maxsize=256)
 def _intI_cached(n, gamma_val, tau_val):
     """Cached version of intI function with numeric values"""
@@ -234,17 +262,23 @@ def _intI_cached(n, gamma_val, tau_val):
     else:
         return n * _intI_cached(n-1, gamma_val, tau_val) - x**(n-1) * math.exp(-x)
 
+def intI(n,gamma,tau):
+    # Convert symbolic expressions to float if possible for better caching
+    try:
+        gamma_val = float(gamma)
+        tau_val = float(tau)
+        return _intI_cached(n, gamma_val, tau_val)
+    except (TypeError, ValueError):
+        # Fallback to original computation for symbolic expressions
+        x = gamma*tau
+        if n == 0:
+            return (1-sp.exp(-x))/x
+        else:
+            return n*intI(n-1,gamma,tau)-x**(n-1)*sp.exp(-x)
+
 
 # ---------------------------------------------------------------------------
 # Pure-NumPy fast path (no SymPy overhead)
-#
-# The Model A/B loading (B) and drift-integral (I) formulas used to exist a
-# second time as a SymPy-based analytic path (_calAB_analytic_cached /
-# calAB_analytic / calAB_matrix / intI), kept for "backward compatibility"
-# but with zero external callers (Affine(), getAffineFactors(), and
-# calAffineCov() already used this NumPy path exclusively). Removed
-# 2026-09-05 per docs/dev/affine-curve-improvement-plan.md F11 / item 2.4 --
-# any future correction to these formulas now only needs to be made once.
 # ---------------------------------------------------------------------------
 
 @lru_cache(maxsize=512)

@@ -257,10 +257,14 @@ def _build_tenor_spread_fallback() -> dict:
 
         lgb = db.get('LGB', {})
 
+        cgb1  = _s(cgb, '中债国债到期收益率:1年')
+        cgb2  = _s(cgb, '中债国债到期收益率:2年')
         cgb5  = _s(cgb, '中债国债到期收益率:5年')
         cgb10 = _s(cgb, '中债国债到期收益率:10年')
         cgb20 = _s(cgb, '中债国债到期收益率:20年')
         cgb30 = _s(cgb, '中债国债到期收益率:30年')
+        cdb1  = _s(cdb, '中债国开债到期收益率:1年')
+        cdb2  = _s(cdb, '中债国开债到期收益率:2年')
         cdb5  = _s(cdb, '中债国开债到期收益率:5年')
         cdb10 = _s(cdb, '中债国开债到期收益率:10年')
         cdb30 = _s(cdb, '中债国开债到期收益率:30年')
@@ -269,9 +273,13 @@ def _build_tenor_spread_fallback() -> dict:
         lgb30 = _s(lgb, '中国:地方政府债到期收益率(AAA):30年') if lgb else None
 
         instruments = {}
+        if cgb1  is not None and cgb2  is not None: instruments['CGB-1s2s']   = cgb2  - cgb1
+        if cgb2  is not None and cgb5  is not None: instruments['CGB-2s5s']   = cgb5  - cgb2
         if cgb5  is not None and cgb10 is not None: instruments['CGB-5s10s']  = cgb10 - cgb5
         if cgb10 is not None and cgb30 is not None: instruments['CGB-10s30s'] = cgb30 - cgb10
         if cgb10 is not None and cgb20 is not None: instruments['CGB-10s20s'] = cgb20 - cgb10
+        if cdb1  is not None and cdb2  is not None: instruments['CDB-1s2s']   = cdb2  - cdb1
+        if cdb2  is not None and cdb5  is not None: instruments['CDB-2s5s']   = cdb5  - cdb2
         if cdb5  is not None and cdb10 is not None: instruments['CDB-5s10s']  = cdb10 - cdb5
         if cdb10 is not None and cdb30 is not None: instruments['CDB-10s30s'] = cdb30 - cdb10
         if cdb5  is not None and cgb5  is not None: instruments['CDBCGB-5y']  = cdb5  - cgb5

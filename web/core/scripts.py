@@ -79,16 +79,32 @@ def _short_newissue_label(ticker: str, issuer_class: str | None = None) -> str:
     m = re.match(r'^([^:]+):([^:]+):([^|]+)\|(.+)$', str(ticker))
     if not m:
         return str(ticker)
-    tenor, stage, leg1, leg2 = m.group(1), m.group(2), m.group(3), m.group(4)
+    tenor, stage, _leg1, _leg2 = m.group(1), m.group(2), m.group(3), m.group(4)
     issuer = str(issuer_class) if issuer_class and pd.notna(issuer_class) else ''
     bucket = f"{issuer}{tenor}"
-    if leg1 == leg2:
-        return f"{stage.replace('_', '').upper()}-{bucket}"
+    return f"{_newissue_stage_display(stage)}-{bucket}"
+
+
+def _newissue_stage_display(stage: str) -> str:
+    """Compact display form of a NewIssue stage key, e.g. 'ofr2_ofr1' ->
+    'OFR2OFR1'. Mirrors web/tabs/alpha/data/loaders.py's
+    to_newissue_stage_label/_ofr_ladder_stage_label -- kept as a separate
+    small function here (rather than importing that module, which pulls in
+    the whole alpha data-loader layer) since this file's stage_map used to
+    plainly stage.upper() unknown stages, which left the underscore in
+    'ofr2_ofr1'.upper() == 'OFR2_OFR1' instead of collapsing it to
+    'OFR2OFR1' the way NIBOTR/OTROFR1 already do.
+    """
     stage_map = {
         'nib_otr': 'NIBOTR',
         'otr_ofr1': 'OTROFR1',
     }
-    return f"{stage_map.get(stage, stage.upper())}-{bucket}"
+    if stage in stage_map:
+        return stage_map[stage]
+    m = re.match(r'^ofr(\d+)_ofr1$', stage)
+    if m:
+        return f'OFR{m.group(1)}OFR1'
+    return stage.replace('_', '').upper()
 
 _locks = {
     "initialise": threading.Lock(),
@@ -198,9 +214,24 @@ def run_initialise() -> str:
 
         try:
             from curves.utils.retrieve import updateInstrumentDef
-            updateInstrumentDef(asof=None)
+            # on_demand=True: this runs from the web app's init/startup path,
+            # which fires whenever the dashboard boots -- including outside
+            # trading hours. Without on_demand, ALLOW_NONTRADING_RETRIEVAL
+            # stays False, _ensure_wind() refuses the connection, every _wss
+            # call returns an empty frame, and updateInstrumentDef now raises
+            # ("no YIELD_CNBD column ... check Wind connection/quota") since
+            # that's indistinguishable from a genuine quota/session failure.
+            # Every other call site (main.py, engine/cli.py) already passes
+            # on_demand=True; this one was the odd one out.
+            updateInstrumentDef(asof=None, on_demand=True)
         except Exception as e:
-            pass
+            # Previously silenced entirely -- a failure here (Wind quota,
+            # session drop, etc.) left *-InstrumentInfo.pkl stale with no
+            # trace, which fed frozen closing yields into ytm_act for
+            # whichever bonds' fetch kept failing. Surface it like the
+            # sibling refresh above so repeated failures are at least
+            # visible in logs instead of disappearing silently.
+            print(f"WARNING: updateInstrumentDef failed: {e}")
 
         if (t.hour >= TradingHoursConfig.START_HOUR) and (t.hour <= TradingHoursConfig.INIT_END_HOUR) and (t.weekday() <= 4):
             print("Updating database and running generators...")
@@ -471,8 +502,13 @@ def refresh(interval):
                     _stat = _bs.get('StatInfo')
                     if isinstance(_spread, pd.DataFrame) and isinstance(_stat, pd.DataFrame) and not _spread.empty:
                         _current = _spread.iloc[-1].rename('spread').to_frame()
-                        _current = _current.join(_stat[['mean', 'vol']], how='inner')
-                        _current['Zscore'] = (_current['spread'] - _current['mean']) / _current['vol']
+                        _stat_cols = ['mean', 'vol'] + (['ewm_vol'] if 'ewm_vol' in _stat.columns else [])
+                        _current = _current.join(_stat[_stat_cols], how='inner')
+                        _vol = pd.to_numeric(_current.get('ewm_vol'), errors='coerce') if 'ewm_vol' in _current.columns else None
+                        _static_vol = pd.to_numeric(_current['vol'], errors='coerce')
+                        _vol = _vol.fillna(_static_vol) if _vol is not None else _static_vol
+                        _vol = _vol.replace(0, float('nan'))
+                        _current['Zscore'] = (pd.to_numeric(_current['spread'], errors='coerce') - pd.to_numeric(_current['mean'], errors='coerce')) / _vol
                         _current['color'] = 'grey'
                         data_rt['BinarySpread'] = _current
         except Exception:
@@ -488,8 +524,13 @@ def refresh(interval):
                     _stat = _pca.get('StatInfo')
                     if isinstance(_spread, pd.DataFrame) and isinstance(_stat, pd.DataFrame) and not _spread.empty:
                         _current = _spread.iloc[-1].rename('spread').to_frame()
-                        _current = _current.join(_stat[['mean', 'vol']], how='inner')
-                        _current['Zscore'] = (_current['spread'] - _current['mean']) / _current['vol']
+                        _stat_cols = ['mean', 'vol'] + (['ewm_vol'] if 'ewm_vol' in _stat.columns else [])
+                        _current = _current.join(_stat[_stat_cols], how='inner')
+                        _vol = pd.to_numeric(_current.get('ewm_vol'), errors='coerce') if 'ewm_vol' in _current.columns else None
+                        _static_vol = pd.to_numeric(_current['vol'], errors='coerce')
+                        _vol = _vol.fillna(_static_vol) if _vol is not None else _static_vol
+                        _vol = _vol.replace(0, float('nan'))
+                        _current['Zscore'] = (pd.to_numeric(_current['spread'], errors='coerce') - pd.to_numeric(_current['mean'], errors='coerce')) / _vol
                         _current['color'] = 'grey'
                         # Rename '1.0Y'-style tenors to '1Y' to match RT format
                         _current.index = [re.sub(r'(-\d+)\.0(Y)$', r'\1\2', idx) for idx in _current.index]
@@ -515,8 +556,14 @@ def refresh(interval):
                 if (isinstance(_spread, pd.DataFrame) and not _spread.empty
                         and isinstance(_stat, pd.DataFrame) and not _stat.empty):
                     _current = _spread.iloc[-1].rename('spread').to_frame()
-                    _current = _current.join(_stat[['mean', 'vol']], how='inner')
-                    _vol = pd.to_numeric(_current['vol'], errors='coerce').replace(0, float('nan'))
+                    _stat_cols = ['mean', 'vol'] + (['ewm_vol'] if 'ewm_vol' in _stat.columns else [])
+                    _current = _current.join(_stat[_stat_cols], how='inner')
+                    # Prefer EWMA(span=60) vol (matches Spread Time Series chart's
+                    # Z-score convention); fall back to static full-window vol.
+                    _vol = pd.to_numeric(_current.get('ewm_vol'), errors='coerce') if 'ewm_vol' in _current.columns else None
+                    _static_vol = pd.to_numeric(_current['vol'], errors='coerce')
+                    _vol = _vol.fillna(_static_vol) if _vol is not None else _static_vol
+                    _vol = _vol.replace(0, float('nan'))
                     _mean = pd.to_numeric(_current['mean'], errors='coerce')
                     _current['Zscore'] = (pd.to_numeric(_current['spread'], errors='coerce') - _mean) / _vol
                     _current['color'] = 'grey'

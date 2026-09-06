@@ -258,9 +258,14 @@ def updateInstrumentDef(asof=None, on_demand=False):
                 # Filtering by start and end date
                 wdinfo = WindConfig.WDINFO
                 bond_info = _wss(list(bonds), wdinfo, "tradeDate="+dps+";returnType=1;credibility=1;priceAdj=U;cycle=D")
-                Nb = bond_info['YIELD_CNBD'].dropna().shape[0]
+                Nb = bond_info['YIELD_CNBD'].dropna().shape[0] if 'YIELD_CNBD' in bond_info.columns else 0
                 if Nb == 0:
                     bond_info = _wss(list(bonds), wdinfo, "tradeDate="+dps+";returnType=1;credibility=1;priceAdj=U;cycle=D")
+                if 'YIELD_CNBD' not in bond_info.columns:
+                    raise RuntimeError(
+                        f"Wind wss returned no YIELD_CNBD column for {btype} on {dps} "
+                        f"(empty/failed response) -- check Wind connection/quota"
+                    )
                 bond_info = filterInstrument(bond_info,btype)
                 file_str = os.path.join(DIR_INPUT, btype + '-bondlist.xlsx')
                 with pd.ExcelWriter(file_str) as writer:
@@ -270,6 +275,19 @@ def updateInstrumentDef(asof=None, on_demand=False):
             _save_pickle(bond_info, os.path.join(DIR_INPUT, btype + '-InstrumentInfo.pkl'))
             print(f"✅ Updated {btype}-InstrumentInfo.pkl")
         except Exception as ex:
+            # A failed Wind fetch here leaves the existing (possibly stale)
+            # -InstrumentInfo.pkl untouched, so the '收盘收益率(%)'/YIELD_CNBD
+            # value used by update_price() for ytm_act silently keeps
+            # repeating on every subsequent run until a fetch succeeds. Log
+            # at ERROR (with traceback) instead of a bare print so repeated
+            # failures for the same btype are actually visible in logs/
+            # monitoring rather than disappearing into stdout.
+            logger.error(
+                f"updateInstrumentDef: failed to update {btype}-InstrumentInfo.pkl "
+                f"for {dps} (Wind API: {ex}) -- existing file left stale, check Wind "
+                f"quota/session and re-run.",
+                exc_info=True,
+            )
             if on_demand:
                 print(f"⚠️ Failed to update {btype}-InstrumentInfo.pkl (Wind API: {ex})")
             else:

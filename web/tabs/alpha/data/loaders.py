@@ -17,6 +17,11 @@ _NEWISSUE_STAGE_LABELS = {
     'otr_ofr1': 'OTROFR1',
 }
 
+
+def _ofr_ladder_stage_label(k: int) -> str:
+    """Compact label prefix for the OFR{k}-vs-OFR1 stage, e.g. 'OFR2OFR1'."""
+    return f'OFR{k}OFR1'
+
 # Reverse of ``NewIssueConfig.ISSUER_CLASS_MAP``: which universe artifact a
 # label's issuer class comes from. Kept local so the web layer does not need a
 # settings import for a two-entry mapping.
@@ -28,7 +33,13 @@ _ISSUER_ASSET_CLASSES = {
 _ASSET_ISSUER_CLASSES = {asset: issuer for issuer, asset in _ISSUER_ASSET_CLASSES.items()}
 
 
-_NEWISSUE_ID_COLS = ('nib_id', 'otr_id', 'ofr1_id', 'ofr2_id', 'ofr3_id')
+def _newissue_id_cols() -> tuple[str, ...]:
+    """('nib_id', 'otr_id', 'ofr1_id'..'ofr{depth}_id') -- driven by
+    NewIssueConfig.OFR_LADDER_DEPTH so the issuer index below doesn't
+    silently miss bonds that only ever reach a higher OFR rank."""
+    from settings.fixed_income import NewIssueConfig
+    depth = NewIssueConfig.OFR_LADDER_DEPTH
+    return ('nib_id', 'otr_id') + tuple(f'ofr{k}_id' for k in range(1, depth + 1))
 
 # {bond_code: issuer_class}, rebuilt when either universe artifact changes.
 # Keyed by the (mtime, mtime) pair of the two source pickles.
@@ -61,7 +72,7 @@ def _bond_issuer_index() -> dict[str, str]:
         for df in data.values():
             if not isinstance(df, pd.DataFrame) or df.empty:
                 continue
-            for col in _NEWISSUE_ID_COLS:
+            for col in _newissue_id_cols():
                 if col not in df.columns:
                     continue
                 for code in df[col].dropna().astype(str).unique():
@@ -103,7 +114,11 @@ def to_newissue_stage_label(ticker: str) -> str:
     if not m:
         return str(ticker)
     tenor, stage, leg1, leg2 = m.group(1), m.group(2), m.group(3), m.group(4)
-    stage_label = _NEWISSUE_STAGE_LABELS.get(stage, stage.upper())
+    stage_m = re.match(r'^ofr(\d+)_ofr1$', stage)
+    if stage_m:
+        stage_label = _ofr_ladder_stage_label(int(stage_m.group(1)))
+    else:
+        stage_label = _NEWISSUE_STAGE_LABELS.get(stage, stage.upper())
     issuer = _issuer_class_for_bond_id(leg1) or _issuer_class_for_bond_id(leg2)
     if issuer:
         return f"{stage_label}-{issuer}{tenor}"
@@ -164,6 +179,26 @@ def load_newissue_stage_timeseries() -> Optional[pd.DataFrame]:
                     tmp['label'] = f'NIBOTR-{bucket_key}'
                     tmp['date'] = tmp.index
                     out.append(tmp[['label', 'spread', 'date']])
+
+            # OFR{k}-vs-OFR1 ladder history, moved here from TBondCurve's
+            # mature-RV pairs per the 2026-09-06 decision. Scoped to
+            # (TBond, 30Y) only -- 5Y/10Y TBond and every CBond bucket keep
+            # using curves/refreshers/otr_ofr_rv.py's TBondCurve/CBondCurve
+            # pairs unchanged, matching curves/refreshers/newissue_spreads.py
+            # ``_STAGE_SCOPE``.
+            if (asset_class, tenor_bucket) == ('TBond', '30Y'):
+                from settings.fixed_income import NewIssueConfig
+                for k in range(2, NewIssueConfig.OFR_LADDER_DEPTH + 1):
+                    ytm_col = f'ytm_ofr{k}'
+                    if not {ytm_col, 'ytm_ofr1'}.issubset(frame.columns):
+                        continue
+                    tmp = frame[[ytm_col, 'ytm_ofr1']].copy()
+                    tmp['spread'] = pd.to_numeric(tmp[ytm_col], errors='coerce') - pd.to_numeric(tmp['ytm_ofr1'], errors='coerce')
+                    tmp = tmp.dropna(subset=['spread'])
+                    if not tmp.empty:
+                        tmp['label'] = f'{_ofr_ladder_stage_label(k)}-{bucket_key}'
+                        tmp['date'] = tmp.index
+                        out.append(tmp[['label', 'spread', 'date']])
         return out
 
     frames = _read_history('TBond') + _read_history('CBond')
@@ -193,14 +228,37 @@ def _parse_newissue_stage_label(label: str) -> Optional[tuple[str, str, Optional
     """Reverse of ``to_newissue_stage_label``.
 
     ``'OTROFR1-CGB10Y'`` -> ``('otr_ofr1', '10Y', 'CGB')``.
+    ``'OFR2OFR1-CGB30Y'`` -> ``('ofr2_ofr1', '30Y', 'CGB')``.
     The legacy unqualified form ``'OTROFR1-10Y'`` still parses, with issuer
     ``None`` meaning "issuer unknown — match every asset class".
     """
     m = re.match(r'^(NIBOTR|OTROFR1)-(CGB|CDB)?(.+)$', str(label))
-    if not m:
-        return None
-    stage = 'nib_otr' if m.group(1) == 'NIBOTR' else 'otr_ofr1'
-    return stage, m.group(3), m.group(2)
+    if m:
+        stage = 'nib_otr' if m.group(1) == 'NIBOTR' else 'otr_ofr1'
+        return stage, m.group(3), m.group(2)
+    m = re.match(r'^OFR(\d+)OFR1-(CGB|CDB)?(.+)$', str(label))
+    if m:
+        return f'ofr{m.group(1)}_ofr1', m.group(3), m.group(2)
+    return None
+
+
+def _newissue_stage_columns(stage: str) -> tuple[str, str, str, str]:
+    """(leg1_ytm_col, leg2_ytm_col, leg1_id_col, leg2_id_col) for a stage.
+
+    ``otr_ofr1``/``nib_otr`` are the two original BondNewIssue stages;
+    ``ofr{k}_ofr1`` (k=2..OFR_LADDER_DEPTH) is the OFR-ladder family moved
+    here from TBondCurve's mature-RV pairs (curves/refreshers/otr_ofr_rv.py)
+    per the 2026-09-06 decision -- OFR1 is always the reference leg (leg2),
+    matching curves/calibration/otr_ofr_universe.py's
+    spread_ofr{k}_ofr1 = ytm_ofr{k} - ytm_ofr1 convention.
+    """
+    if stage == 'otr_ofr1':
+        return 'ytm_otr', 'ytm_ofr1', 'otr_id', 'ofr1_id'
+    m = re.match(r'^ofr(\d+)_ofr1$', stage)
+    if m:
+        k = m.group(1)
+        return f'ytm_ofr{k}', 'ytm_ofr1', f'ofr{k}_id', 'ofr1_id'
+    return 'ytm_nib', 'ytm_otr', 'nib_id', 'otr_id'
 
 
 def load_newissue_episode_series(label: str) -> list[tuple[pd.Timestamp, str, pd.Series]]:
@@ -226,10 +284,7 @@ def load_newissue_episode_series(label: str) -> list[tuple[pd.Timestamp, str, pd
     if parsed is None:
         return []
     stage, tenor_bucket, issuer_class = parsed
-    leg1_col, leg2_col, id1_col, id2_col = (
-        ('ytm_otr', 'ytm_ofr1', 'otr_id', 'ofr1_id') if stage == 'otr_ofr1'
-        else ('ytm_nib', 'ytm_otr', 'nib_id', 'otr_id')
-    )
+    leg1_col, leg2_col, id1_col, id2_col = _newissue_stage_columns(stage)
 
     if issuer_class:
         asset_classes = (_ISSUER_ASSET_CLASSES.get(issuer_class),)
@@ -254,7 +309,10 @@ def load_newissue_episode_series(label: str) -> list[tuple[pd.Timestamp, str, pd
         frame = df.copy()
         frame.index = pd.to_datetime(frame.index)
         sub = frame[[leg1_col, leg2_col, id1_col, id2_col]].copy()
-        sub['spread'] = pd.to_numeric(sub[leg1_col], errors='coerce') - pd.to_numeric(sub[leg2_col], errors='coerce')
+        # CNBD yields are in percent (e.g. 0.015 = 1.5bp); ×100 so the
+        # episode-overlay chart's y-axis reads in bp, matching every other
+        # spread chart in this dashboard rather than an unlabeled raw %.
+        sub['spread'] = 100.0 * (pd.to_numeric(sub[leg1_col], errors='coerce') - pd.to_numeric(sub[leg2_col], errors='coerce'))
         sub = sub.dropna(subset=['spread', id1_col, id2_col])
         if sub.empty:
             continue
@@ -276,7 +334,96 @@ def load_newissue_episode_series(label: str) -> list[tuple[pd.Timestamp, str, pd
     return episodes
 
 
-def load_newissue_current_episode(label: str) -> Optional[pd.Series]:
+def load_otr_ofr_rv_episode_series(
+    asset_class: str, ticker: str
+) -> list[tuple[pd.Timestamp, str, pd.Series]]:
+    """Per-episode OFR-ladder RV spread paths, indexed by trading days since
+    a bond was promoted to that OFR rank.
+
+    ``ticker`` is a TBondCurve/CBondCurve pair ID (``ofrk_id|ofr1_id``, see
+    curves/refreshers/otr_ofr_rv.py) identifying which tenor bucket to read —
+    the OFRk leg is looked up across ``ofr2_id..ofr{depth}_id`` in each
+    bucket's newissue history to find the bucket it belongs to. Every bond's
+    stint at rank OFR2..OFR{depth} in THAT bucket is a separate episode (not
+    just the current pair's own bond), overlaying how the ladder has behaved
+    across different promotions — never mixed across tenor buckets or across
+    OFR1 (a different economic role: the reference leg every other rung
+    prices against, not an RV leg itself).
+
+    Mirrors ``load_newissue_episode_series``'s contiguous-run detection
+    (group by identity-column runs, drop 1-row noise) applied to each rank
+    column in turn, then collapsed to one row per calendar date so a bond
+    promoted straight from OFR3 to OFR2 (skipping no days) still contributes
+    one continuous episode rather than two overlapping ones.
+
+    Returns a list of (start_date, bond_code, series) tuples, sorted
+    chronologically. ``series`` is the OFRk-vs-OFR1 spread in bp, re-based to
+    0 at day 0.
+    """
+    from settings.fixed_income import NewIssueConfig
+
+    if not isinstance(ticker, str) or '|' not in ticker:
+        return []
+    ofrk_id, _, _ = ticker.partition('|')
+
+    dir_input = _get_input_dir()
+    data = _load_pickle_safe(dir_input / f'{asset_class}-newissue.pkl')
+    if not isinstance(data, dict):
+        return []
+
+    depth = NewIssueConfig.OFR_LADDER_DEPTH
+    tenor_bucket = None
+    for bucket, df in data.items():
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+        for k in range(2, depth + 1):
+            id_col = f'ofr{k}_id'
+            if id_col in df.columns and (df[id_col].astype(str) == ofrk_id).any():
+                tenor_bucket = bucket
+                break
+        if tenor_bucket:
+            break
+    if tenor_bucket is None:
+        return []
+
+    df = data[tenor_bucket]
+    frame = df.copy()
+    frame.index = pd.to_datetime(frame.index)
+
+    episodes: list[tuple[pd.Timestamp, str, pd.Series]] = []
+    for k in range(2, depth + 1):
+        id_col, ytm_col = f'ofr{k}_id', f'ytm_ofr{k}'
+        if id_col not in frame.columns or ytm_col not in frame.columns or 'ytm_ofr1' not in frame.columns:
+            continue
+        sub = frame[[id_col, ytm_col, 'ytm_ofr1']].copy()
+        # CNBD yields are in percent (e.g. 0.015 = 1.5bp); ×100 so the
+        # episode-overlay chart's y-axis reads in bp.
+        sub['spread'] = 100.0 * (pd.to_numeric(sub[ytm_col], errors='coerce') - pd.to_numeric(sub['ytm_ofr1'], errors='coerce'))
+        sub = sub.dropna(subset=['spread', id_col])
+        if sub.empty:
+            continue
+
+        run_id = (sub[id_col] != sub[id_col].shift()).cumsum()
+        for _, grp in sub.groupby(run_id):
+            if len(grp) < 2:
+                continue
+            start_date = grp.index[0]
+            bond_code = str(grp[id_col].iloc[0])
+            if not bond_code or bond_code in ('nan', 'None'):
+                continue
+            days_since_start = (grp.index - start_date).days
+            rebased = grp['spread'].to_numpy() - grp['spread'].iloc[0]
+            s = pd.Series(rebased, index=days_since_start)
+            s = s[~s.index.duplicated(keep='last')].sort_index()
+            episodes.append((start_date, bond_code, s))
+
+    episodes.sort(key=lambda item: item[0])
+    return episodes
+
+
+def load_newissue_current_episode(
+    label: str,
+) -> Optional[pd.Series] | tuple[pd.Series, Optional[str]]:
     """Calendar-indexed spread series for *only* the current (leg1, leg2) pair.
 
     Unlike ``load_newissue_stage_timeseries`` (one column stitched across every
@@ -287,15 +434,20 @@ def load_newissue_current_episode(label: str) -> Optional[pd.Series]:
     bond/stage was established" time series chart should plot. A brand-new NIB
     (e.g. issued days ago) will correctly return a short series starting at its
     own issue date, not several years of an unrelated predecessor bond's history.
+
+    Returns ``None`` if nothing is found. Otherwise returns
+    ``(spread_series, "leg1_id|leg2_id")`` — the pair label lets callers show
+    the actual bond codes (e.g. the Spread Time Series chart title) even when
+    ``load_newissue_pair_history``'s richer bond-level lookup comes up empty,
+    which it always does for legs outside the standard pricing universe (e.g.
+    30Y OFR-ladder bonds are not in TBond-cvpx.pkl, capped at
+    BondConfig.PRICING_MAX_TTM=10.0).
     """
     parsed = _parse_newissue_stage_label(label)
     if parsed is None:
         return None
     stage, tenor_bucket, issuer_class = parsed
-    leg1_col, leg2_col, id1_col, id2_col = (
-        ('ytm_otr', 'ytm_ofr1', 'otr_id', 'ofr1_id') if stage == 'otr_ofr1'
-        else ('ytm_nib', 'ytm_otr', 'nib_id', 'otr_id')
-    )
+    leg1_col, leg2_col, id1_col, id2_col = _newissue_stage_columns(stage)
 
     if issuer_class:
         asset_classes = (_ISSUER_ASSET_CLASSES.get(issuer_class),)
@@ -305,7 +457,7 @@ def load_newissue_current_episode(label: str) -> Optional[pd.Series]:
         asset_classes = ('TBond', 'CBond')
 
     dir_input = _get_input_dir()
-    best: Optional[pd.Series] = None
+    best: Optional[tuple[pd.Series, str]] = None
     for asset_class in asset_classes:
         data = _load_pickle_safe(dir_input / f'{asset_class}-newissue.pkl')
         if not isinstance(data, dict):
@@ -320,8 +472,20 @@ def load_newissue_current_episode(label: str) -> Optional[pd.Series]:
         frame = df.copy()
         frame.index = pd.to_datetime(frame.index)
         sub = frame[[leg1_col, leg2_col, id1_col, id2_col]].copy()
-        sub['spread'] = pd.to_numeric(sub[leg1_col], errors='coerce') - pd.to_numeric(sub[leg2_col], errors='coerce')
+        # CNBD yields are in percent (e.g. 0.015 = 1.5bp); ×100 so the chart's
+        # "bp" title/axis actually matches the plotted units.
+        sub['spread'] = 100.0 * (pd.to_numeric(sub[leg1_col], errors='coerce') - pd.to_numeric(sub[leg2_col], errors='coerce'))
         sub = sub.dropna(subset=['spread', id1_col, id2_col])
+        if sub.empty:
+            continue
+        # A row where both rank columns momentarily resolve to the same bond
+        # code is a data quirk (e.g. an OFR rung briefly colliding with OFR1
+        # during a roll), not a real pair -- same guard as
+        # curves/refreshers/otr_ofr_rv.py's episode builder. Drop it so
+        # "current episode" resolves to the last genuinely distinct pairing
+        # instead of a meaningless self-spread with an unusable leg1==leg2
+        # label.
+        sub = sub[sub[id1_col].astype(str) != sub[id2_col].astype(str)]
         if sub.empty:
             continue
 
@@ -334,11 +498,11 @@ def load_newissue_current_episode(label: str) -> Optional[pd.Series]:
             continue
         s = grp['spread'].sort_index()
         s = s[~s.index.duplicated(keep='last')]
-        if best is None or s.index[0] > best.index[0]:
+        if best is None or s.index[0] > best[0].index[0]:
             # Prefer whichever asset class's episode actually started most
             # recently -- the other's stale bucket (if issuer-unqualified) would
             # otherwise dominate the plotted window.
-            best = s
+            best = (s, str(current_pair))
     return best
 
 
@@ -365,9 +529,7 @@ def load_newissue_pair_history(label: str) -> Optional[tuple[pd.Series, Optional
     if parsed is None:
         return None
     stage, tenor_bucket, issuer_class = parsed
-    leg1_id_col, leg2_id_col = (
-        ('otr_id', 'ofr1_id') if stage == 'otr_ofr1' else ('nib_id', 'otr_id')
-    )
+    _, _, leg1_id_col, leg2_id_col = _newissue_stage_columns(stage)
 
     if issuer_class:
         asset_classes = (_ISSUER_ASSET_CLASSES.get(issuer_class),)
@@ -416,7 +578,9 @@ def load_newissue_pair_history(label: str) -> Optional[tuple[pd.Series, Optional
         panel.index = pd.to_datetime(panel.index)
         leg1 = pd.to_numeric(panel[leg1_id], errors='coerce')
         leg2 = pd.to_numeric(panel[leg2_id], errors='coerce')
-        s = (leg1 - leg2).dropna().sort_index()
+        # ytm_quo is in percent (e.g. 2.1678 = 2.1678%); ×100 so the chart's
+        # "bp" title/axis actually matches the plotted units.
+        s = (100.0 * (leg1 - leg2)).dropna().sort_index()
         s = s[~s.index.duplicated(keep='last')]
         if s.empty:
             continue

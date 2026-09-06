@@ -106,8 +106,8 @@ def _sector_pca_sort_key(ticker: str) -> tuple:
 # Explicit display order for TenorSpread (curve & cross-asset spreads).
 # Unrecognised tickers sort after all listed ones, alphabetically.
 _TENOR_SPREAD_ORDER = [
-    'CGB-5s10s', 'CGB-10s20s', 'CGB-10s30s',
-    'CDB-5s10s', 'CDB-10s30s',
+    'CGB-1s2s', 'CGB-2s5s', 'CGB-5s10s', 'CGB-10s20s', 'CGB-10s30s',
+    'CDB-1s2s', 'CDB-2s5s', 'CDB-5s10s', 'CDB-10s30s',
     'CDBCGB-5y', 'CDBCGB-10y', 'CDBCGB-30y',
     'LGBCGB-5y', 'LGBCGB-10y', 'LGBCGB-30y',
     'CGBRepo7d-1y', 'CGBRepo7d-2y', 'CGBRepo7d-5y', 'CGBRepo7d-10y',
@@ -137,7 +137,9 @@ def _current_ofr_pair_ids(asset_class: str) -> set[str]:
 
     depth = NewIssueConfig.OFR_LADDER_DEPTH
     out: set[str] = set()
-    for df in data.values():
+    for tenor_bucket, df in data.items():
+        if not NewIssueConfig.is_data_ready(asset_class, tenor_bucket):
+            continue
         if not isinstance(df, pd.DataFrame) or df.empty or 'ofr1_id' not in df.columns:
             continue
         ofr1_series = df['ofr1_id'].dropna()
@@ -180,6 +182,11 @@ def _filter_current_ofr1_mature_rv(stype: str, spread: pd.DataFrame) -> pd.DataF
     pair_spread = pair_spread.loc[pair_spread.index.astype(str).isin(current_pairs)]
     if pair_spread.empty:
         return base_spread
+
+    if 'label' in pair_spread.columns and 'label' in base_spread.columns:
+        pair_labels = set(pair_spread['label'].astype(str))
+        base_spread = base_spread.loc[~base_spread['label'].astype(str).isin(pair_labels)]
+
     return pd.concat([base_spread, pair_spread], axis=0)
 
 
@@ -724,14 +731,24 @@ def trend(interval, ctype):
        return("Error: The figure file does not exist.")
 
 
-@app.callback(Output("ticker", 'children', allow_duplicate=True),
-              Input('graph-spread-bar', 'clickData'),
-		  prevent_initial_call=True
-              )
+# NOTE: bar-click -> #ticker wiring lives in
+# web/tabs/fixed_income/spreads.py::_display_click_data, which is a strict
+# superset of this (handles BondNewIssue specially and writes the
+# display-truncated OFR-ladder label alongside the real ID in the
+# "ticker-id" store). A duplicate @app.callback(Output("ticker", ...)) here
+# used to double-fire on every bar click and race with it for the same
+# output; removed. display_click_data is kept as a plain function only for
+# any remaining direct callers/tests.
 def display_click_data(clickData):
     if not clickData or "points" not in clickData or not clickData["points"]:
         raise PreventUpdate
-    return clickData["points"][0]["label"]
+    point = clickData["points"][0]
+    customdata = point.get("customdata")
+    if isinstance(customdata, (list, tuple)) and customdata:
+        return customdata[0]
+    if customdata is not None:
+        return customdata
+    return point.get("x", point.get("label"))
 
 
 @app.callback(Output("graph-spread-bar", "figure"),
@@ -796,7 +813,7 @@ def spreadts(stype, season, b):
     zscore = df1.get('zscore') if isinstance(df1, dict) else None
     trace_main = getTrace(df, stype)
     trace_zscore = getZscoreTrace(zscore)
-    trace_add = getTraceAdd(df1, stype)
+    trace_add = getTraceAdd(df1, stype, ticker=b)
     trace_fs = _build_fixing_trace(fs)
     has_zscore = bool(zscore is not None and not zscore.empty)
 

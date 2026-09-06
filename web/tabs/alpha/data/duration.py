@@ -314,6 +314,70 @@ def _get_current_fr007_bp() -> Optional[float]:
     return None
 
 
+# Tenors present in BOTH the par curve (CGB/CDB) and the FR007S{n}Y.IR swap
+# curve -- FR007 IRS only quotes out to 10Y, so a bond longer than that (e.g.
+# a 20Y/30Y CGB) is matched to the 10Y point rather than left unmatched.
+_CGB_TENORS = (1, 2, 3, 5, 7, 10)
+_CDB_TENORS = (1, 2, 3, 5, 7, 10)
+
+
+def get_bondswap_reference_series(spread_type: str, instrument: str) -> Optional[pd.Series]:
+    """Same-tenor proxy for a BondSwap ticker: par-curve yield (CGB/CDB) minus
+    matched-tenor FR007 IRS, in bp, over the curve's full history (2015+).
+
+    Used as a Seasonal Pattern reference line for bonds too young for a real
+    year-over-year comparison of their own history (e.g. issued <2 years
+    ago) -- this is NOT the bond's own spread (it didn't exist for most of
+    this window), but shows the seasonal tendency of generic same-tenor
+    paper vs. swap, which is the standard proxy for "what's normal here."
+
+    Parameters
+    ----------
+    spread_type : "TBondSwap" or "CBondSwap".
+    instrument : bond ID (index into the BondSwap snapshot, for TTM lookup).
+
+    Returns None if the curve/swap data or the bond's TTM aren't available.
+    """
+    if spread_type not in ('TBondSwap', 'CBondSwap'):
+        return None
+    try:
+        dir_input = _get_input_dir()
+        db_path = dir_input / 'database-px.pkl'
+        if not db_path.exists():
+            return None
+        data = _load_pickle_safe(db_path)
+        if not isinstance(data, dict):
+            return None
+
+        curve_key = 'CGB' if spread_type == 'TBondSwap' else 'CDB'
+        curve_label = '中债国债到期收益率' if spread_type == 'TBondSwap' else '中债国开债到期收益率'
+        tenors = _CGB_TENORS if spread_type == 'TBondSwap' else _CDB_TENORS
+        curve_df = data.get(curve_key)
+        irs_df = data.get('IRS')
+        if not isinstance(curve_df, pd.DataFrame) or not isinstance(irs_df, pd.DataFrame):
+            return None
+
+        ttm = _get_ttm_display(spread_type, instrument)
+        if ttm is None or ttm <= 0:
+            return None
+        tenor = min(tenors, key=lambda t: abs(t - ttm))
+
+        curve_col = f'{curve_label}:{tenor}年'
+        irs_col = f'FR007S{tenor}Y.IR'
+        if curve_col not in curve_df.columns or irs_col not in irs_df.columns:
+            return None
+
+        curve_s = pd.to_numeric(curve_df[curve_col], errors='coerce')
+        curve_s.index = pd.DatetimeIndex(curve_s.index)
+        irs_s = pd.to_numeric(irs_df[irs_col], errors='coerce')
+        irs_s.index = pd.DatetimeIndex(irs_s.index)
+
+        ref = ((curve_s - irs_s) * 100.0).dropna()  # % -> bp, matching BondSwap's own units
+        return ref if not ref.empty else None
+    except Exception:
+        return None
+
+
 def _get_ttm_display(spread_type: str, instrument: str) -> Optional[float]:
     """Return TTM (years) for the Candidates table TTM column.
 

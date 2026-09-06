@@ -55,8 +55,17 @@ def _is_constant_series(series: pd.Series) -> bool:
 def _adf_result(series: pd.Series):
     """Run ADF test for a 1D series and return (pvalue, stationary:str, stats, crit)"""
     if _is_constant_series(series):
+        # A frozen series is NOT a mean-reverting process -- it is a dead
+        # instrument whose quotes stopped updating (matured/delisted bond kept
+        # alive by a stale InstrumentInfo fetch on the ytm_act leg and by
+        # updatePKL's unbounded ffill on the ytm_quo leg). Reporting 'YES'
+        # here made every such bond pass StatInfo's dropna(subset=['stationary'])
+        # filter with the strongest possible p-value, and its ~0 vol then
+        # became the z-score divisor (observed: 26 of 131 TBond bonds frozen
+        # 20+ days, one for 612 days, median |residual| 74bp vs 5.9bp for live
+        # bonds, producing a -44.8 z-score). Report 'NO' so it is filtered out.
         crit = {'1%': 'nan', '5%': 'nan', '10%': 'nan'}
-        return 0.0, 'YES', 'nan', crit
+        return 1.0, 'NO', 'nan', crit
     try:
         from statsmodels.tsa.stattools import adfuller
     except Exception as e:
@@ -173,7 +182,140 @@ def OU_calibrate(ts):
     stat_info[statvs] = stat_info[statvs].astype(float)
     return stat_info
 
-def statAnalysis_BC(env, df1, df2, zscore_lookback: int = 252):
+def splice_reference_rolls(spread: pd.DataFrame, roll_dates) -> pd.DataFrame:
+    """Level-adjust a residual panel across reference-bond roll dates.
+
+    When a bucket's reference bond rolls, the fitted curve level steps
+    discontinuously and every bond's ``ytm_act - ytm_quo`` residual steps with
+    it. That step is an identity change, not a market move, and it
+    contaminates the rolling volatility every z-score divides by -- measured
+    at **1.5-6.6x inflation** on real TBond history, which *suppresses*
+    genuine dislocations (missed entries).
+
+    Splicing removes the roll-day *return* and re-cumulates, so the series
+    stays level-continuous and the FULL history remains usable.
+
+    A hard reset (restarting estimation after each roll) is deliberately NOT
+    used here: rolls are frequent (median gap 12-50 days per bucket, and
+    94-100% of days sit within 252 days of one), so resetting would leave the
+    estimator below its minimum sample on 22-64% of days -- strictly worse
+    than the contamination it removes. See
+    docs/dev/affine-curve-improvement-plan.md section 3c/3d.
+
+    Args:
+        spread: residual panel, dates x bonds.
+        roll_dates: dates on which a reference roll occurred. Dates not in
+            ``spread.index`` are ignored.
+
+    Returns:
+        A level-adjusted copy. Unchanged when ``roll_dates`` is empty.
+    """
+    if spread is None or spread.empty or roll_dates is None:
+        return spread
+    try:
+        idx_ts = pd.DatetimeIndex(pd.to_datetime(spread.index))
+        roll_ts = {pd.Timestamp(d) for d in roll_dates}
+    except (TypeError, ValueError):
+        return spread
+    mask = np.array([t in roll_ts for t in idx_ts], dtype=bool)
+    if not mask.any():
+        return spread
+
+    diffs = spread.diff()
+    diffs.loc[mask, :] = 0.0          # drop the identity-change step
+    spliced = diffs.fillna(0.0).cumsum()
+    # Re-anchor to the original ending level so downstream 'close'/'mean'
+    # comparisons stay on the same scale as the raw series. Anchor on each
+    # column's LAST VALID observation, not spread.iloc[-1]: a bond with no
+    # quote on the panel's final date (e.g. the run's own as-of date, before
+    # today's close exists, or a bond that has since matured) has NaN there,
+    # and `spliced - spliced.iloc[-1] + spread.iloc[-1]` broadcasts that NaN
+    # across the ENTIRE column, discarding up to 252 valid observations for
+    # every bond missing only its most recent point (this wiped OU_calibrate
+    # coverage from ~100+ TBond reference bonds down to 25 on 2026-09-06,
+    # a non-trading Sunday with no fresh quote yet).
+    # spliced (from fillna(0.0).cumsum()) is never NaN by construction -- a
+    # gap is deliberately carried forward as "no change" so later values
+    # stay level-continuous across it. The last-valid position must instead
+    # come from `spread`, the original panel, which is where the real gaps
+    # (including a still-missing latest date) actually are.
+    last_valid_pos = spread.notna().to_numpy()[::-1].argmax(axis=0)
+    last_valid_pos = spread.shape[0] - 1 - last_valid_pos
+    has_any_valid = spread.notna().any(axis=0).to_numpy()
+    cols = np.arange(spread.shape[1])
+    anchor_spliced = pd.Series(
+        np.where(has_any_valid, spliced.to_numpy()[last_valid_pos, cols], np.nan),
+        index=spread.columns,
+    )
+    anchor_orig = pd.Series(
+        np.where(has_any_valid, spread.to_numpy()[last_valid_pos, cols], np.nan),
+        index=spread.columns,
+    )
+    spliced = spliced - anchor_spliced + anchor_orig
+    # Positions that were NaN in the original panel stay NaN in the output --
+    # cumsum() treats a gap as "no change" internally (needed to keep later
+    # values level-continuous across it), but that gap itself was never an
+    # observation and must not be reported as one.
+    spliced = spliced.where(spread.notna())
+    return spliced
+
+
+#: A residual that has not moved for this many consecutive observations is
+#: treated as dead (see _drop_stale_residual_bonds). 5 covers a normal trading
+#: week: a genuinely illiquid but live bond still reprices off the CNBD
+#: valuation yield daily, so a full week of bit-identical values means the
+#: source stopped updating rather than that the market stood still.
+MAX_FROZEN_OBS = 5
+
+
+def _trailing_frozen_count(series: pd.Series) -> int:
+    """Number of trailing observations identical to the most recent one."""
+    values = pd.to_numeric(series, errors='coerce').replace([np.inf, -np.inf], np.nan).dropna()
+    if values.empty:
+        return 0
+    arr = values.to_numpy()
+    last = arr[-1]
+    changed = np.nonzero(arr != last)[0]
+    return int(arr.size - changed[-1] - 1) if changed.size else int(arr.size)
+
+
+def _drop_stale_residual_bonds(spread: pd.DataFrame, env, max_frozen: int = MAX_FROZEN_OBS):
+    """Drop bonds whose residual is dead, returning (kept_spread, dropped_ids).
+
+    Two independent upstream defects keep matured/delisted bonds in the panel
+    with a bit-identical residual forever:
+
+    1. ``ytm_act`` is written from ``InstrumentInfo``'s YIELD_CNBD
+       (curves/calibration/selector.py::update_price). A failed Wind fetch
+       leaves the previous pickle in place, so the same close yield is
+       re-written every day -- the exact failure mode already documented at
+       curves/utils/retrieve.py::updateInstrumentDef.
+    2. ``ytm_quo`` is not in curves/utils/file.py::_NO_FFILL_KEYS, so
+       updatePKL's unbounded ``combined.ffill()`` carries the last model
+       yield forward indefinitely once a bond stops being quoted.
+
+    Both legs freeze, so the difference is constant and survives every
+    downstream filter. Screen on two signals: absence from the live
+    instrument universe (a delisted bond has no valid remaining maturity),
+    and a residual frozen for `max_frozen` observations.
+    """
+    if spread.empty:
+        return spread, []
+
+    ttm = pd.to_numeric(env['Def'].get('剩余期限'), errors='coerce') if '剩余期限' in env['Def'].columns else None
+    dropped = []
+    for b in spread.columns:
+        if ttm is None or b not in ttm.index or not pd.notna(ttm.loc[b]) or ttm.loc[b] <= 0:
+            dropped.append(b)
+            continue
+        if _trailing_frozen_count(spread[b]) >= max_frozen:
+            dropped.append(b)
+    if not dropped:
+        return spread, []
+    return spread.drop(columns=dropped), dropped
+
+
+def statAnalysis_BC(env, df1, df2, zscore_lookback: int = 252, roll_dates=None):
     # Ornstein–Uhlenbeck Process calibration, or normal statistics
     # formula reference: https://www.zhihu.com/question/268075949/answer/1531412127
     # spreadvalues between quoted ytm and actual ytm
@@ -190,10 +332,24 @@ def statAnalysis_BC(env, df1, df2, zscore_lookback: int = 252):
     df2 = df2.reindex(index=df1.index)
     spread = df1 - df2
     spread = spread[bonds]
+    # Remove dead instruments before any statistic is fit on them; a frozen
+    # residual otherwise passes the stationarity filter and contributes a
+    # near-zero vol divisor. See _drop_stale_residual_bonds.
+    spread, _stale = _drop_stale_residual_bonds(spread, env)
+    if _stale:
+        bonds = spread.columns
+        print(f"INFO: dropped {len(_stale)} stale/delisted bond(s) from BondCurve stats: "
+              f"{', '.join(map(str, _stale[:8]))}{' ...' if len(_stale) > 8 else ''}")
     # Use a 1-year rolling window for mean/vol/stationarity so old regimes
     # don't dilute the normalisation. Full spread history is kept in the
     # returned dict for downstream charting.
     spread_stat = spread.iloc[-zscore_lookback:] if len(spread) > zscore_lookback else spread
+    # Remove reference-roll step-changes from the SERIES THE STATS ARE FIT
+    # ON (not from the returned `Spread`, which downstream charting expects
+    # raw). OU_calibrate's signature is deliberately untouched -- it has 10
+    # call sites across bond/IRS/spread/OTR-OFR paths and this finding
+    # concerns only the bond-curve residual. See F6 / item 3.2.
+    spread_stat = splice_reference_rolls(spread_stat, roll_dates)
     stat_info = OU_calibrate(spread_stat)
     for b in bonds:
         stat_info.loc[b,'ttm'] = env['Def'].loc[b,'剩余期限']

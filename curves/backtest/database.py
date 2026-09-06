@@ -37,8 +37,20 @@ def loadBondDataPKL(btype,prange,update=False):
                 database_bond = pickle.load(file)    
     return database_bond
 
-def loadIRSPKL():
-    # this file has been updated daily
+def loadIRSPKL(update=False):
+    """Load database-px.pkl (IRS + CNBD/中债估值 curve series: CGB/CDB/ICP/MTN/LGB).
+
+    `update=True` refreshes the file's tail via retrieveCNBDTS() before
+    reading it -- this pulls Wind's *current* window (see that function's own
+    d7d/d1m-to-d logic), not the backtest's historical `prange`; it does not
+    backfill history. Use it when a backtest's `end` is recent enough that
+    the file's tail might be stale, not to fill gaps deep in the past. This
+    file has otherwise been updated daily by the regular data-update pipeline
+    (engine/data_update.py registers curves.utils.retrieve:retrieveCNBDTS).
+    """
+    if update:
+        from curves.utils.retrieve import retrieveCNBDTS
+        retrieveCNBDTS()
     cvdata = pd.read_pickle(os.path.join(DIR_INPUT,'database-px.pkl'))
     return cvdata
 
@@ -71,5 +83,5 @@ def loadDB(btype, prange, update):
                 print(f"Warning: could not write bondpool cache: {e}")
 
     database = loadBondDataPKL(btype, prange, update['bonds'])
-    database.update(loadIRSPKL())
+    database.update(loadIRSPKL(update.get('cbts', False)))
     return database

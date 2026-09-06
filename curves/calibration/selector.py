@@ -8,7 +8,6 @@ import os
 import time
 import pandas as pd
 import numpy as np
-from functools import lru_cache
 from datetime import datetime
 import warnings
 
@@ -21,6 +20,17 @@ from ..utils.file import updatePKL, loadPKL
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
+
+class MissingVolumeDataError(RuntimeError):
+    """Raised when turnover/volume data is missing for a required date.
+
+    A domain exception instead of SystemExit so this stays catchable by
+    the EOD pipeline's per-step isolation (a failing step is logged and
+    skipped, not allowed to kill the host process). See
+    docs/dev/affine-curve-improvement-plan.md F12 / item 1.4.
+    """
+
+
 # Configuration
 class Config:
     """Global configuration for bond selector."""
@@ -28,17 +38,6 @@ class Config:
     ENABLE_CACHING = True
 
 # Utility functions
-@lru_cache(maxsize=1000)
-def calculate_term(date_str: str, maturity_str: str) -> float:
-    """Calculate term in years between two dates."""
-    try:
-        date = pd.to_datetime(date_str)
-        maturity = pd.to_datetime(maturity_str)
-        return (maturity - date).days / 365
-    except:
-        return np.nan
-
-
 def filter_bonds_by_type(bond_names: pd.Series, bond_type: str) -> pd.Index:
     """Filter bonds by type."""
     if bond_type == 'TBond':
@@ -50,15 +49,29 @@ def filter_bonds_by_type(bond_names: pd.Series, bond_type: str) -> pd.Index:
     return bond_names[mask].index
 
 
-def filter_bonds_by_term(terms: pd.Series, min_term: float, max_term: float) -> pd.Index:
-    """Filter bonds by term range."""
-    l = 0
-    while l == 0:
-        mask = (terms > min_term) & (terms <= max_term)
+def filter_bonds_by_term(terms: pd.Series, min_term: float, max_term: float,
+                          max_widen: float = 0.25, step: float = 0.005) -> pd.Index:
+    """Filter bonds by term range.
+
+    Widens the [min_term, max_term] band symmetrically when empty, capped at
+    ``max_widen`` years each side so a bucket can never quietly capture a
+    neighbouring bucket's bond. Returns an empty index (with a warning)
+    rather than looping forever if no candidate is found within the cap.
+    See docs/dev/affine-curve-improvement-plan.md F5 / item 1.3.
+    """
+    orig_min, orig_max = min_term, max_term
+    widen = 0.0
+    while widen <= max_widen:
+        mask = (terms > min_term - widen) & (terms <= max_term + widen)
         bond_filtered = terms[mask].index
-        l = len(bond_filtered)
-        max_term += 0.005
-    return bond_filtered
+        if len(bond_filtered) > 0:
+            return bond_filtered
+        widen += step
+    warnings.warn(
+        f"filter_bonds_by_term: no bonds found for range ({orig_min}, {orig_max}] "
+        f"even after symmetric widening by ±{max_widen}y; returning empty index."
+    )
+    return terms.iloc[0:0].index
 
 
 def get_most_liquid_bond(turnover: pd.Series) -> str:
@@ -123,9 +136,21 @@ def extract_yield(env: dict, bond_id: str, date: datetime, price_type: str) -> f
                 print(f"Missing data for {bond_id}")
             
     else:  # real time data
+        # CNBD valuation is the fallback for every realtime lookup. It must be
+        # resolved BEFORE the BondRT check: outside live Wind hours (or on a
+        # cache miss) env['BondRT'] is None / missing the bond entirely, and
+        # returning NaN there silently starved the whole reference set, so the
+        # affine fit ran against ZERO anchor points and produced a degenerate
+        # near-flat curve (~0.25% at every tenor) instead of failing loudly.
+        try:
+            fallback_yield = env['Def'].loc[bond_id, '估价收益率:%(中债)']
+        except KeyError:
+            fallback_yield = np.nan
+        if not pd.notna(fallback_yield):
+            fallback_yield = np.nan
+
         bond_rt_data = env.get('BondRT')
         if bond_rt_data is not None and bond_id in bond_rt_data.index:
-            fallback_yield = env['Def'].loc[bond_id, '估价收益率:%(中债)']
             bond_rt = bond_rt_data.loc[bond_id]
             if price_type == 'Bid':
                 ytm = bond_rt.get('买价收益率', fallback_yield)
@@ -134,9 +159,10 @@ def extract_yield(env: dict, bond_id: str, date: datetime, price_type: str) -> f
             else:
                 ytm = fallback_yield
             return ytm if pd.notna(ytm) else fallback_yield
-        elif Config.VERBOSE:
-            print(f'Missing real time data for {bond_id} {date}')
-    
+        if Config.VERBOSE:
+            print(f'Missing real time data for {bond_id} {date}; using CNBD valuation')
+        return fallback_yield
+
     return np.nan
 
 
@@ -159,16 +185,48 @@ def prepare_bond_schedule(bond_info: dict) -> tuple:
         bond_info['name'], bond_info['start_date'], bond_info['maturity_date'],
         bond_info['frequency'], bond_info['coupon']
     )
-    
-    # Handle special cases
-    if pd.isna(freq) or freq == 0:
-        freq = 1.0
-    if '贴现' in str(name):
+
+    # Genuine discount / zero-coupon bonds (freq == 0, or '贴现' in the name)
+    # are priced on their own simple-interest short-end formula in
+    # pricing()/pricingYield()/pricingAffine -- never fabricate a coupon
+    # frequency for them (see docs/dev/affine-curve-improvement-plan.md F1 /
+    # item 1.1; this was the same defect already fixed in curve.py).
+    is_discount = (pd.isna(freq) or freq == 0) or ('贴现' in str(name))
+    if is_discount:
         coupon = 0.0
+        freq = 0.0
+    elif pd.isna(freq):
         freq = 1.0
-    
+
     schedule = yd.scheduleDate(start, maturity, name, freq)
     return coupon, freq, schedule
+
+
+def _remaining_flow_times(schedule, asof, ttm: float):
+    """Remaining coupon dates as year fractions from ``asof``, for the bootstrap.
+
+    Returns strictly-positive times below ``ttm`` (the redemption leg at ttm is
+    handled separately by the bootstrapper), or None when the schedule is
+    unusable so the caller falls back to the legacy (ttm, freq) reconstruction.
+
+    A payment falling exactly on ``asof`` is excluded: the bond has gone
+    ex-coupon and the dirty price passed alongside already reflects that.
+    """
+    if schedule is None or len(schedule) == 0:
+        return None
+    try:
+        asof_ts = pd.Timestamp(asof)
+        days = np.array(
+            [(pd.Timestamp(s) - asof_ts).days for s in schedule], dtype=float
+        )
+    except (TypeError, ValueError):
+        return None
+    times = days / 365.0
+    times = times[np.isfinite(times) & (times > 1e-10) & (times < ttm - 1e-10)]
+    # No intermediate coupons left (final period) is a legitimate answer, but
+    # an empty schedule parse is not distinguishable here -- returning an empty
+    # array is correct either way: the bond then has only its redemption leg.
+    return np.sort(times)
 
 
 class RefBondSelector:
@@ -248,8 +306,23 @@ class RefBondSelector:
         if not update and len(result_df) > 0:
             dates_to_process = [d for d in dates_to_process if d not in result_df.index]
 
-        # Collect new rows in a dict and concat once instead of cell-by-cell assignment
+        # Collect new rows in a dict and concat once instead of cell-by-cell assignment.
+        # Also track reference-change events (item 3.2 / F6): a roll is
+        # detected by comparing each day's freshly-selected bond against the
+        # PREVIOUS actual selection for that bucket (not the ffilled value —
+        # a gap day with no selection must not itself look like two rolls).
         new_rows: dict = {}
+        change_events: list = []
+        last_selected: dict = {}
+        # Seed last_selected from the most recent existing row so a roll on
+        # the very first date of this run is still detected against history,
+        # not treated as a fresh/no-prior-value bucket.
+        if len(existing_result_df) > 0:
+            last_row = existing_result_df.ffill().iloc[-1]
+            for bucket_name, bond_id in last_row.items():
+                if pd.notna(bond_id):
+                    last_selected[bucket_name] = _as_scalar_bond_id(bond_id)
+
         for i, current_date in enumerate(dates_to_process):
             if self.verbose and i % max(1, len(dates_to_process) // 10) == 0:
                 progress = 100 * i / len(dates_to_process)
@@ -265,21 +338,74 @@ class RefBondSelector:
                     result_df[bucket_name] = result_df[bucket_name].astype(object)
                 result_df.loc[current_date, bucket_name] = selected_bond
 
+                prev_bond = last_selected.get(bucket_name)
+                if (
+                    pd.notna(selected_bond)
+                    and prev_bond is not None
+                    and selected_bond != prev_bond
+                ):
+                    change_events.append({
+                        'date': current_date,
+                        'bucket': bucket_name,
+                        'old_bond': prev_bond,
+                        'new_bond': selected_bond,
+                    })
+                if pd.notna(selected_bond):
+                    last_selected[bucket_name] = selected_bond
+
         # Merge new rows (if any) and persist
         if new_rows:
+            new_rows_df = pd.DataFrame(new_rows).T
             result_df = pd.concat(
-                [existing_result_df, pd.DataFrame(new_rows).T]
+                [existing_result_df, new_rows_df]
             ).loc[lambda df: ~df.index.duplicated(keep='last')]
         else:
+            new_rows_df = pd.DataFrame(columns=result_df.columns)
             result_df = existing_result_df
-        result_df = result_df.ffill().dropna(how='all').sort_index()
+        result_df = result_df.sort_index()
+        # ffill() only pre-existing gaps (a date never processed, or one with
+        # no volume data). A NaN on a date THIS run just processed is not a
+        # gap -- it means _process_single_date deliberately declined every
+        # candidate for that bucket (most commonly: the only in-range bond
+        # was already claimed by another bucket today, see the duplicate/
+        # near-collinear guard above). Blanket ffill() used to backfill that
+        # NaN with the previous day's bond regardless, silently recreating
+        # the exact duplicate the guard had just blocked (seen on CBond
+        # 2023-10-10..13: the guard correctly returned NaN for 0.7Y after
+        # 0.5Y took 230206.IB, and ffill() immediately overwrote it with
+        # 230206.IB again from 10-09). ffill only where this run did not
+        # explicitly decide, then still allow later runs to ffill it once a
+        # subsequent date away from the collision provides a real value.
+        processed_mask = pd.DataFrame(
+            False, index=result_df.index, columns=result_df.columns
+        )
+        processed_mask.loc[new_rows_df.index, new_rows_df.columns] = True
+        filled = result_df.ffill()
+        result_df = result_df.where(processed_mask, filled)
+        result_df = result_df.dropna(how='all')
+
         final_data = {'RefBond': result_df}
+        if change_events:
+            # Composite (date, bucket) index: a plain date index is not
+            # unique when multiple buckets roll on the same day, which would
+            # silently collapse to one row under updatePKL's own
+            # duplicate-index handling (and this module's own merge below).
+            new_events_df = pd.DataFrame(change_events).set_index(['date', 'bucket'])
+            existing_events = existing_data.get('RefBondChange')
+            if isinstance(existing_events, pd.DataFrame) and not existing_events.empty:
+                events_df = pd.concat([existing_events, new_events_df])
+                events_df = events_df[~events_df.index.duplicated(keep='last')]
+            else:
+                events_df = new_events_df
+            final_data['RefBondChange'] = events_df.sort_index()
         final_data = updatePKL(final_data, ref_file)
         if self.verbose:
             end_time = time.time()
             print(f"Completed in {end_time - start_time:.2f} seconds")
             print(f"Result shape: {result_df.shape}")
-        
+            if change_events:
+                print(f"Recorded {len(change_events)} reference-change event(s)")
+
         return result_df
     
     def _prepare_bond_data(self, env: dict) -> dict:
@@ -364,9 +490,10 @@ class RefBondSelector:
         if current_date in bonds['turnover'].index:
             date_turnover = bonds['turnover'].loc[current_date, available_bonds]#.dropna()
         else:
-            print("Missing Volume data for the date ", current_date)
-            # Halt execution here for debugging / safety: stop further processing
-            raise SystemExit("Execution halted at selector.py after missing Volume data (line ~281)")
+            raise MissingVolumeDataError(
+                f"Missing Volume data for date {current_date}; cannot select "
+                f"reference bonds without turnover."
+            )
 
         # Process each term bucket
         for bucket_term, (min_term, max_term) in term_buckets.items():
@@ -376,11 +503,22 @@ class RefBondSelector:
             bucket_bonds = filter_bonds_by_term(terms, min_term, max_term)
             candidate_bonds = available_bonds.intersection(bucket_bonds)
 
-            # Special handling for short terms (zero coupon bonds)
+            # Special handling for short-end buckets: restrict to annually-
+            # coupon-paying bonds (每年付息次数 == 1), NOT zero-coupon/discount
+            # bonds (freq == 0) despite this block's original name — genuine
+            # discount bills are a separate short-end convention (see affine
+            # plan F1/F12, item 1.1) and are excluded here on purpose, since
+            # this bucket's reference bond still needs a real coupon schedule
+            # for the bootstrap/pricing path. Verified 2026-09-05: freq==0
+            # rows do not appear in this universe's candidate set at all, so
+            # this filter is not currently dropping any discount bills — it
+            # exists to prefer semi-annual-coupon bonds' annual-coupon peers
+            # for short-end bootstrap stability. Renamed from "zero coupon
+            # bonds" to reflect actual intent.
             if bucket_term in [0.5, 1.0]:
                 freq_data = bonds['definition'].loc[candidate_bonds, '每年付息次数']
-                zero_coupon_mask = (freq_data == 1) & freq_data.notna()
-                candidate_bonds = candidate_bonds[zero_coupon_mask]
+                annual_coupon_mask = (freq_data == 1) & freq_data.notna()
+                candidate_bonds = candidate_bonds[annual_coupon_mask]
 
             # For short-end buckets (<1.5Y) use the most liquid bond: near-maturity
             # off-the-run bonds often have stale CNBD yields that equal their coupon
@@ -388,13 +526,21 @@ class RefBondSelector:
             # bootstrap spot. For longer buckets use first off-the-run to avoid
             # the calibration curve chasing on-the-run richness.
             available_turnover = date_turnover.loc[candidate_bonds].dropna()
-            # avoid duplication with previous bucket
-            term_idx = list(existing_results.columns).index(bucket_name)
-            if term_idx > 0:
-                prev_bucket_name = existing_results.columns[term_idx - 1]
-                prev_tenor_bond = day_results[prev_bucket_name]
-                if prev_tenor_bond in available_turnover.index:
-                    available_turnover = available_turnover.drop(index=prev_tenor_bond)
+            # Avoid duplication with ANY bucket already selected today, not
+            # just the immediately preceding one — with symmetric widening
+            # (see filter_bonds_by_term) a bond can land in two non-adjacent
+            # buckets, and BootstrapYieldCurve.instruments is keyed by float
+            # maturity so a duplicate would silently overwrite. See
+            # docs/dev/affine-curve-improvement-plan.md F5, F12 / item 1.3.
+            already_selected = {
+                bond for bond in day_results.values()
+                if isinstance(bond, str) and bond == bond  # excludes NaN
+            }
+
+            if already_selected:
+                to_drop = [b for b in available_turnover.index if b in already_selected]
+                if to_drop:
+                    available_turnover = available_turnover.drop(index=to_drop)
 
             if bucket_term < 1.5:
                 selected_bond = _as_scalar_bond_id(get_most_liquid_bond(available_turnover))
@@ -407,26 +553,114 @@ class RefBondSelector:
             # bonds, and lets new on-the-run issuance roll smoothly into the
             # calibration (old on-the-run becomes the new first off-the-run
             # only when the previous reference ages out of the bucket).
+            #
+            # Both sticky branches must re-apply the SAME two constraints the
+            # fresh selection above already enforces, or they silently undo
+            # them (F5/F12 item 1.3's duplicate guard was applied only to
+            # `available_turnover`, which the sticky path bypasses):
+            #   1. the bond must not already be another bucket's reference
+            #      today -- BootstrapYieldCurve.instruments is keyed by float
+            #      maturity, so a duplicate silently overwrites an anchor and
+            #      leaves the bootstrap with two near-identical maturities;
+            #   2. it must still sit in this bucket's NOMINAL range, not the
+            #      ±max_widen band `bucket_bonds` was built from -- widening
+            #      exists to find a candidate when a bucket is empty, not to
+            #      let a stale reference drift indefinitely into a neighbour.
+            # Both were violated on 2024-01-04..2024-02-01, where 220004.IB
+            # held the 0.7Y AND 1Y buckets for 21 straight days at TTM
+            # 1.07-1.14 (the 0.7Y bucket is [0.6, 0.9]). The resulting pair of
+            # anchors 0.08y apart broke the bootstrap on the 2024-02-02 roll:
+            # RefSpot 10Y fell 2.102% -> 1.563% while its own input bond
+            # traded flat at 2.4684%, stayed ~100bp below market for two
+            # months, and its recovery inflated S2 (cov of factor LEVELS) to
+            # ~5.6, producing curves with -1.02% at 10Y and +400bp bond
+            # pricing errors through 2024-06.
+            def _sticky_ok(candidate) -> bool:
+                if candidate not in bonds['start_date'].index:
+                    return False
+                if candidate in already_selected:
+                    return False
+                candidate_term = terms.get(candidate, np.nan)
+                return bool(pd.notna(candidate_term)
+                            and min_term < candidate_term <= max_term)
+
             previous_dates = existing_results.index[existing_results.index < current_date]
             if len(previous_dates) > 0:
                 prev_date = previous_dates[-1]
                 prev_bond = _as_scalar_bond_id(existing_results.loc[prev_date, bucket_name])
-                if (prev_bond in bonds['start_date'].index
-                        and prev_bond in bucket_bonds):
+                if _sticky_ok(prev_bond):
                     selected_bond = prev_bond
-                elif pd.isna(selected_bond) and prev_bond in bonds['start_date'].index:
+                elif (pd.isna(selected_bond)
+                      and prev_bond in bonds['start_date'].index
+                      and prev_bond not in already_selected):
+                    # Empty-bucket fallback: nothing fresh was selectable, so
+                    # carry the previous reference forward even though it has
+                    # aged out of the nominal range -- an out-of-range anchor
+                    # is still better than a NaN hole in the bootstrap. The
+                    # duplicate check is NOT relaxed here: reusing a bond that
+                    # already anchors another bucket today is exactly the
+                    # collision that breaks the bootstrap.
                     selected_bond = prev_bond
             day_results[bucket_name] = _as_scalar_bond_id(selected_bond)
         return day_results
 
 
+def _fit_coupon_beta(coupons: np.ndarray, ytms: np.ndarray, ttms: np.ndarray) -> float:
+    """Fit the per-date coupon-sensitivity term beta from a reference cross-
+    section: ytm_i ~= level(ttm_i) + beta*coupon_i + eps_i.
+
+    ``level(ttm)`` is approximated by a degree-1 polynomial in ttm (a full
+    curve shape isn't known yet -- this only needs to be good enough to not
+    let a term-structure slope masquerade as a coupon effect). Returns 0.0
+    (no adjustment) if there are too few points or the coupon column has no
+    variation, so a thin day never over-fits noise into beta.
+    See docs/dev/affine-curve-improvement-plan.md F13 / item 1.7.
+    """
+    n = len(coupons)
+    if n < 4 or np.nanstd(coupons) < 1e-6:
+        return 0.0
+    # Design matrix: [1, ttm, coupon]
+    X = np.column_stack([np.ones(n), ttms, coupons])
+    try:
+        coef, _, rank, _ = np.linalg.lstsq(X, ytms, rcond=None)
+    except np.linalg.LinAlgError:
+        return 0.0
+    if rank < X.shape[1]:
+        return 0.0
+    beta = float(coef[2])
+    # Sanity cap: a coupon-driven yield shift beyond +/-2 (in ytm-% per
+    # coupon-% units) on a same-day fit is almost certainly overfitting a
+    # thin/noisy cross-section (F5 reference-selection noise), not a real
+    # liquidity/vintage/tax effect -- do not trust it.
+    if not np.isfinite(beta) or abs(beta) > 2.0:
+        return 0.0
+    return beta
+
+
+def coupon_adjustment_enabled(bond_type: str) -> bool:
+    """Whether the coupon-vintage adjustment (item 1.7 / F13) applies to
+    `bond_type`. The effect is CGB-specific -- CDB shows no coupon
+    sensitivity despite comparable coupon dispersion -- so the setting is a
+    per-asset-class mapping. A plain bool is still honoured for
+    back-compatibility."""
+    setting = getattr(BondConfig, 'APPLY_COUPON_ADJUSTMENT', False)
+    if isinstance(setting, dict):
+        return bool(setting.get(bond_type, False))
+    return bool(setting)
+
+
 class YieldCurveBuilder:
     """Build yield curves from reference bonds."""
-    
+
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
-    
-    def build_curve(self, bond_ref: pd.Series, env: dict, price_type: str, date: datetime, tax: float = 0.0) -> pd.DataFrame:
+        # Diagnostic: per-date fitted coupon-sensitivity beta from the most
+        # recent build_curve() call (F13 / item 1.7). None until fit, or when
+        # apply_coupon_adjustment=False.
+        self.last_coupon_beta: float = None
+
+    def build_curve(self, bond_ref: pd.Series, env: dict, price_type: str, date: datetime,
+                     tax: float = 0.0, apply_coupon_adjustment: bool = False) -> pd.DataFrame:
         """Build yield curve from reference bonds.
 
         Args:
@@ -434,10 +668,23 @@ class YieldCurveBuilder:
                  The current bond-curve workflow uses ``tax=0`` for both TBond
                  and CBond so spot calibration and downstream pricing share the
                  same no-tax convention.
+            apply_coupon_adjustment: when True, fits a per-date coupon-
+                 sensitivity term beta from this date's reference cross-
+                 section and bootstraps on the de-couponed yield
+                 (ytm - beta*coupon) instead of the raw quoted yield, to
+                 correct the short-end coupon-vintage dispersion documented
+                 in F13. Off by default pending historical validation of
+                 beta's stability -- see item 1.7. The fitted beta is always
+                 exposed via ``self.last_coupon_beta`` regardless of this
+                 flag, so it can be monitored before being trusted live.
         """
         yield_curve = bs.BootstrapYieldCurve()
         results = pd.DataFrame(index=bond_ref.index, columns=['bond_id', 'ttm', 'spot'], dtype=object)
-        
+
+        # First pass: collect raw (coupon, ytm, ttm, schedule info) per bucket
+        # so beta can be fit on the whole day's cross-section before anything
+        # is bootstrapped.
+        collected = {}
         for bucket_name, bond_id in bond_ref.items():
             bond_id = _as_scalar_bond_id(bond_id)
             if pd.isna(bond_id):
@@ -454,42 +701,95 @@ class YieldCurveBuilder:
 
             # Get yield
             ytm = extract_yield(env, bond_id, date, price_type)
-            
+
             if pd.isna(ytm) or not np.isfinite(ytm):
                 continue
-            
+
             # Prepare schedule
             coupon, frequency, schedule = prepare_bond_schedule(bond_info)
-            
-            # Calculate pricing
-            dirty, clean, duration, convexity = yd.pricing(
-                date, coupon, schedule, frequency, ytm
-            )
-            
+
             # Calculate time to maturity
             maturity_date = bond_info['maturity_date']
             date_1 = pd.Timestamp(maturity_date).date()
             date_2 = pd.Timestamp(date).date()
             ttm = (date_1 - date_2).days / 365
-            
+
+            collected[bucket_name] = dict(
+                bond_id=bond_id, coupon=coupon, frequency=frequency,
+                schedule=schedule, ttm=ttm, ytm=ytm,
+            )
+
+        # Fit the coupon-sensitivity term on this date's own cross-section
+        # (freq == 0 discount bills excluded -- coupon is definitionally 0
+        # there and they're a separate convention bucket, see F1).
+        coupon_fit_rows = [v for v in collected.values() if v['frequency'] != 0]
+        beta = _fit_coupon_beta(
+            np.array([v['coupon'] for v in coupon_fit_rows], dtype=float),
+            np.array([v['ytm'] for v in coupon_fit_rows], dtype=float),
+            np.array([v['ttm'] for v in coupon_fit_rows], dtype=float),
+        ) if coupon_fit_rows else 0.0
+        self.last_coupon_beta = beta
+
+        for bucket_name, info in collected.items():
+            bond_id, coupon, frequency, schedule, ttm, ytm = (
+                info['bond_id'], info['coupon'], info['frequency'],
+                info['schedule'], info['ttm'], info['ytm'],
+            )
+
+            ytm_for_bootstrap = ytm
+            if apply_coupon_adjustment and beta != 0.0 and frequency != 0:
+                ytm_for_bootstrap = ytm - beta * coupon
+
+            # Calculate pricing at the (possibly de-couponed) yield
+            dirty, clean, duration, convexity = yd.pricing(
+                date, coupon, schedule, frequency, ytm_for_bootstrap
+            )
+
             # Under the current no-tax convention the dirty price is used
             # as-is. The branch is kept for optional future adjustments.
             if tax > 0.0 and np.isfinite(dirty):
-                cpv = yd.coupon_pv_sum(date, coupon, schedule, frequency, ytm)
+                cpv = yd.coupon_pv_sum(date, coupon, schedule, frequency, ytm_for_bootstrap)
                 dirty_for_bootstrap = dirty - tax * cpv
             else:
                 dirty_for_bootstrap = dirty
 
-            # Add to yield curve
+            # Add to yield curve. Pass the bond's REAL remaining coupon dates
+            # (as year fractions from `date`) so the bootstrap does not
+            # reconstruct them from (ttm, frequency) -- that reconstruction
+            # invents a coupon just after the pricing date on a bond's coupon
+            # anniversary, when it has just gone ex-coupon, and forces the
+            # solver to spike the terminal zero. See add_instrument's docstring.
+            flow_times = _remaining_flow_times(schedule, date, ttm)
+            # The redemption pays on the business-day-adjusted final schedule
+            # date, which is 1-2 days after the raw maturity used for `ttm` on
+            # ~25% of bond-days. `ttm` stays the curve node label; the actual
+            # payment time is what the redemption leg must be discounted at
+            # (worth up to ~0.8bp of implied zero at the short end).
+            redemption_time = ttm
+            try:
+                if schedule is not None and len(schedule) > 0:
+                    last_flow = max(pd.Timestamp(x) for x in schedule)
+                    t_last = (last_flow.date() - pd.Timestamp(date).date()).days / 365.0
+                    if np.isfinite(t_last) and t_last > 0:
+                        redemption_time = t_last
+            except (TypeError, ValueError):
+                pass
+            yield_curve.add_instrument(
+                100, ttm, coupon, dirty_for_bootstrap, frequency,
+                flow_times=flow_times, redemption_time=redemption_time,
+            )
+
+            # Record the bucket's identity/tenor. The spot-rate mapping below
+            # keys off results['ttm'], so omitting these leaves every row NaN
+            # and silently produces an empty reference set.
             results.loc[bucket_name, 'bond_id'] = bond_id
             results.loc[bucket_name, 'ttm'] = ttm
-            yield_curve.add_instrument(100, ttm, coupon, dirty_for_bootstrap, frequency)
-        
+
         # Extract yield curve
         maturities = yield_curve.get_maturities()
         zero_rates = yield_curve.get_zero_rates()
         rate_map = dict(zip(maturities, zero_rates))
-        
+
         # Map spot rates
         for bucket_name in results.index:
             ttm = pd.to_numeric(results.loc[bucket_name, 'ttm'], errors='coerce')
@@ -538,12 +838,22 @@ def compute_spot_term_panels(
             # Compute new values
             new_spot = pd.DataFrame(index=missing_dates, columns=columns, dtype=float)
             new_term = pd.DataFrame(index=missing_dates, columns=columns, dtype=float)
+            # Per-date coupon-sensitivity diagnostic (item 1.7 / F13). Persisted
+            # so beta's stability can be monitored in production: a structural
+            # coupon-vintage effect should stay smooth (historically about
+            # -0.072, sd 0.007); a suddenly noisy or sign-flipping beta means
+            # the fit is chasing reference-selection noise and the adjustment
+            # should be reviewed (BondConfig.APPLY_COUPON_ADJUSTMENT).
+            new_beta = pd.Series(index=missing_dates, dtype=float, name='CouponBeta')
 
             _tax = 0.0
             for d in missing_dates:
                 bond_ref = botr.loc[d]
                 builder = YieldCurveBuilder()
-                dfp = builder.build_curve(bond_ref, env, price_type, d, tax=_tax)
+                dfp = builder.build_curve(
+                    bond_ref, env, price_type, d, tax=_tax,
+                    apply_coupon_adjustment=coupon_adjustment_enabled(bond_type),
+                )
 
                 ttm_series = pd.Series(index=columns, dtype=float)
                 spot_series = pd.Series(index=columns, dtype=float)
@@ -557,10 +867,38 @@ def compute_spot_term_panels(
 
                 new_term.loc[d] = ttm_series
                 new_spot.loc[d] = spot_series
+                new_beta.loc[d] = builder.last_coupon_beta
 
             # Save results
-            final_data = {'RefSpot': new_spot, 'RefTerm': new_term}
+            final_data = {'RefSpot': new_spot, 'RefTerm': new_term,
+                          'CouponBeta': new_beta}
             final_data = updatePKL(final_data, file_path)
+
+            # updatePKL's merge (new_df.combine_first(target_df)) unions
+            # columns and forward-fills, so a bucket removed from the
+            # CURRENT TERM_BUCKETS (`columns`, from botr -- already trimmed
+            # by select_reference_bonds) would otherwise linger in RefSpot/
+            # RefTerm forever, ffilled with its last real value from before
+            # removal and displayed as if it were live (e.g. Term near 7Y
+            # kept showing a value frozen from before the 7Y bucket was
+            # dropped from TERM_BUCKETS). Trim back to the current bucket
+            # set and persist the trim. Must rewrite the FULL on-disk dict
+            # (not just RefSpot/RefTerm) since updatePKL(rewrite=True)
+            # replaces the entire file -- this pickle also holds RefBond,
+            # ImpliedVol, Spot, Factors. See
+            # docs/dev/affine-curve-improvement-plan.md F7.
+            trimmed = False
+            for key in ('RefSpot', 'RefTerm'):
+                df = final_data.get(key)
+                if isinstance(df, pd.DataFrame):
+                    stale_cols = [c for c in df.columns if c not in columns]
+                    if stale_cols:
+                        final_data[key] = df.drop(columns=stale_cols)
+                        trimmed = True
+            if trimmed:
+                full_on_disk = loadPKL(file_path)
+                full_on_disk.update(final_data)
+                updatePKL(full_on_disk, file_path, rewrite=True)
             return final_data
     else:
         d = botr.index[-1]
@@ -570,7 +908,10 @@ def compute_spot_term_panels(
         _tax = 0.0
         for p in plist:
             builder = YieldCurveBuilder()
-            dfp = builder.build_curve(bond_ref, env, p, d, tax=_tax)
+            dfp = builder.build_curve(
+                bond_ref, env, p, d, tax=_tax,
+                apply_coupon_adjustment=coupon_adjustment_enabled(bond_type),
+            )
             series = pd.Series(dfp['spot'].values, index=dfp['ttm'].values, dtype=float)
             series.index = pd.to_numeric(series.index, errors='coerce')
             series = series[~pd.isna(series.index)]

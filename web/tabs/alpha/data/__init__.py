@@ -42,6 +42,7 @@ from .loaders import (
     load_spread_timeseries,
     to_newissue_stage_label,
     load_newissue_episode_series,
+    load_otr_ofr_rv_episode_series,
     load_newissue_current_episode,
     load_newissue_pair_history,
     load_macro_series,
@@ -56,6 +57,7 @@ from .duration import (
     _get_tenor_yields_for_spread,
     _get_current_fr007_bp,
     _get_ttm_display,
+    get_bondswap_reference_series,
 )
 from .legs import (
     _parse_repo_spread_legs,
@@ -80,6 +82,7 @@ __all__ = [
     'load_spread_timeseries',
     'to_newissue_stage_label',
     'load_newissue_episode_series',
+    'load_otr_ofr_rv_episode_series',
     'load_newissue_current_episode',
     'load_newissue_pair_history',
     'load_macro_series',
@@ -87,4 +90,5 @@ __all__ = [
     'get_realtime_spread_bp',
     'get_spread_style',
     'resolve_legs',
+    'get_bondswap_reference_series',
 ]

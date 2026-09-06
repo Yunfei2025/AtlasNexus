@@ -269,12 +269,31 @@ class StatRefresher:
                     pickle.dump(pxrt, f)
                 print(f"INFO: Backfilled {repaired_count} missing hedge sensitivities for {btype}.")
 
+            # Reference-roll dates, same input the EOD generator passes to
+            # statAnalysis_BC (curves/generators/stat.py). Without these the
+            # OU mean/vol are fit on a series that still contains the
+            # reference-bond rollover STEPS, so the realtime 'mean' drifts
+            # away from the EOD one (measured 11.5bp on 240004.IB, and
+            # >2bp on 117/291 TBond rows) and the Daily Spread Statistics
+            # Z-score disagrees with the Spread Time Series chart.
+            _roll_dates = None
+            try:
+                from curves.utils.file import loadPKL as _loadPKL
+                _cvref = _loadPKL(os.path.join(DIR_INPUT, f'{btype}-cvref.pkl'))
+                _events = _cvref.get('RefBondChange') if isinstance(_cvref, dict) else None
+                if isinstance(_events, pd.DataFrame) and not _events.empty:
+                    _roll_dates = _events.index.get_level_values('date').unique()
+            except Exception as _e:
+                print(f'WARN {btype}: could not load RefBondChange ({_e}); '
+                      'proceeding without roll splicing')
+
             try:
                 bonds_hist = bond_px['ytm_quo'].columns.intersection(env['Def'].index)
                 df_act_hist = bond_px['ytm_act'].loc[:, bonds_hist].apply(pd.to_numeric, errors='coerce')
                 df_quo_hist = bond_px['ytm_quo'].loc[:, bonds_hist].apply(pd.to_numeric, errors='coerce')
                 df_quo_hist = _suppress_model_jumps(df_quo_hist, df_act_hist)
-                fresh_bc = st.statAnalysis_BC(env, df_act_hist, df_quo_hist).get('StatInfo', pd.DataFrame())
+                fresh_bc = st.statAnalysis_BC(env, df_act_hist, df_quo_hist,
+                                              roll_dates=_roll_dates).get('StatInfo', pd.DataFrame())
                 if isinstance(fresh_bc, pd.DataFrame) and not fresh_bc.empty:
                     stat_his['BondCurve'] = fresh_bc
             except Exception as exc:
@@ -319,9 +338,22 @@ class StatRefresher:
                 vol_ = vol_.where(vol_.abs() > 1e-6)
                 if k == 'BondCurve':
                     # CurveYield (CvBid/CvOfr) already has mean_adj baked in by statAdjust
-                    # (curves/refreshers/rates.py), i.e. spread = spread_raw - mean here.
-                    # Subtracting 'mean' again would double-count it, so normalise directly.
+                    # (curves/refreshers/rates.py), i.e. the raw spread column here is
+                    # actually (spread_raw - mean). Every other consumer of a BondCurve
+                    # row -- the EOD pipeline's StatInfo (curves/calibration/stat.py
+                    # statAnalysis_BC) and web/core/styles.py's getInfo() -- expects the
+                    # standard convention Zscore = (spread - mean) / vol with an
+                    # UN-adjusted spread. Store spread_raw as 'spread' (undoing the
+                    # mean_adj) and keep 'mean' intact instead of zeroing it, so this
+                    # row is consistent with that shared convention; this previously
+                    # diverged and made the Daily Spread Statistics bar disagree with
+                    # the Spread Time Series chart for the same bond (e.g. 260410.IB
+                    # +0.02 vs -1.74 on 2026-09-04; 240004.IB -0.39 vs 1.72 on 2026-09-06).
+                    mean_adj = pd.to_numeric(df_k['mean'], errors='coerce') if 'mean' in df_k.columns else pd.Series(0.0, index=df_k.index)
+                    if not isinstance(mean_adj, pd.Series):
+                        mean_adj = pd.Series(mean_adj, index=df_k.index)
                     df_k['Zscore'] = df_k['spread'] / vol_
+                    df_k['spread'] = df_k['spread'] + mean_adj
                 else:
                     # BondSwap: the IRS rate is market-observed without mean adjustment,
                     # so subtract the OU mean before normalising.

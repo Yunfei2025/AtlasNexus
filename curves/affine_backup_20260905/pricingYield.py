@@ -177,42 +177,20 @@ def pricing(day, coup, schedule, freq, ytm):
     
     YN = 365
     n_flows = len(flow_dates)
-    is_discount = (freq == 0)
-    # Genuine discount / zero-coupon instruments (freq == 0) have no coupon
-    # periodicity to divide by; discount their single cashflow on a simple-
-    # interest, actual/365 basis (market convention for CNY short paper).
-    # See docs/dev/affine-curve-improvement-plan.md F1 / item 1.1.
-    discount_rate = (ytm / 100) if is_discount else (ytm / freq / 100)
-
+    discount_rate = ytm / freq / 100
+    
     if n_flows == 1:  # Single payment
-        if is_discount or dres <= YN:
+        if dres <= YN:
             nt = dres / YN
             discount = 1 / (1 + discount_rate * nt)
         else:
-            # Periods remaining to the single outstanding cashflow. The old
-            # `dres/TS + floor(dres/TS)` double-counted whenever dres == TS,
-            # which is exactly the ex-coupon day of a bond in its final
-            # period: the schedule's ffill lands ON the coupon date, so
-            # dres and TS are both the full final period and nt became 2.0
-            # instead of 1.0. That discounted the bond over two years
-            # instead of one, understating the dirty price by ~1 coupon and
-            # making the bootstrap emit a ~130bp spot spike for that one
-            # day (observed 2026-05-15 on 240010.IB: 1.27% -> 2.57%).
-            # For a single remaining flow the period count is simply
-            # dres/TS; this is identical to the old expression whenever
-            # dres < TS, i.e. every non-ex-coupon case.
-            nt = dres / TS
+            nt = dres / TS + math.floor(dres / TS)
             discount = (1 / (1 + discount_rate)) ** nt
 
-        coupon_amt = 0.0 if is_discount else coup / freq
-        p = (100 + coupon_amt) * discount
-        if is_discount:
-            d = nt * discount
-            v = d * 2 * nt * discount
-        else:
-            d = nt / (1 + ytm / 100 / freq) # nt / freq / 100 * discount
-            v = d * 2 * nt / freq / 100 * discount
-
+        p = (100 + coup / freq) * discount
+        d = nt / (1 + ytm / 100 / freq) # nt / freq / 100 * discount
+        v = d * 2 * nt / freq / 100 * discount
+        
     else:  # Multiple payments
         base_discount = 1 / (1 + discount_rate)
         nt = dres / TS + n_flows - 1
@@ -237,8 +215,8 @@ def pricing(day, coup, schedule, freq, ytm):
         d = (1 / freq * base_discount) * d / p
         v = (1 / freq * base_discount) ** 2 * v / p
     
-    # Accrued interest (a discount instrument has no coupon to accrue)
-    accrued = 0.0 if is_discount else coup / freq * (1 - dres / TS)
+    # Accrued interest
+    accrued = coup / freq * (1 - dres / TS)
     clean_price = p - accrued
     
     return p, clean_price, d, v
@@ -311,8 +289,7 @@ def pricingAffine(day, coup, tax, schedule, freq, factors, S2, gamma, mtype, cal
     
     TS = (schedule.loc[i] - schedule.loc[i - 1]).days
     n_flows = len(flow_dates)
-    is_discount = (freq == 0)
-
+    
     # Pre-extract numpy arrays for fast inner loop
     if isinstance(S2, sp.MatrixBase):
         S2_flat = tuple(float(S2[r,c]) for r in range(3) for c in range(3))
@@ -324,20 +301,9 @@ def pricingAffine(day, coup, tax, schedule, freq, factors, S2, gamma, mtype, cal
     else:
         x_arr = np.asarray(factors, dtype=float).ravel()
 
-    # Actual cashflow dates from the real schedule (irregular after
-    # getNextTradingDate business-day adjustment), instead of assuming every
-    # remaining period has the same length as the first (i·TS + dres). See
-    # docs/dev/affine-curve-improvement-plan.md F10 / item 1.2. taus_days is
-    # real days from `day` to each flow date, used for tau_y (curve lookup).
-    # The discounting-period count still uses the standard bond convention:
-    # the settlement-to-next-coupon stub is a fraction (dres/TS) of the FIRST
-    # remaining period's own actual length, and each whole period after that
-    # counts as exactly 1 (coupon accrues per period, not per calendar day),
-    # regardless of that period's own actual length.
-    flow_idx = flow_dates.index.to_numpy()
-    taus_days = np.array([(d - day).days for d in flow_dates.to_numpy()], dtype=float)
-    stub_fraction = dres / TS
-    n_periods_elapsed = stub_fraction + np.arange(n_flows, dtype=float)
+    # Compute taus in days
+    time_indices = np.arange(n_flows)
+    taus_days = time_indices * TS + dres
 
     # Vectorized: compute a and B for all cashflow dates
     p = 0.0
@@ -349,40 +315,31 @@ def pricingAffine(day, coup, tax, schedule, freq, factors, S2, gamma, mtype, cal
         tau_y = tau_d / 365.0
         a, B = calAB_np(gamma_f, tau_y, S2_flat, mtype)
         y = a + B @ x_arr
-        if is_discount:
-            # Simple-interest, actual/365 convention for genuine discount /
-            # zero-coupon instruments (no coupon periodicity to divide by).
-            # See docs/dev/affine-curve-improvement-plan.md F1 / item 1.1.
-            discount_factor = 1.0 / (1.0 + y / 100.0 * tau_y)
-        else:
-            discount = 1.0 / (1.0 + y / freq / 100.0)
-            discount_factor = discount ** n_periods_elapsed[t]
-
-        coupon_pv = 0.0 if is_discount else coup / freq * discount_factor
+        discount = 1.0 / (1.0 + y / freq / 100.0)
+        discount_factor = discount ** (tau_d / TS)
+        
+        coupon_pv = coup / freq * discount_factor
         p += coupon_pv
         contrib = B * tau_y * coupon_pv
         s -= contrib
         coupon_pv_sum += coupon_pv
         s_coupon -= contrib
-
+    
     # Principal payment (reuse last computed values)
     final_tau_d = taus_days[-1]
     final_tau_y = final_tau_d / 365.0
     a, B = calAB_np(gamma_f, final_tau_y, S2_flat, mtype)
     y = a + B @ x_arr
-    if is_discount:
-        principal_discount = 1.0 / (1.0 + y / 100.0 * final_tau_y)
-    else:
-        discount = 1.0 / (1.0 + y / freq / 100.0)
-        principal_discount = discount ** n_periods_elapsed[-1]
-
+    discount = 1.0 / (1.0 + y / freq / 100.0)
+    principal_discount = discount ** (final_tau_d / TS)
+    
     p0 = 100.0 * principal_discount
     p += p0
     s -= B * final_tau_y * p0
-
+    
     # Pre-tax price (market convention — used for yield inversion via pricingYield)
     p_pretax = p
-    accrued = 0.0 if is_discount else coup / freq * (1.0 - dres / TS)
+    accrued  = coup / freq * (1.0 - dres / TS)
     clean_pretax = p_pretax - accrued
 
     # Optional coupon-premium adjustment. The current bond workflow uses

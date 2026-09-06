@@ -258,7 +258,7 @@ def run_monthly_style_backtest(
     zscore = (s - rolling_mean) / ewm_std.replace(0, np.nan)
     zscore = zscore.replace([np.inf, -np.inf], np.nan)
 
-    trend_state, z_mom, _sigma_mad = _z_momentum_state(
+    trend_state, z_mom, _sigma_ewm = _z_momentum_state(
         s, theta_z=float(theta_z), mom_window=int(mom_window), vol_window=int(vol_window)
     )
     trend_state = trend_state.reindex(s.index).ffill().fillna(0.0)

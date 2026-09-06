@@ -112,8 +112,47 @@ class BondConfig:
     # 3-factor affine factors. Including <1.5y points stabilizes the short end
     # (important for bootstrapping); FIT_MIN_TTM=0.25 still skips the last few
     # weeks before maturity where YTM is most price-sensitive.
+    #
+    # DO NOT raise this to exclude the sub-1y buckets. That was tried on
+    # 2026-09-05 (FIT_MIN_TTM=0.9) to remove an apparent sub-1y inversion and
+    # it CAUSED a much worse one. In Model A the loadings are B -> [1, 1, 0]
+    # as tau -> 0, i.e. y(0+) -> L + S: the sub-1y reference points are the
+    # only observations that pin the L + S combination (the short-rate
+    # asymptote). Drop them and L + S is set purely by extrapolating the
+    # 1y-10y fit, which on 2026-09-04 CBond data put the asymptote at 1.4786
+    # while the 1y market spot was 1.3748 -- the fitted curve then had to fall
+    # ~10bp from tau=0 down to 1y, manufacturing an inversion that is not in
+    # the bootstrapped data (which rises monotonically 1.2955 -> 1.7444).
+    # Measured short-end fit error, CBond 2026-09-04:
+    #     FIT_MIN_TTM=0.9 : +13.7bp @0.34y, +6.3bp @0.49y, +7.2bp @0.73y
+    #     FIT_MIN_TTM=0.25: +3.5bp @0.34y, -1.9bp @0.49y, +1.5bp @0.73y
+    # The convexity term a(tau) is NOT implicated (|a| < 0.004 below 1y), and
+    # S2 converges in ~5 iterations either way.
     FIT_MIN_TTM = 0.25
     FIT_MAX_TTM = 10.0
+    # Least-squares weight applied to reference points at or below
+    # FIT_SHORT_TTM when extracting the 3 affine factors. The goal is to fit
+    # the >1y points (where pricing and RV actually happen) as tightly as
+    # possible, while still keeping the sub-1y points in the fit so they pin
+    # the L + S short-rate asymptote and prevent the spurious front-end
+    # inversion documented on FIT_MIN_TTM above.
+    #
+    # Calibrated 2026-09-05 by leave-one-out CV scored ONLY on >1y points,
+    # over each curve's full history (TBond 961d / CBond 717d), holding the
+    # held-out set identical across policies:
+    #     weight   TBond >1y LOO   CBond >1y LOO
+    #      1.00      14.88bp          9.40bp
+    #      0.50      13.78bp          9.50bp
+    #      0.25      13.04bp          9.54bp   <- TBond best (-12%)
+    #      0.00      21.82bp         10.27bp   <- dropping <1y is much WORSE
+    # Fully excluding the short end is the worst option for BOTH curves: with
+    # only ~5 surviving points a 3-factor fit is under-determined, and the
+    # unpinned asymptote drags the long end too. TBond gains materially from
+    # downweighting (consistent in 3 of 4 calendar years); CBond is flat to
+    # marginally worse, so it stays at 1.0 (no change to current behaviour).
+    # Do NOT go below ~0.25: at w<=0.1 the front-end inversion reappears.
+    FIT_SHORT_TTM = 1.0
+    FIT_SHORT_WEIGHT = {'TBond': 0.25, 'CBond': 1.0}
     # Reference-point staleness filter (applied in the realtime refresher
     # before fitting). A bond is treated as stale and dropped if:
     #   - It is missing from BondRT, OR
@@ -130,6 +169,37 @@ class BondConfig:
     # alpha=0.5 damps that discrete refresh-to-refresh jump while still
     # tracking genuine intraday yield moves within one refresh.
     RT_FACTOR_EWM_ALPHA = 0.5
+    # Coupon-vintage adjustment for reference-bond yields before bootstrapping
+    # (affine plan F13 / item 1.7). TBond's 1-3Y reference set mixes
+    # high-coupon 2022/2023 vintages (2.4-2.6%) with low-coupon 2025/2026
+    # issues (1.3-1.5%); fit residuals correlate +0.80 with coupon there, at
+    # ~6.6bp per 1% of coupon, which the 3-factor affine curve cannot
+    # represent. Fitting spot panels on de-couponed yields (with S2 and the
+    # stored history rebuilt on the SAME convention -- a mixed
+    # adjusted-anchors/unadjusted-history state is worse than either) cut
+    # TBond 1-10Y anchor-fit RMSE from 3.94 to 1.88bp.
+    #
+    # Enabled PER ASSET CLASS, because the effect is CGB-specific. Fitting
+    # beta over the full 961-day history:
+    #   TBond 2024 -0.029(sd .051) | 2025 -0.055(sd .077) | 2026 -0.086(sd .017, negative 99% of days)
+    #   CBond 2024 +0.001(sd .011) | 2025 +0.004(sd .073) | 2026 +0.008(sd .013)
+    # CDB shows no coupon effect despite comparable coupon dispersion
+    # (1.44-2.73% today), matching the documented CGB-specific tax/liquidity
+    # vintage story -- so enabling it there would only add noise. Beta is
+    # exactly 0 in 2022 for both (coupons were homogeneous then), so the
+    # adjustment is self-disabling over that history.
+    #
+    # DISABLED FOR TBOND as of 2026-09-06: the validation above only covered
+    # 2024-2026, where beta is small and stable. Backtesting 2023-03..2024-03
+    # found TBond beta swings to mean +0.09 to +0.12 (sd up to 0.24, max
+    # +0.76, only 33-54% of days negative) through 2023 and Feb-Jun 2024 --
+    # the opposite sign and an order of magnitude noisier than the validated
+    # range. Applying `ytm - beta*coupon` with beta=+0.53 cut one 2.29%-coupon
+    # reference bond's yield by 121bp before bootstrapping, collapsing the
+    # fitted spot curve to -1.02% at 10Y against a ~2.4% market (see
+    # docs/dev/affine-curve-improvement-plan.md). Re-enable per-window only
+    # after beta's stability is re-validated for whatever history is in use.
+    APPLY_COUPON_ADJUSTMENT = {'TBond': False, 'CBond': False}
     # signal_variant options for the TBondCurve/CBondCurve spread_type (see
     # docs/dev/tbondcurve-30y-otr-ofr-plan.md). "otr_ofr_rv" is the mature
     # OTR/OFR relative-value pair, distinct from the BondNewIssue event strategy.
@@ -190,7 +260,7 @@ class NewIssueConfig:
 
     # Depth of the turnover-ranked off-the-run ladder built per bucket: OFR1..OFR{depth}.
     # OFR1 feeds Stage 2 (otr_ofr1) of BondNewIssue; OFR1..OFR{depth} feed mature RV.
-    OFR_LADDER_DEPTH = 3
+    OFR_LADDER_DEPTH = 5
 
     # A turnover-rank challenger (new OTR or new OFR-k) only replaces the confirmed
     # incumbent once it has held the raw turnover lead for this many consecutive

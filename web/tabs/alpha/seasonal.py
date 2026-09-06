@@ -64,7 +64,11 @@ def seasonal_pivot(s: pd.Series, years: int = 8) -> pd.DataFrame:
     Values are spread levels; days with no trading data are NaN (NOT interpolated).
     Each year's series is **re-based to its own Jan-1 close** (first available
     trading day of the year) so that all years share the same zero starting point
-    and the chart shows intra-year moves rather than absolute levels.
+    and the chart shows intra-year moves rather than absolute levels. The
+    discarded base level (and each year's latest absolute level) are kept on
+    ``pivot.attrs["base_level"]`` / ``["last_level"]`` (dict of year -> float)
+    so callers that need to report the actual level (e.g. chart legend/hover)
+    don't have to re-derive it from the raw series.
     """
     s = _coerce_series(s).dropna()
     if s.empty:
@@ -74,12 +78,16 @@ def seasonal_pivot(s: pd.Series, years: int = 8) -> pd.DataFrame:
     min_year = max_year - years + 1
 
     result: dict[int, pd.Series] = {}
+    base_levels: dict[int, float] = {}
+    last_levels: dict[int, float] = {}
     for yr in range(min_year, max_year + 1):
         yr_data = s[s.index.year == yr]
         if yr_data.empty:
             continue
         # Re-base: subtract the first available value so intra-year Δ is visible
         base = yr_data.iloc[0]
+        base_levels[yr] = float(base)
+        last_levels[yr] = float(yr_data.iloc[-1])
         yr_data = yr_data - base
         doy = yr_data.index.day_of_year
         # Keep last observation per day-of-year (handles any duplicate dates)
@@ -93,7 +101,10 @@ def seasonal_pivot(s: pd.Series, years: int = 8) -> pd.DataFrame:
     pivot = pd.DataFrame(result)
     pivot.index = pivot.index.astype(int)
     pivot.columns = pivot.columns.astype(int)
-    return pivot.sort_index()
+    pivot = pivot.sort_index()
+    pivot.attrs["base_level"] = base_levels
+    pivot.attrs["last_level"] = last_levels
+    return pivot
 
 
 def monthly_seasonal_stats(
@@ -245,6 +256,8 @@ def build_seasonal_overlay_figure(
     title: str = "",
     raw_series: Optional[pd.Series] = None,
     spread_type: Optional[str] = None,
+    reference_series: Optional[pd.Series] = None,
+    reference_label: str = "Reference (curve − swap)",
 ) -> "go.Figure":
     """Build a Plotly year-overlay spread chart.
 
@@ -267,6 +280,17 @@ def build_seasonal_overlay_figure(
         Spread type identifier (e.g. "TBondCurve", "FuturesSwap"). When the
         type is a China fixed-income product, known macro seasonal windows
         (CNY liquidity injection and quarter-end repo squeezes) are annotated.
+    reference_series :
+        Optional same-tenor proxy series (e.g. CGB/CDB par curve yield minus
+        matched-tenor FR007 IRS) with a multi-year history, for instruments
+        whose own history is too short for a real year-over-year comparison
+        (e.g. a bond issued within the last 1-2 years). Plotted as a single
+        dashed line -- the multi-year seasonal mean of the *reference*
+        series, re-based the same way as the real per-year lines -- kept
+        visually distinct (not blended into the per-year palette) since it
+        does not represent this instrument's own actual history.
+    reference_label :
+        Legend label for the reference line.
 
     Returns
     -------
@@ -286,6 +310,7 @@ def build_seasonal_overlay_figure(
     years = sorted(pivot.columns.tolist())
     current_year = datetime.date.today().year
     n_years = len(years)
+    base_levels: dict = pivot.attrs.get("base_level", {})
 
     traces = []
 
@@ -295,6 +320,8 @@ def build_seasonal_overlay_figure(
             continue
 
         is_current = (yr == current_year)
+        base = base_levels.get(yr)
+        legend_name = f"{yr} (base {base:+.1f})" if base is not None else str(yr)
 
         if is_current:
             color = THEME["accent"]
@@ -311,14 +338,25 @@ def build_seasonal_overlay_figure(
             opacity = 0.45 + age_frac * 0.45  # 0.45 → 0.90
             dash = "solid"
 
+        if base is not None:
+            hovertemplate = (
+                f"<b>{yr}</b> (base {base:+.1f})<br>Day-of-year: %{{x}}"
+                "<br>Δ: %{y:.2f}<br>Level: %{customdata:.2f}<extra></extra>"
+            )
+            customdata = (col.values + base).tolist()
+        else:
+            hovertemplate = f"<b>{yr}</b><br>Day-of-year: %{{x}}<br>Δ: %{{y:.2f}}<extra></extra>"
+            customdata = None
+
         traces.append(go.Scatter(
             x=col.index.tolist(),
             y=col.values.tolist(),
             mode="lines",
-            name=str(yr),
+            name=legend_name,
             line=dict(color=color, width=width, dash=dash),
             opacity=opacity,
-            hovertemplate=f"<b>{yr}</b><br>Day-of-year: %{{x}}<br>Δ: %{{y:.2f}}<extra></extra>",
+            customdata=customdata,
+            hovertemplate=hovertemplate,
         ))
 
     # Historical mean (smoothed over completed years)
@@ -341,6 +379,24 @@ def build_seasonal_overlay_figure(
             line=dict(color="rgba(52,152,219,0.80)", width=2.0, dash="dash"),
             hovertemplate="Hist. Mean<br>Day-of-year: %{x}<br>Δ: %{y:.2f}<extra></extra>",
         ))
+
+    # Same-tenor proxy reference (e.g. curve yield − matched-tenor swap) for
+    # instruments whose own history is too short for a real year-over-year
+    # comparison. Shown as one dashed line -- the reference's OWN multi-year
+    # seasonal mean -- kept visually and semantically separate from the
+    # per-year palette above since it is not this instrument's actual data.
+    if reference_series is not None and not reference_series.dropna().empty:
+        ref_mean = _yearly_seasonal_mean(reference_series)
+        ref_doys = ref_mean.dropna().index
+        if len(ref_doys) > 0:
+            traces.append(go.Scatter(
+                x=ref_doys.tolist(),
+                y=ref_mean.reindex(ref_doys).values.tolist(),
+                mode="lines",
+                name=reference_label,
+                line=dict(color="rgba(170,176,192,0.85)", width=1.75, dash="dot"),
+                hovertemplate=f"{reference_label}<br>Day-of-year: %{{x}}<br>Δ: %{{y:.2f}}<extra></extra>",
+            ))
 
     layout = go.Layout(
         plot_bgcolor='rgba(0,0,0,0)',
@@ -559,7 +615,7 @@ def build_episode_overlay_figure(
             line=dict(color=color, width=width),
             opacity=opacity,
             showlegend=is_latest,
-            hovertemplate=f"<b>{col}</b><br>Day: %{{x}}<br>Δ: %{{y:.2f}}<extra></extra>",
+            hovertemplate=f"<b>{col}</b><br>Day: %{{x}}<br>Δ: %{{y:.2f}}bp<extra></extra>",
         ))
 
     # Cross-episode median + IQR band, computed over all-but-latest episodes
@@ -596,7 +652,7 @@ def build_episode_overlay_figure(
                 line=dict(color="#3498db", width=1),
             ),
             customdata=band["n"].tolist(),
-            hovertemplate="Median<br>Day: %{x}<br>Δ: %{y:.2f}<br>n=%{customdata}<extra></extra>",
+            hovertemplate="Median<br>Day: %{x}<br>Δ: %{y:.2f}bp<br>n=%{customdata}<extra></extra>",
         ))
 
     layout = go.Layout(
@@ -610,7 +666,7 @@ def build_episode_overlay_figure(
             zerolinecolor="#1a3a6a",
         ),
         yaxis=dict(
-            title="Δ spread (re-based to day 0)",
+            title="Δ spread, bp (re-based to day 0)",
             gridcolor="#1a3a6a",
             zerolinecolor="#2a5a9a",
         ),
@@ -629,6 +685,29 @@ def build_episode_overlay_figure(
         )] if band is not None else None,
     )
     return go.Figure(data=traces, layout=layout)
+
+
+def episode_duration_stats(pivot: pd.DataFrame) -> dict:
+    """Mean/median lifespan (in calendar days since day 0) of every episode
+    in *pivot*, using each column's own last non-NaN index -- i.e. how long
+    that specific (leg1, leg2) identity pairing actually held before the
+    next roll/promotion replaced it. Excludes the still-open latest episode
+    (its final length isn't known yet, so including it would understate the
+    true average). Returns {} if fewer than 2 completed episodes exist.
+    """
+    if pivot is None or pivot.empty or pivot.shape[1] < 2:
+        return {}
+    # The latest (rightmost) column is the still-open current episode.
+    past = pivot.iloc[:, :-1]
+    lengths = past.apply(lambda col: col.dropna().index.max() if col.notna().any() else np.nan)
+    lengths = lengths.dropna()
+    if lengths.empty:
+        return {}
+    return {
+        "n": int(len(lengths)),
+        "mean_days": float(lengths.mean()),
+        "median_days": float(lengths.median()),
+    }
 
 
 _ISSUANCE_DAY_BUCKETS = (10, 20, 30, 60, 90, 120, 150, 180, 270, 360)
@@ -784,8 +863,13 @@ def roll_cycle_bucket_stats(
 
     Returns
     -------
-    DataFrame indexed by DTM bucket, columns: n_cycles, avg_level,
-    consistency, direction (of level vs. 0), p_value, max_level, min_level.
+    DataFrame indexed by DTM bucket (descending, i.e. farthest-from-maturity
+    first), columns: n_cycles, avg_level, consistency, sign (of avg_level vs.
+    0 -- "up"/"down" here means positive/negative *level*, NOT a trend),
+    trend (change in avg_level from the prior, farther-from-maturity bucket
+    -- "up"/"down" here means avg_level is rising/falling as DTM decreases,
+    i.e. the actual convergence direction into the roll), p_value (for
+    *sign*), max_level, min_level.
     """
     from scipy.stats import binomtest
 
@@ -813,11 +897,11 @@ def roll_cycle_bucket_stats(
         up_count = int((vals_s > 0).sum())
         dn_count = int((vals_s < 0).sum())
         if up_count > dn_count:
-            direction, consistency, n_match = "up", up_count / n, up_count
+            sign, consistency, n_match = "up", up_count / n, up_count
         elif dn_count > up_count:
-            direction, consistency, n_match = "down", dn_count / n, dn_count
+            sign, consistency, n_match = "down", dn_count / n, dn_count
         else:
-            direction, consistency, n_match = "neutral", 0.5, n // 2
+            sign, consistency, n_match = "neutral", 0.5, n // 2
 
         p_value = binomtest(n_match, n, 0.5, alternative="greater").pvalue
 
@@ -826,7 +910,7 @@ def roll_cycle_bucket_stats(
             "n_cycles":    n,
             "avg_level":   float(vals_s.mean()),
             "consistency": float(consistency),
-            "direction":   direction,
+            "sign":        sign,
             "p_value":     float(p_value),
             "max_level":   float(vals_s.max()),
             "min_level":   float(vals_s.min()),
@@ -834,7 +918,19 @@ def roll_cycle_bucket_stats(
 
     if not rows:
         return pd.DataFrame()
-    return pd.DataFrame(rows).set_index("dtm")
+    out = pd.DataFrame(rows).set_index("dtm")
+
+    # Trend = change in avg_level from the prior (farther-from-maturity)
+    # bucket -- buckets are already in descending-DTM order (farthest first,
+    # per _ROLL_DTM_BUCKETS), so this reads left-to-right as "toward the
+    # roll" and answers "is the spread converging" independent of sign.
+    prev_level = out["avg_level"].shift(1)
+    delta = out["avg_level"] - prev_level
+    out["trend"] = np.where(
+        prev_level.isna(), "n/a",
+        np.where(delta > 0, "up", np.where(delta < 0, "down", "flat")),
+    )
+    return out
 
 
 def build_roll_cycle_figure(
@@ -842,6 +938,8 @@ def build_roll_cycle_figure(
     title: str = "",
     bucket_stats: Optional["pd.DataFrame"] = None,
     roll_progress_pivot: Optional["pd.DataFrame"] = None,
+    price_basis_pivot: Optional["pd.DataFrame"] = None,
+    y_title: str = "Level",
 ) -> "go.Figure":
     """Build the days-to-maturity roll-cycle overlay for Futures TermBasis.
 
@@ -853,11 +951,22 @@ def build_roll_cycle_figure(
     Parameters
     ----------
     pivot :
-        Output of :func:`roll_cycle_pivot` for the basis/price-basis series.
+        Output of :func:`roll_cycle_pivot` for the primary series -- the
+        FYTM (yield) basis (front FYTM − next FYTM, bp) is preferred here
+        because differencing the two contracts' implied yields cancels the
+        common day-to-day yield move, isolating the curve-slope/carry
+        component between the two delivery dates.
     roll_progress_pivot :
         Optional second pivot (same DTM axis) for OI roll-progress (0..1),
         overlaid on a secondary axis using only the cross-cycle median so the
         "does basis move with the roll" relationship reads at a glance.
+    price_basis_pivot :
+        Optional third pivot (same DTM axis) for the raw price basis
+        (front − next settlement price, pts), overlaid on a tertiary axis
+        using only the cross-cycle median. Unlike the FYTM basis, price
+        basis does NOT cancel the common yield move (both legs are live
+        tradeable prices), so it is noisier and shown only as secondary
+        context alongside the FYTM-basis primary series.
     """
     import plotly.graph_objects as go
 
@@ -935,6 +1044,22 @@ def build_roll_cycle_figure(
                            range=[0, 1], showgrid=False, zeroline=False,
                            tickfont=dict(color="#e05c5c"), title_font=dict(color="#e05c5c"))
 
+    _yaxis3 = None
+    if price_basis_pivot is not None and not price_basis_pivot.empty:
+        pb_median = price_basis_pivot.median(axis=1, skipna=True).dropna()
+        if not pb_median.empty:
+            traces.append(go.Scatter(
+                x=pb_median.index.tolist(), y=pb_median.values.tolist(),
+                mode="lines", name="Median price basis (pts)",
+                line=dict(color="#b28cd6", width=1.5, dash="dot"),
+                yaxis="y3",
+                hovertemplate="Median price basis<br>DTM: %{x}<br>%{y:.3f}pts<extra></extra>",
+            ))
+            _yaxis3 = dict(title="Price basis (pts)", overlaying="y", side="right",
+                           position=0.86, anchor="free",
+                           showgrid=False, zeroline=False,
+                           tickfont=dict(color="#b28cd6"), title_font=dict(color="#b28cd6"))
+
     layout = go.Layout(
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
@@ -945,9 +1070,9 @@ def build_roll_cycle_figure(
             autorange="reversed",
             gridcolor="#1a3a6a", zerolinecolor="#2a5a9a",
         ),
-        yaxis=dict(title="Level", gridcolor="#1a3a6a", zerolinecolor="#2a5a9a"),
+        yaxis=dict(title=y_title, gridcolor="#1a3a6a", zerolinecolor="#2a5a9a"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10)),
-        margin=dict(l=50, r=50, t=40, b=40),
+        margin=dict(l=50, r=70, t=40, b=40),
         hovermode="x unified",
         annotations=[dict(
             text="◆ = DTM checkpoint with p<0.10 (see Roll Statistics)",
@@ -957,5 +1082,7 @@ def build_roll_cycle_figure(
     )
     if _yaxis2 is not None:
         layout.yaxis2 = _yaxis2
+    if _yaxis3 is not None:
+        layout.yaxis3 = _yaxis3
     return go.Figure(data=traces, layout=layout)
 

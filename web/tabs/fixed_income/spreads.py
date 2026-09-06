@@ -49,8 +49,8 @@ def build_spreads_layout():
         {"label": "Treasury BondSwap",      "value": "TBondSwap"},
         {"label": "Policybank BondSwap",    "value": "CBondSwap"},
         {"label": "— Futures —",           "value": "__futures__",  "disabled": True},
-        {"label": "Bond Futures Basis",     "value": "NetBasis"},
-        {"label": "Futures Term Basis",     "value": "TermBasis"},
+        {"label": "Cash-and-Carry",         "value": "NetBasis"},
+        {"label": "Calendar Spread",        "value": "TermBasis"},
         {"label": "Futures Swap",           "value": "FuturesSwap"},
     ]
 
@@ -58,6 +58,11 @@ def build_spreads_layout():
 
     return html.Div([
         dcc.Store(id="realtime-data"),
+        # Holds the real (possibly pipe-delimited pair) instrument ID used for
+        # all downstream lookups; #ticker's visible text may show a shortened
+        # display label (e.g. dropping the OFR1 reference leg) that differs
+        # from this value.
+        dcc.Store(id="ticker-id"),
         dcc.Interval(id="data-refresh-long", interval=int(GRAPH_INTERVAL_LONG), n_intervals=0),
 
         html.Div([
@@ -212,6 +217,46 @@ def build_spreads_layout():
     ], style={'padding': '10px', 'display': 'flex', 'flexDirection': 'column', 'gap': '10px'})
 
 
+def _episode_bucket_stats_panel(bucket_stats) -> "html.Div":
+    """Render an episode_bucket_stats() DataFrame as the Seasonal Pattern
+    card's stats panel -- shared by every event-time (day-since-X) overlay
+    branch of _update_seasonal (BondNewIssue, OFR-ladder RV, ...)."""
+    if bucket_stats is None or bucket_stats.empty:
+        return html.Div()
+    _arrow = {"up": "↑", "down": "↓", "neutral": "—"}
+    _dir_color = {"up": "#00cc96", "down": "#ef553b", "neutral": "#aab0c0"}
+    header = html.Div([
+        html.Span("Day",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
+        html.Span("Dir",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "16px"}),
+        html.Span("Cons%", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
+        html.Span("AvgΔ (bp)", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
+        html.Span("Obs",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
+        html.Span("p-val", style={"fontSize": "10px", "color": "#8fb3d9"}),
+    ], style={"display": "flex", "gap": "12px", "padding": "2px 6px",
+               "borderBottom": "1px solid #1a3a7a", "marginBottom": "2px"})
+    rows = []
+    for day, row in bucket_stats.iterrows():
+        p = row["p_value"]
+        sig = "**" if p < 0.05 else ("*" if p < 0.10 else "")
+        dir_c = _dir_color[row["direction"]]
+        rows.append(html.Div([
+            html.Span(f"D+{day}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "34px"}),
+            html.Span(f"{_arrow[row['direction']]}",
+                      style={"fontSize": "11px", "color": dir_c, "minWidth": "16px"}),
+            html.Span(f"{row['consistency']*100:.0f}%{sig}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "44px"}),
+            html.Span(f"{row['avg_chg_bp']:+.2f}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "44px"}),
+            html.Span(f"n={row['n_episodes']}", style={"fontSize": "11px", "color": "#aab0c0", "minWidth": "34px"}),
+            html.Span(f"p={p:.2f}", style={"fontSize": "11px", "color": "#aab0c0"}),
+        ], style={"display": "flex", "gap": "12px", "padding": "2px 6px"}))
+    note = html.Div(
+        "* p<0.10  ** p<0.05  (one-sided binomial; no FDR correction applied)",
+        style={"fontSize": "9px", "color": "#8fb3d9", "marginTop": "4px", "padding": "0 6px"},
+    )
+    return html.Div([header] + rows + [note],
+                     style={"background": "transparent", "borderRadius": "4px",
+                            "padding": "6px 0", "marginBottom": "8px"})
+
+
 def register_spreads_callbacks(app) -> None:
     """Register the callbacks required by `build_spreads_layout()` onto `app`."""
     from dash import callback_context
@@ -271,15 +316,17 @@ def register_spreads_callbacks(app) -> None:
     # ── Futures spread rendering (Bond-Futures / Term Basis / Futures-Swap) ──────
     # These three read directly from futures-spds.pkl (derived from
     # futures-analytics.pkl by StatGenerator.compute_futures_stats).  Their spreads
-    # are already in their natural units (bp for IRR−Repo and FYTM−IRS, price
-    # points for the calendar Term Basis), so we render them here instead of the
-    # legacy season-keyed graphs path which assumes %-stored spreads (×100 → bp).
+    # are already in their natural units (bp for IRR−Repo, FYTM−IRS, and the
+    # calendar Term Basis, which is a yield/FYTM spread; the raw price basis
+    # is a separate pts-denominated overlay, see PriceBasis below), so we
+    # render them here instead of the legacy season-keyed graphs path which
+    # assumes %-stored spreads (×100 → bp).
     _FUT_SPREADS = {"NetBasis", "TermBasis", "FuturesSwap"}
-    _FUT_UNIT = {"NetBasis": "bp", "FuturesSwap": "bp", "TermBasis": "pts"}
+    _FUT_UNIT = {"NetBasis": "bp", "FuturesSwap": "bp", "TermBasis": "bp"}
     _FUT_TITLE = {
-        "NetBasis":    "Bond Futures Basis (IRR − Repo)",
+        "NetBasis":    "Cash-and-Carry (IRR − Repo)",
         "FuturesSwap": "Futures Swap (FYTM − IRS)",
-        "TermBasis":   "Futures Term Basis (Front − Next)",
+        "TermBasis":   "Calendar Spread (Front FYTM − Next FYTM)",
     }
     _FUT_ZTHD = 2.0
 
@@ -586,13 +633,25 @@ def register_spreads_callbacks(app) -> None:
             ticker_label = _best_default_column()
 
         switch_date = None
+        pair_label = None
         pair_history = load_newissue_pair_history(ticker_label)
         if pair_history is not None:
-            s, _pair_label, switch_date = pair_history
+            s, pair_label, switch_date = pair_history
         else:
             s = None
         if s is None or s.empty:
-            s = load_newissue_current_episode(ticker_label)
+            # load_newissue_pair_history's richer bond-level (cvpx.pkl) lookup
+            # comes up empty for legs outside the standard pricing universe
+            # (e.g. 30Y OFR-ladder bonds, capped at
+            # BondConfig.PRICING_MAX_TTM=10.0) -- fall back to the newissue
+            # universe's own rank-history series, which still carries the
+            # current pair's leg codes for the title even though it only
+            # covers the days this exact pair held the rank together.
+            current_episode = load_newissue_current_episode(ticker_label)
+            if current_episode is not None:
+                s, pair_label = current_episode
+            else:
+                s = None
         if s is None or s.empty:
             # Legacy/unqualified label or fallback summary artifact: fall back
             # to the stitched cross-episode column rather than showing nothing.
@@ -603,16 +662,28 @@ def register_spreads_callbacks(app) -> None:
             if fallback_col in ts.columns:
                 fallback_pair_history = load_newissue_pair_history(fallback_col)
                 if fallback_pair_history is not None:
-                    s, _pair_label, switch_date = fallback_pair_history
+                    s, pair_label, switch_date = fallback_pair_history
                 else:
                     s = None
                 if s is None or s.empty:
-                    s = load_newissue_current_episode(fallback_col)
+                    fallback_current_episode = load_newissue_current_episode(fallback_col)
+                    if fallback_current_episode is not None:
+                        s, pair_label = fallback_current_episode
+                    else:
+                        s = None
                 if s is None or s.empty:
                     s = pd.to_numeric(ts[fallback_col], errors='coerce').dropna()
                 ticker_label = fallback_col
         if s.empty:
             return _fut_empty(f"No data for {ticker_label}")
+
+        # Prefer the actual bond codes (e.g. "260016.IB vs 260010.IB") over
+        # the generic stage/tenor label when available -- the label alone
+        # doesn't say which specific bonds are being compared.
+        display_ticker = ticker_label
+        if pair_label and '|' in pair_label:
+            leg1_id, _, leg2_id = pair_label.partition('|')
+            display_ticker = f"{ticker_label} ({leg1_id} vs {leg2_id})"
 
         mean = float(s.mean()) if len(s) else None
         vol = float(s.std(ddof=1)) if len(s) > 1 else None
@@ -628,7 +699,7 @@ def register_spreads_callbacks(app) -> None:
         start = max(s.index[0], capped_start)
 
         title = (
-            f"<b>{ticker_label}</b><br>"
+            f"<b>{display_ticker}</b><br>"
             f"Latest: {float(s.iloc[-1]):.2f}bp, Mean: {mean:.2f}bp, "
             f"Vol: {(vol if vol is not None else float('nan')):.2f}bp, "
             f"Max: {vmax:.2f}bp, Min: {vmin:.2f}bp"
@@ -767,8 +838,15 @@ def register_spreads_callbacks(app) -> None:
                                     _stat = _bucket.get('StatInfo')
                                     if isinstance(_spread, pd.DataFrame) and isinstance(_stat, pd.DataFrame) and not _spread.empty:
                                         _current = _spread.iloc[-1].rename('spread').to_frame()
-                                        _current = _current.join(_stat[['mean', 'vol']], how='inner')
-                                        _current['Zscore'] = (_current['spread'] - _current['mean']) / _current['vol']
+                                        _stat_cols = ['mean', 'vol'] + (['ewm_vol'] if 'ewm_vol' in _stat.columns else [])
+                                        _current = _current.join(_stat[_stat_cols], how='inner')
+                                        # Prefer EWMA(span=60) vol (matches Spread Time Series chart's
+                                        # Z-score convention); fall back to static full-window vol.
+                                        _vol = pd.to_numeric(_current.get('ewm_vol'), errors='coerce') if 'ewm_vol' in _current.columns else None
+                                        _static_vol = pd.to_numeric(_current['vol'], errors='coerce')
+                                        _vol = _vol.fillna(_static_vol) if _vol is not None else _static_vol
+                                        _vol = _vol.replace(0, float('nan'))
+                                        _current['Zscore'] = (pd.to_numeric(_current['spread'], errors='coerce') - pd.to_numeric(_current['mean'], errors='coerce')) / _vol
                                         _current['color'] = 'grey'
                                         if stype == 'SectorPCASpread':
                                             _current.index = [_re.sub(r'(-\d+)\.0(Y)$', r'\1\2', idx) for idx in _current.index]
@@ -788,8 +866,14 @@ def register_spreads_callbacks(app) -> None:
                                     if (isinstance(_spread, pd.DataFrame) and not _spread.empty
                                             and isinstance(_stat, pd.DataFrame) and not _stat.empty):
                                         _current = _spread.iloc[-1].rename('spread').to_frame()
-                                        _current = _current.join(_stat[['mean', 'vol']], how='inner')
-                                        _vol = pd.to_numeric(_current['vol'], errors='coerce').replace(0, float('nan'))
+                                        _stat_cols = ['mean', 'vol'] + (['ewm_vol'] if 'ewm_vol' in _stat.columns else [])
+                                        _current = _current.join(_stat[_stat_cols], how='inner')
+                                        # Prefer EWMA(span=60) vol (matches Spread Time Series chart's
+                                        # Z-score convention); fall back to static full-window vol.
+                                        _vol = pd.to_numeric(_current.get('ewm_vol'), errors='coerce') if 'ewm_vol' in _current.columns else None
+                                        _static_vol = pd.to_numeric(_current['vol'], errors='coerce')
+                                        _vol = _vol.fillna(_static_vol) if _vol is not None else _static_vol
+                                        _vol = _vol.replace(0, float('nan'))
                                         _mean = pd.to_numeric(_current['mean'], errors='coerce')
                                         _current['Zscore'] = (pd.to_numeric(_current['spread'], errors='coerce') - _mean) / _vol
                                         _current['color'] = 'grey'
@@ -820,6 +904,7 @@ def register_spreads_callbacks(app) -> None:
 
     @app.callback(
         Output("ticker", "children", allow_duplicate=True),
+        Output("ticker-id", "data", allow_duplicate=True),
         Input("graph-spread-bar", "clickData"),
         State("spread-type", "value"),
         prevent_initial_call=True,
@@ -852,7 +937,22 @@ def register_spreads_callbacks(app) -> None:
                     ticker = point.get("label")
         if not ticker:
             raise PreventUpdate
-        return ticker
+        # TBondCurve/CBondCurve OFR-ladder pair rows (ID = "ofrk_id|ofr1_id",
+        # no ":" -- unlike BondNewIssue's "tenor:stage:leg1|leg2" IDs) display
+        # as "ofrk_id (vs ofr1_id)" -- the OFR1 leg can change identity over
+        # the calibration window (see otr_ofr_rv.py's CalibrationSpread
+        # fallback), so naming today's actual reference bond is useful
+        # context, not redundant restatement.
+        if (stype in ('TBondCurve', 'CBondCurve') and isinstance(ticker, str)
+                and '|' in ticker and ':' not in ticker):
+            ofrk_id, _, ofr1_id = ticker.partition('|')
+            display_label = f"{ofrk_id} (vs {ofr1_id})" if ofr1_id else ofrk_id
+        elif stype == 'BondNewIssue' and isinstance(ticker, str) and ':' in ticker:
+            from web.tabs.alpha.data import to_newissue_stage_label
+            display_label = to_newissue_stage_label(ticker)
+        else:
+            display_label = ticker
+        return display_label, ticker
 
     def _fit_to_frame(fig):
         """Strip any hardcoded height/width so the graph fills its container
@@ -875,7 +975,7 @@ def register_spreads_callbacks(app) -> None:
     @app.callback(
         Output("graph-spread", "figure"),
         Input("spread-type", "value"),
-        Input("ticker", "children"),
+        Input("ticker-id", "data"),
     )
     def _update_spread_ts(stype, ticker):
         """Update the spread time series chart."""
@@ -924,7 +1024,7 @@ def register_spreads_callbacks(app) -> None:
             Output("spread-seasonal-stats", "children"),
         ],
         Input("spread-type", "value"),
-        Input("ticker", "children"),
+        Input("ticker-id", "data"),
         Input("seasonal-highlight-month", "value"),
         Input("seasonal-years", "value"),
     )
@@ -937,7 +1037,18 @@ def register_spreads_callbacks(app) -> None:
             episode_pivot,
             build_episode_overlay_figure,
             episode_bucket_stats,
+            episode_duration_stats,
         )
+
+        def _episode_overlay_title(base: str, pivot: pd.DataFrame) -> str:
+            """Append a "avg lifespan: N days (median M, n=K)" clause when at
+            least 2 completed episodes exist, so the chart states up front
+            how long this identity pairing typically holds before rolling."""
+            dur = episode_duration_stats(pivot)
+            if not dur:
+                return base
+            return (f"{base} · avg lifespan: {dur['mean_days']:.1f}d "
+                    f"(median {dur['median_days']:.0f}d, n={dur['n']})")
 
         _empty_fig = go.Figure(layout=dict(
             plot_bgcolor='rgba(0,0,0,0)',
@@ -978,47 +1089,60 @@ def register_spreads_callbacks(app) -> None:
 
             fig = build_episode_overlay_figure(
                 pivot,
-                title=f"{label} — episode overlay (day since roll)",
+                title=_episode_overlay_title(f"{label} — episode overlay (day since roll)", pivot),
                 bucket_stats=bucket_stats,
             )
 
-            stats_children = html.Div()
             try:
-                if not bucket_stats.empty:
-                    _arrow = {"up": "↑", "down": "↓", "neutral": "—"}
-                    _dir_color = {"up": "#00cc96", "down": "#ef553b", "neutral": "#aab0c0"}
-                    header = html.Div([
-                        html.Span("Day",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
-                        html.Span("Dir",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "16px"}),
-                        html.Span("Cons%", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
-                        html.Span("AvgΔ",  style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
-                        html.Span("Obs",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
-                        html.Span("p-val", style={"fontSize": "10px", "color": "#8fb3d9"}),
-                    ], style={"display": "flex", "gap": "12px", "padding": "2px 6px",
-                               "borderBottom": "1px solid #1a3a7a", "marginBottom": "2px"})
-                    rows = []
-                    for day, row in bucket_stats.iterrows():
-                        p = row["p_value"]
-                        sig = "**" if p < 0.05 else ("*" if p < 0.10 else "")
-                        dir_c = _dir_color[row["direction"]]
-                        rows.append(html.Div([
-                            html.Span(f"D+{day}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "34px"}),
-                            html.Span(f"{_arrow[row['direction']]}",
-                                      style={"fontSize": "11px", "color": dir_c, "minWidth": "16px"}),
-                            html.Span(f"{row['consistency']*100:.0f}%{sig}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "44px"}),
-                            html.Span(f"{row['avg_chg_bp']:+.2f}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "44px"}),
-                            html.Span(f"n={row['n_episodes']}", style={"fontSize": "11px", "color": "#aab0c0", "minWidth": "34px"}),
-                            html.Span(f"p={p:.2f}", style={"fontSize": "11px", "color": "#aab0c0"}),
-                        ], style={"display": "flex", "gap": "12px", "padding": "2px 6px"}))
-                    note = html.Div(
-                        "* p<0.10  ** p<0.05  (one-sided binomial; no FDR correction applied)",
-                        style={"fontSize": "9px", "color": "#8fb3d9", "marginTop": "4px", "padding": "0 6px"},
-                    )
-                    stats_children = html.Div([header] + rows + [note],
-                                              style={"background": "transparent", "borderRadius": "4px",
-                                                     "padding": "6px 0", "marginBottom": "8px"})
+                stats_children = _episode_bucket_stats_panel(bucket_stats)
             except Exception as e:
                 print(f"[seasonal] BondNewIssue episode stats error: {e}")
+                stats_children = html.Div()
+
+            return fig, stats_children
+
+        # TBondCurve/CBondCurve OFR-ladder RV pair rows (ID = "ofrk_id|ofr1_id",
+        # see curves/refreshers/otr_ofr_rv.py): episode-relative overlay (day
+        # since a bond was promoted to OFR2/OFR3/...) across every historical
+        # promotion in the same tenor bucket, instead of a calendar-year
+        # overlay — each promotion only lasts weeks to a few months and isn't
+        # anchored to a calendar date, so "day of year" is not meaningful.
+        if stype in ('TBondCurve', 'CBondCurve') and isinstance(ticker, str) and '|' in ticker:
+            from web.tabs.alpha.data import load_otr_ofr_rv_episode_series
+            asset_class = 'TBond' if stype == 'TBondCurve' else 'CBond'
+            ofrk_id, _, ofr1_id = ticker.partition('|')
+            try:
+                episodes = load_otr_ofr_rv_episode_series(asset_class, ticker)
+                pivot = episode_pivot(episodes)
+            except Exception as e:
+                print(f"[seasonal] {stype} OFR-ladder episode error for {ticker}: {e}")
+                return _empty_fig, html.Div()
+
+            if pivot.empty:
+                return _empty_fig, html.Div(
+                    f"No OFR-ladder promotion history for {ofrk_id}",
+                    style={"color": "#8fb3d9", "fontSize": "11px", "padding": "4px"},
+                )
+
+            bucket_stats = pd.DataFrame()
+            try:
+                bucket_stats = episode_bucket_stats(pivot)
+            except Exception as e:
+                print(f"[seasonal] {stype} OFR-ladder episode stats error: {e}")
+
+            fig = build_episode_overlay_figure(
+                pivot,
+                title=_episode_overlay_title(
+                    f"{ofrk_id} vs OFR1 — episode overlay (day since OFR2+ promotion)", pivot
+                ),
+                bucket_stats=bucket_stats,
+            )
+
+            try:
+                stats_children = _episode_bucket_stats_panel(bucket_stats)
+            except Exception as e:
+                print(f"[seasonal] {stype} OFR-ladder episode stats error: {e}")
+                stats_children = html.Div()
 
             return fig, stats_children
 
@@ -1035,7 +1159,15 @@ def register_spreads_callbacks(app) -> None:
             tb = (_load_pickle_cached(os.path.join(DIR_INPUT, "futures-spds.pkl")) or {}).get("TermBasis", {})
             dtm_df = tb.get("DaysToMaturity") if isinstance(tb, dict) else None
             basis_df = tb.get("Spread") if isinstance(tb, dict) else None
+            price_basis_df = tb.get("PriceBasis") if isinstance(tb, dict) else None
             roll_df = tb.get("RollProgress") if isinstance(tb, dict) else None
+            # FYTM (yield) basis is the primary series: differencing the two
+            # contracts' implied yields cancels the common day-to-day yield
+            # move, isolating the curve-slope/carry component between the two
+            # delivery dates. Price basis (front − next settlement price) does
+            # NOT have this cancellation -- both legs move with the market
+            # every day, so it's just as noisy and is shown only as secondary
+            # context, not as the primary mechanism series.
             if not isinstance(dtm_df, pd.DataFrame) or not isinstance(basis_df, pd.DataFrame) \
                     or ticker not in dtm_df.columns or ticker not in basis_df.columns:
                 return _empty_fig, html.Div(
@@ -1063,21 +1195,57 @@ def register_spreads_callbacks(app) -> None:
                 except Exception as e:
                     print(f"[seasonal] TermBasis roll-progress pivot error: {e}")
 
+            price_pivot = pd.DataFrame()
+            if isinstance(price_basis_df, pd.DataFrame) and ticker in price_basis_df.columns:
+                try:
+                    price_pivot = roll_cycle_pivot(dtm_df[ticker], price_basis_df[ticker])
+                except Exception as e:
+                    print(f"[seasonal] TermBasis price-basis pivot error: {e}")
+
             fig = build_roll_cycle_figure(
                 pivot,
-                title=f"{ticker} — roll-cycle overlay (days to maturity)",
+                title=f"{ticker} — roll-cycle overlay (days to maturity, FYTM basis bp)",
                 bucket_stats=bucket_stats,
                 roll_progress_pivot=roll_pivot if not roll_pivot.empty else None,
+                price_basis_pivot=price_pivot if not price_pivot.empty else None,
+                y_title="FYTM basis (bp)",
             )
 
             stats_children = html.Div()
             try:
                 if not bucket_stats.empty:
-                    _arrow = {"up": "↑", "down": "↓", "neutral": "—"}
-                    _dir_color = {"up": "#00cc96", "down": "#ef553b", "neutral": "#aab0c0"}
+                    _arrow = {"up": "↑", "down": "↓", "neutral": "—", "flat": "—", "n/a": "·"}
+                    _dir_color = {"up": "#00cc96", "down": "#ef553b", "neutral": "#aab0c0",
+                                  "flat": "#aab0c0", "n/a": "#aab0c0"}
+
+                    # Convergence verdict: does the near-maturity end (DTM<=45)
+                    # show a significant, directionally consistent pattern, or
+                    # is it noise? FYTM basis should converge toward 0 as the
+                    # front contract's remaining carry period shrinks -- but
+                    # this signal is duration-dependent (clean for T/TL,
+                    # frequently insignificant for TF/TS) and this badge makes
+                    # that visible per-ticker instead of requiring a read of
+                    # every row's p-value.
+                    _near_mat = bucket_stats[bucket_stats.index <= 45]
+                    _sig_near = _near_mat[_near_mat["p_value"] < 0.10]
+                    if _near_mat.empty:
+                        _verdict_text, _verdict_color = "Insufficient data near maturity", "#aab0c0"
+                    elif not _sig_near.empty:
+                        _verdict_text = f"Significant convergence near maturity (n={len(_sig_near)} bucket(s) p<0.10)"
+                        _verdict_color = "#00cc96"
+                    else:
+                        _verdict_text = "No significant convergence near maturity — treat as noise for this contract"
+                        _verdict_color = "#ef553b"
+                    verdict_banner = html.Div(
+                        _verdict_text,
+                        style={"fontSize": "10px", "color": _verdict_color, "fontWeight": "600",
+                               "padding": "2px 6px 6px 6px"},
+                    )
+
                     header = html.Div([
                         html.Span("DTM",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
-                        html.Span("Dir",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "16px"}),
+                        html.Span("Sign",  style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "16px"}),
+                        html.Span("Trend", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "16px"}),
                         html.Span("Cons%", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
                         html.Span("AvgLvl",style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
                         html.Span("Obs",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
@@ -1088,21 +1256,26 @@ def register_spreads_callbacks(app) -> None:
                     for dtm_val, row in bucket_stats.iterrows():
                         p = row["p_value"]
                         sig = "**" if p < 0.05 else ("*" if p < 0.10 else "")
-                        dir_c = _dir_color[row["direction"]]
+                        sign_c = _dir_color[row["sign"]]
+                        trend_c = _dir_color[row["trend"]]
                         rows.append(html.Div([
                             html.Span(f"{dtm_val}d", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "34px"}),
-                            html.Span(f"{_arrow[row['direction']]}",
-                                      style={"fontSize": "11px", "color": dir_c, "minWidth": "16px"}),
+                            html.Span(f"{_arrow[row['sign']]}",
+                                      style={"fontSize": "11px", "color": sign_c, "minWidth": "16px"}),
+                            html.Span(f"{_arrow[row['trend']]}",
+                                      style={"fontSize": "11px", "color": trend_c, "minWidth": "16px"}),
                             html.Span(f"{row['consistency']*100:.0f}%{sig}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "44px"}),
                             html.Span(f"{row['avg_level']:+.2f}", style={"fontSize": "11px", "color": "#ffffff", "minWidth": "44px"}),
                             html.Span(f"n={row['n_cycles']}", style={"fontSize": "11px", "color": "#aab0c0", "minWidth": "34px"}),
                             html.Span(f"p={p:.2f}", style={"fontSize": "11px", "color": "#aab0c0"}),
                         ], style={"display": "flex", "gap": "12px", "padding": "2px 6px"}))
                     note = html.Div(
-                        "* p<0.10  ** p<0.05  (one-sided binomial; no FDR correction applied)",
+                        "Sign = avg level vs. 0 at this DTM.  Trend = change vs. the prior "
+                        "(farther-from-maturity) row, i.e. is it converging into the roll.  "
+                        "* p<0.10  ** p<0.05 (Sign only; one-sided binomial, no FDR correction).",
                         style={"fontSize": "9px", "color": "#8fb3d9", "marginTop": "4px", "padding": "0 6px"},
                     )
-                    stats_children = html.Div([header] + rows + [note],
+                    stats_children = html.Div([verdict_banner, header] + rows + [note],
                                               style={"background": "transparent", "borderRadius": "4px",
                                                      "padding": "6px 0", "marginBottom": "8px"})
             except Exception as e:
@@ -1128,6 +1301,15 @@ def register_spreads_callbacks(app) -> None:
                         series = spd_df[ticker]
                     elif spd_df.columns.size:
                         series = spd_df.iloc[:, 0]
+                    # load_spread_timeseries returns raw CNBD/IRS percent
+                    # values (e.g. 0.015 = 1.5bp) for correlation/backtest
+                    # callers that don't care about units -- but this chart
+                    # and its Monthly Statistics table display in bp (see
+                    # web/core/graphs.py::_primary_series, which applies the
+                    # same ×100 to the exact same pickles for the chart
+                    # above), so scale here too or AvgΔ rounds to "+0.0".
+                    if series is not None:
+                        series = 100.0 * pd.to_numeric(series, errors='coerce')
         except Exception as e:
             print(f"[seasonal] series load error for {stype}/{ticker}: {e}")
 
@@ -1151,6 +1333,21 @@ def register_spreads_callbacks(app) -> None:
             if stype == 'BondNewIssue' and ':' in str(ticker):
                 from web.tabs.alpha.data import to_newissue_stage_label
                 title_ticker = to_newissue_stage_label(ticker)
+
+            # Bonds are non-fungible and often <2yr old, giving BondSwap too
+            # little own history for a real calendar-year comparison. Overlay
+            # a same-tenor curve-vs-swap reference (full history since 2015)
+            # as a separate dashed line so the chart still shows a seasonal
+            # tendency to compare against, without pretending it's this
+            # bond's own past.
+            reference_series = None
+            if stype in ('TBondSwap', 'CBondSwap'):
+                try:
+                    from web.tabs.alpha.data import get_bondswap_reference_series
+                    reference_series = get_bondswap_reference_series(stype, ticker)
+                except Exception as e:
+                    print(f"[seasonal] BondSwap reference series error: {e}")
+
             fig = build_seasonal_overlay_figure(
                 pivot,
                 highlight_month=int(highlight_month) if highlight_month else None,
@@ -1158,6 +1355,8 @@ def register_spreads_callbacks(app) -> None:
                 title=f"{title_ticker} — seasonal year overlay",
                 raw_series=series,
                 spread_type=stype,
+                reference_series=reference_series,
+                reference_label="Reference (same-tenor curve − swap)",
             )
         except Exception as e:
             print(f"[seasonal] figure error: {e}")
@@ -1204,7 +1403,7 @@ def register_spreads_callbacks(app) -> None:
                     html.Span("Month", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "28px"}),
                     html.Span("Dir",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "16px"}),
                     html.Span("Cons%", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
-                    html.Span("AvgΔ",  style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
+                    html.Span("AvgΔ (bp)", style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "44px"}),
                     html.Span("Obs",   style={"fontSize": "10px", "color": "#8fb3d9", "minWidth": "34px"}),
                     html.Span("p-val", style={"fontSize": "10px", "color": "#8fb3d9"}),
                 ], style={"display": "flex", "gap": "12px", "padding": "2px 6px",

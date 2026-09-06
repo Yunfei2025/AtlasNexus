@@ -267,12 +267,16 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 	out: Dict[str, pd.DataFrame] = {}
 
 	def _otr_ofr_rv_snapshot_rows(asset_class: str) -> pd.DataFrame:
-		"""Mature OTR/OFR RV pair rows (signal_variant=otr_ofr_rv), merged into
-		the live TBondCurve/CBondCurve snapshot so they are selectable the same
-		way as ordinary bond-vs-curve instruments (see
+		"""OTR/OFR RV pair rows (signal_variant=otr_ofr_rv), merged into the live
+		TBondCurve/CBondCurve snapshot so they are selectable the same way as
+		ordinary bond-vs-curve instruments (see
 		docs/dev/tbondcurve-30y-otr-ofr-plan.md). Index is pair-format
-		"<otr_id>|<ofr1_id>"; each pair's mean/vol/stationary/halflife come from
-		its own spread history only (never spliced across OTR rolls).
+		"<ofrk_id>|<ofr1_id>"; the displayed spread level is always the current
+		episode's own history (never spliced across OTR rolls), but
+		mean/vol/stationary/halflife calibrate on CalibrationSpread, which
+		falls back to the rank-based ytm_ofrk-ytm_ofr1 series (continuous
+		across identity rolls) when the current episode is younger than
+		otr_ofr_rv.MIN_EPISODE_ROWS -- see otr_ofr_rv._episode_rows_to_pair_frames.
 		"""
 		try:
 			from curves.refreshers.otr_ofr_rv import build_otr_ofr_rv_rows
@@ -286,7 +290,8 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 			sp = series.get("Spread")
 			if not isinstance(sp, pd.Series) or sp.empty:
 				continue
-			stat = OU_calibrate(pd.DataFrame({pair_id: sp}))
+			calibration_spread = series.get("CalibrationSpread", sp)
+			stat = OU_calibrate(pd.DataFrame({pair_id: calibration_spread}))
 			row = stat.loc[pair_id].to_dict() if pair_id in stat.index else {}
 			row["spread"] = float(sp.iloc[-1])
 			rows[pair_id] = row
@@ -323,18 +328,17 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 			# Prefer ewm_vol (EWMA(60), matches the backtest engines' entry-signal
 			# scale) over the static full-sample 'vol' so a live snapshot z-score
 			# and a historical backtest z-score agree on what "extreme" means
-			# under the current volatility regime. BondCurve's CurveYield is the
-			# affine model yield, which already contains the historical mean
-			# adjustment (mean_adj baked in by statAdjust, curves/refreshers/rates.py);
-			# keep this formula identical to StatRefresher.
+			# under the current volatility regime. StatRefresher stores BondCurve's
+			# 'spread' as the un-adjusted (spread_raw) value and 'mean' as the real
+			# OU mean (see curves/refreshers/stat.py), matching the standard
+			# convention used everywhere else -- so subtract mean like BondSwap does.
 			_bc_zvol = df_bc["ewm_vol"] if "ewm_vol" in df_bc.columns else df_bc.get("vol", pd.Series(np.nan, index=df_bc.index))
 			_bc_zvol = pd.to_numeric(_bc_zvol, errors="coerce")
 			_bc_zvol = _bc_zvol.where(_bc_zvol.notna(), pd.to_numeric(df_bc.get("vol", pd.Series(np.nan, index=df_bc.index)), errors="coerce"))
-			df_bc["Zscore"] = (
-				pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce") /
-				_bc_zvol.replace(0, np.nan)
-			)
-			spread_bp = pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce") * 100.0
+			_bc_spread = pd.to_numeric(df_bc.get("spread", pd.Series(np.nan, index=df_bc.index)), errors="coerce")
+			_bc_mean = pd.to_numeric(df_bc.get("mean", pd.Series(0.0, index=df_bc.index)), errors="coerce")
+			df_bc["Zscore"] = (_bc_spread - _bc_mean) / _bc_zvol.replace(0, np.nan)
+			spread_bp = _bc_spread * 100.0
 			borrow_cost_bp = pd.Series(
 				_BOND_CURVE_BORROW_COST_BP_ANNUAL * (_CARRY_BASIS_DAYS / _ANNUAL_CARRY_BASIS_DAYS),
 				index=df_bc.index,

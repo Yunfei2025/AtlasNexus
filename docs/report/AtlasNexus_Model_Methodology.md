@@ -87,9 +87,12 @@ The bond/IRS curves use an **affine factor model**. Numerical robustness is buil
 
 - **PSD projection** (`_project_to_psd`) — symmetrizes the covariance and clips
   eigenvalues to `≥ 1e-10`, guaranteeing a valid covariance even from noisy inputs.
-- **Tikhonov-regularized solve** (`_solve_regularized_system`) — ridge term scaled to
-  the trace of `BᵀB` (`ridge_scale = 1e-8`), with `lstsq` fallback and an
-  `max_abs_factor = 1e6` clamp to suppress blow-ups on ill-conditioned systems.
+- The factor fixed-point solve uses a plain `np.linalg.pinv` batch each
+  iteration, with a relative-Frobenius-norm convergence test and a
+  non-convergence flag stored on `Curve` (`affine_cov_converged`). A
+  previously-planned Tikhonov-regularized solve was never wired in and has
+  since been removed from the code — this doc is corrected 2026-09-05 to stop
+  describing it as live (see `docs/dev/affine-curve-improvement-plan.md` F3).
 - Sympy-based symbolic matrices are cached via hashable-tuple conversion for speed.
 
 Supporting engines: `curves/affine/bootstrap.py` (zero-curve bootstrap),
