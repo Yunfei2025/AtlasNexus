@@ -274,11 +274,15 @@ def register_portfolio_run_callbacks(app):
 
         _missing_signals = [f for f in sorted_factors if f not in snapshot_by_rf]
 
-        def get_coeff(factor):
+        def get_raw_scalar(factor):
             rec = snapshot_by_rf.get(factor)
-            if rec is not None:
-                return float(rec.get('scalar', 1.0))
-            return 0.0  # neutral — no signal yet; run Predict first
+            return float(rec.get('scalar', 0.0)) if rec is not None else 0.0
+
+        def get_coeff(factor, raw_scalar):
+            # Mirror run_analysis's factor_scaling tilt exactly: raw scalar →
+            # scalar_to_coeff() (long-only factors clip to [0,2] around 1+scalar;
+            # directional factors clip to [-1.5,1.5] as-is).
+            return scalar_to_coeff(raw_scalar, factor)
 
         # ── Factor vol lookup (live 1Y EWMA) ─────────────────────────────────
         _vol_map = compute_factor_vol_map(sorted_factors)
@@ -322,14 +326,15 @@ def register_portfolio_run_callbacks(app):
         rows = []
         for factor in sorted_factors:
             rp_max = get_rp_max(factor)
-            coeff  = get_coeff(factor)
+            raw_scalar = get_raw_scalar(factor)
+            coeff = get_coeff(factor, raw_scalar)
             # In factor_scaling mode, exposure = RP Max × signal coefficient
             # In risk_parity & user_defined modes, exposure = RP Max (coeff is display-only)
             if allocation_mode == 'factor_scaling' and coeff != 0:
                 suggested = rp_max * coeff
             else:
                 suggested = rp_max
-            label, color = _scalar_meta(coeff)
+            label, color = _scalar_meta(raw_scalar)
             is_default_coeff = factor not in snapshot_by_rf
 
             vol_val = _vol_map.get(factor)
@@ -809,7 +814,8 @@ def register_portfolio_run_callbacks(app):
                 rp_budgets_out = _fallback_rp_budgets(_fnames_erc, vols, total_capital_m)
             # user_defined already has rp_budgets_out set above
 
-            # ── Save Beta snapshot for Summary tab ────────────────────────────
+            # ── Build Beta snapshot (saved to Summary tab only via "Add to
+            # Portfolio", not automatically on every Run Analysis) ───────────
             # Metadata fields (Item 24): every saved row carries the full run
             # configuration so the Summary tab is reproducible and auditable.
             _factor_pool_all = (
@@ -827,24 +833,16 @@ def register_portfolio_run_callbacks(app):
                 '_factor_pool':     ','.join(sorted(_factor_pool_all)),
                 '_max_duration':    float(max_duration or 5),
             }
-            try:
-                pathlib.Path(_SUMMARY_BETA_PARQUET).parent.mkdir(parents=True, exist_ok=True)
-                _keep_cols = [c for c in [
-                    'Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument',
-                    'Duration', 'Capital (CNY)', 'DV01 (MM CNY)', 'Weight (%)',
-                ] if c in portfolio_df.columns]
-                _snap = portfolio_df[_keep_cols].copy()
-                for _mk, _mv in _run_meta.items():
-                    _snap[_mk] = _mv
-                for _c in ('Duration', 'Capital (CNY)', 'DV01 (MM CNY)'):
-                    if _c in _snap.columns:
-                        _snap[_c] = pd.to_numeric(_snap[_c], errors='coerce')
-                _id_cols = ['Asset Name'] if 'Asset Name' in _snap.columns else []
-                merged = _upsert_snapshot(_snap, _SUMMARY_BETA_PARQUET, _id_cols)
-                print(f"✓ Beta snapshot saved → {_SUMMARY_BETA_PARQUET} ({len(merged)} rows)")
-            except Exception as _se:
-                print(f"Warning: Could not save Beta snapshot: {_se}")
-                traceback.print_exc()
+            _keep_cols = [c for c in [
+                'Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument',
+                'Duration', 'Capital (CNY)', 'DV01 (MM CNY)', 'Weight (%)',
+            ] if c in portfolio_df.columns]
+            _snap = portfolio_df[_keep_cols].copy()
+            for _mk, _mv in _run_meta.items():
+                _snap[_mk] = _mv
+            for _c in ('Duration', 'Capital (CNY)', 'DV01 (MM CNY)'):
+                if _c in _snap.columns:
+                    _snap[_c] = pd.to_numeric(_snap[_c], errors='coerce')
 
             _store_factor_risk = (
                 factor_risk.to_dict('records')
@@ -878,6 +876,32 @@ def register_portfolio_run_callbacks(app):
             return (html.Div(f"Error: {str(e)}", style={'color': THEME['danger']}),
                     error_msg, "", {}, {}, {})
 
+    # ── Add to Portfolio (Beta Book Summary snapshot) ──────────────────────
+    @app.callback(
+        Output('beta-add-to-portfolio-status', 'children'),
+        Input('beta-add-to-portfolio-btn', 'n_clicks'),
+        State('allocation-results-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def add_beta_to_portfolio(n_clicks, allocation_results):
+        if not n_clicks:
+            return dash.no_update
+        try:
+            records = (allocation_results or {}).get('beta_snapshot') or []
+            if not records:
+                return html.Span("⚠ Run analysis first — no results to add.",
+                                  style={'color': THEME['warning'], 'fontWeight': 'bold'})
+
+            _snap = pd.DataFrame(records)
+            pathlib.Path(_SUMMARY_BETA_PARQUET).parent.mkdir(parents=True, exist_ok=True)
+            _id_cols = ['Asset Name'] if 'Asset Name' in _snap.columns else []
+            merged = _upsert_snapshot(_snap, _SUMMARY_BETA_PARQUET, _id_cols)
+            print(f"✓ Beta snapshot saved → {_SUMMARY_BETA_PARQUET} ({len(merged)} rows)")
+            return html.Span(f"✓ Added to Portfolio Summary ({len(_snap)} rows)",
+                              style={'color': '#34d399', 'fontWeight': '700'})
+        except Exception as e:
+            traceback.print_exc()
+            return html.Span(f"✗ Error adding to portfolio: {e}", style={'color': THEME['danger'], 'fontWeight': 'bold'})
 
     # ── IRDL Hedge Overlay callback ───────────────────────────────────────────
     @app.callback(

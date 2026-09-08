@@ -30,6 +30,8 @@ def compute_spread_correlation(
             for col in ts.columns:
                 col_key = display_key(stype, str(col))
                 series = ts[col].copy()
+                if series.index.has_duplicates:
+                    series = series[~series.index.duplicated(keep='last')]
                 series.index = series.index.astype(str)
                 all_spreads[col_key] = series
                 duration_by_key[col_key] = max(

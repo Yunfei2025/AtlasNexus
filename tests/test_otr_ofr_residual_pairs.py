@@ -1,14 +1,24 @@
-"""Tests for the OFR{k}-vs-OFR1 residual-pair RV construction and the
+"""Tests for the OFR{k}-vs-OTR residual-pair RV construction and the
 stale-bond gate that feeds it.
 
-Covers three defects found on production TBond data (2026-09-06):
+Leg2 is OTR, not OFR1 (2026-09-07): OTR carries the liquidity premium and is
+a beta-book holding, so shorting it is financed by selling an existing
+position rather than borrowing OFR1 -- see curves/refreshers/otr_ofr_rv.py's
+module docstring.
+
+Covers four defects found on production TBond data (2026-09-06/07):
   1. `_adf_result` reported a frozen (constant) series as stationary, so dead
      instruments passed StatInfo's stationarity filter with a ~0 vol divisor.
   2. `statAnalysis_BC` kept bonds that had left the instrument universe or
      whose residual had stopped updating.
   3. `_episode_rows_to_pair_frames` built its fallback series against
-     whichever bond was OFR1 on each date rather than the pair's own OFR1,
-     collapsing every pair sharing a leg-A onto one identical spread.
+     whichever bond was the reference leg on each date rather than the
+     pair's own reference leg, collapsing every pair sharing a leg-A onto one
+     identical spread.
+  4. `_episode_rows_to_pair_frames` exposed every historical episode
+     (including ones whose reference leg has since rolled off) as if it were
+     still live-tradeable; only the episode ending on the bucket's most
+     recent date is now returned.
 """
 import numpy as np
 import pandas as pd
@@ -88,22 +98,62 @@ def test_residual_pair_empty_when_a_leg_is_missing():
     assert _residual_pair_series(pd.DataFrame(), 'A.IB', 'B.IB').empty
 
 
-def _universe_frame(n=40):
-    """Two rungs whose OFR1 reference CHANGES midway, so a series built
-    against the moving reference differs from one built against a fixed leg.
+def _universe_frame_two_rungs(n=40):
+    """Two DIFFERENT bonds (K.IB at rung 2, M.IB at rung 3) both paired
+    against the SAME live OTR reference (REF1.IB), each with its own yield
+    level, so a series for one rung must not collapse onto the other's.
+    """
+    idx = pd.date_range('2026-01-01', periods=n, freq='D')
+    return pd.DataFrame({
+        'otr_id': ['REF1.IB'] * n,
+        'ofr2_id': ['K.IB'] * n,
+        'ofr3_id': ['M.IB'] * n,
+        'ytm_otr': np.full(n, 2.50),
+        'ytm_ofr2': np.full(n, 2.55),
+        'ytm_ofr3': np.full(n, 2.65),
+    }, index=idx)
+
+
+def _universe_frame_rolled_reference(n=40):
+    """One rung (ofr2) whose OTR reference CHANGES midway -- the first-half
+    episode (REF1.IB) is closed (does not end on the frame's last date) and
+    must be excluded from the live/current candidate set; only the
+    second-half episode (REF2.IB, still open) should survive.
     """
     idx = pd.date_range('2026-01-01', periods=n, freq='D')
     half = n // 2
     return pd.DataFrame({
-        'ofr1_id': ['REF1.IB'] * half + ['REF2.IB'] * (n - half),
+        'otr_id': ['REF1.IB'] * half + ['REF2.IB'] * (n - half),
         'ofr2_id': ['K.IB'] * n,
-        'ytm_ofr1': np.r_[np.full(half, 2.50), np.full(n - half, 2.60)],
+        'ytm_otr': np.r_[np.full(half, 2.50), np.full(n - half, 2.60)],
         'ytm_ofr2': np.full(n, 2.55),
     }, index=idx)
 
 
-def test_pair_spread_depends_on_its_own_ofr1_leg():
-    """Two pairs sharing leg A must not collapse onto one identical spread."""
+def test_pair_spread_depends_on_its_own_rung_leg():
+    """Two pairs sharing the same reference leg must not collapse onto one
+    identical spread -- each rung's OWN ofrk leg must drive its own series."""
+    idx = pd.date_range('2026-01-01', periods=40, freq='D')
+    rng = np.random.default_rng(2)
+    residuals = pd.DataFrame({
+        'K.IB': 0.05 + rng.standard_normal(40) * 0.001,
+        'M.IB': -0.02 + rng.standard_normal(40) * 0.001,
+        'REF1.IB': 0.01 + rng.standard_normal(40) * 0.001,
+    }, index=idx)
+
+    out = _episode_rows_to_pair_frames(_universe_frame_two_rungs(), residuals)
+
+    assert set(out) == {'K.IB|REF1.IB', 'M.IB|REF1.IB'}
+    s1 = out['K.IB|REF1.IB']['Spread']
+    s2 = out['M.IB|REF1.IB']['Spread']
+    assert np.allclose(s1.to_numpy(), (residuals['K.IB'] - residuals['REF1.IB']).to_numpy())
+    assert np.allclose(s2.to_numpy(), (residuals['M.IB'] - residuals['REF1.IB']).to_numpy())
+    assert not np.allclose(s1.to_numpy(), s2.to_numpy())
+
+
+def test_pair_excludes_closed_episode_after_reference_rolls():
+    """A pair whose OTR reference has since rolled off must not be returned
+    as if it were still a live, tradeable episode (the stale-episode bug)."""
     idx = pd.date_range('2026-01-01', periods=40, freq='D')
     rng = np.random.default_rng(2)
     residuals = pd.DataFrame({
@@ -112,25 +162,20 @@ def test_pair_spread_depends_on_its_own_ofr1_leg():
         'REF2.IB': -0.03 + rng.standard_normal(40) * 0.001,
     }, index=idx)
 
-    out = _episode_rows_to_pair_frames(_universe_frame(), residuals)
+    out = _episode_rows_to_pair_frames(_universe_frame_rolled_reference(), residuals)
 
-    # One episode per (ofr1_id, ofrk_id) identity: K vs REF1 and K vs REF2.
-    assert set(out) == {'K.IB|REF1.IB', 'K.IB|REF2.IB'}
-    s1 = out['K.IB|REF1.IB']['Spread']
+    # Only the still-open episode (K vs REF2, the current OTR) is returned;
+    # the closed K vs REF1 episode must not leak into the live candidate set.
+    assert set(out) == {'K.IB|REF2.IB'}
     s2 = out['K.IB|REF2.IB']['Spread']
-    # Each must equal its OWN legs' residual difference...
-    assert np.allclose(s1.to_numpy(), (residuals['K.IB'] - residuals['REF1.IB']).to_numpy())
     assert np.allclose(s2.to_numpy(), (residuals['K.IB'] - residuals['REF2.IB']).to_numpy())
-    # ...and therefore differ from one another (the collapse bug).
-    assert not np.allclose(s1.to_numpy(), s2.to_numpy())
 
 
 def test_pair_falls_back_to_raw_spread_without_a_residual_panel():
     """Missing residuals must not fabricate a one-legged spread."""
-    out = _episode_rows_to_pair_frames(_universe_frame(), pd.DataFrame())
-    assert set(out) == {'K.IB|REF1.IB', 'K.IB|REF2.IB'}
-    # Raw-yield fallback: ytm_ofr2 - ytm_ofr1 over that episode.
-    assert np.allclose(out['K.IB|REF1.IB']['Spread'].to_numpy(), 2.55 - 2.50)
+    out = _episode_rows_to_pair_frames(_universe_frame_rolled_reference(), pd.DataFrame())
+    assert set(out) == {'K.IB|REF2.IB'}
+    # Raw-yield fallback: ytm_ofr2 - ytm_otr over the still-open episode.
     assert np.allclose(out['K.IB|REF2.IB']['Spread'].to_numpy(), 2.55 - 2.60)
 
 
@@ -138,9 +183,9 @@ def test_self_pair_is_never_emitted():
     """A pair needs two distinct instruments to have any economic content."""
     idx = pd.date_range('2026-01-01', periods=25, freq='D')
     df = pd.DataFrame({
-        'ofr1_id': ['SAME.IB'] * 25,
+        'otr_id': ['SAME.IB'] * 25,
         'ofr2_id': ['SAME.IB'] * 25,
-        'ytm_ofr1': np.full(25, 2.5),
+        'ytm_otr': np.full(25, 2.5),
         'ytm_ofr2': np.full(25, 2.5),
     }, index=idx)
     assert _episode_rows_to_pair_frames(df, pd.DataFrame()) == {}

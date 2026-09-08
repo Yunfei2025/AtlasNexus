@@ -271,12 +271,17 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		TBondCurve/CBondCurve snapshot so they are selectable the same way as
 		ordinary bond-vs-curve instruments (see
 		docs/dev/tbondcurve-30y-otr-ofr-plan.md). Index is pair-format
-		"<ofrk_id>|<ofr1_id>"; the displayed spread level is always the current
-		episode's own history (never spliced across OTR rolls), but
-		mean/vol/stationary/halflife calibrate on CalibrationSpread, which
-		falls back to the rank-based ytm_ofrk-ytm_ofr1 series (continuous
-		across identity rolls) when the current episode is younger than
-		otr_ofr_rv.MIN_EPISODE_ROWS -- see otr_ofr_rv._episode_rows_to_pair_frames.
+		"<ofrk_id>|<otr_id>" -- leg2 is OTR, not OFR1 (2026-09-07: OTR carries
+		the liquidity premium and is a beta-book holding, so shorting it is
+		financed by selling an existing position rather than borrowing OFR1).
+		Only the currently active episode per (bucket, ofrk_id) is included
+		(closed/rolled-off episodes are filtered in build_otr_ofr_rv_rows).
+		The displayed spread level is always the current episode's own
+		history (never spliced across OTR rolls), but mean/vol/stationary/
+		halflife calibrate on CalibrationSpread, which falls back to the
+		rank-based ytm_ofrk-ytm_otr series (continuous across identity rolls)
+		when the current episode is younger than otr_ofr_rv.MIN_EPISODE_ROWS
+		-- see otr_ofr_rv._episode_rows_to_pair_frames.
 		"""
 		try:
 			from curves.refreshers.otr_ofr_rv import build_otr_ofr_rv_rows

@@ -797,7 +797,12 @@ def display_key(spread_type: str, inst: str) -> str:
     T/TF/TS/TL, so a suffix is mandatory there too.
     """
     if spread_type in ('TBondCurve', 'CBondCurve'):
-        return f'{inst}-OTR'
+        # Mature OFR-ladder RV pairs (see curves/refreshers/otr_ofr_rv.py) are
+        # IDed as `<ofrk_id>|<ofr1_id>` -- only the OFRk leg (before the `|`)
+        # names the traded bond; the OFR1 reference leg is looked up via the
+        # REFERENCE BONDS table, not shown in the label.
+        ofrk_id = inst.split('|', 1)[0]
+        return f'{ofrk_id}-OTR'
     if spread_type in ('TBondSwap', 'CBondSwap'):
         return f'{inst}-Swp'
     if spread_type == 'NetBasis':

@@ -59,7 +59,10 @@ def register_correlation_callbacks(app) -> None:
                     ts = _ts_cache[spread_type]
                     if ts is not None and isinstance(ts, pd.DataFrame) and trade_id in ts.columns:
                         col_key = display_key(spread_type, trade_id)
-                        all_spreads[col_key] = ts[trade_id]
+                        series = ts[trade_id]
+                        if series.index.has_duplicates:
+                            series = series[~series.index.duplicated(keep='last')]
+                        all_spreads[col_key] = series
                         duration_by_key[col_key] = max(
                             0.01,
                             float(_get_duration_mult(str(trade_id), str(spread_type))),

@@ -2,21 +2,32 @@
 """Mature-pair relative value (``otr_ofr_rv``) under existing ``TBondCurve`` /
 ``CBondCurve`` (see docs/dev/tbondcurve-30y-otr-ofr-plan.md).
 
-Restricted to the turnover-ranked OFR ladder only (OFR1..OFR{depth}) — this
-module never touches NIB or OTR, so it cannot overlap with the BondNewIssue
+Restricted to the turnover-ranked OFR ladder for leg1 (OFRk, k=2..depth) —
+this module never trades NIB, so it cannot overlap with the BondNewIssue
 rotation-ladder event strategy by construction (see the plan's "Overlap
 Avoidance and Portfolio Netting"). Reuses the same point-in-time OFR-ladder
 history already captured by ``curves.calibration.otr_ofr_universe``
-(``{asset_class}-newissue.pkl``). Every current (ofr1_id, ofrk_id) episode is
-exposed as an extra pair-instrument row/column merged into the existing
-``{asset_class}-spds.pkl['BondCurve']`` structure, so it shows up in the same
-TBondCurve/CBondCurve dropdown as ordinary bond-vs-curve instruments
-(distinguished by ``|`` in the ID: ``<ofrk_id>|<ofr1_id>``).
+(``{asset_class}-newissue.pkl``). The CURRENTLY ACTIVE (otr_id, ofrk_id)
+episode per tenor bucket is exposed as an extra pair-instrument row/column
+merged into the existing ``{asset_class}-spds.pkl['BondCurve']`` structure,
+so it shows up in the same TBondCurve/CBondCurve dropdown as ordinary
+bond-vs-curve instruments (distinguished by ``|`` in the ID:
+``<ofrk_id>|<otr_id>``).
+
+**Leg2 is OTR, not OFR1** (2026-09-07 decision). OFR1 remains the reference
+leg for AFFINE CURVE CALIBRATION elsewhere (it is the anchor every other rung
+is priced against) — that is unrelated and unchanged. But the actual TRADED
+leg2 here is OTR: OTR carries a liquidity premium that makes it expensive/hard
+to borrow to short, whereas OTR is a strategic beta-book holding, so the
+short leg of this RV trade is financed by selling an existing long position
+rather than sourcing a fresh borrow. OFR1 is not, in general, held in the
+beta book, so pairing OFRk against OFR1 would require borrowing OFR1 to short
+it -- exactly the cost this construction avoids by using OTR instead.
 
 The traded object for each pair is the difference of the two legs' affine-curve
-residuals against that pair's own OFR1:
+residuals against that pair's OTR leg:
 
-    pair(t) = (y_k(t) - curve_k(t)) - (y_1(t) - curve_1(t))
+    pair(t) = (y_k(t) - curve_k(t)) - (y_otr(t) - curve_otr(t))
 
 Differencing residuals rather than raw yields removes the curve slope between
 the two maturities (which moves with the curve and does not mean-revert) and
@@ -24,11 +35,18 @@ cancels the affine model's common cross-sectional level bias, since both legs
 carry it. The series spans the full overlap of the two legs' residual
 histories, so it is not limited to the current episode's length.
 
+Only the CURRENTLY ACTIVE episode per (tenor_bucket, ofrk_id) is surfaced as a
+live candidate -- i.e. the episode whose last observed date is the bucket's
+most recent date, meaning its OTR leg has not since rolled to a different
+bond. A past episode whose OTR has since rolled off is closed and must not
+appear as a tradeable pair (see build_otr_ofr_rv_rows).
+
 A prior implementation fell back, for episodes shorter than MIN_EPISODE_ROWS,
 to the OFRk bond's own rank history paired against whichever bond was OFR1 on
-each date. That series does not depend on the pair's named OFR1, so every pair
-sharing a leg-A collapsed onto one identical spread; with ~65% of episodes
-below the threshold it was the active path for most rows. It has been removed.
+each date. That series does not depend on the pair's named reference bond, so
+every pair sharing a leg-A collapsed onto one identical spread; with ~65% of
+episodes below the threshold it was the active path for most rows. It has
+been removed.
 """
 from __future__ import annotations
 
@@ -42,7 +60,7 @@ from settings.paths import DIR_INPUT
 from settings.fixed_income import NewIssueConfig
 from curves.calibration.stat import OU_calibrate
 from curves.utils.loader import loadInstrumentDefinition
-from curves.utils.file import loadPKL, updatePKL
+from curves.utils.file import loadPKL, updatePKL, pkl_lock
 
 from utils.log_window import get_logger
 logger = get_logger(__name__)
@@ -61,10 +79,10 @@ MIN_ZSCORE_VOL = 0.003
 def _load_residual_panel(asset_class: str) -> pd.DataFrame:
     """Per-bond affine-curve residual panel (``ytm_act - ytm_quo``, in %).
 
-    The RV object for an OFR{k}-vs-OFR1 pair is the difference of the two
+    The RV object for an OFR{k}-vs-OTR pair is the difference of the two
     legs' curve residuals, not the difference of their raw yields:
 
-        pair(t) = (y_k - curve_k) - (y_1 - curve_1)
+        pair(t) = (y_k - curve_k) - (y_otr - curve_otr)
 
     Differencing raw yields (the previous behaviour) leaves in the genuine
     curve slope between two different maturities, which moves with the curve
@@ -87,15 +105,18 @@ def _load_residual_panel(asset_class: str) -> pd.DataFrame:
     return act - quo
 
 
-def _residual_pair_series(residuals: pd.DataFrame, ofrk_id: str, ofr1_id: str) -> pd.Series:
-    """``resid(ofrk) - resid(ofr1)`` on the dates both legs are observed.
+def _residual_pair_series(residuals: pd.DataFrame, ofrk_id: str, leg2_id: str) -> pd.Series:
+    """``resid(ofrk) - resid(leg2)`` on the dates both legs are observed.
+
+    ``leg2_id`` is the pair's OTR leg (see module docstring for why OTR,
+    not OFR1, is the traded reference leg).
 
     Returns an empty Series when either leg is missing from the panel, so the
     caller can fall back rather than fabricate a one-legged spread.
     """
-    if residuals.empty or ofrk_id not in residuals.columns or ofr1_id not in residuals.columns:
+    if residuals.empty or ofrk_id not in residuals.columns or leg2_id not in residuals.columns:
         return pd.Series(dtype=float)
-    return (residuals[ofrk_id] - residuals[ofr1_id]).dropna()
+    return (residuals[ofrk_id] - residuals[leg2_id]).dropna()
 
 
 def _bond_own_rank_history(df: pd.DataFrame, bond_id: str, depth: int) -> pd.DataFrame:
@@ -127,58 +148,70 @@ def _bond_own_rank_history(df: pd.DataFrame, bond_id: str, depth: int) -> pd.Dat
 
 
 def _episode_rows_to_pair_frames(df: pd.DataFrame, residuals: Optional[pd.DataFrame] = None) -> Dict[str, Dict[str, pd.Series]]:
-    """Group a per-bucket universe history into OFR-ladder pair episodes.
+    """Group a per-bucket universe history into OFRk-vs-OTR pair episodes.
 
-    For each rung k = 2..OFR_LADDER_DEPTH, groups rows by the (ofr1_id, ofrk_id)
-    identity pair (an "episode" persists while both rungs' confirmed identity
-    stays the same) and exposes ``ofr{k} - ofr1`` as the mature-RV spread.
+    For each rung k = 2..OFR_LADDER_DEPTH, groups rows by the (otr_id, ofrk_id)
+    identity pair (an "episode" persists while both legs' confirmed identity
+    stays the same) and exposes ``ofr{k} - otr`` as the mature-RV spread. OTR
+    is leg2 rather than OFR1 -- see module docstring for the liquidity-premium
+    / beta-book-financing rationale.
+
+    Only the episode that is CURRENTLY ACTIVE for a given (bucket, ofrk_id) --
+    i.e. whose last row is the bucket's most recent date -- is returned. A
+    closed episode (OTR has since rolled to a different bond) is excluded so
+    it cannot leak into the live candidate set as if it were still tradeable.
 
     The traded object is the difference of the two legs' affine-curve
-    residuals against THIS pair's own OFR1 (see _residual_pair_series), which
+    residuals against THIS pair's own OTR (see _residual_pair_series), which
     removes the curve slope between the two maturities and cancels the model's
     common level bias. ``CalibrationSpread`` is that residual pair whenever the
     two legs overlap for at least MIN_EPISODE_ROWS observations, else the
     episode's raw-yield spread.
     """
     out: Dict[str, Dict[str, pd.Series]] = {}
-    if df is None or df.empty or 'ofr1_id' not in df.columns:
+    if df is None or df.empty or 'otr_id' not in df.columns:
         return out
     if residuals is None:
         residuals = pd.DataFrame()
     depth = NewIssueConfig.OFR_LADDER_DEPTH
+    latest_date = df.index.max()
     for k in range(2, depth + 1):
         id_col, ytm_col = f'ofr{k}_id', f'ytm_ofr{k}'
-        if id_col not in df.columns or ytm_col not in df.columns:
+        if id_col not in df.columns or ytm_col not in df.columns or 'ytm_otr' not in df.columns:
             continue
-        pair_key = df['ofr1_id'].astype(str) + '|' + df[id_col].astype(str)
+        pair_key = df['otr_id'].astype(str) + '|' + df[id_col].astype(str)
         for _pair, group in df.groupby(pair_key):
             g = group.sort_index()
-            ofr1 = pd.to_numeric(g['ytm_ofr1'], errors='coerce')
+            # Skip a closed episode: its OTR/ofrk identity pairing has since
+            # rolled to something else, so it is no longer live/tradeable.
+            if g.index.max() != latest_date:
+                continue
+            otr = pd.to_numeric(g['ytm_otr'], errors='coerce')
             ofrk = pd.to_numeric(g[ytm_col], errors='coerce')
-            spread = (ofrk - ofr1).dropna()
+            spread = (ofrk - otr).dropna()
             if spread.empty:
                 continue
-            ofr1_id = str(g['ofr1_id'].iloc[-1])
+            otr_id = str(g['otr_id'].iloc[-1])
             ofrk_id = str(g[id_col].iloc[-1])
-            if pd.isna(ofr1_id) or ofr1_id in ('nan', '') or pd.isna(ofrk_id) or ofrk_id in ('nan', ''):
+            if pd.isna(otr_id) or otr_id in ('nan', '') or pd.isna(ofrk_id) or ofrk_id in ('nan', ''):
                 continue
             # A mature RV pair must contain two distinct instruments.  A
             # repeated identifier creates a synthetic self-spread with zero
             # economic leg difference and must never enter the candidate set.
-            if ofrk_id == ofr1_id:
+            if ofrk_id == otr_id:
                 continue
 
-            # Residual pair against THIS pair's named OFR1, extended over the
+            # Residual pair against THIS pair's named OTR, extended over the
             # full overlapping history of the two legs. This replaces the old
             # `_bond_own_rank_history` fallback, which paired the OFRk bond
-            # against *whichever* bond happened to be OFR1 on each date: that
-            # made the resulting series independent of the pair's own OFR1, so
-            # every pair sharing a leg-A collapsed to one identical spread
-            # (observed: 33 leg-A bonds spanning 160 pair rows, 0 of which
-            # varied across their different OFR1 partners). Because ~65% of
-            # episodes are shorter than MIN_EPISODE_ROWS, that fallback was the
-            # active path for most rows.
-            resid_pair = _residual_pair_series(residuals, ofrk_id, ofr1_id)
+            # against *whichever* bond happened to hold the reference role on
+            # each date: that made the resulting series independent of the
+            # pair's own reference leg, so every pair sharing a leg-A
+            # collapsed to one identical spread (observed: 33 leg-A bonds
+            # spanning 160 pair rows, 0 of which varied across their different
+            # reference partners). Because ~65% of episodes are shorter than
+            # MIN_EPISODE_ROWS, that fallback was the active path for most rows.
+            resid_pair = _residual_pair_series(residuals, ofrk_id, otr_id)
 
             # Calibrate on the residual pair whenever it is long enough; fall
             # back to the episode's own raw-yield spread only when the residual
@@ -192,12 +225,12 @@ def _episode_rows_to_pair_frames(df: pd.DataFrame, residuals: Optional[pd.DataFr
             calibration_spread = resid_pair if use_residual else spread
 
             display_close = ofrk.reindex(spread.index)
-            display_curve = ofr1.reindex(spread.index)
+            display_curve = otr.reindex(spread.index)
             display_spread = resid_pair if use_residual else spread
 
-            pair_id = f'{ofrk_id}|{ofr1_id}'
+            pair_id = f'{ofrk_id}|{otr_id}'
             out[pair_id] = {
-                'ofr1_id': ofr1_id, 'ofrk_id': ofrk_id,
+                'leg2_id': otr_id, 'ofrk_id': ofrk_id,
                 'CloseYield': display_close,
                 'CurveYield': display_curve,
                 'Spread': display_spread,
@@ -242,84 +275,87 @@ def refresh_otr_ofr_rv_spreads(asset_class: str, update: bool = True) -> Dict[st
     pairs = build_otr_ofr_rv_rows(asset_class)
 
     spds_file = os.path.join(DIR_INPUT, f'{asset_class}-spds.pkl')
-    spds = loadPKL(spds_file)
-    bond_curve = spds.get('BondCurve') if isinstance(spds, dict) else None
-    if not isinstance(bond_curve, dict):
-        logger.warning("%s missing BondCurve; skipping otr_ofr_rv merge for %s.", spds_file, asset_class)
-        return {}
+    with pkl_lock(spds_file):
+        spds = loadPKL(spds_file)
+        bond_curve = spds.get('BondCurve') if isinstance(spds, dict) else None
+        if not isinstance(bond_curve, dict):
+            logger.warning("%s missing BondCurve; skipping otr_ofr_rv merge for %s.", spds_file, asset_class)
+            return {}
 
-    stat_info = bond_curve.get('StatInfo')
-    close_yield = bond_curve.get('CloseYield')
-    curve_yield = bond_curve.get('CurveYield')
-    spread = bond_curve.get('Spread')
-    if not isinstance(stat_info, pd.DataFrame):
-        stat_info = pd.DataFrame()
-    if not isinstance(close_yield, pd.DataFrame):
-        close_yield = pd.DataFrame()
-    if not isinstance(curve_yield, pd.DataFrame):
-        curve_yield = pd.DataFrame()
-    if not isinstance(spread, pd.DataFrame):
-        spread = pd.DataFrame()
+        stat_info = bond_curve.get('StatInfo')
+        close_yield = bond_curve.get('CloseYield')
+        curve_yield = bond_curve.get('CurveYield')
+        spread = bond_curve.get('Spread')
+        if not isinstance(stat_info, pd.DataFrame):
+            stat_info = pd.DataFrame()
+        if not isinstance(close_yield, pd.DataFrame):
+            close_yield = pd.DataFrame()
+        if not isinstance(curve_yield, pd.DataFrame):
+            curve_yield = pd.DataFrame()
+        if not isinstance(spread, pd.DataFrame):
+            spread = pd.DataFrame()
 
-    # Drop stale pair rows/columns from a previous merge before rebuilding.
-    stat_info = stat_info.loc[[i for i in stat_info.index if '|' not in str(i)]] if not stat_info.empty else stat_info
-    close_yield = close_yield.loc[:, [c for c in close_yield.columns if '|' not in str(c)]] if not close_yield.empty else close_yield
-    curve_yield = curve_yield.loc[:, [c for c in curve_yield.columns if '|' not in str(c)]] if not curve_yield.empty else curve_yield
-    spread = spread.loc[:, [c for c in spread.columns if '|' not in str(c)]] if not spread.empty else spread
+        # Drop stale pair rows/columns from a previous merge before rebuilding.
+        stat_info = stat_info.loc[[i for i in stat_info.index if '|' not in str(i)]] if not stat_info.empty else stat_info
+        close_yield = close_yield.loc[:, [c for c in close_yield.columns if '|' not in str(c)]] if not close_yield.empty else close_yield
+        curve_yield = curve_yield.loc[:, [c for c in curve_yield.columns if '|' not in str(c)]] if not curve_yield.empty else curve_yield
+        spread = spread.loc[:, [c for c in spread.columns if '|' not in str(c)]] if not spread.empty else spread
 
-    if not pairs:
+        if not pairs:
+            bond_curve['StatInfo'] = stat_info
+            bond_curve['CloseYield'] = close_yield
+            bond_curve['CurveYield'] = curve_yield
+            bond_curve['Spread'] = spread
+            spds['BondCurve'] = bond_curve
+            if update:
+                updatePKL(spds, spds_file, rewrite=True)
+            return bond_curve
+
+        env = loadInstrumentDefinition(asset_class)
+        df_def = env['Def']
+
+        new_close_cols, new_curve_cols, new_spread_cols = {}, {}, {}
+        new_stat_rows = {}
+        for pair_id, series in pairs.items():
+            new_close_cols[pair_id] = series['CloseYield']
+            new_curve_cols[pair_id] = series['CurveYield']
+            new_spread_cols[pair_id] = series['Spread']
+
+            calibration_spread = series.get('CalibrationSpread', series['Spread'])
+            stat = OU_calibrate(pd.DataFrame({pair_id: calibration_spread}))
+            row = stat.loc[pair_id].to_dict() if pair_id in stat.index else {}
+            leg2_id = series['leg2_id']
+            ttm = np.nan
+            if leg2_id in df_def.index:
+                ttm = pd.to_numeric(df_def.loc[leg2_id].get('剩余期限'), errors='coerce')
+            row['ttm'] = float(ttm) if pd.notna(ttm) else np.nan
+            # Display label omits the fixed OTR reference leg (implied for every
+            # row in this ladder); pair_id itself (ofrk_id|otr_id) remains the
+            # real lookup key everywhere else (StatInfo index, click handler
+            # customdata, backtest/portfolio instrument IDs).
+            row['label'] = series['ofrk_id']
+            row['vol_ratio'] = np.nan
+            row['close'] = float(series['CurveYield'].iloc[-1] + row.get('mean', np.nan)) if pd.notna(row.get('mean', np.nan)) else np.nan
+            new_stat_rows[pair_id] = row
+
+        stat_info = pd.concat([stat_info, pd.DataFrame(new_stat_rows).T]) if not stat_info.empty else pd.DataFrame(new_stat_rows).T
+        stat_info.index.name = 'ID'
+        close_yield = close_yield.combine_first(pd.DataFrame(new_close_cols)) if not close_yield.empty else pd.DataFrame(new_close_cols)
+        curve_yield = curve_yield.combine_first(pd.DataFrame(new_curve_cols)) if not curve_yield.empty else pd.DataFrame(new_curve_cols)
+        spread = spread.combine_first(pd.DataFrame(new_spread_cols)) if not spread.empty else pd.DataFrame(new_spread_cols)
+        if not spread.index.is_unique:
+            spread = spread[~spread.index.duplicated(keep='last')]
+
         bond_curve['StatInfo'] = stat_info
         bond_curve['CloseYield'] = close_yield
         bond_curve['CurveYield'] = curve_yield
         bond_curve['Spread'] = spread
         spds['BondCurve'] = bond_curve
+
         if update:
             updatePKL(spds, spds_file, rewrite=True)
+
         return bond_curve
-
-    env = loadInstrumentDefinition(asset_class)
-    df_def = env['Def']
-
-    new_close_cols, new_curve_cols, new_spread_cols = {}, {}, {}
-    new_stat_rows = {}
-    for pair_id, series in pairs.items():
-        new_close_cols[pair_id] = series['CloseYield']
-        new_curve_cols[pair_id] = series['CurveYield']
-        new_spread_cols[pair_id] = series['Spread']
-
-        calibration_spread = series.get('CalibrationSpread', series['Spread'])
-        stat = OU_calibrate(pd.DataFrame({pair_id: calibration_spread}))
-        row = stat.loc[pair_id].to_dict() if pair_id in stat.index else {}
-        ofr1_id = series['ofr1_id']
-        ttm = np.nan
-        if ofr1_id in df_def.index:
-            ttm = pd.to_numeric(df_def.loc[ofr1_id].get('剩余期限'), errors='coerce')
-        row['ttm'] = float(ttm) if pd.notna(ttm) else np.nan
-        # Display label omits the fixed OFR1 reference leg (implied for every
-        # row in this ladder); pair_id itself (ofrk_id|ofr1_id) remains the
-        # real lookup key everywhere else (StatInfo index, click handler
-        # customdata, backtest/portfolio instrument IDs).
-        row['label'] = series['ofrk_id']
-        row['vol_ratio'] = np.nan
-        row['close'] = float(series['CurveYield'].iloc[-1] + row.get('mean', np.nan)) if pd.notna(row.get('mean', np.nan)) else np.nan
-        new_stat_rows[pair_id] = row
-
-    stat_info = pd.concat([stat_info, pd.DataFrame(new_stat_rows).T]) if not stat_info.empty else pd.DataFrame(new_stat_rows).T
-    stat_info.index.name = 'ID'
-    close_yield = close_yield.combine_first(pd.DataFrame(new_close_cols)) if not close_yield.empty else pd.DataFrame(new_close_cols)
-    curve_yield = curve_yield.combine_first(pd.DataFrame(new_curve_cols)) if not curve_yield.empty else pd.DataFrame(new_curve_cols)
-    spread = spread.combine_first(pd.DataFrame(new_spread_cols)) if not spread.empty else pd.DataFrame(new_spread_cols)
-
-    bond_curve['StatInfo'] = stat_info
-    bond_curve['CloseYield'] = close_yield
-    bond_curve['CurveYield'] = curve_yield
-    bond_curve['Spread'] = spread
-    spds['BondCurve'] = bond_curve
-
-    if update:
-        updatePKL(spds, spds_file, rewrite=True)
-
-    return bond_curve
 
 
 def refresh_otr_ofr_rv_realtime(asset_class: str, update: bool = True) -> pd.DataFrame:
@@ -332,60 +368,62 @@ def refresh_otr_ofr_rv_realtime(asset_class: str, update: bool = True) -> pd.Dat
     pairs = build_otr_ofr_rv_rows(asset_class)
 
     rt_file = os.path.join(DIR_INPUT, f'{asset_class}-spdsrt.pkl')
-    rt = loadPKL(rt_file)
-    df_bc = rt.get('BondCurve') if isinstance(rt, dict) else None
-    if not isinstance(df_bc, pd.DataFrame):
-        logger.warning("%s missing BondCurve; skipping otr_ofr_rv realtime merge for %s.", rt_file, asset_class)
-        return pd.DataFrame()
+    with pkl_lock(rt_file):
+        rt = loadPKL(rt_file)
+        df_bc = rt.get('BondCurve') if isinstance(rt, dict) else None
+        if not isinstance(df_bc, pd.DataFrame):
+            logger.warning("%s missing BondCurve; skipping otr_ofr_rv realtime merge for %s.", rt_file, asset_class)
+            return pd.DataFrame()
 
-    df_bc = df_bc.loc[[i for i in df_bc.index if '|' not in str(i)]] if not df_bc.empty else df_bc
-    if not pairs:
+        df_bc = df_bc.loc[[i for i in df_bc.index if '|' not in str(i)]] if not df_bc.empty else df_bc
+        if not pairs:
+            rt['BondCurve'] = df_bc
+            if update:
+                updatePKL(rt, rt_file, rewrite=True)
+            return df_bc
+
+        env = loadInstrumentDefinition(asset_class)
+        df_def = env['Def']
+
+        rows = {}
+        for pair_id, series in pairs.items():
+            sp = series['Spread']
+            calibration_spread = series.get('CalibrationSpread', sp)
+            stat = OU_calibrate(pd.DataFrame({pair_id: calibration_spread}))
+            row = stat.loc[pair_id].to_dict() if pair_id in stat.index else {}
+            leg2_id = series['leg2_id']
+            ttm = pd.to_numeric(df_def.loc[leg2_id].get('剩余期限'), errors='coerce') if leg2_id in df_def.index else np.nan
+            row['ttm'] = float(ttm) if pd.notna(ttm) else np.nan
+            # Display label omits the fixed OTR reference leg (implied for every
+            # row in this ladder); pair_id itself (ofrk_id|otr_id) remains the
+            # real lookup key everywhere else (StatInfo index, click handler
+            # customdata, backtest/portfolio instrument IDs).
+            row['label'] = series['ofrk_id']
+            row['CloseYield'] = float(series['CloseYield'].iloc[-1])
+            row['CurveYield'] = float(series['CurveYield'].iloc[-1])
+            row['spread'] = float(sp.iloc[-1])
+            mean_v = row.get('mean', np.nan)
+            # Prefer ewm_vol (EWMA(60), matches the backtest engines' entry-signal
+            # scale) over the static full-sample 'vol'; see alpha_snapshot.py's
+            # BondCurve block for the full rationale.
+            vol_v = row.get('ewm_vol', np.nan)
+            if not pd.notna(vol_v):
+                vol_v = row.get('vol', np.nan)
+            if pd.notna(vol_v):
+                vol_v = max(float(vol_v), MIN_ZSCORE_VOL)
+            row['Zscore'] = float((row['spread'] - mean_v) / vol_v) if pd.notna(mean_v) and pd.notna(vol_v) and vol_v else np.nan
+            rows[pair_id] = row
+
+        new_rows = pd.DataFrame(rows).T
+        df_bc = pd.concat([df_bc, new_rows]) if not df_bc.empty else new_rows
+        df_bc = df_bc[~df_bc.index.duplicated(keep='last')] if not df_bc.index.is_unique else df_bc
+        df_bc.index.name = 'ID'
         rt['BondCurve'] = df_bc
+
         if update:
             updatePKL(rt, rt_file, rewrite=True)
+
         return df_bc
-
-    env = loadInstrumentDefinition(asset_class)
-    df_def = env['Def']
-
-    rows = {}
-    for pair_id, series in pairs.items():
-        sp = series['Spread']
-        calibration_spread = series.get('CalibrationSpread', sp)
-        stat = OU_calibrate(pd.DataFrame({pair_id: calibration_spread}))
-        row = stat.loc[pair_id].to_dict() if pair_id in stat.index else {}
-        ofr1_id = series['ofr1_id']
-        ttm = pd.to_numeric(df_def.loc[ofr1_id].get('剩余期限'), errors='coerce') if ofr1_id in df_def.index else np.nan
-        row['ttm'] = float(ttm) if pd.notna(ttm) else np.nan
-        # Display label omits the fixed OFR1 reference leg (implied for every
-        # row in this ladder); pair_id itself (ofrk_id|ofr1_id) remains the
-        # real lookup key everywhere else (StatInfo index, click handler
-        # customdata, backtest/portfolio instrument IDs).
-        row['label'] = series['ofrk_id']
-        row['CloseYield'] = float(series['CloseYield'].iloc[-1])
-        row['CurveYield'] = float(series['CurveYield'].iloc[-1])
-        row['spread'] = float(sp.iloc[-1])
-        mean_v = row.get('mean', np.nan)
-        # Prefer ewm_vol (EWMA(60), matches the backtest engines' entry-signal
-        # scale) over the static full-sample 'vol'; see alpha_snapshot.py's
-        # BondCurve block for the full rationale.
-        vol_v = row.get('ewm_vol', np.nan)
-        if not pd.notna(vol_v):
-            vol_v = row.get('vol', np.nan)
-        if pd.notna(vol_v):
-            vol_v = max(float(vol_v), MIN_ZSCORE_VOL)
-        row['Zscore'] = float((row['spread'] - mean_v) / vol_v) if pd.notna(mean_v) and pd.notna(vol_v) and vol_v else np.nan
-        rows[pair_id] = row
-
-    new_rows = pd.DataFrame(rows).T
-    df_bc = pd.concat([df_bc, new_rows]) if not df_bc.empty else new_rows
-    df_bc.index.name = 'ID'
-    rt['BondCurve'] = df_bc
-
-    if update:
-        updatePKL(rt, rt_file, rewrite=True)
-
-    return df_bc
 
 
 def main():

@@ -21,7 +21,11 @@ from settings.paths import DIR_INPUT
 from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
 from web.tabs.alpha.data.duration import _tenor_to_duration
 from web.tabs.beta.callbacks._common import (
+    _SUMMARY_BETA_PARQUET,
     _SUMMARY_ALPHA_PARQUET,
+    _SUMMARY_BETA_DISPLAY_PARQUET,
+    _SUMMARY_ALPHA_DISPLAY_PARQUET,
+    _BETA_BOOK_POSITIONS_PARQUET,
     _BETA_BOOK_USER_PARQUET,
     _ALPHA_POSITIONS_PARQUET,
     _load_cr_ts,
@@ -245,6 +249,39 @@ def _persist_beta_user_rows(
         pd.DataFrame(records).to_parquet(_BETA_BOOK_USER_PARQUET, index=False)
     except Exception:
         pass
+
+
+def _delete_all_beta_rows() -> None:
+    """Wipe the entire Beta Book Portfolio Allocation Snapshot.
+
+    Removes the canonical snapshot, the render-ready display cache, the
+    legacy positions export, and any per-row user overrides/tombstones —
+    all four files the Beta table renderer reads from
+    (see ``_load_persisted_beta_snapshot`` in ``risk/books/beta_table.py``).
+    """
+    for path in (_SUMMARY_BETA_PARQUET, _SUMMARY_BETA_DISPLAY_PARQUET,
+                 _BETA_BOOK_POSITIONS_PARQUET, _BETA_BOOK_USER_PARQUET):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+
+def _delete_all_alpha_rows() -> None:
+    """Wipe the entire Alpha Book Portfolio Allocation Snapshot.
+
+    Removes the canonical snapshot, the render-ready display cache, and the
+    legacy positions export — the files the Alpha table renderer reads from
+    (see ``risk/books/alpha_table.py``).
+    """
+    for path in (_SUMMARY_ALPHA_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET,
+                 _ALPHA_POSITIONS_PARQUET):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
 
 
 # ── Duration/tenor + leg resolution helpers (used by Alpha table + Risk dashboard) ──

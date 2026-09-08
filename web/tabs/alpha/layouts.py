@@ -457,9 +457,15 @@ def build_portfolio_layout() -> html.Div:
                 "Portfolio Allocation Results",
                 action=html.Div([
                     html.Button(
-                        "GENERATE PORTFOLIO", id='alpha-score-btn', n_clicks=0,
+                        "RUN ANALYSIS", id='alpha-score-btn', n_clicks=0,
                         style={'padding': '6px 16px', 'background': THEME['accent'], 'color': 'var(--navy-950)',
                                'border': 'none', 'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700',
+                               'letterSpacing': '0.04em', 'cursor': 'pointer'},
+                    ),
+                    html.Button(
+                        "ADD TO PORTFOLIO", id='alpha-add-to-portfolio-btn', n_clicks=0,
+                        style={'padding': '6px 16px', 'background': 'transparent', 'color': THEME['accent'],
+                               'border': f"1px solid {THEME['accent']}", 'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700',
                                'letterSpacing': '0.04em', 'cursor': 'pointer'},
                     ),
                     html.Button(
@@ -525,6 +531,11 @@ def build_portfolio_layout() -> html.Div:
             dcc.Store(id='alpha-optimized-weights', storage_type='session'),
             dcc.Store(id='alpha-portfolio-export-store', storage_type='session'),
             dcc.Download(id='alpha-portfolio-download'),
+
+            html.Div(
+                id='alpha-add-to-portfolio-status',
+                style={'padding': '0 16px', 'color': THEME['text_sub'], 'fontSize': '11px'},
+            ),
 
             html.Div(
                 id='alpha-portfolio-summary',

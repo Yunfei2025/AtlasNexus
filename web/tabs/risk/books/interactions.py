@@ -11,7 +11,11 @@ from dash.dependencies import Input, Output, State, ALL
 import pandas as pd
 
 from web.tabs.beta.callbacks._common import _SUMMARY_BETA_DISPLAY_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET
-from ..helpers import _row_key, _refresh_alpha_display_row, _persist_alpha_summary_rows, _beta_user_row_key, _load_beta_user_overrides, _persist_beta_user_rows
+from ..helpers import (
+    _row_key, _refresh_alpha_display_row, _persist_alpha_summary_rows,
+    _beta_user_row_key, _load_beta_user_overrides, _persist_beta_user_rows,
+    _delete_all_beta_rows, _delete_all_alpha_rows,
+)
 
 
 def register_risk_book_interaction_callbacks(app):
@@ -395,3 +399,42 @@ def register_risk_book_interaction_callbacks(app):
         if saved:
             return f"Refresh saved snapshots: {', '.join(saved)} at {datetime.now().strftime('%H:%M:%S')}"
         return dash.no_update
+
+    # ── Delete All: wipe the active book's Portfolio Allocation Snapshot ─────
+    @app.callback(
+        [
+            Output('summary-refresh-status', 'children', allow_duplicate=True),
+            Output('summary-refresh-btn', 'n_clicks', allow_duplicate=True),
+            Output('summary-alpha-rows-store', 'data', allow_duplicate=True),
+            Output('summary-beta-rows-store', 'data', allow_duplicate=True),
+        ],
+        Input('summary-delete-all-btn', 'n_clicks'),
+        State('summary-book-active', 'data'),
+        State('summary-refresh-btn', 'n_clicks'),
+        prevent_initial_call=True,
+    )
+    def _delete_all_active_book(n_clicks, active_book, refresh_clicks):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        # Clear the deleted book's client-side rows Store too, not just the
+        # persisted files -- otherwise the auto-triggered Refresh below reads
+        # the still-in-browser stale rows via State('summary-*-rows-store')
+        # in _persist_books_snapshots_on_refresh and writes them straight
+        # back to the just-deleted parquet snapshots, undoing the delete.
+        alpha_store_update = [] if active_book == 'alpha' else dash.no_update
+        beta_store_update = [] if active_book != 'alpha' else dash.no_update
+        try:
+            if active_book == 'alpha':
+                _delete_all_alpha_rows()
+                label = 'Alpha'
+            else:
+                _delete_all_beta_rows()
+                label = 'Beta'
+            return (
+                f"{label} snapshot deleted at {datetime.now().strftime('%H:%M:%S')}",
+                (refresh_clicks or 0) + 1,
+                alpha_store_update,
+                beta_store_update,
+            )
+        except Exception as exc:
+            return f"Delete all failed: {exc}", dash.no_update, dash.no_update, dash.no_update

@@ -12,18 +12,21 @@ import numpy as np
 import pandas as pd
 
 
+_TENOR_MAP = {
+    '3m': '3M', '6m': '6M', '9m': '9M', '1y': '1Y',
+    '2y': '2Y', '3y': '3Y', '5y': '5Y', '10y': '10Y'
+}
+
+
 def _parse_repo_spread_legs(spread_id: str) -> tuple[str, str]:
     """Parse 'Repo7d-1y2y' → ('FR007S2Y.IR', 'FR007S1Y.IR') or
     'Shi3M-1y4y' → ('SHI3MS4Y.IR', 'SHI3MS1Y.IR') or
     'Basis-5y' → ('SHI3MS5Y.IR', 'FR007S5Y.IR').
 
     For spreads: leg1 is the longer/paid tenor, leg2 the shorter/received tenor.
+    A 3-tenor fly ID (e.g. 'Repo7d-1y2y5y') only uses the first two tenors
+    here (1y, 2y) — see _parse_repo_spread_fly_legs for the belly/wings form.
     """
-    _TENOR_MAP = {
-        '3m': '3M', '6m': '6M', '9m': '9M', '1y': '1Y',
-        '2y': '2Y', '3y': '3Y', '5y': '5Y', '10y': '10Y'
-    }
-
     # Handle Basis spreads (e.g., "Basis-5y" → (SHI3MS5Y.IR, FR007S5Y.IR))
     m = re.match(r'basis-(\d+)y$', spread_id.lower())
     if m:
@@ -42,6 +45,28 @@ def _parse_repo_spread_legs(spread_id: str) -> tuple[str, str]:
                 return (f'{ir_prefix}{t2}.IR', f'{ir_prefix}{t1}.IR')
 
     return ('', '')
+
+
+def _parse_repo_spread_fly_legs(spread_id: str) -> tuple[str, str, str]:
+    """Parse a 3-tenor IRS fly like 'Repo7d-1y2y5y' → (leg1=belly, leg2=short
+    wing, leg3=long wing), e.g. ('FR007S2Y.IR', 'FR007S1Y.IR', 'FR007S5Y.IR').
+
+    Sign convention (see resolve_legs3): BUY = long belly (leg1, receive fixed)
+    / short both wings (leg2, leg3, pay fixed); SELL = opposite. Returns
+    ('', '', '') if spread_id is not a 3-tenor Repo7d/Shi3M fly.
+    """
+    for prefix, ir_prefix in [('repo7d', 'FR007S'), ('shi3m', 'SHI3MS')]:
+        m = re.match(rf'{prefix}-(.+)', spread_id.lower())
+        if m:
+            remainder = m.group(1)
+            tenors = re.findall(r'(\d+[a-z])', remainder)
+            if len(tenors) >= 3:
+                short_wing, belly, long_wing = tenors[0], tenors[1], tenors[2]
+                t_short = _TENOR_MAP.get(short_wing, short_wing.upper())
+                t_belly = _TENOR_MAP.get(belly, belly.upper())
+                t_long = _TENOR_MAP.get(long_wing, long_wing.upper())
+                return (f'{ir_prefix}{t_belly}.IR', f'{ir_prefix}{t_short}.IR', f'{ir_prefix}{t_long}.IR')
+    return ('', '', '')
 
 
 def _tenor_str_to_years(tenor: str) -> float:
@@ -70,7 +95,7 @@ def _load_leg_data() -> dict:
 
     _OTR_BANDS = {
         '1Y': (0.9, 1.2), '2Y': (1.6, 2.5), '5Y': (4.0, 6.0),
-        '10Y': (8.5, 10.0), '20Y': (15.0, 25.0), '30Y': (25.0, 30.0),
+        '7Y': (6.0, 8.5), '10Y': (8.5, 10.0), '20Y': (15.0, 25.0), '30Y': (25.0, 30.0),
     }
 
     def _pick_otr(btype: str) -> dict:
@@ -149,7 +174,7 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
     fs_irs = ld.get('fs_irs', {})
 
     # Integer tenor → OTR tenor label
-    _T_MAP = {1: '1Y', 2: '2Y', 5: '5Y', 10: '10Y', 20: '20Y', 30: '30Y'}
+    _T_MAP = {1: '1Y', 2: '2Y', 5: '5Y', 7: '7Y', 10: '10Y', 20: '20Y', 30: '30Y'}
     def _t_label(n: float) -> str:
         ni = int(round(n))
         if ni in _T_MAP:
@@ -252,12 +277,14 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
                     return (otr, f'FR007S{tenor_token}.IR')
         return ('', '')
 
-    # Mature OTR/OFR relative value (signal_variant=otr_ofr_rv), merged into
-    # TBondCurve/CBondCurve as pair-format IDs "<otr_id>|<ofr1_id>" (see
-    # docs/dev/tbondcurve-30y-otr-ofr-plan.md). Long OTR, short 1st-OFR.
+    # Mature OFRk-vs-OTR relative value (signal_variant=otr_ofr_rv), merged
+    # into TBondCurve/CBondCurve as pair-format IDs "<ofrk_id>|<otr_id>" (see
+    # curves/refreshers/otr_ofr_rv.py). Leg2 is OTR, not OFR1: OTR carries the
+    # liquidity premium and is a beta-book holding, so the short leg is
+    # financed by selling an existing position rather than borrowing OFR1.
     if stype in ('TBondCurve', 'CBondCurve') and '|' in str(tid):
-        otr_id, _, ofr1_id = str(tid).partition('|')
-        return (otr_id, ofr1_id)
+        ofrk_id, _, otr_id = str(tid).partition('|')
+        return (ofrk_id, otr_id)
 
     # Bond-Curve: leg1 is the bond, leg2 is the current OTR for the nearest
     # supported tenor category.  The OTR categories intentionally jump from
@@ -313,3 +340,72 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
         if m:
             return (m.group(1), m.group(2))
         return ('', '')
+
+    return ('', '')
+
+
+def resolve_legs3(
+    stype: str, tid: str, duration: float = 0.0, ld: Optional[dict] = None
+) -> tuple[str, str, Optional[str]]:
+    """Resolve (leg1, leg2, leg3) for a spread, exposing the third leg of a
+    3-tenor butterfly instead of resolve_legs()'s lossy 2-leg proxy.
+
+    leg3 is None for every non-fly spread type (leg1/leg2 match resolve_legs()
+    exactly in that case). For a fly:
+        leg1 = belly (middle tenor)
+        leg2 = short wing
+        leg3 = long wing
+
+    Sign convention (2026-09-07): BUY = long belly / short both wings;
+    SELL = short belly / long both wings. OTR carries the liquidity premium
+    on this desk (see curves/refreshers/otr_ofr_rv.py), so pairing the belly
+    against two wings rather than a single reference leg is unrelated to that
+    convention -- this is a distinct 3-leg butterfly structure.
+
+    Args:
+        stype: Spread type (e.g., 'TenorSpread', 'SwapSpread').
+        tid: Trade ID / instrument name (e.g., 'CGB-5s7s10s', 'Repo7d-1y2y5y').
+        duration: Duration in years (passed through to resolve_legs() for
+            non-fly types).
+        ld: Leg data dictionary from _load_leg_data() (lazy-loaded if None).
+
+    Returns:
+        (leg1_code, leg2_code, leg3_code_or_None).
+    """
+    if ld is None:
+        ld = _load_leg_data()
+
+    otr_cgb = ld.get('otr_cgb', {})
+    otr_cdb = ld.get('otr_cdb', {})
+
+    _T_MAP = {1: '1Y', 2: '2Y', 5: '5Y', 7: '7Y', 10: '10Y', 20: '20Y', 30: '30Y'}
+    def _t_label(n: float) -> str:
+        ni = int(round(n))
+        if ni in _T_MAP:
+            return _T_MAP[ni]
+        return min(_T_MAP.values(), key=lambda v: abs(int(v[:-1]) - n))
+
+    if stype == 'TenorSpread':
+        upper = tid.upper()
+        if upper.startswith('CGB-'):
+            m3 = re.search(r'(\d+)S(\d+)S(\d+)S', upper)
+            if m3:
+                short_wing = _t_label(float(m3.group(1)))
+                belly = _t_label(float(m3.group(2)))
+                long_wing = _t_label(float(m3.group(3)))
+                return (otr_cgb.get(belly, ''), otr_cgb.get(short_wing, ''), otr_cgb.get(long_wing, ''))
+        elif upper.startswith('CDB-'):
+            m3 = re.search(r'(\d+)S(\d+)S(\d+)S', upper)
+            if m3:
+                short_wing = _t_label(float(m3.group(1)))
+                belly = _t_label(float(m3.group(2)))
+                long_wing = _t_label(float(m3.group(3)))
+                return (otr_cdb.get(belly, ''), otr_cdb.get(short_wing, ''), otr_cdb.get(long_wing, ''))
+
+    if stype == 'SwapSpread':
+        leg1, leg2, leg3 = _parse_repo_spread_fly_legs(tid)
+        if leg1:
+            return (leg1, leg2, leg3)
+
+    leg1, leg2 = resolve_legs(stype, tid, duration, ld)
+    return (leg1, leg2, None)

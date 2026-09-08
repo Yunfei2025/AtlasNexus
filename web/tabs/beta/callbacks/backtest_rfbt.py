@@ -465,6 +465,42 @@ def register_backtest_rfbt_callbacks(app):
             except Exception as _ufc_exc:
                 print(f"Warning: factor-credit incremental update failed: {_ufc_exc}")
 
+        # ── Stale factor-data warning ───────────────────────────────────────
+        # Train/Predict only refresh factor-rates.pkl / factor-credit.pkl when
+        # FI_REFRESH_FACTOR_DATA is set (see block above) — otherwise they train
+        # on whatever's cached, which can silently lag the raw market data by
+        # weeks and produce a model keyed to an earlier month than expected.
+        stale_data_warning = None
+        try:
+            import pandas as _pd
+            _rates_path = os.path.join(str(DIR_INPUT), 'factor-rates.pkl')
+            if os.path.exists(_rates_path):
+                _rates_df = _pd.read_pickle(_rates_path)
+                _last_date = _rates_df.index.max()
+                _staleness_days = (_date.today() - _last_date.date()).days
+                if _staleness_days > 7:
+                    stale_data_warning = html.Div([
+                        html.Div(
+                            f"⚠️ factor-rates.pkl / factor-credit.pkl last updated "
+                            f"{_last_date.date().isoformat()} ({_staleness_days} days stale). "
+                            "Training now will produce a model keyed to that stale "
+                            "month, not the current month.",
+                            style={'marginBottom': '6px', 'fontWeight': '600'},
+                        ),
+                        html.Div(
+                            "Refresh first: run `python main.py update-data` in a terminal, "
+                            "or set FI_REFRESH_FACTOR_DATA=1 before starting the web app so "
+                            "Train Model refreshes the cache automatically.",
+                        ),
+                    ], style={
+                        'color': THEME['warning'], 'backgroundColor': 'rgba(240, 120, 40, 0.12)',
+                        'border': '1px solid rgba(240, 120, 40, 0.5)', 'borderRadius': '6px',
+                        'padding': '12px 14px', 'marginBottom': '12px', 'fontSize': '11px',
+                        'lineHeight': '1.5',
+                    })
+        except Exception as _stale_exc:
+            print(f"Warning: could not check factor-rates.pkl staleness: {_stale_exc}")
+
         store_data = store_data or {}
         factors = list(dict.fromkeys(
             store_data.get('ir', []) +
@@ -507,6 +543,7 @@ def register_backtest_rfbt_callbacks(app):
                     expected_key = current_month_model_key()
                     return (
                         html.Div([
+                            *([stale_data_warning] if stale_data_warning is not None else []),
                             html.Div(
                                 f"No model found for the current month (expected: "
                                 f"factor_model_{expected_key}.joblib).",
@@ -514,7 +551,10 @@ def register_backtest_rfbt_callbacks(app):
                             ),
                             html.Div(
                                 "Click Train Model to calibrate the model on data "
-                                f"through {expected_key[:4]}-{expected_key[4:6]}-{expected_key[6:]}.",
+                                f"through {expected_key[:4]}-{expected_key[4:6]}-{expected_key[6:]}. "
+                                "Note: if the factor data cache is stale (see warning above), "
+                                "Train Model will train on the stale cache and still not produce "
+                                f"this month's key — refresh the data first.",
                             ),
                         ], style={'color': THEME['warning'], 'padding': '20px'}),
                         f"⚠️ No model for {expected_key[:6]} — click Train Model",
@@ -728,6 +768,7 @@ def register_backtest_rfbt_callbacks(app):
             mean_icir = (sum(s['icir'] for s in factor_stats.values()) /
                          len(factor_stats)) if factor_stats else 0.0
             train_children = [
+                *([stale_data_warning] if stale_data_warning is not None else []),
                 html.Div(
                     header_note,
                     style={'color': 'var(--accent-purple, #9b8cf0)', 'fontSize': '11px',

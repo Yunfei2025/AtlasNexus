@@ -827,9 +827,19 @@ def register_portfolio_callbacks(app) -> None:
             available_cols = [c for c in display_cols if c in df_scored.columns]
             df_display = df_scored[available_cols].copy()
 
-            # Keep the ID column as the raw ticker only.  The raw ID is also the
-            # identifier used by downstream risk, allocation, and persistence code.
-            if 'ID' in df_display.columns:
+            # Render the human-readable display_key() label (matches the
+            # Candidate Instruments table), not the raw ticker -- the raw ID
+            # stays untouched in df_scored/optimized_results, which is what
+            # downstream risk, allocation, and persistence code consumes.
+            if 'ID' in df_display.columns and 'spread_type' in df_scored.columns:
+                df_display['ID'] = [
+                    display_key(stype, ident)
+                    for stype, ident in zip(
+                        df_scored.loc[df_display.index, 'spread_type'].astype(str),
+                        df_scored.loc[df_display.index, 'ID'].astype(str),
+                    )
+                ]
+            elif 'ID' in df_display.columns:
                 df_display['ID'] = df_scored.loc[df_display.index, 'ID'].astype(str).to_numpy()
 
             if 'style' in df_display.columns:
@@ -993,29 +1003,6 @@ def register_portfolio_callbacks(app) -> None:
                 )
                 risk_chart = dcc.Graph(figure=fig, config={'displayModeBar': False})
 
-            # ── Save Alpha snapshot for Summary tab ───────────────────────────────
-            try:
-                import pathlib as _pl
-                _pl.Path(_SUMMARY_ALPHA_PARQUET).parent.mkdir(parents=True, exist_ok=True)
-                _save_cols = [
-                    c for c in [
-                        'ID', 'spread_type', 'category', 'style', 'direction',
-                        'Leg1', 'Leg2', 'ratio_v2_v1',
-                        'Zscore', 'spread', 'carry_roll', 'breakeven_3m', 'vol', 'halflife',
-                        'stop_loss', 'profit_target',
-                        'notional_mm', 'margin_mm', '_duration', 'DV01_k', 'weight', 'risk_contribution',
-                    ] if c in df_scored.columns
-                ]
-                _snap = df_scored[_save_cols].copy()
-                _snap['_timestamp'] = datetime.now().isoformat()
-                # Upsert by (spread_type, ID): keeps prior trades that aren't in this run,
-                # replaces values for trades that re-appear, adds genuinely new trades.
-                _id_cols = [c for c in ('spread_type', 'ID') if c in _snap.columns] or ['ID']
-                merged = _upsert_snapshot(_snap, _SUMMARY_ALPHA_PARQUET, _id_cols)
-                print(f"Alpha snapshot merged: {_SUMMARY_ALPHA_PARQUET} ({len(merged)} rows after upsert)")
-            except Exception as _se:
-                print(f"Warning: Could not save Alpha snapshot: {_se}")
-
             export_payload = {
                 'columns': _port_col_labels,
                 'records': df_display.to_dict('records'),
@@ -1039,6 +1026,47 @@ def register_portfolio_callbacks(app) -> None:
                 None,
                 html.Div(),
             )
+
+    # ── Add to Portfolio (Alpha Book Summary snapshot) ─────────────────────
+    @app.callback(
+        Output('alpha-add-to-portfolio-status', 'children'),
+        Input('alpha-add-to-portfolio-btn', 'n_clicks'),
+        State('alpha-optimized-weights', 'data'),
+        prevent_initial_call=True,
+    )
+    def add_alpha_to_portfolio(n_clicks, optimized_results):
+        if not n_clicks:
+            return no_update
+        try:
+            if not optimized_results:
+                return html.Div("⚠ Run analysis first — no results to add.",
+                                 style={'color': THEME['warning'], 'fontWeight': '600'})
+
+            df_scored = pd.DataFrame(optimized_results)
+            import pathlib as _pl
+            _pl.Path(_SUMMARY_ALPHA_PARQUET).parent.mkdir(parents=True, exist_ok=True)
+            _save_cols = [
+                c for c in [
+                    'ID', 'spread_type', 'category', 'style', 'direction',
+                    'Leg1', 'Leg2', 'ratio_v2_v1',
+                    'Zscore', 'spread', 'carry_roll', 'breakeven_3m', 'vol', 'halflife',
+                    'stop_loss', 'profit_target',
+                    'notional_mm', 'margin_mm', '_duration', 'DV01_k', 'weight', 'risk_contribution',
+                ] if c in df_scored.columns
+            ]
+            _snap = df_scored[_save_cols].copy()
+            _snap['_timestamp'] = datetime.now().isoformat()
+            # Upsert by (spread_type, ID): keeps prior trades that aren't in this run,
+            # replaces values for trades that re-appear, adds genuinely new trades.
+            _id_cols = [c for c in ('spread_type', 'ID') if c in _snap.columns] or ['ID']
+            merged = _upsert_snapshot(_snap, _SUMMARY_ALPHA_PARQUET, _id_cols)
+            print(f"Alpha snapshot merged: {_SUMMARY_ALPHA_PARQUET} ({len(merged)} rows after upsert)")
+            return html.Div(f"✓ Added to Portfolio Summary ({len(_snap)} rows)",
+                             style={'color': THEME['success'], 'fontWeight': '700'})
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return html.Div(f"✗ Error adding to portfolio: {e}", style={'color': THEME['warning'], 'fontWeight': '600'})
 
     @app.callback(
         Output('alpha-portfolio-download', 'data'),

@@ -279,12 +279,20 @@ def build_multiasset_portfolio_layout():
     results_card = html.Div([
         html.Div([
             html.Span("Portfolio Allocation Results", style=_CARD_TITLE),
-            html.Button(
-                'RUN ANALYSIS', id='run-button', n_clicks=initial_n_clicks,
-                style={'padding': '7px 18px', 'background': 'var(--accent-blue)', 'color': '#fff',
-                       'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer',
-                       'fontSize': '10px', 'fontWeight': '700', 'letterSpacing': '0.05em'},
-            ),
+            html.Div([
+                html.Button(
+                    'RUN ANALYSIS', id='run-button', n_clicks=initial_n_clicks,
+                    style={'padding': '7px 18px', 'background': 'var(--accent-blue)', 'color': '#fff',
+                           'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer',
+                           'fontSize': '10px', 'fontWeight': '700', 'letterSpacing': '0.05em'},
+                ),
+                html.Button(
+                    'ADD TO PORTFOLIO', id='beta-add-to-portfolio-btn', n_clicks=0,
+                    style={'padding': '7px 18px', 'background': 'transparent', 'color': 'var(--accent-blue)',
+                           'border': '1px solid var(--accent-blue)', 'borderRadius': '4px', 'cursor': 'pointer',
+                           'fontSize': '10px', 'fontWeight': '700', 'letterSpacing': '0.05em'},
+                ),
+            ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
         ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between',
                   'padding': '11px 16px', 'background': 'var(--surface-panel)',
                   'borderBottom': '1px solid var(--border-strong)'}),
@@ -296,6 +304,7 @@ def build_multiasset_portfolio_layout():
             children=html.Div([
                 html.Div([
                     html.Div(id='status-message', style={'fontSize': '11px', 'color': 'var(--text-primary)'}),
+                    html.Div(id='beta-add-to-portfolio-status', style={'fontSize': '11px', 'color': 'var(--text-primary)'}),
                     html.Div(id='timestamp-display', style={'color': 'var(--text-muted)', 'fontSize': '10px'}),
                 ], style={'padding': '7px 16px', 'background': 'rgba(255,255,255,0.02)',
                           'borderBottom': '1px solid var(--border-strong)', 'display': 'flex',
