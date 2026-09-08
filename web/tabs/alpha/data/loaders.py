@@ -515,9 +515,13 @@ def load_newissue_pair_history(label: str) -> Optional[tuple[pd.Series, Optional
     can show only a day or two even though both bonds have long, overlapping
     quote histories under their *previous* ranks. This instead resolves the
     two bond codes from the current episode, then reads their own
-    ``ytm_quo`` history from ``{asset_class}-cvpx.pkl`` directly -- computing
-    ``spread = ytm(leg1) - ytm(leg2)`` for every day both bonds quote,
-    regardless of which rank either held that day.
+    ``ytm_act`` (actual close yield) history from ``{asset_class}-cvpx.pkl``
+    directly -- computing ``spread = ytm(leg1) - ytm(leg2)`` for every day
+    both bonds traded, regardless of which rank either held that day.
+    ``ytm_quo`` is the fitted-curve quote yield used for on/off-the-run
+    *premium* calibration (``ytm_act - ytm_quo``, see
+    curves/calibration/selector.py) -- not a second bond's actual yield, so
+    it must not be used here for a bond-vs-bond spread.
 
     Returns ``(spread_series, switch_label, switch_date)`` where
     ``switch_date`` is the first date the current episode's rank pairing was
@@ -570,15 +574,15 @@ def load_newissue_pair_history(label: str) -> Optional[tuple[pd.Series, Optional
         switch_date = ids.index[(episode_id == current_episode) & (pair_key == current_pair)][0]
 
         bond_px = _load_pickle_safe(dir_input / f'{asset_class}-cvpx.pkl')
-        ytm_quo = bond_px.get('ytm_quo') if isinstance(bond_px, dict) else None
-        if not isinstance(ytm_quo, pd.DataFrame) or leg1_id not in ytm_quo.columns or leg2_id not in ytm_quo.columns:
+        ytm_act = bond_px.get('ytm_act') if isinstance(bond_px, dict) else None
+        if not isinstance(ytm_act, pd.DataFrame) or leg1_id not in ytm_act.columns or leg2_id not in ytm_act.columns:
             continue
 
-        panel = ytm_quo[[leg1_id, leg2_id]].copy()
+        panel = ytm_act[[leg1_id, leg2_id]].copy()
         panel.index = pd.to_datetime(panel.index)
         leg1 = pd.to_numeric(panel[leg1_id], errors='coerce')
         leg2 = pd.to_numeric(panel[leg2_id], errors='coerce')
-        # ytm_quo is in percent (e.g. 2.1678 = 2.1678%); ×100 so the chart's
+        # ytm_act is in percent (e.g. 2.1678 = 2.1678%); ×100 so the chart's
         # "bp" title/axis actually matches the plotted units.
         s = (100.0 * (leg1 - leg2)).dropna().sort_index()
         s = s[~s.index.duplicated(keep='last')]

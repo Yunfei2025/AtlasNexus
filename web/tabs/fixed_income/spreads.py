@@ -678,12 +678,13 @@ def register_spreads_callbacks(app) -> None:
             return _fut_empty(f"No data for {ticker_label}")
 
         # Prefer the actual bond codes (e.g. "260016.IB vs 260010.IB") over
-        # the generic stage/tenor label when available -- the label alone
-        # doesn't say which specific bonds are being compared.
+        # the generic stage/tenor label -- the label alone doesn't say which
+        # specific bonds are being compared, and once you know the tenor/stage
+        # from the ticker selector above the chart, it's redundant here.
         display_ticker = ticker_label
         if pair_label and '|' in pair_label:
             leg1_id, _, leg2_id = pair_label.partition('|')
-            display_ticker = f"{ticker_label} ({leg1_id} vs {leg2_id})"
+            display_ticker = f"{leg1_id} vs {leg2_id}"
 
         mean = float(s.mean()) if len(s) else None
         vol = float(s.std(ddof=1)) if len(s) > 1 else None
@@ -699,7 +700,7 @@ def register_spreads_callbacks(app) -> None:
         start = max(s.index[0], capped_start)
 
         title = (
-            f"<b>{display_ticker}</b><br>"
+            f"<span style='font-size:20px'><b>{display_ticker}</b></span><br>"
             f"Latest: {float(s.iloc[-1]):.2f}bp, Mean: {mean:.2f}bp, "
             f"Vol: {(vol if vol is not None else float('nan')):.2f}bp, "
             f"Max: {vmax:.2f}bp, Min: {vmin:.2f}bp"

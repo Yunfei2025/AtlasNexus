@@ -557,6 +557,21 @@ def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
                     fwd_peak_val = fwd_series.max()
                     if not pd.isna(fwd_peak_idx) and not pd.isna(fwd_peak_val):
                         stats["Fwd peak"] = (float(fwd_peak_val), float(fwd_peak_idx))
+                    # Best rolldown point: 1Y rolldown = y(T) - y(T-1Y), interpolated
+                    # off the smooth fitted spot curve, holding the curve static.
+                    # Max over T is where the curve is locally steepest (belly), not
+                    # where the yield/forward level is highest.
+                    horizon = 1.0
+                    eligible = tenor_arr[tenor_arr - horizon >= tenor_arr.min()]
+                    if len(eligible) > 0:
+                        y_now = np.interp(eligible, tenor_arr, spot_arr)
+                        y_rolled = np.interp(eligible - horizon, tenor_arr, spot_arr)
+                        rolldown_bp = (y_now - y_rolled) * 100.0
+                        rd_series = pd.Series(rolldown_bp, index=eligible)
+                        rd_peak_idx = rd_series.idxmax()
+                        rd_peak_val = rd_series.max()
+                        if not pd.isna(rd_peak_idx) and not pd.isna(rd_peak_val):
+                            stats["Best Rolldown"] = (float(rd_peak_val), float(rd_peak_idx))
             if band is not None:
                 lo = pd.to_numeric(pd.Series(_decode_plotly_array(_trace_field(band, "base", []))), errors="coerce")
                 width = pd.to_numeric(pd.Series(_decode_plotly_array(_trace_field(band, "y", []))), errors="coerce")
@@ -595,6 +610,22 @@ def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
             if curve_type == "IRSForward" and not hero.empty:
                 peak_x = float(hero.idxmax())
                 stats["Fwd peak"] = (float(hero.max()), peak_x)
+            if curve_type == "IRSSpot" and not hero.empty and len(hero) > 1:
+                # Best rolldown point on the FR007 spot swap curve: 1Y rolldown
+                # = rate(T) - rate(T-1Y), interpolated off the fitted curve.
+                tenor_arr = hero.index.values.astype(float)
+                rate_arr = hero.values.astype(float)
+                horizon = 1.0
+                eligible = tenor_arr[tenor_arr - horizon >= tenor_arr.min()]
+                if len(eligible) > 0:
+                    r_now = np.interp(eligible, tenor_arr, rate_arr)
+                    r_rolled = np.interp(eligible - horizon, tenor_arr, rate_arr)
+                    rolldown_bp = (r_now - r_rolled) * 100.0
+                    rd_series = pd.Series(rolldown_bp, index=eligible)
+                    rd_peak_idx = rd_series.idxmax()
+                    rd_peak_val = rd_series.max()
+                    if not pd.isna(rd_peak_idx) and not pd.isna(rd_peak_val):
+                        stats["Best Rolldown"] = (float(rd_peak_val), float(rd_peak_idx))
     except Exception as e:
         print(f"[curve_snapshot] stats error: {e}")
     return stats
@@ -640,6 +671,9 @@ def _render_curve_snapshot(curve_type: str, stats: Dict[str, Any]) -> Any:
         if peak is not None:
             rows.append(html.Div(className="curve-snapshot__divider"))
             rows.append(_snapshot_stat("Fwd peak @ Term", f"{peak[0]:.3f} % @ {peak[1]:.2f}Y"))
+        rolldown = stats.get("Best Rolldown")
+        if rolldown is not None:
+            rows.append(_snapshot_stat("Best Rolldown (1Y) @ Term", f"{rolldown[0]:+.1f} bp @ {rolldown[1]:.2f}Y"))
         return rows
 
     # IRS spot / forward
@@ -667,6 +701,9 @@ def _render_curve_snapshot(curve_type: str, stats: Dict[str, Any]) -> Any:
     if peak is not None:
         rows.append(html.Div(className="curve-snapshot__divider"))
         rows.append(_snapshot_stat("Fwd peak @ Term", f"{peak[0]:.2f} % @ {peak[1]:.1f}Y"))
+    rolldown = stats.get("Best Rolldown")
+    if rolldown is not None:
+        rows.append(_snapshot_stat("Best Rolldown (1Y) @ Term", f"{rolldown[0]:+.1f} bp @ {rolldown[1]:.2f}Y"))
     return rows
 
 

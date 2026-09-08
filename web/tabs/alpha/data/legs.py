@@ -409,3 +409,76 @@ def resolve_legs3(
 
     leg1, leg2 = resolve_legs(stype, tid, duration, ld)
     return (leg1, leg2, None)
+
+
+def fly_leg_tenor_years(stype: str, tid: str) -> Optional[tuple[float, float, float]]:
+    """Return (belly_years, short_wing_years, long_wing_years) parsed directly
+    from a 3-tenor fly ID, or None if tid is not a fly of a type resolve_legs3
+    supports.
+
+    Kept separate from resolve_legs3's bond/IRS-code lookups: a fly's leg
+    durations are fully determined by its own tenor structure (unlike a
+    single bond, which needs an OTR-snapshot TTM lookup), so this avoids
+    threading a third leg through the snapshot-based duration fallback in
+    web/tabs/risk/helpers.py::_leg_duration_years, which only knows about the
+    old 2-leg (belly, long_wing) proxy.
+    """
+    upper = str(tid).upper()
+    if stype == 'TenorSpread' and (upper.startswith('CGB-') or upper.startswith('CDB-')):
+        m3 = re.search(r'(\d+)S(\d+)S(\d+)S', upper)
+        if m3:
+            short_wing, belly, long_wing = float(m3.group(1)), float(m3.group(2)), float(m3.group(3))
+            return (belly, short_wing, long_wing)
+        return None
+
+    if stype == 'SwapSpread':
+        for prefix in ('repo7d', 'shi3m'):
+            m = re.match(rf'{prefix}-(.+)', str(tid).lower())
+            if m:
+                tenors = re.findall(r'(\d+[a-z])', m.group(1))
+                if len(tenors) >= 3:
+                    short_wing = _tenor_str_to_years(tenors[0].upper())
+                    belly = _tenor_str_to_years(tenors[1].upper())
+                    long_wing = _tenor_str_to_years(tenors[2].upper())
+                    return (belly, short_wing, long_wing)
+        return None
+
+    return None
+
+
+def fly_leg_dv01_ratios(stype: str, tid: str) -> Optional[tuple[float, float]]:
+    """DV01-neutral wing/belly notional ratios for a 3-leg fly:
+    (short_wing_ratio, long_wing_ratio), where each wing's notional =
+    belly_notional * ratio, split so DV01(short_wing) + DV01(long_wing) ==
+    DV01(belly), equally between the two wings (standard duration-neutral
+    butterfly construction).
+
+    Duration proxy matches how the rest of the codebase treats each family:
+    bond legs (TenorSpread CGB-/CDB-) use ttm * 0.92, the same proxy
+    _get_duration_mult / _leg_duration_years apply to '.IB' legs; IRS legs
+    (SwapSpread Repo7d-/Shi3M-) use the swap-annuity formula
+    _tenor_to_duration, matching _get_duration_mult's SwapSpread branch.
+    Returns None if tid is not a fly resolve_legs3 supports, or if any leg's
+    duration comes out non-positive (degenerate tenor).
+    """
+    tenors = fly_leg_tenor_years(stype, tid)
+    if tenors is None:
+        return None
+    belly_y, short_y, long_y = tenors
+
+    if stype == 'SwapSpread':
+        from .duration import _tenor_to_duration
+        dur_belly = _tenor_to_duration(f'{belly_y}y')
+        dur_short = _tenor_to_duration(f'{short_y}y')
+        dur_long = _tenor_to_duration(f'{long_y}y')
+    else:
+        dur_belly = belly_y * 0.92
+        dur_short = short_y * 0.92
+        dur_long = long_y * 0.92
+
+    if dur_belly <= 0 or dur_short <= 0 or dur_long <= 0:
+        return None
+    # Each wing absorbs half the belly's DV01: notional_wing * dur_wing = 0.5 * (notional_belly * dur_belly)
+    short_ratio = 0.5 * dur_belly / dur_short
+    long_ratio = 0.5 * dur_belly / dur_long
+    return (round(short_ratio, 4), round(long_ratio, 4))
