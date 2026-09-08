@@ -488,9 +488,9 @@ def register_backtest_rfbt_callbacks(app):
                             style={'marginBottom': '6px', 'fontWeight': '600'},
                         ),
                         html.Div(
-                            "Refresh first: run `python main.py update-data` in a terminal, "
-                            "or set FI_REFRESH_FACTOR_DATA=1 before starting the web app so "
-                            "Train Model refreshes the cache automatically.",
+                            'Refresh first: click "Generate Factor Series" in Execution Center -> DataBACKFILL or run `python main.py update-data` in a terminal, '
+                            'or set FI_REFRESH_FACTOR_DATA=1 before starting the web app so '
+                            'Train Model refreshes the cache automatically.',
                         ),
                     ], style={
                         'color': THEME['warning'], 'backgroundColor': 'rgba(240, 120, 40, 0.12)',
