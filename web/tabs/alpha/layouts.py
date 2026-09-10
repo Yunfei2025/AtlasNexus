@@ -691,7 +691,7 @@ def build_individual_backtest_panel() -> html.Div:
                                 html.Div([html.Label("Mom window", style=_lbl_xs), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style=_inp_mono)]),
                                 html.Div([html.Label("Vol window", style=_lbl_xs), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style=_inp_mono)]),
                                 html.Div([html.Label("Trail mult", style=_lbl_xs), dcc.Input(id='bt-trailing-mult', type='number', value=3.0, min=0.5, max=5.0, step=0.1, style=_inp_mono)]),
-                            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(4, minmax(0, 76px))', 'gap': '10px'}),
+                            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(4, minmax(88px, 1fr))', 'gap': '10px', 'alignItems': 'end'}),
                         ], style=_subsection),
 
                         # --- Mean-reversion / strategy sub-section ---
@@ -705,7 +705,7 @@ def build_individual_backtest_panel() -> html.Div:
                                     html.Label("Carry weight", style={**_lbl_xs, 'color': THEME['accent']}),
                                     dcc.Input(id='bt-carry-z-weight', type='number', value=0.5, min=0.0, max=2.0, step=0.05, style=_inp_mono),
                                 ]),
-                            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(4, minmax(0, 76px))', 'gap': '10px'}),
+                            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(4, minmax(88px, 1fr))', 'gap': '10px', 'alignItems': 'end'}),
                         ], style=_subsection),
                     ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '8px', 'marginBottom': '10px'}),
 
@@ -725,6 +725,9 @@ def build_individual_backtest_panel() -> html.Div:
                             style={'alignSelf': 'flex-end', 'marginBottom': '7px'},
                         ),
                     ], style={'display': 'flex', 'gap': '16px', 'alignItems': 'flex-end', 'flexWrap': 'wrap'}),
+
+                    # Keep the parameter grid responsive so Windows font metrics do not clip
+                    # numeric values in the Monthly Regime inputs even when the tab is narrow.
 
                     # Legacy, unused — kept only so old saved layouts/State wiring don't break.
                     dcc.Input(id='bt-carry-buffer', type='number', value=0.0, style={'display': 'none'}),
