@@ -975,10 +975,10 @@ class StatGenerator:
         if cgb10 is not None and repo10y is not None: instruments['CGBRepo7d-10y'] = cgb10 - repo10y
 
         # CD-vs-Repo cross-curve: NCD (AAA) yield minus matched-tenor FR007 IRS rate
-        if icp3m is not None and repo3m is not None: instruments['ICPRepo7d-3m'] = icp3m - repo3m
-        if icp6m is not None and repo6m is not None: instruments['ICPRepo7d-6m'] = icp6m - repo6m
-        if icp9m is not None and repo9m is not None: instruments['ICPRepo7d-9m'] = icp9m - repo9m
-        if icp1y is not None and repo1y is not None: instruments['ICPRepo7d-1y'] = icp1y - repo1y
+        if icp3m is not None and repo3m is not None: instruments['NCDRepo7d-3m'] = icp3m - repo3m
+        if icp6m is not None and repo6m is not None: instruments['NCDRepo7d-6m'] = icp6m - repo6m
+        if icp9m is not None and repo9m is not None: instruments['NCDRepo7d-9m'] = icp9m - repo9m
+        if icp1y is not None and repo1y is not None: instruments['NCDRepo7d-1y'] = icp1y - repo1y
 
         if not instruments:
             print('Warning: Could not build any tenor-spread series.')

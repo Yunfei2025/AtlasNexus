@@ -8,8 +8,8 @@ const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov
 const DAILY_SPREADS = [
   {id:'CGB-5s10s',z:0.8},{id:'CGB-10s20s',z:0.5},{id:'CGB-10s30s',z:-0.3},{id:'CDB-5s10s',z:-0.5},
   {id:'CDBCGB-5y',z:-1.1},{id:'CDBCGB-10y',z:-1.3},{id:'CGBRepo7d-1y',z:0.3},{id:'CGBRepo7d-2y',z:0.2},
-  {id:'CGBRepo7d-5y',z:-0.2},{id:'CGBRepo7d-10y',z:-0.4},{id:'ICPRepo7d-3m',z:-0.7},{id:'ICPRepo7d-6m',z:-0.9},
-  {id:'ICPRepo7d-9m',z:-1.0},{id:'ICPRepo7d-1y',z:-0.8},
+  {id:'CGBRepo7d-5y',z:-0.2},{id:'CGBRepo7d-10y',z:-0.4},{id:'NCDRepo7d-3m',z:-0.7},{id:'NCDRepo7d-6m',z:-0.9},
+  {id:'NCDRepo7d-9m',z:-1.0},{id:'NCDRepo7d-1y',z:-0.8},
 ];
 
 // Synthetic time series

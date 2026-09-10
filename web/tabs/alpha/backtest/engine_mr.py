@@ -14,6 +14,7 @@ from ._direction import _direction_label
 from ._ou_mean import blended_mr_mean
 
 MR_VOL_SPAN = 60
+ER_WINDOW = 20
 
 
 def run_spread_backtest(
@@ -33,6 +34,8 @@ def run_spread_backtest(
     carry_roll_sell_ts: Optional[pd.Series] = None,
     mr_vol_span: int = MR_VOL_SPAN,
     ou_mean: Optional[float] = None,
+    er_max: Optional[float] = None,
+    er_window: int = ER_WINDOW,
 ) -> Dict[str, Any]:
     """Run backtest on a single spread time series.
 
@@ -49,6 +52,13 @@ def run_spread_backtest(
     callers that haven't run/passed a stationarity test (e.g. non-stationary
     spreads, where a fixed long-run mean would misread a level shift as an
     extreme reading).
+
+    ``er_max``: optional efficiency-ratio entry gate. ER = |net move over
+    ``er_window`` days| / |sum of daily moves| — near 1 when the spread is
+    travelling one way (a trend, which a lagging rolling-mean anchor keeps
+    reading as a fresh extreme, so the engine fades it repeatedly), near 0 when
+    it is oscillating. Entries are skipped while ER >= ``er_max``. Off by
+    default; exits are never gated.
     """
     if spread_ts is None or len(spread_ts) < 130:
         return {'error': 'Insufficient data'}
@@ -71,6 +81,15 @@ def run_spread_backtest(
 
     composite_signal = zscore.copy()
 
+    # Shifted so day i decides on data through i-1 only.
+    if er_max is not None:
+        _w = max(int(er_window), 2)
+        _net = spread_ts.diff(_w).abs()
+        _path = spread_ts.diff().abs().rolling(_w).sum()
+        efficiency_ratio = (_net / _path.replace(0.0, np.nan)).shift(1)
+    else:
+        efficiency_ratio = None
+
     # Pre-align carry series to spread index once — avoids O(n²) re-slicing in the loop.
     _cr_fallback_val = (carry_roll_bp or 0.0) / 100.0  # convert bp scalar to %
     def _align_cr(ts):
@@ -90,6 +109,7 @@ def run_spread_backtest(
     idx_arr = spread_ts.index
     zscore_arr = zscore.to_numpy(dtype=float)
     composite_arr = composite_signal.to_numpy(dtype=float)
+    er_arr = efficiency_ratio.to_numpy(dtype=float) if efficiency_ratio is not None else None
     _cr_long_arr = _cr_long_aligned.to_numpy(dtype=float) if _cr_long_aligned is not None else None
     _cr_sell_arr = _cr_sell_aligned.to_numpy(dtype=float) if _cr_sell_aligned is not None else None
 
@@ -181,7 +201,13 @@ def run_spread_backtest(
                 entry_price = None
                 entry_zscore = None
 
-        if position == 0:
+        trend_blocked = (
+            er_arr is not None
+            and np.isfinite(er_arr[i])
+            and er_arr[i] >= er_max
+        )
+
+        if position == 0 and not trend_blocked:
             if trade_style == 'mr':
                 # BUY profits when the spread falls; SELL profits when it rises.
                 if z >= entry_z:
@@ -269,6 +295,7 @@ def run_spread_backtest(
             'entry_z': entry_z,
             'exit_z': exit_z,
             'stop_z': stop_z,
+        'er_max': er_max,
             'open_trade': None,
         }
 
@@ -329,5 +356,6 @@ def run_spread_backtest(
         'entry_z': entry_z,
         'exit_z': exit_z,
         'stop_z': stop_z,
+        'er_max': er_max,
         'open_trade': open_trade,
     }

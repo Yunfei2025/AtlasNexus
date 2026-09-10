@@ -111,7 +111,7 @@ _TENOR_SPREAD_ORDER = [
     'CDBCGB-5y', 'CDBCGB-10y', 'CDBCGB-30y',
     'LGBCGB-5y', 'LGBCGB-10y', 'LGBCGB-30y',
     'CGBRepo7d-1y', 'CGBRepo7d-2y', 'CGBRepo7d-5y', 'CGBRepo7d-10y',
-    'ICPRepo7d-3m', 'ICPRepo7d-6m', 'ICPRepo7d-9m', 'ICPRepo7d-1y',
+    'NCDRepo7d-3m', 'NCDRepo7d-6m', 'NCDRepo7d-9m', 'NCDRepo7d-1y',
 ]
 _TENOR_SPREAD_RANK = {ticker: i for i, ticker in enumerate(_TENOR_SPREAD_ORDER)}
 

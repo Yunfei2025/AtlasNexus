@@ -86,8 +86,10 @@ def _get_duration_mult(
         return round(tenor * 0.92, 4)
 
     if spread_type == 'TenorSpread':
-        # TenorSpread: PnL ≈ duration_first_leg × Δspread (DV01-hedged position)
-        # e.g. CGB-5s10s → first leg = 5y → use duration of shorter tenor
+        # TenorSpread: PnL ≈ duration_second_leg × Δspread (DV01-hedged position).
+        # The position is held in the longer leg — see _get_borrow_cost_annual_bp:
+        # "SHORT the spread = short the LONGER-tenor bond" — so the spread's DV01
+        # is carried by that leg, matching the SwapSpread convention below.
         # The 's' suffix is used for years in tenor spread IDs (e.g. 10s = 10 years)
         dash_pos = instrument.find('-')
         tenor_part = instrument[dash_pos + 1:] if dash_pos != -1 else instrument
@@ -99,6 +101,8 @@ def _get_duration_mult(
         tenors_s = re.findall(r'(\d+(?:\.\d+)?)s', tenor_part, re.IGNORECASE)
         if len(tenors_s) >= 3:
             return _tenor_to_duration(tenors_s[1] + 'y')  # belly, for flies
+        if len(tenors_s) == 2:
+            return _tenor_to_duration(tenors_s[1] + 'y')  # second (longer) leg
         if tenors_s:
             return _tenor_to_duration(tenors_s[0] + 'y')
         return 1.0

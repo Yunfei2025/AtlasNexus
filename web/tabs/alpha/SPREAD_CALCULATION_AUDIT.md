@@ -44,7 +44,7 @@ All spread definitions in `web/tabs/alpha/data.py` are **consistent with industr
 ### Bond-vs-Repo (lines 152-158)
 ```python
 'CGBRepo7d-1y': CGB[1y] - FR007S1Y  ✓ bond - funding
-'ICPRepo7d-3m': ICP[3m] - FR007S3M  ✓ cd - funding
+'NCDRepo7d-3m': ICP[3m] - FR007S3M  ✓ cd - funding
 ```
 
 **Conclusion**: Spread calculations follow correct convention. Issue was purely in direction labeling.

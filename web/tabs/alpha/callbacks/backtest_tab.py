@@ -820,11 +820,15 @@ def register_backtest_callbacks(app) -> None:
          State('bt-entry-z', 'value'),
          State('bt-exit-z', 'value'),
          State('bt-stop-z', 'value'),
-         State('bt-min-hold', 'value')],
+         State('bt-min-hold', 'value'),
+         State('bt-port-er-gate-on', 'value'),
+         State('bt-port-er-max', 'value'),
+         State('bt-port-er-window', 'value')],
         prevent_initial_call=True
     )
     def run_portfolio_backtest(n_clicks, optimized_data, capital, txn_cost, period,
-                               entry_z, exit_z, stop_z, min_hold):
+                               entry_z, exit_z, stop_z, min_hold,
+                               er_gate_on, er_max, er_window):
         if not n_clicks:
             return html.Div(), ""
 
@@ -994,6 +998,8 @@ def register_backtest_callbacks(app) -> None:
                 _exit_z   = float(exit_z)   if exit_z   is not None else 0.5
                 _stop_z   = float(stop_z)   if stop_z   is not None else 4.0
                 _min_hold = int(min_hold) if min_hold is not None else 7
+                _er_max = float(er_max) if ('on' in (er_gate_on or []) and er_max is not None) else None
+                _er_window = int(er_window) if er_window is not None else 20
 
                 try:
                     if run_trend:
@@ -1021,6 +1027,8 @@ def register_backtest_callbacks(app) -> None:
                             stop_z=_stop_z,
                             min_hold=_min_hold,
                             ou_mean=_ou_mean,
+                            er_max=_er_max,
+                            er_window=_er_window,
                         )
                 except Exception:
                     continue
