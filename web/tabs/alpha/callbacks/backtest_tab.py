@@ -867,6 +867,13 @@ def register_backtest_callbacks(app) -> None:
                 series = df_spread[instrument].dropna()
                 if len(series) < 10:
                     continue
+                # Different spread types store their index as str, datetime.date,
+                # or Timestamp (see load_spread_timeseries per-type branches) —
+                # normalize before combining series across types into one
+                # DataFrame below, or sort_index() raises on the mixed-type index.
+                if not isinstance(series.index, pd.DatetimeIndex):
+                    series = series.copy()
+                    series.index = pd.to_datetime(series.index)
                 asset_data[full_id] = series
                 weights[full_id] = weight
                 valid_assets.append(full_id)
@@ -874,12 +881,15 @@ def register_backtest_callbacks(app) -> None:
             if not valid_assets:
                 return html.Div("Failed to load historical data for any selected assets.", style={'color': THEME['danger']}), "Data load failed"
 
-            df_prices = pd.DataFrame(asset_data)
-            df_prices = df_prices.sort_index().ffill().dropna()
-            if lookback_days < len(df_prices):
-                df_prices = df_prices.iloc[-lookback_days:]
-            if df_prices.empty:
-                return html.Div("No overlapping historical data found for the selected portfolio.", style={'color': THEME['danger']}), "Data align failed"
+            # Each instrument backtests over its own available history, trimmed
+            # to the requested lookback independently — NOT the intersection of
+            # every instrument's history. A single recently-issued bond in the
+            # book (e.g. a bond a few weeks old) would otherwise collapse every
+            # other instrument's usable window down to that bond's short
+            # history, well under run_spread_backtest's own 130-day minimum,
+            # and silently zero out the whole portfolio backtest. Equity curves
+            # are combined by union (ffill/fillna(0), see df_equity below), so
+            # instruments never need a shared price index up front.
 
             # --- Per-trade signal-driven backtests, combined by portfolio weight ---
             item_lookup = {_i.get('ID'): _i for _i in optimized_data if _i.get('ID')}
@@ -902,7 +912,9 @@ def register_backtest_callbacks(app) -> None:
                 spread_type = _item.get('spread_type', '')
                 run_trend = 'trend' in str(_item.get('style', '')).lower()
 
-                ts = df_prices[asset]
+                ts = asset_data[asset].sort_index()
+                if lookback_days < len(ts):
+                    ts = ts.iloc[-lookback_days:]
                 is_yield_based = spread_type in YIELD_BASED_SPREAD_TYPES
                 ts_bt = -ts if is_yield_based else ts
 
