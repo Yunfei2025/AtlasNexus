@@ -18,6 +18,8 @@ from ..data import (
     THEME, SPREAD_CATEGORIES, MACRO_PREFIX, YIELD_BASED_SPREAD_TYPES,
     load_spread_data, load_spread_timeseries, load_carry_roll_timeseries,
     load_macro_series, _get_duration_mult, _get_borrow_cost_annual_bp,
+    save_instrument_state, load_instrument_params, load_monthly_regime,
+    has_saved_state,
 )
 from .portfolio import _SUMMARY_ALPHA_PARQUET
 from ..layouts import build_individual_backtest_panel, build_portfolio_backtest_panel
@@ -134,6 +136,8 @@ def _run_monthly_style_switch_backtest(
     mom_window: int = 20,
     uncertain_policy: str = 'carry_forward',
     ou_mean: Optional[float] = None,
+    carry_z_weight: float = 0.0,
+    month_to_style_override: Optional[dict] = None,
 ):
     """Run one continuous backtest whose entry style is routed by the monthly review.
 
@@ -147,11 +151,25 @@ def _run_monthly_style_switch_backtest(
     forwarded as the MR fair-value anchor so the backtest's mean-reversion
     signal uses the same mean the live Scan screener's ADF test already
     validated, instead of an independently-computed rolling(120) mean.
+
+    ``month_to_style_override``: a previously-saved ``{Period('M'): style}`` map
+    (see ``web/tabs/alpha/data/saved_state.py``) to use in place of a freshly
+    computed monthly schedule -- lets a reviewed instrument's portfolio-level
+    backtest reuse exactly the regime schedule it was reviewed and saved under,
+    instead of recomputing it (and potentially drifting from what was reviewed
+    as new data arrives).
     """
-    schedule, month_to_style = build_monthly_style_schedule(
-        ts, _default_style_for_spread(spread_type), uncertain_policy=uncertain_policy,
-    )
-    if schedule.empty:
+    if month_to_style_override is not None:
+        month_to_style = month_to_style_override
+        schedule = pd.DataFrame(
+            [{'review_date': pd.Timestamp(p.to_timestamp()), 'assigned_style': v}
+             for p, v in month_to_style.items()]
+        ).sort_values('review_date') if month_to_style else pd.DataFrame()
+    else:
+        schedule, month_to_style = build_monthly_style_schedule(
+            ts, _default_style_for_spread(spread_type), uncertain_policy=uncertain_policy,
+        )
+    if not month_to_style:
         return {'error': 'No valid datetime observations for monthly style backtest.'}
 
     results = run_monthly_style_backtest(
@@ -174,6 +192,7 @@ def _run_monthly_style_switch_backtest(
         spread_type=spread_type,
         carry_roll_sell_ts=carry_roll_sell_ts,
         ou_mean=ou_mean,
+        carry_z_weight=carry_z_weight,
     )
 
     if isinstance(results, dict) and 'error' not in results:
@@ -255,11 +274,30 @@ def register_backtest_callbacks(app) -> None:
     # BACKTEST: Display the current monthly regime for the selected instrument
     # -------------------------------------------------------------------------
     @app.callback(
-        Output('bt-regime-badge', 'children'),
+        [Output('bt-regime-badge', 'children'),
+         Output('bt-saved-state-badge', 'children')],
         [Input('bt-spread-type', 'value'),
-         Input('bt-instrument', 'value')],
+         Input('bt-instrument', 'value'),
+         Input('bt-save-params-status', 'children')],
     )
-    def update_monthly_regime_badge(spread_type, instrument):
+    def update_monthly_regime_badge(spread_type, instrument, _save_status):
+        saved_badge = ""
+        if spread_type and instrument and not (
+            isinstance(instrument, str) and instrument.startswith(MACRO_PREFIX)
+        ):
+            if has_saved_state(spread_type, instrument):
+                saved_badge = html.Span(
+                    "✓ Reviewed & saved — portfolio backtest uses this instrument's own parameters/regime schedule.",
+                    style={'color': THEME['success'], 'fontSize': '11px'},
+                )
+            else:
+                saved_badge = html.Span(
+                    "Using default parameters/regime (not yet reviewed & saved for this instrument).",
+                    style={'color': THEME['warning'], 'fontSize': '11px'},
+                )
+        return _regime_badge_for(spread_type, instrument), saved_badge
+
+    def _regime_badge_for(spread_type, instrument):
         if not instrument or not spread_type:
             return ""
 
@@ -311,7 +349,8 @@ def register_backtest_callbacks(app) -> None:
             return html.Span(f"Regime detection error: {exc}", style={'color': THEME['warning'], 'fontSize': '11px'})
 
     # -------------------------------------------------------------------------
-    # BACKTEST: Spread-type parameter presets
+    # BACKTEST: Spread-type parameter presets, overridden by saved per-instrument
+    # params when this instrument has already been reviewed & saved.
     # -------------------------------------------------------------------------
     @app.callback(
         [Output('bt-entry-z', 'value'),
@@ -321,14 +360,36 @@ def register_backtest_callbacks(app) -> None:
          Output('bt-theta', 'value'),
          Output('bt-mom-window', 'value'),
          Output('bt-vol-window', 'value'),
-         Output('bt-trailing-mult', 'value')],
-        Input('bt-spread-type', 'value'),
+         Output('bt-trailing-mult', 'value'),
+         Output('bt-carry-z-weight', 'value'),
+         Output('bt-allow-short', 'value')],
+        [Input('bt-spread-type', 'value'),
+         Input('bt-instrument', 'value')],
     )
-    def preset_backtest_params(spread_type):
+    def preset_backtest_params(spread_type, instrument):
+        default_allow_short = ['allow']
         if spread_type == 'TenorSpread':
-            return 2.5, 0.25, 5.0, 10, 1.50, 30, 90, 2.0
+            preset = (2.5, 0.25, 5.0, 10, 1.50, 30, 90, 2.0, 0.5)
+        else:
+            preset = (2.0, 0.5, 4.0, 7, 1.25, 20, 60, 1.5, 0.5)
 
-        return 2.0, 0.5, 4.0, 7, 1.25, 20, 60, 1.5
+        if instrument and not (isinstance(instrument, str) and instrument.startswith(MACRO_PREFIX)):
+            saved = load_instrument_params(spread_type, instrument)
+            if saved:
+                keys = ('entry_z', 'exit_z', 'stop_z', 'min_hold', 'theta',
+                        'mom_window', 'vol_window', 'trailing_mult', 'carry_z_weight')
+                values = tuple(
+                    saved[k] if k in saved and saved[k] is not None else preset[i]
+                    for i, k in enumerate(keys)
+                )
+                saved_allow_short = saved.get('allow_short')
+                allow_short_value = (
+                    (['allow'] if saved_allow_short else [])
+                    if saved_allow_short is not None else default_allow_short
+                )
+                return values + (allow_short_value,)
+
+        return preset + (default_allow_short,)
 
     # -------------------------------------------------------------------------
     # BACKTEST: Run Individual Backtest
@@ -347,14 +408,14 @@ def register_backtest_callbacks(app) -> None:
          State('bt-mom-window', 'value'),
          State('bt-vol-window', 'value'),
          State('bt-trailing-mult', 'value'),
-         State('bt-carry-buffer', 'value'),
+         State('bt-carry-z-weight', 'value'),
          State('bt-allow-short', 'value'),
          State('bt-min-hold', 'value')],
         prevent_initial_call=True
     )
     def run_individual_backtest(
         n_clicks, spread_type, instrument, entry_z, exit_z, stop_z, period, theta,
-        mom_window, vol_window, trailing_mult, carry_buffer, allow_short, min_hold
+        mom_window, vol_window, trailing_mult, carry_z_weight, allow_short, min_hold
     ):
         if not n_clicks:
             return html.Div(), ""
@@ -436,7 +497,21 @@ def register_backtest_callbacks(app) -> None:
             # YTM-based spreads: stored carry/snapshot carry is computed on the raw
             # spread value. Flip so LONG = expecting the spread to fall/narrow
             # (economically long the higher-yielding leg's price).
-            if is_yield_based:
+            # TenorSpread stores CarryRoll3m with a sub-type-dependent sign already
+            # (see curves/generators/stat.py): XsYs names (\d+s\d+, e.g. CGB-5s10s)
+            # need the flip below, but cross-curve (CDBCGB-*, LGBCGB-*, MTNCGB-*,
+            # *Repo7d-*) and fly (NsMsLs) names are already stored as BUY=engine LONG
+            # and must NOT be negated again here.
+            _needs_negate = is_yield_based
+            if spread_type == 'TenorSpread' and isinstance(instrument, str):
+                import re
+                if len(re.findall(r'\d+s', instrument, re.IGNORECASE)) >= 3:
+                    _needs_negate = False  # fly
+                elif re.search(r'\d+s\d+', instrument, re.IGNORECASE):
+                    _needs_negate = True  # XsYs
+                else:
+                    _needs_negate = False  # cross-curve
+            if _needs_negate:
                 if carry_roll_ts_instrument is not None:
                     carry_roll_ts_instrument = -carry_roll_ts_instrument
                 carry_roll_bp = -carry_roll_bp
@@ -521,6 +596,7 @@ def register_backtest_callbacks(app) -> None:
                 carry_roll_sell_ts=_cr_sell_for_backtest,
                 mom_window=int(mom_window) if mom_window is not None else 20,
                 ou_mean=ou_mean,
+                carry_z_weight=float(carry_z_weight) if carry_z_weight is not None else 0.5,
             )
 
             # For YTM-based spreads: restore original display signs after internal inversion.
@@ -586,6 +662,78 @@ def register_backtest_callbacks(app) -> None:
         return display, status
 
     # -------------------------------------------------------------------------
+    # BACKTEST: Save reviewed instrument's parameters + monthly regime schedule
+    # -------------------------------------------------------------------------
+    @app.callback(
+        Output('bt-save-params-status', 'children'),
+        Input('bt-save-params-btn', 'n_clicks'),
+        [State('bt-spread-type', 'value'),
+         State('bt-instrument', 'value'),
+         State('bt-entry-z', 'value'),
+         State('bt-exit-z', 'value'),
+         State('bt-stop-z', 'value'),
+         State('bt-period', 'value'),
+         State('bt-theta', 'value'),
+         State('bt-mom-window', 'value'),
+         State('bt-vol-window', 'value'),
+         State('bt-trailing-mult', 'value'),
+         State('bt-carry-z-weight', 'value'),
+         State('bt-allow-short', 'value'),
+         State('bt-min-hold', 'value')],
+        prevent_initial_call=True,
+    )
+    def save_individual_backtest_params(
+        n_clicks, spread_type, instrument, entry_z, exit_z, stop_z, period, theta,
+        mom_window, vol_window, trailing_mult, carry_z_weight, allow_short, min_hold,
+    ):
+        if not n_clicks:
+            return ""
+        if not spread_type or not instrument:
+            return "Select a spread type and instrument before saving."
+        if isinstance(instrument, str) and instrument.startswith(MACRO_PREFIX):
+            return "Macro series are not saveable (no spread_type/instrument key)."
+
+        try:
+            spread_ts = load_spread_timeseries(spread_type)
+            if spread_ts is None or instrument not in spread_ts.columns:
+                return f"No time series data available for {instrument}."
+            ts = spread_ts[instrument].tail(period or 504)
+
+            # Match run_individual_backtest's orientation exactly: the schedule
+            # must be built on the same (sign-normalised) series the engine
+            # actually sees, or a yield-based spread's regime classification
+            # here would silently disagree with the one used at run time.
+            is_yield_based = spread_type in YIELD_BASED_SPREAD_TYPES
+            ts_for_schedule = -ts if is_yield_based else ts
+
+            schedule, month_to_style = build_monthly_style_schedule(
+                ts_for_schedule, _default_style_for_spread(spread_type),
+            )
+            if schedule.empty:
+                return "Could not build a monthly regime schedule (insufficient history)."
+
+            params = {
+                'entry_z': entry_z if entry_z is not None else 2.0,
+                'exit_z': exit_z if exit_z is not None else 0.5,
+                'stop_z': stop_z if stop_z is not None else 4.0,
+                'min_hold': int(min_hold) if min_hold is not None else 7,
+                'theta': theta if theta is not None else 1.25,
+                'mom_window': mom_window if mom_window is not None else 20,
+                'vol_window': vol_window if vol_window is not None else 60,
+                'trailing_mult': trailing_mult if trailing_mult is not None else 3.0,
+                'carry_z_weight': float(carry_z_weight) if carry_z_weight is not None else 0.5,
+                'allow_short': _allow_short_enabled(allow_short),
+            }
+            save_instrument_state(spread_type, instrument, params, month_to_style, schedule)
+            n_tradeable = int(schedule['assigned_style'].isin(['mr', 'trend']).sum())
+            return (
+                f"Saved {instrument} ({spread_type}) at {datetime.now().strftime('%H:%M:%S')} "
+                f"[{n_tradeable}/{len(schedule)} months tradeable]"
+            )
+        except Exception as exc:
+            return f"Save failed: {exc}"
+
+    # -------------------------------------------------------------------------
     # BACKTEST: Portfolio Data Preview Callback
     # -------------------------------------------------------------------------
     @app.callback(
@@ -611,14 +759,29 @@ def register_backtest_callbacks(app) -> None:
 
             sorted_assets = sorted(portfolio_data, key=lambda x: float(x.get('weight', 0) or 0), reverse=True)
             asset_rows = []
+            n_reviewed = 0
             for item in sorted_assets:
                 w = float(item.get('weight', 0) or 0)
                 _dir = item.get('direction', 'N/A')
                 _dir_color = 'var(--accent-green)' if _dir == 'BUY' else ('var(--negative)' if _dir == 'SELL' else 'var(--text-muted)')
+                full_id = str(item.get('ID', ''))
+                _sp_type = item.get('spread_type', '')
+                _inst = full_id.split('|', 1)[1] if '|' in full_id else full_id
+                if not _sp_type and '|' in full_id:
+                    _sp_type = full_id.split('|', 1)[0]
+                _reviewed = bool(_sp_type) and has_saved_state(_sp_type, _inst)
+                if _reviewed:
+                    n_reviewed += 1
+                _review_tag = html.Span(
+                    " [reviewed]" if _reviewed else " [default]",
+                    style={'color': 'var(--accent-green)' if _reviewed else 'var(--text-muted)',
+                           'fontSize': '10px', 'marginLeft': '4px'},
+                )
                 asset_rows.append(html.Div([
                     html.Span('•', style={'color': 'var(--text-muted)', 'marginRight': '6px'}),
                     html.Span(f"{item.get('ID', 'Unknown')} — {w*100:.1f}%", style={'color': 'var(--text-secondary)'}),
                     html.Span(f" ({_dir})", style={'color': _dir_color, 'fontWeight': '600', 'marginLeft': '4px'}),
+                    _review_tag,
                 ], style={'fontSize': '11px', 'padding': '3px 0', 'fontFamily': 'var(--font-mono, monospace)'}))
 
             _stat_lbl = {'fontSize': '9px', 'fontWeight': '600', 'letterSpacing': '0.05em',
@@ -630,7 +793,12 @@ def register_backtest_callbacks(app) -> None:
                     html.Div([html.Div("Weight Sum", style=_stat_lbl), html.Div(f"{total_weight*100:.1f}%", style={'color': 'var(--text-primary)', 'fontSize': '13px'})]),
                     html.Div([html.Div("Direction", style=_stat_lbl), html.Div(f"BUY: {n_buy} / SELL: {n_sell}", style={'color': 'var(--text-primary)', 'fontSize': '12px'})]),
                     html.Div([html.Div("Styles", style=_stat_lbl), html.Div(' | '.join([f"{k}: {v}" for k, v in style_counts.items()]), style={'color': 'var(--text-primary)', 'fontSize': '11px'})]),
-                ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '8px', 'marginBottom': '12px'}),
+                ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '8px', 'marginBottom': '8px'}),
+                html.Div(
+                    f"{n_reviewed} of {n_assets} instruments reviewed & saved (own params/regime schedule); "
+                    f"{n_assets - n_reviewed} use the default parameters/regime below.",
+                    style={'fontSize': '10px', 'color': 'var(--text-muted)', 'fontStyle': 'italic', 'marginBottom': '10px'},
+                ),
                 html.Div("Active Portfolio Assets (Backtest Universe):", style={'fontSize': '11px', 'color': 'var(--text-muted)', 'marginBottom': '6px'}),
                 html.Div(asset_rows, style={'maxHeight': '180px', 'overflowY': 'auto', 'border': '1px solid var(--border-default)',
                                             'borderRadius': '4px', 'padding': '6px 10px', 'background': 'var(--surface-input)'}),
@@ -770,6 +938,57 @@ def register_backtest_callbacks(app) -> None:
 
                 dur = _get_duration_mult(asset, spread_type)
                 _bc_long, _bc_short = _get_borrow_cost_annual_bp(spread_type, asset)
+
+                # Reviewed instruments (Save Parameters on the individual panel)
+                # get their own tuned params and month-by-month MR/trend regime
+                # schedule instead of the book-wide global params + one static
+                # style tag for the whole history. Unreviewed instruments fall
+                # through to the existing behaviour below unchanged.
+                _saved_params = load_instrument_params(spread_type, asset)
+                _saved_regime = load_monthly_regime(spread_type, asset)
+                if _saved_params is not None and _saved_regime is not None:
+                    try:
+                        res = _run_monthly_style_switch_backtest(
+                            ts=ts_bt,
+                            spread_type=spread_type,
+                            entry_z=_saved_params.get('entry_z', 2.0),
+                            exit_z=_saved_params.get('exit_z', 0.5),
+                            stop_z=_saved_params.get('stop_z', 4.0),
+                            min_hold=_saved_params.get('min_hold', 7),
+                            theta=_saved_params.get('theta', 1.25),
+                            vol_window=_saved_params.get('vol_window', 60),
+                            trailing_mult=_saved_params.get('trailing_mult', 3.0),
+                            carry_roll_ts=_cr_ts,
+                            carry_roll_bp=_cr_bp,
+                            duration_mult=dur,
+                            borrow_cost_long_bp=_bc_long,
+                            borrow_cost_short_bp=_bc_short,
+                            allow_short=_saved_params.get('allow_short', True),
+                            carry_roll_sell_ts=None,
+                            mom_window=_saved_params.get('mom_window', 20),
+                            ou_mean=_ou_mean,
+                            carry_z_weight=_saved_params.get('carry_z_weight', 0.0),
+                            month_to_style_override=_saved_regime.get('month_to_style'),
+                        )
+                    except Exception:
+                        res = {'error': 'saved-state backtest failed'}
+                    if 'error' not in res and isinstance(res.get('equity_ts'), pd.Series):
+                        eq = res['equity_ts'].copy()
+                        eq.index = pd.to_datetime(eq.index)
+                        weighted_equity[asset] = eq * weight
+                        trade_summaries.append({
+                            'Asset': asset,
+                            'Direction': _item.get('direction', 'N/A'),
+                            'Style': f"{_item.get('style', 'N/A')} (reviewed)",
+                            'Weight': f"{weight * 100:.1f}%",
+                            '# Trades': res.get('n_trades', 0),
+                            'Win Rate': f"{res.get('win_rate', 0):.0f}%",
+                            'Wtd PnL (bp)': round(float(res.get('total_pnl', 0)) * weight, 1),
+                        })
+                        continue
+                    # Saved-state path failed to produce usable results; fall
+                    # through to the default single-style backtest below rather
+                    # than silently dropping the asset from the book.
 
                 _entry_z  = float(entry_z)  if entry_z  is not None else 2.0
                 _exit_z   = float(exit_z)   if exit_z   is not None else 0.5

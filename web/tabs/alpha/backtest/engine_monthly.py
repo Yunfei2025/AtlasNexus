@@ -208,6 +208,7 @@ def run_monthly_style_backtest(
     carry_roll_sell_ts: Optional[pd.Series] = None,
     mr_vol_span: int = MR_VOL_SPAN,
     ou_mean: Optional[float] = None,
+    carry_z_weight: float = 0.0,
 ) -> Dict[str, Any]:
     """Run a continuous backtest whose entry style is routed by month.
 
@@ -226,6 +227,19 @@ def run_monthly_style_backtest(
     *when* MR-style entries are allowed via its own trend/mean-reversion
     voting ensemble; ``ou_mean`` only changes *where* the MR anchor sits during
     those months, it does not change which months are eligible.
+
+    ``carry_z_weight``: opt-in blend of carry into the MR entry/exit signal
+    (0.0 = disabled, matches prior behaviour exactly). Carry is converted to
+    z-units the same way as the parked ``engine_hybrid`` prototype (carry
+    scaled to the entry horizon then divided by the same vol used for
+    ``zscore``, clipped to ±1.5) and subtracted: ``composite_z = zscore -
+    carry_z_weight * carry_sigma``. A spread paying positive BUY carry needs a
+    smaller adverse price z to trigger a long (z <= -entry_z), and a spread
+    with low/negative carry needs a smaller push to trigger a short (z >=
+    entry_z) -- i.e. high carry biases toward long, low carry biases toward
+    short, matching the desk convention. Only the MR branch's entry/exit
+    comparisons use the composite; the trend branch and all P&L/accrual are
+    unaffected.
     """
     s = _clean_series(spread_ts)
     if s is None or len(s) < 60:
@@ -311,9 +325,21 @@ def run_monthly_style_backtest(
     cr_sell = _align(carry_roll_sell_ts)
     cr_fallback = (carry_roll_bp or 0.0) / 100.0
 
+    # Carry-adjusted composite z-score for MR entries/exits (opt-in via
+    # carry_z_weight, see docstring above). Ported from the parked
+    # engine_hybrid prototype: carry is scaled to the ~30d entry-decision
+    # horizon, expressed in the same units as ewm_std, clipped to ±1.5 so a
+    # single instrument's carry can shift but not dominate the price signal.
+    if carry_z_weight and cr_long is not None:
+        carry_sigma = ((cr_long * 30.0 / 90.0) / ewm_std.replace(0, np.nan)).clip(-1.5, 1.5).fillna(0.0)
+        composite_z = zscore - float(carry_z_weight) * carry_sigma
+    else:
+        composite_z = zscore
+
     price_arr = s.to_numpy(dtype=float)
     idx_arr = s.index
     z_arr = zscore.to_numpy(dtype=float)
+    cz_arr = composite_z.to_numpy(dtype=float)
     st_arr = trend_state.to_numpy(dtype=float)
     vol_arr = trend_vol.to_numpy(dtype=float)
     periods = s.index.to_period('M')
@@ -404,6 +430,7 @@ def run_monthly_style_backtest(
         date = idx_arr[i]
         px = float(price_arr[i])
         z = float(z_arr[i])
+        cz = float(cz_arr[i])
         st = float(st_arr[i])
         vol = float(vol_arr[i])
         style = styles.get(periods[i], 'skip')
@@ -449,11 +476,14 @@ def run_monthly_style_backtest(
             elif np.isfinite(z):
                 exit_reason = None
                 if days_held >= min_hold:
-                    if position == 1 and z >= -exit_z:
+                    if position == 1 and cz >= -exit_z:
                         exit_reason = 'target'
-                    elif position == -1 and z <= exit_z:
+                    elif position == -1 and cz <= exit_z:
                         exit_reason = 'target'
                 if exit_reason is None:
+                    # Stop-loss stays on the raw price z-score: carry should
+                    # make entries/targets easier to reach, not soften the
+                    # risk-control exit that protects against an adverse move.
                     if position == 1 and z < -stop_z:
                         exit_reason = 'stop_loss'
                     elif position == -1 and z > stop_z:
@@ -464,10 +494,10 @@ def run_monthly_style_backtest(
         # ---- Entries, gated by the current month's style ---------------------
         if position == 0 and style in ('mr', 'trend'):
             if style == 'mr':
-                if i >= MR_LOOKBACK and np.isfinite(z):
-                    if z >= entry_z:
+                if i >= MR_LOOKBACK and np.isfinite(cz):
+                    if cz >= entry_z:
                         position = -1
-                    elif z <= -entry_z:
+                    elif cz <= -entry_z:
                         position = 1
                     if position != 0:
                         entry_date, entry_price, entry_zscore, entry_style = date, px, z, 'mr'

@@ -401,9 +401,12 @@ z_t = \frac{s_t - \operatorname{mean}_{120}(s)}{\operatorname{ewmstd}_{\mathrm{s
 The engine enters long when $z_t \le -z_{entry}$ and short when
 $z_t \ge z_{entry}$. A signal exit is allowed only after \texttt{min\_hold}; it occurs
 when the z-score reverts inside the exit band. A $z$-score stop is always active,
-including during the minimum holding period. Carry/roll and direction-aware borrow
-adjustments accrue in realized PnL and can inform ranking and allocation, but do not
-change an MR entry or exit decision.
+including during the minimum holding period, and is always evaluated on the raw
+$z_t$ above -- never on the carry-adjusted composite of the following paragraph --
+so carry cannot soften the risk-control exit. Carry/roll and direction-aware borrow
+adjustments accrue in realized PnL and can inform ranking and allocation; by default
+(\texttt{carry\_z\_weight}$=0$) they do not change an MR entry or target-exit decision
+either, matching all results reported elsewhere in this section.
 
 {\small
 \setlength{\LTleft}{0pt}
@@ -508,6 +511,50 @@ of \texttt{StatInfo['stationary']} and of the monthly regime classifier in
 \S\ref{sec:pairs-regime-selection} -- whether that choice should itself be gated by
 stationarity is a separate, larger design question left open for follow-up, not
 addressed by this fix.
+
+\paragraph{Carry-adjusted composite $z$-score (opt-in, 2026-09-09).} The MR entry/exit
+rule above scores only the spread level; two spreads sitting at the same $z_t$ can
+carry very different funding economics while waiting for the reversion to arrive
+(e.g.\ \texttt{CDBCGB-10y}, whose \texttt{CR+Roll} is materially carry-positive on the
+long side, per the cross-curve TenorSpread sign convention documented in
+\texttt{curves/generators/stat.py}). A spread earning positive carry
+on the side an entry would take needs a smaller adverse move to justify holding it,
+and one earning negative carry (paying away) needs a larger one -- the raw
+price-only $z_t$ cannot express this. \texttt{engine\_monthly.py::run\_monthly\_style\_
+backtest} accepts an optional \texttt{carry\_z\_weight} (default $0.0$, matching prior
+behaviour exactly) that blends the BUY-side carry series into the MR entry/target-exit
+comparison as a composite $z$-score:
+\begin{align}
+\sigma^{\mathrm{carry}}_t &= \operatorname{clip}_{[-1.5,\,1.5]}\!\left(
+  \frac{c_t \times 30/90}{\operatorname{ewmstd}_{\mathrm{span}=60}(s)_t}\right), \\
+z^{\mathrm{comp}}_t &= z_t - w_{\mathrm{carry}} \cdot \sigma^{\mathrm{carry}}_t,
+\end{align}
+where $c_t$ is the daily BUY-side \texttt{CR+Roll} rate (3-month convention, in the
+same percentage units as $s_t$), scaled from its 90-day quoting horizon to the
+$\sim$30-day horizon of an MR entry/exit decision, then expressed in the same
+$z$-units as $z_t$ by dividing by the identical EWMA volatility used in
+Equation~(1) -- so a single instrument's carry can shift the composite but not swamp
+the price signal, reinforced by the $\pm1.5$ clip. $z^{\mathrm{comp}}_t$ replaces
+$z_t$ in the entry test ($z^{\mathrm{comp}}_t \le -z_{entry}$ for long,
+$z^{\mathrm{comp}}_t \ge z_{entry}$ for short) and the post-\texttt{min\_hold}
+target-exit test only; the adverse $z$-score stop and the trend engine are computed
+from raw $z_t$ and are unaffected by $w_{\mathrm{carry}}$. Because high carry lowers
+the bar for a long entry and low/negative carry lowers the bar for a short entry, this
+matches the desk convention of leaning long the carry-positive side of a spread.
+
+This formula is ported, with a fixed $\pm1.5$ clip and $30/90$ horizon scaling
+unchanged, from an earlier regime-hybrid prototype
+(\texttt{engine\_hybrid.py::run\_regime\_hybrid\_backtest}) that was built but never
+wired into the production callback. An initial single-instrument sweep on
+\texttt{CDBCGB-10y} (full history, standard MR defaults, TenorSpread sign fix applied)
+found an interior optimum: Sharpe rose from $0.38$ ($w_{\mathrm{carry}}=0$, 26 trades)
+to a peak of $0.89$ at $w_{\mathrm{carry}}=0.5$ (31 trades, 84\% win rate), then
+degraded past $w_{\mathrm{carry}}\approx1.0$ as carry began to dominate marginal price
+signals rather than merely tilt them. This is one in-sample instrument, not a
+walk-forward validation across the universe, so \texttt{carry\_z\_weight} defaults to
+$0.0$ (identical to pre-existing behaviour) pending a broader candidate study; the
+parameter is wired through \texttt{backtest\_tab.py} but not yet exposed as a UI
+control.
 
 \subsection{Trend Model and Defaults}
 \label{sec:pairs-trend-model}

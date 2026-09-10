@@ -65,6 +65,14 @@ from .legs import (
     _load_leg_data,
     resolve_legs,
 )
+from .saved_state import (
+    save_instrument_params,
+    save_monthly_regime,
+    save_instrument_state,
+    load_instrument_params,
+    load_monthly_regime,
+    has_saved_state,
+)
 
 __all__ = [
     'THEME',
@@ -91,4 +99,10 @@ __all__ = [
     'get_spread_style',
     'resolve_legs',
     'get_bondswap_reference_series',
+    'save_instrument_params',
+    'save_monthly_regime',
+    'save_instrument_state',
+    'load_instrument_params',
+    'load_monthly_regime',
+    'has_saved_state',
 ]

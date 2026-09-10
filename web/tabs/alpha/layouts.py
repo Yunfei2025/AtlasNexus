@@ -635,7 +635,18 @@ def build_individual_backtest_panel() -> html.Div:
         'padding': '7px 10px', 'color': 'var(--text-primary)', 'fontSize': '13px',
         'boxSizing': 'border-box',
     }
-    _inp_mono = {**_inp, 'textAlign': 'right', 'fontFamily': 'var(--font-mono, monospace)'}
+    _inp_mono = {**_inp, 'textAlign': 'right', 'fontFamily': 'var(--font-mono, monospace)',
+                 'padding': '6px 8px', 'fontSize': '12px'}
+    _lbl_xs = {**_lbl, 'fontSize': '8px', 'marginBottom': '4px'}
+    _section_lbl = {
+        'fontSize': '9px', 'fontWeight': '700', 'letterSpacing': '0.08em',
+        'textTransform': 'uppercase', 'color': 'var(--text-muted)', 'marginBottom': '8px',
+    }
+    _subsection = {
+        'background': 'var(--surface-raised)', 'border': '1px solid var(--border-default)',
+        'borderRadius': '6px', 'padding': '10px 12px',
+        'alignSelf': 'flex-start', 'display': 'inline-block',
+    }
 
     return html.Div([
         html.Div([
@@ -657,54 +668,83 @@ def build_individual_backtest_panel() -> html.Div:
                         dcc.Dropdown(id='bt-instrument', options=[], placeholder="Select instrument...",
                                      style={'fontSize': '13px'}),
                     ]),
-                    html.Div([
-                        html.Label("Min Holding (days)", style=_lbl),
-                        dcc.Input(id='bt-min-hold', type='number', value=7, min=1, max=30, step=1, style=_inp),
-                    ]),
                 ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
             ], style={**_card, 'minWidth': '220px', 'maxWidth': '260px'}),
 
             # Automatic monthly regime, trend, and strategy parameters — RIGHT
             html.Div([
                 html.Div([
-                    html.H2("Automatic Monthly Regime", style={**_hdr, 'fontSize': '12px'}),
-                    html.Div(id='bt-regime-badge', style={'minHeight': '20px', 'marginBottom': '14px'}),
-                    html.H2("Trend", style={**_hdr, 'fontSize': '12px'}),
+                    # --- Header row: title + live regime/reviewed status inline ---
                     html.Div([
-                        html.Div([html.Label("Theta z", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-theta', type='number', value=1.25, min=0.25, max=4.0, step=0.05, style=_inp_mono)]),
-                        html.Div([html.Label("Mom window", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style=_inp_mono)]),
-                        html.Div([html.Label("Vol window", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style=_inp_mono)]),
-                        html.Div([html.Label("Trail mult", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-trailing-mult', type='number', value=3.0, min=0.5, max=5.0, step=0.1, style=_inp_mono)]),
-                        html.Div([html.Label("Legacy buffer (unused)", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-carry-buffer', type='number', value=0.0, step=0.0001, style={**_inp_mono, 'opacity': 0.55})]),
-                    ], className='alpha-trend-params', style={'marginBottom': '10px'}),
-                    dcc.Checklist(
-                        id='bt-allow-short',
-                        options=[{'label': ' Allow short-spread trades', 'value': 'allow'}], value=['allow'],
-                        labelStyle={'color': 'var(--text-secondary)', 'fontSize': '11px', 'cursor': 'pointer'},
-                        inputStyle={'accentColor': 'var(--accent-amber)', 'cursor': 'pointer', 'marginRight': '6px'},
-                    ),
-                    html.H2("Strategy Parameters", style={**_hdr, 'fontSize': '12px', 'marginTop': '16px'}),
+                        html.H2("Automatic Monthly Regime", style={**_hdr, 'margin': 0, 'fontSize': '13px', 'whiteSpace': 'nowrap'}),
+                        html.Div(id='bt-regime-badge', style={'flex': '1', 'textAlign': 'right'}),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px', 'flexWrap': 'wrap',
+                              'marginBottom': '6px'}),
+                    html.Div(id='bt-saved-state-badge', style={'minHeight': '16px', 'marginBottom': '12px'}),
+
                     html.Div([
-                        html.Div([html.Label("Entry Z-Score", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25, style=_inp_mono)]),
-                        html.Div([html.Label("Exit Z-Score", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25, style=_inp_mono)]),
-                        html.Div([html.Label("Stop Loss (σ)", style={**_lbl, 'fontSize': '8px'}), dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style=_inp_mono)]),
+                        # --- Trend sub-section ---
                         html.Div([
-                            html.Label("Backtest Period", style={**_lbl, 'fontSize': '8px'}),
-                            dcc.Dropdown(id='bt-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}, {'label': '10 Years', 'value': 2520}], value=504, clearable=False, style={'fontSize': '12px'}),
-                        ]),
-                    ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(130px, 1fr))', 'gap': '10px'}),
-                ], style={**_card, 'flex': '1', 'minWidth': '460px'}),
+                            html.Div("TREND", style=_section_lbl),
+                            html.Div([
+                                html.Div([html.Label("Theta z", style=_lbl_xs), dcc.Input(id='bt-theta', type='number', value=1.25, min=0.25, max=4.0, step=0.05, style=_inp_mono)]),
+                                html.Div([html.Label("Mom window", style=_lbl_xs), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style=_inp_mono)]),
+                                html.Div([html.Label("Vol window", style=_lbl_xs), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style=_inp_mono)]),
+                                html.Div([html.Label("Trail mult", style=_lbl_xs), dcc.Input(id='bt-trailing-mult', type='number', value=3.0, min=0.5, max=5.0, step=0.1, style=_inp_mono)]),
+                            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(4, minmax(0, 76px))', 'gap': '10px'}),
+                        ], style=_subsection),
+
+                        # --- Mean-reversion / strategy sub-section ---
+                        html.Div([
+                            html.Div("MEAN-REVERSION", style=_section_lbl),
+                            html.Div([
+                                html.Div([html.Label("Entry Z", style=_lbl_xs), dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25, style=_inp_mono)]),
+                                html.Div([html.Label("Exit Z", style=_lbl_xs), dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25, style=_inp_mono)]),
+                                html.Div([html.Label("Stop (σ)", style=_lbl_xs), dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style=_inp_mono)]),
+                                html.Div([
+                                    html.Label("Carry weight", style={**_lbl_xs, 'color': THEME['accent']}),
+                                    dcc.Input(id='bt-carry-z-weight', type='number', value=0.5, min=0.0, max=2.0, step=0.05, style=_inp_mono),
+                                ]),
+                            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(4, minmax(0, 76px))', 'gap': '10px'}),
+                        ], style=_subsection),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '8px', 'marginBottom': '10px'}),
+
+                    # --- Shared controls row: min-hold, period, allow-short ---
+                    html.Div([
+                        html.Div([html.Label("Min Hold (d)", style=_lbl_xs), dcc.Input(id='bt-min-hold', type='number', value=7, min=1, max=30, step=1, style={**_inp_mono, 'width': '64px'})],
+                                  style={'flex': '0 0 auto'}),
+                        html.Div([
+                            html.Label("Backtest Period", style=_lbl_xs),
+                            dcc.Dropdown(id='bt-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}, {'label': '10 Years', 'value': 2520}], value=504, clearable=False, style={'fontSize': '12px', 'width': '110px'}),
+                        ], style={'flex': '0 0 auto'}),
+                        dcc.Checklist(
+                            id='bt-allow-short',
+                            options=[{'label': ' Allow short-spread trades', 'value': 'allow'}], value=['allow'],
+                            labelStyle={'color': 'var(--text-secondary)', 'fontSize': '11px', 'cursor': 'pointer'},
+                            inputStyle={'accentColor': 'var(--accent-amber)', 'cursor': 'pointer', 'marginRight': '6px'},
+                            style={'alignSelf': 'flex-end', 'marginBottom': '7px'},
+                        ),
+                    ], style={'display': 'flex', 'gap': '16px', 'alignItems': 'flex-end', 'flexWrap': 'wrap'}),
+
+                    # Legacy, unused — kept only so old saved layouts/State wiring don't break.
+                    dcc.Input(id='bt-carry-buffer', type='number', value=0.0, style={'display': 'none'}),
+                ], style={**_card, 'flex': '1', 'minWidth': '420px'}),
             ], style={'display': 'flex', 'gap': '14px', 'flex': '1'}),
         ], style={'display': 'flex', 'gap': '14px', 'alignItems': 'flex-start', 'marginBottom': '14px',
                   'flexWrap': 'wrap'}),
 
-        # Run Button
+        # Run / Save Buttons
         html.Div([
             an_button(
                 "▶ Run Individual Backtest", id='bt-run-individual-btn', n_clicks=0,
                 variant="success", style_overrides={'padding': '10px 20px', 'fontSize': '12px'},
             ),
-        ], style={'marginBottom': '16px'}),
+            an_button(
+                "💾 Save Parameters", id='bt-save-params-btn', n_clicks=0,
+                variant="secondary", style_overrides={'padding': '10px 20px', 'fontSize': '12px', 'marginLeft': '10px'},
+            ),
+            html.Span(id='bt-save-params-status', style={'color': 'var(--text-muted)', 'fontSize': '12px', 'marginLeft': '12px'}),
+        ], style={'marginBottom': '16px', 'display': 'flex', 'alignItems': 'center'}),
 
         dcc.Loading(id='loading-bt-individual', type='circle', color=THEME['accent'], style={'minHeight': '60px'}, children=html.Div([
             html.Span(id='bt-individual-status', style={'color': 'var(--text-muted)', 'fontSize': '12px', 'marginBottom': '8px', 'display': 'block'}),
