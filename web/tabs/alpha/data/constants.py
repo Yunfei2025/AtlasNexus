@@ -140,9 +140,16 @@ DIVERSIFIED_TRADE_RECOMMENDATIONS = {
 
 
 def _exclude_swapspread_butterflies(labels: pd.Index | pd.Series):
-    """Return mask that excludes IRS butterfly IDs such as Repo7d-1y2y5y or Shi3M-3m6m9m."""
-    text = labels.astype(str)
-    return ~text.str.match(_SWAP_SPREAD_BUTTERFLY_PATTERN)
+    """No-op mask (kept for callers' shape) -- IRS butterfly IDs such as
+    Repo7d-1y2y5y or Shi3M-3m6m9m used to be filtered out here because the
+    leg-resolution machinery only supported 2 legs. resolve_legs3() /
+    fly_leg_dv01_ratios() (web/tabs/alpha/data/legs.py, 2026-09-10) now
+    resolve all 3 legs with a DV01-neutral belly/wings sign convention, so
+    these IDs are no longer excluded from scanning/scoring.
+    """
+    if isinstance(labels, pd.Series):
+        return pd.Series(True, index=labels.index, dtype=bool)
+    return np.ones(len(labels), dtype=bool)
 
 
 def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:

@@ -21,7 +21,7 @@ from ...risk.helpers import _leg_volume_ratio
 from ..data import (
     THEME, SPREAD_CATEGORIES,
     load_spread_data, load_spread_timeseries, display_key,
-    _get_duration_mult, resolve_legs, _load_leg_data,
+    _get_duration_mult, resolve_legs, resolve_legs3, fly_leg_dv01_ratios, _load_leg_data,
 )
 from ..data.duration import _tenor_to_duration
 from ..scoring import _compute_risk_parity_weights
@@ -658,25 +658,42 @@ def register_portfolio_callbacks(app) -> None:
                 _leg_data = _load_leg_data()
                 leg1_list = []
                 leg2_list = []
+                leg3_list = []
                 ratio_list = []
+                ratio3_list = []
                 _alpha_duration_snap_cache: Dict[str, Any] = {}
                 for _, row in df_scored.iterrows():
                     stype = str(row.get('spread_type', ''))
                     tid = str(row.get('ID', ''))
                     dur = float(row.get('_duration', 0.0)) if pd.notna(row.get('_duration')) else 0.0
-                    l1, l2 = resolve_legs(stype, tid, dur, _leg_data)
+                    l1, l2, l3 = resolve_legs3(stype, tid, dur, _leg_data)
                     leg1_list.append(l1)
                     leg2_list.append(l2)
-                    leg_ratio = _leg_volume_ratio(l1, l2, stype, tid, dur, _alpha_duration_snap_cache)
-                    ratio_list.append(round(float(leg_ratio), 4) if leg_ratio is not None else np.nan)
+                    leg3_list.append(l3 or '')
+                    if l3:
+                        # Fly (belly=leg1, short wing=leg2, long wing=leg3):
+                        # both wings' notional/DV01 ratios vs the belly,
+                        # DV01-neutral split -- see fly_leg_dv01_ratios.
+                        dv01_ratios = fly_leg_dv01_ratios(stype, tid)
+                        r2, r3 = dv01_ratios if dv01_ratios is not None else (np.nan, np.nan)
+                        ratio_list.append(round(float(r2), 4) if pd.notna(r2) else np.nan)
+                        ratio3_list.append(round(float(r3), 4) if pd.notna(r3) else np.nan)
+                    else:
+                        leg_ratio = _leg_volume_ratio(l1, l2, stype, tid, dur, _alpha_duration_snap_cache)
+                        ratio_list.append(round(float(leg_ratio), 4) if leg_ratio is not None else np.nan)
+                        ratio3_list.append(np.nan)
                 df_scored['Leg1'] = leg1_list
                 df_scored['Leg2'] = leg2_list
+                df_scored['Leg3'] = leg3_list
                 df_scored['ratio_v2_v1'] = ratio_list
+                df_scored['ratio_v3_v1'] = ratio3_list
             except Exception as e:
                 print(f"WARNING: Leg resolution failed: {e}")
                 df_scored['Leg1'] = ''
                 df_scored['Leg2'] = ''
+                df_scored['Leg3'] = ''
                 df_scored['ratio_v2_v1'] = np.nan
+                df_scored['ratio_v3_v1'] = np.nan
 
             # Step G: Net Notional + Margin (capital consumption)
             # Each leg is classified as either:
@@ -694,27 +711,36 @@ def register_portfolio_callbacks(app) -> None:
                 leg1_signed = notional_mm
                 _ratio = pd.to_numeric(df_scored['ratio_v2_v1'], errors='coerce').fillna(1.0)
                 leg2_signed = -leg1_signed * _ratio
+                # Fly third leg (long wing): same sign as leg2 (both wings
+                # opposite the belly) -- see resolve_legs3 sign convention.
+                _ratio3 = pd.to_numeric(df_scored.get('ratio_v3_v1'), errors='coerce').fillna(0.0)
+                leg3_signed = -leg1_signed * _ratio3
 
                 _leg1 = df_scored['Leg1'].astype(str)
                 _leg2 = df_scored['Leg2'].astype(str)
+                _leg3 = df_scored.get('Leg3', pd.Series('', index=df_scored.index)).astype(str)
                 _leg1_is_bond = _leg1.str.endswith('.IB')
                 _leg2_is_bond = _leg2.str.endswith('.IB')
+                _leg3_is_bond = _leg3.str.endswith('.IB')
                 _leg1_exists = _leg1.str.len() > 0
                 _leg2_exists = _leg2.str.len() > 0
+                _leg3_exists = _leg3.str.len() > 0
 
                 bond_gross = (
                     leg1_signed.abs().where(_leg1_is_bond, 0.0)
                     + leg2_signed.abs().where(_leg2_is_bond, 0.0)
+                    + leg3_signed.abs().where(_leg3_is_bond, 0.0)
                 )
 
                 swapfut_net = (
                     leg1_signed.where(_leg1_exists & ~_leg1_is_bond, 0.0)
                     + leg2_signed.where(_leg2_exists & ~_leg2_is_bond, 0.0)
+                    + leg3_signed.where(_leg3_exists & ~_leg3_is_bond, 0.0)
                 )
                 # Conservative floor: if both legs failed to resolve, still margin
                 # the trade's own notional at the swap/futures rate rather than
                 # silently letting it consume zero capital.
-                _both_unresolved = (~_leg1_exists) & (~_leg2_exists)
+                _both_unresolved = (~_leg1_exists) & (~_leg2_exists) & (~_leg3_exists)
                 _fallback = leg1_signed.abs().where(_both_unresolved, 0.0)
 
                 derivative_margin = pd.Series(0.0, index=df_scored.index, dtype=float)
@@ -722,21 +748,37 @@ def register_portfolio_callbacks(app) -> None:
                     _is_derivative = bool(
                         (_leg1_exists.at[_idx] and not _leg1_is_bond.at[_idx])
                         or (_leg2_exists.at[_idx] and not _leg2_is_bond.at[_idx])
+                        or (_leg3_exists.at[_idx] and not _leg3_is_bond.at[_idx])
                     )
                     if not _is_derivative:
                         continue
                     _leg1_mm = float(leg1_signed.at[_idx])
                     _leg2_mm = float(leg2_signed.at[_idx])
-                    derivative_margin.at[_idx] = _swap_derivative_margin_mm(
-                        _leg1.at[_idx],
-                        _leg2.at[_idx],
-                        _leg1_mm,
-                        _leg2_mm,
-                        float(swapfut_net.at[_idx]),
-                        swap_margin_rate,
-                    )
+                    if _leg3_exists.at[_idx]:
+                        # 3-leg fly derivative margin: treat as leg1-vs-leg2 plus
+                        # leg1-vs-leg3, since _swap_derivative_margin_mm is a
+                        # pairwise (2-leg) margin model with no native 3-leg form.
+                        _leg3_mm = float(leg3_signed.at[_idx])
+                        derivative_margin.at[_idx] = _swap_derivative_margin_mm(
+                            _leg1.at[_idx], _leg2.at[_idx], _leg1_mm, _leg2_mm,
+                            float(leg1_signed.at[_idx] + leg2_signed.at[_idx]),
+                            swap_margin_rate,
+                        ) + _swap_derivative_margin_mm(
+                            _leg1.at[_idx], _leg3.at[_idx], _leg1_mm, _leg3_mm,
+                            float(leg1_signed.at[_idx] + leg3_signed.at[_idx]),
+                            swap_margin_rate,
+                        )
+                    else:
+                        derivative_margin.at[_idx] = _swap_derivative_margin_mm(
+                            _leg1.at[_idx],
+                            _leg2.at[_idx],
+                            _leg1_mm,
+                            _leg2_mm,
+                            float(swapfut_net.at[_idx]),
+                            swap_margin_rate,
+                        )
 
-                net_notional = (leg1_signed + leg2_signed).round(1)
+                net_notional = (leg1_signed + leg2_signed + leg3_signed).round(1)
                 margin = (bond_gross * repo_margin_rate + derivative_margin + _fallback * swap_margin_rate).round(2)
                 return net_notional, margin
 
@@ -747,19 +789,23 @@ def register_portfolio_callbacks(app) -> None:
             # is therefore a limit on the actual netted financing requirement.
             def _portfolio_financing(notional_mm: pd.Series) -> tuple[float, float, float]:
                 _ratio = pd.to_numeric(df_scored['ratio_v2_v1'], errors='coerce').fillna(1.0)
+                _ratio3 = pd.to_numeric(df_scored.get('ratio_v3_v1'), errors='coerce').fillna(0.0)
                 _leg_exposure: dict[str, float] = {}
                 _leg_is_bond: dict[str, bool] = {}
 
-                for row_idx, leg1, leg2, ratio, leg1_notional in zip(
+                for row_idx, leg1, leg2, leg3, ratio, ratio3, leg1_notional in zip(
                     df_scored.index,
                     df_scored['Leg1'].astype(str),
                     df_scored['Leg2'].astype(str),
+                    df_scored.get('Leg3', pd.Series('', index=df_scored.index)).astype(str),
                     _ratio,
+                    _ratio3,
                     notional_mm,
                 ):
                     leg1_notional = float(leg1_notional)
                     leg2_notional = -leg1_notional * float(ratio)
-                    legs = ((leg1, leg1_notional), (leg2, leg2_notional))
+                    leg3_notional = -leg1_notional * float(ratio3)
+                    legs = ((leg1, leg1_notional), (leg2, leg2_notional), (leg3, leg3_notional))
                     resolved_leg = False
                     for leg, leg_notional in legs:
                         if not leg:
@@ -786,15 +832,17 @@ def register_portfolio_callbacks(app) -> None:
                 df_scored['net_notional_mm'], df_scored['margin_mm'] = _compute_net_and_margin(df_scored['notional_mm'])
 
             _ratio = pd.to_numeric(df_scored['ratio_v2_v1'], errors='coerce').fillna(1.0)
+            _ratio3 = pd.to_numeric(df_scored.get('ratio_v3_v1'), errors='coerce').fillna(0.0)
             _leg1_abs = df_scored['notional_mm'].abs()
             _leg2_abs = _leg1_abs * _ratio
+            _leg3_abs = _leg1_abs * _ratio3
             _leg1 = df_scored['Leg1'].astype(str)
             _leg2 = df_scored['Leg2'].astype(str)
             _leg1_bond = _leg1.str.endswith('.IB')
             _leg2_bond = _leg2.str.endswith('.IB')
             _leg1_exists = _leg1.str.len() > 0
             _leg2_exists = _leg2.str.len() > 0
-            _gross_notional_mm = float((_leg1_abs + _leg2_abs).sum())
+            _gross_notional_mm = float((_leg1_abs + _leg2_abs + _leg3_abs).sum())
             _net_bond_mm, _capital_without_repo_mm, _capital_with_repo_mm = _portfolio_financing(df_scored['notional_mm'])
             _gross_leverage = _gross_notional_mm / _capital_with_repo_mm if _capital_with_repo_mm > 0 else 0.0
 
@@ -818,7 +866,7 @@ def register_portfolio_callbacks(app) -> None:
             optimized_results = df_nonzero.to_dict('records')
 
             display_cols = [
-                'ID', 'Leg1', 'Leg2', 'ratio_v2_v1', 'style', 'direction',
+                'ID', 'Leg1', 'Leg2', 'Leg3', 'ratio_v2_v1', 'ratio_v3_v1', 'style', 'direction',
                 'Zscore', 'spread', 'mean', 'vol',
                 'carry_roll', 'breakeven_3m', 'stop_loss', 'profit_target',
                 'seasonal_edge_bps', 'score',
@@ -917,8 +965,8 @@ def register_portfolio_callbacks(app) -> None:
             ]
 
             _port_col_labels = {
-                'Leg1': 'leg 1', 'Leg2': 'leg 2', 'style': 'style',
-                'ratio_v2_v1': 'Ratio (V2/V1)',
+                'Leg1': 'leg 1', 'Leg2': 'leg 2', 'Leg3': 'leg 3', 'style': 'style',
+                'ratio_v2_v1': 'Ratio (V2/V1)', 'ratio_v3_v1': 'Ratio (V3/V1)',
                 'Zscore': 'z-score', 'spread': 'spread(bp)', 'mean': 'mean(bp)',
                 'vol': 'vol(bp)',
                 'carry_roll': 'CR(3m)', 'breakeven_3m': 'b/e(3m)',
@@ -1048,7 +1096,7 @@ def register_portfolio_callbacks(app) -> None:
             _save_cols = [
                 c for c in [
                     'ID', 'spread_type', 'category', 'style', 'direction',
-                    'Leg1', 'Leg2', 'ratio_v2_v1',
+                    'Leg1', 'Leg2', 'Leg3', 'ratio_v2_v1', 'ratio_v3_v1',
                     'Zscore', 'spread', 'carry_roll', 'breakeven_3m', 'vol', 'halflife',
                     'stop_loss', 'profit_target',
                     'notional_mm', 'margin_mm', '_duration', 'DV01_k', 'weight', 'risk_contribution',

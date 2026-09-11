@@ -212,155 +212,153 @@ def build_multiasset_backtest_layout():
         )
 
     return html.Div([
-        # ── Three-Card Horizontal Grid (Strategy / Parameters / Actions) ───
         html.Div([
-            # STRATEGY OVERVIEW — LEFT (fixed width ~280-320px)
+            # ============================= LEFT: all controls =============================
             html.Div([
-                html.H2("Strategy", style={**_hdr, 'fontSize': '12px'}),
+                # --- Strategy ---
                 html.Div([
+                    html.H2("Strategy", style={**_hdr, 'fontSize': '12px'}),
                     html.Div([
-                        html.Div("Factor Pool", style={'fontSize': '9px', 'fontWeight': '600',
+                        html.Div([
+                            html.Div("Factor Pool", style={'fontSize': '9px', 'fontWeight': '600',
+                                                           'textTransform': 'uppercase', 'color': 'var(--text-muted)',
+                                                           'marginBottom': '4px'}),
+                            html.Div(id='backtest-strategy-factor-pool',
+                                    children=[],
+                                    style={'display': 'grid',
+                                           'gridTemplateColumns': 'repeat(3, 1fr)',
+                                           'gap': '4px'}),
+                        ]),
+                        html.Div([
+                            html.Div("Lookback", style={'fontSize': '9px', 'fontWeight': '600',
+                                                        'textTransform': 'uppercase', 'color': 'var(--text-muted)',
+                                                        'marginBottom': '4px'}),
+                            html.Div(id='backtest-strategy-lookback', children="2 Years",
+                                    style={'fontSize': '11px', 'color': 'var(--text-primary)'}),
+                        ]),
+                        html.Div([
+                            html.Div("Capital", style={'fontSize': '9px', 'fontWeight': '600',
                                                        'textTransform': 'uppercase', 'color': 'var(--text-muted)',
                                                        'marginBottom': '4px'}),
-                        html.Div(id='backtest-strategy-factor-pool',
-                                children=[],
-                                style={'display': 'grid',
-                                       'gridTemplateColumns': 'repeat(3, 1fr)',
-                                       'gap': '4px'}),
-                    ]),
-                    html.Div([
-                        html.Div("Lookback", style={'fontSize': '9px', 'fontWeight': '600',
-                                                    'textTransform': 'uppercase', 'color': 'var(--text-muted)',
-                                                    'marginBottom': '4px'}),
-                        html.Div(id='backtest-strategy-lookback', children="2 Years",
-                                style={'fontSize': '11px', 'color': 'var(--text-primary)'}),
-                    ]),
-                    html.Div([
-                        html.Div("Capital", style={'fontSize': '9px', 'fontWeight': '600',
-                                                   'textTransform': 'uppercase', 'color': 'var(--text-muted)',
-                                                   'marginBottom': '4px'}),
-                        html.Div(id='backtest-strategy-capital', children="10 Billion CNY",
-                                style={'fontSize': '11px', 'color': 'var(--text-primary)'}),
-                    ]),
-                ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px'}),
-            ], style={**_card, 'minWidth': '280px', 'maxWidth': '320px', 'marginBottom': '0'}),
+                            html.Div(id='backtest-strategy-capital', children="10 Billion CNY",
+                                    style={'fontSize': '11px', 'color': 'var(--text-primary)'}),
+                        ]),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px'}),
+                ], style=_card),
 
-            # PARAMETERS — MIDDLE (flexible, ~500-700px)
-            html.Div([
-                html.H2("Parameters", style=_hdr),
-
-                # 4-column grid for lookback, capital, correlation, top pairs
+                # --- Parameters ---
                 html.Div([
-                    html.Div([
-                        html.Label("Backtest Lookback", style=_lbl),
-                        dcc.Dropdown(
-                            id='backtest-lookback-preset',
-                            options=[
-                                {'label': '1 Year', 'value': '1Y'},
-                                {'label': '2 Years', 'value': '2Y'},
-                                {'label': '5 Years', 'value': '5Y'},
-                                {'label': '10 Years', 'value': '10Y'},
-                            ],
-                            value='2Y',
-                            clearable=False,
-                            style={'fontSize': '13px'}
-                        ),
-                    ], id='backtest-lookback-container'),
+                    html.H2("Parameters", style=_hdr),
 
                     html.Div([
-                        html.Label("Capital", style=_lbl),
-                        dcc.Input(
-                            id='backtest-capital-input',
-                            type='number',
-                            value=10,
-                            style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}
-                        ),
-                    ]),
+                        html.Div([
+                            html.Label("Backtest Lookback", style=_lbl),
+                            dcc.Dropdown(
+                                id='backtest-lookback-preset',
+                                options=[
+                                    {'label': '1 Year', 'value': '1Y'},
+                                    {'label': '2 Years', 'value': '2Y'},
+                                    {'label': '5 Years', 'value': '5Y'},
+                                    {'label': '10 Years', 'value': '10Y'},
+                                ],
+                                value='2Y',
+                                clearable=False,
+                                style={'fontSize': '13px'}
+                            ),
+                        ], id='backtest-lookback-container'),
 
+                        html.Div([
+                            html.Label("Capital", style=_lbl),
+                            dcc.Input(
+                                id='backtest-capital-input',
+                                type='number',
+                                value=10,
+                                style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner',
+                            ),
+                        ]),
+
+                        html.Div([
+                            html.Label("Unit", style=_lbl),
+                            dcc.Dropdown(
+                                id='backtest-capital-unit',
+                                options=[
+                                    {"label": "Million", "value": "million"},
+                                    {"label": "Billion", "value": "billion"},
+                                ],
+                                value="billion",
+                                clearable=False,
+                                style={'fontSize': '13px'}
+                            ),
+                        ]),
+
+                        html.Div([
+                            html.Label("Correlation Lookback", style=_lbl),
+                            dcc.Dropdown(
+                                id='backtest-corr-lookback',
+                                options=[
+                                    {'label': '3 Months', 'value': '3M'},
+                                    {'label': '6 Months', 'value': '6M'},
+                                    {'label': '1 Year', 'value': '1Y'},
+                                ],
+                                value='1Y',
+                                clearable=False,
+                                style={'fontSize': '13px'}
+                            ),
+                        ]),
+
+                        html.Div([
+                            html.Label("Top Low-Corr Pairs", style=_lbl),
+                            dcc.Input(
+                                id='backtest-top-pairs',
+                                type='number',
+                                value=10, min=5, max=20,
+                                style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner',
+                            ),
+                        ]),
+                    ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(2, minmax(0, 1fr))',
+                              'gap': '10px', 'marginBottom': '12px'}),
+
+                    # Date Mode + Allocation Mode segmented controls
                     html.Div([
-                        html.Label("Unit", style=_lbl),
-                        dcc.Dropdown(
-                            id='backtest-capital-unit',
-                            options=[
-                                {"label": "Million", "value": "million"},
-                                {"label": "Billion", "value": "billion"},
-                            ],
-                            value="billion",
-                            clearable=False,
-                            style={'fontSize': '13px'}
-                        ),
-                    ]),
+                        html.Div([
+                            html.Label("Date Mode", style=_lbl),
+                            _segmented('backtest-date-mode', [
+                                {'label': 'Preset', 'value': 'preset'},
+                                {'label': 'Custom', 'value': 'custom'},
+                            ], 'preset'),
+                        ]),
 
+                        html.Div([
+                            html.Label("Allocation Mode", style=_lbl),
+                            _segmented('backtest-alloc-mode', [
+                                {'label': 'Pure Risk Parity', 'value': 'risk_parity'},
+                                {'label': 'Factor Model Scaling', 'value': 'factor_scaling'},
+                            ], 'risk_parity'),
+                        ]),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
+
+                    # Hidden date range picker (shown when date_mode='custom')
                     html.Div([
-                        html.Label("Correlation Lookback", style=_lbl),
-                        dcc.Dropdown(
-                            id='backtest-corr-lookback',
-                            options=[
-                                {'label': '3 Months', 'value': '3M'},
-                                {'label': '6 Months', 'value': '6M'},
-                                {'label': '1 Year', 'value': '1Y'},
-                            ],
-                            value='1Y',
-                            clearable=False,
-                            style={'fontSize': '13px'}
-                        ),
-                    ]),
+                        html.Label("Backtest Period:", style=_lbl),
+                        html.Div([
+                            dcc.DatePickerRange(
+                                id='history-date-range',
+                                min_date_allowed=datetime(2019, 1, 1).date(),
+                                max_date_allowed=datetime.now().date(),
+                                start_date=datetime(2024, 1, 1).date(),
+                                end_date=datetime.now().date(),
+                                display_format='YYYY-MM-DD',
+                                style={'backgroundColor': 'var(--surface-input)', 'color': 'var(--text-primary)'},
+                                updatemode='bothdates',
+                                with_portal=False,
+                            )
+                        ], style={'display': 'flex', 'gap': '10px', 'position': 'relative', 'zIndex': 999}),
+                        html.Div(id='backtest-min-date-info',
+                                 style={'fontSize': '11px', 'color': 'var(--text-muted)', 'marginTop': '8px'}),
+                    ], id='backtest-period-container', style={'display': 'none', 'marginTop': '12px'}),
+                ], style=_card),
 
-                    html.Div([
-                        html.Label("Top Low-Corr Pairs", style=_lbl),
-                        dcc.Input(
-                            id='backtest-top-pairs',
-                            type='number',
-                            value=10, min=5, max=20,
-                            style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}
-                        ),
-                    ]),
-                ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(140px, 1fr))',
-                          'gap': '10px', 'marginBottom': '12px'}),
-
-                # Date Mode + Allocation Mode segmented controls (two columns)
-                html.Div([
-                    html.Div([
-                        html.Label("Date Mode", style=_lbl),
-                        _segmented('backtest-date-mode', [
-                            {'label': 'Preset', 'value': 'preset'},
-                            {'label': 'Custom', 'value': 'custom'},
-                        ], 'preset'),
-                    ]),
-
-                    html.Div([
-                        html.Label("Allocation Mode", style=_lbl),
-                        _segmented('backtest-alloc-mode', [
-                            {'label': 'Pure Risk Parity', 'value': 'risk_parity'},
-                            {'label': 'Factor Model Scaling', 'value': 'factor_scaling'},
-                        ], 'risk_parity'),
-                    ]),
-                ], style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '10px'}),
-
-                # Hidden date range picker (shown when date_mode='custom')
-                html.Div([
-                    html.Label("Backtest Period:", style=_lbl),
-                    html.Div([
-                        dcc.DatePickerRange(
-                            id='history-date-range',
-                            min_date_allowed=datetime(2019, 1, 1).date(),
-                            max_date_allowed=datetime.now().date(),
-                            start_date=datetime(2024, 1, 1).date(),
-                            end_date=datetime.now().date(),
-                            display_format='YYYY-MM-DD',
-                            style={'backgroundColor': 'var(--surface-input)', 'color': 'var(--text-primary)'},
-                            updatemode='bothdates',
-                            with_portal=False,
-                        )
-                    ], style={'display': 'flex', 'gap': '10px', 'position': 'relative', 'zIndex': 999}),
-                    html.Div(id='backtest-min-date-info',
-                             style={'fontSize': '11px', 'color': 'var(--text-muted)', 'marginTop': '8px'}),
-                ], id='backtest-period-container', style={'display': 'none', 'marginTop': '12px'}),
-            ], style={**_card, 'minWidth': '500px', 'maxWidth': '700px', 'marginBottom': '0', 'flex': '1'}),
-
-            # ACTIONS — RIGHT (fixed width ~140-180px, stacked buttons)
-            html.Div([
-                html.H2("Actions", style={**_hdr, 'fontSize': '12px'}),
+                # --- Actions ---
                 html.Div([
                     an_button(
                         "▶ Run Historical Analysis", id='run-history-button', n_clicks=0,
@@ -374,45 +372,45 @@ def build_multiasset_backtest_layout():
                         "⬇️ Download Report", id='dl-report-button', n_clicks=0, disabled=True,
                         variant="success", style_overrides={'padding': '10px 12px', 'fontSize': '11px', 'width': '100%'},
                     ),
+                    html.Div(id='report-status-message', style={'marginTop': '10px', 'fontSize': '13px'}),
                 ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
-                html.Div(id='report-status-message', style={'marginTop': '10px', 'fontSize': '13px'}),
-            ], style={**_card, 'minWidth': '140px', 'marginBottom': '0', 'display': 'flex',
-                      'flexDirection': 'column', 'justifyContent': 'flex-start'}),
-        ], style={'display': 'grid', 'gridTemplateColumns': 'auto 1fr auto', 'gap': '16px',
-                  'alignItems': 'start', 'marginBottom': '20px', 'maxWidth': '1400px'}),
+            ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px',
+                      'flex': '0 0 300px', 'minWidth': '260px', 'maxWidth': '320px'}),
 
-        # ── Metrics Display ─────────────────────────────────────────────
-        html.Div(id='performance-metrics-container',
-                 style={'marginTop': '15px', 'marginBottom': '15px'}),
+            # ============================= RIGHT: metrics + charts =============================
+            html.Div([
+                html.Div(id='performance-metrics-container',
+                         style={'marginBottom': '15px'}),
 
-        # ── Results ─────────────────────────────────────────────────────
-        dcc.Loading(
-            id="loading-history",
-            type="circle",
-            color=THEME['accent'],
-            children=[
-                dcc.Graph(id='historical-allocation-chart', config={'displayModeBar': False}),
-                html.Div(style={'height': '20px'}),
-                dcc.Graph(id='pnl-attribution-chart', config={'displayModeBar': False}),
-                html.Div(style={'height': '20px'}),
-                # Asset Pool Changes Section
-                html.Div(id='asset-changes-container')
-            ]
-        ),
+                dcc.Loading(
+                    id="loading-history",
+                    type="circle",
+                    color=THEME['accent'],
+                    children=[
+                        dcc.Graph(id='historical-allocation-chart', config={'displayModeBar': False}),
+                        html.Div(style={'height': '20px'}),
+                        dcc.Graph(id='pnl-attribution-chart', config={'displayModeBar': False}),
+                        html.Div(style={'height': '20px'}),
+                        # Asset Pool Changes Section
+                        html.Div(id='asset-changes-container')
+                    ]
+                ),
 
-        # ── Section 4: Monthly Report ───────────────────────────────────
-        html.Div(id='risk-budget-allocation-panel', style={'marginTop': '20px'}),
+                # ── Section 4: Monthly Report ───────────────────────────
+                html.Div(id='risk-budget-allocation-panel', style={'marginTop': '20px'}),
 
-        html.Div([
-            html.H2("本月要点 (Monthly Highlights)", style=_hdr),
-            dcc.Textarea(
-                id='report-commentary-input',
-                style={'width': '100%', 'height': '110px', 'fontSize': '13px',
-                       'background': 'var(--surface-input)', 'color': 'var(--text-primary)',
-                       'border': '1px solid var(--border-default)', 'borderRadius': '6px',
-                       'padding': '8px', 'boxSizing': 'border-box'},
-            ),
-        ], id='report-commentary-container', style={**_card, 'display': 'none'}),
+                html.Div([
+                    html.H2("本月要点 (Monthly Highlights)", style=_hdr),
+                    dcc.Textarea(
+                        id='report-commentary-input',
+                        style={'width': '100%', 'height': '110px', 'fontSize': '13px',
+                               'background': 'var(--surface-input)', 'color': 'var(--text-primary)',
+                               'border': '1px solid var(--border-default)', 'borderRadius': '6px',
+                               'padding': '8px', 'boxSizing': 'border-box'},
+                    ),
+                ], id='report-commentary-container', style={**_card, 'display': 'none', 'marginTop': '15px'}),
+            ], style={'flex': '1', 'minWidth': '0'}),
+        ], style={'display': 'flex', 'gap': '16px', 'alignItems': 'flex-start', 'flexWrap': 'wrap'}),
 
         dcc.Store(id='backtest-results-store'),
         dcc.Store(id='report-meta-store'),
@@ -475,134 +473,136 @@ def build_risk_factor_backtest_layout():
             'display': 'block', 'marginBottom': '6px'}
 
     return html.Div([
-        # ── Factor Selection + Strategy Parameters — two-card grid ──────
         html.Div([
-            # Factor Selection — LEFT
+            # ============================= LEFT: all controls =============================
             html.Div([
-                html.H2("Factor Selection", style=_hdr),
-
+                # --- Factor Selection ---
                 html.Div([
-                    html.Label("Asset Class:", style=_lbl),
-                    dcc.Dropdown(
-                        id='rfbt-asset-class',
-                        options=[
-                            {'label': 'Rates',       'value': 'Rates'},
-                            {'label': 'Spread',      'value': 'Spread'},
-                            {'label': 'FX',          'value': 'FX'},
-                            {'label': 'Commodities', 'value': 'Commodities'},
-                        ],
-                        value='Rates',
-                        clearable=False,
-                        style={'fontSize': '13px'},
-                    ),
-                ], style={'marginBottom': '10px'}),
+                    html.H2("Factor Selection", style=_hdr),
 
-                html.Div([
-                    html.Label("Factor:", style=_lbl),
-                    dcc.Dropdown(
-                        id='rfbt-factor',
-                        options=[],
-                        value=None,
-                        clearable=False,
-                        placeholder="Select factor…",
-                        style={'fontSize': '13px'},
-                    ),
-                ]),
-
-                # Hidden legacy IDs kept for strategy-param callbacks
-                dcc.Store(id='rfbt-strategy-selector', data='FactorModel'),
-                html.Div(id='rfbt-ma-params', children=[
-                    dcc.Input(id='rfbt-ma-short', type='number', value=10, style={'display': 'none'}),
-                    dcc.Input(id='rfbt-ma-long',  type='number', value=30, style={'display': 'none'}),
-                ], style={'display': 'none'}),
-                html.Div(id='rfbt-boll-params', children=[
-                    dcc.Input(id='rfbt-boll-window', type='number', value=20, style={'display': 'none'}),
-                    dcc.Input(id='rfbt-boll-std',    type='number', value=1.5, style={'display': 'none'}),
-                ], style={'display': 'none'}),
-                html.Div(id='rfbt-mom-params', children=[
-                    dcc.Input(id='rfbt-mom-window', type='number', value=20, style={'display': 'none'}),
-                ], style={'display': 'none'}),
-                html.Div(id='rfbt-zscore-params', children=[
-                    dcc.Input(id='rfbt-zscore-window', type='number', value=60,  style={'display': 'none'}),
-                    dcc.Input(id='rfbt-zscore-entry',  type='number', value=1.5, style={'display': 'none'}),
-                    dcc.Input(id='rfbt-zscore-exit',   type='number', value=0.5, style={'display': 'none'}),
-                ], style={'display': 'none'}),
-            ], style={**_card, 'minWidth': '280px', 'maxWidth': '320px'}),
-
-            # Strategy Parameters — RIGHT
-            html.Div([
-                html.H2("Strategy Parameters", style=_hdr),
-                html.Div(id='rfbt-fm-params', children=[
                     html.Div([
-                        html.Label("Train window (months):", style=_lbl),
-                        dcc.Input(id='rfbt-fm-train', type='number', value=12, min=3,
-                                  style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}),
-                    ]),
-                    html.Div([
-                        html.Label("IC threshold:", style=_lbl),
-                        dcc.Input(id='rfbt-fm-ic', type='number', value=0.05, step=0.01, min=0.01,
-                                  style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}),
-                    ]),
-                    html.Div([
-                        html.Label("Top N features:", style=_lbl),
-                        dcc.Input(id='rfbt-fm-topn', type='number', value=8, min=1,
-                                  style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}),
-                    ]),
-                    html.Div([
-                        html.Label("Sizing:", style=_lbl),
+                        html.Label("Asset Class:", style=_lbl),
                         dcc.Dropdown(
-                            id='rfbt-fm-sizing',
+                            id='rfbt-asset-class',
                             options=[
-                                {'label': 'Discrete 5-level', 'value': 'discrete'},
-                                {'label': 'Continuous',       'value': 'continuous'},
+                                {'label': 'Rates',       'value': 'Rates'},
+                                {'label': 'Spread',      'value': 'Spread'},
+                                {'label': 'FX',          'value': 'FX'},
+                                {'label': 'Commodities', 'value': 'Commodities'},
                             ],
-                            value='discrete',
+                            value='Rates',
                             clearable=False,
                             style={'fontSize': '13px'},
                         ),
-                    ]),
+                    ], style={'marginBottom': '10px'}),
+
                     html.Div([
-                        html.Label("Smooth window (days):", style=_lbl),
-                        dcc.Input(id='rfbt-fm-possmooth', type='number', value=10, min=1,
-                                  style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}),
-                    ]),
-                    html.Div([
-                        html.Label("Lookback:", style=_lbl),
+                        html.Label("Factor:", style=_lbl),
                         dcc.Dropdown(
-                            id='rfbt-period-years',
-                            options=[
-                                {'label': '1 Year',   'value': 1},
-                                {'label': '2 Years',  'value': 2},
-                                {'label': '3 Years',  'value': 3},
-                                {'label': '5 Years',  'value': 5},
-                                {'label': '10 Years', 'value': 10},
-                            ],
-                            value=2,
+                            id='rfbt-factor',
+                            options=[],
+                            value=None,
                             clearable=False,
+                            placeholder="Select factor…",
                             style={'fontSize': '13px'},
                         ),
                     ]),
-                    html.Div([
-                        html.Label("Start Date (optional):", style=_lbl),
-                        dcc.DatePickerSingle(
-                            id='rfbt-custom-start',
-                            placeholder='override start…',
-                            clearable=True,
-                            display_format='YYYY-MM-DD',
-                            style={'fontSize': '12px'},
-                        ),
-                    ], style={'minWidth': '160px'}),
-                    html.Div([
-                        html.Label("End Date (optional):", style=_lbl),
-                        dcc.DatePickerSingle(
-                            id='rfbt-custom-end',
-                            placeholder='override end…',
-                            clearable=True,
-                            display_format='YYYY-MM-DD',
-                            style={'fontSize': '12px'},
-                        ),
-                    ], style={'minWidth': '160px'}),
-                ], className='strategy-params-grid', style={'marginBottom': '12px'}),
+
+                    # Hidden legacy IDs kept for strategy-param callbacks
+                    dcc.Store(id='rfbt-strategy-selector', data='FactorModel'),
+                    html.Div(id='rfbt-ma-params', children=[
+                        dcc.Input(id='rfbt-ma-short', type='number', value=10, style={'display': 'none'}),
+                        dcc.Input(id='rfbt-ma-long',  type='number', value=30, style={'display': 'none'}),
+                    ], style={'display': 'none'}),
+                    html.Div(id='rfbt-boll-params', children=[
+                        dcc.Input(id='rfbt-boll-window', type='number', value=20, style={'display': 'none'}),
+                        dcc.Input(id='rfbt-boll-std',    type='number', value=1.5, style={'display': 'none'}),
+                    ], style={'display': 'none'}),
+                    html.Div(id='rfbt-mom-params', children=[
+                        dcc.Input(id='rfbt-mom-window', type='number', value=20, style={'display': 'none'}),
+                    ], style={'display': 'none'}),
+                    html.Div(id='rfbt-zscore-params', children=[
+                        dcc.Input(id='rfbt-zscore-window', type='number', value=60,  style={'display': 'none'}),
+                        dcc.Input(id='rfbt-zscore-entry',  type='number', value=1.5, style={'display': 'none'}),
+                        dcc.Input(id='rfbt-zscore-exit',   type='number', value=0.5, style={'display': 'none'}),
+                    ], style={'display': 'none'}),
+                ], style=_card),
+
+                # --- Strategy Parameters ---
+                html.Div([
+                    html.H2("Strategy Parameters", style=_hdr),
+                    html.Div(id='rfbt-fm-params', children=[
+                        html.Div([
+                            html.Label("Train window (months):", style=_lbl),
+                            dcc.Input(id='rfbt-fm-train', type='number', value=12, min=3,
+                                      style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner'),
+                        ]),
+                        html.Div([
+                            html.Label("IC threshold:", style=_lbl),
+                            dcc.Input(id='rfbt-fm-ic', type='number', value=0.05, step=0.01, min=0.01,
+                                      style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner'),
+                        ]),
+                        html.Div([
+                            html.Label("Top N features:", style=_lbl),
+                            dcc.Input(id='rfbt-fm-topn', type='number', value=8, min=1,
+                                      style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner'),
+                        ]),
+                        html.Div([
+                            html.Label("Sizing:", style=_lbl),
+                            dcc.Dropdown(
+                                id='rfbt-fm-sizing',
+                                options=[
+                                    {'label': 'Discrete 5-level', 'value': 'discrete'},
+                                    {'label': 'Continuous',       'value': 'continuous'},
+                                ],
+                                value='discrete',
+                                clearable=False,
+                                style={'fontSize': '13px'},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Smooth window (days):", style=_lbl),
+                            dcc.Input(id='rfbt-fm-possmooth', type='number', value=10, min=1,
+                                      style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner'),
+                        ]),
+                        html.Div([
+                            html.Label("Lookback:", style=_lbl),
+                            dcc.Dropdown(
+                                id='rfbt-period-years',
+                                options=[
+                                    {'label': '1 Year',   'value': 1},
+                                    {'label': '2 Years',  'value': 2},
+                                    {'label': '3 Years',  'value': 3},
+                                    {'label': '5 Years',  'value': 5},
+                                    {'label': '10 Years', 'value': 10},
+                                ],
+                                value=2,
+                                clearable=False,
+                                style={'fontSize': '13px'},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Start Date (optional):", style=_lbl),
+                            dcc.DatePickerSingle(
+                                id='rfbt-custom-start',
+                                placeholder='override start…',
+                                clearable=True,
+                                display_format='YYYY-MM-DD',
+                                style={'fontSize': '12px'},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("End Date (optional):", style=_lbl),
+                            dcc.DatePickerSingle(
+                                id='rfbt-custom-end',
+                                placeholder='override end…',
+                                clearable=True,
+                                display_format='YYYY-MM-DD',
+                                style={'fontSize': '12px'},
+                            ),
+                        ]),
+                    ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
+                ], style=_card),
 
                 an_button(
                     "▶ Run Backtest & Save",
@@ -610,25 +610,26 @@ def build_risk_factor_backtest_layout():
                     variant="success",
                     title="Trains selected factors and incrementally merges them into "
                           "the .joblib model file. Previously trained factors are preserved.",
-                    style_overrides={'padding': '9px 18px', 'fontSize': '13px'},
+                    style_overrides={'padding': '9px 18px', 'fontSize': '13px', 'width': '100%'},
                 ),
-            ], style={**_card, 'flex': '1', 'minWidth': '0'}),
-        ], style={'display': 'grid', 'gridTemplateColumns': 'auto 1fr', 'gap': '16px',
-                  'alignItems': 'start', 'marginBottom': '20px'}),
+            ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px',
+                      'flex': '0 0 300px', 'minWidth': '260px', 'maxWidth': '320px'}),
 
-        # ── Results ─────────────────────────────────────────────────────
-        dcc.Loading(
-            type='circle',
-            color=THEME['accent'],
-            style={'minHeight': '200px'},
-            children=html.Div([
-                html.Div(id='rfbt-status',
-                         style={'color': 'var(--text-secondary)', 'fontSize': '12px',
-                                'marginBottom': '8px'}),
-                html.Div(id='rfbt-results-container', style={'minHeight': '200px'}),
-            ]),
-        ),
-
+            # ============================= RIGHT: results =============================
+            html.Div([
+                dcc.Loading(
+                    type='circle',
+                    color=THEME['accent'],
+                    style={'minHeight': '200px'},
+                    children=html.Div([
+                        html.Div(id='rfbt-status',
+                                 style={'color': 'var(--text-secondary)', 'fontSize': '12px',
+                                        'marginBottom': '8px'}),
+                        html.Div(id='rfbt-results-container', style={'minHeight': '200px'}),
+                    ]),
+                ),
+            ], style={'flex': '1', 'minWidth': '0'}),
+        ], style={'display': 'flex', 'gap': '16px', 'alignItems': 'flex-start', 'flexWrap': 'wrap'}),
     ], style={'padding': '10px'})
 
 

@@ -451,14 +451,27 @@ input:disabled {
   cursor: not-allowed !important;
 }
 
-/* Hide the up/down spinner buttons on number inputs (e.g. risk-budget Exposure boxes) */
-input.no-spinner::-webkit-outer-spin-button,
-input.no-spinner::-webkit-inner-spin-button {
+/* Hide the up/down spinner buttons on all number inputs app-wide. Windows
+   Chrome/Edge render these much larger than macOS does, and on the narrow
+   (60-90px) strategy-parameter boxes used throughout the tabs the spinner
+   overlaps and hides the typed value. Applied globally rather than opt-in
+   per input: with 60+ number inputs across tabs/subtabs, an opt-in class
+   silently drifts (only a handful ever had it applied) and the browser
+   spinner has no upside on inputs this narrow. `.no-spinner` is kept as a
+   harmless no-op class for any call site that still references it.       */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button,
+input.dash-input-element[type="number"]::-webkit-outer-spin-button,
+input.dash-input-element[type="number"]::-webkit-inner-spin-button {
   -webkit-appearance: none !important;
+  appearance: none !important;
   margin: 0 !important;
+  display: none !important;
 }
-input.no-spinner[type="number"] {
+input[type="number"],
+input.dash-input-element[type="number"] {
   -moz-appearance: textfield !important;
+  appearance: textfield !important;
 }
 
 /* ── dcc.DatePickerSingle ─────────────────────────────────────── */

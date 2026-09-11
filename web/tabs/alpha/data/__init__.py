@@ -64,6 +64,8 @@ from .legs import (
     _tenor_str_to_years,
     _load_leg_data,
     resolve_legs,
+    resolve_legs3,
+    fly_leg_dv01_ratios,
 )
 from .saved_state import (
     save_instrument_params,
@@ -98,6 +100,8 @@ __all__ = [
     'get_realtime_spread_bp',
     'get_spread_style',
     'resolve_legs',
+    'resolve_legs3',
+    'fly_leg_dv01_ratios',
     'get_bondswap_reference_series',
     'save_instrument_params',
     'save_monthly_regime',
