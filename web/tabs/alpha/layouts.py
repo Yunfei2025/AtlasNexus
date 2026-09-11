@@ -683,7 +683,6 @@ def build_individual_backtest_panel() -> html.Div:
                     html.Div([
                         html.Div("TREND", style=_section_lbl),
                         html.Div([
-<<<<<<< HEAD
                             html.Div([html.Label("Theta z", style=_lbl_xs), dcc.Input(id='bt-theta', type='number', value=1.25, min=0.25, max=4.0, step=0.05, style=_inp_mono, className='no-spinner')]),
                             html.Div([html.Label("Mom window", style=_lbl_xs), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style=_inp_mono, className='no-spinner')]),
                             html.Div([html.Label("Vol window", style=_lbl_xs), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style=_inp_mono, className='no-spinner')]),
@@ -692,33 +691,6 @@ def build_individual_backtest_panel() -> html.Div:
                     ], style={**_subsection, 'display': 'block', 'width': '100%', 'boxSizing': 'border-box', 'marginBottom': '8px'}),
 
                     # --- Mean-reversion / strategy sub-section ---
-=======
-                            html.Div("TREND", style=_section_lbl),
-                            html.Div([
-                                html.Div([html.Label("Theta z", style=_lbl_xs), dcc.Input(id='bt-theta', type='number', value=1.25, min=0.25, max=4.0, step=0.05, style=_inp_mono)]),
-                                html.Div([html.Label("Mom window", style=_lbl_xs), dcc.Input(id='bt-mom-window', type='number', value=20, min=5, max=120, step=1, style=_inp_mono)]),
-                                html.Div([html.Label("Vol window", style=_lbl_xs), dcc.Input(id='bt-vol-window', type='number', value=60, min=20, max=252, step=1, style=_inp_mono)]),
-                                html.Div([html.Label("Trail mult", style=_lbl_xs), dcc.Input(id='bt-trailing-mult', type='number', value=3.0, min=0.5, max=5.0, step=0.1, style=_inp_mono)]),
-                            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(4, minmax(88px, 1fr))', 'gap': '10px', 'alignItems': 'end'}),
-                        ], style=_subsection),
-
-                        # --- Mean-reversion / strategy sub-section ---
-                        html.Div([
-                            html.Div("MEAN-REVERSION", style=_section_lbl),
-                            html.Div([
-                                html.Div([html.Label("Entry Z", style=_lbl_xs), dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25, style=_inp_mono)]),
-                                html.Div([html.Label("Exit Z", style=_lbl_xs), dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25, style=_inp_mono)]),
-                                html.Div([html.Label("Stop (σ)", style=_lbl_xs), dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style=_inp_mono)]),
-                                html.Div([
-                                    html.Label("Carry weight", style={**_lbl_xs, 'color': THEME['accent']}),
-                                    dcc.Input(id='bt-carry-z-weight', type='number', value=0.5, min=0.0, max=2.0, step=0.05, style=_inp_mono),
-                                ]),
-                            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(4, minmax(88px, 1fr))', 'gap': '10px', 'alignItems': 'end'}),
-                        ], style=_subsection),
-                    ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '8px', 'marginBottom': '10px'}),
-
-                    # --- Shared controls row: min-hold, period, allow-short ---
->>>>>>> 542feee8a6c2ba2e6911a758cb76055ae1065024
                     html.Div([
                         html.Div("MEAN-REVERSION", style=_section_lbl),
                         html.Div([
