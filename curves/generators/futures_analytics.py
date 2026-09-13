@@ -17,6 +17,7 @@ futures_close        Front contract settlement price (per 100 face)
 next_close           Next-season contract settlement price (per 100 face)
 irr                  Implied repo rate of the CTD (%, Wind tbf_irr02)
 fytm                 Futures implied YTM (%, Wind tbf_fytm02)
+next_fytm            Next-quarter contract implied YTM (%, Wind tbf_fytm02 on contract1)
 ==================== ==============================================
 
 Data source: ``DIR_DATA/futures-db.pkl`` for full-history backfill, and an

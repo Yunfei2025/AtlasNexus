@@ -21,7 +21,7 @@ def run_spread_backtest(
     spread_ts: pd.Series,
     entry_z: float = 2.0,
     exit_z: float = 0.5,
-    stop_z: float = 4.0,
+    stop_z: float = 3.0,
     min_hold: int = 7,
     trade_style: str = 'mr',
     carry_roll_ts: Optional[pd.Series] = None,
@@ -122,6 +122,13 @@ def run_spread_backtest(
 
     trades = []
     position = 0
+    # MR stop-loss lockout. A stop fires at a z MORE extreme than entry_z, so the
+    # entry test is still true on the same bar -- without this the engine
+    # re-entered the identical position every bar, fragmenting one losing trade
+    # into dozens of 1-day 'stop_loss' records with total P&L unchanged (stop_z
+    # was effectively a no-op). Require z to recover back inside the entry band
+    # before the same direction may be re-entered.
+    stop_lock_dir = 0
     entry_date = None
     entry_price = None
     entry_zscore = None
@@ -196,6 +203,8 @@ def run_spread_backtest(
                     'days_held': days_held,
                     'exit_reason': exit_reason,
                 })
+                if exit_reason == 'stop_loss':
+                    stop_lock_dir = position
                 position = 0
                 entry_date = None
                 entry_price = None
@@ -208,25 +217,32 @@ def run_spread_backtest(
         )
 
         if position == 0 and not trend_blocked:
+            # Release the stop lockout once the signal recovers back inside the
+            # entry band.
+            if stop_lock_dir == 1 and z > -entry_z:
+                stop_lock_dir = 0
+            elif stop_lock_dir == -1 and z < entry_z:
+                stop_lock_dir = 0
+
             if trade_style == 'mr':
                 # BUY profits when the spread falls; SELL profits when it rises.
-                if z >= entry_z:
+                if z >= entry_z and stop_lock_dir != -1:
                     position = -1
                     entry_date = date
                     entry_price = price
                     entry_zscore = z
-                elif z <= -entry_z:
+                elif z <= -entry_z and stop_lock_dir != 1:
                     position = 1
                     entry_date = date
                     entry_price = price
                     entry_zscore = z
             else:
-                if z <= -entry_z:
+                if z <= -entry_z and stop_lock_dir != 1:
                     position = 1
                     entry_date = date
                     entry_price = price
                     entry_zscore = z
-                elif z >= entry_z:
+                elif z >= entry_z and stop_lock_dir != -1:
                     position = -1
                     entry_date = date
                     entry_price = price

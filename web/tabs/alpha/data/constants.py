@@ -58,7 +58,11 @@ SPREAD_CATEGORIES = {
     'Tenor-Spread': {
         'label': 'Curve & Cross-Asset Spreads',
         'types': ['TenorSpread'],
-        'description': 'Curve slope, cross-curve, and bond/CD-vs-repo spreads (e.g. 5s10s, CDBCGB, LGBCGB, CGBRepo7d)',
+        'description': (
+            'Curve slope, cross-curve, and bond/CD-vs-repo spreads (e.g. 5s10s, CDBCGB, '
+            'LGBCGB, CGBRepo7d), plus Repo7d-1y5y, Shi3M-1y5y, Repo7d-3m1y, Basis-1y and '
+            'Basis-5y carried over from SwapSpread for this core portfolio'
+        ),
         'style': 'Mixed',
     },
     'Bond-Futures': {

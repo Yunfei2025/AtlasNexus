@@ -275,6 +275,11 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
                 if tenor_token:
                     otr = otr_cgb.get(_t_label(tenor_years), '')
                     return (otr, f'FR007S{tenor_token}.IR')
+        elif upper.startswith(('REPO7D-', 'SHI3M-', 'BASIS-')):
+            # IRS curve-slope/basis instruments carried over from SwapSpread
+            # into this category (see curves.generators.stat.compute_tenor_spreads);
+            # same leg semantics as stype == 'SwapSpread' below.
+            return _parse_repo_spread_legs(tid)
         return ('', '')
 
     # Mature OFRk-vs-OTR relative value (signal_variant=otr_ofr_rv), merged

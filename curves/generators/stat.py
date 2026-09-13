@@ -592,8 +592,8 @@ class StatGenerator:
 
           * Bond-Futures (key ``NetBasis``): IRR − repo, where repo = FR007 +
             FUNDING_BASIS_BP.  In bp.
-          * Term Basis (key ``TermBasis``): front − next-season close
-            (``futures_close − next_close``).  In price points (yuan/100 face).
+          * Term Basis (key ``TermBasis``): front − next-season FYTM spread
+            (``fytm − next_fytm``) × 100.  In bp.
           * Futures-Swap (key ``FuturesSwap``): FYTM − matched-tenor FR007 IRS.
             In bp.
         """
@@ -989,6 +989,40 @@ class StatGenerator:
         df_spread_full = pd.DataFrame(instruments).apply(pd.to_numeric, errors='coerce').sort_index()
         df_spread_stats = df_spread_full.loc[self.start:self.da]  # rolling window for OU calibration
 
+        # Pull in a few IRS-curve-slope instruments the user wants included in
+        # this "core portfolio" category even though they are also computed
+        # under SwapSpread (curves.calibration.irs.spreads.irsSpreads) — a
+        # deliberate duplication, not a bug: TenorSpread and SwapSpread serve
+        # different books and each should be independently backtestable/
+        # scannable with this instrument in it. Sourced from the already-
+        # computed IRS-pxspds.pkl (SHI3M curve data isn't in loadCNBDTS's env,
+        # so these can't be rebuilt from the CGB/CDB/SwapTS series above).
+        # Kept under their native Repo7d-/Shi3M-/Basis- names (not renamed to
+        # this category's "NsMs" convention) for consistency with SwapSpread.
+        # CarryRoll3m is taken directly from IRS-pxspds.pkl rather than run
+        # through the generic sign-flip regex below: irsSpreads() already
+        # signs these correctly (Repo7d-1y5y/Shi3M-1y5y are curve slopes,
+        # negated like XsYs; Basis-1y/-5y and Repo7d-3m1y are not slopes and
+        # keep the raw spread sign), and 'Repo7d-3m1y' in particular would
+        # wrongly escape the r'\d+s\d+' slope-detection regex below (its
+        # tenor tokens are 3m/1y, with only one 'y' and no second 's').
+        _irs_extra_cols = ['Repo7d-1y5y', 'Shi3M-1y5y', 'Repo7d-3m1y', 'Basis-1y', 'Basis-5y']
+        _irs_pxspds = loadPKL(os.path.join(DIR_INPUT, 'IRS-pxspds.pkl'))
+        _extra_cr3m = None
+        if isinstance(_irs_pxspds, dict):
+            _irs_spread = _irs_pxspds.get('Spread')
+            _irs_cr3m = _irs_pxspds.get('CarryRoll3m')
+            if isinstance(_irs_spread, pd.DataFrame):
+                for _col in _irs_extra_cols:
+                    if _col in _irs_spread.columns:
+                        df_spread_full[_col] = pd.to_numeric(_irs_spread[_col], errors='coerce')
+            if isinstance(_irs_cr3m, pd.DataFrame):
+                _found = [c for c in _irs_extra_cols if c in _irs_cr3m.columns]
+                if _found:
+                    _extra_cr3m = _irs_cr3m[_found].apply(pd.to_numeric, errors='coerce')
+            df_spread_full = df_spread_full.sort_index()
+            df_spread_stats = df_spread_full.loc[self.start:self.da]
+
         # Carry+Roll (3m) in %:
         #   XsYs (CGB-5s10s, CDB-5s10s)  BUY = long short-tenor, short long-tenor
         #     → carry = Y_short − Y_long = −spread  → CR3m = −spread × 0.25
@@ -998,10 +1032,22 @@ class StatGenerator:
         #     → carry = 2*Y_belly − Y_short − Y_long = +spread  → CR3m = +spread × 0.25
         df_cr3m_full = df_spread_full.copy() * (90.0 / 360.0)
         for col in df_cr3m_full.columns:
+            if col in _irs_extra_cols:
+                continue  # signed correctly below from IRS-pxspds.pkl instead
             if len(re.findall(r'\d+s', col, re.IGNORECASE)) >= 3:
                 continue  # fly: carry = +spread, no negation
             if re.search(r'\d+s\d+', col, re.IGNORECASE):
                 df_cr3m_full[col] = -df_cr3m_full[col]
+
+        # Overwrite with the correctly-signed carry from IRS-pxspds.pkl: the
+        # 'NsMs' tenor tokens above (e.g. '1y5y', '3m1y') don't match the
+        # r'\d+s\d+' slope regex, so the generic pass above would leave these
+        # unflipped (i.e. treat a curve slope as if it carried like a
+        # cross-curve instrument). Reindexed to df_cr3m_full's date index in
+        # case IRS-pxspds.pkl's own history doesn't fully cover it.
+        if _extra_cr3m is not None:
+            for col in _extra_cr3m.columns:
+                df_cr3m_full[col] = _extra_cr3m[col].reindex(df_cr3m_full.index)
 
         # OU statistics on spread levels (using rolling window only)
         try:

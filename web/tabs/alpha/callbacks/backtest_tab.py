@@ -28,6 +28,14 @@ from ..backtest import (
     build_backtest_results_display,
     build_monthly_style_schedule, canonical_style, run_monthly_style_backtest,
 )
+from ..scoring import build_default_category_portfolio
+
+# Portfolio-source dropdown value -> spread_type passed to
+# build_default_category_portfolio. Keyed by dropdown value, not label, so a
+# label wording change doesn't silently break routing.
+_DEFAULT_PORTFOLIO_SPREAD_TYPE = {
+    'default_tenor_spread': 'TenorSpread',
+}
 
 
 def _default_style_for_spread(spread_type: str) -> str:
@@ -137,6 +145,7 @@ def _run_monthly_style_switch_backtest(
     uncertain_policy: str = 'carry_forward',
     ou_mean: Optional[float] = None,
     carry_z_weight: float = 0.0,
+    max_hold: Optional[int] = None,
     month_to_style_override: Optional[dict] = None,
 ):
     """Run one continuous backtest whose entry style is routed by the monthly review.
@@ -177,7 +186,7 @@ def _run_monthly_style_switch_backtest(
         month_to_style,
         entry_z=entry_z if entry_z is not None else 2.0,
         exit_z=exit_z if exit_z is not None else 0.5,
-        stop_z=stop_z if stop_z is not None else 4.0,
+        stop_z=stop_z if stop_z is not None else 3.0,
         min_hold=int(min_hold) if min_hold is not None else 7,
         theta_z=float(theta) if theta is not None else 1.25,
         mom_window=int(mom_window) if mom_window is not None else 20,
@@ -193,6 +202,7 @@ def _run_monthly_style_switch_backtest(
         carry_roll_sell_ts=carry_roll_sell_ts,
         ou_mean=ou_mean,
         carry_z_weight=carry_z_weight,
+        max_hold=max_hold,
     )
 
     if isinstance(results, dict) and 'error' not in results:
@@ -230,6 +240,36 @@ def register_backtest_callbacks(app) -> None:
             pass
 
         return optimized_data or []
+
+    def _resolve_portfolio_source(source, optimized_data, default_portfolio_data):
+        """Return the (portfolio_records, is_default) the panel should use.
+
+        ``source`` is the 'bt-portfolio-source' dropdown value. Client mode
+        keeps the existing behaviour (saved Alpha snapshot, else the
+        Portfolio-tab store); default mode uses the pre-built
+        'bt-default-portfolio-store' data so it never depends on the
+        Portfolio tab having been run.
+        """
+        if source in _DEFAULT_PORTFOLIO_SPREAD_TYPE:
+            return (default_portfolio_data or []), True
+        return _load_portfolio_snapshot(optimized_data), False
+
+    # -------------------------------------------------------------------------
+    # BACKTEST: Build Default Category Portfolio
+    # -------------------------------------------------------------------------
+    @app.callback(
+        Output('bt-default-portfolio-store', 'data'),
+        Input('bt-portfolio-source', 'value'),
+    )
+    def build_default_portfolio_store(source):
+        spread_type = _DEFAULT_PORTFOLIO_SPREAD_TYPE.get(source)
+        if not spread_type:
+            return None
+        try:
+            return build_default_category_portfolio(spread_type)
+        except Exception as e:
+            print(f"[bt-default-portfolio] failed to build {spread_type} book: {e}")
+            return []
 
     # -------------------------------------------------------------------------
     # BACKTEST: Mode Tab Selector
@@ -368,10 +408,13 @@ def register_backtest_callbacks(app) -> None:
     )
     def preset_backtest_params(spread_type, instrument):
         default_allow_short = ['allow']
+        # stop_z=3.0 in both presets: see run_monthly_style_backtest's stop_z
+        # default for the measured rationale (the stop was a no-op until the
+        # re-entry lockout landed).
         if spread_type == 'TenorSpread':
-            preset = (2.5, 0.25, 5.0, 10, 1.50, 30, 90, 2.0, 0.5)
+            preset = (2.5, 0.25, 3.0, 10, 1.50, 30, 90, 2.0, 0.5)
         else:
-            preset = (2.0, 0.5, 4.0, 7, 1.25, 20, 60, 1.5, 0.5)
+            preset = (2.0, 0.5, 3.0, 7, 1.25, 20, 60, 1.5, 0.5)
 
         if instrument and not (isinstance(instrument, str) and instrument.startswith(MACRO_PREFIX)):
             saved = load_instrument_params(spread_type, instrument)
@@ -582,7 +625,7 @@ def register_backtest_callbacks(app) -> None:
                 spread_type=spread_type,
                 entry_z=entry_z or 2.0,
                 exit_z=exit_z or 0.5,
-                stop_z=stop_z or 4.0,
+                stop_z=stop_z or 3.0,
                 min_hold=int(min_hold) if min_hold is not None else 7,
                 theta=float(theta) if theta is not None else 1.25,
                 vol_window=int(vol_window) if vol_window is not None else 60,
@@ -715,7 +758,7 @@ def register_backtest_callbacks(app) -> None:
             params = {
                 'entry_z': entry_z if entry_z is not None else 2.0,
                 'exit_z': exit_z if exit_z is not None else 0.5,
-                'stop_z': stop_z if stop_z is not None else 4.0,
+                'stop_z': stop_z if stop_z is not None else 3.0,
                 'min_hold': int(min_hold) if min_hold is not None else 7,
                 'theta': theta if theta is not None else 1.25,
                 'mom_window': mom_window if mom_window is not None else 20,
@@ -738,13 +781,20 @@ def register_backtest_callbacks(app) -> None:
     # -------------------------------------------------------------------------
     @app.callback(
         Output('bt-portfolio-data-preview', 'children'),
-        Input('alpha-optimized-weights', 'data')
+        [Input('alpha-optimized-weights', 'data'),
+         Input('bt-portfolio-source', 'value'),
+         Input('bt-default-portfolio-store', 'data')],
     )
-    def update_portfolio_preview(optimized_data):
-        portfolio_data = _load_portfolio_snapshot(optimized_data)
+    def update_portfolio_preview(optimized_data, source, default_portfolio_data):
+        portfolio_data, is_default = _resolve_portfolio_source(source, optimized_data, default_portfolio_data)
 
         if not portfolio_data:
-            return html.P("No portfolio data loaded. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.", style={'color': 'var(--accent-amber)', 'fontStyle': 'italic', 'fontSize': '12px'})
+            msg = (
+                "Could not build the default portfolio (no long-history instruments found)."
+                if is_default else
+                "No portfolio data loaded. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first."
+            )
+            return html.P(msg, style={'color': 'var(--accent-amber)', 'fontStyle': 'italic', 'fontSize': '12px'})
 
         try:
             n_assets = len(portfolio_data)
@@ -799,7 +849,11 @@ def register_backtest_callbacks(app) -> None:
                     f"{n_assets - n_reviewed} use the default parameters/regime below.",
                     style={'fontSize': '10px', 'color': 'var(--text-muted)', 'fontStyle': 'italic', 'marginBottom': '10px'},
                 ),
-                html.Div("Active Portfolio Assets (Backtest Universe):", style={'fontSize': '11px', 'color': 'var(--text-muted)', 'marginBottom': '6px'}),
+                html.Div(
+                    "Active Portfolio Assets (Backtest Universe)"
+                    + (" — Default: Curve & Cross-Asset Spreads (risk parity, direction from z-score):" if is_default else ":"),
+                    style={'fontSize': '11px', 'color': 'var(--text-muted)', 'marginBottom': '6px'},
+                ),
                 html.Div(asset_rows, style={'maxHeight': '180px', 'overflowY': 'auto', 'border': '1px solid var(--border-default)',
                                             'borderRadius': '4px', 'padding': '6px 10px', 'background': 'var(--surface-input)'}),
             ])
@@ -814,6 +868,8 @@ def register_backtest_callbacks(app) -> None:
          Output('bt-portfolio-status', 'children')],
         Input('bt-run-portfolio-btn', 'n_clicks'),
         [State('alpha-optimized-weights', 'data'),
+         State('bt-portfolio-source', 'value'),
+         State('bt-default-portfolio-store', 'data'),
          State('bt-initial-capital', 'value'),
          State('bt-txn-cost', 'value'),
          State('bt-port-period', 'value'),
@@ -826,16 +882,22 @@ def register_backtest_callbacks(app) -> None:
          State('bt-port-er-window', 'value')],
         prevent_initial_call=True
     )
-    def run_portfolio_backtest(n_clicks, optimized_data, capital, txn_cost, period,
+    def run_portfolio_backtest(n_clicks, optimized_data, source, default_portfolio_data,
+                               capital, txn_cost, period,
                                entry_z, exit_z, stop_z, min_hold,
                                er_gate_on, er_max, er_window):
         if not n_clicks:
             return html.Div(), ""
 
-        optimized_data = _load_portfolio_snapshot(optimized_data)
+        optimized_data, is_default = _resolve_portfolio_source(source, optimized_data, default_portfolio_data)
 
         if not optimized_data:
-            return html.Div("No optimized portfolio data found. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.", style={'color': THEME['warning'], 'padding': '20px'}), "Waiting for portfolio data..."
+            msg = (
+                "Could not build the default portfolio (no long-history instruments found)."
+                if is_default else
+                "No optimized portfolio data found. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first."
+            )
+            return html.Div(msg, style={'color': THEME['warning'], 'padding': '20px'}), "Waiting for portfolio data..."
 
         try:
             capital = float(capital) if capital is not None else 10000000.0
@@ -969,7 +1031,7 @@ def register_backtest_callbacks(app) -> None:
                             spread_type=spread_type,
                             entry_z=_saved_params.get('entry_z', 2.0),
                             exit_z=_saved_params.get('exit_z', 0.5),
-                            stop_z=_saved_params.get('stop_z', 4.0),
+                            stop_z=_saved_params.get('stop_z', 3.0),
                             min_hold=_saved_params.get('min_hold', 7),
                             theta=_saved_params.get('theta', 1.25),
                             vol_window=_saved_params.get('vol_window', 60),
@@ -1008,7 +1070,7 @@ def register_backtest_callbacks(app) -> None:
 
                 _entry_z  = float(entry_z)  if entry_z  is not None else 2.0
                 _exit_z   = float(exit_z)   if exit_z   is not None else 0.5
-                _stop_z   = float(stop_z)   if stop_z   is not None else 4.0
+                _stop_z   = float(stop_z)   if stop_z   is not None else 3.0
                 _min_hold = int(min_hold) if min_hold is not None else 7
                 _er_max = float(er_max) if ('on' in (er_gate_on or []) and er_max is not None) else None
                 _er_window = int(er_window) if er_window is not None else 20

@@ -837,3 +837,84 @@ def select_diversified_trades(
             selected.append(row.to_dict())
 
     return selected[:max_trades]
+
+
+def build_default_category_portfolio(
+    spread_type: str,
+    *,
+    min_history_days: int = 1200,
+    zscore_min_abs: float = 0.0,
+) -> List[Dict[str, Any]]:
+    """Build a static risk-parity book across every long-history instrument in
+    one spread-type category, direction taken from each instrument's current
+    z-score sign.
+
+    Unlike the Scan/Score workflow (``curves.refreshers.alpha_candidates``),
+    which is a threshold-gated *opportunity* list that changes day to day as
+    spreads cross ``zscore_threshold``, this is a fixed universe: every
+    instrument in the category with enough price history to backtest gets a
+    risk-parity weight and a BUY/SELL tag, so the resulting book is stable and
+    usable as a standing default portfolio (e.g. "Curve & Cross-Asset
+    Spreads") rather than requiring the user to run a scan first.
+
+    Direction convention matches ``compute_unified_edge_vol_score``'s
+    ``mr_dir``: these are mean-reverting spreads, so a positive z-score (rich)
+    is faded (SELL) and a negative z-score (cheap) is bought (BUY).
+
+    Returns a list of ``{ID, spread_type, direction, style, weight, Zscore,
+    score}`` records in the same shape ``alpha-optimized-weights`` stores, so
+    it can be fed directly into the portfolio backtest.
+    """
+    from .data import load_spread_data
+
+    snap = load_spread_data(spread_type)
+    if snap is None or snap.empty:
+        return []
+
+    ts = load_spread_timeseries(spread_type)
+    if ts is None or ts.empty:
+        return []
+
+    long_hist = {
+        c for c in ts.columns
+        if pd.to_numeric(ts[c], errors='coerce').dropna().shape[0] >= min_history_days
+    }
+    universe = [i for i in snap.index if i in long_hist]
+    if not universe:
+        return []
+
+    df = snap.loc[universe].copy()
+    df['ID'] = df.index.astype(str)
+    df['spread_type'] = spread_type
+    df['style'] = 'meanreversion'
+
+    z = pd.to_numeric(df.get('Zscore'), errors='coerce')
+    df = df[z.notna() & (z.abs() >= float(zscore_min_abs))].copy()
+    if df.empty:
+        return []
+    z = pd.to_numeric(df['Zscore'], errors='coerce')
+
+    direction = pd.Series('BUY', index=df.index, dtype=str)
+    direction.loc[z.gt(0)] = 'SELL'
+    df['direction'] = direction
+
+    # carry_roll is stored BUY-side; flip for SELL legs to match the
+    # convention the rest of the alpha pipeline uses (see run_scoring).
+    if 'carry_roll' in df.columns:
+        carry = pd.to_numeric(df['carry_roll'], errors='coerce')
+        df['carry_roll'] = carry.where(direction.eq('BUY'), -carry)
+
+    # A neutral positive score: this book is not scan-ranked, every member
+    # is included by construction, so score only needs to be > 0 to survive
+    # the downstream "score > 0" filters that assume a scanned candidate list.
+    df['score'] = z.abs().clip(lower=0.01)
+
+    df = df.reset_index(drop=True)
+    weights_dict, risk_contrib, _vol = _compute_risk_parity_weights(df)
+    df['weight'] = df['ID'].map(weights_dict).fillna(1.0 / len(df))
+    df['risk_contribution'] = df['ID'].map(dict(zip(weights_dict.keys(), risk_contrib))).fillna(0.0)
+
+    keep_cols = ['ID', 'spread_type', 'direction', 'style', 'weight',
+                 'Zscore', 'score', 'risk_contribution', 'carry_roll', 'vol']
+    keep_cols = [c for c in keep_cols if c in df.columns]
+    return df[keep_cols].sort_values('weight', ascending=False).to_dict('records')

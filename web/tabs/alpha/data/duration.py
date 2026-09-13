@@ -93,10 +93,15 @@ def _get_duration_mult(
         # The 's' suffix is used for years in tenor spread IDs (e.g. 10s = 10 years)
         dash_pos = instrument.find('-')
         tenor_part = instrument[dash_pos + 1:] if dash_pos != -1 else instrument
-        # Match m/M/y/Y suffixes (SwapSpread style) or s/S suffix (TenorSpread style = years)
+        # Match m/M/y/Y suffixes (SwapSpread style, e.g. Repo7d-1y5y, Basis-5y
+        # carried into this category) or s/S suffix (TenorSpread style = years).
+        # A single tenor (Basis-5y) uses it directly; a pair (Repo7d-1y5y) uses
+        # the second/longer leg, same convention as the SwapSpread branch below
+        # and the s-suffix fallback here (tenors_s[1] for a 2-leg ID).
         tenors_my = re.findall(r'\d+(?:\.\d+)?[mMyY]', tenor_part)
         if tenors_my:
-            return _tenor_to_duration(tenors_my[0].lower())
+            idx = 1 if len(tenors_my) >= 2 else 0
+            return _tenor_to_duration(tenors_my[idx].lower())
         # Fall back to 's' suffix: treat Ns as Ny (N years)
         tenors_s = re.findall(r'(\d+(?:\.\d+)?)s', tenor_part, re.IGNORECASE)
         if len(tenors_s) >= 3:
@@ -161,6 +166,14 @@ def _get_borrow_cost_annual_bp(spread_type: str, instrument: str) -> tuple[float
             return float(bc.get(30, 120))
 
     if spread_type == 'TenorSpread':
+        # Repo7d-/Shi3M-/Basis- instruments carried over from SwapSpread (see
+        # curves.generators.stat.compute_tenor_spreads) have no bond leg to
+        # borrow — same (0.0, 0.0) as under spread_type == 'SwapSpread' (no
+        # matching branch there either). Checked first so 'Basis-5y' doesn't
+        # fall into the CDBCGB/-Ny$ bond-borrow-cost match below, which is
+        # for a genuine cash-bond-vs-curve name like 'CDBCGB-5y'/'LGBCGB-10y'.
+        if instrument.upper().startswith(('REPO7D-', 'SHI3M-', 'BASIS-')):
+            return 0.0, 0.0
         # 'CGB-2s5s10s' → belly=5, long_wing=10 (matches resolve_legs() proxy)
         m3 = re.search(r'(\d+)s(\d+)s(\d+)s?$', instrument, re.IGNORECASE)
         if m3:

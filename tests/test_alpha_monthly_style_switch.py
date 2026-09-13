@@ -256,3 +256,98 @@ def test_no_month_styles_produces_no_trades():
     res = run_monthly_style_backtest(s, {})
     assert res['n_trades'] == 0
     assert res['open_trade'] is None
+
+
+# --------------------------------------------------------------------------
+# MR stop-loss re-entry lockout (regression)
+# --------------------------------------------------------------------------
+
+def _blowoff(n=500, seed=5):
+    """Flat noise to establish mean/vol, then a convex blow-off.
+
+    The convexity outruns the rolling mean, so z keeps climbing after the MR
+    short is opened and the stop-loss must fire.
+    """
+    idx = _bdays(n, start='2020-01-01')
+    rng = np.random.default_rng(seed)
+    base = np.zeros(n)
+    base[:300] = rng.normal(0, 0.4, 300)
+    base[300:] = 0.004 * np.arange(n - 300) ** 2
+    return pd.Series(base + rng.normal(0, 0.03, n), index=idx)
+
+
+def _mr_only_styles(series):
+    _, styles = build_monthly_style_schedule(series, allow_trend_style=False)
+    return {p: 'mr' for p in styles}
+
+
+def _run(series, styles, **kw):
+    params = dict(entry_z=2.0, exit_z=0.5, stop_z=2.5, min_hold=7, duration_mult=1.0)
+    params.update(kw)
+    return run_monthly_style_backtest(series, styles, **params)
+
+
+def test_mr_stop_loss_does_not_immediately_reenter_same_direction():
+    """A stop fires at a z beyond entry_z, where the entry test is still true.
+
+    Without a lockout the engine reopened the identical position on the very
+    next bar, fragmenting one loss into dozens of 1-day 'stop_loss' records
+    (measured: 30 stop records where there should be 1).
+    """
+    s = _blowoff()
+    res = _run(s, _mr_only_styles(s))
+    trades = res['trades_df'].reset_index(drop=True)
+    stops = trades.index[trades['exit_reason'] == 'stop_loss']
+    assert len(stops) > 0, 'fixture must produce at least one stop-loss'
+
+    for i in stops:
+        if i + 1 >= len(trades):
+            continue
+        nxt = trades.loc[i + 1]
+        gap = (pd.Timestamp(nxt['entry_date'])
+               - pd.Timestamp(trades.loc[i, 'exit_date'])).days
+        assert not (nxt['direction'] == trades.loc[i, 'direction'] and gap <= 1), (
+            f'row {i}: stop re-entered {nxt["direction"]} after {gap}d'
+        )
+
+
+def test_mr_stop_loss_count_stays_bounded():
+    """The churn signature of the bug: one adverse move -> many stop records."""
+    s = _blowoff()
+    res = _run(s, _mr_only_styles(s))
+    trades = res['trades_df']
+    n_stops = int((trades['exit_reason'] == 'stop_loss').sum())
+    assert n_stops <= 3, f'{n_stops} stop-loss records suggests re-entry churn'
+
+
+def test_max_hold_closes_a_stale_mr_trade():
+    s = _blowoff()
+    res = _run(s, _mr_only_styles(s), stop_z=99.0, max_hold=30)
+    trades = res['trades_df']
+    assert not trades.empty
+    assert 'max_hold' in set(trades['exit_reason'])
+
+
+def test_max_hold_none_preserves_prior_behaviour():
+    s = _blowoff()
+    styles = _mr_only_styles(s)
+    a = _run(s, styles, stop_z=99.0)
+    b = _run(s, styles, stop_z=99.0, max_hold=None)
+    assert round(float(a['total_pnl']), 9) == round(float(b['total_pnl']), 9)
+
+
+# --------------------------------------------------------------------------
+# engine_mr shares the same stop-loss re-entry semantics (regression)
+# --------------------------------------------------------------------------
+
+def test_engine_mr_stop_loss_does_not_churn():
+    from web.tabs.alpha.backtest.engine_mr import run_spread_backtest
+
+    s = _blowoff()
+    res = run_spread_backtest(
+        s, entry_z=2.0, exit_z=0.5, stop_z=2.5, min_hold=7, duration_mult=1.0,
+    )
+    trades = pd.DataFrame(res['trades'])
+    assert not trades.empty
+    n_stops = int((trades['exit_reason'] == 'stop_loss').sum())
+    assert n_stops <= 3, f'{n_stops} stop-loss records suggests re-entry churn'

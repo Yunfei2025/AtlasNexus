@@ -696,7 +696,7 @@ def build_individual_backtest_panel() -> html.Div:
                         html.Div([
                             html.Div([html.Label("Entry Z", style=_lbl_xs), dcc.Input(id='bt-entry-z', type='number', value=2.0, min=0.5, max=4.0, step=0.25, style=_inp_mono, className='no-spinner')]),
                             html.Div([html.Label("Exit Z", style=_lbl_xs), dcc.Input(id='bt-exit-z', type='number', value=0.5, min=0, max=2.0, step=0.25, style=_inp_mono, className='no-spinner')]),
-                            html.Div([html.Label("Stop (σ)", style=_lbl_xs), dcc.Input(id='bt-stop-z', type='number', value=4.0, min=2.0, max=6.0, step=0.5, style=_inp_mono, className='no-spinner')]),
+                            html.Div([html.Label("Stop (σ)", style=_lbl_xs), dcc.Input(id='bt-stop-z', type='number', value=3.0, min=2.0, max=6.0, step=0.5, style=_inp_mono, className='no-spinner')]),
                             html.Div([
                                 html.Label("Carry weight", style={**_lbl_xs, 'color': THEME['accent']}),
                                 dcc.Input(id='bt-carry-z-weight', type='number', value=0.5, min=0.0, max=2.0, step=0.05, style=_inp_mono, className='no-spinner'),
@@ -777,10 +777,35 @@ def build_portfolio_backtest_panel() -> html.Div:
                 # --- Portfolio Data ---
                 html.Div([
                     html.H2("Portfolio Data", style=_hdr),
-                    html.Div(id='bt-portfolio-data-preview', children=[
-                        html.P("No portfolio data loaded. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.",
-                               style={'color': 'var(--accent-amber)', 'fontStyle': 'italic', 'fontSize': '12px'})
-                    ]),
+                    html.Div([
+                        html.Label("Portfolio Source", style=_lbl),
+                        dcc.Dropdown(
+                            id='bt-portfolio-source',
+                            options=[
+                                {'label': "Client Portfolio (from Portfolio tab)", 'value': 'client'},
+                                {'label': "Default: Curve & Cross-Asset Spreads", 'value': 'default_tenor_spread'},
+                            ],
+                            value='client', clearable=False, style={'fontSize': '13px'},
+                        ),
+                        html.P(
+                            "Default portfolios are a fixed, risk-parity-weighted book across every "
+                            "long-history instrument in the category — direction (BUY/SELL) is set by "
+                            "each instrument's current z-score, not a saved scan. Independent of the "
+                            "Portfolio tab.",
+                            style={'color': 'var(--text-muted)', 'fontSize': '11px', 'marginTop': '6px', 'marginBottom': '0'},
+                        ),
+                    ], style={'marginBottom': '10px'}),
+                    dcc.Loading(id='loading-bt-portfolio-source', type='circle', color=THEME['accent'],
+                                style={'minHeight': '20px'}, children=
+                        html.Div(id='bt-portfolio-data-preview', children=[
+                            html.P("No portfolio data loaded. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first.",
+                                   style={'color': 'var(--accent-amber)', 'fontStyle': 'italic', 'fontSize': '12px'})
+                        ]),
+                    ),
+                    # Holds the built default-portfolio records (client mode uses
+                    # alpha-optimized-weights / the saved snapshot directly, see
+                    # _load_portfolio_snapshot / _resolve_portfolio_source).
+                    dcc.Store(id='bt-default-portfolio-store', data=None),
                 ], style=_card),
 
                 # --- Backtest Settings ---
@@ -811,7 +836,7 @@ def build_portfolio_backtest_panel() -> html.Div:
                     html.Div([
                         dcc.Input(id='bt-entry-z', type='number', value=2.0),
                         dcc.Input(id='bt-exit-z', type='number', value=0.5),
-                        dcc.Input(id='bt-stop-z', type='number', value=4.0),
+                        dcc.Input(id='bt-stop-z', type='number', value=3.0),
                         dcc.Input(id='bt-min-hold', type='number', value=7),
                     ], style={'display': 'none'}),
                 ], style=_card),

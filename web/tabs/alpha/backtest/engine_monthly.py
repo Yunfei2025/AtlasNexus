@@ -184,7 +184,12 @@ def run_monthly_style_backtest(
     *,
     entry_z: float = 2.0,
     exit_z: float = 0.5,
-    stop_z: float = 4.0,
+    # 3.0, not 4.0: the MR stop only became functional once the same-direction
+    # re-entry lockout was added (it previously churned one loss into many
+    # 1-day records with total P&L unchanged). Measured on the 25-instrument
+    # TenorSpread book at its own preset (entry 2.5 / exit 0.25 / min_hold 10):
+    # maxDD 1699 -> 1076bp (-37%) and Sharpe 1.686 -> 1.706, for -15% P&L.
+    stop_z: float = 3.0,
     min_hold: int = 7,
     theta_z: float = 1.25,
     mom_window: int = 20,
@@ -198,6 +203,7 @@ def run_monthly_style_backtest(
     # permission -- 15 (3 weeks) was tight enough to silently block entry
     # into a still-fresh trend leg for a full review cycle.
     trend_max_flip_age: int = 25,
+    max_hold: Optional[int] = None,
     carry_roll_ts: Optional[pd.Series] = None,
     carry_roll_bp: float = 0.0,
     duration_mult: float = 1.0,
@@ -227,6 +233,18 @@ def run_monthly_style_backtest(
     *when* MR-style entries are allowed via its own trend/mean-reversion
     voting ensemble; ``ou_mean`` only changes *where* the MR anchor sits during
     those months, it does not change which months are eligible.
+
+    ``max_hold``: optional time stop (calendar days) for MR trades. ``None``
+    disables it (prior behaviour). Without it a losing MR position can sit open
+    for many months waiting for ``exit_z`` -- measured on CGBRepo7d-5y, a single
+    242-day short cost -62.6bp, more than the whole book's profit.
+
+    Stop-loss re-entry: a stop fires at a z strictly beyond ``entry_z``, so the
+    MR entry test is still satisfied on the very same bar. The engine therefore
+    locks out further same-direction MR entries until the signal recovers back
+    inside the entry band. Before this, ``stop_z`` was a silent no-op: lowering
+    it only split one losing trade into many 1-day 'stop_loss' records while
+    total P&L stayed bit-identical.
 
     ``carry_z_weight``: opt-in blend of carry into the MR entry/exit signal
     (0.0 = disabled, matches prior behaviour exactly). Carry is converted to
@@ -372,6 +390,13 @@ def run_monthly_style_backtest(
     last_exit_index = -10 ** 9
     last_exit_dir = 0
     last_exit_flip_run = -1  # flip_run_id of the trend trade we last closed, if any
+    # MR stop-loss lockout. A stop fires at a z MORE extreme than entry_z, so the
+    # MR entry condition is still true on the same bar -- without this the engine
+    # re-entered the identical position every bar, fragmenting one losing trade
+    # into dozens of 1-day "stop_loss" records with the total P&L unchanged
+    # (stop_z was effectively a no-op). Require z to recover back inside the
+    # entry band before the same direction may be re-entered.
+    mr_stop_lock_dir = 0
     realized_pnl = 0.0
     realized_capital = 0.0
     realized_carry = 0.0
@@ -386,6 +411,7 @@ def run_monthly_style_backtest(
         nonlocal position, entry_date, entry_price, entry_zscore, entry_style, best_fav
         nonlocal realized_pnl, realized_capital, realized_carry, open_cr_sum
         nonlocal last_exit_index, last_exit_dir, last_exit_flip_run
+        nonlocal mr_stop_lock_dir
 
         days_held = (date - entry_date).days if entry_date is not None else 0
         price_pnl = (px - entry_price) * position * duration_mult
@@ -418,6 +444,10 @@ def run_monthly_style_backtest(
         last_exit_index = i
         last_exit_dir = position
         last_exit_flip_run = int(flip_run_id[i]) if entry_style == 'trend' else -1
+        # Arm the lockout only for MR stops; a 'target' exit already left the
+        # entry band on its own and needs no lockout.
+        if reason == 'stop_loss' and entry_style == 'mr':
+            mr_stop_lock_dir = position
         position = 0
         entry_date = None
         entry_price = None
@@ -488,6 +518,12 @@ def run_monthly_style_backtest(
                         exit_reason = 'stop_loss'
                     elif position == -1 and z > stop_z:
                         exit_reason = 'stop_loss'
+                # Time stop: an MR thesis that has not converged within
+                # max_hold days is stale (variance ratio keeps falling out to
+                # 120d on these spreads, so waiting longer is not rewarded).
+                # Checked last so a genuine target/stop keeps its own reason.
+                if exit_reason is None and max_hold is not None and days_held >= int(max_hold):
+                    exit_reason = 'max_hold'
                 if exit_reason is not None:
                     _close(i, date, px, exit_reason, z)
 
@@ -495,9 +531,16 @@ def run_monthly_style_backtest(
         if position == 0 and style in ('mr', 'trend'):
             if style == 'mr':
                 if i >= MR_LOOKBACK and np.isfinite(cz):
-                    if cz >= entry_z:
+                    # Release the stop lockout once the signal has genuinely
+                    # recovered back inside the entry band.
+                    if mr_stop_lock_dir == 1 and cz > -entry_z:
+                        mr_stop_lock_dir = 0
+                    elif mr_stop_lock_dir == -1 and cz < entry_z:
+                        mr_stop_lock_dir = 0
+
+                    if cz >= entry_z and mr_stop_lock_dir != -1:
                         position = -1
-                    elif cz <= -entry_z:
+                    elif cz <= -entry_z and mr_stop_lock_dir != 1:
                         position = 1
                     if position != 0:
                         entry_date, entry_price, entry_zscore, entry_style = date, px, z, 'mr'
