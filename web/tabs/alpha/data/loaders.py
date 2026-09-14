@@ -8,7 +8,10 @@ import re
 
 import pandas as pd
 
-from .constants import _build_tenor_spread_timeseries, _exclude_swapspread_butterflies, SPREAD_CATEGORIES
+from .constants import (
+    _build_tenor_spread_timeseries, _exclude_swapspread_butterflies, SPREAD_CATEGORIES,
+    _CGB_30Y_DEPENDENT_INSTRUMENTS, _truncate_cgb_30y_series,
+)
 from .io import _get_input_dir, _load_pickle_safe, _normalize_repo_frame
 
 
@@ -900,6 +903,7 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                 loaded_df = spd.apply(pd.to_numeric, errors='coerce')
 
         # Fallback: rebuild from database-px.pkl via loadCNBDTS if the pkl is unavailable.
+        result_df = None
         try:
             from curves.utils.loader import loadCNBDTS
             env = loadCNBDTS()
@@ -908,15 +912,28 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                 df = pd.DataFrame(tenor_ts)
                 df = df.apply(pd.to_numeric, errors='coerce')
                 if loaded_df is not None and not loaded_df.empty:
-                    return loaded_df.reindex(columns=loaded_df.columns.union(df.columns)).combine_first(df)
-                return df
+                    result_df = loaded_df.reindex(columns=loaded_df.columns.union(df.columns)).combine_first(df)
+                else:
+                    result_df = df
         except Exception:
             pass
 
-        if loaded_df is not None and not loaded_df.empty:
-            return loaded_df
+        if result_df is None and loaded_df is not None and not loaded_df.empty:
+            result_df = loaded_df
 
-        return None
+        if result_df is None:
+            return None
+
+        # See _truncate_cgb_30y_series docstring in .constants: CGB-30y's
+        # pre-2021-07 illiquidity artifact lives in Tenor-spds.pkl (the
+        # "canonical" source above), not just the raw-CNBD rebuild path, so
+        # it must be cut here regardless of which of the two sources above
+        # produced result_df.
+        result_df = result_df.copy()
+        for _col in _CGB_30Y_DEPENDENT_INSTRUMENTS:
+            if _col in result_df.columns:
+                result_df[_col] = _truncate_cgb_30y_series(result_df[_col])
+        return result_df
 
     elif spread_type == 'NetBasis':
         data = _load_pickle_safe(dir_input / 'futures-spds.pkl')

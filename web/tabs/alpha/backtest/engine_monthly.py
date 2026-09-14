@@ -620,7 +620,7 @@ def run_monthly_style_backtest(
     base = {
         'spread_ts': s,
         'zscore_ts': zscore,
-        'composite_signal_ts': zscore,
+        'composite_signal_ts': composite_z,
         'trend_state_ts': trend_state,
         'norm_mom_ts': z_mom,
         'style_ts': style_ts,

@@ -232,6 +232,33 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
                 if 'FR007S1Y.IR' in swap_ts.columns and '中债商业银行同业存单到期收益率(AAA):1年' in icp.columns:
                     result['NCDRepo7d-1y'] = icp['中债商业银行同业存单到期收益率(AAA):1年'] - swap_ts['FR007S1Y.IR']
 
+        for _key in _CGB_30Y_DEPENDENT_INSTRUMENTS:
+            if _key in result and isinstance(result[_key], pd.Series):
+                result[_key] = _truncate_cgb_30y_series(result[_key])
+
         return result
     except Exception:
         return {}
+
+
+# CGB-30y was thinly traded before ~2021-07: the raw CNBD 30y yield node
+# repeatedly prints an isolated single-day jump (3-4x the same day's 10y/20y
+# move, e.g. +15bp on 2018-08-17 vs +3-4bp on the other two legs) that
+# partially reverts over the following days -- a stale/thin-liquidity data
+# artifact, not a real curve move (confirmed by comparing all three legs:
+# genuine curve events like the Feb-Mar 2020 rally move all three legs
+# together). Any spread/fly built off this node inherits the artifact
+# amplified by its coefficient, so every series that uses it is truncated to
+# start once 30y liquidity normalized -- applied both when rebuilding from
+# raw CNBD data (this module) and when reading the pre-built snapshot pickle
+# (see loaders.load_spread_timeseries), since the pickle path is what's
+# actually used day to day and bypasses this function entirely.
+CGB_30Y_TRUNCATE_START = pd.Timestamp('2021-07-01')
+_CGB_30Y_DEPENDENT_INSTRUMENTS = ('CGB-10s30s', 'CGB-10s20s30s', 'LGBCGB-30y')
+
+
+def _truncate_cgb_30y_series(s: pd.Series) -> pd.Series:
+    idx = s.index
+    if not isinstance(idx, pd.DatetimeIndex):
+        idx = pd.to_datetime(idx, errors='coerce')
+    return s.loc[idx >= CGB_30Y_TRUNCATE_START]

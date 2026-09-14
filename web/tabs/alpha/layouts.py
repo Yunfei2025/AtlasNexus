@@ -613,13 +613,28 @@ def build_backtest_layout() -> html.Div:
             style={'marginBottom': '16px', 'width': 'fit-content'},
         ),
 
-        html.Div(id='backtest-mode-content'),
+        # Persists 'bt-spread-type' / 'bt-instrument' / 'bt-portfolio-source'
+        # selections across a page reload (both panels below now stay mounted
+        # across mode-tab switches, so a live session doesn't need this to
+        # preserve results -- see the visibility-toggle note below).
+        dcc.Store(id='bt-selection-store', storage_type='session', data={}),
+
+        # Both panels are built once and kept mounted; switching
+        # 'backtest-mode-tabs' only toggles which one is visible (CSS
+        # display, see toggle_backtest_mode_visibility), instead of tearing
+        # one down and rebuilding the other from scratch. That's what lets a
+        # run's charts/results, dropdown selections, and parameter inputs
+        # survive switching back and forth -- e.g. to compare an individual
+        # spread's backtest against the portfolio's on the same screen.
+        html.Div(id='backtest-individual-panel', children=build_individual_backtest_panel()),
+        html.Div(id='backtest-portfolio-panel', children=build_portfolio_backtest_panel()),
 
     ], style={'padding': '10px', 'display': 'flex', 'flexDirection': 'column', 'gap': '4px'})
 
 
-def build_individual_backtest_panel() -> html.Div:
+def build_individual_backtest_panel(saved_selection: dict | None = None) -> html.Div:
     """Build the individual spread backtest panel."""
+    saved_selection = saved_selection or {}
     _card = {
         'background': 'var(--surface-panel)', 'border': '1px solid var(--border-strong)',
         'borderRadius': '6px', 'padding': '14px 16px',
@@ -661,13 +676,14 @@ def build_individual_backtest_panel() -> html.Div:
                             dcc.Dropdown(
                                 id='bt-spread-type',
                                 options=_BACKTEST_SPREAD_TYPE_OPTIONS,
-                                value='TBondCurve', clearable=False,
+                                value=saved_selection.get('spread_type') or 'TBondCurve', clearable=False,
                                 style={'fontSize': '13px'},
                             ),
                         ]),
                         html.Div([
                             html.Label("Instrument", style=_lbl),
                             dcc.Dropdown(id='bt-instrument', options=[], placeholder="Select instrument...",
+                                         value=saved_selection.get('instrument'),
                                          style={'fontSize': '13px'}),
                         ]),
                     ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
@@ -752,8 +768,9 @@ def build_individual_backtest_panel() -> html.Div:
     ])
 
 
-def build_portfolio_backtest_panel() -> html.Div:
+def build_portfolio_backtest_panel(saved_selection: dict | None = None) -> html.Div:
     """Build the portfolio backtest panel."""
+    saved_selection = saved_selection or {}
     _card = {
         'background': 'var(--surface-panel)', 'border': '1px solid var(--border-strong)',
         'borderRadius': '6px', 'padding': '14px 16px',
@@ -785,7 +802,8 @@ def build_portfolio_backtest_panel() -> html.Div:
                                 {'label': "Client Portfolio (from Portfolio tab)", 'value': 'client'},
                                 {'label': "Default: Curve & Cross-Asset Spreads", 'value': 'default_tenor_spread'},
                             ],
-                            value='client', clearable=False, style={'fontSize': '13px'},
+                            value=saved_selection.get('portfolio_source') or 'client', clearable=False,
+                            style={'fontSize': '13px'},
                         ),
                         html.P(
                             "Default portfolios are a fixed, risk-parity-weighted book across every "
@@ -825,20 +843,15 @@ def build_portfolio_backtest_panel() -> html.Div:
                             dcc.Input(id='bt-txn-cost', type='number', value=0.5, min=0, max=5, step=0.1, style=_inp, className='no-spinner'),
                         ]),
                     ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(2, minmax(0, 1fr))', 'gap': '10px'}),
-                    # Signal settings below are consumed by the portfolio callback as
-                    # the fallback for instruments with no saved per-instrument params
-                    # (see run_portfolio_backtest). Not shown here — tune them per
-                    # instrument on the Individual Spread tab and Save Parameters
-                    # instead of setting one value for the whole book. Kept as hidden
-                    # inputs (not deleted) so Dash can still resolve this callback's
-                    # State, and so the shared IDs with the Individual Spread tab
-                    # keep a value even when this panel is the one mounted.
-                    html.Div([
-                        dcc.Input(id='bt-entry-z', type='number', value=2.0),
-                        dcc.Input(id='bt-exit-z', type='number', value=0.5),
-                        dcc.Input(id='bt-stop-z', type='number', value=3.0),
-                        dcc.Input(id='bt-min-hold', type='number', value=7),
-                    ], style={'display': 'none'}),
+                    # Signal settings for instruments with no saved per-instrument
+                    # params (see run_portfolio_backtest) come from the Individual
+                    # Spread tab's own 'bt-entry-z'/'bt-exit-z'/'bt-stop-z'/
+                    # 'bt-min-hold' inputs — both panels are mounted at once (see
+                    # build_backtest_layout), so the portfolio callback reads those
+                    # directly as State instead of carrying its own hidden copies.
+                    # Tune them per instrument on the Individual Spread tab and
+                    # Save Parameters instead of setting one value for the whole
+                    # book.
                 ], style=_card),
 
                 # --- Trend filter (efficiency-ratio entry gate) ---

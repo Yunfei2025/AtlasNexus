@@ -274,27 +274,59 @@ def register_backtest_callbacks(app) -> None:
     # -------------------------------------------------------------------------
     # BACKTEST: Mode Tab Selector
     # -------------------------------------------------------------------------
+    # Both panels are mounted once (see build_backtest_layout) and stay in the
+    # DOM the whole session; switching tabs only toggles which one is visible.
+    # That's what lets a run's charts/results and dropdown selections survive
+    # switching back and forth, instead of the previous behaviour of tearing
+    # one panel down and rebuilding the other from scratch on every switch.
     @app.callback(
-        Output('backtest-mode-content', 'children'),
+        [Output('backtest-individual-panel', 'style'),
+         Output('backtest-portfolio-panel', 'style')],
         Input('backtest-mode-tabs', 'value'),
     )
-    def render_backtest_mode(mode):
-        if mode == 'individual':
-            return build_individual_backtest_panel()
-        elif mode == 'portfolio':
-            return build_portfolio_backtest_panel()
-        return html.Div("Select a backtest mode.")
+    def toggle_backtest_mode_visibility(mode):
+        show = {'display': 'block'}
+        hide = {'display': 'none'}
+        if mode == 'portfolio':
+            return hide, show
+        return show, hide
+
+    # -------------------------------------------------------------------------
+    # BACKTEST: Persist Spread/Instrument/Portfolio-Source Selection
+    # -------------------------------------------------------------------------
+    # Both panels stay mounted for the life of the session (see
+    # toggle_backtest_mode_visibility above), so this Store is only needed to
+    # restore selections across a page reload/new session, not across a mode
+    # switch.
+    @app.callback(
+        Output('bt-selection-store', 'data'),
+        [Input('bt-spread-type', 'value'),
+         Input('bt-instrument', 'value'),
+         Input('bt-portfolio-source', 'value')],
+        State('bt-selection-store', 'data'),
+    )
+    def persist_backtest_selection(spread_type, instrument, portfolio_source, saved_selection):
+        saved_selection = dict(saved_selection or {})
+        if spread_type is not None:
+            saved_selection['spread_type'] = spread_type
+        if instrument is not None:
+            saved_selection['instrument'] = instrument
+        if portfolio_source is not None:
+            saved_selection['portfolio_source'] = portfolio_source
+        return saved_selection
 
     # -------------------------------------------------------------------------
     # BACKTEST: Populate Instrument Dropdown
     # -------------------------------------------------------------------------
     @app.callback(
-        Output('bt-instrument', 'options'),
+        [Output('bt-instrument', 'options'),
+         Output('bt-instrument', 'value')],
         Input('bt-spread-type', 'value'),
+        State('bt-selection-store', 'data'),
     )
-    def update_instrument_options(spread_type):
+    def update_instrument_options(spread_type, saved_selection):
         if not spread_type:
-            return []
+            return [], None
 
         macro_options = []
         if spread_type == 'TBondSwap':
@@ -304,11 +336,20 @@ def register_backtest_callbacks(app) -> None:
             ]
 
         df = load_spread_data(spread_type)
-        if df is None or df.empty:
-            return macro_options
+        options = macro_options if df is None or df.empty else (
+            macro_options + [{'label': str(idx), 'value': str(idx)} for idx in df.index]
+        )
 
-        options = [{'label': str(idx), 'value': str(idx)} for idx in df.index]
-        return macro_options + options
+        saved_selection = saved_selection or {}
+        saved_instrument = saved_selection.get('instrument')
+        saved_spread_type = saved_selection.get('spread_type')
+        valid_values = {opt['value'] for opt in options}
+        # Only keep the saved instrument if it still belongs to this spread
+        # type (i.e. this call is the initial mount, not a genuine spread-type
+        # change) and still appears in the freshly loaded options.
+        if saved_spread_type == spread_type and saved_instrument in valid_values:
+            return options, saved_instrument
+        return options, None
 
     # -------------------------------------------------------------------------
     # BACKTEST: Display the current monthly regime for the selected instrument
@@ -558,8 +599,17 @@ def register_backtest_callbacks(app) -> None:
                 if carry_roll_ts_instrument is not None:
                     carry_roll_ts_instrument = -carry_roll_ts_instrument
                 carry_roll_bp = -carry_roll_bp
-                if ou_mean is not None:
-                    ou_mean = -ou_mean
+
+            # ou_mean is the fair-value anchor for the PRICE SERIES passed to the
+            # engine below (`-ts if _negate_ts else ts`), so it must follow that
+            # same sign flip -- NOT `_needs_negate`, which only governs carry's
+            # already-sign-adjusted storage convention. Using `_needs_negate` here
+            # left ou_mean un-negated for fly instruments (3+ \d+s groups, e.g.
+            # CGB-10s20s30s) while the price series was still negated, putting
+            # `mean` and `s` on opposite sides of zero and producing spurious
+            # z-scores of 20+ (see blended_mr_mean / composite z-score, Sep 2025+).
+            if ou_mean is not None and is_yield_based:
+                ou_mean = -ou_mean
 
         try:
             duration_mult = _get_duration_mult(instrument, spread_type)
