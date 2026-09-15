@@ -148,6 +148,9 @@ def build_risk_layout():
                     'whiteSpace': 'nowrap', 'marginRight': '16px',
                 }),
                 html.Div(id='summary-combo-strip', style={'display': 'flex', 'alignItems': 'center', 'flex': '1', 'overflow': 'hidden'}),
+                html.Span("🔄", id='summary-combo-refresh', n_clicks=0, title="Reload saved Beta/Alpha backtests from disk",
+                           style={'fontSize': '13px', 'color': THEME['text_sub'], 'marginLeft': '8px', 'flexShrink': '0',
+                                  'cursor': 'pointer', 'padding': '2px 4px'}),
                 html.Span("▼ details", id='summary-combo-chevron', style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginLeft': '12px', 'flexShrink': '0'}),
             ], id='summary-combo-toggle', n_clicks=0, style={'display': 'flex', 'alignItems': 'center', 'cursor': 'pointer', 'userSelect': 'none', 'padding': '4px 0'}),
 
@@ -155,7 +158,7 @@ def build_risk_layout():
             html.Div(id='summary-combo-detail', children=[
                 html.Hr(style={'borderColor': THEME['table_header'], 'margin': '12px 0'}),
 
-                # --- Controls: capital base + weight slider ---
+                # --- Controls: capital base + alpha share (plain inputs, no slider) ---
                 html.Div([
                     html.Div([
                         html.Label("Alpha Capital Base (MM CNY)", style={
@@ -171,21 +174,24 @@ def build_risk_layout():
                         html.Div("Alpha P&L is in bp on unit positions; this notional converts it "
                                  "to a return so the two books are comparable.",
                                  style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '260px'}),
-                        html.Div(id='summary-combo-margin-hint',
-                                 style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '260px'}),
                     ]),
                     html.Div([
-                        html.Label("Alpha Share of Capital", style={
+                        html.Label("Alpha Share of Capital (%)", style={
                             'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
                             'textTransform': 'uppercase', 'color': THEME['text_sub'],
                             'display': 'block', 'marginBottom': '6px'}),
-                        dcc.Slider(id='summary-combo-alpha-weight', min=0, max=100, step=5, value=50,
-                                   marks={0: {'label': '100% Beta', 'style': {'fontSize': '10px', 'color': THEME['text_sub']}},
-                                          50: {'label': '50/50', 'style': {'fontSize': '10px', 'color': THEME['text_sub']}},
-                                          100: {'label': '100% Alpha', 'style': {'fontSize': '10px', 'color': THEME['text_sub']}}},
-                                   tooltip={'placement': 'bottom', 'always_visible': True}),
-                    ], style={'flex': '1', 'minWidth': '280px', 'paddingLeft': '30px'}),
-                ], style={'display': 'flex', 'alignItems': 'flex-start', 'gap': '20px',
+                        dcc.Input(id='summary-combo-alpha-weight', type='number',
+                                  value=50, min=0, max=100, step=5, debounce=True,
+                                  style={'width': '90px', 'backgroundColor': THEME['bg_input'],
+                                         'border': f'1px solid {THEME["table_header"]}',
+                                         'borderRadius': '4px', 'padding': '7px 9px',
+                                         'color': THEME['text_main'], 'fontSize': '13px'}),
+                        html.Div("Beta takes the remainder. 0 = all Beta, 100 = all Alpha.",
+                                 style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '220px'}),
+                    ]),
+                    html.Div(id='summary-combo-margin-hint',
+                             style={'fontSize': '10px', 'color': THEME['text_sub'], 'flex': '1', 'minWidth': '200px', 'alignSelf': 'center'}),
+                ], style={'display': 'flex', 'alignItems': 'flex-start', 'gap': '28px',
                           'flexWrap': 'wrap', 'marginBottom': '16px'}),
 
                 # --- Rendered analysis: metric cards, frontier, equity curves ---

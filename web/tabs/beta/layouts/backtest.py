@@ -365,6 +365,12 @@ def build_multiasset_backtest_layout():
                         variant="success", style_overrides={'padding': '10px 12px', 'fontSize': '11px', 'width': '100%'},
                     ),
                     an_button(
+                        "💾 Save Result", id='save-history-backtest-button', n_clicks=0,
+                        variant="secondary", style_overrides={'padding': '10px 12px', 'fontSize': '11px', 'width': '100%'},
+                    ),
+                    html.Span(id='save-history-backtest-status',
+                              style={'color': 'var(--text-muted)', 'fontSize': '11px', 'display': 'block'}),
+                    an_button(
                         "📄 Generate Report", id='gen-report-button', n_clicks=0,
                         variant="secondary", style_overrides={'padding': '10px 12px', 'fontSize': '11px', 'width': '100%'},
                     ),

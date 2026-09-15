@@ -7,6 +7,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
+import io
+
 import numpy as np
 import pandas as pd
 
@@ -1258,10 +1260,13 @@ def register_backtest_callbacks(app) -> None:
             )
             chart = dcc.Graph(figure=fig, config={'displayModeBar': False})
 
-            label_style = {'color': THEME['text_sub'], 'fontSize': '12px'}
-            val_style   = {'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '16px'}
-            item_style  = {'display': 'flex', 'flexDirection': 'column'}
-            _sub_style = {'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '1px'}
+            label_style = {'color': THEME['text_sub'], 'fontSize': '11px', 'textTransform': 'uppercase',
+                           'letterSpacing': '.05em'}
+            val_style   = {'color': THEME['text_main'], 'fontWeight': '700', 'fontSize': '20px', 'marginTop': '4px'}
+            item_style  = {'display': 'flex', 'flexDirection': 'column', 'backgroundColor': THEME['bg_main'],
+                           'padding': '12px 16px', 'borderRadius': '6px',
+                           'border': f'1px solid {THEME["table_header"]}', 'flex': '1', 'minWidth': '150px'}
+            _sub_style = {'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '3px'}
             stats = html.Div([
                 html.Div([
                     html.Span("Total Return", style=label_style),
@@ -1294,7 +1299,7 @@ def register_backtest_callbacks(app) -> None:
                 ], style=item_style),
                 html.Div([html.Span("Daily Vol",        style=label_style), html.Span(f"{std_pnl:.2f} bp",    style=val_style)], style=item_style),
                 html.Div([html.Span("Trades loaded",    style=label_style), html.Span(f"{len(weighted_equity)}/{len(valid_assets)}", style=val_style)], style=item_style),
-            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '20px', 'marginBottom': '10px'})
+            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '14px'})
 
             contrib_table = dash_table.DataTable(
                 columns=[{'name': c, 'id': c} for c in ['Asset', 'Direction', 'Style', 'Weight', '# Trades', 'Win Rate', 'Wtd PnL (bp)']],
@@ -1372,7 +1377,7 @@ def register_backtest_callbacks(app) -> None:
         if not store_data or 'equity_ts' not in store_data:
             return "Run the portfolio backtest first — nothing to save."
         try:
-            equity_ts = pd.read_json(store_data['equity_ts'], orient='split', typ='series')
+            equity_ts = pd.read_json(io.StringIO(store_data['equity_ts']), orient='split', typ='series')
             equity_ts.index = pd.to_datetime(equity_ts.index)
             save_portfolio_backtest_result(
                 portfolio_source=store_data.get('portfolio_source', ''),

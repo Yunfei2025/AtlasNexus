@@ -890,12 +890,6 @@ def build_portfolio_backtest_panel(saved_selection: dict | None = None) -> html.
                         "💾 Save Result", id='bt-save-portfolio-result-btn', n_clicks=0,
                         variant="secondary", style_overrides={'padding': '10px 14px', 'fontSize': '12px', 'width': '100%', 'marginTop': '8px'},
                     ),
-                    html.P(
-                        "Persists this run's combined equity curve + instrument weights "
-                        "(DIR_ALPHA_PARAMS/alpha_portfolio_backtest.pkl) for later use combining "
-                        "with the beta book, instead of recomputing on demand.",
-                        style={'color': 'var(--text-muted)', 'fontSize': '10px', 'marginTop': '6px', 'marginBottom': '0'},
-                    ),
                     html.Span(id='bt-save-portfolio-result-status', style={'color': 'var(--text-muted)', 'fontSize': '11px', 'marginTop': '6px', 'display': 'block'}),
                 ], style=_card),
             ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px',

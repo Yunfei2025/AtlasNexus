@@ -1033,6 +1033,17 @@ def register_backtest_hist_callbacks(app):
                     'end_date': end_date.strftime('%Y-%m-%d'),
                     'alloc_mode': alloc_mode,
                     'corr_matrix': _corr_payload,
+                    # For the "Save Result" button -> multiasset.storage.save_backtest_result,
+                    # which the beta+alpha combination panel reads via load_last_backtest_result.
+                    'equity_series': [
+                        {'date': d.strftime('%Y-%m-%d'), 'value': float(v)}
+                        for d, v in zip(df_pnl['Date'], df_pnl['Total'])
+                    ] if not df_pnl.empty else [],
+                    'sharpe': float(sharpe_ratio) if metrics_table is not None else 0.0,
+                    'annualized_return': float(annualized_return) if metrics_table is not None else 0.0,
+                    'max_drawdown': float(max_drawdown) if metrics_table is not None else 0.0,
+                    'asset_pool': sorted(all_assets_ever),
+                    'total_capital': float(total_capital_cny) / 1_000_000,
                 }
             else:
                 results_payload = None
@@ -1043,4 +1054,36 @@ def register_backtest_hist_callbacks(app):
             traceback.print_exc()
             err_fig = go.Figure().update_layout(title=f"Error: {str(e)}", template=THEME['chart_template'])
             return err_fig, err_fig, None, html.Div(f"Error: {str(e)}", style={'color': THEME['danger']}), None
+
+    # 6. Save Result — persist the last run so the beta+alpha combination
+    # panel (web/tabs/risk/books/combination_callbacks.py) reads a fixed,
+    # known beta result via multiasset.storage.load_last_backtest_result
+    # instead of nothing (that panel never re-runs this backtest itself).
+    @app.callback(
+        Output('save-history-backtest-status', 'children'),
+        Input('save-history-backtest-button', 'n_clicks'),
+        State('backtest-results-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def save_historical_backtest_result(n_clicks, results_payload):
+        if not n_clicks:
+            return ""
+        if not results_payload or 'equity_series' not in results_payload:
+            return "Run the historical analysis first — nothing to save."
+        try:
+            from multiasset.storage import save_backtest_result
+            save_backtest_result(
+                equity_series=results_payload['equity_series'],
+                sharpe=results_payload.get('sharpe', 0.0),
+                annualized_return=results_payload.get('annualized_return', 0.0),
+                max_drawdown=results_payload.get('max_drawdown', 0.0),
+                asset_pool=results_payload.get('asset_pool', []),
+                total_capital=results_payload.get('total_capital', 0.0),
+                start_date=results_payload.get('start_date'),
+                end_date=results_payload.get('end_date'),
+            )
+            return f"✅ Saved at {pd.Timestamp.now().strftime('%H:%M:%S')}"
+        except Exception as e:
+            traceback.print_exc()
+            return f"⚠️ Save failed: {e}"
 

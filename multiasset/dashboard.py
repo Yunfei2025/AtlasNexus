@@ -774,20 +774,26 @@ def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_un
             drawdowns = (portfolio_values - rolling_max) / rolling_max
             max_drawdown = drawdowns.min()
             
-            metrics_table = html.Table([
-                html.Tr([
-                    html.Th("Annualized Return", style={'padding': '8px 15px', 'backgroundColor': '#3498db', 'color': 'white'}),
-                    html.Th("Sharpe Ratio", style={'padding': '8px 15px', 'backgroundColor': '#3498db', 'color': 'white'}),
-                    html.Th("Max Drawdown", style={'padding': '8px 15px', 'backgroundColor': '#3498db', 'color': 'white'}),
-                ]),
-                html.Tr([
-                    html.Td(f"{annualized_return:.2%}", style={'padding': '8px 15px', 'textAlign': 'center', 'fontWeight': 'bold',
-                                                               'color': '#27ae60' if annualized_return >= 0 else '#e74c3c'}),
-                    html.Td(f"{sharpe_ratio:.2f}", style={'padding': '8px 15px', 'textAlign': 'center', 'fontWeight': 'bold',
-                                                          'color': '#27ae60' if sharpe_ratio >= 1 else '#f39c12' if sharpe_ratio >= 0 else '#e74c3c'}),
-                    html.Td(f"{max_drawdown:.2%}", style={'padding': '8px 15px', 'textAlign': 'center', 'fontWeight': 'bold', 'color': '#e74c3c'}),
-                ]),
-            ], style={'borderCollapse': 'collapse', 'fontSize': '14px'})
+            def _perf_metric_card(label, value_str, color):
+                return html.Div([
+                    html.Div(label, style={'color': '#7f8c8d', 'fontSize': '11px',
+                                            'textTransform': 'uppercase', 'letterSpacing': '.06em',
+                                            'marginBottom': '6px'}),
+                    html.Div(value_str, style={'fontSize': '22px', 'fontWeight': '700', 'color': color}),
+                ], style={'backgroundColor': '#ffffff', 'padding': '12px 16px', 'borderRadius': '6px',
+                          'border': '1px solid #bdc3c7', 'flex': '1', 'minWidth': '150px'})
+
+            metrics_table = html.Div([
+                _perf_metric_card(
+                    "Annualized Return", f"{annualized_return:.2%}",
+                    '#27ae60' if annualized_return >= 0 else '#e74c3c',
+                ),
+                _perf_metric_card(
+                    "Sharpe Ratio", f"{sharpe_ratio:.2f}",
+                    '#27ae60' if sharpe_ratio >= 1 else '#f39c12' if sharpe_ratio >= 0 else '#e74c3c',
+                ),
+                _perf_metric_card("Max Drawdown", f"{max_drawdown:.2%}", '#e74c3c'),
+            ], style={'display': 'flex', 'gap': '10px', 'flexWrap': 'wrap'})
         
         # Serialize the run's result for the "Save Result" button (a
         # separate callback -- the run and the persist-to-disk action are

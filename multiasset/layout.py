@@ -650,9 +650,10 @@ def create_layout():
                             html.Span("PCA Factor Risk Parity", style={'color': '#27ae60', 'fontWeight': 'bold'}),
                         ], style={'display': 'flex', 'alignItems': 'center', 'marginLeft': '30px'}),
                         
-                        # Performance Metrics Table
-                        html.Div(id='performance-metrics-container', style={'marginLeft': '30px'}),
-                    ], style={'marginBottom': '15px', 'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '10px'}),
+                    ], style={'marginBottom': '10px', 'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '10px'}),
+
+                    # Performance Metrics Cards
+                    html.Div(id='performance-metrics-container', style={'marginBottom': '15px'}),
 
                     html.Div([
                         html.Button(
