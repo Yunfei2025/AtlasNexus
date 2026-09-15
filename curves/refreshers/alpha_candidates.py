@@ -33,6 +33,74 @@ from curves.refreshers.alpha_scoring import (
     _add_unified_score_preview,
     _stationary_yes_mask,
 )
+from web.tabs.alpha.data.saved_state import load_instrument_params
+
+# Category default (entry_z, carry_z_weight) when an instrument has no saved
+# state -- mirrors web/tabs/alpha/callbacks/backtest_tab.py's
+# preset_backtest_params, so an un-reviewed instrument's candidate gate uses
+# the same threshold the individual-spread backtest panel would default to.
+_DEFAULT_ENTRY_PARAMS = {
+	"TenorSpread": {"entry_z": 2.5, "carry_z_weight": 0.5},
+}
+_FALLBACK_ENTRY_PARAMS = {"entry_z": 2.0, "carry_z_weight": 0.5}
+
+
+def _entry_params_for(spread_type: str, instrument: str) -> tuple[float, float]:
+	"""Return (entry_z, carry_z_weight) for one instrument: saved params if
+	the instrument has been reviewed (Save Parameters on the individual
+	backtest panel), else the same category default the backtest panel
+	itself would preset for an un-reviewed instrument."""
+	saved = None
+	try:
+		saved = load_instrument_params(spread_type, instrument)
+	except Exception:
+		saved = None
+	default = _DEFAULT_ENTRY_PARAMS.get(spread_type, _FALLBACK_ENTRY_PARAMS)
+	entry_z = default["entry_z"]
+	carry_z_weight = default["carry_z_weight"]
+	if saved:
+		if saved.get("entry_z") is not None:
+			entry_z = float(saved["entry_z"])
+		if saved.get("carry_z_weight") is not None:
+			carry_z_weight = float(saved["carry_z_weight"])
+	return entry_z, carry_z_weight
+
+
+def _add_composite_score(df: pd.DataFrame) -> pd.DataFrame:
+	"""Add 'entry_z_used', 'carry_z_weight_used', and 'composite_z' columns.
+
+	Mirrors the backtest engines' composite score (engine_monthly.py):
+	  composite_z = zscore - carry_z_weight * carry_sigma
+	  carry_sigma = clip(carry_roll_bp/100 * 30/90 / ewm_vol, -1.5, 1.5)
+	using each row's own saved (or category-default) entry_z/carry_z_weight,
+	and the snapshot's own Zscore/ewm_vol/carry_roll -- a same-day check
+	against the backtest's own entry rule, not a multi-day position replay.
+	"""
+	if df.empty:
+		out = df.copy()
+		out["entry_z_used"] = pd.Series(dtype=float)
+		out["carry_z_weight_used"] = pd.Series(dtype=float)
+		out["composite_z"] = pd.Series(dtype=float)
+		return out
+
+	out = df.copy()
+	entry_z_vals = []
+	carry_zw_vals = []
+	for stype, inst in zip(out["spread_type"].astype(str), out["ID"].astype(str)):
+		ez, czw = _entry_params_for(stype, inst)
+		entry_z_vals.append(ez)
+		carry_zw_vals.append(czw)
+	out["entry_z_used"] = entry_z_vals
+	out["carry_z_weight_used"] = carry_zw_vals
+
+	zscore = pd.to_numeric(out.get("Zscore"), errors="coerce")
+	ewm_vol = pd.to_numeric(out.get("ewm_vol"), errors="coerce")
+	ewm_vol = ewm_vol.where(ewm_vol.notna() & ewm_vol.gt(0), pd.to_numeric(out.get("vol"), errors="coerce"))
+	carry_roll_bp = pd.to_numeric(out.get("carry_roll"), errors="coerce").fillna(0.0)
+
+	carry_sigma = ((carry_roll_bp / 100.0) * (30.0 / 90.0) / ewm_vol.replace(0, np.nan)).clip(-1.5, 1.5).fillna(0.0)
+	out["composite_z"] = zscore - out["carry_z_weight_used"] * carry_sigma
+	return out
 
 
 def _corr_display_key(spread_type: str, inst: str) -> str:
@@ -395,15 +463,22 @@ def build_alpha_candidates(
 	except Exception:
 		z_thd = 2.0
 
-	# Mean-reversion entries governed by z-score; futures carry categories exempt.
+	# Mean-reversion entries governed by the SAME composite z-score and
+	# per-instrument entry_z the individual-spread backtest panel would use
+	# (saved params when the instrument has been reviewed, else the category
+	# default preset) -- not the flat zscore_threshold/raw Zscore used
+	# elsewhere. This is a same-day check against the backtest's own entry
+	# rule ("would the backtest open a position on this spread today"), not a
+	# multi-day open-position replay. See _add_composite_score.
+	mr = _add_composite_score(mr)
 	_FUTURES_CATS = {"Bond-Futures", "Futures-Term", "Futures-Swap"}
 	if "category" in mr.columns and not mr.empty:
 		mr_futures = mr[mr["category"].isin(_FUTURES_CATS)].copy()
 		mr_other   = mr[~mr["category"].isin(_FUTURES_CATS)].copy()
-		mr_other   = mr_other[mr_other["abs_zscore"] >= z_thd].copy()
+		mr_other   = mr_other[mr_other["composite_z"].abs() >= mr_other["entry_z_used"]].copy()
 		mr = pd.concat([mr_futures, mr_other], axis=0, ignore_index=True)
 	else:
-		mr = mr[mr["abs_zscore"] >= z_thd].copy()
+		mr = mr[mr["composite_z"].abs() >= mr["entry_z_used"]].copy()
 
 	# Trend/Carry: Swap-Spread, Tenor-Spread, and futures categories do NOT gate by z-score.
 	_CARRY_FREE_CATS = {"Swap-Spread", "Tenor-Spread", "Bond-Futures", "Futures-Term", "Futures-Swap"}
@@ -444,8 +519,12 @@ def build_alpha_candidates(
 	trend = _add_unified_score_preview(trend)
 
 	# Mean-reversion direction follows the platform's economic convention:
-	# BUY profits when the spread falls, so an extreme high z-score is a BUY;
-	# SELL profits when the spread rises, so an extreme low z-score is a SELL.
+	# BUY profits when the spread falls, so an extreme high composite z-score
+	# is a BUY; SELL profits when the spread rises, so an extreme low
+	# composite z-score is a SELL. Uses composite_z (carry-adjusted, per-
+	# instrument entry_z) rather than raw Zscore/zscore_threshold, so the
+	# side shown here is the actual side the backtest's own entry rule would
+	# take today, not just today's raw deviation.
 	# Momentum/Carry direction: trend_state sets the established direction
 	# (BUY=downtrend/expect fall, SELL=uptrend/expect rise); z_t must be the
 	# OPPOSITE sign — a mild pullback against that trend — so there is still
@@ -454,9 +533,9 @@ def build_alpha_candidates(
 	# excluded; a pullback beyond the stretch cap is excluded too (that size
 	# of countertrend move risks being a reversal, not a retracement).
 	if not mr.empty:
-		mr_zscore = pd.to_numeric(mr["Zscore"], errors="coerce")
-		mr.loc[mr_zscore.ge(z_thd), "direction"] = "BUY"
-		mr.loc[mr_zscore.le(-z_thd), "direction"] = "SELL"
+		mr_composite_z = pd.to_numeric(mr["composite_z"], errors="coerce")
+		mr.loc[mr_composite_z.ge(mr["entry_z_used"]), "direction"] = "BUY"
+		mr.loc[mr_composite_z.le(-mr["entry_z_used"]), "direction"] = "SELL"
 
 	if not trend.empty:
 		trend_state = pd.to_numeric(trend.get("trend_state", pd.Series(np.nan, index=trend.index)), errors="coerce")

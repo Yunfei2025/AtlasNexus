@@ -28,7 +28,13 @@ from .helpers import (
 
 
 def register_scan_callbacks(app) -> None:
-    _mr_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'halflife', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'seasonal_label', 'score', 'stop_loss', 'profit_target']
+    # 'composite_z'/'entry_z_used': the carry-adjusted z-score and per-instrument
+    # entry threshold that actually gate MeanReversion candidates and set their
+    # direction (see alpha_candidates.build_alpha_candidates/_add_composite_score)
+    # -- shown next to the raw 'Zscore' so the two can be compared directly,
+    # since carry can shift composite_z's sign relative to the raw Zscore near
+    # the threshold.
+    _mr_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'composite_z', 'entry_z_used', 'spread', 'mean', 'vol', 'halflife', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'seasonal_label', 'score', 'stop_loss', 'profit_target']
     _trend_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'seasonal_label', 'score', 'trend_state', 'stop_loss', 'profit_target']
 
     def _render_candidates_from_df(df_input: pd.DataFrame):
@@ -68,7 +74,7 @@ def register_scan_callbacks(app) -> None:
                 pd.to_numeric(df_display.loc[_sell_mask, 'carry_roll'], errors='coerce').multiply(-1)
             )
 
-        for col in ['Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score', 'stop_loss', 'profit_target', 'trend_state', 'regime_confidence', 'efficiency_ratio', 'hurst', 'ttm_display', 'breakeven_3m', 'seasonal_edge_bps']:
+        for col in ['Zscore', 'composite_z', 'entry_z_used', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score', 'stop_loss', 'profit_target', 'trend_state', 'regime_confidence', 'efficiency_ratio', 'hurst', 'ttm_display', 'breakeven_3m', 'seasonal_edge_bps']:
             if col in df_display.columns:
                 df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(1)
 
