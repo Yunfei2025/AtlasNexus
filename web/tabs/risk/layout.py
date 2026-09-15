@@ -18,40 +18,6 @@ def build_risk_layout():
     3. Ticket: Detailed allocation/trade list
     """
 
-    # --- 1. Combination Data (Placeholders as requested) ---
-    risk_free_rate = 1.5
-
-    # Beta (Strategic Asset Allocation)
-    beta_vol = 15.0
-    beta_sharpe = 0.4
-    beta_ret = beta_vol * beta_sharpe  # 6.0%
-
-    # Alpha (Tactical Adjustments)
-    alpha_vol = 5.0
-    alpha_ir = 0.5
-    alpha_ret = alpha_vol * alpha_ir   # 2.5%
-
-    total_ret = risk_free_rate + beta_ret + alpha_ret
-
-    # Styling helpers
-    def card_style(bg_color=THEME['bg_card']):
-        return {
-            'backgroundColor': bg_color,
-            'padding': '15px',
-            'borderRadius': '6px',
-            'textAlign': 'center',
-            'border': f'1px solid {THEME["table_header"]}',
-            'flex': '1',
-            'margin': '0 5px',
-            'minWidth': '150px'
-        }
-
-    def value_style(color=THEME['success']):
-        return {'fontSize': '24px', 'fontWeight': 'bold', 'color': color, 'margin': '5px 0'}
-
-    def label_style():
-        return {'color': THEME['text_sub'], 'fontSize': '12px', 'textTransform': 'uppercase', 'letterSpacing': '1px'}
-
     # --- Prepare Data for Exposure ---
     heatmap_fig = go.Figure()
     vol_table = None
@@ -170,7 +136,10 @@ def build_risk_layout():
         # ── Books subtab ─────────────────────────────────────────────────────
         html.Div(id='summary-tab-books', children=[
 
-        # 1. Combination Section — collapsed summary strip, expandable on click
+        # 1. Combination Section — collapsed summary strip, expandable on click.
+        # Both the strip and the detail body are rendered by a callback from
+        # the two books' *saved* backtest results (see books/combination.py);
+        # nothing here is computed at layout time.
         html.Div([
             html.Div([
                 html.Span("Portfolio Combination", style={
@@ -178,60 +147,50 @@ def build_risk_layout():
                     'textTransform': 'uppercase', 'color': THEME['text_sub'],
                     'whiteSpace': 'nowrap', 'marginRight': '16px',
                 }),
-                html.Div([
-                    html.Div([
-                        html.Span(f"{total_ret:.1f}%", style={'fontSize': '18px', 'fontWeight': '700', 'color': THEME['accent']}),
-                        html.Span("Target Return", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '2px'}),
-                    ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center', 'padding': '4px 20px', 'borderRight': f'1px solid {THEME["table_header"]}'}),
-                    html.Span("=", style={'padding': '0 14px', 'color': THEME['table_header'], 'fontSize': '18px'}),
-                    html.Div([
-                        html.Span(f"{risk_free_rate:.1f}%", style={'fontSize': '18px', 'fontWeight': '700', 'color': THEME['success']}),
-                        html.Span("Risk Free", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '2px'}),
-                    ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center', 'padding': '4px 20px', 'borderRight': f'1px solid {THEME["table_header"]}'}),
-                    html.Span("+", style={'padding': '0 14px', 'color': THEME['table_header'], 'fontSize': '18px'}),
-                    html.Div([
-                        html.Span(f"{beta_ret:.1f}%", style={'fontSize': '18px', 'fontWeight': '700', 'color': THEME['accent']}),
-                        html.Span("Beta Alloc", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '2px'}),
-                    ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center', 'padding': '4px 20px', 'borderRight': f'1px solid {THEME["table_header"]}'}),
-                    html.Span("+", style={'padding': '0 14px', 'color': THEME['table_header'], 'fontSize': '18px'}),
-                    html.Div([
-                        html.Span(f"{alpha_ret:.1f}%", style={'fontSize': '18px', 'fontWeight': '700', 'color': THEME['warning']}),
-                        html.Span("Alpha Overlay", style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '2px'}),
-                    ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center', 'padding': '4px 20px'}),
-                ], style={'display': 'flex', 'alignItems': 'center', 'flex': '1', 'overflow': 'hidden'}),
+                html.Div(id='summary-combo-strip', style={'display': 'flex', 'alignItems': 'center', 'flex': '1', 'overflow': 'hidden'}),
                 html.Span("▼ details", id='summary-combo-chevron', style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginLeft': '12px', 'flexShrink': '0'}),
             ], id='summary-combo-toggle', n_clicks=0, style={'display': 'flex', 'alignItems': 'center', 'cursor': 'pointer', 'userSelect': 'none', 'padding': '4px 0'}),
 
             # Expanded detail — collapsed by default
             html.Div(id='summary-combo-detail', children=[
                 html.Hr(style={'borderColor': THEME['table_header'], 'margin': '12px 0'}),
+
+                # --- Controls: capital base + weight slider ---
                 html.Div([
                     html.Div([
-                        html.Div("Risk Free Rate", style=label_style()),
-                        html.Div(f"{risk_free_rate:.1f}%", style=value_style(THEME['success'])),
-                        html.Div("Cash / Treasury", style={'fontSize': '11px', 'color': THEME['text_sub']}),
-                    ], style=card_style()),
+                        html.Label("Alpha Capital Base (MM CNY)", style={
+                            'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
+                            'textTransform': 'uppercase', 'color': THEME['text_sub'],
+                            'display': 'block', 'marginBottom': '6px'}),
+                        dcc.Input(id='summary-combo-alpha-capital', type='number',
+                                  value=2000, min=1, step=100, debounce=True,
+                                  style={'width': '140px', 'backgroundColor': THEME['bg_input'],
+                                         'border': f'1px solid {THEME["table_header"]}',
+                                         'borderRadius': '4px', 'padding': '7px 9px',
+                                         'color': THEME['text_main'], 'fontSize': '13px'}),
+                        html.Div("Alpha P&L is in bp on unit positions; this notional converts it "
+                                 "to a return so the two books are comparable.",
+                                 style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '260px'}),
+                        html.Div(id='summary-combo-margin-hint',
+                                 style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '260px'}),
+                    ]),
                     html.Div([
-                        html.Div("Beta Allocation", style=label_style()),
-                        html.Div(f"{beta_ret:.1f}%", style=value_style(THEME['accent'])),
-                        html.Div([
-                            html.Span("Strategic Asset Allocation", style={'display': 'block', 'marginBottom': '5px'}),
-                            html.Span(f"{beta_vol}% Vol", style={'fontWeight': 'bold', 'color': THEME['accent']}),
-                            html.Span(" × "),
-                            html.Span(f"{beta_sharpe} Sharpe", style={'fontWeight': 'bold', 'color': THEME['accent']}),
-                        ], style={'fontSize': '11px', 'color': THEME['text_sub'], 'backgroundColor': 'rgba(255,255,255,0.05)', 'padding': '5px', 'borderRadius': '4px'}),
-                    ], style=card_style()),
-                    html.Div([
-                        html.Div("Alpha Overlay", style=label_style()),
-                        html.Div(f"{alpha_ret:.1f}%", style=value_style(THEME['warning'])),
-                        html.Div([
-                            html.Span("Tactical Adjustments", style={'display': 'block', 'marginBottom': '5px'}),
-                            html.Span(f"{alpha_vol}% Vol", style={'fontWeight': 'bold', 'color': THEME['warning']}),
-                            html.Span(" × "),
-                            html.Span(f"{alpha_ir} IR", style={'fontWeight': 'bold', 'color': THEME['warning']}),
-                        ], style={'fontSize': '11px', 'color': THEME['text_sub'], 'backgroundColor': 'rgba(255,255,255,0.05)', 'padding': '5px', 'borderRadius': '4px'}),
-                    ], style=card_style()),
-                ], style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'center', 'alignItems': 'stretch'}),
+                        html.Label("Alpha Share of Capital", style={
+                            'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
+                            'textTransform': 'uppercase', 'color': THEME['text_sub'],
+                            'display': 'block', 'marginBottom': '6px'}),
+                        dcc.Slider(id='summary-combo-alpha-weight', min=0, max=100, step=5, value=50,
+                                   marks={0: {'label': '100% Beta', 'style': {'fontSize': '10px', 'color': THEME['text_sub']}},
+                                          50: {'label': '50/50', 'style': {'fontSize': '10px', 'color': THEME['text_sub']}},
+                                          100: {'label': '100% Alpha', 'style': {'fontSize': '10px', 'color': THEME['text_sub']}}},
+                                   tooltip={'placement': 'bottom', 'always_visible': True}),
+                    ], style={'flex': '1', 'minWidth': '280px', 'paddingLeft': '30px'}),
+                ], style={'display': 'flex', 'alignItems': 'flex-start', 'gap': '20px',
+                          'flexWrap': 'wrap', 'marginBottom': '16px'}),
+
+                # --- Rendered analysis: metric cards, frontier, equity curves ---
+                dcc.Loading(id='summary-combo-loading', type='circle', color=THEME['accent'],
+                            children=html.Div(id='summary-combo-body')),
             ], style={'display': 'none', 'overflow': 'hidden'}),
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '14px 20px', 'borderRadius': '5px', 'marginBottom': '20px'}),
 

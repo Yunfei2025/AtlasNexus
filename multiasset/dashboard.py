@@ -34,7 +34,7 @@ from multiasset.layout import (
 
 # Import business logic
 from multiasset.main import run_risk_parity_allocation, create_custom_portfolio
-from multiasset.storage import save_asset_pool
+from multiasset.storage import save_asset_pool, save_backtest_result
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
 from settings.paths import DIR_INPUT
@@ -564,7 +564,8 @@ def update_factor_history_chart(selected_factors):
 @app.callback(
     [Output('historical-allocation-chart', 'figure'),
      Output('pnl-attribution-chart', 'figure'),
-     Output('performance-metrics-container', 'children')],
+     Output('performance-metrics-container', 'children'),
+     Output('history-backtest-last-result-store', 'data')],
     [Input('run-history-button', 'n_clicks')],
     [State('asset-pool-store', 'data'),
      State('capital-input', 'value'),
@@ -575,7 +576,7 @@ def update_factor_history_chart(selected_factors):
 def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_unit, start_date, end_date):
     """Update historical allocation analysis."""
     if n_clicks == 0 or not asset_pool:
-        return go.Figure(), go.Figure(), None
+        return go.Figure(), go.Figure(), None, None
     
     try:
         # Parse dates
@@ -589,7 +590,7 @@ def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_un
         market_data = load_raw_market_data()
         
         if risk_factors.empty:
-            return go.Figure().update_layout(title="No risk factor data available"), go.Figure(), None
+            return go.Figure().update_layout(title="No risk factor data available"), go.Figure(), None, None
         
         # Set date range
         if not end_date:
@@ -654,7 +655,7 @@ def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_un
             allocations_by_date[date] = current_allocations
         
         if not history_data:
-            return go.Figure().update_layout(title="Insufficient data for historical analysis"), go.Figure(), None
+            return go.Figure().update_layout(title="Insufficient data for historical analysis"), go.Figure(), None, None
         
         # Calculate daily PnL
         all_dates = sorted(risk_factors.loc[(risk_factors.index >= start_date) & (risk_factors.index <= end_date)].index)
@@ -788,14 +789,63 @@ def update_historical_allocation(n_clicks, asset_pool, total_capital, capital_un
                 ]),
             ], style={'borderCollapse': 'collapse', 'fontSize': '14px'})
         
-        return fig_alloc, fig_pnl, metrics_table
-        
+        # Serialize the run's result for the "Save Result" button (a
+        # separate callback -- the run and the persist-to-disk action are
+        # kept as distinct user steps, matching the Alpha book's Portfolio
+        # Backtest panel).
+        store_data = None
+        if not df_pnl.empty and len(df_pnl) > 1:
+            store_data = {
+                'equity_series': [
+                    {'date': d.strftime('%Y-%m-%d'), 'value': float(v)}
+                    for d, v in zip(df_pnl['Date'], df_pnl['Total'])
+                ],
+                'sharpe': float(sharpe_ratio),
+                'annualized_return': float(annualized_return),
+                'max_drawdown': float(max_drawdown),
+                'asset_pool': selected_asset_names,
+                'total_capital': float(total_capital),
+                'start_date': start_date.strftime('%Y-%m-%d') if start_date is not None else None,
+                'end_date': end_date.strftime('%Y-%m-%d') if end_date is not None else None,
+            }
+
+        return fig_alloc, fig_pnl, metrics_table, store_data
+
     except Exception as e:
         print(f"Error in historical analysis: {e}")
         import traceback
         traceback.print_exc()
         err_fig = go.Figure().update_layout(title=f"Error: {str(e)}")
-        return err_fig, err_fig, None
+        return err_fig, err_fig, None, None
+
+
+@app.callback(
+    Output('save-history-backtest-status', 'children'),
+    Input('save-history-backtest-button', 'n_clicks'),
+    State('history-backtest-last-result-store', 'data'),
+    prevent_initial_call=True,
+)
+def save_historical_backtest(n_clicks, store_data):
+    """Persist the last historical-allocation backtest run to disk, for
+    later use combining with the Alpha book's saved portfolio result."""
+    if not n_clicks:
+        return ""
+    if not store_data or 'equity_series' not in store_data:
+        return "Run the historical analysis first — nothing to save."
+    try:
+        save_backtest_result(
+            equity_series=store_data['equity_series'],
+            sharpe=store_data.get('sharpe', 0.0),
+            annualized_return=store_data.get('annualized_return', 0.0),
+            max_drawdown=store_data.get('max_drawdown', 0.0),
+            asset_pool=store_data.get('asset_pool', []),
+            total_capital=store_data.get('total_capital', 0.0),
+            start_date=store_data.get('start_date'),
+            end_date=store_data.get('end_date'),
+        )
+        return f"Saved {len(store_data.get('asset_pool', []))} assets at {datetime.now().strftime('%H:%M:%S')}"
+    except Exception as exc:
+        return f"Save failed: {exc}"
 
 
 # ============================================================================

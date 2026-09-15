@@ -656,11 +656,25 @@ def create_layout():
 
                     html.Div([
                         html.Button(
-                            "Run Historical Analysis", 
+                            "Run Historical Analysis",
                             id='run-history-button',
                             n_clicks=0,
                             style={'backgroundColor': '#27ae60', 'color': 'white', 'padding': '10px 20px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold', 'marginBottom': '15px'}
                         ),
+                        html.Button(
+                            "\U0001F4BE Save Result",
+                            id='save-history-backtest-button',
+                            n_clicks=0,
+                            style={'backgroundColor': '#7f8c8d', 'color': 'white', 'padding': '10px 20px', 'border': 'none', 'borderRadius': '5px', 'cursor': 'pointer', 'fontSize': '14px', 'fontWeight': 'bold', 'marginBottom': '15px', 'marginLeft': '10px'}
+                        ),
+                        html.Span(
+                            id='save-history-backtest-status',
+                            style={'color': '#7f8c8d', 'fontSize': '12px', 'marginLeft': '10px'}
+                        ),
+                        # Holds the last run's result (equity curve + summary
+                        # stats + asset pool) so "Save Result" can persist it
+                        # without re-running the factor risk-parity backtest.
+                        dcc.Store(id='history-backtest-last-result-store', data=None),
                         dcc.Loading(
                             id="loading-history",
                             type="default",

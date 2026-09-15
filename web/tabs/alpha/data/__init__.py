@@ -54,6 +54,7 @@ from .duration import (
     _tenor_to_duration,
     _get_duration_mult,
     _get_borrow_cost_annual_bp,
+    estimate_margin_mm,
     _get_tenor_yields_for_spread,
     _get_current_fr007_bp,
     _get_ttm_display,
@@ -74,6 +75,10 @@ from .saved_state import (
     load_instrument_params,
     load_monthly_regime,
     has_saved_state,
+)
+from .saved_portfolio_backtest import (
+    save_portfolio_backtest_result,
+    load_portfolio_backtest_result,
 )
 
 __all__ = [
@@ -109,4 +114,6 @@ __all__ = [
     'load_instrument_params',
     'load_monthly_regime',
     'has_saved_state',
+    'save_portfolio_backtest_result',
+    'load_portfolio_backtest_result',
 ]

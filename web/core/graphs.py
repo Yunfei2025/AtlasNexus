@@ -110,8 +110,7 @@ _TENOR_SPREAD_ORDER = [
     'CDB-1s2s', 'CDB-2s5s', 'CDB-5s10s', 'CDB-10s30s',
     'CDBCGB-5y', 'CDBCGB-10y', 'CDBCGB-30y',
     'LGBCGB-5y', 'LGBCGB-10y', 'LGBCGB-30y',
-    'CGBRepo7d-1y', 'CGBRepo7d-2y', 'CGBRepo7d-5y', 'CGBRepo7d-10y',
-    'NCDRepo7d-3m', 'NCDRepo7d-6m', 'NCDRepo7d-9m', 'NCDRepo7d-1y',
+    'CGBRepo7d-1y', 'CGBRepo7d-2y', 'CGBRepo7d-5y',
 ]
 _TENOR_SPREAD_RANK = {ticker: i for i, ticker in enumerate(_TENOR_SPREAD_ORDER)}
 
@@ -822,6 +821,9 @@ def statistics(interval, data_rt_js, stype, season):
     if stype == 'SectorPCASpread':
         spread = spread.loc[sorted(spread.index, key=_sector_pca_sort_key)]
     elif stype == 'TenorSpread':
+        # NCDRepo7d-* (NCD/ICP-vs-repo) excluded from the Daily Spread
+        # Statistics bar chart, kept in the underlying data for other views.
+        spread = spread.loc[~spread.index.astype(str).str.startswith('NCDRepo7d-')]
         spread = spread.loc[sorted(spread.index, key=_tenor_spread_sort_key)]
     else:
         spread = spread.sort_index()

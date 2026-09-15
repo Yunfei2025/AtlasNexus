@@ -19,7 +19,7 @@ from ..data import (
     load_spread_data, load_spread_timeseries, load_carry_roll_timeseries,
     load_macro_series, _get_duration_mult, _get_borrow_cost_annual_bp,
     save_instrument_state, load_instrument_params, load_monthly_regime,
-    has_saved_state,
+    has_saved_state, save_portfolio_backtest_result, estimate_margin_mm,
 )
 from .portfolio import _SUMMARY_ALPHA_PARQUET
 from ..layouts import build_individual_backtest_panel, build_portfolio_backtest_panel
@@ -915,7 +915,8 @@ def register_backtest_callbacks(app) -> None:
     # -------------------------------------------------------------------------
     @app.callback(
         [Output('bt-portfolio-results', 'children'),
-         Output('bt-portfolio-status', 'children')],
+         Output('bt-portfolio-status', 'children'),
+         Output('bt-portfolio-last-result-store', 'data')],
         Input('bt-run-portfolio-btn', 'n_clicks'),
         [State('alpha-optimized-weights', 'data'),
          State('bt-portfolio-source', 'value'),
@@ -937,7 +938,7 @@ def register_backtest_callbacks(app) -> None:
                                entry_z, exit_z, stop_z, min_hold,
                                er_gate_on, er_max, er_window):
         if not n_clicks:
-            return html.Div(), ""
+            return html.Div(), "", None
 
         optimized_data, is_default = _resolve_portfolio_source(source, optimized_data, default_portfolio_data)
 
@@ -947,7 +948,7 @@ def register_backtest_callbacks(app) -> None:
                 if is_default else
                 "No optimized portfolio data found. Please go to the 'Portfolio' tab and run 'Calculate Score & Allocation' first."
             )
-            return html.Div(msg, style={'color': THEME['warning'], 'padding': '20px'}), "Waiting for portfolio data..."
+            return html.Div(msg, style={'color': THEME['warning'], 'padding': '20px'}), "Waiting for portfolio data...", None
 
         try:
             capital = float(capital) if capital is not None else 10000000.0
@@ -991,7 +992,7 @@ def register_backtest_callbacks(app) -> None:
                 valid_assets.append(full_id)
 
             if not valid_assets:
-                return html.Div("Failed to load historical data for any selected assets.", style={'color': THEME['danger']}), "Data load failed"
+                return html.Div("Failed to load historical data for any selected assets.", style={'color': THEME['danger']}), "Data load failed", None
 
             # Each instrument backtests over its own available history, trimmed
             # to the requested lookback independently — NOT the intersection of
@@ -1017,12 +1018,23 @@ def register_backtest_callbacks(app) -> None:
 
             weighted_equity: dict = {}
             trade_summaries: list = []
+            # Weighted-average margin per unit of book notional (DV01-based
+            # single-leg proxy, ~2.5x-calibrated for the cross-leg netting it
+            # can't see -- see estimate_margin_mm). Lets ROE be reported
+            # alongside ROA: ROA is return on gross notional, ROE is return
+            # on the capital the book actually ties up as margin.
+            margin_ratio_per_notional = 0.0
 
             for asset in valid_assets:
                 _item = item_lookup.get(asset, {})
                 weight = alloc_weights[asset]
                 spread_type = _item.get('spread_type', '')
                 run_trend = 'trend' in str(_item.get('style', '')).lower()
+                try:
+                    _dur = _get_duration_mult(asset, spread_type)
+                    margin_ratio_per_notional += weight * estimate_margin_mm(1.0, _dur)
+                except Exception:
+                    pass
 
                 ts = asset_data[asset].sort_index()
                 if lookback_days < len(ts):
@@ -1175,7 +1187,7 @@ def register_backtest_callbacks(app) -> None:
                 })
 
             if not weighted_equity:
-                return html.Div("No backtest results for any assets.", style={'color': THEME['danger'], 'padding': '20px'}), "No results"
+                return html.Div("No backtest results for any assets.", style={'color': THEME['danger'], 'padding': '20px'}), "No results", None
 
             df_equity = pd.DataFrame(weighted_equity).sort_index().ffill().fillna(0)
             portfolio_equity = df_equity.sum(axis=1)
@@ -1190,6 +1202,29 @@ def register_backtest_callbacks(app) -> None:
             max_drawdown = float((running_max - portfolio_equity.values).max())
             win_days = (port_daily > 0).sum()
             win_rate = (win_days / n_days * 100) if n_days > 0 else 0.0
+
+            # Percent-of-notional views of the bp figures. The equity curve is
+            # already DV01-scaled (engine_monthly: price_pnl = Δspread ×
+            # position × duration_mult), i.e. bp of *price* per unit notional,
+            # so 100bp = 1% of notional -- no capital assumption needed.
+            total_pnl_pct = total_pnl / 100.0
+            max_drawdown_pct = max_drawdown / 100.0
+            # Average annual return on assets: arithmetic (not compounded) --
+            # the book runs unit notional per instrument rather than
+            # reinvesting, so scaling the mean daily P&L is the honest
+            # annualization here.
+            roa_annual_pct = (avg_pnl * 252.0) / 100.0
+            # Return on equity: ROA rescaled from gross notional to the
+            # margin the book actually ties up (margin_ratio_per_notional,
+            # from estimate_margin_mm -- a DV01 proxy, not a netted margin
+            # calculation, see its docstring). None when the ratio couldn't
+            # be computed for any asset in this book (e.g. an unknown
+            # spread_type falls through _get_duration_mult's 1.0 default,
+            # which is handled, but a fully empty book is not).
+            roe_annual_pct = (
+                roa_annual_pct / margin_ratio_per_notional
+                if margin_ratio_per_notional > 0 else None
+            )
 
             # --- Chart: per-trade weighted equity + portfolio total ---
             fig = go.Figure()
@@ -1226,11 +1261,37 @@ def register_backtest_callbacks(app) -> None:
             label_style = {'color': THEME['text_sub'], 'fontSize': '12px'}
             val_style   = {'color': THEME['text_main'], 'fontWeight': 'bold', 'fontSize': '16px'}
             item_style  = {'display': 'flex', 'flexDirection': 'column'}
+            _sub_style = {'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '1px'}
             stats = html.Div([
-                html.Div([html.Span("Total Return",     style=label_style), html.Span(f"{total_pnl:+.1f} bp", style={**val_style, 'color': THEME['success'] if total_pnl > 0 else THEME['danger']})], style=item_style),
+                html.Div([
+                    html.Span("Total Return", style=label_style),
+                    html.Span(f"{total_pnl:+.1f} bp", style={**val_style, 'color': THEME['success'] if total_pnl > 0 else THEME['danger']}),
+                    html.Span(f"{total_pnl_pct:+.2f}% of notional", style=_sub_style),
+                ], style=item_style),
+                html.Div([
+                    html.Span("Avg Annual Return (ROA)", style=label_style),
+                    html.Span(f"{roa_annual_pct:+.2f}%", style={**val_style, 'color': THEME['success'] if roa_annual_pct > 0 else THEME['danger']}),
+                    html.Span(f"{avg_pnl * 252.0:+.1f} bp/yr", style=_sub_style),
+                ], style=item_style),
+                html.Div([
+                    html.Span("Return on Margin (ROE)", style=label_style),
+                    html.Span(
+                        f"{roe_annual_pct:+.1f}%" if roe_annual_pct is not None else "n/a",
+                        style={**val_style, 'color': (THEME['success'] if roe_annual_pct and roe_annual_pct > 0 else THEME['danger']) if roe_annual_pct is not None else THEME['text_sub']},
+                    ),
+                    html.Span(
+                        f"margin ≈ {margin_ratio_per_notional * 100:.2f}% of notional (DV01 proxy)"
+                        if margin_ratio_per_notional > 0 else "margin estimate unavailable",
+                        style=_sub_style,
+                    ),
+                ], style=item_style),
                 html.Div([html.Span("Sharpe Ratio",     style=label_style), html.Span(f"{sharpe:.2f}",         style=val_style)], style=item_style),
                 html.Div([html.Span("Win Rate (daily)", style=label_style), html.Span(f"{win_rate:.1f}%",      style=val_style)], style=item_style),
-                html.Div([html.Span("Max Drawdown",     style=label_style), html.Span(f"-{max_drawdown:.1f} bp", style={**val_style, 'color': THEME['danger']})], style=item_style),
+                html.Div([
+                    html.Span("Max Drawdown", style=label_style),
+                    html.Span(f"-{max_drawdown_pct:.2f}%", style={**val_style, 'color': THEME['danger']}),
+                    html.Span(f"-{max_drawdown:.1f} bp", style=_sub_style),
+                ], style=item_style),
                 html.Div([html.Span("Daily Vol",        style=label_style), html.Span(f"{std_pnl:.2f} bp",    style=val_style)], style=item_style),
                 html.Div([html.Span("Trades loaded",    style=label_style), html.Span(f"{len(weighted_equity)}/{len(valid_assets)}", style=val_style)], style=item_style),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '20px', 'marginBottom': '10px'})
@@ -1257,9 +1318,76 @@ def register_backtest_callbacks(app) -> None:
             ])
             status_msg = f"Backtest completed at {datetime.now().strftime('%H:%M:%S')} — {len(weighted_equity)}/{len(valid_assets)} trades over {n_days} days"
 
-            return results_content, status_msg
+            # Serialize the run's result for the "Save Result" button (a
+            # separate callback, not saved here automatically -- the run and
+            # the persist-to-disk action are kept as distinct user steps).
+            _instruments_snapshot = [
+                {
+                    'ID': _a,
+                    'spread_type': item_lookup.get(_a, {}).get('spread_type', ''),
+                    'direction': item_lookup.get(_a, {}).get('direction', 'N/A'),
+                    'style': item_lookup.get(_a, {}).get('style', 'N/A'),
+                    'weight': alloc_weights[_a],
+                }
+                for _a in valid_assets if _a in alloc_weights
+            ]
+            store_data = {
+                'portfolio_source': source,
+                'equity_ts': portfolio_equity.to_json(orient='split', date_format='iso'),
+                'sharpe': sharpe,
+                'total_pnl_bp': total_pnl,
+                'max_drawdown_bp': max_drawdown,
+                'total_return_pct': total_pnl_pct,
+                'max_drawdown_pct': max_drawdown_pct,
+                'roa_annual_pct': roa_annual_pct,
+                'roe_annual_pct': roe_annual_pct,
+                'margin_ratio_per_notional': margin_ratio_per_notional,
+                'instruments': _instruments_snapshot,
+                'lookback_days': lookback_days,
+            }
+
+            return results_content, status_msg, store_data
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            return html.Div(f"Error executing portfolio backtest: {str(e)}", style={'color': THEME['danger']}), "Error"
+            return html.Div(f"Error executing portfolio backtest: {str(e)}", style={'color': THEME['danger']}), "Error", None
+
+    # -------------------------------------------------------------------------
+    # BACKTEST: Save the last portfolio-backtest run's result to disk
+    # -------------------------------------------------------------------------
+    # Kept as a separate, explicit action rather than auto-saving every run:
+    # the run button is cheap to click while iterating on settings, and only
+    # a result the user has reviewed and wants to keep (e.g. for a later
+    # beta+alpha combination) should overwrite the persisted file.
+    @app.callback(
+        Output('bt-save-portfolio-result-status', 'children'),
+        Input('bt-save-portfolio-result-btn', 'n_clicks'),
+        State('bt-portfolio-last-result-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def save_portfolio_backtest(n_clicks, store_data):
+        if not n_clicks:
+            return ""
+        if not store_data or 'equity_ts' not in store_data:
+            return "Run the portfolio backtest first — nothing to save."
+        try:
+            equity_ts = pd.read_json(store_data['equity_ts'], orient='split', typ='series')
+            equity_ts.index = pd.to_datetime(equity_ts.index)
+            save_portfolio_backtest_result(
+                portfolio_source=store_data.get('portfolio_source', ''),
+                equity_ts=equity_ts,
+                sharpe=store_data.get('sharpe', 0.0),
+                total_pnl_bp=store_data.get('total_pnl_bp', 0.0),
+                max_drawdown_bp=store_data.get('max_drawdown_bp', 0.0),
+                instruments=store_data.get('instruments', []),
+                lookback_days=store_data.get('lookback_days', 0),
+                total_return_pct=store_data.get('total_return_pct', float('nan')),
+                max_drawdown_pct=store_data.get('max_drawdown_pct', float('nan')),
+                roa_annual_pct=store_data.get('roa_annual_pct', float('nan')),
+                roe_annual_pct=store_data.get('roe_annual_pct'),
+                margin_ratio_per_notional=store_data.get('margin_ratio_per_notional', float('nan')),
+            )
+            return f"Saved {len(store_data.get('instruments', []))} instruments at {datetime.now().strftime('%H:%M:%S')}"
+        except Exception as exc:
+            return f"Save failed: {exc}"

@@ -8,6 +8,9 @@ import re
 import numpy as np
 import pandas as pd
 
+from curves.utils.file import loadPKL
+from settings.paths import DIR_INPUT
+
 # ---------------------------------------------------------------------------
 # Theme / Style constants — mirrors web/assets/colors.css design tokens.
 # Alpha Book accent is amber (--accent-amber), not blue.
@@ -166,6 +169,7 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
             'CGB-1s2s': cnbd_data['CGB']['中债国债到期收益率:2年'] - cnbd_data['CGB']['中债国债到期收益率:1年'],
             'CGB-2s5s': cnbd_data['CGB']['中债国债到期收益率:5年'] - cnbd_data['CGB']['中债国债到期收益率:2年'],
             'CGB-5s10s': cnbd_data['CGB']['中债国债到期收益率:10年'] - cnbd_data['CGB']['中债国债到期收益率:5年'],
+            'CGB-10s20s': cnbd_data['CGB']['中债国债到期收益率:20年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
             'CGB-10s30s': cnbd_data['CGB']['中债国债到期收益率:30年'] - cnbd_data['CGB']['中债国债到期收益率:10年'],
             'CDB-1s2s': cnbd_data['CDB']['中债国开债到期收益率:2年'] - cnbd_data['CDB']['中债国开债到期收益率:1年'],
             'CDB-2s5s': cnbd_data['CDB']['中债国开债到期收益率:5年'] - cnbd_data['CDB']['中债国开债到期收益率:2年'],
@@ -219,8 +223,6 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
                 result['CGBRepo7d-2y'] = cgb['中债国债到期收益率:2年'] - swap_ts['FR007S2Y.IR']
             if 'FR007S5Y.IR' in swap_ts.columns and '中债国债到期收益率:5年' in cgb.columns:
                 result['CGBRepo7d-5y'] = cgb['中债国债到期收益率:5年'] - swap_ts['FR007S5Y.IR']
-            if 'FR007S10Y.IR' in swap_ts.columns and '中债国债到期收益率:10年' in cgb.columns:
-                result['CGBRepo7d-10y'] = cgb['中债国债到期收益率:10年'] - swap_ts['FR007S10Y.IR']
 
             if isinstance(icp, pd.DataFrame):
                 if 'FR007S3M.IR' in swap_ts.columns and '中债商业银行同业存单到期收益率(AAA):3个月' in icp.columns:
@@ -235,6 +237,32 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
         for _key in _CGB_30Y_DEPENDENT_INSTRUMENTS:
             if _key in result and isinstance(result[_key], pd.Series):
                 result[_key] = _truncate_cgb_30y_series(result[_key])
+
+        # IRS-curve-slope instruments the user wants included in this "core
+        # portfolio" category even though they are also computed under
+        # SwapSpread (curves.calibration.irs.spreads.irsSpreads) — a
+        # deliberate duplication, not a bug: TenorSpread and SwapSpread serve
+        # different books and each should be independently backtestable/
+        # scannable with this instrument in it. Mirrors the same block in
+        # curves/generators/stat.py's EOD Tenor-spds.pkl generator (kept in
+        # sync so the live snapshot / Individual Spread tab / Default
+        # portfolio see the same instruments as the historical pickle).
+        # Sourced from IRS-pxspds.pkl (SHI3M curve data isn't in
+        # loadCNBDTS's cnbd_data, so these can't be rebuilt from the
+        # CGB/CDB/SwapTS series above). Kept under their native
+        # Repo7d-/Shi3M-/Basis- names, not renamed to this category's
+        # "NsMs" convention, for consistency with SwapSpread.
+        _irs_extra_cols = ['Repo7d-1y5y', 'Shi3M-1y5y', 'Repo7d-3m1y', 'Basis-1y', 'Basis-5y']
+        try:
+            _irs_pxspds = loadPKL(str(DIR_INPUT / 'IRS-pxspds.pkl'))
+        except Exception:
+            _irs_pxspds = None
+        if isinstance(_irs_pxspds, dict):
+            _irs_spread = _irs_pxspds.get('Spread')
+            if isinstance(_irs_spread, pd.DataFrame):
+                for _col in _irs_extra_cols:
+                    if _col in _irs_spread.columns:
+                        result[_col] = pd.to_numeric(_irs_spread[_col], errors='coerce')
 
         return result
     except Exception:

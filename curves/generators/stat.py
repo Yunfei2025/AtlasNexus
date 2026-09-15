@@ -924,7 +924,6 @@ class StatGenerator:
         repo1y  = _series(swap_ts, _swap_col('1Y'))  if swap_ts is not None else None
         repo2y  = _series(swap_ts, _swap_col('2Y'))  if swap_ts is not None else None
         repo5y  = _series(swap_ts, _swap_col('5Y'))  if swap_ts is not None else None
-        repo10y = _series(swap_ts, _swap_col('10Y')) if swap_ts is not None else None
         repo3m  = _series(swap_ts, _swap_col('3M'))  if swap_ts is not None else None
         repo6m  = _series(swap_ts, _swap_col('6M'))  if swap_ts is not None else None
         repo9m  = _series(swap_ts, _swap_col('9M'))  if swap_ts is not None else None
@@ -972,7 +971,6 @@ class StatGenerator:
         if cgb1  is not None and repo1y  is not None: instruments['CGBRepo7d-1y']  = cgb1  - repo1y
         if cgb2  is not None and repo2y  is not None: instruments['CGBRepo7d-2y']  = cgb2  - repo2y
         if cgb5  is not None and repo5y  is not None: instruments['CGBRepo7d-5y']  = cgb5  - repo5y
-        if cgb10 is not None and repo10y is not None: instruments['CGBRepo7d-10y'] = cgb10 - repo10y
 
         # CD-vs-Repo cross-curve: NCD (AAA) yield minus matched-tenor FR007 IRS rate
         if icp3m is not None and repo3m is not None: instruments['NCDRepo7d-3m'] = icp3m - repo3m

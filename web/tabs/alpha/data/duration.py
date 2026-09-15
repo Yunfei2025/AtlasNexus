@@ -11,6 +11,23 @@ import pandas as pd
 from .io import _get_input_dir, _load_pickle_safe
 from .loaders import load_spread_data
 
+# Same tenor-stress table as web/tabs/alpha/callbacks/portfolio.py's
+# _swap_derivative_margin_mm (the scan/allocation workflow's margin model,
+# which needs resolved Leg1/Leg2 trade IDs). Duplicated here in years-of-
+# duration terms rather than imported, because this module's callers
+# (Default-book backtest instruments) have no resolved leg codes to parse a
+# tenor from -- only a duration multiplier already computed by
+# _get_duration_mult. Duration is close enough to tenor at every bucket
+# boundary below for the stress-bp lookup to land in the same tier.
+_MARGIN_TENOR_STRESS_BP = (
+    (1.0, 10.0),
+    (3.0, 20.0),
+    (5.0, 35.0),
+    (10.0, 50.0),
+    (float('inf'), 75.0),
+)
+_MARGIN_MIN_RATE = 0.0025
+
 
 def _tenor_to_duration(tenor: str) -> float:
     """Convert a tenor string to IRS modified duration.
@@ -134,6 +151,49 @@ def _get_duration_mult(
             return _tenor_to_duration(tenors[1].lower())  # middle for flies
 
     return 1.0
+
+
+# Calibration for estimate_margin_mm's cross-leg-netting blind spot: fit
+# against summary_alpha_portfolio.parquet's real (leg-resolved, netted)
+# margin_mm for the 25 live TenorSpread/SwapSpread rows on 2026-09-15.
+# ratio = actual_margin_mm / single_leg_dv01_estimate had median 2.49x
+# (mean 3.40x, IQR 2.0-4.0x, range 0.53x-11.2x across instruments) -- the
+# spread is wide because this proxy sees only one leg's notional/duration
+# while the real model grosses up both (or all three, for a fly) legs at
+# their own tenors, so a re-fit against a fresh snapshot may land
+# elsewhere. Median is used over mean for robustness to the two long-tenor
+# outliers (ratio >8x) pulling the mean up.
+_MARGIN_NETTING_MULTIPLIER = 2.5
+
+
+def estimate_margin_mm(notional_mm: float, duration_mult: float) -> float:
+    """DV01-based initial-margin proxy for one instrument's own notional.
+
+    A simplified sibling of web/tabs/alpha/callbacks/portfolio.py's
+    _swap_derivative_margin_mm, for callers with no resolved Leg1/Leg2 trade
+    IDs to net against (e.g. the Default-book backtest, whose instruments are
+    built from raw yield series, not tradeable leg codes). The real function
+    grosses up DV01 across both legs of a spread (and nets across the whole
+    book); this one only sees a single leg's notional/duration, so its raw
+    DV01 term is scaled by ``_MARGIN_NETTING_MULTIPLIER`` to correct the
+    systematic undershoot -- see that constant's docstring for the fit and
+    its uncertainty. This stays a rough proxy, not a netted margin
+    calculation: real cross-instrument netting only happens in the full
+    scan/allocation workflow, which has leg codes to net against.
+
+    Same tenor-stress-bucket + notional-floor structure as
+    _swap_derivative_margin_mm:
+    ``margin = max(gross_dv01_k * stress_bp(tenor) / 1000, notional_mm * min_rate)``,
+    scaled by the netting multiplier on the DV01 term only (the notional
+    floor is already a whole-position charge, not a per-leg one).
+    """
+    notional_mm = abs(float(notional_mm))
+    duration_mult = max(0.01, float(duration_mult))
+    stress_bp = next(stress for tenor, stress in _MARGIN_TENOR_STRESS_BP if duration_mult <= tenor)
+    dv01_k = notional_mm * duration_mult / 10.0
+    dv01_margin_mm = dv01_k * stress_bp / 1000.0 * _MARGIN_NETTING_MULTIPLIER
+    notional_floor_mm = notional_mm * _MARGIN_MIN_RATE
+    return round(max(dv01_margin_mm, notional_floor_mm), 4)
 
 
 def _get_borrow_cost_annual_bp(spread_type: str, instrument: str) -> tuple[float, float]:

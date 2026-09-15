@@ -19,6 +19,9 @@ INPUT_DIR = PROJECT_ROOT / 'input'
 HISTORY_DIR = INPUT_DIR / 'asset_pool_history'
 LAST_POOL_FILE = INPUT_DIR / 'asset_pool_last.json'
 
+BACKTEST_DIR = INPUT_DIR / 'multiasset_backtest'
+LAST_BACKTEST_FILE = BACKTEST_DIR / 'multiasset_backtest_last.json'
+
 
 def ensure_directories():
     """Ensure input directories exist."""
@@ -83,6 +86,71 @@ def load_last_asset_pool() -> Optional[Dict[str, Any]]:
             return json.load(f)
     except Exception as e:
         print(f"Error loading last asset pool: {e}")
+        return None
+
+
+def save_backtest_result(
+    equity_series: List[Dict[str, Any]],
+    sharpe: float,
+    annualized_return: float,
+    max_drawdown: float,
+    asset_pool: List[str],
+    total_capital: float,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> str:
+    """Persist the historical-allocation backtest's combined equity curve and
+    summary stats, so a later beta+alpha combination reads a fixed result
+    instead of re-running the factor risk-parity optimizer + per-asset
+    return sweep on demand.
+
+    ``equity_series``: list of {'date': iso-string, 'value': float} records
+    (cumulative portfolio PnL, same units as multiasset/dashboard.py's
+    df_pnl['Total'], i.e. million CNY) -- JSON-safe, no DataFrame/Series.
+
+    Mirrors save_asset_pool's convention: writes both a timestamped history
+    file and overwrites a fixed 'last' file for easy lookup.
+    """
+    BACKTEST_DIR.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data = {
+        'timestamp': timestamp,
+        'sharpe': float(sharpe),
+        'annualized_return': float(annualized_return),
+        'max_drawdown': float(max_drawdown),
+        'asset_pool': list(asset_pool),
+        'total_capital': float(total_capital),
+        'start_date': start_date,
+        'end_date': end_date,
+        'equity_series': equity_series,
+    }
+
+    history_path = BACKTEST_DIR / f"backtest_{timestamp}.json"
+    try:
+        with open(history_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Error saving backtest history file: {e}")
+
+    try:
+        with open(LAST_BACKTEST_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Error saving last backtest file: {e}")
+
+    return str(history_path)
+
+
+def load_last_backtest_result() -> Optional[Dict[str, Any]]:
+    """Load the last-saved historical-allocation backtest result, or None."""
+    if not LAST_BACKTEST_FILE.exists():
+        return None
+    try:
+        with open(LAST_BACKTEST_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading last backtest result: {e}")
         return None
 
 

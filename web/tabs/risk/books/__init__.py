@@ -8,6 +8,7 @@ original public registration function for existing callers.
 
 from .alpha_table import register_alpha_book_table_callbacks
 from .beta_table import register_beta_book_table_callbacks
+from .combination_callbacks import register_combination_callbacks
 from .controls import register_risk_book_control_callbacks
 from .interactions import register_risk_book_interaction_callbacks
 
@@ -18,6 +19,7 @@ def register_risk_books_callbacks(app):
     register_beta_book_table_callbacks(app)
     register_alpha_book_table_callbacks(app)
     register_risk_book_interaction_callbacks(app)
+    register_combination_callbacks(app)
 
 
 __all__ = ['register_risk_books_callbacks']

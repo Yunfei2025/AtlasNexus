@@ -886,6 +886,17 @@ def build_portfolio_backtest_panel(saved_selection: dict | None = None) -> html.
                         "▶ Run Portfolio Backtest", id='bt-run-portfolio-btn', n_clicks=0,
                         variant="success", style_overrides={'padding': '10px 14px', 'fontSize': '12px', 'width': '100%'},
                     ),
+                    an_button(
+                        "💾 Save Result", id='bt-save-portfolio-result-btn', n_clicks=0,
+                        variant="secondary", style_overrides={'padding': '10px 14px', 'fontSize': '12px', 'width': '100%', 'marginTop': '8px'},
+                    ),
+                    html.P(
+                        "Persists this run's combined equity curve + instrument weights "
+                        "(DIR_ALPHA_PARAMS/alpha_portfolio_backtest.pkl) for later use combining "
+                        "with the beta book, instead of recomputing on demand.",
+                        style={'color': 'var(--text-muted)', 'fontSize': '10px', 'marginTop': '6px', 'marginBottom': '0'},
+                    ),
+                    html.Span(id='bt-save-portfolio-result-status', style={'color': 'var(--text-muted)', 'fontSize': '11px', 'marginTop': '6px', 'display': 'block'}),
                 ], style=_card),
             ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px',
                       'flex': '0 0 300px', 'minWidth': '260px', 'maxWidth': '320px'}),
@@ -896,6 +907,10 @@ def build_portfolio_backtest_panel(saved_selection: dict | None = None) -> html.
                     html.Span(id='bt-portfolio-status', style={'color': 'var(--text-muted)', 'fontSize': '12px', 'marginBottom': '8px', 'display': 'block'}),
                     html.Div(id='bt-portfolio-results'),
                 ])),
+                # Holds the last run's result (equity curve + summary stats +
+                # instrument snapshot) so the "Save Result" button can persist
+                # it without re-running the backtest.
+                dcc.Store(id='bt-portfolio-last-result-store', data=None),
             ], style={'flex': '1', 'minWidth': '0'}),
         ], style={'display': 'flex', 'gap': '16px', 'alignItems': 'flex-start', 'flexWrap': 'wrap'}),
     ])
