@@ -145,6 +145,15 @@ def _metrics(returns: pd.Series) -> dict[str, float]:
 #  size positions against.
 MAX_MARGIN_UTILIZATION = 0.90
 
+# Suggested splits (Max Sharpe / Risk Parity) are snapped to this tick size
+# rather than reported at the sweep's native 1% resolution. This is a
+# real-world capital allocation meant to be set roughly annually, not
+# adjusted daily -- a split precise to 1% implies the underlying Sharpe
+# estimate (from one finite, noisy sample of daily returns) can distinguish
+# e.g. 61% from 62% margin share, which it cannot. Coarser ticks make the
+# suggestion visibly a rough-and-ready number, not a false-precision output.
+SUGGESTED_SPLIT_TICK = 0.05
+
 
 def build_combination(
     beta_result: Optional[dict],
@@ -249,17 +258,30 @@ def build_combination(
                       'total_return': m['total_return'], 'max_drawdown': m['max_drawdown']})
     sweep_df = pd.DataFrame(sweep)
 
-    best_idx = sweep_df['sharpe'].idxmax()
-    max_sharpe_ms = float(sweep_df.loc[best_idx, 'alpha_margin_share'])
-    max_sharpe_val = float(sweep_df.loc[best_idx, 'sharpe'])
+    # Max Sharpe is picked off a coarse SUGGESTED_SPLIT_TICK grid (e.g. 5%
+    # ticks: 5/95, 10/90, ... 95/5), not the fine 1% sweep grid above -- see
+    # SUGGESTED_SPLIT_TICK docstring. The fine sweep still drives the
+    # frontier chart's curve; only the suggested number is coarsened.
+    coarse_grid = np.round(np.arange(0.0, 1.0001, SUGGESTED_SPLIT_TICK), 4)
+    coarse_sharpes = []
+    for gms in coarse_grid:
+        gw = (gms * util) / margin_ratio
+        m = _metrics((1.0 - gms) * r_beta + gw * r_alpha)
+        coarse_sharpes.append(m['sharpe'])
+    coarse_sharpes = np.array(coarse_sharpes)
+    best_coarse_idx = int(np.nanargmax(coarse_sharpes))
+    max_sharpe_ms = float(coarse_grid[best_coarse_idx])
+    max_sharpe_val = float(coarse_sharpes[best_coarse_idx])
 
     # Risk parity between the two books: equal risk contribution, in notional-
     # weight space (the return blend the vol/Sharpe maths sees), then
     # converted back to an allocated margin share for display/consistency
-    # with ms/w above (inverting w = (ms * util) / margin_ratio).
+    # with ms/w above (inverting w = (ms * util) / margin_ratio), and snapped
+    # to the same coarse tick as Max Sharpe for the same reason.
     rp_w = _risk_parity_weight(r_beta, r_alpha)
-    rp_ms = float(np.clip(rp_w * margin_ratio / util, 0.0, 1.0))
-    rp_metrics = _metrics((1.0 - rp_ms) * r_beta + rp_w * r_alpha)
+    rp_ms_raw = float(np.clip(rp_w * margin_ratio / util, 0.0, 1.0))
+    rp_ms = float(np.round(rp_ms_raw / SUGGESTED_SPLIT_TICK) * SUGGESTED_SPLIT_TICK)
+    rp_metrics = _metrics((1.0 - rp_ms) * r_beta + (rp_ms * util / margin_ratio) * r_alpha)
 
     total_capital_mm = float(total_capital_mm or 0.0)
     beta_notional_mm = (1.0 - ms) * total_capital_mm

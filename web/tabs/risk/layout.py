@@ -181,14 +181,15 @@ def build_risk_layout():
                             'textTransform': 'uppercase', 'color': THEME['text_sub'],
                             'display': 'block', 'marginBottom': '6px'}),
                         dcc.Input(id='summary-combo-alpha-margin-share', type='number',
-                                  value=50, min=0, max=100, step=5, debounce=True,
+                                  value=None, min=0, max=100, step=5, debounce=True,
+                                  placeholder='auto (max Sharpe)',
                                   style={'width': '90px', 'backgroundColor': THEME['bg_input'],
                                          'border': f'1px solid {THEME["table_header"]}',
                                          'borderRadius': '4px', 'padding': '7px 9px',
                                          'color': THEME['text_main'], 'fontSize': '13px'}),
                         html.Div("Beta takes the remainder as notional. Alpha's own notional is "
-                                 "derived from its margin ratio — see Suggested Splits for the "
-                                 "max-Sharpe value.",
+                                 "derived from its margin ratio. Left blank, defaults to the "
+                                 "max-Sharpe split.",
                                  style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '240px'}),
                     ]),
                     html.Div(id='summary-combo-margin-hint',

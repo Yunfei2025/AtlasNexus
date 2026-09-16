@@ -71,7 +71,24 @@ def register_combination_callbacks(app):
         alpha_result = load_portfolio_backtest_result()
 
         total_capital = float(total_capital_mm) if total_capital_mm else 0.0
-        margin_share = float(alpha_margin_share_pct or 0) / 100.0
+
+        # No margin share typed yet (fresh load / cleared input): default the
+        # "Selected" split to the max-Sharpe point rather than an arbitrary
+        # 50/50, so the combined-book view shown by default is the optimum,
+        # not a placeholder. max_sharpe_margin_share doesn't depend on the
+        # requested split, so a first pass at any placeholder share reads it
+        # off the sweep; an explicit 0 from the user is still respected.
+        if alpha_margin_share_pct is None:
+            probe = build_combination(beta_result, alpha_result, total_capital, 0.5,
+                                       max_margin_utilization=MAX_MARGIN_UTILIZATION)
+            if 'error' in probe:
+                strip = html.Span(probe['error'], style={'color': THEME['warning'], 'fontSize': '12px'})
+                body = html.Div(probe['error'], style={'color': THEME['warning'], 'fontSize': '12px',
+                                                        'padding': '12px 0'})
+                return strip, body, ""
+            margin_share = probe['max_sharpe_margin_share']
+        else:
+            margin_share = float(alpha_margin_share_pct) / 100.0
 
         result = build_combination(beta_result, alpha_result, total_capital, margin_share,
                                     max_margin_utilization=MAX_MARGIN_UTILIZATION)
