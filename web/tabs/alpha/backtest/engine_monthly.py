@@ -215,6 +215,7 @@ def run_monthly_style_backtest(
     mr_vol_span: int = MR_VOL_SPAN,
     ou_mean: Optional[float] = None,
     carry_z_weight: float = 0.0,
+    mr_lookback: int = MR_LOOKBACK,
 ) -> Dict[str, Any]:
     """Run a continuous backtest whose entry style is routed by month.
 
@@ -258,6 +259,17 @@ def run_monthly_style_backtest(
     short, matching the desk convention. Only the MR branch's entry/exit
     comparisons use the composite; the trend branch and all P&L/accrual are
     unaffected.
+
+    ``mr_lookback``: trailing window (trading days) for the plain rolling-mean
+    fair-value anchor in ``blended_mr_mean`` (default ``MR_LOOKBACK``=120,
+    matches prior behaviour). Measured across the 38-instrument TenorSpread
+    book (10y each), 120 wins on median/mean Sharpe and total P&L versus a
+    252-day window, but a handful of instruments that have drifted
+    one-directionally over the past year (e.g. CGBRepo7d-5y) score
+    meaningfully better with a longer window, since a short lookback keeps
+    chasing a moving mean on those names. Exposed per-instrument via the
+    Individual Spread backtest panel's "Lookback Window" dropdown rather than
+    changed globally.
     """
     s = _clean_series(spread_ts)
     if s is None or len(s) < 60:
@@ -285,7 +297,7 @@ def run_monthly_style_backtest(
     # even though the spread is still moving in relative terms. EWMA reacts
     # within its span instead of carrying stale high-vol history, which keeps
     # the z-score's entry rate roughly stable across vol regimes.
-    rolling_mean = blended_mr_mean(s, ou_mean, lookback=MR_LOOKBACK)
+    rolling_mean = blended_mr_mean(s, ou_mean, lookback=int(mr_lookback))
     ewm_std = s.ewm(span=max(int(mr_vol_span), 2), min_periods=max(int(mr_vol_span), 2)).std()
     zscore = (s - rolling_mean) / ewm_std.replace(0, np.nan)
     zscore = zscore.replace([np.inf, -np.inf], np.nan)
@@ -628,6 +640,7 @@ def run_monthly_style_backtest(
         'entry_z': entry_z,
         'exit_z': exit_z,
         'stop_z': stop_z,
+        'mr_lookback': int(mr_lookback),
         'theta_z': float(theta_z),
         'trend_max_flip_age': int(trend_max_flip_age),
         'open_trade': open_trade,

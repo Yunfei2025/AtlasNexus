@@ -158,36 +158,38 @@ def build_risk_layout():
             html.Div(id='summary-combo-detail', children=[
                 html.Hr(style={'borderColor': THEME['table_header'], 'margin': '12px 0'}),
 
-                # --- Controls: capital base + alpha share (plain inputs, no slider) ---
+                # --- Controls: total capital + alpha margin share (plain inputs, no slider) ---
                 html.Div([
                     html.Div([
-                        html.Label("Alpha Capital Base (MM CNY)", style={
+                        html.Label("Total Capital (MM CNY)", style={
                             'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
                             'textTransform': 'uppercase', 'color': THEME['text_sub'],
                             'display': 'block', 'marginBottom': '6px'}),
-                        dcc.Input(id='summary-combo-alpha-capital', type='number',
+                        dcc.Input(id='summary-combo-total-capital', type='number',
                                   value=2000, min=1, step=100, debounce=True,
                                   style={'width': '140px', 'backgroundColor': THEME['bg_input'],
                                          'border': f'1px solid {THEME["table_header"]}',
                                          'borderRadius': '4px', 'padding': '7px 9px',
                                          'color': THEME['text_main'], 'fontSize': '13px'}),
-                        html.Div("Alpha P&L is in bp on unit positions; this notional converts it "
-                                 "to a return so the two books are comparable.",
+                        html.Div("Split beta notional : alpha margin (Beta is unlevered; Alpha is "
+                                 "margined, so its capital footprint is margin, not notional).",
                                  style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '260px'}),
                     ]),
                     html.Div([
-                        html.Label("Alpha Share of Capital (%)", style={
+                        html.Label("Alpha Margin Share of Capital (%)", style={
                             'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
                             'textTransform': 'uppercase', 'color': THEME['text_sub'],
                             'display': 'block', 'marginBottom': '6px'}),
-                        dcc.Input(id='summary-combo-alpha-weight', type='number',
+                        dcc.Input(id='summary-combo-alpha-margin-share', type='number',
                                   value=50, min=0, max=100, step=5, debounce=True,
                                   style={'width': '90px', 'backgroundColor': THEME['bg_input'],
                                          'border': f'1px solid {THEME["table_header"]}',
                                          'borderRadius': '4px', 'padding': '7px 9px',
                                          'color': THEME['text_main'], 'fontSize': '13px'}),
-                        html.Div("Beta takes the remainder. 0 = all Beta, 100 = all Alpha.",
-                                 style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '220px'}),
+                        html.Div("Beta takes the remainder as notional. Alpha's own notional is "
+                                 "derived from its margin ratio — see Suggested Splits for the "
+                                 "max-Sharpe value.",
+                                 style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '240px'}),
                     ]),
                     html.Div(id='summary-combo-margin-hint',
                              style={'fontSize': '10px', 'color': THEME['text_sub'], 'flex': '1', 'minWidth': '200px', 'alignSelf': 'center'}),

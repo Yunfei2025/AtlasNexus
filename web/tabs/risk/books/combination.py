@@ -7,19 +7,27 @@ portfolio, to answer two questions:
   1. What capital split between the books maximizes risk-adjusted return?
   2. Are the two books actually diversifying each other, or duplicating risk?
 
-Unit reconciliation is the crux. The two books measure P&L differently:
+Unit reconciliation is the crux. The two books measure P&L differently, and
+consume capital differently:
 
   - Beta (multiasset historical allocation) is cumulative P&L in **million
-    CNY** against an explicit ``total_capital``.
+    CNY** against an explicit ``total_capital``, unlevered: its notional and
+    its capital commitment are the same MM figure.
   - Alpha (TenorSpread portfolio backtest) is cumulative P&L in **basis
-    points** on notionally-unit positions -- it carries no capital base, so
-    "593bp" alone says nothing about how much capital it consumed.
+    points** on notionally-unit positions, margined: a given capital
+    commitment buys ``1 / margin_ratio`` MM of notional (``margin_ratio`` from
+    ``estimate_alpha_book_margin_ratio``, typically well under 1), so its
+    capital footprint is its **margin**, not its notional.
 
-Neither is a return until divided by a capital base, so a "50/50 split" is
-not even well-defined until the caller supplies the alpha book's notional.
-``alpha_capital_mm`` is that input: alpha bp convert to CNY as
-``pnl_bp / 10000 * alpha_capital_mm``, after which both books are daily
-return series on their own capital and can be weighted.
+A naive 50/50 "capital split" that means beta-notional : alpha-notional
+therefore compares unlike things -- it implicitly assumes alpha is unlevered
+too, understating how much of the actual capital pool alpha is committing.
+The split this module works in is **beta notional : alpha margin**: the
+caller supplies ``alpha_margin_share`` (alpha's share of ``total_capital_mm``
+as margin) and ``margin_ratio`` converts that into the notional weight the
+return-blend math needs (``w = alpha_margin_share / margin_ratio``, which can
+exceed 1.0 -- alpha notional bigger than the whole capital pool -- whenever
+the book is meaningfully levered, which is the normal case).
 """
 
 from __future__ import annotations
@@ -70,13 +78,14 @@ def estimate_alpha_book_margin_ratio(instruments: list[dict]) -> Optional[float]
     return weighted_margin / total_w
 
 
-def _alpha_returns(alpha_result: dict, alpha_capital_mm: float) -> Optional[pd.Series]:
-    """Daily fractional returns for the alpha book on ``alpha_capital_mm``.
+def _alpha_returns(alpha_result: dict) -> Optional[pd.Series]:
+    """Daily fractional returns for the alpha book on one unit of notional.
 
     ``equity_ts`` is cumulative P&L in bp of a unit position, so the daily
     *change* in bp divided by 10000 is the day's return on one unit of
-    notional -- independent of the capital base. Scaling by capital cancels
-    out, but is kept explicit so the CNY P&L series below stays derivable.
+    notional. Scaling to an actual notional (or a margin-derived one, see
+    module docstring) happens by multiplying this series by a weight, not
+    here.
     """
     eq = alpha_result.get('equity_ts')
     if not isinstance(eq, pd.Series) or eq.empty:
@@ -127,29 +136,68 @@ def _metrics(returns: pd.Series) -> dict[str, float]:
             'total_return': total_return, 'max_drawdown': max_dd}
 
 
+#  Margin allocated to Alpha is a capital CAP, not a target to fully deploy:
+#  daily mark-to-market moves against the book consume margin headroom, and
+#  running at 100% utilization means the very next adverse move breaches the
+#  cap (a margin call / forced unwind) rather than being absorbed. Only this
+#  fraction of the allocated margin is treated as usable when deriving
+#  alpha's notional; the rest is a standing buffer, not "spare capital" to
+#  size positions against.
+MAX_MARGIN_UTILIZATION = 0.90
+
+
 def build_combination(
     beta_result: Optional[dict],
     alpha_result: Optional[dict],
-    alpha_capital_mm: float,
-    alpha_weight: float,
+    total_capital_mm: float,
+    alpha_margin_share: float,
+    max_margin_utilization: float = MAX_MARGIN_UTILIZATION,
 ) -> dict[str, Any]:
     """Align both books and analyse the combined portfolio.
 
-    ``alpha_weight`` is the alpha book's share of total capital (0..1); beta
-    takes the remainder. Returns a dict with per-book metrics, the combined
-    metrics at the requested weight, a full weight sweep (for the frontier
-    chart), and the diversification statistics.
+    Capital is split as **beta notional : alpha margin**, not beta notional :
+    alpha notional -- alpha is a margined book (``margin_ratio`` MM of margin
+    per MM of notional, typically << 1), so its notional at a given capital
+    commitment can be a large multiple of that capital. ``alpha_margin_share``
+    (0..1) is alpha's share of ``total_capital_mm`` *allocated as margin
+    capacity*; beta gets the remainder as its own notional (beta is
+    unlevered, so its notional and its capital commitment are the same MM
+    figure).
 
-    Returns ``{'error': str}`` when either book has no saved result, or when
-    their date ranges do not overlap enough to compare.
+    That allocated margin is a cap, not a deployment target: only
+    ``max_margin_utilization`` of it (default 90%) is treated as usable when
+    sizing alpha's notional, leaving the rest as headroom against adverse
+    mark-to-market moves rather than being sized into positions. Both the
+    *usable* margin and its derived notional, and the *allocated* (unbuffered)
+    margin, are returned separately so the UI can show what's earmarked
+    versus what's actually put to work.
+
+    Internally the usable margin is converted to the return-blend weight the
+    Sharpe/vol maths actually needs -- alpha's notional as a fraction of total
+    capital, ``w = (alpha_margin_share * max_margin_utilization) /
+    margin_ratio`` -- since ``_alpha_returns`` is a return per unit of alpha
+    notional. ``w`` can exceed 1.0 (alpha notional bigger than the whole
+    capital pool) whenever ``margin_ratio < 1``, which is the normal,
+    expected case for a margined book; it is not clipped.
+
+    Returns ``{'error': str}`` when either book has no saved result, when
+    their date ranges do not overlap enough to compare, or when the alpha
+    book's margin ratio can't be estimated (required to convert margin share
+    into a notional weight).
     """
     if not beta_result:
         return {'error': 'No saved Beta backtest. Run and save it in the Multi-Asset dashboard.'}
     if not alpha_result:
         return {'error': 'No saved Alpha backtest. Run and save it in Alpha > Backtest > Portfolio.'}
 
+    margin_ratio = estimate_alpha_book_margin_ratio(alpha_result.get('instruments') or [])
+    if margin_ratio is None or margin_ratio <= 0:
+        return {'error': ("Can't estimate the Alpha book's margin ratio from its saved instrument "
+                          "snapshot (needed to convert margin share into a notional weight) — "
+                          "re-run and save the Alpha portfolio backtest.")}
+
     r_beta = _beta_returns(beta_result)
-    r_alpha = _alpha_returns(alpha_result, alpha_capital_mm)
+    r_alpha = _alpha_returns(alpha_result)
     if r_beta is None:
         return {'error': 'Saved Beta result has no usable equity series / capital base.'}
     if r_alpha is None:
@@ -169,46 +217,55 @@ def build_combination(
     m_beta = _metrics(r_beta)
     m_alpha = _metrics(r_alpha)
 
+    util = float(np.clip(max_margin_utilization, 0.0, 1.0)) or MAX_MARGIN_UTILIZATION
+
     corr = float(r_beta.corr(r_alpha))
-    w = float(np.clip(alpha_weight, 0.0, 1.0))
-    r_combined = (1.0 - w) * r_beta + w * r_alpha
+    ms = float(np.clip(alpha_margin_share, 0.0, 1.0))
+    # w is sized off USABLE margin (ms * util), not the full allocated margin
+    # -- the untouched (1 - util) slice is a standing buffer, not deployed.
+    w = (ms * util) / margin_ratio  # alpha notional as a fraction of total capital -- not clipped, see docstring
+    r_combined = (1.0 - ms) * r_beta + w * r_alpha
     m_combined = _metrics(r_combined)
 
     # Diversification ratio: weighted-average standalone vol over realised
     # combined vol. >1 means the combination genuinely cancels risk; ~1 means
-    # the books are effectively the same bet.
-    wavg_vol = (1.0 - w) * m_beta['vol'] + w * m_alpha['vol']
+    # the books are effectively the same bet. Weighted by each book's actual
+    # capital share (beta notional / alpha margin), matching r_combined above
+    # -- not by the notional weight, which would overstate alpha's capital use.
+    wavg_vol = (1.0 - ms) * m_beta['vol'] + ms * m_alpha['vol']
     div_ratio = float(wavg_vol / m_combined['vol']) if m_combined['vol'] else float('nan')
 
-    # Weight sweep for the frontier chart / optimal points.
+    # Margin-share sweep for the frontier chart / optimal points -- the x-axis
+    # is what the UI actually controls (capital allocated to alpha as margin
+    # capacity), each grid point converted to a notional weight via the same
+    # margin_ratio and utilization buffer as the selected point above.
     grid = np.round(np.arange(0.0, 1.0001, 0.01), 4)
     sweep = []
-    for gw in grid:
-        m = _metrics((1.0 - gw) * r_beta + gw * r_alpha)
-        sweep.append({'alpha_weight': float(gw), 'sharpe': m['sharpe'],
-                      'vol': m['vol'], 'total_return': m['total_return'],
-                      'max_drawdown': m['max_drawdown']})
+    for gms in grid:
+        gw = (gms * util) / margin_ratio
+        m = _metrics((1.0 - gms) * r_beta + gw * r_alpha)
+        sweep.append({'alpha_margin_share': float(gms), 'alpha_weight': float(gw),
+                      'sharpe': m['sharpe'], 'vol': m['vol'],
+                      'total_return': m['total_return'], 'max_drawdown': m['max_drawdown']})
     sweep_df = pd.DataFrame(sweep)
 
     best_idx = sweep_df['sharpe'].idxmax()
-    max_sharpe_w = float(sweep_df.loc[best_idx, 'alpha_weight'])
+    max_sharpe_ms = float(sweep_df.loc[best_idx, 'alpha_margin_share'])
     max_sharpe_val = float(sweep_df.loc[best_idx, 'sharpe'])
 
-    # Risk parity between the two books: equal risk contribution. With two
-    # assets this has a closed form only when uncorrelated; solve on the grid
-    # instead so the correlation term is respected.
+    # Risk parity between the two books: equal risk contribution, in notional-
+    # weight space (the return blend the vol/Sharpe maths sees), then
+    # converted back to an allocated margin share for display/consistency
+    # with ms/w above (inverting w = (ms * util) / margin_ratio).
     rp_w = _risk_parity_weight(r_beta, r_alpha)
-    rp_metrics = _metrics((1.0 - rp_w) * r_beta + rp_w * r_alpha)
+    rp_ms = float(np.clip(rp_w * margin_ratio / util, 0.0, 1.0))
+    rp_metrics = _metrics((1.0 - rp_ms) * r_beta + rp_w * r_alpha)
 
-    # Suggested alpha capital from the book's own DV01-based margin ratio: if
-    # this book runs at unit-notional-per-instrument scaled by
-    # alpha_capital_mm, its actual margin usage is
-    # alpha_capital_mm * margin_ratio -- shown so the manual capital input
-    # can be sanity-checked against a real (if approximate) margin model,
-    # not just guessed. None when the instrument snapshot can't support the
-    # estimate (e.g. an old saved result predating this field).
-    margin_ratio = estimate_alpha_book_margin_ratio(alpha_result.get('instruments') or [])
-    implied_margin_mm = margin_ratio * alpha_capital_mm if margin_ratio is not None else None
+    total_capital_mm = float(total_capital_mm or 0.0)
+    beta_notional_mm = (1.0 - ms) * total_capital_mm
+    alpha_margin_allocated_mm = ms * total_capital_mm
+    alpha_margin_usable_mm = alpha_margin_allocated_mm * util
+    alpha_notional_mm = alpha_margin_usable_mm / margin_ratio
 
     return {
         'n_days': int(len(common)),
@@ -217,16 +274,23 @@ def build_combination(
         'beta': m_beta,
         'alpha': m_alpha,
         'combined': m_combined,
+        'alpha_margin_share': ms,
         'alpha_weight': w,
+        'max_margin_utilization': util,
         'correlation': corr,
         'diversification_ratio': div_ratio,
         'sweep': sweep_df,
-        'max_sharpe_weight': max_sharpe_w,
+        'max_sharpe_margin_share': max_sharpe_ms,
         'max_sharpe': max_sharpe_val,
+        'risk_parity_margin_share': rp_ms,
         'risk_parity_weight': rp_w,
         'risk_parity': rp_metrics,
         'margin_ratio': margin_ratio,
-        'implied_margin_mm': implied_margin_mm,
+        'total_capital_mm': total_capital_mm,
+        'beta_notional_mm': beta_notional_mm,
+        'alpha_margin_mm': alpha_margin_allocated_mm,
+        'alpha_margin_usable_mm': alpha_margin_usable_mm,
+        'alpha_notional_mm': alpha_notional_mm,
         'returns': {'beta': r_beta, 'alpha': r_alpha, 'combined': r_combined},
     }
 

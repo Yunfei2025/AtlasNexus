@@ -12,17 +12,17 @@ from ..ui.components import button as an_button
 
 
 _BACKTEST_SPREAD_TYPE_OPTIONS = [
-    {'label': 'Bond-Curve (Treasury)', 'value': 'TBondCurve'},
-    {'label': 'Bond-Curve (Policybank)', 'value': 'CBondCurve'},
-    {'label': 'Bond-Swap (Treasury)', 'value': 'TBondSwap'},
-    {'label': 'Bond-Swap (Policybank)', 'value': 'CBondSwap'},
+    {'label': 'Treasury Bond', 'value': 'TBondCurve'},
+    {'label': 'Policybank Bond', 'value': 'CBondCurve'},
+    {'label': 'Treasury BondSwap', 'value': 'TBondSwap'},
+    {'label': 'Policybank BondSwap', 'value': 'CBondSwap'},
     {'label': 'New-Issue OTR/OFR Event', 'value': 'BondNewIssue'},
-    {'label': 'Swap Spread', 'value': 'SwapSpread'},
+    {'label': 'Swaps', 'value': 'SwapSpread'},
     {'label': 'Curve & Cross-Asset Spreads', 'value': 'TenorSpread'},
-    {'label': 'Bond-Futures (IRR−Repo)', 'value': 'NetBasis'},
-    {'label': 'Term Basis (Futures)', 'value': 'TermBasis'},
-    {'label': 'Futures vs Swap (FYTM−IRS)', 'value': 'FuturesSwap'},
-    {'label': 'PCA Spread', 'value': 'PCASpread'},
+    {'label': 'Cash-and-Carry', 'value': 'NetBasis'},
+    {'label': 'Calendar Spread', 'value': 'TermBasis'},
+    {'label': 'Futures Swap', 'value': 'FuturesSwap'},
+    {'label': 'Sector PCA', 'value': 'SectorPCASpread'},
 ]
 
 
@@ -720,12 +720,25 @@ def build_individual_backtest_panel(saved_selection: dict | None = None) -> html
                         ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(2, minmax(0, 1fr))', 'gap': '8px'}),
                     ], style={**_subsection, 'display': 'block', 'width': '100%', 'boxSizing': 'border-box', 'marginBottom': '10px'}),
 
-                    # --- Shared controls: min-hold, period, allow-short ---
+                    # --- Shared controls: min-hold, period, lookback window, allow-short ---
                     html.Div([
                         html.Div([html.Label("Min Hold (d)", style=_lbl_xs), dcc.Input(id='bt-min-hold', type='number', value=7, min=1, max=30, step=1, style={**_inp_mono, 'width': '100%'}, className='no-spinner')]),
                         html.Div([
                             html.Label("Backtest Period", style=_lbl_xs),
                             dcc.Dropdown(id='bt-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}, {'label': '10 Years', 'value': 2520}], value=504, clearable=False, style={'fontSize': '12px'}),
+                        ]),
+                        html.Div([
+                            html.Label("Lookback Window", style=_lbl_xs),
+                            dcc.Dropdown(
+                                id='bt-mr-lookback',
+                                options=[
+                                    {'label': '3 Months', 'value': 90},
+                                    {'label': '6 Months', 'value': 120},
+                                    {'label': '1 Year', 'value': 252},
+                                    {'label': '2 Years', 'value': 504},
+                                ],
+                                value=120, clearable=False, style={'fontSize': '12px'},
+                            ),
                         ]),
                     ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(2, minmax(0, 1fr))', 'gap': '10px', 'marginBottom': '10px'}),
                     dcc.Checklist(

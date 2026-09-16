@@ -87,8 +87,8 @@ SPREAD_CATEGORIES = {
         'style': 'Mixed',
     },
     'PCA-Spread': {
-        'label': 'Multi-Asset PCA',
-        'types': ['PCASpread'],
+        'label': 'Sector PCA',
+        'types': ['SectorPCASpread'],
         'description': 'Cross-asset relative value from PCA',
         'style': 'MeanReversion',
     },
@@ -128,7 +128,7 @@ for _cat, _info in SPREAD_CATEGORIES.items():
 YIELD_BASED_SPREAD_TYPES = {
     'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap',
     'SwapSpread', 'TenorSpread', 'NetBasis', 'FuturesSwap',
-    'PCASpread', 'BinarySpread', 'BondNewIssue',
+    'SectorPCASpread', 'BinarySpread', 'BondNewIssue',
 }
 
 # Default z-score thresholds

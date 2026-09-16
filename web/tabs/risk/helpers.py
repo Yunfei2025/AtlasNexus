@@ -457,6 +457,10 @@ def _leg_volume_ratio(
 
     Returns None when either leg's duration cannot be resolved.
     """
+    if spread_type == 'TenorSpread' and str(trade_id or '').upper().startswith('NCDREPO7D-'):
+        # NCD/ICP curve yield vs matched FR007 IRS tenor: both legs are the
+        # same notional (1-for-1 spread), not duration-matched.
+        return 1.0
     if snap_cache is None:
         snap_cache = {}
     dur1 = _leg_duration_years(leg1, spread_type, trade_id, trade_duration, snap_cache)

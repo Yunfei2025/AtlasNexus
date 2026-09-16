@@ -232,7 +232,7 @@ def _get_borrow_cost_annual_bp(spread_type: str, instrument: str) -> tuple[float
         # matching branch there either). Checked first so 'Basis-5y' doesn't
         # fall into the CDBCGB/-Ny$ bond-borrow-cost match below, which is
         # for a genuine cash-bond-vs-curve name like 'CDBCGB-5y'/'LGBCGB-10y'.
-        if instrument.upper().startswith(('REPO7D-', 'SHI3M-', 'BASIS-')):
+        if instrument.upper().startswith(('REPO7D-', 'SHI3M-', 'BASIS-', 'NCDREPO7D-')):
             return 0.0, 0.0
         # 'CGB-2s5s10s' → belly=5, long_wing=10 (matches resolve_legs() proxy)
         m3 = re.search(r'(\d+)s(\d+)s(\d+)s?$', instrument, re.IGNORECASE)

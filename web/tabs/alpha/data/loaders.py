@@ -694,7 +694,7 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
                 frames.append(df)
         return pd.concat(frames, axis=0) if frames else None
 
-    elif spread_type == 'PCASpread':
+    elif spread_type == 'SectorPCASpread':
         data = _load_pickle_safe(dir_input / 'Misc-spds.pkl')
         if data is None:
             return None
@@ -865,7 +865,7 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                 return result
         return None
 
-    elif spread_type == 'PCASpread':
+    elif spread_type == 'SectorPCASpread':
         filepath = dir_input / 'Misc-spds.pkl'
         data = _load_pickle_safe(filepath)
         if data is None:
@@ -1051,7 +1051,12 @@ def load_realtime_spreads(spread_type: str) -> Optional[pd.DataFrame]:
                     frames.append(sp)
         return pd.concat(frames, axis=1) if frames else None
 
-    elif spread_type in ['PCASpread', 'BinarySpread']:
+    elif spread_type == 'SectorPCASpread':
+        data = _load_pickle_safe(dir_input / 'Misc-spdsrt.pkl')
+        if data:
+            return data.get('PCASpread')
+
+    elif spread_type == 'BinarySpread':
         data = _load_pickle_safe(dir_input / 'Misc-spdsrt.pkl')
         if data:
             return data.get(spread_type)

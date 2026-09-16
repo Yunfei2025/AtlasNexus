@@ -55,6 +55,7 @@ def _compute_factor_stats(results: Dict) -> Dict:
         sig = df['signal'].dropna()
         last_signal = float(sig.iloc[-1]) if not sig.empty else 0.0
         last_pred_val = float(pred.iloc[-1]) if not pred.empty else 0.0
+        last_data_date = pred.index[-1] if not pred.empty else (df.index[-1] if len(df) else None)
         pred_hist = pred.tail(252)
         z_score = ((last_pred_val - pred_hist.mean()) / (pred_hist.std() + 1e-8)
                    if len(pred_hist) > 5 else 0.0)
@@ -69,6 +70,7 @@ def _compute_factor_stats(results: Dict) -> Dict:
         ic_tstat = mean_ic / (ic_std / (n_ic ** 0.5) + 1e-8) if n_ic > 1 else 0.0
         factor_stats[factor] = {
             'last_signal': last_signal,
+            'last_data_date': last_data_date,
             'z_score': z_score,
             'scalar': scalar,
             'mean_ic': mean_ic,

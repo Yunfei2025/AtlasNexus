@@ -788,7 +788,19 @@ def register_backtest_rfbt_callbacks(app):
                 signal_notes,
             ]
             status_prefix = "🔮 Model predicted" if action == 'predict' else "⚡ Model trained"
-            status_msg = (f"{status_prefix} · {persist_note} · Mean ICIR: {mean_icir:.2f}")
+            _data_dates = [
+                s['last_data_date'] for s in factor_stats.values()
+                if s.get('last_data_date') is not None
+            ]
+            data_date_note = ""
+            if _data_dates:
+                _latest_data_date = max(_data_dates)
+                try:
+                    _latest_data_date_str = _latest_data_date.strftime('%Y%m%d')
+                except AttributeError:
+                    _latest_data_date_str = str(_latest_data_date)
+                data_date_note = f" · using data on {_latest_data_date_str}"
+            status_msg = (f"{status_prefix}{data_date_note} · {persist_note} · Mean ICIR: {mean_icir:.2f}")
 
             # Build snapshot records for the Portfolio tab's factor-signals-snapshot-store.
             # With discrete sizing the 'signal' column IS the quantised target in [-1,1],

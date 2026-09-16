@@ -275,6 +275,15 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
                 if tenor_token:
                     otr = otr_cgb.get(_t_label(tenor_years), '')
                     return (otr, f'FR007S{tenor_token}.IR')
+        elif upper.startswith('NCDREPO7D-'):
+            # NCDRepo7d-<tenor>: NCD/ICP curve yield vs matched FR007 IRS tenor.
+            # No tradeable "NCD-<tenor>" instrument code exists (curve-level
+            # yield, like LGBCGB/MTNCGB), so leg1 is a synthetic label.
+            m = re.match(r'NCDREPO7D-(\d+[MY])$', upper)
+            if m:
+                tenor_token, _ = _parse_tenor_token(m.group(1))
+                if tenor_token:
+                    return (f'NCD-{tenor_token}', f'FR007S{tenor_token}.IR')
         elif upper.startswith(('REPO7D-', 'SHI3M-', 'BASIS-')):
             # IRS curve-slope/basis instruments carried over from SwapSpread
             # into this category (see curves.generators.stat.compute_tenor_spreads);

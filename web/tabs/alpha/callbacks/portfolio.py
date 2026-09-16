@@ -19,7 +19,7 @@ from settings.paths import DIR_INPUT as _DIR_INPUT
 from ...risk.helpers import _leg_volume_ratio
 
 from ..data import (
-    THEME, SPREAD_CATEGORIES,
+    THEME, SPREAD_CATEGORIES, ZSCORE_ENTRY_THRESHOLD,
     load_spread_data, load_spread_timeseries, display_key,
     _get_duration_mult, resolve_legs, resolve_legs3, fly_leg_dv01_ratios, _load_leg_data,
 )
@@ -456,6 +456,37 @@ def register_portfolio_callbacks(app) -> None:
                                 inst_row['carry_roll'] = -float(inst_row['carry_roll'])
                             except (TypeError, ValueError):
                                 pass
+                        # Snapshot 'spread'/'mean'/'vol' are stored in raw yield %
+                        # for these types (see curves.refreshers.alpha_snapshot);
+                        # scale to bp here to match the scanned-candidates path
+                        # (web/tabs/alpha/callbacks/scan_callbacks.py _PCT_TYPES).
+                        if stype in {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap', 'TenorSpread', 'SwapSpread'}:
+                            for _col in ('spread', 'mean', 'vol'):
+                                if _col in inst_row:
+                                    _v = pd.to_numeric(inst_row[_col], errors='coerce')
+                                    if pd.notna(_v):
+                                        inst_row[_col] = float(_v) * 100.0
+                        # stop_loss/profit_target are only computed on the scanned
+                        # path (scan_callbacks.py); curated instruments added
+                        # directly never go through it, so derive them here from
+                        # the same MR/trend formula.
+                        if 'stop_loss' not in inst_row or 'profit_target' not in inst_row:
+                            _spread_c = pd.to_numeric(inst_row.get('spread'), errors='coerce')
+                            _mean_c = pd.to_numeric(inst_row.get('mean'), errors='coerce')
+                            _vol_c = pd.to_numeric(inst_row.get('vol'), errors='coerce')
+                            _z_c = pd.to_numeric(inst_row.get('Zscore'), errors='coerce')
+                            if pd.notna(_spread_c) and pd.notna(_mean_c) and pd.notna(_vol_c):
+                                _dist_c = abs(_spread_c - _mean_c)
+                                _vol_c_abs = abs(_vol_c)
+                                _is_mr_c = str(inst_row.get('style', '') or '').strip().lower() == 'meanreversion'
+                                if _is_mr_c:
+                                    inst_row.setdefault('stop_loss', round(_dist_c + 1.5 * _vol_c_abs, 4))
+                                    inst_row.setdefault('profit_target', round(_dist_c, 4))
+                                elif pd.notna(_z_c):
+                                    _dir_sign_c = -1.0 if _inst_dir == 'SELL' else 1.0
+                                    _trend_target_c = abs(_dir_sign_c * ZSCORE_ENTRY_THRESHOLD - _z_c) * _vol_c_abs
+                                    inst_row.setdefault('stop_loss', round(2.0 * _vol_c_abs, 4))
+                                    inst_row.setdefault('profit_target', round(_trend_target_c, 4))
                         extra_rows.append(inst_row)
                 if extra_rows:
                     df_curated = pd.concat([df_curated, pd.DataFrame(extra_rows)], ignore_index=True)

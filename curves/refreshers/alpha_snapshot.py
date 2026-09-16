@@ -477,6 +477,37 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		if "stationary" not in df_tenor.columns:
 			df_tenor["stationary"] = "NO"
 
+		# MeanReversion-classified instruments (ADF stationary=='YES') use the
+		# fitted OU theta as their fair-value mean, which is why the Candidate
+		# Scanner's Zscore for these can honour a per-instrument mr_lookback:
+		# recalibrate just the OU fit (not vol/Zscore, computed below from
+		# whichever mean/vol land in df_tenor) over that instrument's own saved
+		# window instead of the shared 252-day one, when it differs. Carry/
+		# Momentum-classified (non-stationary) instruments never reach here --
+		# their Candidates-tab Zscore is a 20/63-day momentum figure
+		# (alpha_scoring._add_momentum_ma_zscore) unrelated to this mean anchor,
+		# so mr_lookback has no effect on them and we skip the recompute.
+		from web.tabs.alpha.data.saved_state import load_instrument_params
+		_stationary_ids = df_tenor.index[
+			df_tenor["stationary"].astype(str).str.upper().eq("YES")
+		]
+		for _inst in _stationary_ids:
+			try:
+				_saved = load_instrument_params("TenorSpread", _inst)
+				_lb = _saved.get("mr_lookback") if _saved else None
+				if _lb is None or int(_lb) == N:
+					continue
+				_hist_lb = df_ts[_inst].dropna().tail(int(_lb))
+				if _hist_lb.empty:
+					continue
+				_restat = OU_calibrate(_hist_lb.to_frame(_inst))
+				if _inst in _restat.index:
+					for _c in ["mean", "vol", "ewm_vol", "halflife", "stationary"]:
+						if _c in _restat.columns:
+							df_tenor.loc[_inst, _c] = _restat.loc[_inst, _c]
+			except Exception:
+				continue
+
 		df_tenor["spread"] = pd.to_numeric(df_tenor["spread"], errors="coerce")
 		df_tenor["mean"] = pd.to_numeric(df_tenor["mean"], errors="coerce")
 		df_tenor["vol"] = pd.to_numeric(df_tenor["vol"], errors="coerce")

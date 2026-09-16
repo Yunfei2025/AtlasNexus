@@ -149,6 +149,7 @@ def _run_monthly_style_switch_backtest(
     carry_z_weight: float = 0.0,
     max_hold: Optional[int] = None,
     month_to_style_override: Optional[dict] = None,
+    mr_lookback: int = 120,
 ):
     """Run one continuous backtest whose entry style is routed by the monthly review.
 
@@ -169,6 +170,10 @@ def _run_monthly_style_switch_backtest(
     backtest reuse exactly the regime schedule it was reviewed and saved under,
     instead of recomputing it (and potentially drifting from what was reviewed
     as new data arrives).
+
+    ``mr_lookback``: trailing window (trading days) for the MR fair-value
+    anchor, forwarded to ``run_monthly_style_backtest`` -- see that function's
+    docstring for the per-instrument rationale.
     """
     if month_to_style_override is not None:
         month_to_style = month_to_style_override
@@ -205,6 +210,7 @@ def _run_monthly_style_switch_backtest(
         ou_mean=ou_mean,
         carry_z_weight=carry_z_weight,
         max_hold=max_hold,
+        mr_lookback=mr_lookback,
     )
 
     if isinstance(results, dict) and 'error' not in results:
@@ -445,6 +451,7 @@ def register_backtest_callbacks(app) -> None:
          Output('bt-vol-window', 'value'),
          Output('bt-trailing-mult', 'value'),
          Output('bt-carry-z-weight', 'value'),
+         Output('bt-mr-lookback', 'value'),
          Output('bt-allow-short', 'value')],
         [Input('bt-spread-type', 'value'),
          Input('bt-instrument', 'value')],
@@ -453,17 +460,20 @@ def register_backtest_callbacks(app) -> None:
         default_allow_short = ['allow']
         # stop_z=3.0 in both presets: see run_monthly_style_backtest's stop_z
         # default for the measured rationale (the stop was a no-op until the
-        # re-entry lockout landed).
+        # re-entry lockout landed). mr_lookback=120 (6mo) matches
+        # run_monthly_style_backtest's MR_LOOKBACK default -- see that
+        # function's docstring for the book-wide measurement backing it.
         if spread_type == 'TenorSpread':
-            preset = (2.5, 0.25, 3.0, 10, 1.50, 30, 90, 2.0, 0.5)
+            preset = (2.5, 0.25, 3.0, 10, 1.50, 30, 90, 2.0, 0.5, 120)
         else:
-            preset = (2.0, 0.5, 3.0, 7, 1.25, 20, 60, 1.5, 0.5)
+            preset = (2.0, 0.5, 3.0, 7, 1.25, 20, 60, 1.5, 0.5, 120)
 
         if instrument and not (isinstance(instrument, str) and instrument.startswith(MACRO_PREFIX)):
             saved = load_instrument_params(spread_type, instrument)
             if saved:
                 keys = ('entry_z', 'exit_z', 'stop_z', 'min_hold', 'theta',
-                        'mom_window', 'vol_window', 'trailing_mult', 'carry_z_weight')
+                        'mom_window', 'vol_window', 'trailing_mult', 'carry_z_weight',
+                        'mr_lookback')
                 values = tuple(
                     saved[k] if k in saved and saved[k] is not None else preset[i]
                     for i, k in enumerate(keys)
@@ -496,12 +506,14 @@ def register_backtest_callbacks(app) -> None:
          State('bt-trailing-mult', 'value'),
          State('bt-carry-z-weight', 'value'),
          State('bt-allow-short', 'value'),
-         State('bt-min-hold', 'value')],
+         State('bt-min-hold', 'value'),
+         State('bt-mr-lookback', 'value')],
         prevent_initial_call=True
     )
     def run_individual_backtest(
         n_clicks, spread_type, instrument, entry_z, exit_z, stop_z, period, theta,
-        mom_window, vol_window, trailing_mult, carry_z_weight, allow_short, min_hold
+        mom_window, vol_window, trailing_mult, carry_z_weight, allow_short, min_hold,
+        mr_lookback
     ):
         if not n_clicks:
             return html.Div(), ""
@@ -692,6 +704,7 @@ def register_backtest_callbacks(app) -> None:
                 mom_window=int(mom_window) if mom_window is not None else 20,
                 ou_mean=ou_mean,
                 carry_z_weight=float(carry_z_weight) if carry_z_weight is not None else 0.5,
+                mr_lookback=int(mr_lookback) if mr_lookback is not None else 120,
             )
 
             # For YTM-based spreads: restore original display signs after internal inversion.
@@ -774,12 +787,14 @@ def register_backtest_callbacks(app) -> None:
          State('bt-trailing-mult', 'value'),
          State('bt-carry-z-weight', 'value'),
          State('bt-allow-short', 'value'),
-         State('bt-min-hold', 'value')],
+         State('bt-min-hold', 'value'),
+         State('bt-mr-lookback', 'value')],
         prevent_initial_call=True,
     )
     def save_individual_backtest_params(
         n_clicks, spread_type, instrument, entry_z, exit_z, stop_z, period, theta,
         mom_window, vol_window, trailing_mult, carry_z_weight, allow_short, min_hold,
+        mr_lookback,
     ):
         if not n_clicks:
             return ""
@@ -817,6 +832,7 @@ def register_backtest_callbacks(app) -> None:
                 'vol_window': vol_window if vol_window is not None else 60,
                 'trailing_mult': trailing_mult if trailing_mult is not None else 3.0,
                 'carry_z_weight': float(carry_z_weight) if carry_z_weight is not None else 0.5,
+                'mr_lookback': int(mr_lookback) if mr_lookback is not None else 120,
                 'allow_short': _allow_short_enabled(allow_short),
             }
             save_instrument_state(spread_type, instrument, params, month_to_style, schedule)
@@ -1111,6 +1127,7 @@ def register_backtest_callbacks(app) -> None:
                             ou_mean=_ou_mean,
                             carry_z_weight=_saved_params.get('carry_z_weight', 0.0),
                             month_to_style_override=_saved_regime.get('month_to_style'),
+                            mr_lookback=_saved_params.get('mr_lookback', 120),
                         )
                     except Exception:
                         res = {'error': 'saved-state backtest failed'}

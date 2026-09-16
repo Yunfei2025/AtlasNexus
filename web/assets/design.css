@@ -459,19 +459,26 @@ input:disabled {
    silently drifts (only a handful ever had it applied) and the browser
    spinner has no upside on inputs this narrow. `.no-spinner` is kept as a
    harmless no-op class for any call site that still references it.       */
+input[type="number"] {
+  -moz-appearance: textfield !important;
+}
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button,
 input.dash-input-element[type="number"]::-webkit-outer-spin-button,
 input.dash-input-element[type="number"]::-webkit-inner-spin-button {
   -webkit-appearance: none !important;
-  appearance: none !important;
   margin: 0 !important;
   display: none !important;
+  opacity: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  pointer-events: none !important;
 }
-input[type="number"],
-input.dash-input-element[type="number"] {
-  -moz-appearance: textfield !important;
-  appearance: textfield !important;
+/* Dash 4.x's dcc.Input renders its own +/- stepper buttons (not the native
+   browser spin arrows targeted above) whenever min/max/step are set on a
+   number input. Hide those too so every number box is a plain text field. */
+.dash-input-stepper {
+  display: none !important;
 }
 
 /* ── dcc.DatePickerSingle ─────────────────────────────────────── */

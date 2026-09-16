@@ -526,6 +526,19 @@ def _nearest(series: pd.Series, target: float) -> Optional[float]:
     return float(series.loc[idx])
 
 
+def _annuity_mdur(term_years: float, rate: float = 0.03, freq: int = 2) -> float:
+    """Approximate modified duration of a par instrument at a given tenor,
+    using a simple annuity closed-form (same style as curves.generators.pairs.swap_dv01,
+    duplicated inline here since graphs.py only has bare (tenor, yield) points, no schedule)."""
+    if term_years <= 0:
+        return 0.0
+    alpha = 1.0 / freq
+    n = int(round(term_years * freq))
+    v = 1.0 / (1.0 + rate / freq)
+    annuity = alpha * (v * (1 - v ** n) / (1 - v)) if n > 0 else 0.0
+    return annuity
+
+
 def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
     """Derive the right-rail snapshot (spot levels, slope, bid-offer, fwd peak)
     directly from the already-drawn traces, so the rail always matches the chart."""
@@ -544,29 +557,23 @@ def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
                 stats["1Y Spot"] = s1y
                 if s5y is not None and s1y is not None:
                     stats["1s5s"] = (s5y - s1y) * 100.0
-                # Implied forward peak: derive forward rates from spot curve,
-                # then find the peak (analogous to IRS Forward 'Fwd peak').
                 spot_arr = hero.values.astype(float)
                 tenor_arr = hero.index.values.astype(float)
                 if len(tenor_arr) > 1:
-                    df_DF = np.exp(-spot_arr * tenor_arr / 100)
-                    fwd_arr = -100 * np.gradient(np.log(df_DF + 1e-12), tenor_arr)
-                    fwd_series = pd.Series(fwd_arr, index=tenor_arr)
-                    fwd_peak_idx = fwd_series.idxmax()
-                    fwd_peak_val = fwd_series.max()
-                    if not pd.isna(fwd_peak_idx) and not pd.isna(fwd_peak_val):
-                        stats["Fwd peak"] = (float(fwd_peak_val), float(fwd_peak_idx))
                     # Best rolldown point: 1Y rolldown = y(T) - y(T-1Y), interpolated
-                    # off the smooth fitted spot curve, holding the curve static.
-                    # Max over T is where the curve is locally steepest (belly), not
-                    # where the yield/forward level is highest.
+                    # off the smooth fitted spot curve, holding the curve static, then
+                    # duration-weighted (bp x Mdur(T-1Y)) to approximate the actual 1Y
+                    # total-return effect rather than raw yield pickup — otherwise the
+                    # metric is biased toward the belly regardless of price sensitivity.
                     horizon = 1.0
                     eligible = tenor_arr[tenor_arr - horizon >= tenor_arr.min()]
                     if len(eligible) > 0:
                         y_now = np.interp(eligible, tenor_arr, spot_arr)
                         y_rolled = np.interp(eligible - horizon, tenor_arr, spot_arr)
                         rolldown_bp = (y_now - y_rolled) * 100.0
-                        rd_series = pd.Series(rolldown_bp, index=eligible)
+                        mdur = np.array([_annuity_mdur(t - horizon) for t in eligible])
+                        rolldown_return_bp = rolldown_bp * mdur
+                        rd_series = pd.Series(rolldown_return_bp, index=eligible)
                         rd_peak_idx = rd_series.idxmax()
                         rd_peak_val = rd_series.max()
                         if not pd.isna(rd_peak_idx) and not pd.isna(rd_peak_val):
@@ -606,12 +613,11 @@ def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
                     pass  # Fallback: leave Repo7d-1s5s unset if data unavailable
             if not sec.empty:
                 stats["Shibor3M 10Y"] = _nearest(sec, 10.0)
-            if curve_type == "IRSForward" and not hero.empty:
-                peak_x = float(hero.idxmax())
-                stats["Fwd peak"] = (float(hero.max()), peak_x)
             if curve_type == "IRSSpot" and not hero.empty and len(hero) > 1:
                 # Best rolldown point on the FR007 spot swap curve: 1Y rolldown
-                # = rate(T) - rate(T-1Y), interpolated off the fitted curve.
+                # = rate(T) - rate(T-1Y), interpolated off the fitted curve, then
+                # duration-weighted (bp x Mdur(T-1Y), annuity proxy per
+                # curves.generators.pairs.swap_dv01) to approximate 1Y total return.
                 tenor_arr = hero.index.values.astype(float)
                 rate_arr = hero.values.astype(float)
                 horizon = 1.0
@@ -620,7 +626,9 @@ def _curve_snapshot_stats(curve_type: str, figure: Any) -> Dict[str, Any]:
                     r_now = np.interp(eligible, tenor_arr, rate_arr)
                     r_rolled = np.interp(eligible - horizon, tenor_arr, rate_arr)
                     rolldown_bp = (r_now - r_rolled) * 100.0
-                    rd_series = pd.Series(rolldown_bp, index=eligible)
+                    mdur = np.array([_annuity_mdur(t - horizon, rate=0.015, freq=4) for t in eligible])
+                    rolldown_return_bp = rolldown_bp * mdur
+                    rd_series = pd.Series(rolldown_return_bp, index=eligible)
                     rd_peak_idx = rd_series.idxmax()
                     rd_peak_val = rd_series.max()
                     if not pd.isna(rd_peak_idx) and not pd.isna(rd_peak_val):
@@ -666,13 +674,10 @@ def _render_curve_snapshot(curve_type: str, stats: Dict[str, Any]) -> Any:
         if grid_bottom:
             rows.append(html.Div(className="curve-snapshot__divider"))
             rows.append(html.Div(grid_bottom, className="curve-snapshot__grid2"))
-        peak = stats.get("Fwd peak")
-        if peak is not None:
-            rows.append(html.Div(className="curve-snapshot__divider"))
-            rows.append(_snapshot_stat("Fwd peak @ Term", f"{peak[0]:.3f} % @ {peak[1]:.2f}Y"))
         rolldown = stats.get("Best Rolldown")
         if rolldown is not None:
-            rows.append(_snapshot_stat("Best Rolldown (1Y) @ Term", f"{rolldown[0]:+.1f} bp @ {rolldown[1]:.2f}Y"))
+            rows.append(html.Div(className="curve-snapshot__divider"))
+            rows.append(_snapshot_stat("Best Rolldown Return (1Y) @ Term", f"{rolldown[0]:+.1f} bp @ {rolldown[1]:.2f}Y"))
         return rows
 
     # IRS spot / forward
@@ -696,13 +701,10 @@ def _render_curve_snapshot(curve_type: str, stats: Dict[str, Any]) -> Any:
     if grid_bottom:
         rows.append(html.Div(className="curve-snapshot__divider"))
         rows.append(html.Div(grid_bottom, className="curve-snapshot__grid2"))
-    peak = stats.get("Fwd peak")
-    if peak is not None:
-        rows.append(html.Div(className="curve-snapshot__divider"))
-        rows.append(_snapshot_stat("Fwd peak @ Term", f"{peak[0]:.2f} % @ {peak[1]:.1f}Y"))
     rolldown = stats.get("Best Rolldown")
     if rolldown is not None:
-        rows.append(_snapshot_stat("Best Rolldown (1Y) @ Term", f"{rolldown[0]:+.1f} bp @ {rolldown[1]:.2f}Y"))
+        rows.append(html.Div(className="curve-snapshot__divider"))
+        rows.append(_snapshot_stat("Best Rolldown Return (1Y) @ Term", f"{rolldown[0]:+.1f} bp @ {rolldown[1]:.2f}Y"))
     return rows
 
 
@@ -821,9 +823,11 @@ def statistics(interval, data_rt_js, stype, season):
     if stype == 'SectorPCASpread':
         spread = spread.loc[sorted(spread.index, key=_sector_pca_sort_key)]
     elif stype == 'TenorSpread':
-        # NCDRepo7d-* (NCD/ICP-vs-repo) excluded from the Daily Spread
-        # Statistics bar chart, kept in the underlying data for other views.
-        spread = spread.loc[~spread.index.astype(str).str.startswith('NCDRepo7d-')]
+        # ICPRepo7d-* is the retired name for the same NCD/ICP-vs-repo
+        # instrument now generated as NCDRepo7d-* (curves.generators.stat);
+        # it lingers in Tenor-spds.pkl because updatePKL merges by column
+        # rather than overwriting, so filter the stale duplicate here.
+        spread = spread.loc[~spread.index.astype(str).str.startswith('ICPRepo7d-')]
         spread = spread.loc[sorted(spread.index, key=_tenor_spread_sort_key)]
     else:
         spread = spread.sort_index()

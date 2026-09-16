@@ -273,7 +273,7 @@ def build_multiasset_backtest_layout():
                                 id='backtest-capital-input',
                                 type='number',
                                 value=10,
-                                style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner',
+                                style={**_inp}, className='no-spinner',
                             ),
                         ]),
 
@@ -312,7 +312,7 @@ def build_multiasset_backtest_layout():
                                 id='backtest-top-pairs',
                                 type='number',
                                 value=10, min=5, max=20,
-                                style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner',
+                                style={**_inp}, className='no-spinner',
                             ),
                         ]),
                     ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(2, minmax(0, 1fr))',
@@ -541,17 +541,17 @@ def build_risk_factor_backtest_layout():
                         html.Div([
                             html.Label("Train window (months):", style=_lbl),
                             dcc.Input(id='rfbt-fm-train', type='number', value=12, min=3,
-                                      style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner'),
+                                      style={**_inp}, className='no-spinner'),
                         ]),
                         html.Div([
                             html.Label("IC threshold:", style=_lbl),
                             dcc.Input(id='rfbt-fm-ic', type='number', value=0.05, step=0.01, min=0.01,
-                                      style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner'),
+                                      style={**_inp}, className='no-spinner'),
                         ]),
                         html.Div([
                             html.Label("Top N features:", style=_lbl),
                             dcc.Input(id='rfbt-fm-topn', type='number', value=8, min=1,
-                                      style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner'),
+                                      style={**_inp}, className='no-spinner'),
                         ]),
                         html.Div([
                             html.Label("Sizing:", style=_lbl),
@@ -569,7 +569,7 @@ def build_risk_factor_backtest_layout():
                         html.Div([
                             html.Label("Smooth window (days):", style=_lbl),
                             dcc.Input(id='rfbt-fm-possmooth', type='number', value=10, min=1,
-                                      style={**_inp, 'MozAppearance': 'textfield', 'appearance': 'textfield'}, className='no-spinner'),
+                                      style={**_inp}, className='no-spinner'),
                         ]),
                         html.Div([
                             html.Label("Lookback:", style=_lbl),
@@ -691,7 +691,7 @@ def build_factor_backtest_layout():
     _param_lbl = {'fontSize': '9px', 'color': 'var(--text-muted)', 'display': 'block'}
     _param_hd  = {'fontSize': '9px', 'color': 'var(--accent-blue)', 'fontWeight': '600', 'marginBottom': '3px'}
     _inp = {**DARK_INPUT_STYLE, 'fontSize': '10px', 'padding': '3px 5px', 'width': '100%',
-            'MozAppearance': 'textfield', 'WebkitAppearance': 'none', 'appearance': 'textfield'}
+            'MozAppearance': 'textfield'}
 
     sidebar = html.Div([
         html.Div([
