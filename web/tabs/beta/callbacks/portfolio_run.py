@@ -495,7 +495,7 @@ def register_portfolio_run_callbacks(app):
          Output('portfolio-data-store', 'data'),
          Output('rp-budget-store', 'data'),
          Output('allocation-results-store', 'data')],
-        [Input('run-button', 'n_clicks')],
+        [Input('beta-run-button', 'n_clicks')],
         [State('capital-input', 'value'),
          State('capital-unit', 'value'),
          State('asset-pool-store', 'data'),
