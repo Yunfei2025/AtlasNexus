@@ -487,6 +487,43 @@ def register_portfolio_run_callbacks(app):
         except Exception:
             return ""
 
+    # ── 3.9b  Best rolldown term hint (CGB, informational only) ────────────────
+    @app.callback(
+        Output('rolldown-best-term-display', 'children'),
+        Input('capital-input', 'id'),  # static id; callback fires once on page load
+        prevent_initial_call=False,
+    )
+    def show_best_rolldown_term(_):
+        """Current best risk-adjusted carry+rolldown tenor on the CGB curve.
+
+        Informational only — this note does not currently feed run_analysis;
+        the Rolldown Tilt % input is a placeholder for a future CGB-aware
+        allocation step (multiasset/rolldown.py).
+        """
+        try:
+            from multiasset.pca_analyzer import CN_IR_TENORS
+            from multiasset.rolldown import cn_loading_matrix, carry_rolldown, select_t_star
+            from multiasset.config import CURVE_CONFIG
+
+            pkl_file, pkl_key, cols = CURVE_CONFIG['CN']
+            data = pd.read_pickle(DIR_INPUT / pkl_file)[pkl_key][cols]
+            data = data.rename(columns=dict(zip(cols, CN_IR_TENORS))).dropna()
+            data.index = pd.to_datetime(data.index)
+
+            tenors = list(CN_IR_TENORS)
+            asof_row = data.iloc[-1]
+            lookback = data.loc[data.index >= asof_row.name - relativedelta(years=1), tenors]
+            dy = lookback.diff().dropna()
+
+            B = cn_loading_matrix()
+            level_vol = (dy.values @ B).std(axis=0)[0]
+            cr = carry_rolldown(asof_row[tenors], tenors=tuple(tenors))
+            t_star = select_t_star(cr, level_vol=level_vol)
+            asof_str = asof_row.name.strftime('%Y-%m-%d')
+            return f"→ Best rolldown term (CGB): {t_star} (as of {asof_str})"
+        except Exception:
+            return ""
+
     # 4. Run Analysis (Portfolio Tab -> Results)
     @app.callback(
         [Output('portfolio-table-container', 'children'),

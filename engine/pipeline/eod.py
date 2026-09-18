@@ -18,6 +18,7 @@ _EOD_STEPS: list[tuple[str, str, str]] = [
     ("factors",     "factors.interface",      "calibrate"),
     ("futures",     "futures.interface",      "calibrate"),
     ("multiasset",  "multiasset.interface",   "calibrate"),
+    ("cgb_rolldown", "multiasset.interface",  "calibrate_rolldown"),
     # pairs step runs on-demand only, not in EOD pipeline
     # derivatives step runs on-demand only, not in EOD pipeline
 ]

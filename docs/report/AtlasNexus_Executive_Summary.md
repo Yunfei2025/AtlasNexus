@@ -21,15 +21,16 @@ source of truth, and daily processes are manual and error-prone.
 
 ## How it works
 
-- **One engine, two consoles.** A deterministic end-of-day pipeline calibrates
-  curves, generates factor signals, and builds books once per day; the **Daily**
-  and **Intraday** consoles render the resulting artifacts — they never recompute
-  on the fly.
-- **Five books.** *Market* (calibrated rates/credit state) → *Beta Book*
-  (systematic macro factor allocation) → *Alpha Book* (market-neutral relative
-  value) → *Summary* (combined desk risk/P&L) → *Run Center* (operations).
+- **One engine, one terminal.** A deterministic end-of-day pipeline calibrates
+  curves, generates factor signals, and builds books once per day; the console
+  renders the resulting artifacts — it never recomputes on the fly.
+- **Five books.** *Market Monitor* (calibrated rates/credit state and pricing) →
+  *Beta Portfolio* (systematic macro factor allocation) → *Alpha Portfolio*
+  (market-neutral relative value across spreads, pairs and volatility) →
+  *Portfolio Summary* (combined desk risk/P&L and tickets) → *Execution Center*
+  (daily run, data backfill, artifact inspection).
 - **Research = production.** The same walk-forward factor model that is
-  backtested in the Beta Book is the one that generates live signals — model
+  backtested in the Beta Portfolio is the one that generates live signals — model
   training is a deliberate, versioned step, decoupled from the daily run.
 - **Isolated, auditable steps.** Each calibration step is independently logged;
   a failure in one module never aborts the rest of the run. Every run is
@@ -41,8 +42,27 @@ source of truth, and daily processes are manual and error-prone.
 - **Beta:** leakage-aware walk-forward factor model (purge/embargo, IC-based
   selection, causal vol-targeted sizing) plus factor risk-parity allocation.
 - **Alpha:** regression-based pairs/spread trading with statistically validated
-  entry/exit signals, plus a volatility/RV book.
+  entry/exit signals, across mean-reversion, monthly and seasonal engines, plus a
+  volatility/RV book.
 - **Futures & derivatives:** dedicated strategy and options-pricing engines.
+
+## Recent additions
+
+- **Capital allocation between books.** The Portfolio Summary now sizes Beta
+  against Alpha on a like-for-like basis — beta notional versus alpha *margin*,
+  since the RV book is margined — and sweeps every split to plot a
+  **diversification frontier** with the maximum-Sharpe point marked. It reports
+  combined Sharpe, correlation, and a diversification ratio that makes explicit
+  whether the two books genuinely offset each other.
+- **CMBC FICC Allocation Index (民生FICC配置指数).** A rules-based FICC allocation
+  index with a published rulebook, generated from the Beta Portfolio and exported
+  as a formatted monthly PDF report directly from the terminal.
+- **Deeper alpha backtesting.** Separate mean-reversion, monthly and seasonal
+  engines with candidate scoring, replacing a single generic backtest path.
+- **Carry and roll-down in rates allocation.** Curve analytics surface the best
+  roll-down term, and the daily pipeline now computes a carry/roll-down-aware
+  tilt for the China government bond curve (engine-side; not yet surfaced in the
+  terminal).
 
 ## Why it matters
 
@@ -52,15 +72,18 @@ source of truth, and daily processes are manual and error-prone.
 | Spreadsheet sprawl | One terminal |
 | Manual, opaque EOD | Logged, isolated, versioned pipeline |
 | Asset-weighted risk | Factor risk-parity |
+| Books sized by intuition | Margin-aware diversification frontier |
 
 ## Status & next steps
 
 The platform is live and running the daily fixed-income workflow end-to-end.
-Near-term priorities: broaden the factor/macro universe, integrate live execution
-into the Tickets workflow, extend RV coverage to additional asset classes, and
-formalize periodic model-risk review of the factor model's selection and sizing
-hyperparameters.
+Trade tickets are currently *inferred from positions* — there is no order or fill
+connectivity — so building a genuine execution path is the main operational gap.
+Other near-term priorities: broaden the factor/macro universe, surface the
+carry/roll-down tilt in the terminal and calibrate its sizing against history,
+extend RV coverage to additional asset classes, complete the planned intraday
+console, and formalize periodic model-risk review of the factor model's selection
+and sizing hyperparameters.
 
 *Full detail: see the User Manual, Model Methodology, and Presentation documents
 in this folder.*
-```

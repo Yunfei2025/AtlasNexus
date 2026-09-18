@@ -113,6 +113,18 @@ def build_multiasset_portfolio_layout():
         ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
 
         html.Div([
+            html.Span("Rolldown Tilt %:", style=_INLINE_LBL),
+            dcc.Input(
+                id='rolldown-tilt-input', type='number', value=20, min=0, max=100, step=1,
+                style={'width': '48px', 'background': 'var(--surface-input)',
+                       'border': '1px solid var(--border-default)', 'borderRadius': '4px',
+                       'padding': '6px 8px', 'fontSize': '10px', 'color': 'var(--text-primary)',
+                       'textAlign': 'right'},
+            ),
+            html.Span(id='rolldown-best-term-display', style={'color': 'var(--text-muted)', 'fontSize': '9px'}),
+        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
+
+        html.Div([
             html.Span("Model:", style=_INLINE_LBL),
             html.Span("Deterministic", style={
                 'fontSize': '10px', 'color': 'var(--accent-blue)',

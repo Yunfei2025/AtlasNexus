@@ -136,56 +136,80 @@ Risk budgeting decides **how much** risk to hold per factor; roll-down decides *
 
 ---
 
-## 7. Implementation plan (scoped: anchor-only Stage 2)
+## 7. Implementation plan (scoped: simple pro-rata tilt, not the §4 anchor template)
 
-**Scope decision:** because CN rates currently only gives us one reliable roll-down read (`T*`, the best-carry point on the curve), Stage 2 is scoped to the **§4 anchoring template only** — bullet / spread / butterfly built around `T*` — not the general N-tenor cvxpy program in §3. §3 stays documented as the natural extension once we trust roll-down estimates at multiple tenors simultaneously. This keeps the first version legible to a risk committee (explicit template, not a black-box QP) and avoids inventing a residual-covariance/turnover-penalty calibration exercise before Stage 1 is even wired to carry.
+**Scope decision, revised:** a standalone comparison test (real CGB data, 2026-09-16, see §7.5) showed the §4 anchor template (bullet/spread/butterfly solved as a 3×3 linear system) adds real complexity — picking a slope leg and curvature wings that don't degenerate, solving a linear system per rebalance — for a benefit that turned out to be small: a much simpler **pro-rata tilt toward the single best-rolldown tenor** reproduces almost all of the effect, at the cost of a small, quantified drift in the Slope/Curvature risk budget. Given CN rates currently only gives us one reliable roll-down read (`T*`), that complexity isn't earning its keep yet. §4's anchor template stays documented as the natural next step if the tilt's factor drift turns out to matter in backtest, or once multiple tenors' roll-down estimates are trusted simultaneously (at which point §3's general optimizer is the real target, not the anchor template either).
 
-### 7.1 What already exists (reuse, don't rebuild)
+### 7.1 The math, worked through on real CGB data (2026-09-16)
 
-Stage 1 (factor risk parity) is already ~90% built in `multiasset/`, just not exposed as a standalone rates-only module:
+Two separate calculations, easy to conflate — kept separate deliberately so carry/rolldown never changes *how much* risk is taken, only *which tenor* carries it.
 
-- `multiasset/pca_analyzer.py:475` `PCARiskFactorAnalyzer` — PCA loadings `B` (level/slope/curvature) and PC vols, fit per country including `'CN'`.
-- `multiasset/factor_backtest.py` — `compute_ewma_factor_vols`, `compute_ewma_factor_covariance` — gives `σ_k` and factor covariance for the closed-form Stage 1 formula in §2.
-- `multiasset/factor_optimizer.py:206` — SLSQP-based ERC solve; §2's closed-form solution can bypass this entirely since PCs are already orthogonal (no need to call the general optimizer for Stage 1).
-- `multiasset/budget.py:18` `derive_vol_sqrt_budgets` — reusable for `b_k` if we want vol^0.5 budgets instead of equal budgets.
+**Step A — Stage 1, `e*` (how much risk, per factor).** Unchanged from §2, and untouched by carry: closed-form risk parity across Level/Slope/Curvature using PC vols from trailing daily yield changes. Carry never enters this step.
 
-None of the above currently touches carry/rolldown — Stage 1 output (`e*`, target PC exposures) is the clean handoff point into the new Stage 2 module.
+**Step B — carry + rolldown per tenor (which tenor is "cheap to hold").**
 
-Carry/rolldown building blocks exist but are **not tenor-DV01-vectorized** for CN IRS:
+```
+carry(T)  = yield(T) − yield(funding tenor)                     # yield pickup, bp
+roll(T)   = duration(T) × [yield(T) − yield(T − 3m)] × 4         # price gain from sliding down the curve, annualized
+```
 
-- `curves/calibration/irs/valuation.py:20` `evalueContract` — per-contract `Carry(3m,bp)` and `Roll(3m,bp)` (via `_calculate_roll_returns`, L64) off the fitted CN IRS spot curve. This is the right source of truth for roll-down (uses the actual fitted curve, not a naive static spread).
-- `curves/generators/irs.py:186-187` — persists `Carry(3m,bp)`/`Roll(3m,bp)` per instrument into the stat-curve time series.
+`yield(T − 3m)` is read off the same curve by linear interpolation between quoted tenors. Worked example, CN 1Y used as the funding proxy:
 
-### 7.2 New work required
+| Tenor | Duration | Carry (bp) | Roll (bp) | Total (bp) |
+|---|---|---|---|---|
+| 1Y | 0.95 | 0 | 0 | 0 |
+| 2Y | 1.90 | 1.4 | 2.6 | 4.0 |
+| 5Y | 4.50 | 18.0 | 25.0 | 43.0 |
+| 10Y | 8.50 | 45.6 | 46.8 | 92.4 |
+| **20Y** | 13.00 | **90.0** | **57.8** | **147.8** |
+| 30Y | 17.00 | 90.7 | 1.2 | 91.9 |
 
-1. **Tenor-grid reconciliation.** `IRSConfig` (`settings/fixed_income.py:305`) quotes FR007 at 1M/3M/6M/9M/1Y/2Y/3Y/4Y/5Y/7Y/10Y; `CN_IR_TENORS`/`CN_DETERMINISTIC_WEIGHTS` (`multiasset/pca_analyzer.py:34,47`) use a 1/2/5/10/20/30Y PCA grid. Before anything else, build a small mapping/interpolation layer so a roll-down value computed at an IRS-quoted tenor can be located against the PCA tenor grid (needed to pick `T*` and to know which PC loadings apply there).
+`T* = argmax(risk-adjusted total)` → **20Y**. Note 30Y has almost the same carry as 20Y but almost no roll, because the curve is nearly flat 20Y→30Y — carry alone would have missed this; roll-down is what separates them.
 
-2. **Per-tenor carry+rolldown vector for CN IRS.** Wrap `evalueContract`'s `Roll(3m,bp)`/`Carry(3m,bp)` outputs into a single function producing a `(N,)` vector aligned to the reconciled tenor grid, net of funding (FR007 fixing vs. actual repo, per §5 open item — do not use static carry). This is new code but should live next to `curves/calibration/irs/valuation.py`, not duplicate the bond-swap (`stat.py`) or factor (`factors/generator/carry.py`) carry logic.
+**Step C — the tilt itself (where the rolldown weight enters the portfolio).**
 
-3. **`T*` selection.** Pick the tenor on the reconciled grid with the best risk-adjusted carry+rolldown (e.g. `(carry+roll)/local curve vol` at that point). This is a simple argmax over the vector from (2) — no optimizer needed.
+```
+w_tilted            = w_baseline                              # start from Stage-1's no-rolldown weights
+w_tilted[T*]        += tilt_pct × Σ|w_baseline|                # add capital at the best-rolldown tenor
+w_tilted[other t]    -= tilt_pct × |w_baseline[t]|              # funded pro-rata to each tenor's existing weight
+```
 
-4. **Instrument template construction (§4), CN-specific:**
-   - Level: bullet at `T*`, sized to hit `e*_level` from Stage 1.
-   - Slope: spread with one leg at `T*`; choose `2s–T*` vs `T*–10s` by comparing which side's carry+rolldown vector value is more favorable; size to hit `e*_slope`.
-   - Curvature: PCA-weighted butterfly (weights from `B` at neighboring PCA tenors), body at `T*`; size to hit `e*_curvature`.
-   - Solve the 3-instrument-to-3-factor mapping as a small linear system (`B_template^T @ w = e*`), not a general QP — this is exactly the "residual fine-tuning" DOF-elimination in §4, minus the optimizer since we've fixed the instrument choice up front.
+With `tilt_pct = 20%` on the real book (`Σ|w_baseline| = 753.4`), 150.7 DV01-units move onto 20Y (130.2 → 280.9), funded by shrinking every other tenor 20% of its own weight (e.g. 30Y: 330.1 → 250.3, a cut of 79.8).
 
-5. **Module shape / integration**, following repo conventions:
-   - New module, e.g. `rates_portfolio/` (or `multiasset/rates_rolldown.py` if kept inside multiasset — needs a naming decision, see open question) exposing `interface.calibrate(cfg, store)` per the `interface.py` convention.
-   - Output: weights per instrument, `e*` vs. realized PC exposure, `T*` and the carry+rolldown value that drove it — serialize into `BacktestResult.meta` (`engine/schema.py:133`), since there's no dedicated schema field for this yet and none should be added prematurely.
-   - Wire into `engine/pipeline/eod.py` alongside the other `*.interface.calibrate()` calls, gated so a failure here doesn't break the rest of the pipeline (existing convention).
+**Why this only costs a *little* factor drift, not a lot:** funding is proportional to each tenor's existing weight, and on the CN grid every tenor has equal Level loading (`CN_DETERMINISTIC_WEIGHTS['Level'] = [1/6]*6`), so the pro-rata cut exactly preserves total Level exposure — no drift there by construction. Slope and Curvature loadings are *not* equal across tenors, so parking extra capital at 20Y (which has non-trivial Slope/Curvature loading) does pull those off target: in the worked example, Slope drifted +11.8% and Curvature −9.6% from `e*`. That drift is the entire price of skipping the §4 anchor template's equality constraint — nothing else changes.
 
-6. **Backtest / validation**, before this replaces any live book logic:
-   - Use `curve-backtest --btype IRS` to sanity-check that `T*` selection and the fitted-curve roll-down number are stable, not noisy re-picks day to day (whipsawing `T*` would be worse than a static template).
-   - Compare realized carry+rolldown captured by the template vs. a naive "always 5Y bullet" or "always the on-the-run belly" baseline.
+### 7.2 What already exists (reuse, don't rebuild)
 
-### 7.3 Explicit non-goals for this pass
+- `multiasset/pca_analyzer.py:34,47` `CN_IR_TENORS`, `CN_DETERMINISTIC_WEIGHTS` — Level/Slope/Curvature loadings `B` on the CGB 6-tenor grid (1/2/5/10/20/30Y).
+- `multiasset/utils.py` `get_default_sensitivities(tenor)['IRDL']` — modified duration per tenor, used directly in the roll formula above.
+- `multiasset/config.py:150` `CURVE_CONFIG['CN']` → `database-px.pkl['CGB']` — real CGB yield history, no Wind dependency, used as-is in the test.
+- `multiasset/factor_backtest.py` `compute_ewma_factor_vols`/`compute_ewma_factor_covariance` — production PC-vol source for Stage 1 (`σ_k`); the test used a simple trailing-1y std as a stand-in, production should use these instead.
+- None of the above currently touches carry/rolldown — confirmed no reuse conflict.
 
-- No cvxpy dependency, no residual-covariance matrix, no turnover penalty calibration (§3, §5 items on `λ`/`κ`) — deferred until multi-tenor roll-down estimates are trusted enough to optimize over jointly.
-- No `γ` carry-tilt on Stage 1 budgets (§2.1) — Stage 1 stays pure risk parity for now; carry enters only in Stage 2 via the template choice.
+### 7.3 Status
 
-### 7.4 Open questions before starting
+Built and merged — this is not a plan anymore, it's what's in the repo:
 
-- [ ] Where should the new module live — new top-level `rates_portfolio/` (cleaner, matches other strategy dirs like `pairs/`, `futures/`) vs. inside `multiasset/` (reuses `pca_analyzer.py`/`factor_backtest.py` without cross-package imports)?
-- [ ] Repo has no `portfolio/` directory despite CLAUDE.md describing one as nlopt-based — confirm whether that's stale documentation or a module that hasn't been created yet, since it affects where this should sit architecturally.
-- [ ] Confirm FR007-vs-repo funding basis data is available for a proper carry net-of-funding number (§5 flags this as a known gap in the existing carry code).
+- [x] `multiasset/rolldown.py` — `carry_rolldown`, `select_t_star`, `tilt_weights`, `factor_drift`, `run_rolldown_tilt`. Pure functions, no I/O, ~140 lines total.
+- [x] `multiasset/interface.py::calibrate_rolldown(cfg, store)` — loads real CGB data via `cfg.input_dir`, runs Stage 1 + the tilt, returns a JSON-serializable dict for `BacktestResult.meta`. `cfg.params['cgb_rolldown_tilt_pct']` overrides the tilt fraction (default 0.20).
+- [x] Wired into `engine/pipeline/eod.py` as its own gated step (`cgb_rolldown`), isolated the same way `otr_ofr` is — a failure here doesn't break the rest of the EOD run.
+- [x] `tests/test_multiasset_rolldown.py` — 4 tests against a synthetic CGB-shaped curve, verifying the belly-vs-flat-long-end carry/roll behavior, `T*` selection, and that the tilt preserves Level exactly while Slope/Curvature drift as expected.
+
+That's the whole implementation. There is exactly **one** genuinely open item, and it's not a build task:
+
+- [ ] **Calibrate `tilt_pct` via backtest.** Currently a guess (20%) picked to make the worked example legible, not derived from data. Before this feeds a live book, run it through `curve-backtest`-style history to sanity-check: realized carry+rolldown captured vs. no-tilt, how often `T*` flips day to day (a noisy `T*` would whipsaw the book — if so, add a minimum-holding-period rule), and whether Slope/Curvature drift ever gets large in stress periods. This is analysis, not new code — the module already takes `tilt_pct` as a parameter.
+
+Everything else previously listed here (tenor-grid reconciliation for IRS, γ carry-tilt on Stage 1, the §4 anchor template, cvxpy/§3) is explicitly **not** being built now — see §7.4.
+
+### 7.4 Explicit non-goals for this pass
+
+- No §4 anchor template (bullet/spread/butterfly, 3×3 linear solve) — only revisit if backtest shows the drift matters.
+- No cvxpy, no residual-covariance matrix, no turnover-penalty calibration (§3, §5 items on `λ`/`κ`).
+- No `γ` carry-tilt on Stage 1 budgets (§2.1) — Stage 1 stays pure risk parity; carry enters only via the Step C tilt.
+- No IRS/FR007 tenor-grid reconciliation yet — this pass is CGB-only, which has one native, un-mapped tenor grid, sidestepping that problem entirely.
+
+### 7.5 Resolved from earlier open questions
+
+- **Module placement:** inside `multiasset/` (not a new top-level package) — it reuses `pca_analyzer.py`/`factor_backtest.py`/`utils.py` directly, and a new top-level package would need cross-package imports for no benefit at this scope.
+- **`portfolio/` vs `multiasset/` per CLAUDE.md:** confirmed via code search that no `portfolio/` directory exists; the nlopt-based description in CLAUDE.md is stale — the real risk-parity/optimizer code lives in `multiasset/factor_optimizer.py` using `scipy.optimize.SLSQP`. Flagging for a separate CLAUDE.md correction, out of scope for this doc.
+- **Validated end-to-end:** the full calculation above (carry/roll table, `T*` selection, pro-rata tilt, factor-drift check) was run against real `database-px.pkl['CGB']` data with no synthetic inputs and no Wind dependency — see the standalone script referenced in the implementation PR.

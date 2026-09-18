@@ -104,6 +104,7 @@ def register_combination_callbacks(app):
         div_ratio = result['diversification_ratio']
         ms = result['alpha_margin_share']
         w = result['alpha_weight']
+        util = result['max_margin_utilization']
 
         formula = html.Div([
             html.Div(
@@ -135,7 +136,6 @@ def register_combination_callbacks(app):
         alpha_margin_mm = result['alpha_margin_mm']
         alpha_margin_usable_mm = result['alpha_margin_usable_mm']
         alpha_notional_mm = result['alpha_notional_mm']
-        util = result['max_margin_utilization']
 
         # --- Collapsed strip: the three headline answers ---
         strip = html.Div([
