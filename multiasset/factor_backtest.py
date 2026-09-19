@@ -618,7 +618,7 @@ def run_factor_backtest(
     save: bool = True,
     save_latest_only: bool = False,
     **strategy_kwargs,
-) -> Tuple[Dict[str, pd.DataFrame], Optional[Dict]]:
+) -> Tuple[Dict[str, pd.DataFrame], Optional[Dict], Optional[Dict]]:
     """Run a single strategy across multiple factors and save results.
 
     Parameters
@@ -641,9 +641,16 @@ def run_factor_backtest(
 
     Returns
     -------
-    (results, latest_artifact)
+    (results, latest_artifact, models_by_month)
         results         : {factor_code: DataFrame}
         latest_artifact : artifact dict for the latest month, or None.
+        models_by_month : {month_key: {factor_code: model_artifact}} for the
+                          ``'FactorModel'`` strategy (populated regardless of
+                          ``save`` — lets a caller defer the disk write via
+                          ``multiasset.factor_model.save_factor_model_results``
+                          without re-running the backtest); ``None`` for the
+                          technical-indicator strategies, which have no
+                          trained-model concept.
     """
     factor_levels = load_factor_rates(input_dir)
 
@@ -660,7 +667,7 @@ def run_factor_backtest(
         for k, v in strategy_kwargs.items():
             if hasattr(fm_cfg, k):
                 setattr(fm_cfg, k, type(getattr(fm_cfg, k))(v))
-        results, latest_artifact = run_factor_model_batch(
+        results, latest_artifact, models_by_month = run_factor_model_batch(
             factors=factors,
             start_date=start_date,
             end_date=end_date,
@@ -669,7 +676,7 @@ def run_factor_backtest(
             save=save,
             save_latest_only=save_latest_only,
         )
-        return results, latest_artifact
+        return results, latest_artifact, models_by_month
 
     # ── Technical indicator strategies ──────────────────────────────────
     if start_date:
@@ -725,8 +732,8 @@ def run_factor_backtest(
         print(f"Saved factor-backtest.pkl  (strategy={strategy}, "
               f"{len(results)} factors)")
 
-    # Non-FactorModel strategies have no model artifact
-    return results, None
+    # Non-FactorModel strategies have no model artifact / trained-model concept
+    return results, None, None
 
 
 def load_factor_backtest(

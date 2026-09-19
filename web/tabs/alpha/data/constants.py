@@ -46,12 +46,16 @@ SPREAD_CATEGORIES = {
         'description': 'Treasury/Policybank bond yield vs fitted curve',
         'style': 'MeanReversion',
     },
-    'Bond-Swap': {
-        'label': 'Bond vs Swap',
-        'types': ['TBondSwap', 'CBondSwap'],
-        'description': 'Bond yield vs interpolated swap rate',
-        'style': 'Mixed',
-    },
+    # Bond-Swap (TBondSwap/CBondSwap) removed from the scanner 2026-09-19:
+    # economically near-duplicate of TenorSpread's CGBRepo7d/CDBCGB-Xy
+    # (same bond-vs-FR007-IRS or bond-vs-bond-curve trade, just keyed by bond
+    # code vs. tenor label / CNBD curve level). Scanning both inflated
+    # apparent diversification without adding independent P&L -- see
+    # alpha-strategy-vs-level-correlation. TBondSwap/CBondSwap themselves are
+    # NOT removed: risk/portfolio reporting (web/tabs/risk/*, portfolio.py)
+    # still resolves legs/duration for any already-held position of this
+    # type, and TenorSpread's CGBRepo7d is the surviving scanner-facing
+    # equivalent going forward.
     'Swap-Spread': {
         'label': 'Swap Spreads',
         'types': ['SwapSpread'],
@@ -79,6 +83,18 @@ SPREAD_CATEGORIES = {
         'types': ['TermBasis'],
         'description': 'Near vs far futures contract spread',
         'style': 'MeanReversion',
+    },
+    'Futures-Term-Event': {
+        'label': 'Calendar Spread (Roll Event)',
+        'types': ['TermBasisEvent'],
+        'description': (
+            'Front/next contract basis, gated by OI-derived roll_progress instead of a '
+            'stationary z-score: entry only in the early-roll regime, scored against the '
+            'causal cohort of prior roll cycles at the same roll_progress, force-exit once '
+            'OI has mostly migrated to the next contract. Coexists with TermBasis (MR) for '
+            'comparison -- see curves/calibration/termbasis_cohort.py.'
+        ),
+        'style': 'EventDriven',
     },
     'Futures-Swap': {
         'label': 'Futures vs Swap (FYTM − IRS)',
@@ -128,13 +144,27 @@ for _cat, _info in SPREAD_CATEGORIES.items():
 YIELD_BASED_SPREAD_TYPES = {
     'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap',
     'SwapSpread', 'TenorSpread', 'NetBasis', 'FuturesSwap',
-    'SectorPCASpread', 'BinarySpread', 'BondNewIssue',
+    'SectorPCASpread', 'BinarySpread', 'BondNewIssue', 'TermBasisEvent',
 }
 
 # Default z-score thresholds
 ZSCORE_ENTRY_THRESHOLD = 2.0
 ZSCORE_EXIT_THRESHOLD = 0.5
 MAX_CORRELATION_THRESHOLD = 0.6
+
+# Spreads confirmed (via full-book MR-vs-trend backtest scan) to be structural
+# trend exceptions rather than mean-reverting: MR barely trades them (near-zero
+# trade count) or loses money, while the trend engine (momentum z-score entry +
+# vol-normalized trailing stop) is clearly and consistently profitable across
+# both full-history and recent windows. Everything else in the book backtests
+# as mean-reversion regardless of its style label -- see
+# backtest_tab.py's TREND_ROUTED_INSTRUMENTS check. Scanning 48 non-stationary
+# candidates across the book found no other spread meeting this bar, so this
+# is an explicit, reviewed whitelist rather than a `style`/regime-based rule
+# (a prior monthly regime router mislabeled trend broadly and was disabled).
+TREND_ROUTED_INSTRUMENTS = {
+    ('TenorSpread', 'CGB-10s30s'),
+}
 
 # Instrument selector prefix for non-spread (macro) series
 MACRO_PREFIX = "MACRO|"

@@ -38,7 +38,7 @@ from settings.paths import DIR_INPUT, DIR_DATA, DIR_MODELS
 
 # ── Reused components from factors/ ─────────────────────────────────────────
 from factors.engine.selector import FactorSelector
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, rankdata
 
 from multiasset.factor_backtest import (
     load_factor_rates,
@@ -87,23 +87,37 @@ class FactorModelConfig:
     # ICIR acts as a confidence multiplier on the z-score (not a gate) so
     # the warm-up transition is smooth rather than abrupt.
     # No SMA smoothing and no turnover filter → fully path-independent.
-    sizing_mode: str = 'discrete'            # 'binary' (legacy) | 'continuous' | 'discrete'
-    target_vol: float = 0.10                 # annualised vol target (continuous mode only)
-    vol_scale_window: int = 60               # realised-vol lookback (continuous mode only)
+    sizing_mode: str = 'discrete'            # 'binary' (legacy) | 'continuous' | 'discrete' | 'tilt'
+    target_vol: float = 0.10                 # unused since the continuous-mode rewrite (see continuous_conviction_cap); kept for back-compat
+    vol_scale_window: int = 60               # realised daily-vol lookback (continuous mode: conviction = pred / this vol)
     icir_window: int = 60                    # rolling OOS-IC window for ICIR confidence
-    icir_saturation: float = 0.25            # tanh saturation: ICIR at which confidence=0.76
+    icir_saturation: float = 0.25            # tanh saturation: ICIR at which confidence=0.76 ('discrete'/'tilt'); wider in 'continuous', see icir_saturation_continuous
     max_leverage: float = 2.0                # cap |position| (continuous mode only)
     # ── Discrete sizing ─────────────────────────────────────────────────────
     position_smooth_window: int = 1          # no SMA smoothing → path-independent
     discrete_tick: float = 0.2               # quantisation step of the target
     discrete_max_z: float = 1.5              # |z| at which the target saturates to ±1
     discrete_deadzone_z: float = 0.5         # |z| below which target is exactly 0
+    # ── Continuous sizing (rewritten — see build_position_series docstring) ──
+    # conviction = clip(predicted_return / realised_daily_vol, ±cap); this is
+    # "how many typical daily market moves is this prediction", a market-
+    # anchored unit that (unlike a self-relative z-score) doesn't drift with
+    # how noisy the model's own output has recently been.
+    continuous_conviction_cap: float = 3.0        # cap on conviction before the ICIR/leverage scaling
+    icir_saturation_continuous: float = 0.6       # wider than icir_saturation: keeps confidence in its mid-range on ordinary days instead of pinning to ~0/~1
+    icir_confidence_floor: float = -0.15          # ICIR below this is treated as this value — a small negative floor instead of clip(lower=0), so an ordinary noisy/negative ICIR doesn't snap confidence straight to its minimum
+    icir_confidence_floor_weight: float = 0.15    # minimum confidence retained even when ICIR is at its worst (position never goes fully to zero purely from ICIR noise)
     # ── Turnover & costs (doc §3.3 / §5.1) ──────────────────────────────────
-    turnover_threshold: float = 0.10         # used only in continuous mode
+    # NOTE: turnover_threshold is retained for the 'binary'/legacy path's
+    # turnover accounting only. 'continuous' mode no longer holds-then-snaps
+    # on a threshold — see build_position_series: there is no execution
+    # constraint at this layer, so the position is re-evaluated fresh every
+    # day rather than filtered.
+    turnover_threshold: float = 0.10
     # tx cost is read from settings.fixed_income.FACTOR_TX_COST_BP (flat notional bp)
     # ── Walk-forward purge / embargo (doc §4.2) ─────────────────────────────
     purge_days: int = 5                      # purge around train/test boundary
-    embargo_days: int = 10                   # embargo at start of test set
+    embargo_days: int = 10                   # extra train-side gap before each test window
     # ── Fix 1: Multi-horizon ensemble ───────────────────────────────────────
     # Train separate models for each prediction horizon and blend by IC weight.
     # H=20 strongly upweights momentum features, capturing sustained trends.
@@ -122,6 +136,35 @@ class FactorModelConfig:
     # Mom120 / Mom252 added in _momentum_features; floor enforced here.
     long_floor: float = 0.30                      # min position during confirmed trend
     long_floor_confirm_window: int = 120          # medium-term momentum window (days)
+    # ── 'tilt' sizing: strategic baseline + bounded model deviation ─────────
+    # For CORE holdings (e.g. IRDL.CN duration) the model should tilt around a
+    # policy allocation, not decide whether to hold the asset at all. The
+    # 'discrete' mode's dead-zone maps "no signal" to "no position", which on a
+    # long-only core asset forfeits carry on ~38% of days and costs far more
+    # than the (statistically insignificant) timing signal earns.
+    #   position = tilt_base + tilt_amp * tanh(z)   [clipped to 0..max_leverage]
+    # tilt_base comes from duration POLICY, not from the model. tilt_amp is
+    # deliberately small: in-sample every larger amp reduced return, so this is
+    # "permission to lean", not a source of alpha.
+    tilt_base: float = 0.60                       # strategic baseline exposure
+    tilt_amp: float = 0.20                        # max deviation either side
+    tilt_use_icir_gate: bool = True               # scale z by ICIR confidence
+    # ── Drawdown-aware position governor ─────────────────────────────────────
+    # Investigation trigger: the Nov-2022 CN policy pivot. The model's
+    # predicted_return kept RISING (0.0004 -> 0.0022) for several straight
+    # days while the position lost money on every one of them, because the
+    # z-scored prediction has no channel for "this call is currently wrong" —
+    # it only sees the prediction's own history, not its recent P&L. This
+    # governor tracks REALIZED P&L of the position actually held and cuts
+    # size on a live losing streak, independent of what the model currently
+    # predicts. It is a risk overlay, not a signal — it cannot improve return
+    # in a market that keeps moving in the model's favour, only cap the
+    # damage when a directional call is actively wrong.
+    use_drawdown_governor: bool = False           # off by default; opt-in per factor
+    dd_governor_window: int = 10                  # trailing days of REALIZED strategy P&L examined
+    dd_governor_loss_bp: float = 8.0              # trigger: trailing window P&L worse than -loss_bp (in return-space bp, i.e. 8.0 = -0.08%)
+    dd_governor_scale: float = 0.4                # position multiplier once triggered (0.4 = cut to 40%)
+    dd_governor_cooldown_days: int = 10           # days position stays scaled down after trigger, even if the losing streak stops
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -282,11 +325,25 @@ def _load_macro_features() -> pd.DataFrame:
 
 # ── Load raw curve data for a factor ────────────────────────────────────
 def _load_curve_data(factor_code: str, input_dir: str) -> Optional[pd.DataFrame]:
-    """Load raw tenor yield data for the factor's underlying curve."""
+    """Load raw tenor yield data for the factor's underlying curve.
+
+    Normalises the index to a pandas DatetimeIndex before returning: some
+    source pickles (e.g. the CN curve files) store plain datetime.date
+    objects, while the rest of the pipeline (factor-rates.pkl, macro data,
+    etc.) uses Timestamp/DatetimeIndex. Merging Series built on those two
+    index *types* into one DataFrame does not align matching calendar dates
+    at all — pandas unions them as if every date were distinct on both sides
+    (confirmed: this silently doubled the row count of every IRDL.CN feature
+    set, from ~2924 to ~5848, and pushed carry features' resulting NaN rate
+    high enough that build_features()'s 50%-NaN filter dropped them).
+    Normalising once here, at the single choke point all curve data flows
+    through, fixes it for every caller regardless of which pkl supplied it.
+    """
     from multiasset.config import CURVE_CONFIG, SPREAD_CONFIG
 
     prefix = factor_code.split('.')[0]
     suffix = factor_code.split('.')[1] if '.' in factor_code else ''
+    data: Optional[pd.DataFrame] = None
 
     try:
         if prefix in ('IRDL', 'IRSL', 'IRCV'):
@@ -297,32 +354,33 @@ def _load_curve_data(factor_code: str, input_dir: str) -> Optional[pd.DataFrame]
                 if os.path.exists(fxcurve_path):
                     fxcurve = pd.read_pickle(fxcurve_path)
                     if suffix in fxcurve:
-                        return fxcurve[suffix]
-                return None
-            pkl_file, pkl_key, columns = cfg
-            data = pd.read_pickle(os.path.join(input_dir, pkl_file))
-            if pkl_key and isinstance(data, dict):
-                data = data[pkl_key]
-            if columns:
-                data = data[[c for c in columns if c in data.columns]]
-            return data
+                        data = fxcurve[suffix]
+            else:
+                pkl_file, pkl_key, columns = cfg
+                data = pd.read_pickle(os.path.join(input_dir, pkl_file))
+                if pkl_key and isinstance(data, dict):
+                    data = data[pkl_key]
+                if columns:
+                    data = data[[c for c in columns if c in data.columns]]
 
         elif prefix in ('SPDL', 'SPSL'):
             cfg = SPREAD_CONFIG.get(suffix)
-            if cfg is None:
-                return None
-            pkl_file, pkl_key, columns = cfg
-            data = pd.read_pickle(os.path.join(input_dir, pkl_file))
-            if pkl_key and isinstance(data, dict):
-                data = data[pkl_key]
-            if columns:
-                data = data[[c for c in columns if c in data.columns]]
-            return data
+            if cfg is not None:
+                pkl_file, pkl_key, columns = cfg
+                data = pd.read_pickle(os.path.join(input_dir, pkl_file))
+                if pkl_key and isinstance(data, dict):
+                    data = data[pkl_key]
+                if columns:
+                    data = data[[c for c in columns if c in data.columns]]
 
     except Exception as e:
         print(f"Warning: could not load curve data for {factor_code}: {e}")
+        return None
 
-    return None
+    if data is not None and not isinstance(data.index, pd.DatetimeIndex):
+        data = data.copy()
+        data.index = pd.to_datetime(data.index)
+    return data
 
 
 # ── Master feature builder ──────────────────────────────────────────────
@@ -618,22 +676,127 @@ def _predict_ic_model(
 #  3b. Position sizing  (shared by backtest + live-predict paths)
 # ═══════════════════════════════════════════════════════════════════════════
 
+def rolling_spearman_ic(a: pd.Series, b: pd.Series, window: int = 60) -> pd.Series:
+    """Rolling Spearman rank-IC between two series, ranked *within each window*.
+
+    ``pandas.Series.rolling().corr()`` is Pearson only — there is no built-in
+    rolling Spearman.  Feature selection and model training elsewhere in this
+    module (``_compute_ic_metrics`` / ``_train_ic_model``) use Spearman IC
+    throughout, so the diagnostic / sizing IC must match: a Pearson rolling
+    corr on daily bond returns is dominated by the handful of large-move days
+    each quarter and can disagree materially with the Spearman IC the model
+    was actually selected and trained on.
+
+    Ranking on the full series first and then taking a rolling Pearson corr
+    of the ranks is *not* equivalent (ranks drift as the window moves) and can
+    be off by several hundredths of correlation — so each window is ranked
+    independently here.
+    """
+    common = a.index.intersection(b.index)
+    av = a.reindex(common).to_numpy(dtype=float)
+    bv = b.reindex(common).to_numpy(dtype=float)
+    n = len(av)
+    out = np.full(n, np.nan)
+    min_valid = max(window // 2, 10)
+    for i in range(window - 1, n):
+        wa = av[i - window + 1:i + 1]
+        wb = bv[i - window + 1:i + 1]
+        mask = ~(np.isnan(wa) | np.isnan(wb))
+        if mask.sum() < min_valid:
+            continue
+        ra = rankdata(wa[mask])
+        rb = rankdata(wb[mask])
+        if ra.std() == 0 or rb.std() == 0:
+            continue
+        out[i] = np.corrcoef(ra, rb)[0, 1]
+    return pd.Series(out, index=common)
+
+
+def mean_ic_at_effective_horizon(
+    predicted_return: pd.Series,
+    daily_returns: pd.Series,
+    effective_horizon: pd.Series,
+    window: int = 60,
+) -> float:
+    """Mean rolling IC graded at each date's own blended ensemble horizon.
+
+    The standard IC diagnostic (``rolling_spearman_ic`` vs next-day return)
+    always measures H=1 accuracy, which under-credits the multi-horizon
+    ensemble (``target_horizons``) whenever a longer horizon dominates the
+    blend — e.g. during a confirmed trend, where H=20 momentum features win
+    but next-day noise swamps any real 20-day predictive power. This computes
+    IC once per distinct rounded horizon present in ``effective_horizon`` and
+    reports the overall mean across all dates, each graded at its own horizon.
+
+    Returns ``nan`` if no valid IC observations exist.
+    """
+    eff_h = effective_horizon.dropna()
+    if eff_h.empty:
+        return float('nan')
+    h_rounded = eff_h.round().clip(lower=1)
+    ic_by_h = []
+    for H in sorted(h_rounded.unique()):
+        H = int(H)
+        fwd_H = daily_returns.rolling(H).sum().shift(-H).reindex(predicted_return.index)
+        ic_H = rolling_spearman_ic(predicted_return, fwd_H, window).dropna()
+        mask = h_rounded.reindex(ic_H.index) == H
+        ic_by_h.append(ic_H[mask.fillna(False)])
+    if not ic_by_h:
+        return float('nan')
+    combined = pd.concat(ic_by_h)
+    return float(combined.mean()) if len(combined) > 0 else float('nan')
+
+
 def rolling_icir(
     predicted_return: pd.Series,
     daily_returns: pd.Series,
     window: int = 60,
+    horizon: Optional[Union[int, pd.Series]] = None,
 ) -> pd.Series:
     """Rolling information-coefficient information-ratio.
 
-    IC_t   = window-corr(predicted_return, next-day actual return)
+    IC_t   = window Spearman rank-corr(predicted_return, actual forward
+             return) — matches the Spearman IC used for feature selection
+             and training (see ``rolling_spearman_ic``).
     ICIR_t = rolling mean(IC) / rolling std(IC)   over the same window.
+
+    ``horizon`` controls the forward-return window IC is graded against:
+      * ``None`` (default) or ``1`` — next-day return, the historical
+        behaviour.
+      * an int H > 1 — H-day forward return (``daily_returns.rolling(H)
+        .sum().shift(-H)``).
+      * a per-date ``pd.Series`` (e.g. ``result['effective_horizon']`` from
+        the multi-horizon ensemble) — each date is graded against its own
+        blended horizon's forward return, so a model whose ensemble is
+        currently trend-dominated (H=20) is not scored on next-day noise.
+        Implemented by grouping dates with the same rounded horizon and
+        computing the rolling IC once per distinct horizon, then stitching
+        the results back together.
 
     The series is **not** shifted here — callers that use it for sizing must
     ``.shift(1)`` so that only past information drives today's position.
-    Mirrors the dashboard IC block (backtest_rfbt.py) so both paths agree.
+    Mirrors the dashboard IC block (backtest_rfbt.py) so both paths agree
+    when ``horizon`` is left at its default.
     """
-    actual_fwd = daily_returns.shift(-1).reindex(predicted_return.index)
-    ic = predicted_return.rolling(window).corr(actual_fwd)
+    if horizon is None or (np.isscalar(horizon) and int(horizon) <= 1):
+        actual_fwd = daily_returns.shift(-1).reindex(predicted_return.index)
+        ic = rolling_spearman_ic(predicted_return, actual_fwd, window)
+    elif np.isscalar(horizon):
+        H = int(horizon)
+        actual_fwd = daily_returns.rolling(H).sum().shift(-H).reindex(predicted_return.index)
+        ic = rolling_spearman_ic(predicted_return, actual_fwd, window)
+    else:
+        # Per-date horizon series: compute once per distinct rounded horizon
+        # (there are only ever len(cfg.target_horizons) distinct values in
+        # practice) and stitch each horizon's IC back onto its own dates.
+        horizon_rounded = horizon.reindex(predicted_return.index).round().clip(lower=1)
+        ic = pd.Series(np.nan, index=predicted_return.index)
+        for H in sorted(horizon_rounded.dropna().unique()):
+            H = int(H)
+            actual_fwd_H = daily_returns.rolling(H).sum().shift(-H).reindex(predicted_return.index)
+            ic_H = rolling_spearman_ic(predicted_return, actual_fwd_H, window)
+            mask = horizon_rounded == H
+            ic.loc[mask] = ic_H.loc[mask]
     ic_mean = ic.rolling(window, min_periods=max(window // 2, 10)).mean()
     ic_std = ic.rolling(window, min_periods=max(window // 2, 10)).std()
     return (ic_mean / ic_std.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
@@ -767,11 +930,72 @@ def bucket_position(
             return -2
 
 
+def apply_drawdown_governor(
+    position: pd.Series,
+    daily_returns: pd.Series,
+    cfg: FactorModelConfig,
+) -> pd.Series:
+    """Cut position size after a live losing streak on the position actually held.
+
+    Runs as a causal, sequential (day-by-day) pass over the *base* position a
+    sizing mode already computed. At each day it looks back over the trailing
+    ``dd_governor_window`` days of REALIZED strategy return — using the
+    position the governor itself already output on those days, not the
+    unscaled base position — and if that trailing P&L is worse than
+    ``-dd_governor_loss_bp``, scales today's (and the next
+    ``dd_governor_cooldown_days`` days') position by ``dd_governor_scale``.
+
+    This targets a specific failure mode found investigating the Nov-2022
+    IRDL.CN drawdown: the z-scored prediction has no concept of "this call
+    has been wrong for a week" — it only sees the prediction's own history,
+    so predicted_return kept RISING while the held position lost money every
+    day. The governor is a pure risk overlay: it cannot add return (it never
+    increases size above what the model already wanted), it can only reduce
+    the damage from a sustained wrong-direction call.
+
+    Sequential by construction — the day-N decision depends on day-(N-1)'s
+    governed position — so this cannot be vectorised with a single rolling
+    window without look-ahead. With one pass over a ~10y daily series per
+    factor this is not a scaling concern (confirmed: sub-second).
+    """
+    if not cfg.use_drawdown_governor:
+        return position
+
+    idx = position.index
+    rets = daily_returns.reindex(idx).fillna(0.0).to_numpy()
+    base = position.fillna(0.0).to_numpy()
+    n = len(idx)
+
+    governed = np.zeros(n)
+    realized = np.zeros(n)          # realized strategy return under the GOVERNED position
+    cooldown_remaining = 0
+
+    for i in range(n):
+        # Today's realized P&L uses YESTERDAY's governed position (matches
+        # the strategy_returns convention elsewhere: position.shift(1) * ret).
+        realized[i] = (governed[i - 1] if i > 0 else 0.0) * rets[i]
+
+        window_start = max(0, i - cfg.dd_governor_window + 1)
+        trailing_pnl = realized[window_start:i + 1].sum()
+
+        if trailing_pnl < -cfg.dd_governor_loss_bp / 1e4:
+            cooldown_remaining = cfg.dd_governor_cooldown_days
+
+        if cooldown_remaining > 0:
+            governed[i] = base[i] * cfg.dd_governor_scale
+            cooldown_remaining -= 1
+        else:
+            governed[i] = base[i]
+
+    return pd.Series(governed, index=idx)
+
+
 def build_position_series(
     predicted_return: pd.Series,
     daily_returns: pd.Series,
     cfg: FactorModelConfig,
     long_only: bool = False,
+    effective_horizon: Optional[pd.Series] = None,
 ) -> pd.DataFrame:
     """Convert predicted returns into a tradable position series.
 
@@ -788,9 +1012,24 @@ def build_position_series(
     ``2*discrete_max_level / position_smooth_window`` (no path dependence on
     the held position).  All inputs are causal (shifted) to avoid look-ahead.
 
+    ``'tilt'`` is for CORE holdings: ``tilt_base + tilt_amp * tanh(z)``, with
+    no dead-zone, so the position never collapses to zero on a missing signal.
+    ``'discrete'`` treats the model as deciding *whether to hold the asset*;
+    for a strategic allocation like IRDL.CN duration that forfeits carry on
+    the many days the signal is weak, which empirically costs far more than
+    the timing signal earns.  See ``tilt_base`` / ``tilt_amp`` in the config.
+
     ``long_only=True`` clips the final position to ``[0, max_leverage]`` so
     the factor can never go short — appropriate for IRDL (duration level)
     which represents the core long-only bond exposure.
+
+    ``effective_horizon``: per-date IC-weighted blend horizon from the
+    multi-horizon ensemble (``result['effective_horizon']``). When supplied,
+    the ICIR confidence gate grades each day's IC against *that* day's
+    blended forward-return horizon rather than always next-day (H=1) — so a
+    model whose ensemble is currently trend-dominated (H=20 upweighted) is
+    not penalised with a low next-day IC it was never trying to achieve.
+    ``None`` preserves the historical H=1 behaviour.
     """
     pred = predicted_return.astype(float)
 
@@ -799,6 +1038,33 @@ def build_position_series(
         smoothed = pred.rolling(cfg.signal_smooth_days, min_periods=1).mean()
     else:
         smoothed = pred
+
+    if cfg.sizing_mode == 'tilt':
+        # Strategic baseline + bounded model deviation. No dead-zone: a weak
+        # or missing signal leaves the position at tilt_base, never at zero.
+        pred_z = _rolling_zscore(smoothed, cfg.icir_window).fillna(0.0)
+
+        if cfg.tilt_use_icir_gate:
+            icir = rolling_icir(smoothed, daily_returns, cfg.icir_window,
+                               horizon=effective_horizon).shift(1)
+            # clip(lower=0): a negative ICIR means the signal has been
+            # anti-predictive, so fall back to the baseline rather than
+            # inverting on what is usually a noisy estimate.
+            conf = np.tanh(icir.clip(lower=0) / cfg.icir_saturation).fillna(0.0)
+        else:
+            conf = 1.0
+
+        target = cfg.tilt_base + cfg.tilt_amp * np.tanh(pred_z * conf)
+        lo, hi = (0.0, cfg.max_leverage) if long_only else (-cfg.max_leverage, cfg.max_leverage)
+        target = target.clip(lo, hi).fillna(cfg.tilt_base)
+
+        out = pd.DataFrame({'position': target})
+        # 'signal' stays a direction flag relative to the baseline, so the UI's
+        # long/short/neutral colouring still reads correctly.
+        out['signal'] = np.sign(target - cfg.tilt_base).fillna(0).astype(int)
+        out['position'] = apply_drawdown_governor(out['position'], daily_returns, cfg)
+        out['turnover'] = out['position'].diff().abs().fillna(0.0)
+        return out[['signal', 'position', 'turnover']]
 
     if cfg.sizing_mode == 'discrete':
         # 1. Standardise so the level is regime-relative (causal rolling z).
@@ -810,7 +1076,8 @@ def build_position_series(
         #    As the rolling IC history builds, confidence smoothly ramps to 1
         #    and z_scaled converges to pred_z.  This is NOT path-dependent:
         #    ICIR depends only on market data (pred vs actual), not positions.
-        icir = rolling_icir(smoothed, daily_returns, cfg.icir_window).shift(1)
+        icir = rolling_icir(smoothed, daily_returns, cfg.icir_window,
+                           horizon=effective_horizon).shift(1)
         icir_confidence = np.tanh(icir.clip(lower=0) / cfg.icir_saturation).fillna(0.0)
         pred_z_scaled = pred_z * icir_confidence
 
@@ -821,6 +1088,7 @@ def build_position_series(
         )).astype(float)
 
         out = pd.DataFrame({'signal': target, 'position': target})
+        out['position'] = apply_drawdown_governor(out['position'], daily_returns, cfg)
         out['turnover'] = out['position'].diff().abs().fillna(out['position'].abs())
         return out[['signal', 'position', 'turnover']]
 
@@ -830,38 +1098,64 @@ def build_position_series(
             raw_sig = raw_sig.clip(lower=0)   # 0 or +1 only
         signal = raw_sig.astype(int)
         out = pd.DataFrame({'signal': signal, 'position': raw_sig})
+        out['position'] = apply_drawdown_governor(out['position'], daily_returns, cfg)
         out['turnover'] = out['position'].diff().abs().fillna(out['position'].abs())
         return out
 
-    # ── Continuous sizing (doc §3.1) ─────────────────────────────────────
-    # 1. Standardise the predicted return so size is regime-relative.
-    pred_z = _rolling_zscore(smoothed, cfg.icir_window).fillna(0.0)
+    # ── Continuous sizing ─────────────────────────────────────────────────
+    # This is a risk-FACTOR allocation weight, not an executable bond ticket —
+    # there is no lot size or trade-feasibility constraint at this layer (the
+    # portfolio layer translates the weight into real trades on its own
+    # schedule). Investigation trigger: 'discrete' mode's 5-tick quantisation
+    # made the position look almost binary (0 or 0.3, rarely 0.4-1.0) and then
+    # spike to max — e.g. IRDL.CN Mar-2025, where the position jumped 0.3 -> 1.0
+    # over ~2 weeks while the underlying yield barely moved. Two causes, both
+    # present here too until fixed below:
+    #
+    # (a) z-scoring predicted_return against ITS OWN trailing volatility
+    #     (_rolling_zscore) has no anchor to the market's actual move size — a
+    #     modest, steady drift in the model's raw output can look like extreme
+    #     conviction purely because the prediction has recently been unusually
+    #     quiet. Fixed by scaling against REALISED MARKET vol instead: this
+    #     directly answers "how many typical daily moves is this prediction",
+    #     a stable, market-anchored unit that doesn't drift with how noisy the
+    #     model's own output has recently been.
+    # (b) icir_weight = tanh(icir / icir_saturation) saturates so fast that
+    #     confidence sits near 0 or near 1 on most days, rarely in between —
+    #     confirmed empirically: with icir_saturation=0.25, ~61% of days where
+    #     the raw signal alone would justify a meaningful position were
+    #     collapsed to ~0 by this gate. Fixed with a floor (so a noisy/briefly
+    #     negative ICIR doesn't snap straight to 0) and a wider saturation.
+    #
+    # The old turnover-hold-then-snap filter (step 4) is removed entirely: it
+    # doesn't reduce trading costs for something that isn't traded here, and
+    # holding the position flat until a 10% threshold breaks — then jumping
+    # straight to the new raw value — is itself a "stuck then jump" pattern,
+    # just via a different mechanism than discrete's ticks.
+    realised_daily_vol = (
+        daily_returns.rolling(cfg.vol_scale_window).std().shift(1)
+    ).reindex(pred.index)
+    conviction = smoothed / realised_daily_vol.replace(0, np.nan)
+    conviction = conviction.clip(-cfg.continuous_conviction_cap, cfg.continuous_conviction_cap).fillna(0.0)
 
-    # 2. ICIR weight — smooth saturating confidence gate (past info only).
-    icir = rolling_icir(pred, daily_returns, cfg.icir_window).shift(1)
-    icir_weight = np.tanh(icir / cfg.icir_saturation).fillna(0.0)
-
-    # 3. Risk-parity vol scale — target_vol / realised annualised vol (lagged).
-    realised_vol = (
-        daily_returns.rolling(cfg.vol_scale_window).std().shift(1) * np.sqrt(252)
-    )
-    realised_vol = realised_vol.reindex(pred.index)
-    vol_scale = (cfg.target_vol / realised_vol.replace(0, np.nan)).clip(upper=cfg.max_leverage)
-    vol_scale = vol_scale.fillna(0.0)
+    icir = rolling_icir(pred, daily_returns, cfg.icir_window,
+                       horizon=effective_horizon).shift(1)
+    # confidence ranges over [icir_confidence_floor_weight, 1.0] rather than
+    # snapping to ~0/~1: floor the ICIR input (a noisy/briefly negative ICIR
+    # is treated as barely-worse-than-zero, not "no confidence at all"), then
+    # rescale tanh's [0, 1) range into [floor_weight, 1.0] so the position
+    # never fully zeroes out purely from ICIR noise but still asymptotes to
+    # a real ceiling of 1.0 rather than overshooting it.
+    tanh_conf = np.tanh(
+        (icir.clip(lower=cfg.icir_confidence_floor) - cfg.icir_confidence_floor)
+        / cfg.icir_saturation_continuous
+    ).fillna(0.0)
+    icir_confidence = cfg.icir_confidence_floor_weight + (1.0 - cfg.icir_confidence_floor_weight) * tanh_conf
 
     lo, hi = (0.0, cfg.max_leverage) if long_only else (-cfg.max_leverage, cfg.max_leverage)
-    raw_position = (pred_z * icir_weight * vol_scale).clip(lo, hi).fillna(0.0)
+    position = (conviction * icir_confidence).clip(lo, hi)
+    position = apply_drawdown_governor(position, daily_returns, cfg)
 
-    # 4. Turnover filter — only move when the change clears the threshold.
-    held = 0.0
-    positions = []
-    thr = cfg.turnover_threshold
-    for val in raw_position.values:
-        if abs(val - held) > thr:
-            held = float(val)
-        positions.append(held)
-
-    position = pd.Series(positions, index=raw_position.index)
     out = pd.DataFrame({'position': position})
     out['signal'] = np.sign(position).fillna(0).astype(int)
     out['turnover'] = position.diff().abs().fillna(position.abs())
@@ -880,6 +1174,42 @@ _LONG_ONLY_PREFIXES: frozenset = frozenset({'IRDL'})
 def _is_long_only(factor_code: str) -> bool:
     """Return True if this factor family only allows long (non-negative) positions."""
     return factor_code.split('.')[0] in _LONG_ONLY_PREFIXES
+
+
+# Per-factor sizing overrides, applied when the caller has not explicitly
+# chosen a sizing_mode. Keyed by exact factor code (not prefix) because this
+# is a property of the individual market, not the factor family.
+#
+# IRDL.CN: strongly-trending core duration holding. Measured out-of-sample
+# (params fitted on the first half of history, evaluated on the held-out
+# second half), 'tilt' beat 'discrete' at +0.366%/Sharpe 1.98 vs
+# +0.109%/Sharpe 1.18 — the gain comes from holding the strategic exposure
+# rather than going flat on ~38% of days, NOT from better prediction. A
+# constant 0.70 with no model scored marginally better still (Sharpe 2.07),
+# so tilt_amp is deliberately small: it buys optionality to lean, not alpha.
+#
+# Deliberately NOT applied to IRDL.US / .DE / .JP / .UK — there the underlying
+# is choppier and the timing model genuinely beats buy-and-hold under
+# 'discrete' (US 0.99 vs 0.53, DE 1.22 vs 0.28). Switching them would
+# destroy value.
+#
+# tilt_base is a DURATION POLICY input. 0.70 is what the in-sample split
+# selected; revise it when the policy allocation changes, not to chase
+# backtest Sharpe.
+# NOTE: currently empty by design. A 'tilt' default for IRDL.CN was trialled
+# and reverted: its apparent edge (+0.30%/Sharpe 1.45 on full history vs
+# +0.08%/0.82 for 'discrete') came almost entirely from the 2015-16 CN bond
+# rally. Moving the start date one year later (2015 -> 2016) flips it to
+# -0.13%/-0.56, because 'tilt' holds ~0.70 duration continuously and simply
+# tracks the underlying, which itself returns -0.17%/-0.53 over that window.
+# A default whose sign depends on the start year is not a default. 'tilt'
+# remains selectable in the UI as an explicit duration-policy choice.
+_FACTOR_SIZING_OVERRIDES: Dict[str, Dict] = {}
+
+
+def factor_sizing_override(factor_code: str) -> Dict:
+    """Return the per-factor sizing override dict, or {} if none is defined."""
+    return dict(_FACTOR_SIZING_OVERRIDES.get(factor_code, {}))
 
 
 def _compute_target_returns(
@@ -927,7 +1257,18 @@ def run_factor_model_backtest(
         Columns: signal, returns, strategy_returns, cumulative_returns,
                  predicted_return, n_features
     """
-    cfg = config or FactorModelConfig()
+    if config is None:
+        # No explicit config: apply this factor's sizing override (if any) on
+        # top of the defaults. An explicitly-passed config always wins, so a
+        # UI selection is never silently overridden.
+        cfg = FactorModelConfig()
+        override = factor_sizing_override(factor_code)
+        if override:
+            import dataclasses as _dc
+            cfg = _dc.replace(cfg, **override)
+            print(f"  [{factor_code}] sizing override: {override}")
+    else:
+        cfg = config
 
     # Ensure DatetimeIndex
     if not isinstance(factor_levels.index, pd.DatetimeIndex):
@@ -1001,11 +1342,21 @@ def run_factor_model_backtest(
         train_feat = all_features.loc[train_mask].copy()
         test_feat  = all_features.loc[test_mask].copy()
 
-        # Embargo: drop the first ``embargo_days`` rows of the test set so that
-        # samples immediately after the train boundary do not bleed train info
-        # through the forward-return window (doc §4.2).
-        if cfg.embargo_days > 0 and len(test_feat) > cfg.embargo_days:
-            test_feat = test_feat.iloc[cfg.embargo_days:]
+        # Embargo (doc §4.2, López de Prado): widen the gap on the TRAIN side
+        # of the train/test boundary. It must never delete test rows — test
+        # windows here are contiguous (each starts the day after the previous
+        # ends), so dropping the head of each window would silently discard
+        # that many out-of-sample days *every* period. With test_months=1
+        # (~21 trading days) an embargo of 10 removed ~49% of all OOS days,
+        # made the reported return series discontiguous (cumprod compounding
+        # across the holes), and left results dependent on where month
+        # boundaries happened to fall — a start-date shift of a few weeks
+        # swung buy-and-hold Sharpe between -0.53 and +1.61. Applying the
+        # embargo to the training tail achieves the intended leakage
+        # protection while keeping the out-of-sample series complete.
+        if cfg.embargo_days > 0:
+            embargo_cut = test_start - pd.Timedelta(days=cfg.embargo_days)
+            train_feat = train_feat.loc[train_feat.index < embargo_cut]
 
         if len(train_feat) < cfg.min_observations or len(test_feat) == 0:
             continue
@@ -1034,6 +1385,7 @@ def run_factor_model_backtest(
         # |IC| of the selected features — longer horizons win during trends.
         preds_list:    List[pd.Series] = []
         weights_list:  List[float]     = []
+        horizons_used: List[int]       = []
         best_selected: List[str]       = []
 
         for H in horizons:
@@ -1067,7 +1419,12 @@ def run_factor_model_backtest(
             # Feature selection
             selected_H = selector.select_factors(metrics_H, tf_H)
             if not selected_H:
-                selected_H = metrics_H.nlargest(min(3, len(metrics_H)), 'IC_abs').index.tolist()
+                # Emergency fallback: nothing passed the significance/VIF/
+                # diversification gates. Rank by IC t-stat, not raw IC_abs,
+                # so this fallback stays consistent with FactorSelector's
+                # normal ranking (see FactorSelector._ic_score).
+                fallback_score = FactorSelector._ic_score(metrics_H)
+                selected_H = fallback_score.nlargest(min(3, len(metrics_H))).index.tolist()
             if not selected_H:
                 continue
 
@@ -1107,6 +1464,7 @@ def run_factor_model_backtest(
             ) if selected_H else 0.01
             preds_list.append(preds_H)
             weights_list.append(max(mean_ic_H if not np.isnan(mean_ic_H) else 0.0, 0.01))
+            horizons_used.append(H)
             if len(selected_H) > len(best_selected):
                 best_selected = selected_H
 
@@ -1117,9 +1475,19 @@ def run_factor_model_backtest(
         total_w = sum(weights_list)
         preds   = sum(p * (w / total_w) for p, w in zip(preds_list, weights_list))
 
+        # Effective horizon for this test window: the IC-weighted average of
+        # the horizons that contributed to the blend (Fix 5 — see
+        # ``_compute_target_returns``/rolling_icir callers). Lets the IC
+        # diagnostic and ICIR sizing gate track *what the ensemble actually
+        # predicts* instead of always grading next-day (H=1) accuracy, which
+        # under-credits the model whenever longer horizons dominate the blend
+        # (e.g. during a confirmed trend).
+        eff_horizon_val = sum(h * w for h, w in zip(horizons_used, weights_list)) / total_w
+
         pred_df = pd.DataFrame({
             'predicted_return': preds,
             'n_features':       len(best_selected),
+            'effective_horizon': eff_horizon_val,
         })
         all_predictions.append(pred_df)
 
@@ -1142,6 +1510,7 @@ def run_factor_model_backtest(
 
     result['predicted_return'] = pred_full['predicted_return']
     result['n_features'] = pred_full['n_features']
+    result['effective_horizon'] = pred_full['effective_horizon']
 
     # Actual daily returns (for PnL, always use 1-day returns)
     result['returns'] = daily_returns.reindex(result.index)
@@ -1149,7 +1518,8 @@ def run_factor_model_backtest(
     # Long-only flag comes from factor metadata, not string inspection.
     _long_only = _is_long_only(factor_code)
     pos = build_position_series(result['predicted_return'], result['returns'], cfg,
-                                long_only=_long_only)
+                                long_only=_long_only,
+                                effective_horizon=result['effective_horizon'])
 
     # Fix 4: Position floor during confirmed bond-bull trend (long-only factors only).
     # When both short-term (60d) and medium-term (cfg.long_floor_confirm_window)
@@ -1167,6 +1537,12 @@ def run_factor_model_backtest(
         pos.loc[floor_mask, 'position'] = (
             pos.loc[floor_mask, 'position'].clip(lower=cfg.long_floor)
         )
+        # Track floor-eligible days for downstream P&L attribution — makes
+        # explicit how much of the strategy return is a policy floor vs.
+        # the IC-weighted model's own signal (see doc §5.2 floor review).
+        result['floor_eligible'] = floor_mask.reindex(result.index).fillna(False)
+    else:
+        result['floor_eligible'] = False
 
     result['signal'] = pos['signal']
     # Position stays in [-1, 1] (the canonical scale shared with portfolio snapshot).
@@ -1197,7 +1573,7 @@ def run_factor_model_batch(
     config: Optional[FactorModelConfig] = None,
     save: bool = True,
     save_latest_only: bool = False,
-) -> Tuple[Dict[str, pd.DataFrame], Optional[Dict]]:
+) -> Tuple[Dict[str, pd.DataFrame], Optional[Dict], Dict[str, Dict]]:
     """Run factor-model backtest across multiple risk factors.
 
     Saves results to ``factor-backtest.pkl`` under the key ``'FactorModel'``.
@@ -1206,10 +1582,16 @@ def run_factor_model_batch(
 
     Returns
     -------
-    (results, latest_artifact)
+    (results, latest_artifact, models_by_month)
         results         : {factor_code: DataFrame}
         latest_artifact : the artifact dict saved/updated for the latest month,
                           or None when save=False or nothing was produced.
+        models_by_month : {month_key: {factor_code: model_artifact}} — always
+                          populated regardless of ``save``, so a caller that
+                          ran with ``save=False`` (e.g. a UI "preview" action)
+                          can defer the actual disk write to a later, explicit
+                          "Save" action via ``save_factor_model_results()``
+                          without re-running the walk-forward backtest.
     """
     factor_levels = load_factor_rates(input_dir)
     if not isinstance(factor_levels.index, pd.DatetimeIndex):
@@ -1247,93 +1629,126 @@ def run_factor_model_batch(
             traceback.print_exc()
 
     if save and results:
-        # ── Accumulative save to factor-backtest.pkl ──────────────────────
-        pkl_path = os.path.join(str(input_dir), 'factor-backtest.pkl')
-        existing: Dict = {}
-        if os.path.exists(pkl_path):
-            try:
-                existing = pd.read_pickle(pkl_path)
-            except Exception:
-                existing = {}
+        last_saved_artifact = save_factor_model_results(
+            results, models_by_month, input_dir=input_dir,
+            config=config, save_latest_only=save_latest_only,
+        )
+        return results, last_saved_artifact, models_by_month
 
-        # Merge new factor results into existing (accumulative, not replace)
-        if 'FactorModel' not in existing:
-            existing['FactorModel'] = {}
+    return results, None, models_by_month
 
-        for factor_code, new_df in results.items():
-            prev_df = existing['FactorModel'].get(factor_code)
-            if prev_df is not None and not prev_df.empty:
-                # Concat and keep latest rows for overlapping dates
-                merged = pd.concat([prev_df, new_df])
-                merged = merged[~merged.index.duplicated(keep='last')]
-                existing['FactorModel'][factor_code] = merged.sort_index()
-            else:
-                existing['FactorModel'][factor_code] = new_df
 
-        pd.to_pickle(existing, pkl_path)
-        print(f"Saved factor-backtest.pkl  (strategy=FactorModel, "
-              f"{len(existing['FactorModel'])} total factors, "
-              f"{len(results)} updated)")
+def save_factor_model_results(
+    results: Dict[str, pd.DataFrame],
+    models_by_month: Dict[str, Dict],
+    input_dir: Union[str, Path] = DIR_INPUT,
+    config: Optional[FactorModelConfig] = None,
+    save_latest_only: bool = False,
+) -> Optional[Dict]:
+    """Persist factor-model backtest ``results`` + ``models_by_month`` to disk.
 
-        # ── Save monthly trained-model .joblib files ──────────────────────
-        cfg = config or FactorModelConfig()
-        models_dir = os.path.join(str(input_dir), 'models')
-        os.makedirs(models_dir, exist_ok=True)
+    Extracted from ``run_factor_model_batch`` so a UI "Save" action can
+    persist an already-computed run (e.g. the one currently on screen)
+    without re-running the walk-forward backtest. Writes:
 
-        # When save_latest_only=True we only persist the most-recent month,
-        # keeping the models/ folder lean for daily-signal use.
-        if save_latest_only and models_by_month:
-            latest_key = max(models_by_month)
-            months_to_save = {latest_key: models_by_month[latest_key]}
+      1. ``factor-backtest.pkl`` — accumulative merge of ``results`` under
+         the ``'FactorModel'`` key, read by the Backtest History tab.
+      2. ``models/factor_model_<month>.joblib`` — the trained monthly model
+         artifacts, incrementally merged (other factors' models in an
+         existing file are preserved). This is the file the live/portfolio
+         signal path (``predict_factor_signals``) actually reads.
+
+    Returns the last-saved artifact dict, or ``None`` if there was nothing
+    to save.
+    """
+    if not results:
+        return None
+
+    # ── Accumulative save to factor-backtest.pkl ──────────────────────
+    pkl_path = os.path.join(str(input_dir), 'factor-backtest.pkl')
+    existing: Dict = {}
+    if os.path.exists(pkl_path):
+        try:
+            existing = pd.read_pickle(pkl_path)
+        except Exception:
+            existing = {}
+
+    # Merge new factor results into existing (accumulative, not replace)
+    if 'FactorModel' not in existing:
+        existing['FactorModel'] = {}
+
+    for factor_code, new_df in results.items():
+        prev_df = existing['FactorModel'].get(factor_code)
+        if prev_df is not None and not prev_df.empty:
+            # Concat and keep latest rows for overlapping dates
+            merged = pd.concat([prev_df, new_df])
+            merged = merged[~merged.index.duplicated(keep='last')]
+            existing['FactorModel'][factor_code] = merged.sort_index()
         else:
-            months_to_save = models_by_month
+            existing['FactorModel'][factor_code] = new_df
 
-        n_saved = 0
-        last_saved_artifact: Optional[Dict] = None
-        for month_key, factor_models in months_to_save.items():
-            joblib_path = os.path.join(
-                models_dir, f'factor_model_{month_key}.joblib'
-            )
-            # Incremental merge: load existing file, overlay new factors only.
-            # Factors not in this run are preserved unchanged.
-            existing_artifact: Dict = {}
-            n_retained = 0
-            if os.path.exists(joblib_path):
-                try:
-                    existing_artifact = joblib.load(joblib_path)
-                    n_retained = len([k for k in existing_artifact
-                                      if k != 'metadata' and k not in factor_models])
-                except Exception:
-                    existing_artifact = {}
-            existing_artifact.update(factor_models)  # new factors override by key
-            print(f"  joblib merge: {len(factor_models)} updated, "
-                  f"{n_retained} retained from previous → "
-                  f"{len([k for k in existing_artifact if k != 'metadata'])} total")
-            existing_artifact['metadata'] = {
-                'train_end_date': month_key,
-                'created_date': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'config': {
-                    'train_months': cfg.train_months,
-                    'ic_threshold': cfg.ic_threshold,
-                    'top_n': cfg.top_n,
-                    'target_horizon': cfg.target_horizon,
-                    'signal_smooth_days': cfg.signal_smooth_days,
-                    'weighting_method': cfg.weighting_method,
-                },
-                'factors': [k for k in existing_artifact if k != 'metadata'],
-            }
-            joblib.dump(existing_artifact, joblib_path)
-            last_saved_artifact = existing_artifact
-            n_saved += 1
+    pd.to_pickle(existing, pkl_path)
+    print(f"Saved factor-backtest.pkl  (strategy=FactorModel, "
+          f"{len(existing['FactorModel'])} total factors, "
+          f"{len(results)} updated)")
 
-        label = 'latest-only' if save_latest_only else 'all'
-        print(f"Saved {n_saved} monthly factor_model_*.joblib files ({label}) "
-              f"({len(months_to_save)} months, factors per latest: "
-              f"{len(months_to_save.get(max(months_to_save) if months_to_save else '', {}))}")
+    # ── Save monthly trained-model .joblib files ──────────────────────
+    cfg = config or FactorModelConfig()
+    models_dir = os.path.join(str(input_dir), 'models')
+    os.makedirs(models_dir, exist_ok=True)
 
-        return results, last_saved_artifact
+    # When save_latest_only=True we only persist the most-recent month,
+    # keeping the models/ folder lean for daily-signal use.
+    if save_latest_only and models_by_month:
+        latest_key = max(models_by_month)
+        months_to_save = {latest_key: models_by_month[latest_key]}
+    else:
+        months_to_save = models_by_month
 
-    return results, None
+    n_saved = 0
+    last_saved_artifact: Optional[Dict] = None
+    for month_key, factor_models in months_to_save.items():
+        joblib_path = os.path.join(
+            models_dir, f'factor_model_{month_key}.joblib'
+        )
+        # Incremental merge: load existing file, overlay new factors only.
+        # Factors not in this run are preserved unchanged.
+        existing_artifact: Dict = {}
+        n_retained = 0
+        if os.path.exists(joblib_path):
+            try:
+                existing_artifact = joblib.load(joblib_path)
+                n_retained = len([k for k in existing_artifact
+                                  if k != 'metadata' and k not in factor_models])
+            except Exception:
+                existing_artifact = {}
+        existing_artifact.update(factor_models)  # new factors override by key
+        print(f"  joblib merge: {len(factor_models)} updated, "
+              f"{n_retained} retained from previous → "
+              f"{len([k for k in existing_artifact if k != 'metadata'])} total")
+        existing_artifact['metadata'] = {
+            'train_end_date': month_key,
+            'created_date': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'config': {
+                'train_months': cfg.train_months,
+                'ic_threshold': cfg.ic_threshold,
+                'top_n': cfg.top_n,
+                'target_horizon': cfg.target_horizon,
+                'signal_smooth_days': cfg.signal_smooth_days,
+                'weighting_method': cfg.weighting_method,
+            },
+            'factors': [k for k in existing_artifact if k != 'metadata'],
+        }
+        joblib.dump(existing_artifact, joblib_path)
+        last_saved_artifact = existing_artifact
+        n_saved += 1
+
+    label = 'latest-only' if save_latest_only else 'all'
+    print(f"Saved {n_saved} monthly factor_model_*.joblib files ({label}) "
+          f"({len(months_to_save)} months, factors per latest: "
+          f"{len(months_to_save.get(max(months_to_save) if months_to_save else '', {}))}")
+
+    return last_saved_artifact
 
 
 # ═══════════════════════════════════════════════════════════════════════════

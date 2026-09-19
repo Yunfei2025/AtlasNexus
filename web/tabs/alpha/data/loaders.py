@@ -712,6 +712,12 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
             return None
         return data.get('BondNewIssue', {}).get('StatInfo')
 
+    elif spread_type == 'TermBasisEvent':
+        data = _load_pickle_safe(dir_input / 'TermBasisEvent-spds.pkl')
+        if data is None:
+            return None
+        return data.get('TermBasisEvent', {}).get('StatInfo')
+
     return None
 
 
@@ -977,6 +983,13 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
 
     elif spread_type == 'BondNewIssue':
         return load_newissue_stage_timeseries()
+
+    elif spread_type == 'TermBasisEvent':
+        data = _load_pickle_safe(dir_input / 'TermBasisEvent-spds.pkl')
+        if data is None:
+            return None
+        sp = data.get('TermBasisEvent', {}).get('Spread')
+        return sp if isinstance(sp, pd.DataFrame) and not sp.empty else None
 
     return None
 

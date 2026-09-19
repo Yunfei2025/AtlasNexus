@@ -18,6 +18,7 @@ import plotly.graph_objects as go
 
 from ..data import (
     THEME, SPREAD_CATEGORIES, MACRO_PREFIX, YIELD_BASED_SPREAD_TYPES,
+    TREND_ROUTED_INSTRUMENTS,
     load_spread_data, load_spread_timeseries, load_carry_roll_timeseries,
     load_macro_series, _get_duration_mult, _get_borrow_cost_annual_bp,
     save_instrument_state, load_instrument_params, load_monthly_regime,
@@ -1047,7 +1048,16 @@ def register_backtest_callbacks(app) -> None:
                 _item = item_lookup.get(asset, {})
                 weight = alloc_weights[asset]
                 spread_type = _item.get('spread_type', '')
-                run_trend = 'trend' in str(_item.get('style', '')).lower()
+                # `style` is never "trend"/"TrendFollowing" in this codebase (only
+                # MeanReversion/Carry/EventDriven/Mixed/Unknown are ever assigned),
+                # so a substring check here always routes to MR. Trend-following was
+                # tried book-wide via a monthly regime router and disabled after it
+                # hurt Sharpe (mislabeled trend broadly); the reviewed exception is
+                # the explicit TREND_ROUTED_INSTRUMENTS whitelist below, populated
+                # only from instruments where a full MR-vs-trend backtest scan showed
+                # MR structurally can't trade the spread and trend is consistently
+                # profitable across both full-history and recent windows.
+                run_trend = (spread_type, asset) in TREND_ROUTED_INSTRUMENTS
                 try:
                     _dur = _get_duration_mult(asset, spread_type)
                     margin_ratio_per_notional += weight * estimate_margin_mm(1.0, _dur)
@@ -1158,13 +1168,20 @@ def register_backtest_callbacks(app) -> None:
 
                 try:
                     if run_trend:
+                        # Validated TenorSpread trend preset (matches
+                        # preset_backtest_params below and the backtest that
+                        # justified this instrument's TREND_ROUTED_INSTRUMENTS
+                        # entry: mom_window=30/trailing_mult=2.0, not the generic
+                        # 20/1.5 run_trend_backtest_dc defaults).
                         res = run_trend_backtest_dc(
                             spread_ts=ts_bt, carry_roll_ts=_cr_ts,
                             carry_roll_bp=_cr_bp, duration_mult=dur,
                             allow_short=True,
                             spread_type=spread_type,
                             theta=1.50 if spread_type == 'TenorSpread' else 1.25,
+                            mom_window=30 if spread_type == 'TenorSpread' else 20,
                             vol_window=90 if spread_type == 'TenorSpread' else 60,
+                            trailing_mult=2.0 if spread_type == 'TenorSpread' else 1.5,
                             adaptive_theta=True,
                             theta_min_mult=0.5,
                             theta_max_mult=2.5,
@@ -1198,7 +1215,7 @@ def register_backtest_callbacks(app) -> None:
                 trade_summaries.append({
                     'Asset': asset,
                     'Direction': _item.get('direction', 'N/A'),
-                    'Style': _item.get('style', 'N/A'),
+                    'Style': f"{_item.get('style', 'N/A')} (trend-routed)" if run_trend else _item.get('style', 'N/A'),
                     'Weight': f"{weight * 100:.1f}%",
                     '# Trades': res.get('n_trades', 0),
                     'Win Rate': f"{res.get('win_rate', 0):.0f}%",
@@ -1314,7 +1331,7 @@ def register_backtest_callbacks(app) -> None:
                     html.Span(f"-{max_drawdown_pct:.2f}%", style={**val_style, 'color': THEME['danger']}),
                     html.Span(f"-{max_drawdown:.1f} bp", style=_sub_style),
                 ], style=item_style),
-                html.Div([html.Span("Daily Vol",        style=label_style), html.Span(f"{std_pnl:.2f} bp",    style=val_style)], style=item_style),
+                html.Div([html.Span("Annual Vol",       style=label_style), html.Span(f"{std_pnl * np.sqrt(252) / 100.0:.2f}%",    style=val_style)], style=item_style),
                 html.Div([html.Span("Trades loaded",    style=label_style), html.Span(f"{len(weighted_equity)}/{len(valid_assets)}", style=val_style)], style=item_style),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '14px'})
 

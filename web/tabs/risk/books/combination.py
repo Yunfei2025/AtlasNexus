@@ -124,16 +124,27 @@ def _beta_returns(beta_result: dict) -> Optional[pd.Series]:
 def _metrics(returns: pd.Series) -> dict[str, float]:
     """Annualized Sharpe / vol / total return / max drawdown of a return series."""
     if returns is None or returns.empty or returns.std() == 0:
-        return {'sharpe': float('nan'), 'vol': float('nan'),
-                'total_return': float('nan'), 'max_drawdown': float('nan')}
+        return {'sharpe': float('nan'), 'vol': float('nan'), 'total_return': float('nan'),
+                'ann_return': float('nan'), 'max_drawdown': float('nan')}
     vol = float(returns.std() * np.sqrt(TRADING_DAYS))
     sharpe = float(returns.mean() / returns.std() * np.sqrt(TRADING_DAYS))
     equity = (1.0 + returns).cumprod()
     total_return = float(equity.iloc[-1] - 1.0)
+    n_years = len(returns) / TRADING_DAYS
+    # equity.iloc[-1] can go non-positive for a leveraged combined series
+    # (alpha_weight w above can exceed 1.0 -- see module docstring); a
+    # fractional power of a non-positive base is undefined (numpy silently
+    # yields nan), so treat "wiped out or worse" as -100% rather than nan.
+    if n_years > 0 and equity.iloc[-1] > 0:
+        ann_return = float(equity.iloc[-1] ** (1.0 / n_years) - 1.0)
+    elif n_years > 0:
+        ann_return = -1.0
+    else:
+        ann_return = float('nan')
     running_max = equity.cummax()
     max_dd = float(((equity - running_max) / running_max).min())
-    return {'sharpe': sharpe, 'vol': vol,
-            'total_return': total_return, 'max_drawdown': max_dd}
+    return {'sharpe': sharpe, 'vol': vol, 'total_return': total_return,
+            'ann_return': ann_return, 'max_drawdown': max_dd}
 
 
 #  Margin allocated to Alpha is a capital CAP, not a target to fully deploy:

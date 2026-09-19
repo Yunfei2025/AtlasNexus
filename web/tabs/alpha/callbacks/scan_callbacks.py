@@ -13,7 +13,7 @@ from dash import dcc, html, callback_context
 from dash.dependencies import Input, Output, State, ALL
 from dash.exceptions import PreventUpdate
 
-from ..data import THEME, ZSCORE_ENTRY_THRESHOLD, _get_input_dir, load_spread_data, display_key, get_realtime_spread_bp, _get_borrow_cost_annual_bp, _get_ttm_display, _get_current_fr007_bp
+from ..data import THEME, ZSCORE_ENTRY_THRESHOLD, TREND_ROUTED_INSTRUMENTS, _get_input_dir, load_spread_data, display_key, get_realtime_spread_bp, _get_borrow_cost_annual_bp, _get_ttm_display, _get_current_fr007_bp
 from ..scoring import compute_scan_score
 from .helpers import (
     _ALPHA_CORR_COLORSCALE,
@@ -191,6 +191,22 @@ def register_scan_callbacks(app) -> None:
                         'verticalAlign': 'middle', 'cursor': 'default',
                     })
 
+                trend_tag = None
+                if (stype, inst) in TREND_ROUTED_INSTRUMENTS:
+                    trend_tag = html.Span('TREND', title=(
+                        'Backtested with the trend engine (momentum z-score entry, '
+                        'vol-normalized trailing stop), not mean-reversion. MR '
+                        'structurally cannot trade this spread (near-zero trade '
+                        'count / losing); trend is consistently profitable '
+                        'full-history and recent -- confirmed by backtest, not '
+                        'the regime router (disabled book-wide).'
+                    ), style={
+                        'backgroundColor': '#FF9800', 'color': '#000',
+                        'fontSize': '9px', 'fontWeight': 'bold', 'padding': '1px 5px',
+                        'borderRadius': '3px', 'marginLeft': '5px',
+                        'verticalAlign': 'middle', 'cursor': 'help',
+                    })
+
                 carry_tag = None
                 carry_raw = row.get('carry_roll', None)
                 try:
@@ -253,6 +269,8 @@ def register_scan_callbacks(app) -> None:
                 right_cluster = [z_bar, z_label, carry_tag]
                 if seas_tag is not None:
                     right_cluster.append(seas_tag)
+                if trend_tag is not None:
+                    right_cluster.append(trend_tag)
 
                 remove_btn = html.Button(
                     '×',

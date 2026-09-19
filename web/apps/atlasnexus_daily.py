@@ -75,11 +75,6 @@ from web.tabs.volatility import (
     register_volatility_callbacks,
 )
 
-from web.tabs.beta.factor_backtest import (
-    build_factor_model_backtest_layout,
-    # register_factor_backtest_callbacks,  # replaced by rfbt- callbacks in multiasset
-)
-
 from web.tabs.market import (
     build_trend_layout,
     register_trend_callbacks,
@@ -178,7 +173,6 @@ register_multiasset_callbacks(app)
 register_risk_callbacks(app)
 register_alpha_callbacks(app)
 register_volatility_callbacks(app)
-# register_factor_backtest_callbacks(app)  # replaced by rfbt- callbacks in multiasset
 register_trend_callbacks(app)
 register_market_data_callbacks(app)
 register_pricer_callbacks(app)

@@ -11,6 +11,7 @@ Provides:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Dict, Optional, Iterable, Tuple
 
@@ -64,6 +65,64 @@ def _entry_params_for(spread_type: str, instrument: str) -> tuple[float, float]:
 		if saved.get("carry_z_weight") is not None:
 			carry_z_weight = float(saved["carry_z_weight"])
 	return entry_z, carry_z_weight
+
+
+# SwapSpread liquidity gate: FR007 anchor tenors quoted/traded with reliable
+# two-way markets. Mirrors settings.futures.FuturesConfig.IRS_TERMS (the same
+# anchor set the curve-interpolation layer already trusts), plus Shi3M's own
+# narrower liquid set (1y/5y only -- Shi3M has materially thinner two-way
+# markets than FR007 even at matching tenors, per user 2026-09-19).
+# Repo7d-4y5y, Repo7d-2y3y, and any other combination touching a non-anchor
+# leg (4y, 3y as a Shi3M leg, etc.) are suitable for rebalance-driven
+# position rolls (e.g. a 5y position aging into 4y5y to hold duration) but
+# not for allocating significant size in a standalone RV trade -- see
+# alpha-single-spread-sharpe-ceiling: a thin instrument can't absorb size
+# even if its z-score signal looks clean.
+_REPO7D_LIQUID_TENORS = {"3m", "6m", "9m", "1y", "2y", "5y"}
+_SHI3M_LIQUID_TENORS = {"1y", "5y"}
+_BASIS_LIQUID_TENORS = {"1y", "5y"}
+
+_TENOR_TOKEN_RE = re.compile(r"(\d+[a-z])")
+_BASIS_SINGLE_RE = re.compile(r"^basis-(\d+y)$")
+
+
+def _swapspread_tenor_legs(instrument_id: str) -> tuple[Optional[str], list[str]]:
+	"""Parse a SwapSpread ID into (prefix, [tenor_tokens]).
+
+	Mirrors web/tabs/alpha/data/legs.py's _parse_repo_spread_legs /
+	_parse_repo_spread_fly_legs tenor tokenization (2-leg slope, 3-leg fly,
+	or single-tenor Basis-Xy) so the liquidity gate agrees with how legs are
+	actually resolved for trading. Returns (None, []) if the ID doesn't match
+	any known SwapSpread naming convention.
+	"""
+	lowered = str(instrument_id).strip().lower()
+	m = _BASIS_SINGLE_RE.match(lowered)
+	if m:
+		return "basis", [m.group(1)]
+	for prefix in ("repo7d", "shi3m"):
+		m = re.match(rf"{prefix}-(.+)", lowered)
+		if m:
+			return prefix, _TENOR_TOKEN_RE.findall(m.group(1))
+	return None, []
+
+
+def is_swapspread_liquid(instrument_id: str) -> bool:
+	"""True only if EVERY leg of a SwapSpread instrument is an anchor tenor
+
+	with a reliable two-way market -- see the liquid-tenor sets above. A
+	spread with any illiquid leg (e.g. Repo7d-4y5y, Shi3M-2y3y) still trades
+	fine for rebalancing an existing position's duration, but should not be
+	sized as a standalone RV candidate in the scanner.
+	"""
+	prefix, tenors = _swapspread_tenor_legs(instrument_id)
+	if prefix is None or not tenors:
+		return False
+	liquid_set = {
+		"repo7d": _REPO7D_LIQUID_TENORS,
+		"shi3m": _SHI3M_LIQUID_TENORS,
+		"basis": _BASIS_LIQUID_TENORS,
+	}[prefix]
+	return all(t in liquid_set for t in tenors)
 
 
 def _add_composite_score(df: pd.DataFrame) -> pd.DataFrame:
@@ -555,6 +614,26 @@ def build_alpha_candidates(
 	if "category" in trend.columns and "direction" in trend.columns:
 		sell_restricted = trend["category"].isin(_SELL_RESTRICTED_CATEGORIES)
 		trend = trend[~(sell_restricted & trend["direction"].eq("SELL"))].copy()
+
+	# SwapSpread liquidity gate: only anchor-tenor-both-legs instruments (see
+	# is_swapspread_liquid) are eligible as standalone RV candidates here.
+	# Off-anchor combinations (Repo7d-4y5y, Shi3M-2y3y, ...) are real
+	# instruments used for rebalancing an existing position's duration as it
+	# ages (e.g. a 5y position rolling into 4y5y to hold the 5y point), not
+	# for sizing new RV positions -- excluded from the scanner, not from the
+	# underlying data (SwapSpread-spds.pkl / TenorSpread's carried-over
+	# subset are unaffected; risk/portfolio reporting on an existing
+	# rebalance-driven position still resolves normally).
+	if "spread_type" in mr.columns and "ID" in mr.columns:
+		swap_mask = mr["spread_type"].eq("SwapSpread")
+		if swap_mask.any():
+			illiquid = swap_mask & ~mr["ID"].astype(str).map(is_swapspread_liquid)
+			mr = mr[~illiquid].copy()
+	if "spread_type" in trend.columns and "ID" in trend.columns:
+		swap_mask = trend["spread_type"].eq("SwapSpread")
+		if swap_mask.any():
+			illiquid = swap_mask & ~trend["ID"].astype(str).map(is_swapspread_liquid)
+			trend = trend[~illiquid].copy()
 
 	mr = mr.sort_values(["score"], ascending=False).head(int(max_per_style)).copy()
 	trend = trend.sort_values(["score"], ascending=False).head(int(max_per_style)).copy()

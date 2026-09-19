@@ -550,10 +550,10 @@ class StatGenerator:
     def compute_pca_spreads(self) -> None:
         spot_ts_all = pd.concat(self.spot_ts, axis=1).droplevel(level=0, axis=1).sort_index()
         spot_ts_all = spot_ts_all.loc[self.start1y:self.da].dropna()
-        
+
         # Clean data to handle byte strings and invalid values before PCA
         spot_ts_all = spot_ts_all.apply(pd.to_numeric, errors='coerce').dropna()
-        
+
         # Z-score standardization
         mu = spot_ts_all.mean()
         sigma = spot_ts_all.std().replace(0, np.nan)
@@ -562,11 +562,29 @@ class StatGenerator:
         pcs = pca.fit_transform(spot_standardized)
         recon = pca.inverse_transform(pcs)
         resid = spot_standardized - recon
+        resid_df = pd.DataFrame(resid, index=spot_standardized.index, columns=spot_standardized.columns)
+
+        # Per-instrument R^2 of the 2-PC reconstruction against that instrument's
+        # own (standardized) history: how much of THIS instrument's variance the
+        # common level/slope factors normally explain. Low R^2 means the
+        # instrument was never well described by the common factors, so a large
+        # residual there is idiosyncratic noise, not a deviation from a
+        # relationship that reliably holds -- it has no reason to revert.
+        # A rolling-window drop in R^2 (compare vs. prior runs' StatInfo) flags
+        # a regime break: the relationship the residual measures just stopped
+        # holding, so the current extremity is measuring the break, not a
+        # tradeable dislocation.
+        ss_res = (resid_df ** 2).sum()
+        ss_tot = (spot_standardized ** 2).sum()  # standardized series has ~zero mean
+        r2 = (1.0 - ss_res / ss_tot.replace(0, np.nan)).clip(upper=1.0)
+
+        stat_info = st.OU_calibrate(resid_df)
+        stat_info['R2'] = r2.reindex(stat_info.index)
 
         pca_spd = {
             'Spot': spot_ts_all,
-            'Spread': pd.DataFrame(resid, index=spot_standardized.index, columns=spot_standardized.columns),
-            'StatInfo': st.OU_calibrate(pd.DataFrame(resid, index=spot_standardized.index, columns=spot_standardized.columns)),
+            'Spread': resid_df,
+            'StatInfo': stat_info,
         }
         self.spreads['PCASpread'] = pca_spd
         updatePKL(self.spreads, os.path.join(DIR_INPUT, 'Misc-spds.pkl'))
@@ -1203,9 +1221,18 @@ class StatGenerator:
         self.compute_spread_regression()
         self.compute_pca_spreads()
         self.compute_tenor_spreads()
-        # Futures stats (futures-spds.pkl) is now updated independently via
-        # futures-stats-update command; skip it here to decouple from EOD pipeline.
-        # self.compute_futures_stats()
+        # Futures stats (futures-spds.pkl): re-added to the EOD chain 2026-09-19
+        # after being decoupled on 2026-06-30 (commit 6fee5de) in favour of the
+        # separate `futures-stats-update` command / dashboard button. That
+        # decoupling silently stopped TermBasis/NetBasis/FuturesSwap from
+        # updating once nobody was triggering the command manually --
+        # futures-spds.pkl went stale from 2026-09-02 while its upstream input
+        # (futures-analytics.pkl, still refreshed daily by FuturesAnalyticsGenerator)
+        # kept updating, so the gap wasn't visible until the Spread Time Series
+        # chart was checked directly. `futures-stats-update` still exists for
+        # manual/on-demand reruns; this call just ensures the automatic daily
+        # path always keeps futures-spds.pkl current too.
+        self.compute_futures_stats()
         self.compute_seasonal_screener()
         print('\nFinish initialising statistics at：', datetime.datetime.now().strftime('%H:%M:%S'))
 

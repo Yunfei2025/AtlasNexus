@@ -789,12 +789,11 @@ def display_click_data(clickData):
     return point.get("x", point.get("label"))
 
 
-@app.callback(Output("graph-spread-bar", "figure"),
-              Input("data-refresh", "n_intervals"),
-              Input("realtime-data", "data"),
-              Input("spread-type", "value"),
-              Input("select-season", "value"),
-              )
+# NOTE: the "graph-spread-bar" callback wiring lives in
+# web/tabs/fixed_income/spreads.py::_update_spread_bar, a strict superset of
+# this (futures types, Misc-spds.pkl fallback, manual refresh button). A
+# duplicate @app.callback here raced it for the same output on the shared
+# app; removed. statistics is kept as a plain function for its real caller.
 def statistics(interval, data_rt_js, stype, season):
     if not data_rt_js:
         empty_layout = layout_stat(yunits.get(stype, "Z-score"))
@@ -839,11 +838,14 @@ def statistics(interval, data_rt_js, stype, season):
     return figure
 
 
-@app.callback(Output("graph-spread", "figure"),
-              Input("spread-type", "value"),
-              Input("select-season", "value"),
-              Input("ticker", "children"),
-              )
+# NOTE: the "graph-spread" callback wiring lives in
+# web/tabs/fixed_income/spreads.py::_update_spread_ts, which drives this
+# function from the "ticker-id" store (the real ticker) rather than the
+# "ticker" div (a display label). A duplicate @app.callback(Output(
+# "graph-spread", ...)) here registered first on the shared app and won,
+# feeding display labels into build_spread_series; those miss StatInfo.index
+# and got silently coerced to tenors[0] (TBond-1.0Y) by _ensure_tenor.
+# Removed -- spreadts is kept as a plain function for its real caller.
 def spreadts(stype, season, b):
     dfc = build_spread_series(b, season, stype)
     df = dfc["df"]

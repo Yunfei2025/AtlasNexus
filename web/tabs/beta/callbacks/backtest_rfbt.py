@@ -14,6 +14,8 @@ from plotly.subplots import make_subplots
 
 from settings.paths import DIR_INPUT
 
+from multiasset.factor_model import rolling_spearman_ic, mean_ic_at_effective_horizon
+
 from ..data import THEME
 from ._rfbt_train_helpers import (
     _config_matches,
@@ -21,6 +23,13 @@ from ._rfbt_train_helpers import (
     _render_signal_cards,
     _build_results_from_saved_artifact,
 )
+
+# In-process cache for the "Run Backtest" / "Save" split: holds the results
+# and models_by_month from the most recent unsaved run of
+# run_risk_factor_backtest, so the Save button can persist them without
+# re-running the (~seconds-to-minutes) walk-forward backtest. Single-slot —
+# a new Run Backtest click overwrites it; Save always acts on the latest run.
+_LAST_RFBT_RUN: dict = {}
 
 
 def register_backtest_rfbt_callbacks(app):
@@ -89,8 +98,40 @@ def register_backtest_rfbt_callbacks(app):
         return (hide, hide, hide, hide, flex)
 
     @app.callback(
+        Output('rfbt-fm-tilt-params', 'style'),
+        Input('rfbt-fm-sizing', 'value'),
+    )
+    def toggle_rfbt_tilt_params(sizing_mode):
+        """Reveal the tilt baseline/amplitude inputs only in 'tilt' mode."""
+        return {'display': 'block'} if sizing_mode == 'tilt' else {'display': 'none'}
+
+    @app.callback(
+        [Output('rfbt-fm-sizing', 'value'),
+         Output('rfbt-fm-tiltbase', 'value'),
+         Output('rfbt-fm-tiltamp', 'value')],
+        Input('rfbt-factor', 'value'),
+    )
+    def apply_factor_sizing_default(factor_val):
+        """Pre-select the sizing mode this factor is configured for.
+
+        Mirrors ``multiasset.factor_model._FACTOR_SIZING_OVERRIDES`` so the
+        panel opens on the same mode the engine would use by default (e.g.
+        IRDL.CN → tilt). The user can still change it; an explicit choice is
+        always passed through to the backtest.
+        """
+        from multiasset.factor_model import factor_sizing_override, FactorModelConfig
+        defaults = FactorModelConfig()
+        ov = factor_sizing_override(factor_val) if factor_val else {}
+        return (
+            ov.get('sizing_mode', 'discrete'),
+            ov.get('tilt_base', defaults.tilt_base),
+            ov.get('tilt_amp', defaults.tilt_amp),
+        )
+
+    @app.callback(
         [Output('rfbt-results-container', 'children'),
-         Output('rfbt-status', 'children')],
+         Output('rfbt-status', 'children'),
+         Output('rfbt-save-btn', 'disabled')],
         Input('rfbt-run-btn', 'n_clicks'),
         [State('rfbt-factor', 'value'),
          State('rfbt-strategy-selector', 'data'),
@@ -109,7 +150,9 @@ def register_backtest_rfbt_callbacks(app):
          State('rfbt-fm-ic', 'value'),
          State('rfbt-fm-topn', 'value'),
          State('rfbt-fm-sizing', 'value'),
-         State('rfbt-fm-possmooth', 'value')],
+         State('rfbt-fm-possmooth', 'value'),
+         State('rfbt-fm-tiltbase', 'value'),
+         State('rfbt-fm-tiltamp', 'value')],
         prevent_initial_call=True,
     )
     def run_risk_factor_backtest(
@@ -118,6 +161,7 @@ def register_backtest_rfbt_callbacks(app):
         ma_short, ma_long, boll_window, boll_std,
         mom_window, zscore_window, zscore_entry, zscore_exit,
         fm_train, fm_ic, fm_topn, fm_sizing, fm_possmooth,
+        fm_tiltbase, fm_tiltamp,
     ):
         if not n_clicks or not factor_val:
             raise dash.exceptions.PreventUpdate
@@ -132,11 +176,16 @@ def register_backtest_rfbt_callbacks(app):
             years      = int(period_years or 2)
             start_date = (_date_cls.today() - timedelta(days=years * 365)).isoformat()
 
+        # A fresh run invalidates any previously cached (unsaved) result —
+        # Save must never persist a stale run under new parameters.
+        _LAST_RFBT_RUN.clear()
+
         try:
             from multiasset.factor_backtest import (
                 run_factor_backtest, compute_metrics, get_factor_duration,
                 _is_yield_factor, get_factor_weighted_duration,
             )
+            from multiasset.factor_model import FactorModelConfig
 
             strategy = 'FactorModel'
             kwargs = {'train_months': int(fm_train or 12),
@@ -144,22 +193,47 @@ def register_backtest_rfbt_callbacks(app):
                       'top_n': int(fm_topn or 8),
                       'sizing_mode': fm_sizing or 'discrete',
                       'position_smooth_window': int(fm_possmooth or 10)}
+            if (fm_sizing or 'discrete') == 'tilt':
+                # tilt_base is a policy input; 0.0 is a legitimate tilt_amp
+                # (pure baseline, no model lean), so don't use `or` here.
+                _cfg_defaults = FactorModelConfig()
+                kwargs['tilt_base'] = (float(fm_tiltbase)
+                                       if fm_tiltbase is not None
+                                       else _cfg_defaults.tilt_base)
+                kwargs['tilt_amp'] = (float(fm_tiltamp)
+                                      if fm_tiltamp is not None
+                                      else _cfg_defaults.tilt_amp)
 
-            results, _ = run_factor_backtest(
+            # save=False: this button only previews the diagnostics below.
+            # Nothing is written to disk until the (now separate) Save button
+            # is clicked — see the run_risk_factor_backtest_save callback.
+            results, _, models_by_month = run_factor_backtest(
                 factors=factors,
                 strategy=strategy,
                 start_date=start_date,
                 end_date=end_date,
                 input_dir=DIR_INPUT,
-                save=True,
+                save=False,
                 **kwargs,
             )
+
+            if results and models_by_month is not None:
+                fm_cfg = FactorModelConfig()
+                for k, v in kwargs.items():
+                    if hasattr(fm_cfg, k):
+                        setattr(fm_cfg, k, type(getattr(fm_cfg, k))(v))
+                _LAST_RFBT_RUN.update({
+                    'results': results,
+                    'models_by_month': models_by_month,
+                    'config': fm_cfg,
+                })
 
             if not results:
                 return (
                     html.Div("No results — check that factor-rates.pkl exists and factors have data.",
                              style={'color': THEME['warning'], 'padding': '20px'}),
                     "⚠️ No factors produced results",
+                    True,  # keep Save disabled — nothing to save
                 )
 
             # ── Compute IC statistics and current signal state per factor ──
@@ -181,16 +255,32 @@ def register_backtest_rfbt_callbacks(app):
                            if len(pred_hist) > 5 else 0.0)
                 scalar = max(0.5, min(2.0, abs(z_score)))
 
-                # IC: 60-day rolling correlation(predicted_return_t, return_{t+1})
+                # IC: 60-day rolling Spearman rank-corr(predicted_return_t, return_{t+1})
                 # 60-day window (≈3 months) reduces noise vs 20-day; EWMA added to chart
+                # Spearman (not Pearson) to match the IC feature selection/training use.
+                # This is always graded at H=1 (next-day) — see mean_ic_eff below for
+                # the horizon the model's ensemble is actually blended toward.
                 actual_fwd = df['returns'].shift(-1).reindex(df.index)
-                ic_rolling = df['predicted_return'].rolling(60).corr(actual_fwd).dropna()
+                ic_rolling = rolling_spearman_ic(df['predicted_return'], actual_fwd, 60).dropna()
                 mean_ic  = float(ic_rolling.mean()) if len(ic_rolling) > 0 else 0.0
                 ic_std   = float(ic_rolling.std())  if len(ic_rolling) > 1 else 1.0
                 icir     = mean_ic / (ic_std + 1e-8)
                 ic_hit   = float((ic_rolling > 0).mean()) if len(ic_rolling) > 0 else 0.0
                 n_ic     = len(ic_rolling)
                 ic_tstat = mean_ic / (ic_std / (n_ic ** 0.5) + 1e-8) if n_ic > 1 else 0.0
+
+                # IC at the ensemble's own effective (IC-weighted blend) horizon —
+                # avoids under-crediting the model when longer horizons (H=5/20)
+                # dominate the blend during a trend, since the H=1 IC above only
+                # measures next-day accuracy regardless of what the model is
+                # actually trying to predict.
+                mean_ic_eff = float('nan')
+                avg_eff_horizon = float('nan')
+                if 'effective_horizon' in df.columns and df['effective_horizon'].notna().any():
+                    avg_eff_horizon = float(df['effective_horizon'].dropna().mean())
+                    mean_ic_eff = mean_ic_at_effective_horizon(
+                        df['predicted_return'], df['returns'], df['effective_horizon'],
+                    )
 
                 factor_stats[factor] = {
                     'last_signal': last_signal,
@@ -200,19 +290,30 @@ def register_backtest_rfbt_callbacks(app):
                     'icir':        icir,
                     'ic_hit':      ic_hit,
                     'ic_tstat':    ic_tstat,
+                    'mean_ic_effective_horizon': mean_ic_eff,
+                    'avg_effective_horizon': avg_eff_horizon,
                     'ic_rolling':  ic_rolling,
                 }
 
             # ── Section 2: Performance + IC statistics table ────────────
-            from multiasset.config import RiskModelConfig as _RMC
+            # No risk-free-rate deduction here: 'position' is a signal-strength
+            # scalar in [-1, 1] (or [0, 1] for long-only), not a leveraged
+            # capital allocation — it rarely approaches 1.0, so strategy_returns
+            # has a much smaller vol than a fully-invested portfolio would.
+            # Subtracting RiskModelConfig.RISK_FREE_RATE (2%, calibrated for
+            # compute_portfolio_metrics on an actual NAV series in
+            # backtest_hist.py) swamps this factor-level return/vol scale and
+            # produces wildly negative Sharpe unrelated to signal quality
+            # (e.g. -17 instead of -0.3 for the same P&L). RF-rate adjustment
+            # belongs at the portfolio/NAV level, not the per-factor diagnostic.
             metric_rows = []
             for factor, df in results.items():
-                m = compute_metrics(df, risk_free_rate=_RMC.RISK_FREE_RATE,
+                m = compute_metrics(df, risk_free_rate=0.0,
                                     geometric_annualisation=True)
                 if 'strategy_returns_gross' in df.columns:
                     m_gross = compute_metrics(
                         df.assign(strategy_returns=df['strategy_returns_gross']),
-                        risk_free_rate=_RMC.RISK_FREE_RATE,
+                        risk_free_rate=0.0,
                         geometric_annualisation=True,
                     )
                 else:
@@ -242,6 +343,19 @@ def register_backtest_rfbt_callbacks(app):
                     'ICIR':      f"{s['icir']:.2f}",
                     'IC t-stat': f"{s['ic_tstat']:.2f}",
                     'IC Hit%':   f"{s['ic_hit']:.1%}",
+                    # IC at the ensemble's own IC-weighted blend horizon — the
+                    # columns above always grade next-day (H=1) accuracy, which
+                    # under-credits the model when H=5/20 dominate the blend.
+                    'Mean IC (eff-H)': (
+                        f"{s['mean_ic_effective_horizon']:.4f}"
+                        if s.get('mean_ic_effective_horizon') == s.get('mean_ic_effective_horizon')
+                        else '—'
+                    ),
+                    'Avg Horizon': (
+                        f"{s['avg_effective_horizon']:.1f}d"
+                        if s.get('avg_effective_horizon') == s.get('avg_effective_horizon')
+                        else '—'
+                    ),
                 })
 
             metrics_table = dash_table.DataTable(
@@ -385,18 +499,10 @@ def register_backtest_rfbt_callbacks(app):
 
             mean_icir = (sum(s['icir'] for s in factor_stats.values()) /
                          len(factor_stats)) if factor_stats else 0.0
-            # Surface incremental-save info: joblib merges, other factors are retained
-            try:
-                from multiasset.factor_model import load_latest_factor_model
-                art, mkey = load_latest_factor_model()
-                n_total = len([k for k in (art or {}) if k != 'metadata'])
-                n_new   = len(results)
-                n_kept  = n_total - n_new
-                save_note = (f"model {mkey}: {n_new} updated + {n_kept} retained = "
-                             f"{n_total} total factors in .joblib")
-            except Exception:
-                save_note = f"{len(results)} factor(s) saved"
-            status_msg = (f"✅ {save_note} · Mean ICIR: {mean_icir:.2f}")
+            # This run is a preview only — nothing has been written to disk yet.
+            # Click Save to persist it to factor-backtest.pkl + the monthly .joblib.
+            status_msg = (f"👁 Preview only (not saved) — {len(results)} factor(s) run · "
+                          f"Mean ICIR: {mean_icir:.2f} · click Save to persist")
 
             result_children = [
                 html.H6("Performance & IC Statistics",
@@ -408,16 +514,60 @@ def register_backtest_rfbt_callbacks(app):
                 html.Div(per_factor_divs),
             ]
 
-            return html.Div(result_children), status_msg
+            return html.Div(result_children), status_msg, False  # enable Save
 
         except Exception as e:
             import traceback
             traceback.print_exc()
+            _LAST_RFBT_RUN.clear()
             return (
                 html.Div(f"Error: {e}",
                          style={'color': THEME['danger'], 'padding': '20px'}),
                 f"❌ {e}",
+                True,  # keep Save disabled
             )
+
+    # ================================================================
+    # Save the last Run Backtest result — persists to factor-backtest.pkl
+    # and the monthly .joblib WITHOUT re-running the backtest.
+    # ================================================================
+
+    @app.callback(
+        Output('rfbt-status', 'children', allow_duplicate=True),
+        Output('rfbt-save-btn', 'disabled', allow_duplicate=True),
+        Input('rfbt-save-btn', 'n_clicks'),
+        prevent_initial_call=True,
+    )
+    def save_risk_factor_backtest(n_clicks):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+
+        if not _LAST_RFBT_RUN:
+            return "⚠️ Nothing to save — click Run Backtest first", True
+
+        try:
+            from multiasset.factor_model import save_factor_model_results
+
+            results = _LAST_RFBT_RUN['results']
+            models_by_month = _LAST_RFBT_RUN['models_by_month']
+            fm_cfg = _LAST_RFBT_RUN['config']
+
+            saved_artifact = save_factor_model_results(
+                results, models_by_month, input_dir=DIR_INPUT,
+                config=fm_cfg, save_latest_only=False,
+            )
+            n_total = len([k for k in (saved_artifact or {}) if k != 'metadata'])
+            n_new = len(results)
+            n_kept = n_total - n_new
+            save_note = (f"model saved: {n_new} updated + {n_kept} retained = "
+                         f"{n_total} total factors in .joblib")
+            # Keep the cache so repeated Save clicks (or a page refresh of this
+            # tab) don't silently no-op — only a fresh Run Backtest clears it.
+            return f"✅ {save_note}", False
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return f"❌ Save failed: {e}", False
 
     # ================================================================
     # Factor tab: Train Model (Latest Signal) callback
@@ -614,7 +764,7 @@ def register_backtest_rfbt_callbacks(app):
 
                 # (branch kept for legacy compatibility — missing_factors is always empty here now)
                 if missing_factors:
-                    results_new, merged_artifact = run_factor_backtest(
+                    results_new, merged_artifact, _ = run_factor_backtest(
                         factors=missing_factors,
                         strategy='FactorModel',
                         start_date=None,
@@ -674,7 +824,7 @@ def register_backtest_rfbt_callbacks(app):
                     existing_artifact = None
 
                 if factors_to_train:
-                    results_new, latest_artifact = run_factor_backtest(
+                    results_new, latest_artifact, _ = run_factor_backtest(
                         factors=factors_to_train,
                         strategy='FactorModel',
                         start_date=None,

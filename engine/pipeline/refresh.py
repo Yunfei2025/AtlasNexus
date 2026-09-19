@@ -21,6 +21,11 @@ _REFRESH_STEPS: list[tuple[str, str, str]] = [
     ("credit",  "curves.interface", "refresh_credit"),
     ("irs",     "curves.interface", "refresh_irs"),
     ("stat",    "curves.interface", "refresh_stat"),
+    # Reads futures-analytics.pkl/futures-px.pkl as last written by the EOD
+    # curves step (no intraday futures_analytics refresh exists yet), so this
+    # only picks up new roll_progress/gate state when those EOD artifacts
+    # themselves advance -- harmless to re-run every intraday cycle otherwise.
+    ("termbasis_event", "curves.interface", "calibrate_termbasis_event"),
 ]
 
 

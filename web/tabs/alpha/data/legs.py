@@ -332,6 +332,12 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
     elif stype == 'TermBasis':
         return _futs_front_next(tid)
 
+    # TermBasisEvent: same front/next contract legs as TermBasis -- tid is the
+    # ctype ('T'/'TF'/'TS'/'TL') either way, only the entry/exit gate differs
+    # (roll-progress-cohort event vs stationary z-score).
+    elif stype == 'TermBasisEvent':
+        return _futs_front_next(tid)
+
     # FuturesSwap: leg1 = Futures contract, leg2 = IRS (matched tenor)
     # Economic trade: long futures (physical), pay fixed IRS (hedge rate risk)
     elif stype == 'FuturesSwap':

@@ -17,6 +17,7 @@ from .helpers import (
     _style_to_regime,
 )
 from .correlation_callbacks import register_correlation_callbacks
+from .pca_pairs_callbacks import register_pca_pairs_callbacks
 from .portfolio_callbacks import register_portfolio_callbacks
 from .scan_callbacks import register_scan_callbacks
 
@@ -24,12 +25,14 @@ from .scan_callbacks import register_scan_callbacks
 def register_candidate_callbacks(app) -> None:
     """Register all callbacks used by the Alpha Candidates workflow."""
     register_scan_callbacks(app)
+    register_pca_pairs_callbacks(app)
     register_correlation_callbacks(app)
     register_portfolio_callbacks(app)
 
 
 __all__ = [
     'register_candidate_callbacks',
+    'register_pca_pairs_callbacks',
     '_apply_seasonal_quality_gate',
     '_get_upstream_regime',
     '_load_alpha_book_positions',

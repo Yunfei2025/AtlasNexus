@@ -14,11 +14,34 @@ from scipy import stats
 
 class FactorSelector:
     """Handles factor selection and filtering operations."""
-    
+
     def __init__(self, config):
         """Initialize with configuration parameters."""
         self.config = config
-    
+
+    @staticmethod
+    def _ic_score(metrics: pd.DataFrame) -> pd.Series:
+        """IC t-statistic (|IC| / SE(IC)), used to rank factors instead of raw
+        ``IC_abs``.
+
+        Ranking on raw IC_abs favours whichever feature had the noisiest
+        short-window IC estimate — with ~250 training rows (or far fewer
+        effective independent observations once overlapping H-day forward
+        returns are accounted for), that is largely a function of sample
+        size, not genuine predictive strength.  The t-stat penalises IC
+        estimated from fewer/less-independent observations, so two features
+        with the same IC_abs but different ``count`` (or different p_value
+        from an NW correction upstream) are no longer treated as equal.
+
+        Falls back to ``IC_abs`` when ``count`` is unavailable.
+        """
+        if 'count' not in metrics.columns:
+            return metrics['IC_abs']
+        ic_safe = metrics['IC'].fillna(0).clip(-0.99, 0.99)
+        n = metrics['count'].clip(lower=3)
+        t_stat = (ic_safe * np.sqrt(n - 2) / np.sqrt(1 - ic_safe ** 2)).abs()
+        return t_stat.fillna(metrics['IC_abs'])
+
     def select_factors(self, metrics: pd.DataFrame, train_factors: pd.DataFrame = None) -> List[str]:
         """
         Select top factors using configured filtering methods.
@@ -54,8 +77,10 @@ class FactorSelector:
                 print("⚠️ No factors remain after filtering")
                 return []
             
-            # Step 4: Select top N factors by absolute IC
-            top_factors = filtered_factors.nlargest(self.config.top_n, 'IC_abs')
+            # Step 4: Select top N factors by IC t-stat (not raw IC_abs — see
+            # ``_ic_score``: penalises IC estimated from fewer/noisier obs).
+            ic_score = self._ic_score(filtered_factors)
+            top_factors = filtered_factors.loc[ic_score.nlargest(self.config.top_n).index]
             selected = top_factors.index.tolist()
             
             vif_status = "with VIF" if self.config.use_vif_filtering else "without VIF"
@@ -82,10 +107,10 @@ class FactorSelector:
         """
         try:
             max_corr = getattr(self.config, 'max_factor_correlation', 0.6)
-            
-            # Sort by absolute IC (descending)
-            sorted_factors = metrics.sort_values('IC_abs', ascending=False)
-            factor_names = sorted_factors.index.tolist()
+
+            # Sort by IC t-stat (descending) — see ``_ic_score``.
+            ic_score = self._ic_score(metrics)
+            factor_names = ic_score.sort_values(ascending=False).index.tolist()
             
             # Get factor data
             available_factors = [f for f in factor_names if f in train_factors.columns]
@@ -163,30 +188,51 @@ class FactorSelector:
             return ic_filtered
     
     def _filter_by_significance(self, metrics: pd.DataFrame) -> pd.DataFrame:
-        """Filter factors by statistical significance."""
+        """Filter factors by statistical significance.
+
+        If the caller already supplied a ``p_value`` / ``is_significant``
+        column (e.g. ``multiasset.factor_model._compute_ic_metrics``, which
+        Newey-West adjusts the p-value for overlapping H-day forward returns),
+        that is used directly rather than recomputed here — recomputing a
+        naive n-2 t-test would silently discard the NW correction and
+        overstate significance for H > 1.  Only falls back to a naive t-test
+        when no such column is present (legacy callers).
+        """
         if not self.config.use_significance_test:
             return self._filter_by_ic(metrics)
-        
+
         # Check minimum observations
         if 'count' in metrics.columns:
             min_obs_filtered = metrics[metrics['count'] >= self.config.min_observations]
         else:
             min_obs_filtered = metrics
-        
-        # Calculate t-statistic for IC significance
-        if len(min_obs_filtered) > 0 and 'count' in min_obs_filtered.columns:
+
+        if len(min_obs_filtered) == 0:
+            print("⚠️ Insufficient data for significance testing, using IC filtering")
+            return self._filter_by_ic(metrics)
+
+        # Preferred path: caller-supplied (possibly NW-adjusted) significance.
+        if 'is_significant' in min_obs_filtered.columns:
+            significant_factors = min_obs_filtered[min_obs_filtered['is_significant'].astype(bool)]
+            print(f"📊 Significance: {len(significant_factors)} factors with p < {self.config.confidence_level} "
+                  f"(caller-supplied p-value)")
+            return significant_factors
+
+        # Fallback: naive two-tailed t-test on IC (assumes independent obs —
+        # only appropriate when the caller's forward-return horizon is 1).
+        if 'count' in min_obs_filtered.columns:
             ic_vals = min_obs_filtered['IC'].fillna(0)
             n_vals = min_obs_filtered['count']
-            
+
             # Avoid division by zero and invalid sqrt
             ic_vals_safe = ic_vals.clip(-0.99, 0.99)
             t_stats = ic_vals_safe * np.sqrt(n_vals - 2) / np.sqrt(1 - ic_vals_safe**2)
-            
+
             # Two-tailed test
             critical_t = stats.t.ppf(1 - self.config.confidence_level/2, n_vals - 2)
             significant_mask = t_stats.abs() > critical_t
             significant_factors = min_obs_filtered[significant_mask]
-            
+
             print(f"📊 Significance: {len(significant_factors)} factors with p < {self.config.confidence_level}")
             return significant_factors
         else:

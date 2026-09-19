@@ -40,6 +40,7 @@ def _metric_card(title: str, metrics: dict, accent: str, extra=None) -> html.Div
         html.Div(f"{metrics['sharpe']:.2f}", style={'fontSize': '22px', 'fontWeight': '700',
                                                      'color': accent, 'marginBottom': '8px'}),
         row('Ann. Vol', f"{metrics['vol'] * 100:.2f}%"),
+        row('Ann. Return', f"{metrics['ann_return'] * 100:+.2f}%"),
         row('Total Return', f"{metrics['total_return'] * 100:+.2f}%"),
         row('Max Drawdown', f"{metrics['max_drawdown'] * 100:.2f}%"),
     ] + ([extra] if extra is not None else []), style={
@@ -114,12 +115,8 @@ def register_combination_callbacks(app):
                 f"= {combined['total_return'] * 100:+.1f}%",
             ),
             html.Div(
-                f"Alpha's return-blend weight ({w:.2f}) is its USABLE margin ({ms:.2f} × "
-                f"{util * 100:.0f}% utilization cap) ÷ its margin ratio "
-                f"({result['margin_ratio'] * 100:.1f}%) — it's a margined book, so its notional "
-                f"(and its return contribution) is a multiple of the capital it ties up. Only "
-                f"{util * 100:.0f}% of the allocated margin is sized into positions; the rest is "
-                f"headroom against adverse mark-to-market moves, not spare capital.",
+                f"Alpha's return-blend weight ({w:.2f}) is its usable margin ÷ its margin ratio "
+                f"({result['margin_ratio'] * 100:.1f}%).",
                 style={'marginTop': '3px'},
             ),
             html.Div(
@@ -140,6 +137,7 @@ def register_combination_callbacks(app):
         # --- Collapsed strip: the three headline answers ---
         strip = html.Div([
             _stat(f"{combined['sharpe']:.2f}", 'Combined Sharpe', THEME['accent']),
+            _stat(f"{combined['ann_return'] * 100:+.2f}%", 'Ann. Return', THEME['text_main']),
             _stat(f"{(1 - ms) * 100:.0f}/{ms * 100:.0f}", 'Beta Notional / Alpha Margin', THEME['text_main']),
             _stat(f"{corr:+.2f}", 'Correlation',
                   THEME['success'] if corr < 0.3 else THEME['warning']),

@@ -89,7 +89,7 @@ def _get_duration_mult(
             pass
         return 1.0
 
-    if spread_type in ('NetBasis', 'TermBasis'):
+    if spread_type in ('NetBasis', 'TermBasis', 'TermBasisEvent'):
         # instrument is e.g. 'T-NQ1' or a bond code; use contract-type TTM proxy
         _CTYPE_TENOR = {'T': 10.0, 'TL': 30.0, 'TF': 5.0, 'TS': 2.0}
         ctype = instrument.split('-')[0] if '-' in instrument else instrument

@@ -160,3 +160,27 @@ def calibrate_otr_ofr(cfg: RunConfig, store: ArtifactStore) -> dict:
             status[f"otr_ofr_rv_{asset_class}"] = "failed"
 
     return status
+
+
+# ── TermBasisEvent (roll-progress-gated Calendar Spread event strategy) ──
+
+def calibrate_termbasis_event(cfg: RunConfig, store: ArtifactStore) -> dict:
+    """Refresh TermBasisEvent-spds.pkl (see curves/refreshers/termbasis_event.py).
+
+    Runs alongside (not in place of) the stationary-MR TermBasis spread,
+    which is already refreshed by ``calibrate``'s StatGenerator step. Reads
+    ``futures-analytics.pkl`` and ``futures-px.pkl`` (OI), both of which are
+    written earlier in the ``curves`` step of this same pipeline — this step
+    must therefore run after ``calibrate``, same ordering constraint as
+    ``calibrate_otr_ofr``.
+    """
+    logger.info("[curves] Refreshing TermBasisEvent-spds.pkl")
+    try:
+        from curves.refreshers.termbasis_event import refresh_termbasis_event
+        result = refresh_termbasis_event(update=True)
+        n = len(result.get('TermBasisEvent', {}).get('StatInfo', []))
+        logger.info("[curves] TermBasisEvent refresh done: %d active ctype(s)", n)
+        return {"status": "ok", "n_active": n}
+    except Exception:
+        logger.exception("[curves] TermBasisEvent refresh failed")
+        return {"status": "failed"}

@@ -159,7 +159,6 @@ def build_candidates_layout() -> html.Div:
                         id='alpha-spread-categories',
                         options=[
                             {'label': ' Bond-Curve', 'value': 'Bond-Curve'},
-                            {'label': ' Bond-Swap', 'value': 'Bond-Swap'},
                             {'label': ' Swap Spreads', 'value': 'Swap-Spread'},
                             {'label': ' Curve & Cross-Asset', 'value': 'Tenor-Spread'},
                             {'label': ' New-Issue Event', 'value': 'New-Issue'},
@@ -167,7 +166,7 @@ def build_candidates_layout() -> html.Div:
                             {'label': ' Calendar Spreads', 'value': 'Futures-Term'},
                             {'label': ' Futures-Swap', 'value': 'Futures-Swap'},
                         ],
-                        value=['Bond-Curve', 'Bond-Swap', 'Swap-Spread', 'Tenor-Spread'],
+                        value=['Bond-Curve', 'Swap-Spread', 'Tenor-Spread'],
                         inputStyle={'marginRight': '7px', 'accentColor': THEME['accent']},
                         labelStyle={'color': 'var(--text-primary)', 'fontSize': '13px', 'cursor': 'pointer'},
                         style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '6px 16px'},
@@ -263,6 +262,40 @@ def build_candidates_layout() -> html.Div:
                   'marginBottom': '10px'}),
 
         html.Div(id='alpha-scan-status', style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '4px'}),
+
+        # ── Card 1b: Sector PCA — Rich/Cheap Pair Screen ─────────────────────
+        # Separate from the main MR/momentum scan above: SectorPCASpread
+        # candidates don't carry carry_roll/borrow-cost/saved-params the way
+        # build_alpha_candidates' universe does, and the "pick" here is a
+        # screened OVERSOLD-vs-OVERBOUGHT PAIR (see
+        # web/tabs/alpha/sector_pca_screen.py), not a single-instrument row.
+        # "Add pair" below appends both legs to the same alpha-selected-
+        # candidates store the main scan uses, so they flow through
+        # correlation-check/portfolio sizing unchanged.
+        html.Div([
+            _alpha_card_header(
+                "Sector PCA — Rich/Cheap Screen",
+                badge_text="Oversold vs. overbought pair · reversion checks",
+                action=html.Button(
+                    "🔍 Scan Sector PCA Pairs", id='alpha-pca-scan-btn', n_clicks=0,
+                    style={'padding': '5px 14px', 'background': 'var(--accent-amber)', 'color': 'var(--navy-950)',
+                           'border': 'none', 'borderRadius': '4px', 'fontSize': '10px', 'fontWeight': '700',
+                           'letterSpacing': '0.05em', 'cursor': 'pointer'},
+                ),
+            ),
+            html.Div(
+                "Ranks all Sector PCA residuals by |Z|, screens the most oversold vs. most overbought "
+                "for signs the gap is reverting (not repricing): gap-to-field, residual has turned, "
+                "model fit (R²), OU stationarity/halflife — rechecked on the constructed spread, not just the legs.",
+                style={'fontSize': '10px', 'color': THEME['text_sub'], 'padding': '0 16px', 'marginTop': '8px'},
+            ),
+            dcc.Loading(
+                id='loading-pca-pairs', type='circle', color=THEME['accent'],
+                style={'minHeight': '40px'},
+                children=html.Div(id='alpha-pca-pairs-container', style={'padding': '10px 16px 14px'}),
+            ),
+        ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden',
+                  'marginBottom': '10px'}),
 
         # ── Card 2: Candidates & Correlation Check ──────────────────────────
         html.Div([

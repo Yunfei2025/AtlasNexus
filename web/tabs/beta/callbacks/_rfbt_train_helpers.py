@@ -16,6 +16,7 @@ import plotly.graph_objects as go
 from dash import html, dcc
 
 from settings.paths import DIR_INPUT
+from multiasset.factor_model import rolling_spearman_ic, mean_ic_at_effective_horizon
 from ..data import THEME
 
 
@@ -60,14 +61,28 @@ def _compute_factor_stats(results: Dict) -> Dict:
         z_score = ((last_pred_val - pred_hist.mean()) / (pred_hist.std() + 1e-8)
                    if len(pred_hist) > 5 else 0.0)
         scalar = max(0.5, min(2.0, abs(z_score)))
+        # Spearman rank-IC (not Pearson) to match feature selection/training use.
         actual_fwd = df['returns'].shift(-1).reindex(df.index)
-        ic_rolling = df['predicted_return'].rolling(60).corr(actual_fwd).dropna()
+        ic_rolling = rolling_spearman_ic(df['predicted_return'], actual_fwd, 60).dropna()
         mean_ic = float(ic_rolling.mean()) if len(ic_rolling) > 0 else 0.0
         ic_std = float(ic_rolling.std()) if len(ic_rolling) > 1 else 1.0
         icir = mean_ic / (ic_std + 1e-8)
         ic_hit = float((ic_rolling > 0).mean()) if len(ic_rolling) > 0 else 0.0
         n_ic = len(ic_rolling)
         ic_tstat = mean_ic / (ic_std / (n_ic ** 0.5) + 1e-8) if n_ic > 1 else 0.0
+
+        # IC at the ensemble's own effective (IC-weighted blend) horizon —
+        # see mean_ic_at_effective_horizon docstring: the H=1 IC above always
+        # measures next-day accuracy, which under-credits the model whenever
+        # longer horizons dominate the blend (e.g. during a confirmed trend).
+        mean_ic_eff = float('nan')
+        avg_eff_horizon = float('nan')
+        if 'effective_horizon' in df.columns and df['effective_horizon'].notna().any():
+            avg_eff_horizon = float(df['effective_horizon'].dropna().mean())
+            mean_ic_eff = mean_ic_at_effective_horizon(
+                df['predicted_return'], df['returns'], df['effective_horizon'],
+            )
+
         factor_stats[factor] = {
             'last_signal': last_signal,
             'last_data_date': last_data_date,
@@ -77,6 +92,8 @@ def _compute_factor_stats(results: Dict) -> Dict:
             'icir': icir,
             'ic_hit': ic_hit,
             'ic_tstat': ic_tstat,
+            'mean_ic_effective_horizon': mean_ic_eff,
+            'avg_effective_horizon': avg_eff_horizon,
             'ic_rolling': ic_rolling,
         }
     return factor_stats
@@ -169,6 +186,14 @@ def _render_signal_cards(factor_stats: Dict, artifact=None) -> html.Div:
                     html.Span(conf, style={'color': conf_color, 'fontWeight': '700'}),
                 ], style={'display': 'flex', 'justifyContent': 'space-between', 'fontSize': '9px',
                           'marginTop': '2px'}),
+                *([html.Div([
+                    html.Span(f"IC @ {stats['avg_effective_horizon']:.0f}d",
+                               style={'color': 'var(--text-muted)'}),
+                    html.Span(f"{stats['mean_ic_effective_horizon']:+.3f}",
+                               style={'color': 'var(--text-secondary)'}),
+                ], style={'display': 'flex', 'justifyContent': 'space-between', 'fontSize': '9px'})]
+                   if stats.get('avg_effective_horizon') == stats.get('avg_effective_horizon')
+                   else []),
             ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '2px'}),
         ], style={'padding': '10px 12px'})
 
@@ -234,13 +259,16 @@ def _build_results_from_saved_artifact(
         Position sizing applied fresh from the saved predictions (not baked
         into the .joblib), so the discrete 5-level mapping needs no retrain.
     """
+    import dataclasses as _dc
+
     from multiasset.factor_backtest import load_factor_rates
     from multiasset.factor_model import (
         build_features, _compute_target_returns, _predict_ic_model,
         build_position_series, factor_tx_cost_per_unit, FactorModelConfig,
+        factor_sizing_override,
     )
 
-    size_cfg = FactorModelConfig(
+    base_size_cfg = FactorModelConfig(
         signal_smooth_days=smooth_days,
         sizing_mode=sizing_mode,
         position_smooth_window=position_smooth_window,
@@ -279,6 +307,17 @@ def _build_results_from_saved_artifact(
             result['predicted_return'] = preds
             result['n_features'] = len(fa.get('selected_factors', []) or trained_model.get('feature_names', []))
             result['returns'] = daily_returns.reindex(result.index)
+
+            # Apply this factor's sizing override (e.g. IRDL.CN → tilt) unless
+            # the caller explicitly asked for a non-default mode. Without this
+            # the saved-artifact path would size IRDL.CN as 'discrete' while
+            # the backtest path uses 'tilt', so the live signal would not match
+            # the backtest it was validated against.
+            size_cfg = base_size_cfg
+            if sizing_mode == 'discrete':
+                _ov = factor_sizing_override(factor)
+                if _ov:
+                    size_cfg = _dc.replace(base_size_cfg, **_ov)
 
             _long_only = factor.split('.')[0] == 'IRDL'
             pos = build_position_series(

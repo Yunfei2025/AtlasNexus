@@ -134,6 +134,50 @@ class FuturesConfig:
         return clist_
 
 
+class TermBasisEventConfig:
+    """Config for TermBasisEvent — the roll-progress-gated event-driven
+
+    Calendar Spread strategy, alongside (not replacing) the stationary-MR
+    ``TermBasis`` z-score engine. Mirrors ``settings.fixed_income.NewIssueConfig``:
+    each front/next-season contract pair is one episode (analogous to an
+    OTR's tenure), and OI-derived ``roll_progress`` (0..1, next_oi / (front_oi
+    + next_oi)) stands in for ``NewIssueConfig``'s calendar-day event age —
+    a better axis here because roll speed varies cycle to cycle while the
+    OI migration itself is the actual structural driver of the spread.
+    See curves/generators/stat.py's RollProgress computation and
+    web/tabs/alpha/seasonal.py's roll-cycle overlay for the existing
+    (display-only) precedent this promotes into a trading gate.
+    """
+
+    # roll_progress entry window: only open new positions early in the roll
+    # cycle, while the front contract still holds the bulk of OI and the
+    # spread is carry/repo-driven rather than thin-liquidity noise.
+    ENTRY_ROLL_PROGRESS_MAX = 0.30
+
+    # Force-flatten / no new entries once OI has mostly migrated to the next
+    # contract — front-contract prices become unreliable as its liquidity
+    # dries up into delivery (same thin-liquidity concern PriceBasis's
+    # docstring already flags for the raw price leg).
+    EXIT_ROLL_PROGRESS_MIN = 0.70
+
+    # Nearest-match tolerance on roll_progress (0..1 scale, not calendar days)
+    # when building the causal cohort — analogous to NewIssueConfig's
+    # age_tolerance_days but scaled to the roll_progress axis.
+    ROLL_PROGRESS_TOLERANCE = 0.05
+
+    # Minimum prior (causal) roll cycles required before trusting a cohort
+    # percentile — mirrors curves.calibration.newissue_cohort.MIN_COHORT_EPISODES.
+    MIN_COHORT_EPISODES = 3
+
+    # Entry gate: cohort percentile (0-100) the live term-basis level must sit
+    # at or below at the current roll_progress to enter. Percentile is taken
+    # against the causal history of prior roll cycles for the same ctype, so
+    # this fires only when today's basis is unusually cheap/rich relative to
+    # where this cycle has historically been at this stage of the roll.
+    ENTRY_PERCENTILE_MAX = 25.0
+    ENTRY_PERCENTILE_MIN = 75.0  # symmetric short-side gate (percentile >= this)
+
+
 if __name__ == "__main__":
     # Lightweight self-test to make it obvious whether imports work when
     # executing this file directly.
