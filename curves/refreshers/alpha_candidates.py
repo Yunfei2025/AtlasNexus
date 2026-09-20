@@ -45,6 +45,15 @@ _DEFAULT_ENTRY_PARAMS = {
 }
 _FALLBACK_ENTRY_PARAMS = {"entry_z": 2.0, "carry_z_weight": 0.5}
 
+# Momentum/Carry (trend bucket) score-magnitude entry gate: `score` from
+# _add_unified_score_preview is |expected_return_H| / risk (>=0, direction
+# is a separate field) -- 1.0 means the expected move over the scoring
+# horizon is at least one standard deviation of risk, the same
+# dimensionally-meaningful cutoff MR's composite_z >= entry_z gate enforces
+# in its own (z-score) units. See build_alpha_candidates's trend-direction
+# block for how this combines with the trend_state/trend_zt pullback gate.
+MOMENTUM_CARRY_MIN_SCORE = 1.0
+
 
 def _entry_params_for(spread_type: str, instrument: str) -> tuple[float, float]:
 	"""Return (entry_z, carry_z_weight) for one instrument: saved params if
@@ -605,6 +614,22 @@ def build_alpha_candidates(
 		trend_dir.loc[trend_state.gt(0) & trend_zt.lt(0) & trend_zt.gt(-stretch_cap)] = "SELL"
 		trend["direction"] = trend_dir
 		trend = trend[trend["direction"].isin(["BUY", "SELL"])].copy()
+
+		# Score-magnitude gate: _add_unified_score_preview already computed
+		# `score` = |expected_return_H| / risk (dimensionless, >=0 by
+		# construction -- see its docstring) alongside its OWN sign-of-P&L
+		# direction, but that direction gets overwritten by the pullback
+		# logic above and score was previously used only for ranking, never
+		# as an entry gate here -- so a pullback-confirmed row with a tiny
+		# edge-to-risk ratio (score << 1) could still enter. Restored
+		# 2026-09-19 per user: score>=1 means the expected move over the
+		# scoring horizon is at least one standard deviation of risk -- the
+		# same dimensionally-meaningful "worth trading" cutoff MR's
+		# composite_z>=entry_z gate already enforces in return-vol space.
+		# Both gates (pullback timing AND score magnitude) must pass.
+		if not trend.empty and "score" in trend.columns:
+			trend_score = pd.to_numeric(trend["score"], errors="coerce")
+			trend = trend[trend_score.ge(MOMENTUM_CARRY_MIN_SCORE)].copy()
 
 	# ── Execution-feasibility filters ──────────────────────────────────────────
 	_SELL_RESTRICTED_CATEGORIES = {"Bond-Swap", "Bond-Curve"}
