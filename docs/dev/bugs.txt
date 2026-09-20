@@ -1,1 +1,3 @@
-Market Monitor -> Data, table BOND FUTURES & CTD, the on the run future contracts has been switched to 2612, why it still shows TL2609 here?
+Alpha portfolio -> Candidates, Candidates & Correlation Check, for momentum/carry candidates, can we add a filter for them: filter out only score > 1 for buy and <-1 for sell.
+Alpha portfolio -> portfolio, the maximum dv01 is set to 10MM but why the Portfolio Allocation Results show the total DV01 is only 904k (0.9MM) too far away from the target?  
+Beta Portfolio-> Backtest, the position is still discrete not smoothed. Is smoothed signal level better than discrete one?
