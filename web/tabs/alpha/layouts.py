@@ -303,6 +303,20 @@ def build_candidates_layout() -> html.Div:
             html.Div([
                 # Left: Candidates signals
                 html.Div([
+                    html.Div([
+                        html.Span("Momentum/Carry score filter:", style={
+                            'fontSize': '9px', 'color': THEME['text_sub'], 'whiteSpace': 'nowrap',
+                        }),
+                        dcc.Input(
+                            id='alpha-trend-score-min',
+                            type='number', value=1.0, min=0, step=0.1, debounce=True,
+                            style={'width': '64px', 'fontSize': '11px'},
+                        ),
+                        html.Span("(keeps BUY with score > value, SELL with score < −value)", style={
+                            'fontSize': '9px', 'color': THEME['text_sub'], 'fontStyle': 'italic',
+                        }),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px',
+                              'marginBottom': '8px', 'flexWrap': 'wrap'}),
                     dcc.Loading(
                         id='loading-candidates', type='circle',
                         color=THEME['accent'],

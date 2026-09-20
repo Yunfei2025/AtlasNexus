@@ -118,7 +118,7 @@ DIVERSIFICATION_RECOMMENDATIONS = {
 SELECTED_FACTOR_POOL = {
     'ir_factors': ['IRDL.CN', 'IRSL.CN', 'IRCV.CN'],  # Default: CN Level/Slope/Curvature
     'sp_factors': [],
-    'cr_factors': [],  # Credit: CRDL/CRSL/CRCV x LGB/MTN/ICP
+    'cr_factors': [],  # Credit: CRDL/CRSL/CRCV x CDB/LGB/MTN/NCD
     'fx_factors': ['FXDL.USDCNY'],
     'cmd_factors': ['CMDL.AU', 'CMDL.AL'],  # Gold + Aluminium
     'eq_factors': [],
@@ -174,8 +174,10 @@ def compute_factor_vol_map(
 #   - IRDL: Interest Rate Delta Level (整条收益率曲线的加权平均变动)
 #   - IRSL: Interest Rate Slope (2Y-10Y spread 斜率)
 #   - IRCV: Interest Rate Curvature (凸度)
-#   - SPDL: Spread Delta Level (利差水平)
-#   - SPSL: Spread Slope (利差斜率)
+#   - CRDL/CRSL/CRCV: Credit spread Level/Slope/Curvature (own yield - CGB,
+#     by tenor), across CDB/LGB/MTN/NCD. Replaces the retired SPDL/SPSL
+#     naming (outright spread level, not vs-CGB — data-generation pipeline
+#     removed).
 #   - FXDL: FX Delta Level (汇率水平)
 #   - CMDL: Commodity Delta Level (商品价格水平)
 # ============================================================================
@@ -273,33 +275,13 @@ FACTOR_TO_ASSET_MAP = {
         {'name': 'JP10Y', 'type': 'Rates', 'universe': 'Japan Gov Bond', 'sector': '10Y'},
     ],
 
-    # ==================== Spread Products ====================
-    # Interest Rate Swap
-    'SPDL.IRS': [
-        {'name': 'IRS1Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '1Y'},
-        {'name': 'IRS2Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '2Y'},
-        {'name': 'IRS5Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '5Y'},
-        {'name': 'IRS10Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '10Y'},
-    ],
-    'SPSL.IRS': [
-        {'name': 'IRS2Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '2Y'},
-        {'name': 'IRS10Y', 'type': 'Spread', 'universe': 'Interest Rate Swap', 'sector': '10Y'},
-    ],
-
     # ==================== Credit Spreads (own yield - CGB, by tenor) ==========
-    # China Development Bond — legacy SPDL.CDB/SPSL.CDB (outright CDB level/slope,
-    # not a spread vs CGB) are kept for backward compatibility; CRDL/CRSL/CRCV.CDB
-    # below are the correct CDB-vs-CGB credit spread factors (see CREDIT_CONFIG).
-    'SPDL.CDB': [
-        {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
-        {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
-        {'name': 'CDB5Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '5Y'},
-        {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
-    ],
-    'SPSL.CDB': [
-        {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
-        {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
-    ],
+    # China Development Bond — CRDL/CRSL/CRCV.CDB are the CDB-vs-CGB credit
+    # spread factors (see CREDIT_CONFIG). The legacy SPDL.CDB/SPSL.CDB
+    # (outright CDB level/slope, not a spread vs CGB) and SPDL.IRS/SPSL.IRS
+    # (IRS spread) entries were removed along with the SPDL/SPSL
+    # data-generation pipeline (risk_loader._load_sp_factors) — CRDL/CRSL/
+    # CRCV cover the same and a broader credit universe (LGB, MTN added).
     'CRDL.CDB': [
         {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
         {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
@@ -365,23 +347,20 @@ FACTOR_TO_ASSET_MAP = {
         {'name': 'MTN5Y', 'type': 'Credit', 'universe': 'Medium Term Note', 'sector': '5Y'},
     ],
 
-    # Interbank Commercial Paper (Level + Slope only — too few tenors for curvature)
-    'SPDL.ICP': [
-        {'name': 'ICP3M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '3M'},
-        {'name': 'ICP6M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '6M'},
-        {'name': 'ICP1Y', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '1Y'},
+    # Negotiable Certificate of Deposit (NCD) — Level + Slope only, too few
+    # tenors for curvature. Renamed from the legacy 'ICP' factor-code
+    # universe name; the underlying database-px.pkl pickle key stays 'ICP'.
+    'CRDL.NCD': [
+        {'name': 'NCD3M', 'type': 'Credit', 'universe': 'NCD (Interbank CD)', 'sector': '3M'},
+        {'name': 'NCD6M', 'type': 'Credit', 'universe': 'NCD (Interbank CD)', 'sector': '6M'},
+        {'name': 'NCD9M', 'type': 'Credit', 'universe': 'NCD (Interbank CD)', 'sector': '9M'},
+        {'name': 'NCD1Y', 'type': 'Credit', 'universe': 'NCD (Interbank CD)', 'sector': '1Y'},
     ],
-    'CRDL.ICP': [
-        {'name': 'ICP3M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '3M'},
-        {'name': 'ICP6M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '6M'},
-        {'name': 'ICP9M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '9M'},
-        {'name': 'ICP1Y', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '1Y'},
-    ],
-    'CRSL.ICP': [
-        {'name': 'ICP3M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '3M'},
-        {'name': 'ICP6M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '6M'},
-        {'name': 'ICP9M', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '9M'},
-        {'name': 'ICP1Y', 'type': 'Credit', 'universe': 'Interbank Commercial Paper', 'sector': '1Y'},
+    'CRSL.NCD': [
+        {'name': 'NCD3M', 'type': 'Credit', 'universe': 'NCD (Interbank CD)', 'sector': '3M'},
+        {'name': 'NCD6M', 'type': 'Credit', 'universe': 'NCD (Interbank CD)', 'sector': '6M'},
+        {'name': 'NCD9M', 'type': 'Credit', 'universe': 'NCD (Interbank CD)', 'sector': '9M'},
+        {'name': 'NCD1Y', 'type': 'Credit', 'universe': 'NCD (Interbank CD)', 'sector': '1Y'},
     ],
 
     # ==================== FX (Foreign Exchange) ====================

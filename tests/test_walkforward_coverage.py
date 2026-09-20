@@ -73,15 +73,44 @@ def test_backtest_covers_most_available_days():
 
 
 def test_tilt_sizing_never_goes_flat():
-    """'tilt' holds a baseline: a weak signal must not collapse the position."""
+    """'tilt' holds a baseline: a weak signal must not collapse the position.
+
+    Governor disabled here: it is a separate, deliberate mechanism that CAN
+    push the position below the tilt band during a live losing streak (see
+    test_drawdown_governor_can_push_tilt_below_its_band) — this test isolates
+    the sizing formula itself.
+    """
+    idx = pd.bdate_range('2020-01-01', periods=400)
+    rng = np.random.default_rng(1)
+    pred = pd.Series(rng.normal(0, 1e-4, len(idx)), index=idx)
+    rets = pd.Series(rng.normal(0, 2e-4, len(idx)), index=idx)
+
+    cfg = FactorModelConfig(sizing_mode='tilt', tilt_base=0.6, tilt_amp=0.2,
+                            use_drawdown_governor=False)
+    pos = build_position_series(pred, rets, cfg, long_only=True)['position']
+
+    assert (pos > 0).all(), "tilt sizing must never go flat"
+    assert pos.min() >= 0.6 - 0.2 - 1e-9
+
+
+def test_drawdown_governor_can_push_tilt_below_its_band():
+    """With the governor ON (the default), a live losing streak CAN cut the
+    position below the tilt band — that is the governor working as intended,
+    not a violation of 'tilt never goes flat'. Confirms the two mechanisms
+    compose the way build_position_series' docstring describes."""
     idx = pd.bdate_range('2020-01-01', periods=400)
     rng = np.random.default_rng(1)
     pred = pd.Series(rng.normal(0, 1e-4, len(idx)), index=idx)
     rets = pd.Series(rng.normal(0, 2e-4, len(idx)), index=idx)
 
     cfg = FactorModelConfig(sizing_mode='tilt', tilt_base=0.6, tilt_amp=0.2)
+    assert cfg.use_drawdown_governor, "test assumes the governor is on by default"
     pos = build_position_series(pred, rets, cfg, long_only=True)['position']
 
-    assert (pos > 0).all(), "tilt sizing must never go flat"
-    assert pos.min() >= 0.6 - 0.2 - 1e-9
+    assert (pos > 0).all(), "governor scales down, but must never zero the position outright"
+    assert pos.min() < 0.6 - 0.2, (
+        "expected the governor to push below the tilt band at least once on "
+        "this seeded random walk — if this no longer happens, either the "
+        "governor's defaults changed or this seed stopped triggering it"
+    )
     assert pos.max() <= 0.6 + 0.2 + 1e-9

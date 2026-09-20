@@ -95,96 +95,6 @@ def _as_positive_float(value: Any) -> float | None:
     return None
 
 
-def _reserve_existing_capacity(
-    positions: list[dict] | None,
-    repo_margin_rate: float,
-    swap_margin_rate: float,
-) -> tuple[float, float, float, int]:
-    """Return margin/DV01 already committed by saved Alpha-book positions.
-
-    Only a positive manually entered ``volume_mm`` denotes an executed holding.
-    The saved margin and DV01 are scaled proportionally from its prior target,
-    so a live holding is never resized by a subsequent new-trade allocation.
-    Blank-volume target rows are not yet committed and consume no capacity.
-    """
-    if not positions:
-        return 0.0, 0.0, 0.0, 0
-
-    try:
-        snapshot = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
-    except (FileNotFoundError, OSError, ValueError):
-        snapshot = pd.DataFrame()
-
-    snapshot_by_key: dict[tuple[str, str], dict] = {}
-    if not snapshot.empty and {'spread_type', 'ID'}.issubset(snapshot.columns):
-        for _, row in snapshot.drop_duplicates(['spread_type', 'ID'], keep='last').iterrows():
-            snapshot_by_key[(str(row['spread_type']), str(row['ID']))] = row.to_dict()
-
-    leg_exposure: dict[str, float] = {}
-    leg_is_bond: dict[str, bool] = {}
-    margin_used_mm = 0.0
-    has_snapshot_margin = False
-    buy_dv01_k = 0.0
-    sell_dv01_k = 0.0
-    held_count = 0
-    for position in positions:
-        spread_type = str(position.get('spread_type', '') or '')
-        trade_id = str(position.get('instrument', position.get('ID', '')) or '')
-        snapshot_row = snapshot_by_key.get((spread_type, trade_id), {})
-
-        executed_volume = _as_positive_float(position.get('volume_mm'))
-        if executed_volume is None:
-            continue
-        saved_notional = _as_positive_float(snapshot_row.get('notional_mm'))
-        actual_notional = executed_volume
-
-        scale = actual_notional / saved_notional if saved_notional else 1.0
-        saved_margin_mm = _as_positive_float(snapshot_row.get('margin_mm'))
-        if saved_margin_mm is not None:
-            margin_used_mm += saved_margin_mm * scale
-            has_snapshot_margin = True
-        saved_dv01_k = _as_positive_float(snapshot_row.get('DV01_k'))
-        if saved_dv01_k is None:
-            # A live manually-entered holding with no usable allocation snapshot
-            # must block new allocation rather than risking an over-allocated book.
-            raise ValueError(
-                f"Cannot reserve existing position {trade_id}: rerun its allocation or enter a complete snapshot first."
-            )
-
-        direction = str(position.get('direction') or snapshot_row.get('direction') or '').strip().upper()
-        signed_notional = actual_notional * (-1.0 if direction == 'SELL' else 1.0)
-        leg1 = str(snapshot_row.get('Leg1', '') or '')
-        leg2 = str(snapshot_row.get('Leg2', '') or '')
-        ratio = pd.to_numeric(snapshot_row.get('ratio_v2_v1'), errors='coerce')
-        ratio = float(ratio) if pd.notna(ratio) and float(ratio) > 0 else 1.0
-        if leg1 or leg2:
-            for leg, exposure in ((leg1, signed_notional), (leg2, -signed_notional * ratio)):
-                if not leg:
-                    continue
-                leg_exposure[leg] = leg_exposure.get(leg, 0.0) + exposure
-                leg_is_bond[leg] = leg.endswith('.IB')
-        else:
-            # Treat an unresolved holding as an unnettable derivative exposure.
-            fallback_key = f'__unresolved_{spread_type}_{trade_id}'
-            leg_exposure[fallback_key] = signed_notional
-            leg_is_bond[fallback_key] = False
-
-        if direction == 'SELL':
-            sell_dv01_k += saved_dv01_k * scale
-        else:
-            buy_dv01_k += saved_dv01_k * scale
-        held_count += 1
-
-    if has_snapshot_margin:
-        return margin_used_mm, buy_dv01_k, sell_dv01_k, held_count
-
-    # Legacy fallback for older snapshots that do not persist per-trade margin.
-    net_bond_mm = sum(abs(exposure) for leg, exposure in leg_exposure.items() if leg_is_bond[leg])
-    net_derivative_mm = sum(abs(exposure) for leg, exposure in leg_exposure.items() if not leg_is_bond[leg])
-    capital_used = net_bond_mm * repo_margin_rate + net_derivative_mm * swap_margin_rate
-    return capital_used, buy_dv01_k, sell_dv01_k, held_count
-
-
 def _upsert_snapshot(new_df: pd.DataFrame, parquet_path: str, id_cols: list[str]) -> pd.DataFrame:
     """Insert-or-update by id_cols: keep existing rows, replace matched ones, add new ones."""
     import os
@@ -385,10 +295,12 @@ def register_portfolio_callbacks(app) -> None:
                     _merged_curated.append(_e)
             curated_instruments = _merged_curated
 
-            # Executed Alpha-book rows are immutable holdings. They remain
-            # visible to correlation analysis, but only rows with an actual
-            # volume are excluded from this optimization. Blank-volume target
-            # rows are still candidates and may receive a new allocation.
+            # Executed Alpha-book rows (positive volume_mm) are "held": they
+            # join the same risk-parity solve as every new candidate below --
+            # capital/DV01 is shared, and a held row's size can move to keep
+            # the whole book balanced -- but this key set lets the display
+            # mark them so a resize reads as "rebalanced holding", not a
+            # brand-new trade. Blank-volume target rows are plain candidates.
             existing_position_keys = {
                 (str(entry.get('spread_type', '') or ''), str(entry.get('instrument', entry.get('ID', '')) or ''))
                 for entry in (book_positions or [])
@@ -396,18 +308,7 @@ def register_portfolio_callbacks(app) -> None:
             }
             existing_position_keys.discard(('', ''))
 
-            try:
-                _reserved_capital_mm, _reserved_buy_dv01_k, _reserved_sell_dv01_k, _held_count = _reserve_existing_capacity(
-                    book_positions, repo_margin_rate, swap_margin_rate,
-                )
-            except ValueError as exc:
-                return (
-                    html.Div(str(exc), style={'color': THEME['warning'], 'padding': '10px'}),
-                    html.Div(), html.Div(), [], None, html.Div(),
-                )
-
-            _available_capital_mm = max(0.0, total_capital_mm - _reserved_capital_mm)
-            _available_dv01_k = max(0.0, total_dv01_budget * 1000 - max(_reserved_buy_dv01_k, _reserved_sell_dv01_k))
+            _held_count = len(existing_position_keys)
 
             df = pd.DataFrame(candidates)
 
@@ -515,12 +416,6 @@ def register_portfolio_callbacks(app) -> None:
 
                 df = df_curated
 
-            if existing_position_keys and {'spread_type', 'ID'}.issubset(df.columns):
-                _new_trade_mask = ~pd.Series(
-                    list(zip(df['spread_type'].astype(str), df['ID'].astype(str))), index=df.index
-                ).isin(existing_position_keys)
-                df = df.loc[_new_trade_mask].copy()
-
             # Manually saved/book positions do not carry the scanner's score.
             # Give those rows a neutral positive score so they remain eligible
             # for allocation rather than all being filtered out below.
@@ -542,33 +437,9 @@ def register_portfolio_callbacks(app) -> None:
             n_trades = len(df_scored)
             if n_trades == 0:
                 return (
-                    html.Div("No new candidates to allocate. Existing positions remain unchanged.", style={'color': THEME['text_sub']}),
+                    html.Div("No candidates or saved positions available to allocate.", style={'color': THEME['text_sub']}),
                     html.Div(), html.Div(), [], None, html.Div()
                 )
-
-            if _available_capital_mm <= 0 or _available_dv01_k <= 0:
-                _issues: list[str] = []
-                if _available_capital_mm <= 0:
-                    _issues.append(
-                        f"capital exhausted (available {max(_available_capital_mm, 0.0):,.1f} MM; reserved {_reserved_capital_mm:,.1f} MM of {total_capital_mm:,.1f} MM)"
-                    )
-                if _available_dv01_k <= 0:
-                    _issues.append(
-                        f"single-side DV01 exhausted (available {max(_available_dv01_k, 0.0) / 1000.0:,.3f} MM/bp; reserved BUY {_reserved_buy_dv01_k / 1000.0:,.3f} MM/bp, SELL {_reserved_sell_dv01_k / 1000.0:,.3f} MM/bp, limit {total_dv01_budget:,.3f} MM/bp)"
-                    )
-                return (
-                    html.Div(
-                        "Cannot allocate new trades because " + "; ".join(_issues) + ". "
-                        "Close an existing position or increase the corresponding portfolio limit.",
-                        style={'color': THEME['warning'], 'padding': '10px'},
-                    ),
-                    html.Div(), html.Div(), [], None, html.Div(),
-                )
-
-            # All downstream capital and DV01 constraints apply only to new
-            # trades; existing positions were reserved above and are immutable.
-            total_capital_mm = _available_capital_mm
-            total_dv01_budget = _available_dv01_k / 1000.0
 
             alloc_method = alloc_method or 'risk_parity'
 
@@ -877,19 +748,45 @@ def register_portfolio_callbacks(app) -> None:
             _net_bond_mm, _capital_without_repo_mm, _capital_with_repo_mm = _portfolio_financing(df_scored['notional_mm'])
             _gross_leverage = _gross_notional_mm / _capital_with_repo_mm if _capital_with_repo_mm > 0 else 0.0
 
+            # DV01-vs-capital shortfall check: Step E above scales notional up
+            # to the DV01_budget target, but this Step H capital/margin check
+            # runs AFTER Step E and can scale notional back down again to fit
+            # total_capital_mm -- silently leaving the realized DV01 far
+            # below the requested budget with no visible explanation. Capital
+            # stays the hard constraint (never breach the margin budget); this
+            # only surfaces the shortfall so it isn't mistaken for a sizing
+            # bug when it is actually "not enough capital to reach that DV01".
+            _achieved_dv01_k = max(_buy_dv01, _sell_dv01) if (_buy_dv01 > 0 and _sell_dv01 > 0) else (_buy_dv01 + _sell_dv01)
+            if _dv01_budget_k > 1e-6 and _achieved_dv01_k < _dv01_budget_k * 0.99:
+                _achieved_dv01_after = pd.to_numeric(df_scored['DV01_k'], errors='coerce')
+                _buy_dv01_after = _achieved_dv01_after[_buy_mask].sum() if _buy_mask.any() else 0.0
+                _sell_dv01_after = _achieved_dv01_after[_sell_mask].sum() if _sell_mask.any() else 0.0
+                _achieved_dv01_k = max(_buy_dv01_after, _sell_dv01_after) if (_buy_dv01_after > 0 and _sell_dv01_after > 0) else (_buy_dv01_after + _sell_dv01_after)
+            _dv01_shortfall_pct = (
+                max(0.0, 1.0 - _achieved_dv01_k / _dv01_budget_k) if _dv01_budget_k > 1e-6 else 0.0
+            )
+
             _metric_label = {'color': THEME['text_sub'], 'fontSize': '9px', 'fontWeight': '600',
                              'textTransform': 'uppercase', 'display': 'block', 'marginBottom': '3px'}
             _metric_value = {'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': '700'}
             financing_summary = [
-                html.Div([html.Span('Existing Positions', style=_metric_label), html.Span(f'{_held_count} fixed holdings', style=_metric_value)]),
-                html.Div([html.Span('Reserved Capital', style=_metric_label), html.Span(f'{_reserved_capital_mm:,.1f} MM', style=_metric_value)]),
-                html.Div([html.Span('Capital for New Trades', style=_metric_label), html.Span(f'{total_capital_mm:,.1f} MM', style={**_metric_value, 'color': THEME['accent']} )]),
-                html.Div([html.Span('DV01 for New Trades', style=_metric_label), html.Span(f'{total_dv01_budget:,.3f} MM CNY/bp', style={**_metric_value, 'color': THEME['accent']} )]),
+                html.Div([html.Span('Existing Positions', style=_metric_label), html.Span(f'{_held_count} held (resized with this run)', style=_metric_value)]),
+                html.Div([html.Span('Total Capital', style=_metric_label), html.Span(f'{total_capital_mm:,.1f} MM', style={**_metric_value, 'color': THEME['accent']} )]),
+                html.Div([html.Span('Total DV01 Budget', style=_metric_label), html.Span(f'{total_dv01_budget:,.3f} MM CNY/bp', style={**_metric_value, 'color': THEME['accent']} )]),
                 html.Div([html.Span('Gross Leg Notional', style=_metric_label), html.Span(f'{_gross_notional_mm:,.1f} MM', style=_metric_value)]),
                 html.Div([html.Span('Capital Without Repo (Netted)', style=_metric_label), html.Span(f'{_capital_without_repo_mm:,.1f} MM', style=_metric_value)]),
                 html.Div([html.Span('Capital With Repo (Netted)', style=_metric_label), html.Span(f'{_capital_with_repo_mm:,.1f} MM', style=_metric_value)]),
                 html.Div([html.Span('Gross Leverage', style=_metric_label), html.Span(f'{_gross_leverage:.1f}x', style={**_metric_value, 'color': THEME['accent']} )]),
             ]
+            if _dv01_shortfall_pct > 0.01:
+                financing_summary.append(html.Div([
+                    html.Span('⚠ DV01 Shortfall', style=_metric_label),
+                    html.Span(
+                        f'{_achieved_dv01_k / 1000.0:,.3f} MM/bp of {total_dv01_budget:,.3f} MM/bp target '
+                        f'({_dv01_shortfall_pct:.0%} short — capital-constrained, not a sizing error)',
+                        style={**_metric_value, 'color': THEME['warning']},
+                    ),
+                ], style={'flexBasis': '100%'}))
 
             # Build downstream payload after leg + ratio enrichment so later
             # stages (Summary/Backtest/etc.) receive the ratio field.
@@ -905,6 +802,19 @@ def register_portfolio_callbacks(app) -> None:
             ]
             available_cols = [c for c in display_cols if c in df_scored.columns]
             df_display = df_scored[available_cols].copy()
+
+            # Saved positions with an executed volume_mm are held, not purely
+            # new -- they now share the same risk-parity solve as every other
+            # row (their size can move to keep the whole book balanced), but
+            # the table still marks them so a resize reads as "rebalanced
+            # holding", not "brand-new trade".
+            if {'spread_type', 'ID'}.issubset(df_scored.columns):
+                _held_mask = pd.Series(
+                    list(zip(df_scored['spread_type'].astype(str), df_scored['ID'].astype(str))),
+                    index=df_scored.index,
+                ).isin(existing_position_keys)
+            else:
+                _held_mask = pd.Series(False, index=df_scored.index)
 
             # Render the human-readable display_key() label (matches the
             # Candidate Instruments table), not the raw ticker -- the raw ID
@@ -948,6 +858,16 @@ def register_portfolio_callbacks(app) -> None:
                     pd.to_numeric(df_display.loc[_sell, 'carry_roll'], errors='coerce')
                     .multiply(-1).round(4)
                 )
+
+            # Mark held rows (a saved position being resized, not a brand-new
+            # trade) in the ID column, then remember their row_index within
+            # df_display for styling before the TOTAL row is appended below
+            # (df_display's positional order equals df_scored's here, so a
+            # 0-based enumerate lines up with the table's eventual row_index).
+            _held_row_indices = [i for i, keep in enumerate(_held_mask.to_numpy()) if keep]
+            if 'ID' in df_display.columns and _held_row_indices:
+                _held_display_idx = df_display.index[_held_row_indices]
+                df_display.loc[_held_display_idx, 'ID'] = df_display.loc[_held_display_idx, 'ID'].astype(str) + '  [HELD]'
 
             summary_row: dict = {c: "" for c in df_display.columns}
             summary_row['ID'] = 'TOTAL'
@@ -993,6 +913,13 @@ def register_portfolio_callbacks(app) -> None:
                 {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgba(255,255,255,0.015)'},
                 {'if': {'row_index': last_row_idx}, 'fontWeight': 'bold', 'borderTop': f'1px solid {THEME["accent"]}'},
                 {'if': {'column_id': 'ID'}, 'whiteSpace': 'pre-line', 'lineHeight': '1.35', 'minWidth': '170px'},
+            ]
+            # Held rows are full participants in this run's risk-parity solve
+            # (their size can move), just tagged [HELD] in the ID column so a
+            # rebalanced holding doesn't read as a brand-new trade.
+            conditional_style += [
+                {'if': {'row_index': idx}, 'fontStyle': 'italic'}
+                for idx in _held_row_indices
             ]
 
             _port_col_labels = {

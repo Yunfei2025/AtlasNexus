@@ -411,10 +411,11 @@ def register_scan_callbacks(app) -> None:
          State('alpha-direction-filter', 'value'),
          State('seasonal-prefilter-toggle', 'value'),
          State('seasonal-prefilter-min-consistency', 'value'),
-         State('seasonal-prefilter-p-thresh', 'value')],
+         State('seasonal-prefilter-p-thresh', 'value'),
+         State('alpha-trend-score-min', 'value')],
         prevent_initial_call=True,
     )
-    def scan_candidates(n_clicks, categories, zscore_thd, direction, seasonal_prefilter, seasonal_min_consistency, seasonal_p_thresh):
+    def scan_candidates(n_clicks, categories, zscore_thd, direction, seasonal_prefilter, seasonal_min_consistency, seasonal_p_thresh, trend_score_min):
         if not n_clicks or not categories:
             return html.Div("Select spread categories and click Scan.", style={'color': THEME['text_sub']}), "", [], {}
 
@@ -662,6 +663,30 @@ def register_scan_callbacks(app) -> None:
                         html.Div("All candidates filtered out by breakeven > vol constraint.", style={'color': THEME['warning']}),
                         f"Filtered at {scanned_time}", [], {},
                     )
+
+        # Momentum/Carry score filter: 'score' from compute_scan_score/
+        # _add_unified_score_preview is an unsigned edge-to-risk magnitude, so
+        # sign it by direction (BUY=+, SELL=-) to apply the user's requested
+        # "score > threshold for BUY, score < -threshold for SELL" cutoff.
+        # Mean-reversion rows are untouched -- MR already gates on its own
+        # composite_z/entry_z threshold, not this score.
+        try:
+            _trend_score_thd = float(trend_score_min) if trend_score_min is not None else 1.0
+        except (TypeError, ValueError):
+            _trend_score_thd = 1.0
+        if _trend_score_thd > 0 and 'score' in df_all.columns and 'style' in df_all.columns:
+            _style_f = df_all['style'].astype(str).str.strip().str.lower()
+            _is_trend_f = _style_f.isin({'carry', 'trend', 'trendfollowing', 'momentum', 'mixed'})
+            if _is_trend_f.any():
+                _score_f = pd.to_numeric(df_all['score'], errors='coerce')
+                _dir_f = df_all.get('direction', pd.Series('', index=df_all.index)).astype(str).str.strip().str.upper()
+                _signed_score_f = _score_f.where(_dir_f.ne('SELL'), -_score_f)
+                _fails_gate = _is_trend_f & ~(
+                    (_dir_f.eq('BUY') & _signed_score_f.gt(_trend_score_thd)) |
+                    (_dir_f.eq('SELL') & _signed_score_f.lt(-_trend_score_thd))
+                )
+                if _fails_gate.any():
+                    df_all = df_all[~_fails_gate].copy()
 
         table_out, candidate_data, regime_store = _render_candidates_from_df(df_all)
         style_counts = (

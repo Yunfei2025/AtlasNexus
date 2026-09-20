@@ -521,7 +521,7 @@ def build_risk_factor_backtest_layout():
                             id='rfbt-asset-class',
                             options=[
                                 {'label': 'Rates',       'value': 'Rates'},
-                                {'label': 'Spread',      'value': 'Spread'},
+                                {'label': 'Credit',      'value': 'Credit'},
                                 {'label': 'FX',          'value': 'FX'},
                                 {'label': 'Commodities', 'value': 'Commodities'},
                             ],
@@ -599,11 +599,11 @@ def build_risk_factor_backtest_layout():
                                     dcc.Dropdown(
                                         id='rfbt-fm-sizing',
                                         options=[
-                                            {'label': 'Discrete 5-level', 'value': 'discrete'},
-                                            {'label': 'Continuous',       'value': 'continuous'},
-                                            {'label': 'Tilt (core hold)', 'value': 'tilt'},
+                                            {'label': 'Continuous (default)', 'value': 'continuous'},
+                                            {'label': 'Discrete 5-level',     'value': 'discrete'},
+                                            {'label': 'Tilt (core hold)',     'value': 'tilt'},
                                         ],
-                                        value='discrete',
+                                        value='continuous',
                                         clearable=False,
                                         style={'fontSize': '13px'},
                                     ),

@@ -3,8 +3,8 @@
 Factor-level backtest engine for yield-based risk factors.
 
 Generates factor yield series from the deterministic model (IRDL, IRSL, IRCV,
-SPDL, SPSL, FXDL, CMDL), converts yield changes to duration-adjusted returns,
-runs close-only technical strategies, and persists results.
+CRDL, CRSL, CRCV, FXDL, CMDL), converts yield changes to duration-adjusted
+returns, runs close-only technical strategies, and persists results.
 
 Output files (in DIR_INPUT):
   factor-rates.pkl  – DataFrame of factor yield/price levels (index=date)
@@ -99,9 +99,157 @@ def get_factor_weighted_duration(factor_code: str) -> Optional[float]:
 
 
 def _is_yield_factor(factor_code: str) -> bool:
-    """Return True if this factor is yield/spread-based (needs duration conversion)."""
+    """Return True if this factor is yield/spread-based (needs duration conversion).
+
+    'SP*' (SPDL/SPSL/SPCV) is the retired naming for what CRDL/CRSL/CRCV
+    now cover under a broader universe (LGB, MTN added) and full Curvature
+    coverage — the data-generation pipeline (risk_loader._load_sp_factors)
+    was removed, so no live factor should carry that prefix, but it's kept
+    recognised here for compatibility with any stale saved artifact still
+    referencing it.
+    """
     prefix = factor_code.split('.')[0]
     return prefix in ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL', 'SPCV', 'CRDL', 'CRSL', 'CRCV')
+
+
+# 'DL' (Level) factors are equal-weighted (sum=1) portfolios of outright
+# tenor yields — see DETERMINISTIC_WEIGHTS / CN_DETERMINISTIC_WEIGHTS in
+# pca_analyzer.py. The factor level *is* a genuine yield, so daily accrual
+# (carry) is unambiguous in principle: level/100/252.
+#
+# 'SL' (Slope) and 'CV' (Curvature) factors are long-short (weights sum to
+# 0) contrasts across tenors — the level has no accrual interpretation on
+# its own (e.g. a negative slope reading is not "negative carry" the way a
+# negative yield level would be; it depends on the actual long/short leg
+# notionals). Their carry is the *difference* of each leg's own carry+roll,
+# which needs the per-tenor data and loading weights this module doesn't
+# currently thread through (see multiasset.rolldown.carry_rolldown for the
+# per-tenor carry+roll-down calc used elsewhere, in tenor-selection tilt —
+# not yet wired into the Slope/Curvature *level* return series). Left as a
+# documented gap rather than guessed at.
+_LEVEL_FACTOR_PREFIXES: frozenset = frozenset({'IRDL', 'SPDL', 'CRDL'})
+
+
+def _is_level_factor(factor_code: str) -> bool:
+    """Return True if this is a Level-type yield factor (has unambiguous carry)."""
+    return factor_code.split('.')[0] in _LEVEL_FACTOR_PREFIXES
+
+
+# IRDL is the raw government-bond yield level for a country, held on a
+# funded (repo/reverse-repo) basis — the real P&L driver of holding it is
+# the SPREAD to the funding rate (yield - repo cost), not the gross yield.
+# Gross yield/252 as carry implicitly assumes the position is funded at
+# zero, which produced an unrealistic Sharpe once carry dominated the
+# return series' (very low) volatility.
+#
+# Scoped to IRDL only for now: SPDL/CRDL (credit/swap spread levels — CDB
+# vs Treasury, IRS spread, LGB, etc.) are already spreads over a
+# risk-free curve, so it's not established that the same funding-rate
+# subtraction applies to them the same way without double-netting an
+# already-embedded funding cost — left as a separate question rather than
+# assumed here.
+_IRDL_FUNDING_RATE_MACRO_COL = {
+    'CN': 'FR007',   # 7-day reverse repo rate — CN onshore funding cost
+    'US': 'SOFR',
+    'DE': 'ESTR',
+    'UK': 'SONIA',
+    'JP': 'TONAR',
+}
+
+_funding_rate_cache: Dict[str, pd.Series] = {}
+
+
+def _load_funding_rate(country: str) -> Optional[pd.Series]:
+    """Load the daily funding-rate series (percent) for an IRDL country.
+
+    Reads macro-px.pkl directly rather than importing multiasset.factor_model
+    (which itself imports this module — would be circular). Cached per
+    country code since this is called once per factor per backtest.
+    """
+    if country in _funding_rate_cache:
+        return _funding_rate_cache[country]
+
+    macro_col = _IRDL_FUNDING_RATE_MACRO_COL.get(country)
+    if macro_col is None:
+        return None
+
+    try:
+        macro_path = os.path.join(str(DIR_INPUT), 'macro-px.pkl')
+        raw = pd.read_pickle(macro_path)
+        macro_df = pd.concat(raw, axis=1).droplevel(0, axis=1)
+        macro_df.columns = [c.split('.')[0] for c in macro_df.columns]
+        if macro_col not in macro_df.columns:
+            _funding_rate_cache[country] = None
+            return None
+        rate = macro_df[macro_col].dropna()
+        # Same index-type defect fixed in factors.generator.macro._load_macro:
+        # the source pickle's index is plain datetime.date, not Timestamp.
+        rate.index = pd.to_datetime(rate.index)
+        _funding_rate_cache[country] = rate
+    except Exception as e:
+        print(f"Warning: could not load funding rate for {country} ({macro_col}): {e}")
+        _funding_rate_cache[country] = None
+
+    return _funding_rate_cache[country]
+
+
+def _yield_carry(level: pd.Series, factor_code: str, net_of_funding: bool = True) -> pd.Series:
+    """Daily accrual (carry) for a Level-type yield factor, in return space.
+
+    ``net_of_funding=True`` (the RISK-metric convention — used for Sharpe /
+    vol / drawdown): for IRDL, nets the funding/repo cost of holding the
+    position —
+        carry_t = (yield_{t-1} - funding_rate_{t-1}) / 100 / 252
+    funding_rate is the country's overnight/short-term repo rate (FR007 for
+    CN, SOFR for US, etc. — see _IRDL_FUNDING_RATE_MACRO_COL), reflecting
+    that holding a government bond is a funded (leveraged, repo'd) position,
+    not a cash purchase. Gross yield/252 alone, with no funding deduction,
+    understates the day-to-day risk of the position and inflated Sharpe to
+    an implausible ~9 on IRDL.CN — the real per-day P&L risk is the spread
+    earned over the cost of financing it. Sparse single-day gaps in the
+    funding series (weekends / local holidays it isn't quoted on, ~80 out
+    of ~2750 overlapping days for FR007) are forward-filled. Falls back to
+    GROSS for the genuinely missing stretch before that country's funding
+    series starts at all (e.g. FR007 begins 2015-09-01, ~8 months after
+    IRDL.CN's earliest date) — never propagating NaN into the series.
+
+    ``net_of_funding=False`` (the RETURN convention — used for Total
+    Return / Ann. Return): plain gross carry, ``yield_{t-1}/100/252``, no
+    funding deduction. This is what the position actually EARNS from
+    holding the bond — the funding cost is a financing decision (how much
+    leverage/repo is used), not part of the asset's own return. Reporting
+    net-of-funding as "the return" would conflate "what the bond earned"
+    with "what a specific funding choice cost", which isn't the return
+    convention this book uses elsewhere.
+
+    For SPDL/CRDL (credit/swap spread levels), carry is gross level/252
+    regardless of ``net_of_funding`` — see module-level comment above on
+    why funding-rate netting isn't (yet) applied there.
+
+    Returns an all-zero series for non-Level factors (Slope/Curvature —
+    see _is_level_factor) so callers can add this unconditionally without
+    an extra branch, and get the pre-fix (price-only) behaviour by default
+    until Slope/Curvature carry is implemented.
+    """
+    if not _is_level_factor(factor_code):
+        return pd.Series(0.0, index=level.index)
+
+    gross_carry = level.shift(1) / 100.0 / 252.0
+    if not net_of_funding:
+        return gross_carry
+
+    prefix, _, suffix = factor_code.partition('.')
+    if prefix == 'IRDL':
+        funding_rate = _load_funding_rate(suffix)
+        if funding_rate is not None:
+            # ffill covers sparse single-day gaps; leaves genuinely-before-
+            # inception dates as NaN so the .where() below can identify them.
+            funding_aligned = funding_rate.reindex(level.index).ffill()
+            net_yield = level - funding_aligned
+            net_carry = net_yield.shift(1) / 100.0 / 252.0
+            return net_carry.where(funding_aligned.notna(), gross_carry)
+
+    return gross_carry
 
 
 def factor_level_to_price_return(
@@ -109,13 +257,17 @@ def factor_level_to_price_return(
     factor_code: str,
     output_in_percent: bool = False,
 ) -> pd.Series:
-    """Convert a factor level series into factor portfolio price returns.
+    """Convert a factor level series into factor portfolio returns.
 
-    Returns are emitted in decimal form by default for backtests, and in percent
-    form when ``output_in_percent=True`` for dashboards/optimizer reporting.
+    Despite the name (kept for backward compatibility with existing
+    callers), this now includes carry for Level-type yield factors — see
+    _yield_carry — not price return alone. Returns are emitted in decimal
+    form by default for backtests, and in percent form when
+    ``output_in_percent=True`` for dashboards/optimizer reporting.
     """
     if _is_yield_factor(factor_code):
         returns_pct = -get_factor_duration(factor_code) * series.diff()
+        returns_pct = returns_pct + _yield_carry(series, factor_code) * 100.0
     else:
         returns_pct = series.pct_change() * 100.0
     if output_in_percent:
@@ -320,7 +472,7 @@ def generate_factor_credit(
     """Generate and optionally save the credit spread factor level series.
 
     Produces a DataFrame indexed by date with columns ``CRDL.CDB``, ``CRSL.LGB``,
-    ``CRCV.MTN``, ``CRDL.ICP``/``CRSL.ICP`` (no curvature for ICP — see
+    ``CRCV.MTN``, ``CRDL.NCD``/``CRSL.NCD`` (no curvature for NCD — see
     ``CREDIT_NO_CURVATURE``), etc.
 
     Saves to ``<input_dir>/factor-credit.pkl``, kept separate from
@@ -398,12 +550,43 @@ def update_factor_credit(
 # Each accepts a Series of yield (or price) levels and returns a DataFrame
 # with at least: signal, returns, strategy_returns, cumulative_returns.
 
-def _yield_to_return(series: pd.Series, mod_dur: float) -> pd.Series:
-    """Convert yield level series to approximated bond return series.
+def _yield_to_return(
+    series: pd.Series,
+    mod_dur: float,
+    factor_code: Optional[str] = None,
+    net_of_funding: bool = True,
+) -> pd.Series:
+    """Convert yield level series to approximated bond TOTAL return series.
 
-    r_t ≈ -D_mod × Δy_t / 100  (Δy in percentage points → bond %return)
+    r_t ≈ -D_mod × Δy_t / 100 + carry_t
+
+    The price-return term (-D×Δy/100) was previously the whole formula —
+    it captures only mark-to-market from yield changes and omits the
+    coupon/carry accrual a bond actually earns while held. On IRDL.CN this
+    understated the full-history annualised return by ~2.8 percentage
+    points (0.17% price-only vs ~3.0% price+carry, against a ~2.8% average
+    yield level) — carry, not price movement, is most of a duration
+    factor's real return.
+    ``factor_code`` is optional and, when omitted or not a Level-type
+    factor (see _is_level_factor), the carry term is exactly zero — the
+    pre-fix behaviour, and the current state for Slope/Curvature factors
+    pending their own (leg-difference, not level-based) carry formula.
+
+    ``net_of_funding`` (default True — see _yield_carry): for IRDL, whether
+    carry is netted against the country's funding/repo rate. Callers
+    computing RISK metrics (Sharpe, vol, drawdown) should use the default
+    (net) — funding-blind gross carry is a near-deterministic daily
+    addition that understates real day-to-day P&L risk and inflated Sharpe
+    to an implausible ~9 on IRDL.CN. Callers computing the factor's own
+    RETURN (Total Return, Ann. Return — "what did holding this actually
+    earn") should pass ``net_of_funding=False``: funding is a financing
+    choice, not part of the bond's own return, and this book's return
+    convention elsewhere does not deduct financing cost from return figures.
     """
-    return -mod_dur * series.diff() / 100.0
+    price_return = -mod_dur * series.diff() / 100.0
+    if factor_code is None:
+        return price_return
+    return price_return + _yield_carry(series, factor_code, net_of_funding=net_of_funding)
 
 
 def _price_to_return(series: pd.Series) -> pd.Series:
@@ -417,6 +600,7 @@ def run_ma_yield_strategy(
     is_yield: bool,
     short_window: int = 10,
     long_window: int = 30,
+    factor_code: Optional[str] = None,
 ) -> pd.DataFrame:
     """MA crossover on the factor level series.
 
@@ -436,7 +620,7 @@ def run_ma_yield_strategy(
     df.iloc[:long_window, df.columns.get_loc('signal')] = 0
 
     if is_yield:
-        df['returns'] = _yield_to_return(levels, mod_dur)
+        df['returns'] = _yield_to_return(levels, mod_dur, factor_code)
     else:
         df['returns'] = _price_to_return(levels)
 
@@ -451,6 +635,7 @@ def run_bollinger_yield_strategy(
     is_yield: bool,
     window: int = 20,
     num_std: float = 1.5,
+    factor_code: Optional[str] = None,
 ) -> pd.DataFrame:
     """Bollinger band strategy on the factor level series.
 
@@ -494,7 +679,7 @@ def run_bollinger_yield_strategy(
     df['signal'] = signals
 
     if is_yield:
-        df['returns'] = _yield_to_return(levels, mod_dur)
+        df['returns'] = _yield_to_return(levels, mod_dur, factor_code)
     else:
         df['returns'] = _price_to_return(levels)
 
@@ -508,6 +693,7 @@ def run_momentum_yield_strategy(
     mod_dur: float,
     is_yield: bool,
     window: int = 20,
+    factor_code: Optional[str] = None,
 ) -> pd.DataFrame:
     """Momentum (rate-of-change) strategy.
 
@@ -524,7 +710,7 @@ def run_momentum_yield_strategy(
     df.iloc[:window, df.columns.get_loc('signal')] = 0
 
     if is_yield:
-        df['returns'] = _yield_to_return(levels, mod_dur)
+        df['returns'] = _yield_to_return(levels, mod_dur, factor_code)
     else:
         df['returns'] = _price_to_return(levels)
 
@@ -540,6 +726,7 @@ def run_zscore_yield_strategy(
     window: int = 60,
     entry_z: float = 1.5,
     exit_z: float = 0.5,
+    factor_code: Optional[str] = None,
 ) -> pd.DataFrame:
     """Z-score mean-reversion strategy.
 
@@ -578,7 +765,7 @@ def run_zscore_yield_strategy(
     df['signal'] = signals
 
     if is_yield:
-        df['returns'] = _yield_to_return(levels, mod_dur)
+        df['returns'] = _yield_to_return(levels, mod_dur, factor_code)
     else:
         df['returns'] = _price_to_return(levels)
 
@@ -710,6 +897,7 @@ def run_factor_backtest(
             levels=series,
             mod_dur=mod_dur,
             is_yield=is_yield,
+            factor_code=factor,
             **defaults,
         )
         results[factor] = result_df

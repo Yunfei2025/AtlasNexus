@@ -51,12 +51,18 @@ def register_backtest_rfbt_callbacks(app):
             {'label': 'IRDL.JP — Japan Level',        'value': 'IRDL.JP'},
             {'label': 'IRDL.UK — UK Level',           'value': 'IRDL.UK'},
         ],
-        'Spread': [
-            {'label': 'SPDL.IRS — IRS Level',        'value': 'SPDL.IRS'},
-            {'label': 'SPSL.IRS — IRS Slope',         'value': 'SPSL.IRS'},
-            {'label': 'SPDL.CDB — CDB Level',         'value': 'SPDL.CDB'},
-            {'label': 'SPSL.CDB — CDB Slope',         'value': 'SPSL.CDB'},
-            {'label': 'SPDL.ICP — ICP Level',         'value': 'SPDL.ICP'},
+        'Credit': [
+            {'label': 'CRDL.CDB — CDB Level',         'value': 'CRDL.CDB'},
+            {'label': 'CRSL.CDB — CDB Slope',         'value': 'CRSL.CDB'},
+            {'label': 'CRCV.CDB — CDB Curvature',     'value': 'CRCV.CDB'},
+            {'label': 'CRDL.LGB — LGB Level',         'value': 'CRDL.LGB'},
+            {'label': 'CRSL.LGB — LGB Slope',         'value': 'CRSL.LGB'},
+            {'label': 'CRCV.LGB — LGB Curvature',     'value': 'CRCV.LGB'},
+            {'label': 'CRDL.MTN — MTN Level',         'value': 'CRDL.MTN'},
+            {'label': 'CRSL.MTN — MTN Slope',         'value': 'CRSL.MTN'},
+            {'label': 'CRCV.MTN — MTN Curvature',     'value': 'CRCV.MTN'},
+            {'label': 'CRDL.NCD — NCD Level',         'value': 'CRDL.NCD'},
+            {'label': 'CRSL.NCD — NCD Slope',         'value': 'CRSL.NCD'},
         ],
         'FX': [
             {'label': 'FXDL.USDCNY',                 'value': 'FXDL.USDCNY'},
@@ -123,7 +129,7 @@ def register_backtest_rfbt_callbacks(app):
         defaults = FactorModelConfig()
         ov = factor_sizing_override(factor_val) if factor_val else {}
         return (
-            ov.get('sizing_mode', 'discrete'),
+            ov.get('sizing_mode', defaults.sizing_mode),
             ov.get('tilt_base', defaults.tilt_base),
             ov.get('tilt_amp', defaults.tilt_amp),
         )
@@ -186,17 +192,17 @@ def register_backtest_rfbt_callbacks(app):
                 _is_yield_factor, get_factor_weighted_duration,
             )
             from multiasset.factor_model import FactorModelConfig
+            _cfg_defaults = FactorModelConfig()
 
             strategy = 'FactorModel'
             kwargs = {'train_months': int(fm_train or 12),
                       'ic_threshold': float(fm_ic or 0.05),
                       'top_n': int(fm_topn or 8),
-                      'sizing_mode': fm_sizing or 'discrete',
+                      'sizing_mode': fm_sizing or _cfg_defaults.sizing_mode,
                       'position_smooth_window': int(fm_possmooth or 10)}
-            if (fm_sizing or 'discrete') == 'tilt':
+            if (fm_sizing or _cfg_defaults.sizing_mode) == 'tilt':
                 # tilt_base is a policy input; 0.0 is a legitimate tilt_amp
                 # (pure baseline, no model lean), so don't use `or` here.
-                _cfg_defaults = FactorModelConfig()
                 kwargs['tilt_base'] = (float(fm_tiltbase)
                                        if fm_tiltbase is not None
                                        else _cfg_defaults.tilt_base)
@@ -318,6 +324,21 @@ def register_backtest_rfbt_callbacks(app):
                     )
                 else:
                     m_gross = m
+                # Ann Ret is reported GROSS OF FUNDING COST — what the factor
+                # itself earned. Funding is a financing choice, not part of
+                # the asset's own return, so it isn't deducted from the
+                # return figure (unlike Sharpe/vol/DD below, which stay net
+                # of funding — see _yield_carry / strategy_returns_gross_of_funding
+                # docstrings for why the two use different conventions).
+                # Falls back to the net series for factors with no separate
+                # gross-of-funding column (non-IRDL — identical anyway).
+                ann_ret_col = ('strategy_returns_gross_of_funding'
+                              if 'strategy_returns_gross_of_funding' in df.columns
+                              else 'strategy_returns')
+                m_ann_ret = compute_metrics(
+                    df.assign(strategy_returns=df[ann_ret_col]),
+                    risk_free_rate=0.0, geometric_annualisation=True,
+                )
                 avg_turnover = float(df['turnover'].abs().mean()) if 'turnover' in df.columns else 0.0
                 # Max daily position move in B/day (position ±1 = ±10B → ×10). Feasibility check.
                 if 'position' in df.columns:
@@ -331,7 +352,7 @@ def register_backtest_rfbt_callbacks(app):
                 metric_rows.append({
                     'Factor':    factor,
                     'Duration':  dur_str,
-                    'Ann Ret':   f"{m.get('Ann. Return', 0):.2%}",
+                    'Ann Ret':   f"{m_ann_ret.get('Ann. Return', 0):.2%}",
                     'Ann Vol':   f"{m.get('Ann. Vol', 0):.2%}",
                     'Sharpe':    f"{m.get('Sharpe', 0):.2f}",
                     'Sharpe(gr)':f"{m_gross.get('Sharpe', 0):.2f}",
@@ -669,11 +690,12 @@ def register_backtest_rfbt_callbacks(app):
 
         end_date = _date.today().replace(day=1).isoformat()
 
+        from multiasset.factor_model import FactorModelConfig as _FMCfgDefaults
         current_cfg = {
             'train_months': int(fm_train or 12),
             'ic_threshold': float(fm_ic or 0.05),
             'top_n': int(fm_topn or 8),
-            'sizing_mode': 'discrete',
+            'sizing_mode': _FMCfgDefaults().sizing_mode,
             'position_smooth_window': 10,
         }
 

@@ -124,65 +124,6 @@ class DeterministicRiskFactorAnalyzer:
             print(f"Warning: Could not load curve data for {country}: {e}")
             return None
     
-    def _load_spread_data(self, spread_type: str) -> Optional[pd.DataFrame]:
-        """
-        Load spread curve DataFrame for a given spread type.
-        
-        Returns None if data is unavailable or insufficient.
-        """
-        try:
-            if spread_type not in SPREAD_CONFIG:
-                # Handle ICP separately (from database-px.pkl)
-                if spread_type == 'ICP':
-                    for file_name, key in (('database-px.pkl', 'ICP'), ('IRS-cvpx.pkl', 'ytm_act')):
-                        file_path = os.path.join(self.input_dir, file_name)
-                        if not os.path.exists(file_path):
-                            continue
-                        try:
-                            data = pd.read_pickle(file_path)
-                            if file_name == 'database-px.pkl' and 'ICP' in data:
-                                icp_col = '中债商业银行同业存单到期收益率(AAA):1年'
-                                if icp_col in data['ICP'].columns:
-                                    return data['ICP'][[icp_col]]
-                            if file_name == 'IRS-cvpx.pkl' and isinstance(data, dict) and key in data:
-                                frame = data[key]
-                                icp_col = 'FR007S1Y.IR'
-                                if icp_col in frame.columns:
-                                    return frame[[icp_col]]
-                        except Exception as exc:
-                            print(f"Warning: could not load spread fallback {file_path}: {exc}")
-                return None
-            
-            pkl_file, pkl_key, cols = SPREAD_CONFIG[spread_type]
-            file_path = os.path.join(self.input_dir, pkl_file)
-            try:
-                data = pd.read_pickle(file_path)
-                data = data[pkl_key]
-            except Exception as exc:
-                print(f"Warning: Could not load spread data for {spread_type} from {file_path}: {exc}")
-                if spread_type == 'IRS':
-                    fallback_path = os.path.join(self.input_dir, 'IRS-cvpx.pkl')
-                    if os.path.exists(fallback_path):
-                        try:
-                            fallback = pd.read_pickle(fallback_path)
-                            data = fallback.get('ytm_act') if isinstance(fallback, dict) else None
-                        except Exception as fallback_exc:
-                            print(f"Warning: Could not load IRS fallback {fallback_path}: {fallback_exc}")
-                            return None
-                    else:
-                        return None
-                else:
-                    return None
-            
-            available = [c for c in cols if c in data.columns]
-            if len(available) < 1:
-                return None
-            
-            return data[available]
-        except Exception as e:
-            print(f"Warning: Could not load spread data for {spread_type}: {e}")
-            return None
-    
     def calculate_full_history_deterministic_scores(
         self, 
         countries: Optional[List[str]] = None
@@ -242,64 +183,10 @@ class DeterministicRiskFactorAnalyzer:
         self._full_history_scores_cache = all_scores
         return all_scores
     
-    def calculate_full_history_deterministic_spread_scores(
-        self,
-        spread_types: Optional[List[str]] = None
-    ) -> pd.DataFrame:
-        """
-        Calculate deterministic spread factor scores over full available history.
-        
-        Args:
-            spread_types: List of spread types to analyze. If None, uses all in DETERMINISTIC_SPREAD_WEIGHTS.
-            
-        Returns:
-            DataFrame with columns like 'Level.CDB', 'Slope.CDB', 'Level.IRS', etc.
-        """
-        if spread_types is None:
-            spread_types = list(DETERMINISTIC_SPREAD_WEIGHTS.keys())
-        
-        all_scores = pd.DataFrame()
-        
-        for spread_type in spread_types:
-            spread_data = self._load_spread_data(spread_type)
-            if spread_data is None or spread_data.empty:
-                print(f"Skipping {spread_type}: no spread data")
-                continue
-            
-            # Get weights for this spread type
-            if spread_type not in DETERMINISTIC_SPREAD_WEIGHTS:
-                print(f"Skipping {spread_type}: no weights defined")
-                continue
-            
-            spread_weights = DETERMINISTIC_SPREAD_WEIGHTS[spread_type]
-            
-            # Apply deterministic weights directly to spread levels.
-            # SPDL.CDB = equal-weighted avg CDB spread level in %
-            # SPSL.CDB = slope of CDB spread curve
-            # Preserves current absolute level rather than an arbitrary cumsum.
-            for factor_name, weights in spread_weights.items():
-                n_tenors = min(len(weights), len(spread_data.columns))
-                if n_tenors < len(weights):
-                    print(f"Warning: {spread_type} has only {n_tenors} tenors, expected {len(weights)}")
-                    w = weights[:n_tenors]
-                    tenor_levels = spread_data.iloc[:, :n_tenors]
-                else:
-                    w = weights
-                    tenor_levels = spread_data.iloc[:, :len(weights)]
-                
-                # Factor level = weighted combination of current spread levels
-                factor_level = (tenor_levels * w).sum(axis=1)
-                
-                # Store with naming convention: Factor.SpreadType
-                col_name = f"{factor_name}.{spread_type}"
-                all_scores[col_name] = factor_level
-
-        return all_scores
-
     def _load_credit_spread_data(self, universe: str) -> Optional[pd.DataFrame]:
         """
         Load the credit spread curve (own yield - CGB yield, by matching tenor)
-        for a credit universe (CDB, LGB, MTN, ICP).
+        for a credit universe (CDB, LGB, MTN, NCD).
 
         Returns None if either leg's data is unavailable.
         """
@@ -331,10 +218,10 @@ class DeterministicRiskFactorAnalyzer:
     ) -> pd.DataFrame:
         """
         Calculate deterministic credit spread factor scores (Level/Slope/Curvature)
-        over full available history, for each credit universe (CDB, LGB, MTN, ICP).
+        over full available history, for each credit universe (CDB, LGB, MTN, NCD).
 
         Each universe's spread curve (own yield - CGB yield at matching tenor) uses
-        its own log-tenor-space weights, since CDB/LGB/MTN/ICP have different and
+        its own log-tenor-space weights, since CDB/LGB/MTN/NCD have different and
         unevenly-spaced tenor grids (see config.get_credit_weights).
 
         Returns:
@@ -369,11 +256,11 @@ class DeterministicRiskFactorAnalyzer:
         Get deterministic sensitivities for a specific credit-universe tenor.
 
         Mirrors get_tenor_sensitivities, but for credit spread universes
-        (CDB/LGB/MTN/ICP) whose tenor grids and weights differ per universe
+        (CDB/LGB/MTN/NCD) whose tenor grids and weights differ per universe
         (see CREDIT_CONFIG / get_credit_weights), unlike IR's fixed 5-tenor grid.
 
         Args:
-            universe: Credit universe code (e.g. 'CDB', 'LGB', 'MTN', 'ICP')
+            universe: Credit universe code (e.g. 'CDB', 'LGB', 'MTN', 'NCD')
             tenor: Tenor string (e.g. '1Y', '10Y', '3M')
 
         Returns:
@@ -495,7 +382,6 @@ class PCARiskFactorAnalyzer:
         self._pca_factors_cache: Optional[pd.DataFrame] = None
         self._last_rebalance_date: Optional[pd.Timestamp] = None
         self._full_history_scores_cache: Optional[pd.DataFrame] = None
-        self._full_history_spread_scores_cache: Optional[pd.DataFrame] = None
     
     # -------------------------------------------------------------------------
     # Data loading helper
@@ -524,29 +410,6 @@ class PCARiskFactorAnalyzer:
                 return curves_ts.get(country)
         except Exception as e:
             print(f"Warning: Could not load curve data for {country}: {e}")
-            return None
-    
-    def _load_spread_data(self, spread_type: str) -> Optional[pd.DataFrame]:
-        """
-        Load spread curve DataFrame for a given spread type.
-        
-        Returns None if data is unavailable or insufficient.
-        """
-        try:
-            if spread_type not in SPREAD_CONFIG:
-                return None
-            
-            pkl_file, pkl_key, cols = SPREAD_CONFIG[spread_type]
-            data = pd.read_pickle(os.path.join(self.input_dir, pkl_file))
-            data = data[pkl_key]
-            
-            available = [c for c in cols if c in data.columns]
-            if len(available) < 2:  # Need at least 2 points for spread PCA
-                return None
-            
-            return data[available]
-        except Exception as e:
-            print(f"Warning: Could not load spread data for {spread_type}: {e}")
             return None
     
     # -------------------------------------------------------------------------
@@ -833,104 +696,6 @@ class PCARiskFactorAnalyzer:
         if not hasattr(self, '_yield_change_std'):
             self._yield_change_std = {}
         self._yield_change_std[country] = std
-        
-        return result
-    
-    def calculate_full_history_spread_pca_scores(self, n_components: int = 2) -> pd.DataFrame:
-        """
-        Calculate PCA scores over the full history for spread curves.
-        
-        Similar to calculate_full_history_pca_scores but for spread types (IRS, CDB).
-        
-        Args:
-            n_components: Number of principal components (default: 2 for spreads)
-            
-        Returns:
-            DataFrame with columns like PC1.IRS, PC2.IRS, PC1.CDB, PC2.CDB
-        """
-        # Return cached result if available
-        if self._full_history_spread_scores_cache is not None:
-            return self._full_history_spread_scores_cache
-        
-        all_scores = pd.DataFrame()
-        
-        for spread_type in SPREAD_CONFIG.keys():
-            spread_df = self._load_spread_data(spread_type)
-            if spread_df is None:
-                continue
-            
-            scores = self._calculate_spread_full_history_scores(
-                spread_type, spread_df, n_components
-            )
-            if scores is not None:
-                all_scores = pd.concat([all_scores, scores], axis=1)
-        
-        # Cache the result
-        self._full_history_spread_scores_cache = all_scores
-        return all_scores
-    
-    def _calculate_spread_full_history_scores(
-        self,
-        spread_type: str,
-        spread_df: pd.DataFrame,
-        n_components: int,
-    ) -> Optional[pd.DataFrame]:
-        """
-        Calculate full-history PCA scores for a single spread type.
-        """
-        if not isinstance(spread_df.index, pd.DatetimeIndex):
-            spread_df.index = pd.to_datetime(spread_df.index)
-        
-        # Use all available data
-        spread_df = spread_df.dropna()
-        
-        if len(spread_df) < 30:
-            return None
-        
-        # Calculate spread changes
-        spread_changes = spread_df.diff().dropna()
-        
-        if len(spread_changes) < 20:
-            return None
-        
-        # Standardize
-        mean = spread_changes.mean()
-        std = spread_changes.std().replace(0, 1)
-        spread_changes_std = (spread_changes - mean) / std
-        spread_changes_std = spread_changes_std.dropna(axis=1)
-        
-        # Fit PCA on full history
-        pca = PCA(n_components=min(n_components, spread_changes_std.shape[1]))
-        pca.fit(spread_changes_std)
-        
-        # Project all data to get PC scores (daily changes in PC space)
-        pc_changes = pca.transform(spread_changes_std)
-        
-        # Cumulative sum to get PC level time series
-        pc_cumsum = np.cumsum(pc_changes, axis=0)
-        
-        # Create DataFrame with PC scores
-        pc_names = ['PC1', 'PC2'][:pca.n_components_]
-        result = pd.DataFrame(
-            pc_cumsum,
-            index=spread_changes_std.index,
-            columns=[f'{pc}.{spread_type}' for pc in pc_names]
-        )
-        
-        # Store the loadings and std for sensitivity calculation
-        loadings = pd.DataFrame(
-            pca.components_.T,
-            index=spread_changes_std.columns,
-            columns=pc_names
-        )
-        # Use a separate dict for spread loadings
-        if not hasattr(self, '_spread_loadings'):
-            self._spread_loadings = {}
-        if not hasattr(self, '_spread_change_std'):
-            self._spread_change_std = {}
-        
-        self._spread_loadings[spread_type] = loadings
-        self._spread_change_std[spread_type] = std
         
         return result
     

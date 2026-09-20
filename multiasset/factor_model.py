@@ -83,11 +83,22 @@ class FactorModelConfig:
     # Target horizon
     target_horizon: int = 1                  # predict N-day forward return
     # ── Position sizing ──────────────────────────────────────────────────────
-    # 'discrete' mode: z-score → 5 discrete levels via ICIR-scaled z.
-    # ICIR acts as a confidence multiplier on the z-score (not a gate) so
-    # the warm-up transition is smooth rather than abrupt.
-    # No SMA smoothing and no turnover filter → fully path-independent.
-    sizing_mode: str = 'discrete'            # 'binary' (legacy) | 'continuous' | 'discrete' | 'tilt'
+    # 'continuous' is the default: this is a risk-FACTOR allocation weight, not
+    # an executable bond ticket, so there is no lot-size/trade-feasibility
+    # reason to quantise it. 'discrete' mode's 5-tick quantisation clustered
+    # the position at 0/0.3 (~87% of days) and made ordinary conviction
+    # changes look like sharp jumps to max size. Validated out-of-window
+    # (start-date sweep, 2015-2025, ann. exposure matched to discrete's ~0.23
+    # so the comparison isn't confounded by leverage): continuous wins 14/22
+    # windows, median Sharpe 0.87 vs discrete's 0.73. It is not strictly
+    # dominant — discrete's hard deadzone can commit to true zero, which wins
+    # in the rare month continuous carries real size on what turns out to be
+    # a wrong, weak signal (e.g. Nov-2025) — but continuous is the better
+    # choice on the whole. See build_position_series docstring for the fixes
+    # (market-anchored conviction scale, smoothed ICIR gate, no turnover-snap)
+    # and use_drawdown_governor for the complementary defense against an
+    # abrupt, wrong prediction jump (e.g. the Nov-2022 CN policy pivot).
+    sizing_mode: str = 'continuous'          # 'binary' (legacy) | 'continuous' (default) | 'discrete' | 'tilt'
     target_vol: float = 0.10                 # unused since the continuous-mode rewrite (see continuous_conviction_cap); kept for back-compat
     vol_scale_window: int = 60               # realised daily-vol lookback (continuous mode: conviction = pred / this vol)
     icir_window: int = 60                    # rolling OOS-IC window for ICIR confidence
@@ -103,10 +114,21 @@ class FactorModelConfig:
     # "how many typical daily market moves is this prediction", a market-
     # anchored unit that (unlike a self-relative z-score) doesn't drift with
     # how noisy the model's own output has recently been.
-    continuous_conviction_cap: float = 3.0        # cap on conviction before the ICIR/leverage scaling
-    icir_saturation_continuous: float = 0.6       # wider than icir_saturation: keeps confidence in its mid-range on ordinary days instead of pinning to ~0/~1
+    #
+    # icir_saturation_continuous / floor_weight below were calibrated (not
+    # guessed) to match discrete's long-run average |position| (~0.23-0.25 on
+    # IRDL.CN) before the two modes were compared — otherwise a Sharpe
+    # difference could just reflect one mode running more average risk than
+    # the other, not the actual shape of the position path. floor_weight=0.0
+    # was deliberately chosen over a positive floor: a floor kept average
+    # exposure elevated (0.30-0.36 at floor_weight 0.05-0.15) without a
+    # matching Sharpe benefit in this validation, so there is currently no
+    # evidence it earns its cost — revisit if a different factor's exposure
+    # profile calls for one.
+    continuous_conviction_cap: float = 1.5        # cap on conviction before the ICIR/leverage scaling
+    icir_saturation_continuous: float = 3.0       # wider than icir_saturation: keeps confidence in its mid-range on ordinary days instead of pinning to ~0/~1
     icir_confidence_floor: float = -0.15          # ICIR below this is treated as this value — a small negative floor instead of clip(lower=0), so an ordinary noisy/negative ICIR doesn't snap confidence straight to its minimum
-    icir_confidence_floor_weight: float = 0.15    # minimum confidence retained even when ICIR is at its worst (position never goes fully to zero purely from ICIR noise)
+    icir_confidence_floor_weight: float = 0.0     # minimum confidence retained even when ICIR is at its worst; see calibration note above
     # ── Turnover & costs (doc §3.3 / §5.1) ──────────────────────────────────
     # NOTE: turnover_threshold is retained for the 'binary'/legacy path's
     # turnover accounting only. 'continuous' mode no longer holds-then-snaps
@@ -159,8 +181,18 @@ class FactorModelConfig:
     # size on a live losing streak, independent of what the model currently
     # predicts. It is a risk overlay, not a signal — it cannot improve return
     # in a market that keeps moving in the model's favour, only cap the
-    # damage when a directional call is actively wrong.
-    use_drawdown_governor: bool = False           # off by default; opt-in per factor
+    # damage when a directional call is actively wrong. Complementary to
+    # 'continuous' sizing, not a substitute: continuous smooths the position
+    # *path* (fixes a slow, self-relative drift being mistaken for
+    # conviction), while the governor catches a *fast, wrong* prediction
+    # jump that no amount of path-smoothing addresses, since the raw
+    # prediction itself moved abruptly. Validated together (start-date
+    # sweep): 14/22 windows beat discrete, median Sharpe 0.87 vs 0.73.
+    # Default on for this reason; costs were visible but modest in
+    # validation (e.g. 2024 gave up ~0.08% vs the ungoverned run — the
+    # unavoidable price of a rule that can't distinguish "wrong" from
+    # "temporarily choppy but right" in advance).
+    use_drawdown_governor: bool = True
     dd_governor_window: int = 10                  # trailing days of REALIZED strategy P&L examined
     dd_governor_loss_bp: float = 8.0              # trigger: trailing window P&L worse than -loss_bp (in return-space bp, i.e. 8.0 = -0.08%)
     dd_governor_scale: float = 0.4                # position multiplier once triggered (0.4 = cut to 40%)
@@ -1215,14 +1247,21 @@ def factor_sizing_override(factor_code: str) -> Dict:
 def _compute_target_returns(
     factor_code: str,
     factor_levels: pd.DataFrame,
+    net_of_funding: bool = True,
 ) -> pd.Series:
-    """Compute daily returns for a factor (duration-adjusted for yields)."""
+    """Compute daily returns for a factor (duration-adjusted for yields).
+
+    ``net_of_funding`` (default True): for IRDL, whether carry is netted
+    against the funding/repo rate — see _yield_to_return / _yield_carry.
+    Risk metrics (Sharpe, vol) use the net (default) series; return figures
+    (Total/Ann. Return) should request ``net_of_funding=False``.
+    """
     level = factor_levels[factor_code].dropna()
     is_yield = _is_yield_factor(factor_code)
     mod_dur = get_factor_duration(factor_code)
 
     if is_yield:
-        return _yield_to_return(level, mod_dur)
+        return _yield_to_return(level, mod_dur, factor_code, net_of_funding=net_of_funding)
     else:
         return _price_to_return(level)
 
@@ -1512,8 +1551,18 @@ def run_factor_model_backtest(
     result['n_features'] = pred_full['n_features']
     result['effective_horizon'] = pred_full['effective_horizon']
 
-    # Actual daily returns (for PnL, always use 1-day returns)
+    # Actual daily returns (for PnL, always use 1-day returns).
+    # 'returns' is NET of funding cost (the risk-metric convention: Sharpe/
+    # vol/drawdown should reflect the real day-to-day P&L risk of a funded
+    # position). 'returns_gross_of_funding' is what the factor itself
+    # actually earned (Total/Ann. Return convention — funding is a
+    # financing choice, not part of the asset's own return). See
+    # _yield_to_return / _yield_carry docstrings. Identical for non-IRDL
+    # factors, where there is no funding-rate netting to begin with.
     result['returns'] = daily_returns.reindex(result.index)
+    result['returns_gross_of_funding'] = _compute_target_returns(
+        factor_code, factor_levels, net_of_funding=False,
+    ).reindex(result.index)
 
     # Long-only flag comes from factor metadata, not string inspection.
     _long_only = _is_long_only(factor_code)
@@ -1550,12 +1599,24 @@ def run_factor_model_backtest(
     result['position'] = pos['position']
     result['turnover'] = pos['turnover']
 
-    # Gross PnL, then net of transaction costs (doc §5.1, DV01-aware)
-    # Use continuous position for returns calculation before bucketing
+    # Gross PnL, then net of transaction costs (doc §5.1, DV01-aware).
+    # NOTE: "gross" here means gross of TRANSACTION COST, using the
+    # (already funding-net) 'returns' column for risk purposes — a separate
+    # axis from 'returns_gross_of_funding' above (gross of FUNDING cost,
+    # used only for the Ann./Total Return display convention). Don't
+    # conflate the two: strategy_returns_gross_of_funding is what the
+    # STRATEGY (position x factor) actually earned before its financing
+    # cost, still net of transaction cost.
     result['strategy_returns_gross'] = pos['position'].shift(1) * result['returns']
+    result['strategy_returns_gross_of_funding'] = (
+        pos['position'].shift(1) * result['returns_gross_of_funding']
+    )
     cost_per_unit = factor_tx_cost_per_unit(factor_code, cfg)
     tx_cost = result['turnover'].abs() * cost_per_unit
     result['strategy_returns'] = result['strategy_returns_gross'] - tx_cost
+    result['strategy_returns_gross_of_funding'] = (
+        result['strategy_returns_gross_of_funding'] - tx_cost
+    )
     result['cumulative_returns'] = (1 + result['strategy_returns'].fillna(0)).cumprod()
 
     return result

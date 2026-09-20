@@ -225,7 +225,12 @@ CREDIT_CONFIG: Dict[str, Tuple[str, str, List[Tuple[str, str, float]]]] = {
             ('中债中短期票据到期收益率(AAA):5年', '中债国债到期收益率:5年', 5.0),
         ],
     ),
-    'ICP': (
+    # 'NCD': factor-code universe name for CD (Negotiable Certificate of
+    # Deposit / interbank NCD) yields. Renamed from the legacy 'ICP' code —
+    # the pickle sub-key below stays 'ICP' (that's database-px.pkl's own
+    # internal key, not renamed as part of this — see multiasset.config
+    # module scope note).
+    'NCD': (
         'database-px.pkl',
         'ICP',
         [
@@ -238,7 +243,7 @@ CREDIT_CONFIG: Dict[str, Tuple[str, str, List[Tuple[str, str, float]]]] = {
 }
 
 # Universes that get Level + Slope only (too few tenors for a butterfly curvature read).
-CREDIT_NO_CURVATURE = {'ICP'}
+CREDIT_NO_CURVATURE = {'NCD'}
 
 
 def get_credit_weights(tenor_years: List[float], include_curvature: bool = True) -> Dict[str, np.ndarray]:

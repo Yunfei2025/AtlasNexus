@@ -111,7 +111,7 @@ def _render_signal_cards(factor_stats: Dict, artifact=None) -> html.Div:
     (matches the guide's BetaCandidates.jsx interaction) without needing a
     server round-trip or clientside callback.
     """
-    _IR_PREFIXES = ('IRDL', 'IRSL', 'IRCV', 'SPDL', 'SPSL', 'SPCV')
+    _IR_PREFIXES = ('IRDL', 'IRSL', 'IRCV', 'CRDL', 'CRSL', 'CRCV')
     _POS = '#34d399'
     _NEG = '#f87171'
     _NEUTRAL = 'var(--text-muted)'
@@ -122,8 +122,8 @@ def _render_signal_cards(factor_stats: Dict, artifact=None) -> html.Div:
         arrow_prefix = '↑↑' if ls >= 0.8 else ('↓↓' if ls <= -0.8 else '')
         prefix = factor.split('.')[0]
         is_yield = prefix in _IR_PREFIXES
-        is_slope = prefix == 'IRSL'
-        is_curv = prefix == 'IRCV'
+        is_slope = prefix in ('IRSL', 'CRSL')
+        is_curv = prefix in ('IRCV', 'CRCV')
         if ls > 0:
             if is_slope:
                 arrow, dir_label = '↑', 'Steepener'
@@ -239,7 +239,7 @@ def _build_results_from_saved_artifact(
     smooth_days: int,
     factors: List[str],
     factor_subset: Optional[List[str]] = None,
-    sizing_mode: str = 'discrete',
+    sizing_mode: Optional[str] = None,
     position_smooth_window: int = 10,
 ) -> Dict:
     """Build results DataFrames from a saved *artifact*.
@@ -270,7 +270,7 @@ def _build_results_from_saved_artifact(
 
     base_size_cfg = FactorModelConfig(
         signal_smooth_days=smooth_days,
-        sizing_mode=sizing_mode,
+        sizing_mode=sizing_mode if sizing_mode is not None else FactorModelConfig().sizing_mode,
         position_smooth_window=position_smooth_window,
     )
 
@@ -306,15 +306,22 @@ def _build_results_from_saved_artifact(
             result = pd.DataFrame(index=preds.index)
             result['predicted_return'] = preds
             result['n_features'] = len(fa.get('selected_factors', []) or trained_model.get('feature_names', []))
+            # 'returns' is net of funding cost (risk-metric convention);
+            # 'returns_gross_of_funding' is what the factor itself earned
+            # (Ann./Total Return convention) — see run_factor_model_backtest
+            # and _yield_carry docstrings. Identical for non-IRDL factors.
             result['returns'] = daily_returns.reindex(result.index)
+            result['returns_gross_of_funding'] = _compute_target_returns(
+                factor, factor_levels, net_of_funding=False,
+            ).reindex(result.index)
 
-            # Apply this factor's sizing override (e.g. IRDL.CN → tilt) unless
-            # the caller explicitly asked for a non-default mode. Without this
-            # the saved-artifact path would size IRDL.CN as 'discrete' while
-            # the backtest path uses 'tilt', so the live signal would not match
-            # the backtest it was validated against.
+            # Apply this factor's sizing override (e.g. a factor pinned to
+            # 'tilt') unless the caller explicitly asked for a specific mode.
+            # Without this the saved-artifact path could size a factor
+            # differently than the backtest path, so the live signal would
+            # not match the backtest it was validated against.
             size_cfg = base_size_cfg
-            if sizing_mode == 'discrete':
+            if sizing_mode is None:
                 _ov = factor_sizing_override(factor)
                 if _ov:
                     size_cfg = _dc.replace(base_size_cfg, **_ov)
@@ -329,8 +336,14 @@ def _build_results_from_saved_artifact(
             result['turnover'] = pos['turnover']
 
             result['strategy_returns_gross'] = result['position'].shift(1) * result['returns']
+            result['strategy_returns_gross_of_funding'] = (
+                result['position'].shift(1) * result['returns_gross_of_funding']
+            )
             tx_cost = result['turnover'].abs() * factor_tx_cost_per_unit(factor, size_cfg)
             result['strategy_returns'] = result['strategy_returns_gross'] - tx_cost
+            result['strategy_returns_gross_of_funding'] = (
+                result['strategy_returns_gross_of_funding'] - tx_cost
+            )
             result['cumulative_returns'] = (1 + result['strategy_returns'].fillna(0)).cumprod()
             results[factor] = result
         except Exception as e:
