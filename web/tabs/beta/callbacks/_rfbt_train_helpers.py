@@ -264,7 +264,7 @@ def _build_results_from_saved_artifact(
     from multiasset.factor_backtest import load_factor_rates
     from multiasset.factor_model import (
         build_features, _compute_target_returns, _predict_ic_model,
-        build_position_series, factor_tx_cost_per_unit, FactorModelConfig,
+        build_position_series, FactorModelConfig,
         factor_sizing_override,
     )
 
@@ -335,15 +335,15 @@ def _build_results_from_saved_artifact(
             result['position'] = pos['position']
             result['turnover'] = pos['turnover']
 
+            # No transaction-cost deduction — see run_factor_model_backtest /
+            # factor_tx_cost_per_unit: the only cost modelled is funding,
+            # already netted into 'returns' for IRDL via FR007. 'strategy_returns'
+            # and 'strategy_returns_gross' are identical for the same reason.
             result['strategy_returns_gross'] = result['position'].shift(1) * result['returns']
             result['strategy_returns_gross_of_funding'] = (
                 result['position'].shift(1) * result['returns_gross_of_funding']
             )
-            tx_cost = result['turnover'].abs() * factor_tx_cost_per_unit(factor, size_cfg)
-            result['strategy_returns'] = result['strategy_returns_gross'] - tx_cost
-            result['strategy_returns_gross_of_funding'] = (
-                result['strategy_returns_gross_of_funding'] - tx_cost
-            )
+            result['strategy_returns'] = result['strategy_returns_gross']
             result['cumulative_returns'] = (1 + result['strategy_returns'].fillna(0)).cumprod()
             results[factor] = result
         except Exception as e:

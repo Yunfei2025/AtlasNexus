@@ -399,7 +399,7 @@ def register_portfolio_callbacks(app) -> None:
                     stored_regime = str(entry.get('regime', '') or '').strip().lower()
                     if stored_regime in {'mean-reverting', 'meanreversion', 'mean_reverting', 'mr'}:
                         stored_regime = 'mean-reverting'
-                    elif stored_regime in {'trend', 'trendfollowing', 'trend_following', 'carry', 'mixed', 'momentum'}:
+                    elif stored_regime in {'trend', 'trendfollowing', 'trend_following', 'carry', 'mixed', 'momentum', 'eventdriven'}:
                         stored_regime = 'momentum'
 
                     # Normalize direction
@@ -836,7 +836,7 @@ def register_portfolio_callbacks(app) -> None:
                     style_value = str(value).strip().lower()
                     if style_value in {'meanreversion', 'mean_reverting'}:
                         return 'mean-reverting'
-                    if style_value in {'trend', 'trendfollowing', 'carry', 'mixed'}:
+                    if style_value in {'trend', 'trendfollowing', 'carry', 'mixed', 'eventdriven'}:
                         return 'momentum'
                     return value
 

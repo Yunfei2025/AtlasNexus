@@ -304,7 +304,7 @@ def build_candidates_layout() -> html.Div:
                 # Left: Candidates signals
                 html.Div([
                     html.Div([
-                        html.Span("Momentum/Carry score filter:", style={
+                        html.Span("Momentum score filter:", style={
                             'fontSize': '9px', 'color': THEME['text_sub'], 'whiteSpace': 'nowrap',
                         }),
                         dcc.Input(
@@ -312,7 +312,7 @@ def build_candidates_layout() -> html.Div:
                             type='number', value=1.0, min=0, step=0.1, debounce=True,
                             style={'width': '64px', 'fontSize': '11px'},
                         ),
-                        html.Span("(keeps BUY with score > value, SELL with score < −value)", style={
+                        html.Span("(Momentum only; keeps BUY with score > value, SELL with score < −value. Carry and Event-Driven use their own gates.)", style={
                             'fontSize': '9px', 'color': THEME['text_sub'], 'fontStyle': 'italic',
                         }),
                     ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px',

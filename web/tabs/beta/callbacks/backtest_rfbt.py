@@ -316,6 +316,12 @@ def register_backtest_rfbt_callbacks(app):
             for factor, df in results.items():
                 m = compute_metrics(df, risk_free_rate=0.0,
                                     geometric_annualisation=True)
+                # NOTE: strategy_returns_gross == strategy_returns for every
+                # factor right now (transaction cost is deliberately zero —
+                # see factor_tx_cost_per_unit), so 'Sharpe(gr)' below will
+                # always match 'Sharpe'. Left in place as the seam for when
+                # a real (likely leg-weighted, for IRSL/IRCV) tx-cost model
+                # is reintroduced, at which point the two will diverge again.
                 if 'strategy_returns_gross' in df.columns:
                     m_gross = compute_metrics(
                         df.assign(strategy_returns=df['strategy_returns_gross']),

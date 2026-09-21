@@ -36,12 +36,14 @@ def register_scan_callbacks(app) -> None:
     # the threshold.
     _mr_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'composite_z', 'entry_z_used', 'spread', 'mean', 'vol', 'halflife', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'seasonal_label', 'score', 'stop_loss', 'profit_target']
     _trend_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'seasonal_label', 'score', 'trend_state', 'stop_loss', 'profit_target']
+    _carry_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'carry_sigma', 'breakeven_3m', 'seasonal_edge_bps', 'seasonal_label', 'score', 'stop_loss', 'profit_target']
+    _event_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'seasonal_label', 'score', 'event_age_days', 'stop_loss', 'profit_target']
 
     def _render_candidates_from_df(df_input: pd.DataFrame):
         if df_input is None or df_input.empty:
             return html.Div("No candidates found.", style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '6px 8px', 'fontStyle': 'italic'}), [], {}
 
-        _all_display_cols = list(dict.fromkeys(_mr_display_cols + _trend_display_cols + ['style']))
+        _all_display_cols = list(dict.fromkeys(_mr_display_cols + _trend_display_cols + _carry_display_cols + _event_display_cols + ['style']))
         df_display = df_input.copy()
         if 'ID' not in df_display.columns and df_display.index.name == 'ID':
             df_display = df_display.reset_index()
@@ -50,16 +52,18 @@ def register_scan_callbacks(app) -> None:
         available_all = [c for c in _all_display_cols if c in df_display.columns]
         df_display = df_display[available_all].copy()
 
-        if 'style' in df_display.columns:
-            def _style_to_regime_label(value):
-                style_value = str(value).strip().lower()
-                if style_value in {'meanreversion', 'mean_reverting'}:
-                    return 'mean-reverting'
-                if style_value in {'trend', 'trendfollowing', 'carry', 'mixed'}:
-                    return 'momentum'
-                return value
-
-            df_display['style'] = df_display['style'].map(_style_to_regime_label)
+        # Panel routing uses the RAW style below (style_s, before any
+        # collapsing) so Carry/Momentum/EventDriven land in their own
+        # section. 'regime' is a separate, deliberately-coarser diagnostic
+        # column (mean-reverting/momentum/uncertain) shown alongside style
+        # for context -- see _style_to_regime in helpers.py for the same
+        # collapse used elsewhere. Do NOT overwrite df_display['style']
+        # itself with the collapsed label, or routing below breaks.
+        style_s = (
+            df_display['style'].astype(str).str.strip().str.lower()
+            if 'style' in df_display.columns
+            else pd.Series('', index=df_display.index, dtype=str)
+        )
 
         candidate_data = df_display.to_dict('records')
 
@@ -74,40 +78,47 @@ def register_scan_callbacks(app) -> None:
                 pd.to_numeric(df_display.loc[_sell_mask, 'carry_roll'], errors='coerce').multiply(-1)
             )
 
-        for col in ['Zscore', 'composite_z', 'entry_z_used', 'spread', 'mean', 'vol', 'carry_roll', 'halflife', 'score', 'stop_loss', 'profit_target', 'trend_state', 'regime_confidence', 'efficiency_ratio', 'hurst', 'ttm_display', 'breakeven_3m', 'seasonal_edge_bps']:
+        for col in ['Zscore', 'composite_z', 'entry_z_used', 'spread', 'mean', 'vol', 'carry_roll', 'carry_sigma', 'halflife', 'score', 'stop_loss', 'profit_target', 'trend_state', 'regime_confidence', 'efficiency_ratio', 'hurst', 'ttm_display', 'breakeven_3m', 'seasonal_edge_bps', 'event_age_days']:
             if col in df_display.columns:
                 df_display[col] = pd.to_numeric(df_display[col], errors='coerce').round(1)
 
         _mr_avail = [c for c in _mr_display_cols if c in df_display.columns]
         _trend_avail = [c for c in _trend_display_cols if c in df_display.columns]
+        _carry_avail = [c for c in _carry_display_cols if c in df_display.columns]
+        _event_avail = [c for c in _event_display_cols if c in df_display.columns]
 
         regime_s = (
             df_display['regime'].astype(str).str.strip().str.lower().replace('nan', 'unknown')
             if 'regime' in df_display.columns
             else pd.Series('unknown', index=df_display.index, dtype=str)
         )
-        style_s = (
-            df_display['style'].astype(str).str.strip().str.lower()
-            if 'style' in df_display.columns
-            else pd.Series('', index=df_display.index, dtype=str)
-        )
 
-        # Candidate ``style`` selects the strategy card. The statistical
-        # ``regime`` remains a diagnostic column and must not move a Carry
-        # candidate into the Mean-Reversion section.
+        # Candidate ``style`` selects the strategy card: Mean-Reversion,
+        # Momentum, Carry, and Event-Driven are each routed to their own
+        # section. The statistical ``regime`` column (above) remains a
+        # separate diagnostic and must not move a row between sections.
         style_mr = style_s.isin({'meanreversion', 'mean-reverting', 'mean_reverting', 'mr'})
-        style_trend = style_s.isin({'carry', 'trend', 'trendfollowing', 'momentum', 'mixed'})
-        uncertain_unmapped = ~style_mr & ~style_trend
+        # 'momentum' is what build_alpha_candidates actually assigns -- it's
+        # carved out of the Carry-eligible pool by trend_state, not a
+        # separate 'Trend'/'TrendFollowing' style (no code path ever
+        # produces those). Keep 'trend'/'trendfollowing' in the isin for
+        # forward-compat in case that ever changes upstream.
+        style_momentum = style_s.isin({'momentum', 'trend', 'trendfollowing'})
+        style_carry = style_s.eq('carry')
+        style_event = style_s.eq('eventdriven')
+        uncertain_unmapped = ~style_mr & ~style_momentum & ~style_carry & ~style_event
 
         df_mr = df_display[style_mr][_mr_avail].copy()
-        df_trend = df_display[style_trend][_trend_avail].copy()
+        df_trend = df_display[style_momentum][_trend_avail].copy()
+        df_carry = df_display[style_carry][_carry_avail].copy()
+        df_event = df_display[style_event][_event_avail].copy()
         df_uncertain = df_display[uncertain_unmapped][_mr_avail].copy()
 
         regime_counts = regime_s.value_counts(dropna=False)
         regime_summary = ', '.join([f"{k}: {int(v)}" for k, v in regime_counts.items()])
         style_summary_div = html.Div(f"Regime: {regime_summary}", style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'})
 
-        def _signal_cards(df_rows, max_z=4.0):
+        def _signal_cards(df_rows, max_z=4.0, show_trend_tag=False):
             cards = []
             for row in df_rows:
                 inst = str(row.get('ID', '') or '')
@@ -192,7 +203,7 @@ def register_scan_callbacks(app) -> None:
                     })
 
                 trend_tag = None
-                if (stype, inst) in TREND_ROUTED_INSTRUMENTS:
+                if show_trend_tag and (stype, inst) in TREND_ROUTED_INSTRUMENTS:
                     trend_tag = html.Span('TREND', title=(
                         'Backtested with the trend engine (momentum z-score entry, '
                         'vol-normalized trailing stop), not mean-reversion. MR '
@@ -343,11 +354,25 @@ def register_scan_callbacks(app) -> None:
 
         mr_rows = df_mr.head(20).to_dict('records') if not df_mr.empty else []
         trend_rows = df_trend.head(20).to_dict('records') if not df_trend.empty else []
-        uncertain_rows = df_uncertain.head(20).to_dict('records') if not df_uncertain.empty else []
+        carry_rows = df_carry.head(20).to_dict('records') if not df_carry.empty else []
+        event_rows = df_event.head(20).to_dict('records') if not df_event.empty else []
 
         mr_cards = _signal_cards(mr_rows)
-        trend_cards = _signal_cards(trend_rows)
-        uncertain_cards = _signal_cards(uncertain_rows)
+        # TREND_ROUTED_INSTRUMENTS badge only makes sense in the Momentum
+        # section -- it documents "this spread is backtested with the trend
+        # engine, not MR", which reads as a contradiction on a card sitting
+        # in Carry/Event-Driven/MR (e.g. CGB-10s30s can land in Carry on a
+        # non-stationary day while still being trend-whitelisted).
+        trend_cards = _signal_cards(trend_rows, show_trend_tag=True)
+        carry_cards = _signal_cards(carry_rows)
+        event_cards = _signal_cards(event_rows)
+
+        # Uncertain (unmapped style) rows are intentionally not rendered --
+        # df_uncertain is still computed above for the regime-summary line
+        # and as a diagnostic, but per user 2026-09-21 we do not want to
+        # show a candidate whose style didn't map to one of the four known
+        # buckets; check df_uncertain directly (e.g. via a debugger or the
+        # regime summary text) if that count is ever unexpectedly large.
 
         sections = []
         if mr_cards:
@@ -358,27 +383,36 @@ def register_scan_callbacks(app) -> None:
 
         if trend_cards:
             sections.append(html.Div([
-                _section_header('Momentum / Carry', len(trend_rows), '#FF9800'),
+                _section_header('Momentum', len(trend_rows), '#FF9800'),
                 _three_col_grid(trend_cards),
-            ], style={'marginBottom': '18px'} if uncertain_cards else {}))
+            ], style={'marginBottom': '18px'}))
 
-        if uncertain_cards:
+        if carry_cards:
             sections.append(html.Div([
-                _section_header('Uncertain', len(uncertain_rows), THEME['text_sub']),
-                html.Div(
-                    "Regime unresolved — check spread chart before trading.",
-                    style={**_empty_style, 'marginBottom': '6px', 'fontStyle': 'italic'},
-                ),
-                _three_col_grid(uncertain_cards),
+                _section_header('Carry', len(carry_rows), '#B388FF'),
+                _three_col_grid(carry_cards),
+            ], style={'marginBottom': '18px'}))
+
+        if event_cards:
+            sections.append(html.Div([
+                _section_header('Event-Driven', len(event_rows), '#29B6F6'),
+                _three_col_grid(event_cards),
             ]))
 
         if not sections:
             sections = [html.Div("No candidates found.", style=_empty_style)]
 
-        metric_legend = html.Div(
-            "Card metrics: left = Z-score, right = Carry (bp,3m)",
-            style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginBottom': '6px'}
-        )
+        metric_legend = html.Div([
+            html.Span("Card metrics: ", style={'fontWeight': '600'}),
+            html.Span("bar/σ = Zscore ", style={'color': THEME['text_sub']}),
+            html.Span("(the row's entry/pullback signal — for Momentum rows this is a "
+                      "rolling momentum z-score, not the ranking 'score' column); ",
+                      style={'color': THEME['text_sub']}),
+            html.Span("green/red pill", style={'color': THEME['success']}),
+            html.Span(" = Carry (bp, 3m); ", style={'color': THEME['text_sub']}),
+            html.Span("amber pill", style={'color': THEME['accent']}),
+            html.Span(" = realtime spread (bp, live bid/ofr mid).", style={'color': THEME['text_sub']}),
+        ], style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginBottom': '6px'})
 
         table_out = html.Div([
             style_summary_div,
@@ -664,19 +698,24 @@ def register_scan_callbacks(app) -> None:
                         f"Filtered at {scanned_time}", [], {},
                     )
 
-        # Momentum/Carry score filter: 'score' from compute_scan_score/
+        # Momentum score filter: 'score' from compute_scan_score/
         # _add_unified_score_preview is an unsigned edge-to-risk magnitude, so
         # sign it by direction (BUY=+, SELL=-) to apply the user's requested
         # "score > threshold for BUY, score < -threshold for SELL" cutoff.
-        # Mean-reversion rows are untouched -- MR already gates on its own
-        # composite_z/entry_z threshold, not this score.
+        # Momentum bucket only -- Mean-Reversion gates on its own
+        # composite_z/entry_z threshold, Carry on its own carry_sigma gate
+        # (see CARRY_MIN_SIGMA in alpha_candidates.py), and Event-Driven is
+        # ungated; none of those three use this score.
         try:
             _trend_score_thd = float(trend_score_min) if trend_score_min is not None else 1.0
         except (TypeError, ValueError):
             _trend_score_thd = 1.0
         if _trend_score_thd > 0 and 'score' in df_all.columns and 'style' in df_all.columns:
             _style_f = df_all['style'].astype(str).str.strip().str.lower()
-            _is_trend_f = _style_f.isin({'carry', 'trend', 'trendfollowing', 'momentum', 'mixed'})
+            # 'momentum' is what build_alpha_candidates assigns (carved out
+            # of the Carry pool by trend_state) -- see style_momentum note
+            # in _render_candidates_from_df above.
+            _is_trend_f = _style_f.isin({'momentum', 'trend', 'trendfollowing'})
             if _is_trend_f.any():
                 _score_f = pd.to_numeric(df_all['score'], errors='coerce')
                 _dir_f = df_all.get('direction', pd.Series('', index=df_all.index)).astype(str).str.strip().str.upper()
@@ -694,10 +733,12 @@ def register_scan_callbacks(app) -> None:
             .astype(str).str.strip().str.lower().value_counts()
         )
         mr_count = int(style_counts.get('meanreversion', 0))
-        trend_count = int(style_counts.reindex(['carry', 'trend', 'trendfollowing', 'momentum', 'mixed']).fillna(0).sum())
+        trend_count = int(style_counts.reindex(['momentum', 'trend', 'trendfollowing']).fillna(0).sum())
+        carry_count = int(style_counts.get('carry', 0))
+        event_count = int(style_counts.get('eventdriven', 0))
         status = (
             f"Found {len(df_all)} candidates at {scanned_time} "
-            f"[MR={mr_count}, Momentum/Carry={trend_count}]"
+            f"[MR={mr_count}, Momentum={trend_count}, Carry={carry_count}, Event-Driven={event_count}]"
         )
 
         return table_out, status, candidate_data, regime_store

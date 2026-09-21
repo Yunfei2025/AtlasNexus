@@ -79,7 +79,22 @@ class FactorModelConfig:
     train_months: int = 12
     test_months: int = 1
     # Signal smoothing
-    signal_smooth_days: int = 1              # no pre-smoothing: keep signal path-independent
+    # 10-day rolling mean of predicted_return, applied before z-scoring, in
+    # every sizing mode (shared step in build_position_series). Investigation
+    # trigger: IRDL.CN position swinging e.g. 0.3->1.3 in a single day during
+    # 2022-07-21..08-09, 2025-05-16..06-26 — traced to a SMALL, marginal
+    # predicted_return oscillating across the z-score deadzone threshold on
+    # ordinary day-to-day noise (unlike the separate Jan-2021 case, where
+    # predicted_return itself was large and sustained for ~13 days — smoothing
+    # verified to have ZERO effect there, since averaging a persistently wrong
+    # signal over any window still gives the wrong average; that needs a
+    # different fix, not this one).
+    # Validated out-of-sample (22 six-month start dates, 2015-2025):
+    # smooth=10 beats smooth=1 in 18/22 windows, mean Sharpe +0.15, and
+    # reduces mean day-to-day |position change| in EVERY window (~8% avg
+    # reduction, not just on average). Losses are small (-0.05 to -0.18) and
+    # confined to four 2023-2024 starts.
+    signal_smooth_days: int = 10
     # Target horizon
     target_horizon: int = 1                  # predict N-day forward return
     # ── Position sizing ──────────────────────────────────────────────────────
@@ -837,9 +852,19 @@ def rolling_icir(
 def factor_tx_cost_per_unit(factor_code: str, cfg: FactorModelConfig) -> float:
     """Transaction cost per unit of position turnover, in **return space**.
 
-    Uses a flat notional-based cost (``FACTOR_TX_COST_BP`` from
-    ``settings.fixed_income``) applied uniformly across all factor types.
-    0.3 bp notional = 3e-5 per unit of position.
+    NOT CURRENTLY USED by run_factor_model_backtest / the saved-artifact
+    path — as of the funding-cost work, the only cost modelled for these
+    factors is funding (netted into 'returns' for IRDL via FR007; see
+    _yield_carry), and transaction cost is deliberately zero everywhere.
+    Kept (rather than removed) as the seam to reintroduce a real cost
+    later: the flat ``FACTOR_TX_COST_BP`` this used to return was
+    calibrated to CN treasury FUTURES spreads (a single outright
+    instrument) and materially understates the cost of IRSL/IRCV, which
+    are synthetic long-short combinations across 2-6 CGB tenor legs
+    traded simultaneously — real execution cost there is closer to the
+    SUM of each leg's own bid-ask, not one outright's. A correct fix would
+    key off ``factor_code`` (currently ignored) to apply a leg-weighted
+    cost for Slope/Curvature factors specifically.
     """
     from settings.fixed_income import FACTOR_TX_COST_BP
     return FACTOR_TX_COST_BP / 1e4
@@ -1599,24 +1624,27 @@ def run_factor_model_backtest(
     result['position'] = pos['position']
     result['turnover'] = pos['turnover']
 
-    # Gross PnL, then net of transaction costs (doc §5.1, DV01-aware).
-    # NOTE: "gross" here means gross of TRANSACTION COST, using the
-    # (already funding-net) 'returns' column for risk purposes — a separate
-    # axis from 'returns_gross_of_funding' above (gross of FUNDING cost,
-    # used only for the Ann./Total Return display convention). Don't
-    # conflate the two: strategy_returns_gross_of_funding is what the
-    # STRATEGY (position x factor) actually earned before its financing
-    # cost, still net of transaction cost.
+    # PnL. Transaction cost is NOT deducted — by design (see
+    # factor_tx_cost_per_unit): the only cost modelled for these factors is
+    # funding, already netted into 'returns' for IRDL (see _yield_carry /
+    # FR007). IRSL/IRCV are long-short spreads with no funded-outright
+    # interpretation and get no cost of any kind — same as their carry,
+    # which is exactly zero for the same reason (weights sum to zero, see
+    # _yield_carry's Slope/Curvature note).
+    #
+    # 'strategy_returns' and 'strategy_returns_gross' are therefore
+    # identical (cost = 0). Both columns are kept, rather than removed, so
+    # callers that read one or the other (the gross/net split still matters
+    # for 'strategy_returns_gross_of_funding' vs 'strategy_returns', which
+    # differ by the FUNDING deduction, not a transaction-cost one) don't
+    # need special-casing, and so a real per-leg tx-cost model can be
+    # reintroduced later (see factor_tx_cost_per_unit docstring) without
+    # restructuring this block again.
     result['strategy_returns_gross'] = pos['position'].shift(1) * result['returns']
     result['strategy_returns_gross_of_funding'] = (
         pos['position'].shift(1) * result['returns_gross_of_funding']
     )
-    cost_per_unit = factor_tx_cost_per_unit(factor_code, cfg)
-    tx_cost = result['turnover'].abs() * cost_per_unit
-    result['strategy_returns'] = result['strategy_returns_gross'] - tx_cost
-    result['strategy_returns_gross_of_funding'] = (
-        result['strategy_returns_gross_of_funding'] - tx_cost
-    )
+    result['strategy_returns'] = result['strategy_returns_gross']
     result['cumulative_returns'] = (1 + result['strategy_returns'].fillna(0)).cumprod()
 
     return result

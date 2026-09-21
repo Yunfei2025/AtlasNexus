@@ -262,8 +262,17 @@ def register_alpha_book_table_callbacks(app):
                     else:
                         duration = 0.0
     
-                    # Resolve leg1/leg2 for all spread types
-                    leg1, leg2 = _resolve_bondcurve_legs(spread_type, trade_id, duration)
+                    # Prefer the leg info saved by Alpha Portfolio's Run Optimization
+                    # (row['Leg1']/['Leg2']) — it reflects what was actually traded.
+                    # Only fall back to the OTR/duration heuristic resolver when the
+                    # saved snapshot doesn't have leg info (e.g. older saved rows).
+                    saved_leg1 = row.get('Leg1', None)
+                    saved_leg2 = row.get('Leg2', None)
+                    if saved_leg1 not in (None, '') and pd.notna(saved_leg1) and \
+                       saved_leg2 not in (None, '') and pd.notna(saved_leg2):
+                        leg1, leg2 = str(saved_leg1), str(saved_leg2)
+                    else:
+                        leg1, leg2 = _resolve_bondcurve_legs(spread_type, trade_id, duration)
                     leg_ratio_val = _leg_volume_ratio(leg1, leg2, spread_type, trade_id, duration, _alpha_duration_snap_cache)
                     leg_ratio = f"{leg_ratio_val:.2f}" if leg_ratio_val is not None else ''
                     leg2_target_volume = (
@@ -348,7 +357,7 @@ def register_alpha_book_table_callbacks(app):
                         'Z-Score':                f"{zscore_val:.2f}" if zscore_val is not None else '',
                         'Close Price (bp)':       f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
                         'Progress':               '',
-                        'Target Volume (MM CNY)': f"{notional:,.1f}",
+                        'Capital (MM CNY)':       f"{notional:,.1f}",
                         'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",
                         'Carry+Roll (3m,bp)':     _fmt1(-carry_roll_3m_val if str(row.get('direction', '')).strip().upper() == 'SELL' else carry_roll_3m_val),
                         'Breakeven (3m,bp)':      _fmt1(breakeven_val),
@@ -374,7 +383,7 @@ def register_alpha_book_table_callbacks(app):
                 except (ValueError, TypeError):
                     row_volume = None
                 try:
-                    target_volume = float(str(r.get('Target Volume (MM CNY)', '') or '').replace(',', '').strip()) if str(r.get('Target Volume (MM CNY)', '') or '').strip() else None
+                    target_volume = float(str(r.get('Capital (MM CNY)', '') or '').replace(',', '').strip()) if str(r.get('Capital (MM CNY)', '') or '').strip() else None
                 except (ValueError, TypeError):
                     target_volume = None
                 if row_volume is not None and row_volume > 0 and target_volume not in (None, 0):
@@ -415,7 +424,7 @@ def register_alpha_book_table_callbacks(app):
                 return total if has_any else None
     
             _s_vol    = _sum_col('Volume (mm)',            _BOND_OUTRIGHT_TYPES)
-            _s_tvol   = _sum_col('Target Volume (MM CNY)', _BOND_OUTRIGHT_TYPES)
+            _s_tvol   = _sum_col('Capital (MM CNY)', _BOND_OUTRIGHT_TYPES)
             _s_margin = _sum_col('Margin (MM)')
             _s_dv01   = _sum_col('DV01 (k CNY/bp)')
             _s_carry  = _sum_col('MtM Carry (MM CNY)')
@@ -427,7 +436,7 @@ def register_alpha_book_table_callbacks(app):
             total_row = {c: '' for c in display_rows[0].keys()}
             total_row['ID']                     = 'TOTAL'
             total_row['Volume (mm)']            = f"{_s_vol:,.1f}"    if _s_vol    is not None else ''
-            total_row['Target Volume (MM CNY)'] = f"{_s_tvol:,.1f}"   if _s_tvol   is not None else ''
+            total_row['Capital (MM CNY)'] = f"{_s_tvol:,.1f}"   if _s_tvol   is not None else ''
             total_row['Margin (MM)']            = f"{_s_margin:,.2f}" if _s_margin is not None else ''
             total_row['DV01 (k CNY/bp)']        = f"{_s_dv01:.1f}"    if _s_dv01   is not None else ''
             total_row['MtM Carry (MM CNY)']     = f"{_s_carry:,.4f}"  if _s_carry  is not None else ''
@@ -501,7 +510,7 @@ def register_alpha_book_table_callbacks(app):
             total_rows = [r for r in display_rows if r.get('ID') == 'TOTAL']
             _numeric_cols = {
                 'Duration', 'Open price (bp)', 'Volume (mm)', 'Z-Score', 'Close Price (bp)',
-                'Target Volume (MM CNY)', 'Target Volume Leg2 (MM CNY)', 'Margin (MM)', 'DV01 (k CNY/bp)', 'Carry+Roll (3m,bp)',
+                'Capital (MM CNY)', 'Target Volume Leg2 (MM CNY)', 'Margin (MM)', 'DV01 (k CNY/bp)', 'Carry+Roll (3m,bp)',
                 'Breakeven (3m,bp)', 'Stop (bp)', 'Target (bp)', 'MTM spd (bp)',
                 'MtM Carry (MM CNY)', 'MtM Value (MM CNY)', 'Target Weight (%)', 'RC (%)', 'Weight (%)',
             }
@@ -512,7 +521,7 @@ def register_alpha_book_table_callbacks(app):
                 ('Style', 'left'), ('Direction', 'center'), ('Duration', 'right'),
                 ('Open price (bp)', 'right'), ('Volume (mm)', 'right'), ('Open date', 'right'),
                 ('Z-Score', 'right'), ('Close Price (bp)', 'right'), ('Progress', 'left'),
-                ('Target Volume (MM CNY)', 'right'), ('Target Volume Leg2 (MM CNY)', 'right'), ('Margin (MM)', 'right'),
+                ('Capital (MM CNY)', 'right'), ('Target Volume Leg2 (MM CNY)', 'right'), ('Margin (MM)', 'right'),
                 ('DV01 (k CNY/bp)', 'right'),
                 ('Carry+Roll (3m,bp)', 'right'), ('Breakeven (3m,bp)', 'right'),
                 ('Stop (bp)', 'right'), ('Target (bp)', 'right'), ('MTM spd (bp)', 'right'),

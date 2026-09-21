@@ -105,7 +105,7 @@ def _refresh_alpha_display_row(row: dict) -> dict:
     open_price_bp = _coerce_float(updated.get('Open price (bp)'))
     volume_mm = _coerce_float(updated.get('Volume (mm)'))
     if volume_mm is None:
-        volume_mm = _coerce_float(updated.get('Target Volume (MM CNY)'))
+        volume_mm = _coerce_float(updated.get('Capital (MM CNY)'))
     duration = _coerce_float(updated.get('Duration'))
     close_price_bp = _coerce_float(updated.get('Close Price (bp)'))
 

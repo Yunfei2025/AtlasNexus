@@ -46,6 +46,8 @@ const MR_ROWS = [
   ['BUY','Repo7d-9m2y',0.5],['BUY','Shi3M-6m3y',0.8], ['SELL','Shi3M-9m4y',-1.0],
 ];
 const MOM_ROWS = [['BUY','CDBCGB-30y',-0.9],['BUY','CDBCGB-10y',-1.5]];
+const CARRY_ROWS = [['BUY','NetBasis-TF03',1.3]];
+const EVENT_ROWS = [['BUY','250011-OTR',null]];
 const UNC_ROWS = [
   ['BUY','CDB-10s30s',1.6],['BUY','210017-OTR',2.6],['BUY','CGB-5s10s',1.0],
   ['BUY','CDB-5s10s',0.6], ['BUY','CDBCGB-5y',-1.0],['BUY','CGB-10s30s',1.0],
@@ -280,11 +282,13 @@ function AlphaCandidates() {
               <div style={{ font:'var(--type-meta)', fontSize:'10px', color:'var(--text-muted)' }}>
                 Regime: <span style={{ color:'var(--text-secondary)' }}>uncertain: 16</span>{' · '}
                 <span style={{ color:'#34d399' }}>mean-reverting: 9</span>{' · '}
-                <span style={{ color:amber }}>trending: 2</span>
+                <span style={{ color:amber }}>momentum: 2</span>
               </div>
-              <Cluster color="#34d399"           title="Mean-Reversion"   count={9}  rows={MR_ROWS} />
-              <Cluster color={amber}             title="Momentum / Carry" count={2}  rows={MOM_ROWS} />
-              <Cluster color="var(--text-muted)" title="Uncertain"        count={16}
+              <Cluster color="#34d399"           title="Mean-Reversion" count={9}  rows={MR_ROWS} />
+              <Cluster color={amber}             title="Momentum"       count={2}  rows={MOM_ROWS} />
+              <Cluster color="#B388FF"           title="Carry"          count={1}  rows={CARRY_ROWS} />
+              <Cluster color="#29B6F6"           title="Event-Driven"   count={1}  rows={EVENT_ROWS} />
+              <Cluster color="var(--text-muted)" title="Uncertain"      count={16}
                 note="Regime unresolved — check spread chart before trading." rows={UNC_ROWS} />
 
               {/* Selected candidates for correlation check */}
