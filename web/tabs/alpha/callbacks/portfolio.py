@@ -33,7 +33,10 @@ _SUMMARY_ALPHA_PARQUET = str(_DIR_INPUT / 'summary_alpha_portfolio.parquet')
 # calculation is not available. These are model assumptions, not quoted
 # market margin requirements; they are deliberately tenor-sensitive so a
 # short-end swap spread is not charged the same flat percentage as a long-end
-# spread. The notional floor preserves a minimum liquidity/operational charge.
+# spread. The notional floor preserves a minimum liquidity/operational charge,
+# and is itself tenor-bucketed (same buckets as the stress table) so it never
+# flattens out the DV01 signal at the short end -- without this, every tenor
+# from 3M to 1Y previously floored to the same 0.25% and looked flat.
 _SWAP_MARGIN_TENOR_STRESS_BP = (
     (1.0, 10.0),
     (3.0, 20.0),
@@ -41,7 +44,13 @@ _SWAP_MARGIN_TENOR_STRESS_BP = (
     (10.0, 50.0),
     (float('inf'), 75.0),
 )
-_SWAP_MARGIN_MIN_RATE = 0.0025
+_SWAP_MARGIN_MIN_RATE_BY_TENOR = (
+    (1.0, 0.0006),
+    (3.0, 0.0012),
+    (5.0, 0.0025),
+    (10.0, 0.0025),
+    (float('inf'), 0.0025),
+)
 
 
 def _swap_leg_tenor_duration(leg: Any) -> tuple[float, float] | None:
@@ -77,13 +86,14 @@ def _swap_derivative_margin_mm(
 
     max_tenor = max(leg1_info[0], leg2_info[0])
     stress_bp = next(stress for tenor, stress in _SWAP_MARGIN_TENOR_STRESS_BP if max_tenor <= tenor)
+    min_rate = next(rate for tenor, rate in _SWAP_MARGIN_MIN_RATE_BY_TENOR if max_tenor <= tenor)
     gross_notional_mm = abs(float(leg1_notional_mm)) + abs(float(leg2_notional_mm))
     gross_dv01_k = (
         abs(float(leg1_notional_mm)) * leg1_info[1] / 10.0
         + abs(float(leg2_notional_mm)) * leg2_info[1] / 10.0
     )
     dv01_margin_mm = gross_dv01_k * stress_bp / 1000.0
-    notional_floor_mm = gross_notional_mm * _SWAP_MARGIN_MIN_RATE
+    notional_floor_mm = gross_notional_mm * min_rate
     return round(max(dv01_margin_mm, notional_floor_mm), 2)
 
 
