@@ -1,5 +1,5 @@
 Alpha portfolio -> Candidates, Candidates & Correlation Check, for momentum/carry candidates, can we add a filter for them: filter out only score > 1 for buy and <-1 for sell.
 Alpha portfolio -> portfolio, the app failed to pass the leg info from the table of Portfolio Allocation Results to the table Portfolio Allocation Snapshot (alpha) in Portfolio Summary. Check and fix it. also add a column "Taret Volume" which is also passed /from the table Portfolio Allocation Results. also, what is the margin rate for swaps at short end? it should not be the same as the long end.
 Alpha portfolio -> pairs, why the spread 2600002.IB -260010.IB does not have realtime spread data? the rest do have.
-Alpha portfolio -> spread, add CGBRepo-10y, to the spread type curve & cross-asset spread, show it in the Daily Spread Statistics after CGBRepo-10y.
+Alpha portfolio -> spread, add CGBRepo-10y, to the spread type curve & cross-asset spread, show it in the Daily Spread Statistics after CGBRepo-10y; For Sector PCA, why i did not see Swap tickers?
 
