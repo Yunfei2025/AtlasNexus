@@ -10,7 +10,7 @@ from settings.fixed_income import IRSConfig
 
 def irsSpreads(qtpx):
     """Calculate IRS spreads (serial, fly, basis, box) efficiently."""
-    repo_cols = qtpx.columns[qtpx.columns.str.contains('FR007S') & ~qtpx.columns.str.contains('1M|2M|7Y|10Y')]
+    repo_cols = qtpx.columns[qtpx.columns.str.contains('FR007S') & ~qtpx.columns.str.contains('1M|2M')]
     shibor_cols = qtpx.columns[qtpx.columns.str.contains('SHI3MS') & ~qtpx.columns.str.contains('7Y|10Y')]
     repos, shibors = qtpx[repo_cols], qtpx[shibor_cols]
     spreads = {}
@@ -21,7 +21,7 @@ def irsSpreads(qtpx):
     pairs = pd.concat(spreads, axis=1)
     pairs.columns = IRSConfig.PAIRS
     flys = _calculate_fly_spreads(repos, shibors)
-    rmap = {0: '3m', 1: '6m', 2: '9m', 3: '1y', 4: '2y', 5: '3y', 6: '4y', 7: '5y'}
+    rmap = {0: '3m', 1: '6m', 2: '9m', 3: '1y', 4: '2y', 5: '3y', 6: '4y', 7: '5y', 8: '7y', 9: '10y'}
     basis = pd.DataFrame({f'Basis-{rmap[i+1]}': shibors.iloc[:, i] - repos.iloc[:, i+1]
                          for i in range(min(len(shibor_cols), len(repo_cols) - 1))})
     box = pd.concat({f'Basis-{j}s': basis.diff(j, axis=1).iloc[:, j:] for j in range(1, 5)}, axis=1)
@@ -31,7 +31,7 @@ def irsSpreads(qtpx):
 
 def _calculate_fly_spreads(repos, shibors):
     """Calculate fly spreads for repo and shibor."""
-    rmap = {0: '3m', 1: '6m', 2: '9m', 3: '1y', 4: '2y', 5: '3y', 6: '4y', 7: '5y'}
+    rmap = {0: '3m', 1: '6m', 2: '9m', 3: '1y', 4: '2y', 5: '3y', 6: '4y', 7: '5y', 8: '7y', 9: '10y'}
     spreads = {}
     for i in range(len(repos.columns) - 2):
         for j in range(i + 1, len(repos.columns) - 1):
@@ -49,12 +49,13 @@ def irsSpreadsRatio(spread_list):
     ratio = {}
     for s in spread_list:
         note = s.split('-')[1]
-        if len(note) == 2:
+        tokens = re.findall(r'\d+[my]', note.lower())
+        if len(tokens) == 1:
             ratio[s] = 1
-        elif len(note) == 4:
-            ratio[s] = IRSConfig.TERM_MAP[note[2:]] / IRSConfig.TERM_MAP[note[:2]]
-        elif len(note) == 6:
-            t1, t2, t3 = IRSConfig.TERM_MAP[note[2:4]], IRSConfig.TERM_MAP[note[:2]], IRSConfig.TERM_MAP[note[4:]]
+        elif len(tokens) == 2:
+            ratio[s] = IRSConfig.TERM_MAP[tokens[1]] / IRSConfig.TERM_MAP[tokens[0]]
+        elif len(tokens) == 3:
+            t1, t2, t3 = IRSConfig.TERM_MAP[tokens[1]], IRSConfig.TERM_MAP[tokens[0]], IRSConfig.TERM_MAP[tokens[2]]
             ratio[s] = [t1 / t2 / 2, t1 / t3 / 2]
     return ratio
 
@@ -117,16 +118,16 @@ def irsSpreadComposite(spread_list, cost):
     spread_cost = pd.Series(index=spread_list)
     for sp in spread_list:
         stype, note = sp.split('-')
-        note = note.upper()
+        tokens = [tok.upper() for tok in re.findall(r'\d+[my]', note.lower())]
         if stype == 'Basis':
-            if len(note) == 2:
-                spread_cost[sp] = cost[s + note + t] - irs_ratio[sp] * cost[f + note + t]
+            if len(tokens) == 1:
+                spread_cost[sp] = cost[s + tokens[0] + t] - irs_ratio[sp] * cost[f + tokens[0] + t]
             else:
-                spread_cost[sp] = spread_cost[f'{stype}-{note[2:].lower()}'] - spread_cost[f'{stype}-{note[:2].lower()}']
+                spread_cost[sp] = spread_cost[f'{stype}-{tokens[1].lower()}'] - spread_cost[f'{stype}-{tokens[0].lower()}']
         elif stype in ['Repo7d', 'Shi3M']:
             prefix = f if stype == 'Repo7d' else s
-            if len(note) == 4:
-                spread_cost[sp] = cost[prefix + note[2:] + t] - irs_ratio[sp] * cost[prefix + note[:2] + t]
+            if len(tokens) == 2:
+                spread_cost[sp] = cost[prefix + tokens[1] + t] - irs_ratio[sp] * cost[prefix + tokens[0] + t]
             else:
-                spread_cost[sp] = (cost[prefix + note[2:4] + t] - irs_ratio[sp][0] * cost[prefix + note[:2] + t] - irs_ratio[sp][1] * cost[prefix + note[4:] + t])
+                spread_cost[sp] = (cost[prefix + tokens[1] + t] - irs_ratio[sp][0] * cost[prefix + tokens[0] + t] - irs_ratio[sp][1] * cost[prefix + tokens[2] + t])
     return spread_cost

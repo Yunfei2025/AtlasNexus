@@ -257,13 +257,41 @@ def register_portfolio_run_callbacks(app):
         # ── Factor model signal lookup (scalar + colour) ───────────────────────
         # Discrete target in [-1,1] (0.2 tick) from the Beta-book factor backtest.
         # Derive a label + colour from the sign and magnitude of the scalar.
-        def _scalar_meta(c):
-            if c == 0:
+        #
+        # IMPORTANT: the snapshot stores IRSL with its sign flipped (positive =
+        # steepener) so scalar_to_coeff()'s generic directional formula keeps
+        # the "up = risk-on" convention for the exposure calc — see the flip
+        # in backtest_rfbt.py's snapshot-record builder. That flip must be
+        # undone here before deriving the label, and the label vocabulary
+        # (Steepener/Flattener, Bullish/Bearish, Concave/Convex, Long/Short)
+        # must mirror _sc() in _rfbt_train_helpers.py exactly — otherwise this
+        # column disagrees with the direction shown on the Candidates tab.
+        _IR_LABEL_PREFIXES = ('IRDL', 'IRSL', 'IRCV', 'CRDL', 'CRSL', 'CRCV')
+
+        def _scalar_meta(c, factor):
+            prefix = factor.split('.')[0]
+            raw = -c if prefix == 'IRSL' else c  # undo the storage-time flip
+            if raw == 0:
                 return ('Neutral', THEME.get('text_sub', '#aaa'))
-            mag = abs(c)
+            mag = abs(raw)
             strength = 'Strong ' if mag >= 0.8 else ('' if mag >= 0.4 else 'Mild ')
-            if c > 0:
+            is_slope = prefix in ('IRSL', 'CRSL')
+            is_curve = prefix in ('IRCV', 'CRCV')
+            is_yield = prefix in _IR_LABEL_PREFIXES and not is_slope and not is_curve
+            if raw > 0:
+                if is_slope:
+                    return (f'{strength}Steepener', THEME.get('success', '#2ecc71'))
+                if is_curve:
+                    return (f'{strength}Concave', THEME.get('success', '#2ecc71'))
+                if is_yield:
+                    return (f'{strength}Bullish', THEME.get('success', '#2ecc71'))
                 return (f'{strength}Long', THEME.get('success', '#2ecc71'))
+            if is_slope:
+                return (f'{strength}Flattener', THEME.get('danger', '#e74c3c'))
+            if is_curve:
+                return (f'{strength}Convex', THEME.get('danger', '#e74c3c'))
+            if is_yield:
+                return (f'{strength}Bearish', THEME.get('danger', '#e74c3c'))
             return (f'{strength}Short', THEME.get('danger', '#e74c3c'))
         snapshot_by_rf = {}
         if snapshot_data:
@@ -334,7 +362,7 @@ def register_portfolio_run_callbacks(app):
                 suggested = rp_max * coeff
             else:
                 suggested = rp_max
-            label, color = _scalar_meta(raw_scalar)
+            label, color = _scalar_meta(raw_scalar, factor)
             is_default_coeff = factor not in snapshot_by_rf
 
             vol_val = _vol_map.get(factor)

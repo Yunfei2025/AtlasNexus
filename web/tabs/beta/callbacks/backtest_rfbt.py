@@ -981,9 +981,16 @@ def register_backtest_rfbt_callbacks(app):
             status_msg = (f"{status_prefix}{data_date_note} · {persist_note} · Mean ICIR: {mean_icir:.2f}")
 
             # Build snapshot records for the Portfolio tab's factor-signals-snapshot-store.
-            # With discrete sizing the 'signal' column IS the quantised target in [-1,1],
-            # so last_signal is the exact level the backtest holds — use it as the scalar
-            # directly so the portfolio factor_scaling exposure matches the backtest.
+            # Use 'last_position' (the actual backtest-held exposure), not
+            # 'last_signal' (mere sign of that exposure). They only coincide
+            # under sizing_mode='discrete'; the live default is 'continuous',
+            # where signal is just sign(position) and collapses every factor
+            # to exactly -1/0/+1 — which silently discarded all conviction
+            # sizing here and made Factor Model Scaling apply the same coeff
+            # to a barely-positive and a maximally-positive signal alike.
+            # last_position already lives on the backtest's own leverage
+            # scale (continuous: [-max_leverage, max_leverage]; discrete: the
+            # quantised level itself), matching what Candidates displays.
             def _bucket_label(c):
                 if c == 0:
                     return 'Neutral'
@@ -993,9 +1000,9 @@ def register_backtest_rfbt_callbacks(app):
             snapshot_records = []
             for _f, _s in factor_stats.items():
                 _z = _s.get('z_score', 0.0)
-                _ls = _s.get('last_signal', 0.0)
+                _lp = _s.get('last_position', _s.get('last_signal', 0.0))
                 _icir = _s.get('icir', 0.0)
-                _scalar = -float(_ls) if _f.startswith('IRSL.') else float(_ls)
+                _scalar = -float(_lp) if _f.startswith('IRSL.') else float(_lp)
                 # IRSL is displayed as steepener on the positive side; flip the
                 # stored scalar so Factor Model Scaling keeps the same convention.
                 _bucket = _bucket_label(_scalar)

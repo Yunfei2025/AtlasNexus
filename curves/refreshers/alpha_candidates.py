@@ -45,17 +45,21 @@ _DEFAULT_ENTRY_PARAMS = {
 }
 _FALLBACK_ENTRY_PARAMS = {"entry_z": 2.0, "carry_z_weight": 0.5}
 
-# Momentum score-magnitude entry gate (Momentum bucket only -- Carry and
+# Momentum Zscore-magnitude entry gate (Momentum bucket only -- Carry and
 # EventDriven rows are split out into their own buckets and do not use this
-# gate, see build_alpha_candidates). `score` from _add_unified_score_preview
-# is |expected_return_H| / risk (>=0, direction is a separate field) -- 1.0
-# means the expected move over the scoring horizon is at least one standard
-# deviation of risk, the same dimensionally-meaningful cutoff MR's
-# composite_z >= entry_z gate enforces in its own (z-score) units. See
-# build_alpha_candidates's momentum-direction block for how this combines
-# with the trend_state/trend_zt pullback gate.
+# gate, see build_alpha_candidates). Checks |trend_momentum| (the pullback
+# z-score against the established trend -- this is what a Momentum row's
+# 'Zscore' column actually holds, since _add_momentum_ma_zscore overwrites
+# it with this value): 1.0 means the pullback itself is at least one
+# standard deviation, the same dimensionally-meaningful cutoff MR's
+# composite_z >= entry_z gate enforces in its own (z-score) units. Combines
+# with the pullback-direction/stretch_cap window in build_alpha_candidates's
+# momentum-direction block into MOMENTUM_CARRY_MIN_SCORE <= |trend_momentum|
+# < stretch_cap.
 # NOTE: name kept for backward compatibility (tests/saved params may
-# reference it); it no longer covers "Carry" -- see CARRY_MIN_SIGMA.
+# reference it); it covers neither "Carry" (see CARRY_MIN_SIGMA) nor the
+# separate 'score' (expected-edge/risk) column -- corrected 2026-09-22 per
+# user, this gate is on the Zscore/trend_momentum pullback magnitude.
 MOMENTUM_CARRY_MIN_SCORE = 1.0
 
 # Carry bucket entry gate: |carry_sigma| (see _carry_sigma) must clear this
@@ -126,7 +130,10 @@ def _entry_params_for(spread_type: str, instrument: str) -> tuple[float, float]:
 # not for allocating significant size in a standalone RV trade -- see
 # alpha-single-spread-sharpe-ceiling: a thin instrument can't absorb size
 # even if its z-score signal looks clean.
-_REPO7D_LIQUID_TENORS = {"3m", "6m", "9m", "1y", "2y", "5y"}
+# 7y/10y added 2026-09-22: now tradable and liquid on the FR007 curve (user
+# confirmed). Shi3M's 7y/10y stay out of its own liquid set -- not yet liquid
+# there.
+_REPO7D_LIQUID_TENORS = {"3m", "6m", "9m", "1y", "2y", "5y", "7y", "10y"}
 _SHI3M_LIQUID_TENORS = {"1y", "5y"}
 _BASIS_LIQUID_TENORS = {"1y", "5y"}
 
@@ -493,23 +500,30 @@ def build_alpha_candidates(
 	  Momentum, Carry, EventDriven), each bucket scored/ranked independently.
 	- MeanReversion requires stationary == "YES" (hard requirement)
 	- Uses historical spread time series to compute correlation (diff-based)
-	- Momentum entries require z_t opposite in sign to trend_state (a mild
-	  pullback against the established trend, leaving room to continue); the
-	  pullback is capped at ``zscore_threshold * momentum_stretch_mult`` so it
-	  reads as a retracement, not an incipient reversal. Momentum also
-	  requires score >= MOMENTUM_CARRY_MIN_SCORE.
-	- Carry entries require |carry_sigma| >= CARRY_MIN_SIGMA (carry-roll
-	  magnitude relative to vol) AND |carry_roll| >= CARRY_MIN_ROLL_BP
-	  (absolute bp floor) AND vol <= CARRY_VOL_PCTILE quantile of that day's
-	  Carry pool (held for the running yield, so it should be a
-	  comparatively quiet spread) -- independent of any trend/momentum
-	  signal.
-	- EventDriven is scoped to exactly New-Issue (OTR/OFR roll-pressure) and
-	  Futures-Term-Event (calendar-spread roll event) -- see
-	  _EVENT_DRIVEN_CATEGORIES. Entries are ungated here -- their own
-	  upstream roll-pressure/event gating already applies. Only New-Issue
-	  reaches this function today (Futures-Term-Event has no snapshot pipe
-	  yet, see _EVENT_DRIVEN_CATEGORIES comment).
+	- Priority order within the Carry-eligible pool (Swap-Spread,
+	  Tenor-Spread, Bond-Futures, Futures-Swap, Bond-Swap -- Futures-Term is
+	  NOT included, see EventDriven note below), per user 2026-09-22:
+	    1. Momentum: evaluated on the FULL pool first -- z_t opposite in
+	       sign to trend_state (a mild pullback against the established
+	       trend) AND MOMENTUM_CARRY_MIN_SCORE <= |z_t| <
+	       ``zscore_threshold * momentum_stretch_mult`` (the pullback must
+	       be at least 1 sigma, but not so large it reads as an incipient
+	       reversal rather than a retracement).
+	    2. Carry: whatever did NOT qualify for Momentum (including
+	       trend_state != 0 rows that failed the pullback/Zscore gate) is
+	       then evaluated against |carry_sigma| >= CARRY_MIN_SIGMA
+	       (carry-roll magnitude relative to vol) AND |carry_roll| >=
+	       CARRY_MIN_ROLL_BP (absolute bp floor) AND vol <=
+	       CARRY_VOL_PCTILE quantile of that day's Carry pool (held for the
+	       running yield, so it should be a comparatively quiet spread).
+	  A row can therefore land in Momentum OR Carry, never both.
+	- EventDriven is scoped to exactly New-Issue (OTR/OFR roll-pressure),
+	  Futures-Term-Event (calendar-spread roll event), and Futures-Term
+	  (TermBasis calendar spread) -- see _EVENT_DRIVEN_CATEGORIES. New-Issue
+	  rows additionally require data_ready == True (alpha_snapshot.py's own
+	  quote-freshness/lag-existence check -- added 2026-09-22 per user, since
+	  unfiltered New-Issue rows were mostly backfilled/not-yet-clean data).
+	  Other EventDriven categories have no upstream data_ready gate.
 	"""
 	# Force rebuild so each scan uses the latest spread snapshot, avoiding
 	# stale candidate rows when upstream realtime pickles were refreshed.
@@ -547,6 +561,15 @@ def build_alpha_candidates(
 		#"Swap-Spread": "MeanReversion", # HANDLED DYNAMICALLY BELOW
 		"Bond-Swap": "Carry",
 		"New-Issue": "EventDriven",
+		# Futures-Term (TermBasis, displayed as *-Cal) is a calendar/roll
+		# spread -- always EventDriven, per user 2026-09-22, same family as
+		# Futures-Term-Event/TermBasisEvent (its roll-progress-gated
+		# sibling on the same underlying spread; see
+		# SPREAD_CATEGORIES['Futures-Term-Event']). NOT dynamic/stationary-
+		# gated like Swap-Spread/Tenor-Spread/Futures-Swap below -- a
+		# calendar spread's economics are event-driven (contract roll)
+		# regardless of whether its z-score happens to be stationary today.
+		"Futures-Term": "EventDriven",
 	}
 	if "style" not in df_all.columns:
 		df_all["style"] = df_all["category"].map(cat_to_style)
@@ -558,8 +581,10 @@ def build_alpha_candidates(
 
 	# Dynamic style for mixed categories: MR if stationary, else Carry.
 	# Bond-Futures is always Carry (defined as carry trade in SPREAD_CATEGORIES).
-	_MR_ELIGIBLE_DYNAMIC = {"Swap-Spread", "Tenor-Spread", "Futures-Term", "Futures-Swap"}
-	for dynamic_category in ["Swap-Spread", "Tenor-Spread", "Bond-Futures", "Futures-Term", "Futures-Swap"]:
+	# Futures-Term is NOT included here -- it's a static EventDriven category
+	# via cat_to_style above (calendar spread, not MR/Carry-eligible).
+	_MR_ELIGIBLE_DYNAMIC = {"Swap-Spread", "Tenor-Spread", "Futures-Swap"}
+	for dynamic_category in ["Swap-Spread", "Tenor-Spread", "Bond-Futures", "Futures-Swap"]:
 		mask_dynamic = df_all["category"] == dynamic_category
 		if mask_dynamic.any():
 			df_all.loc[mask_dynamic, "style"] = "Carry"
@@ -600,27 +625,44 @@ def build_alpha_candidates(
 	# NOTE: no style mapping anywhere in this pipeline ever assigns
 	# style="Trend"/"TrendFollowing" (cat_to_style/dynamic-style above only
 	# ever produce MeanReversion/Carry/EventDriven) -- so Momentum is not a
-	# style-based bucket at all. It's carved OUT of the Carry-eligible pool
-	# below by trend_state (see the enrichment/split block further down),
-	# so it is populated only once Carry has been through regression
-	# enrichment (needs series_map, built after this point).
+	# style-based bucket at all. Per user 2026-09-22: Momentum is evaluated
+	# on the FULL Carry-eligible pool below (pullback-direction + score
+	# gate), and Carry is whatever's left over that did NOT qualify for
+	# Momentum -- see the priority-order block further down (needs
+	# series_map, built after this point, so the split happens later).
 	carry = work[style_lower.eq("carry")].copy()
 
-	# Event-Driven is scoped to exactly the two event-mechanics categories
+	# Event-Driven is scoped to exactly the event-mechanics categories
 	# SPREAD_CATEGORIES declares as EventDriven -- New-Issue (OTR/OFR
-	# roll-pressure) and Futures-Term-Event (calendar-spread roll event) --
-	# per user 2026-09-21. Today only New-Issue's BondNewIssue rows ever
-	# reach this point: load_alpha_spreads_snapshot() has no
-	# Futures-Term-Event/TermBasisEvent block, so that category can never
-	# appear in `work` yet (it has its own separate backtest pathway, see
-	# engine_termbasis_event.py). The explicit category allowlist below
-	# guards against silent scope creep if EITHER (a) TermBasisEvent is ever
-	# wired into the snapshot, or (b) some other category's style is ever
-	# set/defaulted to "EventDriven" -- only these two named categories
-	# should ever populate this bucket, not "whatever style ended up
-	# EventDriven".
-	_EVENT_DRIVEN_CATEGORIES = {"New-Issue", "Futures-Term-Event"}
+	# roll-pressure), Futures-Term-Event (calendar-spread roll event), and
+	# Futures-Term (TermBasis, the calendar spread itself -- added
+	# 2026-09-22 per user: TS-Cal/T-Cal/TF-Cal/TL-Cal are calendar spreads
+	# and belong in Event-Driven, not Mean-Reversion, regardless of their
+	# z-score's stationarity). Futures-Term-Event has no snapshot pipe yet
+	# (load_alpha_spreads_snapshot() has no TermBasisEvent block -- it has
+	# its own separate backtest pathway, see engine_termbasis_event.py), so
+	# only New-Issue and Futures-Term rows actually reach this point today.
+	# The explicit category allowlist below guards against silent scope
+	# creep if EITHER (a) TermBasisEvent is ever wired into the snapshot, or
+	# (b) some other category's style is ever set/defaulted to
+	# "EventDriven" -- only these named categories should ever populate
+	# this bucket, not "whatever style ended up EventDriven".
+	_EVENT_DRIVEN_CATEGORIES = {"New-Issue", "Futures-Term-Event", "Futures-Term"}
 	event = work[style_lower.eq("eventdriven") & work["category"].isin(_EVENT_DRIVEN_CATEGORIES)].copy()
+
+	# Data-quality gate for New-Issue (BondNewIssue) rows: alpha_snapshot.py
+	# already computes 'data_ready' per row (quote-freshness / lag-existence
+	# checks -- see docs/dev/tbondcurve-30y-otr-ofr-plan.md's gate list;
+	# False rows carry a 'rejection_reason' like
+	# 'backfilled_close_yield_only'/'backfilled_with_turnover'). Previously
+	# unfiltered here, so every open New-Issue event showed as a candidate
+	# regardless of data quality. Per user 2026-09-22: require data_ready ==
+	# True. Other EventDriven categories (Futures-Term/TermBasis today) have
+	# no such column and are left as-is.
+	if "data_ready" in event.columns:
+		_ni_mask = event["category"].eq("New-Issue")
+		_data_ready = event["data_ready"].astype(object).map(lambda v: bool(v) if isinstance(v, (bool, int)) else str(v).strip().lower() == "true")
+		event = event[~_ni_mask | _data_ready].copy()
 
 	# Apply z-score threshold
 	try:
@@ -672,31 +714,27 @@ def build_alpha_candidates(
 	mr = _enrich_candidates_with_regression(mr, scoring_series_map)
 	event = _enrich_candidates_with_regression(event, scoring_series_map)
 
-	# Momentum is carved OUT of the Carry-eligible pool by trend_state (see
-	# NOTE above -- no style ever tags a row "Trend" directly).
-	# _enrich_candidates_with_regression already computes trend_state per row
-	# (via _mad_z_momentum_state -- a MAD-normalized momentum hysteresis
-	# state in {-1, 0, +1}), so no second momentum computation is needed:
-	# trend_state != 0 (an established trend) -> Momentum, where
-	# _add_momentum_ma_zscore then overwrites Zscore with a rolling momentum
-	# z-score for the pullback/score gates below; trend_state == 0 (no
-	# established trend) -> Carry, keeping the raw/level Zscore intact, since
-	# a non-trending spread's carry_sigma gate should not be computed off a
-	# momentum z-score.
-	carry = _enrich_candidates_with_regression(carry, scoring_series_map)
-	is_trending = pd.to_numeric(
-		carry.get("trend_state", pd.Series(np.nan, index=carry.index)),
-		errors="coerce",
-	).fillna(0.0).ne(0.0)
-	momentum = carry[is_trending].copy()
-	carry = carry[~is_trending].copy()
-	if not momentum.empty:
-		momentum["style"] = "Momentum"
-	momentum = _add_momentum_ma_zscore(momentum, scoring_series_map)
+	# Priority order for the Carry-eligible pool, per user 2026-09-22:
+	#   1. MR already removed above (separate pool from the start).
+	#   2. Momentum: STRONG trend only -- trend_state != 0 AND passes the
+	#      pullback-direction gate AND |trend_momentum| >=
+	#      MOMENTUM_CARRY_MIN_SCORE (the pullback z-score itself, NOT the
+	#      separate 'score' expected-edge/risk column -- corrected
+	#      2026-09-22 per user). Evaluated on the FULL Carry-eligible pool
+	#      (not pre-split by trend_state), so a row only leaves the
+	#      Carry-eligible pool if it actually clears the full momentum bar
+	#      -- not merely because it has SOME historical trend direction.
+	#   3. Carry: everything that did NOT qualify for Momentum (including
+	#      trend_state != 0 rows that failed the pullback/Zscore gate) is
+	#      then evaluated against Carry's own sigma/bp/vol gates. A weakly-
+	#      trending but well-compensated carry spread can still surface here.
+	carry_pool = _enrich_candidates_with_regression(carry, scoring_series_map)
+	momentum_candidates = _add_momentum_ma_zscore(carry_pool.copy(), scoring_series_map)
+	if not momentum_candidates.empty:
+		momentum_candidates["style"] = "Momentum"
 
 	mr = _add_unified_score_preview(mr)
-	momentum = _add_unified_score_preview(momentum)
-	carry = _add_unified_score_preview(carry)
+	momentum_candidates = _add_unified_score_preview(momentum_candidates)
 	event = _add_unified_score_preview(event)
 
 	# Mean-reversion direction follows the platform's economic convention:
@@ -718,32 +756,53 @@ def build_alpha_candidates(
 		mr.loc[mr_composite_z.ge(mr["entry_z_used"]), "direction"] = "BUY"
 		mr.loc[mr_composite_z.le(-mr["entry_z_used"]), "direction"] = "SELL"
 
-	if not momentum.empty:
-		trend_state = pd.to_numeric(momentum.get("trend_state", pd.Series(np.nan, index=momentum.index)), errors="coerce")
-		trend_zt = pd.to_numeric(momentum.get("trend_momentum", momentum.get("Zscore", pd.Series(np.nan, index=momentum.index))), errors="coerce")
+	if not momentum_candidates.empty:
+		trend_state = pd.to_numeric(momentum_candidates.get("trend_state", pd.Series(np.nan, index=momentum_candidates.index)), errors="coerce")
+		trend_zt = pd.to_numeric(momentum_candidates.get("trend_momentum", momentum_candidates.get("Zscore", pd.Series(np.nan, index=momentum_candidates.index))), errors="coerce")
 		stretch_cap = abs(z_thd * float(momentum_stretch_mult))
-		trend_dir = pd.Series("", index=momentum.index, dtype=str)
+		trend_dir = pd.Series("", index=momentum_candidates.index, dtype=str)
 		trend_dir.loc[trend_state.lt(0) & trend_zt.gt(0) & trend_zt.lt(stretch_cap)] = "BUY"
 		trend_dir.loc[trend_state.gt(0) & trend_zt.lt(0) & trend_zt.gt(-stretch_cap)] = "SELL"
-		momentum["direction"] = trend_dir
-		momentum = momentum[momentum["direction"].isin(["BUY", "SELL"])].copy()
+		momentum_candidates["direction"] = trend_dir
+		momentum_candidates = momentum_candidates[momentum_candidates["direction"].isin(["BUY", "SELL"])].copy()
 
-		# Score-magnitude gate: _add_unified_score_preview already computed
-		# `score` = |expected_return_H| / risk (dimensionless, >=0 by
-		# construction -- see its docstring) alongside its OWN sign-of-P&L
-		# direction, but that direction gets overwritten by the pullback
-		# logic above and score was previously used only for ranking, never
-		# as an entry gate here -- so a pullback-confirmed row with a tiny
-		# edge-to-risk ratio (score << 1) could still enter. Restored
-		# 2026-09-19 per user: score>=1 means the expected move over the
-		# scoring horizon is at least one standard deviation of risk -- the
-		# same dimensionally-meaningful "worth trading" cutoff MR's
-		# composite_z>=entry_z gate already enforces in return-vol space.
-		# Both gates (pullback timing AND score magnitude) must pass.
-		# Momentum bucket only -- see MOMENTUM_CARRY_MIN_SCORE.
-		if not momentum.empty and "score" in momentum.columns:
-			trend_score = pd.to_numeric(momentum["score"], errors="coerce")
-			momentum = momentum[trend_score.ge(MOMENTUM_CARRY_MIN_SCORE)].copy()
+		# Zscore-magnitude gate: |trend_momentum| (the SAME pullback z-score
+		# used for direction just above, i.e. the row's 'Zscore' column,
+		# since _add_momentum_ma_zscore overwrites Zscore with this value)
+		# must clear MOMENTUM_CARRY_MIN_SCORE sigma units -- a pullback that
+		# is too small isn't a meaningfully sized retracement, even though
+		# it's the right sign and under the stretch_cap ceiling. Combines
+		# with the pullback-direction window above into
+		# MOMENTUM_CARRY_MIN_SCORE <= |trend_momentum| < stretch_cap.
+		# Corrected 2026-09-22 per user: this gate checks the Zscore/
+		# trend_momentum pullback magnitude, NOT the separate 'score'
+		# (expected-edge/risk) column -- score remains a ranking/display
+		# field only for Momentum rows, not an entry gate.
+		if not momentum_candidates.empty:
+			trend_zt_gate = pd.to_numeric(
+				momentum_candidates.get("trend_momentum", momentum_candidates.get("Zscore")),
+				errors="coerce",
+			)
+			momentum_candidates = momentum_candidates[trend_zt_gate.abs().ge(MOMENTUM_CARRY_MIN_SCORE)].copy()
+
+	momentum = momentum_candidates
+
+	# Carry is everything from the Carry-eligible pool that did NOT qualify
+	# for Momentum above (per user 2026-09-22: MR removed first, then
+	# STRONG trend rows are pulled out as Momentum, then the remainder --
+	# including trend_state!=0 rows that failed the pullback/score gate --
+	# is evaluated as Carry). Match on (spread_type, ID) since momentum was
+	# scored/enriched as its own copy of the pool.
+	if "spread_type" in carry_pool.columns and "ID" in carry_pool.columns:
+		momentum_keys = set(
+			zip(momentum["spread_type"].astype(str), momentum["ID"].astype(str))
+		) if not momentum.empty and "spread_type" in momentum.columns else set()
+		carry_keys = list(zip(carry_pool["spread_type"].astype(str), carry_pool["ID"].astype(str)))
+		not_in_momentum = [k not in momentum_keys for k in carry_keys]
+		carry = carry_pool[pd.Series(not_in_momentum, index=carry_pool.index)].copy()
+	else:
+		carry = carry_pool.copy()
+	carry = _add_unified_score_preview(carry)
 
 	# Carry direction/gate: sign of carry_sigma sets the side (positive
 	# carry_sigma -> BUY the carry). Entry requires ALL THREE:

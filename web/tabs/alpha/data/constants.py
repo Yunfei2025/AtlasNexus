@@ -82,7 +82,7 @@ SPREAD_CATEGORIES = {
         'label': 'Calendar Spread',
         'types': ['TermBasis'],
         'description': 'Near vs far futures contract spread',
-        'style': 'MeanReversion',
+        'style': 'EventDriven',
     },
     'Futures-Term-Event': {
         'label': 'Calendar Spread (Roll Event)',

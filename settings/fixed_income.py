@@ -338,6 +338,7 @@ class IRSConfig:
         'FR007S1Y.IR': 1,
         'FR007S2Y.IR': 2,
         'FR007S5Y.IR': 5,
+        'FR007S7Y.IR': 7,
         'FR007S10Y.IR': 10
     }
     S3M_LIST = {
@@ -353,9 +354,13 @@ class IRSConfig:
         1: "4s", 2: "8s", 3: "12s", 4: "16s", 5: "20s", 7: "28s", 10: "40s"
     }
     PAIRS = ['Repo7d-3m6m', 'Repo7d-6m9m', 'Repo7d-9m1y', 'Repo7d-1y2y', 'Repo7d-2y3y', 'Repo7d-3y4y', 'Repo7d-4y5y',
+             'Repo7d-5y7y', 'Repo7d-7y10y',
              'Repo7d-3m9m', 'Repo7d-6m1y', 'Repo7d-9m2y', 'Repo7d-1y3y', 'Repo7d-2y4y', 'Repo7d-3y5y',
+             'Repo7d-4y7y', 'Repo7d-5y10y',
              'Repo7d-3m1y', 'Repo7d-6m2y', 'Repo7d-9m3y', 'Repo7d-1y4y', 'Repo7d-2y5y',
+             'Repo7d-3y7y', 'Repo7d-4y10y',
              'Repo7d-3m2y', 'Repo7d-6m3y', 'Repo7d-9m4y', 'Repo7d-1y5y',
+             'Repo7d-2y7y', 'Repo7d-3y10y',
              'Shi3M-6m9m', 'Shi3M-9m1y', 'Shi3M-1y2y', 'Shi3M-2y3y', 'Shi3M-3y4y', 'Shi3M-4y5y',
              'Shi3M-6m1y', 'Shi3M-9m2y', 'Shi3M-1y3y', 'Shi3M-2y4y', 'Shi3M-3y5y',
              'Shi3M-6m2y', 'Shi3M-9m3y', 'Shi3M-1y4y', 'Shi3M-2y5y',

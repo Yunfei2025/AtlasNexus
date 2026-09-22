@@ -1,1 +1,40 @@
-Beta portfolio -> portfolio, Risk Budgets: factor model scaling. i found the column coeff does not reflect the prediction shown in subtab candidates. Whether strong signal or neutral it is always 1.0. Check and fix.
+1	[FIXED] Beta portfolio -> portfolio, Risk Budgets: factor model scaling. i found the column coeff does not reflect the prediction shown in subtab candidates. Whether strong signal or neutral it is always 1.0. Check and fix.
+
+	Two stacked root causes, both fixed:
+
+	(a) Label mismatch: the Risk Budgets coeff column's direction label
+	(_scalar_meta in web/tabs/beta/callbacks/portfolio_run.py) always used
+	generic Long/Short wording on the raw stored scalar, without undoing the
+	IRSL sign flip applied when the snapshot is built (positive = steepener,
+	for the exposure-sizing convention) and without the factor-aware
+	Steepener/Flattener/Bullish/Bearish/Concave/Convex vocabulary the
+	Candidates tab's signal cards use (_sc in _rfbt_train_helpers.py). Fixed:
+	_scalar_meta now takes the factor name, undoes the IRSL storage-time flip,
+	and mirrors the Candidates card's per-prefix label vocabulary exactly.
+
+	(b) Real root cause of "always 1.0" (the important one): the snapshot
+	builder (train_factor_model_for_factor_tab in backtest_rfbt.py) stored
+	'last_signal' as the coeff-driving scalar, under a comment claiming "the
+	'signal' column IS the quantised target" — true only under
+	sizing_mode='discrete'. Production factor models default to
+	sizing_mode='continuous' (FactorModelConfig default, no per-factor
+	override defined), where 'signal' is defined as sign(position) — always
+	exactly -1/0/+1 — while 'position' carries the real continuous conviction
+	(e.g. IRCV.CN was actually +0.478, not +1.0). Feeding sign-only values
+	into scalar_to_coeff() meant every factor's coeff snapped to one of only
+	three values per its long-only/directional formula (e.g. 0/1/2 for
+	long-only, so a neutral IRDL and a maxed-out-but-actually-weak directional
+	signal could both land on the same displayed number), discarding all
+	conviction sizing regardless of how strong or weak the real backtest
+	signal was. Same bug independently affected the Candidates tab's own
+	"Strong"/"Mild" signal-card labeling (_sc in _rfbt_train_helpers.py),
+	which also gated off last_signal and so showed every non-neutral factor
+	as "Strong" with double arrows.
+
+	Fix: _compute_factor_stats now also captures 'last_position' (the actual
+	backtest-held exposure) alongside 'last_signal' (direction only). The
+	Portfolio snapshot builder and the Candidates signal cards both now key
+	off last_position for magnitude, so coeff and the Strong/Mild label track
+	the real continuous conviction the backtest is actually running with —
+	matching Candidates exactly, no more collapsing to a handful of fixed
+	values.

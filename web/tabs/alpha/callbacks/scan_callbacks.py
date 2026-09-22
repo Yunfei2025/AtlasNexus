@@ -13,7 +13,7 @@ from dash import dcc, html, callback_context
 from dash.dependencies import Input, Output, State, ALL
 from dash.exceptions import PreventUpdate
 
-from ..data import THEME, ZSCORE_ENTRY_THRESHOLD, TREND_ROUTED_INSTRUMENTS, _get_input_dir, load_spread_data, display_key, get_realtime_spread_bp, _get_borrow_cost_annual_bp, _get_ttm_display, _get_current_fr007_bp
+from ..data import THEME, ZSCORE_ENTRY_THRESHOLD, TREND_ROUTED_INSTRUMENTS, _get_input_dir, load_spread_data, display_key, get_realtime_spread_bp, _get_ttm_display
 from ..scoring import compute_scan_score
 from .helpers import (
     _ALPHA_CORR_COLORSCALE,
@@ -68,12 +68,16 @@ def register_scan_callbacks(app) -> None:
         candidate_data = df_display.to_dict('records')
 
         if 'carry_roll' in df_display.columns and 'direction' in df_display.columns:
-            # Snapshot carry is BUY-oriented; flip sign for SELL in card display.
-            # TenorSpread carry_roll is already resolved per-direction upstream
-            # (direction-specific borrow cost), so it must not be flipped again.
+            # Snapshot carry is BUY-oriented; flip sign for SELL in card
+            # display so it reflects what the ACTUAL position earns (a SELL
+            # on negative raw carry_roll earns positive carry from the short
+            # side). TenorSpread's earlier financing/borrow-cost adjustment
+            # (the _ts_mask block above) only adjusts MAGNITUDE by direction
+            # (long vs short borrow cost) -- it does not flip the base sign,
+            # so TenorSpread needs this same flip too. Corrected 2026-09-22
+            # per user: previously excluded here on the (incorrect) assumption
+            # that the financing adjustment already handled it.
             _sell_mask = df_display['direction'].astype(str).str.strip().str.upper().eq('SELL')
-            if 'spread_type' in df_display.columns:
-                _sell_mask = _sell_mask & ~df_display['spread_type'].astype(str).eq('TenorSpread')
             df_display.loc[_sell_mask, 'carry_roll'] = (
                 pd.to_numeric(df_display.loc[_sell_mask, 'carry_roll'], errors='coerce').multiply(-1)
             )
@@ -167,15 +171,37 @@ def register_scan_callbacks(app) -> None:
                         'borderRadius': '0 2px 2px 0',
                     }
 
-                z_bar = html.Div(style={'position': 'relative', 'height': '6px',
+                score_raw = row.get('score', None)
+                try:
+                    score_val = float(score_raw)
+                except (TypeError, ValueError):
+                    score_val = None
+                if show_trend_tag:
+                    # Momentum rows: Zscore here IS the pullback z-score
+                    # (trend_momentum against the established trend),
+                    # overwritten from the level Zscore by
+                    # _add_momentum_ma_zscore -- THIS is what the
+                    # MOMENTUM_CARRY_MIN_SCORE entry gate checks
+                    # (|Zscore| >= threshold), not the separate 'score'
+                    # (expected-edge/risk) column, which is display/ranking
+                    # only for Momentum rows. See the card legend above.
+                    z_title = (
+                        f"Momentum pullback z-score (the entry gate): {z:+.2f}σ."
+                        + (f" Edge/risk score (display only): {score_val:+.2f}." if score_val is not None else "")
+                    )
+                else:
+                    z_title = f"Zscore: {z:+.2f}σ"
+                z_bar = html.Div(title=z_title, style={'position': 'relative', 'height': '6px',
                                         'backgroundColor': THEME['bg_main'],
                                         'borderRadius': '3px', 'overflow': 'hidden',
                                         'width': '72px', 'display': 'inline-block',
-                                        'verticalAlign': 'middle', 'marginLeft': '6px'},
+                                        'verticalAlign': 'middle', 'marginLeft': '6px',
+                                        'cursor': 'help'},
                                  children=[html.Div(style=bar_style)])
-                z_label = html.Span(f'{z:+.1f}σ', style={
+                z_label = html.Span(f'{z:+.1f}σ', title=z_title, style={
                     'fontSize': '10px', 'color': bar_color,
                     'fontWeight': 'bold', 'marginLeft': '4px', 'verticalAlign': 'middle',
+                    'cursor': 'help',
                 })
 
                 seas_label = str(row.get('seasonal_label', '') or '').strip().lower()
@@ -405,8 +431,10 @@ def register_scan_callbacks(app) -> None:
         metric_legend = html.Div([
             html.Span("Card metrics: ", style={'fontWeight': '600'}),
             html.Span("bar/σ = Zscore ", style={'color': THEME['text_sub']}),
-            html.Span("(the row's entry/pullback signal — for Momentum rows this is a "
-                      "rolling momentum z-score, not the ranking 'score' column); ",
+            html.Span("(for Momentum rows this is the pullback z-score against the "
+                      "established trend, and IS the entry gate: |Zscore| ≥ the Momentum "
+                      "Zscore filter threshold; the separate 'score' shown on hover is "
+                      "expected-edge/risk, display-only for Momentum rows); ",
                       style={'color': THEME['text_sub']}),
             html.Span("green/red pill", style={'color': THEME['success']}),
             html.Span(" = Carry (bp, 3m); ", style={'color': THEME['text_sub']}),
@@ -596,37 +624,21 @@ def register_scan_callbacks(app) -> None:
                         pd.to_numeric(df_all.loc[_pct_mask, _col], errors='coerce') * 100.0
                     )
 
-        _TENOR_RATIO = 2.0
-        _FINANCING_RATE_BP = _get_current_fr007_bp() or 137.0
-
-        if 'carry_roll' in df_all.columns and 'spread_type' in df_all.columns and 'ID' in df_all.columns:
+        # TenorSpread carry_roll is stored annual (spread_pct * 100, see
+        # alpha_snapshot.py's TenorSpread block) -- convert to 3m here so it
+        # matches every other spread_type's 3m-basis carry_roll. Per user
+        # 2026-09-22: no financing-rate or bond-borrow-cost adjustment is
+        # applied -- these positions net against an existing book, so
+        # "the carry is roughly the spread" (raw annual carry, just rebased
+        # to 3m), not the previous per-instrument financing/borrow-cost
+        # estimate. Removed both the _fin_adj (FR007-vs-long-tenor-yield
+        # differential) and _bc_adj (BondConfig.BORROW_COST short-sale cost)
+        # terms that used to be added/subtracted here.
+        if 'carry_roll' in df_all.columns and 'spread_type' in df_all.columns:
             _ts_mask = df_all['spread_type'].eq('TenorSpread')
             if _ts_mask.any():
-                from ..data import _get_tenor_yields_for_spread
                 _cr_ts_annual = pd.to_numeric(df_all.loc[_ts_mask, 'carry_roll'], errors='coerce')
-                _dir_ts = df_all.loc[_ts_mask].get('direction', pd.Series('', index=df_all.index[_ts_mask])).astype(str).str.strip().str.upper()
-                _fin_adj = pd.Series(0.0, index=df_all.index[_ts_mask], dtype=float)
-                _bc_adj = pd.Series(0.0, index=df_all.index[_ts_mask], dtype=float)
-
-                for _bidx in df_all.index[_ts_mask]:
-                    inst_id = str(df_all.at[_bidx, 'ID'])
-                    try:
-                        y_short, y_long = _get_tenor_yields_for_spread(inst_id)
-                        if y_long is not None:
-                            y_long_bp = y_long * 100.0
-                            _fin_adj.at[_bidx] = 0.5 * (_FINANCING_RATE_BP - y_long_bp)
-                    except Exception:
-                        _fin_adj.at[_bidx] = 0.0
-
-                    _bc_l, _bc_s = _get_borrow_cost_annual_bp('TenorSpread', inst_id)
-                    if _dir_ts.at[_bidx] == 'BUY':
-                        _bc_annual = _bc_l * 0.5
-                    else:
-                        _bc_annual = _bc_s * 0.5
-                    _bc_adj.at[_bidx] = _bc_annual / 4.0
-
-                _cr_annual_adjusted = _cr_ts_annual + _fin_adj - _bc_adj * 4.0
-                _cr_3m = _cr_annual_adjusted * (90.0 / 360.0)
+                _cr_3m = _cr_ts_annual * (90.0 / 360.0)
                 df_all.loc[_ts_mask, 'carry_roll'] = _cr_3m.round(4)
 
         _snap_ttm_cache: dict = {}
@@ -653,11 +665,15 @@ def register_scan_callbacks(app) -> None:
             if 'carry_roll' in df_all.columns:
                 _cr_be = pd.to_numeric(df_all['carry_roll'], errors='coerce')
                 _dir_be = df_all.get('direction', pd.Series('', index=df_all.index)).astype(str).str.strip().str.upper()
-                # TenorSpread carry_roll is already resolved per-direction above;
-                # only flip sign for other spread types still stored BUY-oriented.
-                _is_tenor_be = df_all.get('spread_type', pd.Series('', index=df_all.index)).astype(str).eq('TenorSpread')
+                # carry_roll is stored BUY-oriented; flip sign for SELL so
+                # breakeven reflects what the actual position earns. The
+                # _ts_mask financing/borrow-cost block above only adjusts
+                # TenorSpread's MAGNITUDE by direction -- it does not flip
+                # the base sign, so TenorSpread needs this flip too (same
+                # fix as the card-display flip above; corrected 2026-09-22
+                # per user).
                 _dir_sign_be = pd.Series(1.0, index=df_all.index, dtype=float)
-                _dir_sign_be[_dir_be.eq('SELL') & ~_is_tenor_be] = -1.0
+                _dir_sign_be[_dir_be.eq('SELL')] = -1.0
                 _cr_disp_be = _cr_be * _dir_sign_be
                 _ttm_be = pd.to_numeric(df_all['ttm_display'], errors='coerce').replace(0, np.nan)
                 _be_raw = (-_cr_disp_be / _ttm_be).where(_cr_disp_be.lt(0) & _ttm_be.notna())
@@ -698,32 +714,31 @@ def register_scan_callbacks(app) -> None:
                         f"Filtered at {scanned_time}", [], {},
                     )
 
-        # Momentum score filter: 'score' from compute_scan_score/
-        # _add_unified_score_preview is an unsigned edge-to-risk magnitude, so
-        # sign it by direction (BUY=+, SELL=-) to apply the user's requested
-        # "score > threshold for BUY, score < -threshold for SELL" cutoff.
+        # Momentum Zscore filter: for Momentum rows, 'Zscore' IS the pullback
+        # z-score (trend_momentum), overwritten from the level Zscore by
+        # _add_momentum_ma_zscore -- NOT the separate 'score' (expected-
+        # edge/risk) column, which remains ranking/display-only for Momentum
+        # rows. Corrected 2026-09-22 per user: this re-applies
+        # |Zscore| >= threshold (the same gate build_alpha_candidates already
+        # bakes in at MOMENTUM_CARRY_MIN_SCORE), so the user's live UI
+        # threshold can tighten/loosen it without a full rebuild.
         # Momentum bucket only -- Mean-Reversion gates on its own
         # composite_z/entry_z threshold, Carry on its own carry_sigma gate
         # (see CARRY_MIN_SIGMA in alpha_candidates.py), and Event-Driven is
-        # ungated; none of those three use this score.
+        # ungated; none of those three use this gate.
         try:
             _trend_score_thd = float(trend_score_min) if trend_score_min is not None else 1.0
         except (TypeError, ValueError):
             _trend_score_thd = 1.0
-        if _trend_score_thd > 0 and 'score' in df_all.columns and 'style' in df_all.columns:
+        if _trend_score_thd > 0 and 'Zscore' in df_all.columns and 'style' in df_all.columns:
             _style_f = df_all['style'].astype(str).str.strip().str.lower()
             # 'momentum' is what build_alpha_candidates assigns (carved out
             # of the Carry pool by trend_state) -- see style_momentum note
             # in _render_candidates_from_df above.
             _is_trend_f = _style_f.isin({'momentum', 'trend', 'trendfollowing'})
             if _is_trend_f.any():
-                _score_f = pd.to_numeric(df_all['score'], errors='coerce')
-                _dir_f = df_all.get('direction', pd.Series('', index=df_all.index)).astype(str).str.strip().str.upper()
-                _signed_score_f = _score_f.where(_dir_f.ne('SELL'), -_score_f)
-                _fails_gate = _is_trend_f & ~(
-                    (_dir_f.eq('BUY') & _signed_score_f.gt(_trend_score_thd)) |
-                    (_dir_f.eq('SELL') & _signed_score_f.lt(-_trend_score_thd))
-                )
+                _z_f = pd.to_numeric(df_all['Zscore'], errors='coerce')
+                _fails_gate = _is_trend_f & ~_z_f.abs().ge(_trend_score_thd)
                 if _fails_gate.any():
                     df_all = df_all[~_fails_gate].copy()
 

@@ -288,10 +288,15 @@ def register_portfolio_callbacks(app) -> None:
             total_capital = _as_positive_float(total_capital) or 1000.0
             total_capital_mm = total_capital
             total_dv01_budget = _as_positive_float(total_dv01_budget) or 10.0
+            # Book is financed entirely via TRS: bond legs are charged a flat
+            # notional-based TRS haircut (bond_margin_rate) rather than a
+            # physical-repo leverage ratio -- see Step G/H below.
+            # repo_leverage/repo_margin_rate are accepted but currently
+            # unused, kept only in case a physical-repo mode returns.
             bond_margin_rate = (_as_positive_float(bond_margin_rate) or 5.0) / 100.0
             swap_margin_rate = (_as_positive_float(swap_margin_rate) or 3.0) / 100.0
             repo_leverage = max(1.0, _as_positive_float(repo_leverage) or 15.0)
-            repo_margin_rate = 1.0 / repo_leverage
+            repo_margin_rate = 1.0 / repo_leverage  # noqa: unused (see comment above)
 
             # Merge all instruments from correlation matrix (curated_instruments) with saved positions (book_positions).
             # Combine both: curated from correlation check (new candidates) + book_positions (saved old trades).
@@ -608,14 +613,25 @@ def register_portfolio_callbacks(app) -> None:
                 df_scored['ratio_v3_v1'] = np.nan
 
             # Step G: Net Notional + Margin (capital consumption)
+            # This book is financed entirely via TRS (no physical bond repo),
+            # so every leg -- bond or derivative -- is a synthetic funding
+            # line with a dealer, not a two-sided physical repo/reverse-repo.
             # Each leg is classified as either:
-            #   - Bond (leg code ends '.IB'): funded via repo/TRS with security
-            #     firms through repo at 1 / `repo_leverage` of gross bond exposure.
+            #   - Bond (leg code ends '.IB'): bond TRS haircut is priced off
+            #     the bond's own price-volatility risk (issuer/liquidity),
+            #     which dealers quote as a flat or tenor-bucketed rate on
+            #     notional -- not DV01 -- so it is charged gross notional at
+            #     `bond_margin_rate`. Two legs of a bond-vs-bond spread are
+            #     two separate TRS tickets against two different, non-fungible
+            #     bonds and are NOT netted against each other (only identical
+            #     leg codes repeated across trades net -- see Step H).
             #   - Swap / Futures (IRS '.IR' legs, futures contract codes, or any
-            #     unresolved leg as a conservative floor): funded via exchange/
-            #     counterparty margin at `swap_margin_rate`.
-            # Bond repo capital uses gross bond legs at the configured leverage:
-            #   margin_bond = (|bond_leg1| + |bond_leg2|) / repo_leverage
+            #     unresolved leg as a conservative floor): rate-curve risk is
+            #     genuinely DV01-driven (SIMM-style), funded via
+            #     `_swap_derivative_margin_mm`'s tenor-stressed DV01 charge at
+            #     `swap_margin_rate`.
+            # Bond TRS capital uses gross bond legs at the configured rate:
+            #   margin_bond = (|bond_leg1| + |bond_leg2|) * bond_margin_rate
             # For bond-vs-bond spreads this implies:
             #   net_notional = signed_leg1 * (1 - ratio)
             #   margin_bond = |signed_leg1| * (1 + ratio) * bond_margin_rate
@@ -691,19 +707,43 @@ def register_portfolio_callbacks(app) -> None:
                         )
 
                 net_notional = (leg1_signed + leg2_signed + leg3_signed).round(1)
-                margin = (bond_gross * repo_margin_rate + derivative_margin + _fallback * swap_margin_rate).round(2)
+                margin = (bond_gross * bond_margin_rate + derivative_margin + _fallback * swap_margin_rate).round(2)
                 return net_notional, margin
 
             df_scored['net_notional_mm'], df_scored['margin_mm'] = _compute_net_and_margin(df_scored['notional_mm'])
 
-            # Step H: net all matching leg exposures across the portfolio before
-            # applying repo funding or derivative initial margin.  Total Capital
-            # is therefore a limit on the actual netted financing requirement.
+            # Step H: net all matching leg exposures across the whole Alpha
+            # book -- not per-trade -- before applying TRS funding or
+            # derivative initial margin, so Total Capital gates the actual
+            # netted financing requirement rather than the sum of each
+            # trade's standalone margin.
+            #
+            # Bond legs (.IB) net by raw notional: two trades holding the
+            # SAME bond code are two TRS tickets on the same underlying and
+            # genuinely offset dollar-for-dollar. Two DIFFERENT bond codes
+            # (e.g. the two legs of a bond-vs-bond curve spread) are two
+            # separate TRS tickets against non-fungible collateral and are
+            # never netted against each other -- only identical leg codes
+            # repeated across trades net here.
+            # Derivative legs (IRS/futures) net by signed DV01, not raw
+            # notional -- a curve-slope trade's short-tenor leg carries a
+            # large duration-matching ratio (e.g. Repo7d-3m1y's leg2 ratio is
+            # ~4.4x leg1) purely to equalize duration, not to represent real
+            # capital exposure. Netting that leg's notional against an
+            # unrelated trade's same-tenor leg would treat a small-DV01 curve
+            # trade as if it were a multi-billion-CNY outright position and
+            # starve the book of capital headroom it doesn't actually need.
+            # Netted DV01 is converted back to margin with the same
+            # tenor-stress rate _swap_derivative_margin_mm already applies
+            # per-trade, so the book-level and per-trade views agree.
             def _portfolio_financing(notional_mm: pd.Series) -> tuple[float, float, float]:
                 _ratio = pd.to_numeric(df_scored['ratio_v2_v1'], errors='coerce').fillna(1.0)
                 _ratio3 = pd.to_numeric(df_scored.get('ratio_v3_v1'), errors='coerce').fillna(0.0)
-                _leg_exposure: dict[str, float] = {}
-                _leg_is_bond: dict[str, bool] = {}
+                _bond_leg_exposure: dict[str, float] = {}
+                _deriv_leg_dv01_k: dict[str, float] = {}
+                _deriv_leg_notional: dict[str, float] = {}
+                _deriv_leg_max_tenor: dict[str, float] = {}
+                _unresolved_notional_mm = 0.0
 
                 for row_idx, leg1, leg2, leg3, ratio, ratio3, leg1_notional in zip(
                     df_scored.index,
@@ -723,17 +763,41 @@ def register_portfolio_callbacks(app) -> None:
                         if not leg:
                             continue
                         resolved_leg = True
-                        _leg_exposure[leg] = _leg_exposure.get(leg, 0.0) + leg_notional
-                        _leg_is_bond[leg] = leg.endswith('.IB')
+                        if leg.endswith('.IB'):
+                            _bond_leg_exposure[leg] = _bond_leg_exposure.get(leg, 0.0) + leg_notional
+                            continue
+                        _tenor_dur = _swap_leg_tenor_duration(leg)
+                        if _tenor_dur is None:
+                            # Unknown leg code: can't net by DV01, so fall
+                            # back to a conservative per-leg notional charge
+                            # (never netted against other trades).
+                            _unresolved_notional_mm += abs(leg_notional)
+                            continue
+                        _tenor_years, _leg_duration = _tenor_dur
+                        _deriv_leg_dv01_k[leg] = _deriv_leg_dv01_k.get(leg, 0.0) + leg_notional * _leg_duration / 10.0
+                        _deriv_leg_notional[leg] = _deriv_leg_notional.get(leg, 0.0) + leg_notional
+                        _deriv_leg_max_tenor[leg] = max(_deriv_leg_max_tenor.get(leg, 0.0), _tenor_years)
                     if not resolved_leg:
-                        fallback_key = f'__unresolved_{row_idx}'
-                        _leg_exposure[fallback_key] = leg1_notional
-                        _leg_is_bond[fallback_key] = False
+                        _unresolved_notional_mm += abs(leg1_notional)
 
-                net_bond_mm = sum(abs(exposure) for leg, exposure in _leg_exposure.items() if _leg_is_bond[leg])
-                net_derivative_mm = sum(abs(exposure) for leg, exposure in _leg_exposure.items() if not _leg_is_bond[leg])
-                capital_without_repo = net_bond_mm + net_derivative_mm * swap_margin_rate
-                capital_with_repo = net_bond_mm * repo_margin_rate + net_derivative_mm * swap_margin_rate
+                net_bond_mm = sum(abs(exposure) for exposure in _bond_leg_exposure.values())
+
+                # Convert each leg's netted DV01 back to margin with the same
+                # tenor-stress bucket used per-trade, floored by a small
+                # netted-notional-based minimum (mirrors _swap_derivative_margin_mm,
+                # but applied once per netted leg instead of once per trade).
+                net_derivative_margin_mm = 0.0
+                for leg, dv01_k in _deriv_leg_dv01_k.items():
+                    max_tenor = _deriv_leg_max_tenor[leg]
+                    stress_bp = next(stress for tenor, stress in _SWAP_MARGIN_TENOR_STRESS_BP if max_tenor <= tenor)
+                    min_rate = next(rate for tenor, rate in _SWAP_MARGIN_MIN_RATE_BY_TENOR if max_tenor <= tenor)
+                    dv01_margin_mm = abs(dv01_k) * stress_bp / 1000.0
+                    notional_floor_mm = abs(_deriv_leg_notional[leg]) * min_rate
+                    net_derivative_margin_mm += max(dv01_margin_mm, notional_floor_mm)
+                net_derivative_margin_mm += _unresolved_notional_mm * swap_margin_rate
+
+                capital_without_repo = net_bond_mm + net_derivative_margin_mm
+                capital_with_repo = net_bond_mm * bond_margin_rate + net_derivative_margin_mm
                 return net_bond_mm, capital_without_repo, capital_with_repo
 
             _, _, _capital_with_repo_mm = _portfolio_financing(df_scored['notional_mm'])
@@ -784,8 +848,8 @@ def register_portfolio_callbacks(app) -> None:
                 html.Div([html.Span('Total Capital', style=_metric_label), html.Span(f'{total_capital_mm:,.1f} MM', style={**_metric_value, 'color': THEME['accent']} )]),
                 html.Div([html.Span('Total DV01 Budget', style=_metric_label), html.Span(f'{total_dv01_budget:,.3f} MM CNY/bp', style={**_metric_value, 'color': THEME['accent']} )]),
                 html.Div([html.Span('Gross Leg Notional', style=_metric_label), html.Span(f'{_gross_notional_mm:,.1f} MM', style=_metric_value)]),
-                html.Div([html.Span('Capital Without Repo (Netted)', style=_metric_label), html.Span(f'{_capital_without_repo_mm:,.1f} MM', style=_metric_value)]),
-                html.Div([html.Span('Capital With Repo (Netted)', style=_metric_label), html.Span(f'{_capital_with_repo_mm:,.1f} MM', style=_metric_value)]),
+                html.Div([html.Span('Capital at Full Notional (Netted)', style=_metric_label), html.Span(f'{_capital_without_repo_mm:,.1f} MM', style=_metric_value)]),
+                html.Div([html.Span('TRS Margin Used (Netted)', style=_metric_label), html.Span(f'{_capital_with_repo_mm:,.1f} MM', style=_metric_value)]),
                 html.Div([html.Span('Gross Leverage', style=_metric_label), html.Span(f'{_gross_leverage:.1f}x', style={**_metric_value, 'color': THEME['accent']} )]),
             ]
             if _dv01_shortfall_pct > 0.01:
@@ -987,7 +1051,7 @@ def register_portfolio_callbacks(app) -> None:
                     html.Div([html.Strong("Total Trades: ", style={'color': THEME['text_sub']}), html.Span(f"{len(df_scored)}", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("Margin Budget: ", style={'color': THEME['text_sub']}), html.Span(f"{total_capital:.1f} MM CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("DV01 Budget: ", style={'color': THEME['text_sub']}), html.Span(f"{total_dv01_budget:.1f} MM CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
-                    html.Div([html.Strong("Capital With Repo (Netted): ", style={'color': THEME['text_sub']}), html.Span(f"{_capital_with_repo_mm:.2f} / {total_capital:.1f} MM CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
+                    html.Div([html.Strong("TRS Margin Used (Netted): ", style={'color': THEME['text_sub']}), html.Span(f"{_capital_with_repo_mm:.2f} / {total_capital:.1f} MM CNY", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("Avg Score: ", style={'color': THEME['text_sub']}), html.Span(f"{df_scored['score'].mean():.3f}", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("Risk Parity: ", style={'color': THEME['text_sub']}), html.Span(f"σ(RC)={df_scored['risk_contribution'].std():.3f}" if 'risk_contribution' in df_scored.columns else "N/A", style={'color': THEME['text_main']})], style={'marginRight': '30px'}),
                     html.Div([html.Strong("BUY/SELL: ", style={'color': THEME['text_sub']}), html.Span(f"{(df_scored['direction'] == 'BUY').sum()} / {(df_scored['direction'] == 'SELL').sum()}" if 'direction' in df_scored.columns else "N/A", style={'color': THEME['text_main']})]),

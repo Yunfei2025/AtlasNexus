@@ -59,16 +59,18 @@ def test_tenor_legs_is_case_insensitive():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize('instrument,expected', [
-    # Repo7d anchors: 3m, 6m, 9m, 1y, 2y, 5y -- every pairwise combination liquid.
+    # Repo7d anchors: 3m, 6m, 9m, 1y, 2y, 5y, 7y, 10y -- every pairwise combination liquid.
     ('Repo7d-3m6m', True), ('Repo7d-6m9m', True), ('Repo7d-9m1y', True),
     ('Repo7d-1y2y', True), ('Repo7d-2y5y', True), ('Repo7d-1y5y', True),
     ('Repo7d-3m1y', True), ('Repo7d-3m5y', True),
+    ('Repo7d-5y7y', True), ('Repo7d-7y10y', True), ('Repo7d-5y10y', True),
     # Off-anchor legs (3y, 4y) make the whole spread illiquid even with one
     # anchor leg present.
     ('Repo7d-4y5y', False), ('Repo7d-2y3y', False), ('Repo7d-1y4y', False),
-    ('Repo7d-3y4y', False),
+    ('Repo7d-3y4y', False), ('Repo7d-4y7y', False), ('Repo7d-3y10y', False),
     # 3-leg flies: liquid only if ALL THREE legs are anchors.
     ('Repo7d-3m6m9m', True), ('Repo7d-1y2y5y', True),
+    ('Repo7d-2y5y10y', True), ('Repo7d-5y7y10y', True),
     ('Repo7d-3m2y3y', False),   # 3y leg breaks it
     ('Repo7d-3m4y5y', False),   # 4y leg breaks it
     # Shi3M: narrower liquid set (1y, 5y only) -- even anchor-looking 6m/9m
@@ -86,10 +88,11 @@ def test_is_swapspread_liquid(instrument, expected):
 
 
 def test_liquid_tenor_sets_match_stated_anchors():
-    """Documents the exact anchor sets from the user's 2026-09-19 description:
-    Repo7d-{3m,6m,9m,1y,2y,5y} and Shi3M-{1y,5y}; Basis matches Shi3M's
-    narrower set since Basis = SHI3M leg - FR007 leg at one tenor."""
-    assert _REPO7D_LIQUID_TENORS == {'3m', '6m', '9m', '1y', '2y', '5y'}
+    """Documents the exact anchor sets: Repo7d-{3m,6m,9m,1y,2y,5y,7y,10y}
+    (7y/10y added 2026-09-22, now tradable and liquid) and Shi3M-{1y,5y};
+    Basis matches Shi3M's narrower set since Basis = SHI3M leg - FR007 leg
+    at one tenor."""
+    assert _REPO7D_LIQUID_TENORS == {'3m', '6m', '9m', '1y', '2y', '5y', '7y', '10y'}
     assert _SHI3M_LIQUID_TENORS == {'1y', '5y'}
     assert _BASIS_LIQUID_TENORS == {'1y', '5y'}
 

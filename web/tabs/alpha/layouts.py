@@ -304,7 +304,7 @@ def build_candidates_layout() -> html.Div:
                 # Left: Candidates signals
                 html.Div([
                     html.Div([
-                        html.Span("Momentum score filter:", style={
+                        html.Span("Momentum Zscore filter:", style={
                             'fontSize': '9px', 'color': THEME['text_sub'], 'whiteSpace': 'nowrap',
                         }),
                         dcc.Input(
@@ -312,7 +312,7 @@ def build_candidates_layout() -> html.Div:
                             type='number', value=1.0, min=0, step=0.1, debounce=True,
                             style={'width': '64px', 'fontSize': '11px'},
                         ),
-                        html.Span("(Momentum only; keeps BUY with score > value, SELL with score < −value. Carry and Event-Driven use their own gates.)", style={
+                        html.Span("(Momentum only; keeps rows with |Zscore (pullback σ)| ≥ value. Carry and Event-Driven use their own gates.)", style={
                             'fontSize': '9px', 'color': THEME['text_sub'], 'fontStyle': 'italic',
                         }),
                     ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px',
@@ -423,8 +423,12 @@ def build_portfolio_layout() -> html.Div:
             dcc.Input(id='alpha-mom-window', type='number', value=20, style={'display': 'none'}),
             dcc.Input(id='alpha-alloc-method', type='text', value='risk_parity', style={'display': 'none'}),
             dcc.Checklist(id='alpha-enforce-corr', options=[], value=[], style={'display': 'none'}),
-            dcc.Input(id='alpha-bond-margin-rate', type='number', value=5.0, style={'display': 'none'}),
             dcc.Input(id='alpha-swap-margin-rate', type='number', value=3.0, style={'display': 'none'}),
+            # Book is financed entirely via TRS (no physical bond repo), so
+            # repo_leverage no longer drives bond-leg margin -- see
+            # alpha-bond-margin-rate below, which is now the live input.
+            # Kept wired (not deleted) in case a physical-repo mode returns.
+            dcc.Input(id='alpha-repo-leverage', type='number', value=15.0, style={'display': 'none'}),
         ], style={'display': 'none'}),
 
         html.Div([
@@ -558,16 +562,16 @@ def build_portfolio_layout() -> html.Div:
                 ]),
                 html.Div(style={'alignSelf': 'stretch', 'width': '1px', 'background': 'var(--border-strong)'}),
                 html.Div([
-                    html.Label("Repo Leverage", style=_label_style),
+                    html.Label("Bond TRS Rate", style=_label_style),
                     html.Div([
                         dcc.Input(
-                            id='alpha-repo-leverage', type='number', value=15.0, min=1.0, step=0.5,
+                            id='alpha-bond-margin-rate', type='number', value=5.0, min=0.1, step=0.1,
                             style={'width': '64px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',
                                    'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',
                                    'textAlign': 'right'},
                         ),
-                        html.Span("x", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
+                        html.Span("%", style={'color': THEME['text_sub'], 'fontSize': '10px'}),
                     ], style={'display': 'flex', 'alignItems': 'center', 'gap': '6px'}),
                 ]),
                 html.Div(id='alpha-financing-summary', style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '16px',

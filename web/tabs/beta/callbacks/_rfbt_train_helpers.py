@@ -55,6 +55,14 @@ def _compute_factor_stats(results: Dict) -> Dict:
         pred = df['predicted_return'].dropna()
         sig = df['signal'].dropna()
         last_signal = float(sig.iloc[-1]) if not sig.empty else 0.0
+        # 'position' is the actual backtest-used exposure (continuous
+        # conviction in [-max_leverage, max_leverage], or the quantised level
+        # itself in discrete mode). 'signal' is only sign(position) once
+        # sizing_mode='continuous' (the default) — using last_signal alone
+        # for anything downstream of "how big" collapses every factor to
+        # exactly -1/0/+1, discarding all magnitude. See last_position below.
+        pos = df['position'].dropna() if 'position' in df.columns else sig
+        last_position = float(pos.iloc[-1]) if not pos.empty else last_signal
         last_pred_val = float(pred.iloc[-1]) if not pred.empty else 0.0
         last_data_date = pred.index[-1] if not pred.empty else (df.index[-1] if len(df) else None)
         pred_hist = pred.tail(252)
@@ -85,6 +93,7 @@ def _compute_factor_stats(results: Dict) -> Dict:
 
         factor_stats[factor] = {
             'last_signal': last_signal,
+            'last_position': last_position,
             'last_data_date': last_data_date,
             'z_score': z_score,
             'scalar': scalar,
@@ -117,9 +126,15 @@ def _render_signal_cards(factor_stats: Dict, artifact=None) -> html.Div:
     _NEUTRAL = 'var(--text-muted)'
 
     def _sc(factor, stats):
-        ls = stats['last_signal']            # quantised target in [-1,1]; sign = direction
-        strong = ls >= 0.8 or ls <= -0.8
-        arrow_prefix = '↑↑' if ls >= 0.8 else ('↓↓' if ls <= -0.8 else '')
+        # 'last_signal' is sign(position) once sizing_mode='continuous' (the
+        # live default) — always exactly -1/0/+1, so it can carry direction
+        # but never conviction size. 'last_position' is the actual held
+        # exposure (continuous: [-max_leverage, max_leverage]; discrete:
+        # equal to signal already), so use it for the strong/mild threshold.
+        ls = stats['last_signal']            # sign = direction
+        lp = stats.get('last_position', ls)  # magnitude = conviction
+        strong = lp >= 0.8 or lp <= -0.8
+        arrow_prefix = '↑↑' if lp >= 0.8 else ('↓↓' if lp <= -0.8 else '')
         prefix = factor.split('.')[0]
         is_yield = prefix in _IR_PREFIXES
         is_slope = prefix in ('IRSL', 'CRSL')

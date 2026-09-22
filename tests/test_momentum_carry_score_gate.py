@@ -1,15 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Tests for the Momentum/Carry (trend bucket) score-magnitude entry gate.
+"""Tests for the Momentum bucket's Zscore-magnitude entry gate, and for
+`_add_unified_score_preview`'s separate `score` column.
 
-Regression coverage for a 2026-09-19 fix: `_add_unified_score_preview`
-(curves/refreshers/alpha_scoring.py) already computes `score` =
-|expected_return_H| / risk -- a dimensionless, non-negative (direction is a
-separate field) ratio where score>=1 means the expected move over the
-scoring horizon is at least one standard deviation of risk. That score was
-being used only for ranking in build_alpha_candidates's trend bucket, never
-as an entry gate -- a pullback-confirmed row with score << 1 (negligible
-edge-to-risk) could still enter. MOMENTUM_CARRY_MIN_SCORE=1.0 now filters
-the trend bucket after the pullback direction is assigned.
+Background: `_add_unified_score_preview` (curves/refreshers/alpha_scoring.py)
+computes `score` = |expected_return_H| / risk -- a dimensionless, non-negative
+(direction is a separate field) ratio. It is a real, correctly-computed
+column (tested below), but as of 2026-09-22 it is NOT the Momentum entry
+gate -- it is display/ranking only for Momentum rows.
+
+The actual gate (MOMENTUM_CARRY_MIN_SCORE, in build_alpha_candidates) checks
+|Zscore| -- for Momentum rows, 'Zscore' is overwritten by
+_add_momentum_ma_zscore to be the pullback z-score (trend_momentum) against
+the established trend, not the row's original level Zscore. A
+pullback-confirmed row whose pullback magnitude is too small (|Zscore| < 1)
+is dropped even though its expected edge/risk score might be large, and vice
+versa -- the two are independent measures of the row.
 """
 from __future__ import annotations
 
@@ -74,45 +79,53 @@ def test_score_of_one_means_edge_equals_one_risk_stdev():
 
 
 # ---------------------------------------------------------------------------
-# The actual gate: MOMENTUM_CARRY_MIN_SCORE applied to the trend bucket
+# The actual gate: MOMENTUM_CARRY_MIN_SCORE applied to |Zscore| (the
+# pullback z-score / trend_momentum), NOT the 'score' column
 # ---------------------------------------------------------------------------
 
 def test_momentum_carry_min_score_constant_is_one():
-    """Documents the exact threshold the user asked to restore: score>=1
-    for the trend bucket's entry gate (score is unsigned; BUY/SELL is a
-    separate field set by the pullback logic, not by score's sign)."""
+    """Documents the threshold: |Zscore| (pullback z-score) >= 1.0 for the
+    Momentum bucket's entry gate. Zscore is unsigned-magnitude-gated here;
+    BUY/SELL is a separate field set by the pullback logic beforehand, not
+    by this gate."""
     assert MOMENTUM_CARRY_MIN_SCORE == 1.0
 
 
-def test_trend_score_gate_filters_low_magnitude_rows():
+def test_momentum_zscore_gate_filters_small_pullbacks():
     """Simulates the gate step in build_alpha_candidates: after direction is
-    set by the trend_state/trend_zt pullback logic, a row must ALSO clear
-    score >= MOMENTUM_CARRY_MIN_SCORE to survive -- a pullback-confirmed
-    direction with negligible edge-to-risk must be dropped."""
-    trend = pd.DataFrame({
-        'ID': ['STRONG_EDGE', 'WEAK_EDGE', 'BORDERLINE'],
-        'direction': ['BUY', 'BUY', 'SELL'],
-        'score': [2.5, 0.3, 1.0],
+    set by the trend_state/trend_zt pullback logic (which overwrites
+    'Zscore' with the pullback z-score), a row must ALSO clear
+    |Zscore| >= MOMENTUM_CARRY_MIN_SCORE to survive -- a pullback-confirmed
+    direction whose pullback is too small in sigma terms must be dropped,
+    regardless of its (separate, unrelated) 'score' edge/risk value."""
+    momentum = pd.DataFrame({
+        'ID': ['STRONG_PULLBACK', 'WEAK_PULLBACK', 'BORDERLINE', 'SMALL_ZSCORE_BIG_SCORE'],
+        'direction': ['BUY', 'BUY', 'SELL', 'BUY'],
+        'Zscore': [2.5, 0.3, -1.0, 0.2],
+        'score': [1.2, 1.5, 0.9, 9.6],  # deliberately uncorrelated with Zscore
     })
-    trend_score = pd.to_numeric(trend['score'], errors='coerce')
-    filtered = trend[trend_score.ge(MOMENTUM_CARRY_MIN_SCORE)].copy()
+    zscore = pd.to_numeric(momentum['Zscore'], errors='coerce')
+    filtered = momentum[zscore.abs().ge(MOMENTUM_CARRY_MIN_SCORE)].copy()
 
-    assert set(filtered['ID']) == {'STRONG_EDGE', 'BORDERLINE'}
-    assert 'WEAK_EDGE' not in set(filtered['ID'])
+    assert set(filtered['ID']) == {'STRONG_PULLBACK', 'BORDERLINE'}
+    assert 'WEAK_PULLBACK' not in set(filtered['ID'])
+    # A high 'score' does NOT rescue a row with a small Zscore/pullback --
+    # the gate is on Zscore, score is display-only for Momentum rows.
+    assert 'SMALL_ZSCORE_BIG_SCORE' not in set(filtered['ID'])
 
 
-def test_trend_score_gate_does_not_touch_mr_bucket():
-    """The score gate is scoped to the trend/carry bucket only -- MR's
-    entry gate remains composite_z >= entry_z_used (its own, pre-existing
-    mechanism), unaffected by MOMENTUM_CARRY_MIN_SCORE."""
+def test_momentum_zscore_gate_does_not_touch_mr_bucket():
+    """The Zscore-magnitude gate is scoped to the Momentum bucket only --
+    MR's entry gate remains composite_z >= entry_z_used (its own,
+    pre-existing mechanism), unaffected by MOMENTUM_CARRY_MIN_SCORE."""
     mr = pd.DataFrame({
-        'ID': ['MR_LOW_SCORE_BUT_VALID_Z'],
+        'ID': ['MR_LOW_ZSCORE_BUT_VALID_COMPOSITE_Z'],
         'direction': ['BUY'],
         'composite_z': [2.1],
         'entry_z_used': [2.0],
-        'score': [0.1],  # would fail the trend gate, but MR doesn't use it
+        'Zscore': [0.1],  # would fail the momentum gate, but MR doesn't use it
     })
     mr_composite_z = pd.to_numeric(mr['composite_z'], errors='coerce')
     # MR's own gate (mirrors alpha_candidates.py's actual mr filtering step):
     mr_kept = mr[mr_composite_z.abs().ge(mr['entry_z_used'])]
-    assert len(mr_kept) == 1  # MR row survives on its own z-based gate despite low score
+    assert len(mr_kept) == 1  # MR row survives on its own composite_z gate despite low Zscore

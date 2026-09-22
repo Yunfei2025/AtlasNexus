@@ -356,7 +356,22 @@ regime with more of them.
   data is pulled, so it's an explicit, known noise source rather than
   discovered later during live P&L review.
 
-## 13. Summary
+## 13. Alternative signal considered: CTD YTM vs futures-implied YTM
+
+Considered replacing `NBR` (§3) with a yield-space spread,
+`YTM_CTD(t) - YTM_implied(t)` (the yield that makes the CTD's carried
+forward price match its actual price). Attractive because it's
+unit-consistent with §4's gate, which is already in yield-shift terms —
+but it doesn't actually remove anything `NBR` carries: computing
+`YTM_implied` still needs the same carry model, and the spread still
+inherits the delivery-option-driven nonzero baseline (§1/§3.4), so it needs
+the same z-scoring treatment anyway. Not a strict improvement — kept `NBR`.
+
+Better use of the idea: as a smoothing input to §4's gate (a continuous
+version of the duration-bucket proxy) rather than as the primary signal.
+Revisit when tuning §4 empirically.
+
+## 14. Summary
 
 One signal (`NBR` z-score vs repo, MR-style), one gate (breakeven distance /
 horizon vol, sizes or excludes), one diagnostic (IRR dispersion, monitoring
