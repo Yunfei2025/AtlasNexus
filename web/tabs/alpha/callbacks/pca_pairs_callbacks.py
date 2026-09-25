@@ -51,12 +51,14 @@ def _leg_row(ticker: str, direction: str, z: float, r2, halflife, stationary: st
     return html.Div([
         _leg_pill(direction),
         html.Span(display_key(SPREAD_TYPE, ticker), style={
-            'color': THEME['text_main'], 'fontSize': '12px', 'fontWeight': '500', 'marginLeft': '8px',
+            'color': THEME['text_main'], 'fontSize': '11px', 'fontWeight': '500', 'marginLeft': '6px',
+            'overflow': 'hidden', 'textOverflow': 'ellipsis', 'whiteSpace': 'nowrap',
         }),
-        html.Span(f"Z={z:+.2f}  R²={r2_txt}  t½={hl_txt}  stationary={stationary or 'n/a'}", style={
-            'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '10px',
+        html.Span(f"Z={z:+.2f} R²={r2_txt} t½={hl_txt}", style={
+            'color': THEME['text_sub'], 'fontSize': '9px', 'marginLeft': 'auto', 'flexShrink': '0',
+            'whiteSpace': 'nowrap',
         }),
-    ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '3px'})
+    ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '3px', 'gap': '4px'})
 
 
 def _pair_card(cand) -> html.Div:
@@ -65,18 +67,14 @@ def _pair_card(cand) -> html.Div:
     border_color = THEME['success'] if passes else THEME['warning']
 
     header = html.Div([
-        html.Span('✓ Passes screen' if passes else '⚠ Flagged', style={
-            'color': border_color, 'fontSize': '11px', 'fontWeight': '700',
+        html.Span('✓ Passes' if passes else '⚠ Flagged', style={
+            'color': border_color, 'fontSize': '10px', 'fontWeight': '700',
         }),
         html.Span(
-            f"  spread Z={cand.spread_zscore:+.2f}" if cand.spread_zscore is not None else "",
-            style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '6px'},
+            f"Z={cand.spread_zscore:+.2f}" if cand.spread_zscore is not None else "",
+            style={'color': THEME['text_sub'], 'fontSize': '9px', 'marginLeft': 'auto'},
         ),
-        html.Span(
-            f"  leg corr={cand.leg_corr:+.2f}" if cand.leg_corr is not None else "",
-            style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '6px'},
-        ),
-    ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '6px'})
+    ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '5px', 'gap': '6px'})
 
     legs = html.Div([
         _leg_row(cheap.ticker, 'BUY', cheap.zscore, cheap.r2, cheap.halflife, cheap.stationary),
@@ -86,12 +84,12 @@ def _pair_card(cand) -> html.Div:
     reasons_div = None
     if cand.reasons:
         reasons_div = html.Ul(
-            [html.Li(r, style={'fontSize': '9px', 'color': THEME['warning']}) for r in cand.reasons],
-            style={'margin': '6px 0 0', 'paddingLeft': '16px'},
+            [html.Li(r, style={'fontSize': '8px', 'color': THEME['warning']}) for r in cand.reasons],
+            style={'margin': '5px 0 0', 'paddingLeft': '14px'},
         )
 
     add_btn = html.Button(
-        'Add pair to candidates',
+        'Add pair',
         id={'type': 'alpha-pca-pair-add', 'pair': _pair_id(cheap.ticker, rich.ticker)},
         n_clicks=0,
         title=(
@@ -101,17 +99,17 @@ def _pair_card(cand) -> html.Div:
             'deliberate override, not a recommendation.'
         ),
         style={
-            'marginTop': '8px', 'padding': '4px 12px',
+            'marginTop': '7px', 'padding': '3px 10px', 'width': '100%',
             'background': 'transparent', 'color': border_color,
             'border': f'1px solid {border_color}', 'borderRadius': '3px',
-            'fontSize': '10px', 'fontWeight': '700', 'cursor': 'pointer',
+            'fontSize': '9px', 'fontWeight': '700', 'cursor': 'pointer',
         },
     )
 
     return html.Div([header, legs, reasons_div, add_btn], style={
-        'padding': '10px 12px', 'borderRadius': '4px',
+        'padding': '8px 10px', 'borderRadius': '4px',
         'backgroundColor': THEME['bg_card'], 'borderLeft': f'3px solid {border_color}',
-        'marginBottom': '8px',
+        'flex': '1 1 220px', 'minWidth': '220px', 'maxWidth': '280px', 'boxSizing': 'border-box',
     })
 
 
@@ -141,7 +139,10 @@ def register_pca_pairs_callbacks(app) -> None:
             "constructed spread).",
             style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginBottom': '8px'},
         )
-        return html.Div([summary] + cards)
+        cards_row = html.Div(cards, style={
+            'display': 'flex', 'flexWrap': 'wrap', 'gap': '8px', 'alignItems': 'stretch',
+        })
+        return html.Div([summary, cards_row])
 
     @app.callback(
         [Output('alpha-selected-candidates', 'data', allow_duplicate=True),

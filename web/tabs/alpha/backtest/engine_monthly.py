@@ -384,9 +384,11 @@ def run_monthly_style_backtest(
         return float(v) if np.isfinite(v) else 0.0
 
     # Warm-up: the first index at which *either* engine could act.  MR needs its
-    # full rolling window; trend needs momentum + vol windows.
+    # full rolling window (the caller's mr_lookback, not the module default --
+    # see the matching fix at the MR entry gate below); trend needs momentum +
+    # vol windows.
     trend_start = max(int(vol_window), int(mom_window)) + 1
-    start_i = min(MR_LOOKBACK, trend_start)
+    start_i = min(int(mr_lookback), trend_start)
     start_i = max(start_i, 1)
     if start_i >= len(s):
         return {'error': 'Insufficient data'}
@@ -542,7 +544,12 @@ def run_monthly_style_backtest(
         # ---- Entries, gated by the current month's style ---------------------
         if position == 0 and style in ('mr', 'trend'):
             if style == 'mr':
-                if i >= MR_LOOKBACK and np.isfinite(cz):
+                # mr_lookback (the caller's param, e.g. a saved per-instrument
+                # override), not the module default MR_LOOKBACK -- previously
+                # hardcoded here, so a shortened mr_lookback correctly sped up
+                # the fair-value anchor (rolling_mean above) but MR entries
+                # stayed blocked until the module's 120-bar default anyway.
+                if i >= int(mr_lookback) and np.isfinite(cz):
                     # Release the stop lockout once the signal has genuinely
                     # recovered back inside the entry band.
                     if mr_stop_lock_dir == 1 and cz > -entry_z:

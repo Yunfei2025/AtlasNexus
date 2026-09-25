@@ -39,6 +39,30 @@ import pandas as pd
 
 TRADING_DAYS = 252
 
+# Rolling-correlation diagnostic (see docs/plans/portfolio_construction_beta_alpha.md
+# §5.1). A single full-sample correlation can't distinguish "diversifying on
+# average" from "diversifying except in the tail" -- both books are
+# duration/curve-adjacent (Alpha core = TenorSpread bond-vs-curve/repo, Beta's
+# Rates sleeve = duration-driven), so a rates-stress episode is exactly the
+# scenario where the two could correlate hard while the full-sample number
+# still looks fine.
+#
+# Window is 120 trading days (~half a year), not the 60d full-sample minimum
+# gate below: at n=60 the standard error of a sample correlation is ~0.13,
+# noisy enough to flag spurious "spikes" on noise alone; at n=120 it drops to
+# ~0.09. Using the same 60d figure for both the floor and the rolling window
+# would also mean the first rolling point needs the *entire* minimum-overlap
+# history, leaving no room to see it move -- 120d keeps the rolling view a
+# strict step above the floor. Still short enough that a multi-week
+# stress-driven correlation shift shows up as a distinguishable bump rather
+# than being smoothed into the full-sample average.
+ROLLING_CORR_WINDOW = 120
+
+# First-pass threshold for flagging a rolling-correlation spike, not tuned
+# against real data yet -- revisit once this has been looked at against
+# actual saved beta/alpha backtest history.
+ROLLING_CORR_FLAG = 0.5
+
 
 def estimate_alpha_book_margin_ratio(instruments: list[dict]) -> Optional[float]:
     """Weighted-average margin consumed per unit of alpha notional.
@@ -166,12 +190,21 @@ MAX_MARGIN_UTILIZATION = 0.90
 SUGGESTED_SPLIT_TICK = 0.05
 
 
+# Backtest-window dropdown choices (Summary > Books > Portfolio Combination).
+# 'MAX' keeps the full overlapping history; the year windows trim both books'
+# return series to the trailing N*TRADING_DAYS calendar days before any
+# metric (Sharpe, vol, PnL) is computed, so every number on the panel -- not
+# just the chart -- reflects the selected window.
+WINDOW_YEARS = {'1Y': 1, '2Y': 2, '5Y': 5, '10Y': 10, 'MAX': None}
+
+
 def build_combination(
     beta_result: Optional[dict],
     alpha_result: Optional[dict],
     total_capital_mm: float,
     alpha_margin_share: float,
     max_margin_utilization: float = MAX_MARGIN_UTILIZATION,
+    window: str = 'MAX',
 ) -> dict[str, Any]:
     """Align both books and analyse the combined portfolio.
 
@@ -199,6 +232,12 @@ def build_combination(
     notional. ``w`` can exceed 1.0 (alpha notional bigger than the whole
     capital pool) whenever ``margin_ratio < 1``, which is the normal,
     expected case for a margined book; it is not clipped.
+
+    ``window`` trims both books' overlapping return series to the trailing
+    N years (see ``WINDOW_YEARS``) before any metric is computed; ``'MAX'``
+    (default) keeps the full overlap. Trimming happens after the overlap
+    join, on the *joined* calendar, so a window like '1Y' means "the last
+    year both books were live", not the last year of either alone.
 
     Returns ``{'error': str}`` when either book has no saved result, when
     their date ranges do not overlap enough to compare, or when the alpha
@@ -234,12 +273,40 @@ def build_combination(
     r_beta = r_beta.reindex(common).astype(float)
     r_alpha = r_alpha.reindex(common).astype(float)
 
+    years = WINDOW_YEARS.get(window, None)
+    if years is not None:
+        cutoff = common.max() - pd.Timedelta(days=int(years * 365.25))
+        windowed = common[common >= cutoff]
+        if len(windowed) < 60:
+            return {'error': (f"Only {len(windowed)} overlapping days in the trailing {window} window "
+                              f"— need at least 60 to compare. Pick a longer window.")}
+        common = windowed
+        r_beta = r_beta.reindex(common)
+        r_alpha = r_alpha.reindex(common)
+
     m_beta = _metrics(r_beta)
     m_alpha = _metrics(r_alpha)
 
     util = float(np.clip(max_margin_utilization, 0.0, 1.0)) or MAX_MARGIN_UTILIZATION
 
+    # Margin-based alpha metrics: r_alpha is return per unit of NOTIONAL (see
+    # _alpha_returns); dividing notional by margin_ratio gives margin, so
+    # scaling the return series by 1/margin_ratio would reprice it as return
+    # per unit of margin IF the whole allocated margin were deployed. It
+    # isn't -- only `util` (e.g. 90%) of allocated margin is usable, the rest
+    # is a standing buffer that earns nothing (see MAX_MARGIN_UTILIZATION).
+    # An allocation of 2B with 90% utilization means the return has to be
+    # measured against the full 2B, not just the 1.8B actually deployed --
+    # scaling by `util / margin_ratio` (not `1 / margin_ratio`) is what makes
+    # that buffer show up as a drag on the book's margin-based return, and
+    # it's the same scaling the combined blend already applies via `w` below
+    # -- this just isolates it to the alpha book on its own so the two return
+    # bases don't have to be inferred from the blend.
+    m_alpha_margin = _metrics(r_alpha * util / margin_ratio)
+
     corr = float(r_beta.corr(r_alpha))
+    rolling_corr = _rolling_correlation(r_beta, r_alpha)
+    worst_window_corr = float(rolling_corr.max()) if rolling_corr is not None else None
     ms = float(np.clip(alpha_margin_share, 0.0, 1.0))
     # w is sized off USABLE margin (ms * util), not the full allocated margin
     # -- the untouched (1 - util) slice is a standing buffer, not deployed.
@@ -300,17 +367,39 @@ def build_combination(
     alpha_margin_usable_mm = alpha_margin_allocated_mm * util
     alpha_notional_mm = alpha_margin_usable_mm / margin_ratio
 
+    # Total PnL in MM CNY over the selected window, net of cost -- both books'
+    # equity series are already net of financing/borrow cost (see module
+    # docstring), so total_return * capital-base is the net PnL directly, no
+    # separate cost deduction needed. Each book's PnL is on ITS OWN capital
+    # base -- beta notional, alpha's ALLOCATED margin (the full 2B in the
+    # 20B/90-10 example, not the 1.8B actually deployed: m_alpha_margin's
+    # return series already has the utilization buffer folded in via `util`,
+    # so it's already "return against the whole allocation, buffer included"
+    # -- multiplying by the usable-only slice would double-count the buffer
+    # drag). Combined PnL is beta's PnL plus alpha's PnL scaled by margin
+    # usage, which equals total_return on the whole capital pool since
+    # combined returns are the same capital-weighted blend used for
+    # m_combined above.
+    pnl_beta_mm = m_beta['total_return'] * beta_notional_mm
+    pnl_alpha_mm = m_alpha_margin['total_return'] * alpha_margin_allocated_mm
+    pnl_combined_mm = m_combined['total_return'] * total_capital_mm
+
     return {
         'n_days': int(len(common)),
         'start': common.min(),
         'end': common.max(),
         'beta': m_beta,
         'alpha': m_alpha,
+        'alpha_margin_metrics': m_alpha_margin,
         'combined': m_combined,
         'alpha_margin_share': ms,
         'alpha_weight': w,
         'max_margin_utilization': util,
         'correlation': corr,
+        'rolling_correlation': rolling_corr,
+        'rolling_correlation_window': ROLLING_CORR_WINDOW,
+        'worst_window_correlation': worst_window_corr,
+        'rolling_correlation_flag': ROLLING_CORR_FLAG,
         'diversification_ratio': div_ratio,
         'sweep': sweep_df,
         'max_sharpe_margin_share': max_sharpe_ms,
@@ -324,8 +413,30 @@ def build_combination(
         'alpha_margin_mm': alpha_margin_allocated_mm,
         'alpha_margin_usable_mm': alpha_margin_usable_mm,
         'alpha_notional_mm': alpha_notional_mm,
+        'pnl_beta_mm': pnl_beta_mm,
+        'pnl_alpha_mm': pnl_alpha_mm,
+        'pnl_combined_mm': pnl_combined_mm,
+        'window': window,
         'returns': {'beta': r_beta, 'alpha': r_alpha, 'combined': r_combined},
     }
+
+
+def _rolling_correlation(
+    r_beta: pd.Series,
+    r_alpha: pd.Series,
+    window: int = ROLLING_CORR_WINDOW,
+) -> Optional[pd.Series]:
+    """Rolling correlation of the two books' daily returns, or None if there
+    isn't enough overlapping history for even one window's worth of points.
+
+    Deliberately separate from the full-sample ``corr`` scalar in
+    ``build_combination`` -- see ``ROLLING_CORR_WINDOW`` docstring for why the
+    window is longer than the full-sample minimum-overlap gate.
+    """
+    if len(r_beta) < window:
+        return None
+    roll = r_beta.rolling(window).corr(r_alpha).dropna()
+    return roll if not roll.empty else None
 
 
 def _risk_parity_weight(r_beta: pd.Series, r_alpha: pd.Series) -> float:

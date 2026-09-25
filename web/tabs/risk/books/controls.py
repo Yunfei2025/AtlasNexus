@@ -12,18 +12,25 @@ from web.tabs.beta.data import THEME
 
 def register_risk_book_control_callbacks(app):
     """Register the Summary > Books control callbacks."""
+
+    # ── Combination / Allocation Snapshot page switcher ─────────────────────────
+    # Both pages are mounted at once (see build_risk_layout); switching
+    # 'summary-books-page-tabs' only toggles which is visible, the same
+    # pattern Alpha > Backtest uses for Individual/Portfolio -- so neither
+    # page's inputs (capital, margin share, window, book/column toggles)
+    # reset when you switch back and forth.
     @app.callback(
-        [Output('summary-combo-detail', 'style'),
-         Output('summary-combo-chevron', 'children')],
-        Input('summary-combo-toggle', 'n_clicks'),
-        prevent_initial_call=True,
+        [Output('summary-books-page-combination', 'style'),
+         Output('summary-books-page-allocation', 'style')],
+        Input('summary-books-page-tabs', 'value'),
     )
-    def _toggle_combo_detail(n_clicks):
-        is_open = bool(n_clicks and n_clicks % 2 == 1)
-        style = {'overflow': 'hidden'}
-        style['display'] = 'block' if is_open else 'none'
-        return style, ('▲ collapse' if is_open else '▼ details')
-    
+    def _toggle_books_page(page):
+        show = {'display': 'block'}
+        hide = {'display': 'none'}
+        if page == 'allocation':
+            return hide, show
+        return show, hide
+
     # ── Beta / Alpha book toggle ────────────────────────────────────────────────
     _ACCENT = THEME['accent']
     _WARN = THEME['warning']

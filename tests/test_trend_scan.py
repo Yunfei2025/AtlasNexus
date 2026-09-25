@@ -153,11 +153,18 @@ def test_scan_instrument_recommends_when_both_checks_agree(monkeypatch):
     def _fake_run_mr(spread_ts, **kwargs):
         return {'n_trades': 1, 'sharpe': -2.0}
 
-    def _fake_run_trend(spread_ts, **kwargs):
+    def _fake_run_monthly_style(spread_ts, month_to_style, **kwargs):
         return {'n_trades': 20, 'sharpe': 1.0}
 
     monkeypatch.setattr('web.tabs.alpha.backtest.engine_mr.run_spread_backtest', _fake_run_mr)
-    monkeypatch.setattr('web.tabs.alpha.backtest.engine_trend.run_trend_backtest', _fake_run_trend)
+    # scan_instrument validates the trend leg through run_monthly_style_backtest
+    # (the engine that actually trades a whitelisted instrument), not
+    # engine_trend.run_trend_backtest standalone -- see trend_scan.py's
+    # 2026-09-25 module docstring correction.
+    monkeypatch.setattr(
+        'web.tabs.alpha.backtest.engine_monthly.run_monthly_style_backtest',
+        _fake_run_monthly_style,
+    )
 
     # Long enough that recent_years=2 leaves a genuine pre-cutoff slice too.
     idx = pd.bdate_range('2020-01-01', periods=_MIN_TOTAL_OBS + 700)

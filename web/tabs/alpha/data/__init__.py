@@ -8,6 +8,8 @@ Split into submodules for size; re-exported here so existing
   - loaders: load_spread_data, load_spread_timeseries, load_realtime_spreads, ...
   - duration: duration multiplier, borrow cost, tenor yields, TTM display
   - legs: resolve_legs and supporting leg-parsing helpers
+  - core_seed: cached Alpha core (TenorSpread) book membership seed for the
+    satellite candidate correlation-check, refreshed on a time-based expiry
 """
 
 from __future__ import annotations
@@ -81,6 +83,11 @@ from .saved_portfolio_backtest import (
     save_portfolio_backtest_result,
     load_portfolio_backtest_result,
 )
+from .core_seed import (
+    load_core_seed,
+    core_seed_age_days,
+    CORE_SEED_MAX_AGE_DAYS,
+)
 
 __all__ = [
     'THEME',
@@ -118,4 +125,7 @@ __all__ = [
     'has_saved_state',
     'save_portfolio_backtest_result',
     'load_portfolio_backtest_result',
+    'load_core_seed',
+    'core_seed_age_days',
+    'CORE_SEED_MAX_AGE_DAYS',
 ]

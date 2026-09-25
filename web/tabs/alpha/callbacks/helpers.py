@@ -36,6 +36,13 @@ from ..scoring import (
 _ALPHA_BOOK_POSITIONS_PARQUET = _get_input_dir() / 'alpha_book_positions.parquet'
 _REGIME_LOOKUP_CACHE: dict[str, dict[str, str]] = {}
 
+# The alpha core book (Curve & Cross-Asset / TenorSpread, category value
+# 'Tenor-Spread') has already been backtested as a whole -- the seasonal
+# pre-filter below is a satellite-only screen, never applied to core rows
+# regardless of their style. See build_candidates_layout's Core/Satellites
+# split in layouts.py.
+_CORE_CATEGORY = 'Tenor-Spread'
+
 # Custom colorscale matching guide/AlphaCandidates.jsx corrCell():
 # navy-blue (rgb(30,80,160)) for positive, brick-red (rgb(200,60,40))
 # for negative, fading to a near-transparent center at 0.
@@ -70,7 +77,14 @@ def _apply_seasonal_quality_gate(
     p_value_threshold: float,
     month: int | None = None,
 ) -> tuple[pd.DataFrame, int, int]:
-    """Keep candidates with reliable current-month seasonality."""
+    """Keep candidates with reliable current-month seasonality.
+
+    Satellite-only: core-book rows (category == _CORE_CATEGORY) are always
+    kept regardless of style -- the core book has already been backtested as
+    a whole, so this pre-scan quality screen doesn't apply to it. MR rows
+    (any category) are also always kept, since MR entries are already gated
+    on today's composite_z, not seasonality.
+    """
     if not isinstance(seasonal_data, dict):
         return candidates, 0, 0
     if not {'spread_type', 'ID'}.issubset(candidates.columns):
@@ -89,8 +103,11 @@ def _apply_seasonal_quality_gate(
             or regime in {'meanreversion', 'mean_reverting', 'mean-reverting'}
         )
 
+    def _is_core_row(row: pd.Series) -> bool:
+        return str(row.get('category', '') or '').strip() == _CORE_CATEGORY
+
     for index, row in candidates.iterrows():
-        if _is_mean_reverting_row(row):
+        if _is_mean_reverting_row(row) or _is_core_row(row):
             continue
 
         seasonal_frame = seasonal_data.get(str(row['spread_type']))
@@ -357,9 +374,9 @@ def _normalize_corr_labels(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _build_heatmap(values, *, title: str, height: int | None = None):
+def _build_heatmap(values, *, title: str, height: int | None = None, labels: list[str] | None = None):
     fig = go.Figure(data=go.Heatmap(
-        z=values, colorscale=_ALPHA_CORR_COLORSCALE, zmin=-1, zmax=1,
+        z=values, x=labels, y=labels, colorscale=_ALPHA_CORR_COLORSCALE, zmin=-1, zmax=1,
         hovertemplate='%{y} vs %{x}<br>Corr: %{z:.3f}<extra></extra>',
     ))
     if height is None:
@@ -370,6 +387,7 @@ def _build_heatmap(values, *, title: str, height: int | None = None):
         margin=dict(l=100, r=20, t=40, b=80),
         plot_bgcolor=THEME['bg_main'], paper_bgcolor=THEME['bg_main'],
         font=dict(color=THEME['text_main'], size=10),
-        xaxis=dict(tickangle=45),
+        xaxis=dict(tickangle=45, type='category'),
+        yaxis=dict(type='category'),
     )
     return fig

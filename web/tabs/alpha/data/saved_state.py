@@ -131,3 +131,39 @@ def has_saved_state(spread_type: str, instrument: str) -> bool:
     return bool(entry.get('params')) or bool(
         isinstance(entry.get('regime'), dict) and entry['regime'].get('month_to_style')
     )
+
+
+def clear_instrument_state(spread_type: str, instrument: str) -> bool:
+    """Remove a reviewed instrument's saved params/regime entirely.
+
+    For un-reviewing an instrument whose saved params turned out to be wrong
+    for it (e.g. an MR entry_z/stop_z set saved before the instrument was
+    found to be structurally MR-broken and trend-routed instead -- see
+    ``web/tabs/alpha/data/constants.py``'s ``TREND_ROUTED_INSTRUMENTS``).
+    After this call ``load_instrument_params``/``load_monthly_regime`` return
+    None again and every caller falls back to the category default, same as
+    an instrument that was never saved.
+
+    Returns True if an entry existed and was removed, False if there was
+    nothing to clear.
+    """
+    path = _state_path()
+    try:
+        with open(path, 'rb') as f:
+            state = pickle.load(f)
+        if not isinstance(state, dict):
+            return False
+    except FileNotFoundError:
+        return False
+
+    inst_map = state.get(spread_type)
+    if not isinstance(inst_map, dict) or instrument not in inst_map:
+        return False
+
+    del inst_map[instrument]
+    if not inst_map:
+        del state[spread_type]
+
+    with open(path, 'wb') as f:
+        pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+    return True

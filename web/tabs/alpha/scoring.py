@@ -71,6 +71,8 @@ def select_diverse_instruments(
     candidates: list[dict],
     n: int = 10,
     max_abs_corr: float = 1.0,
+    locked: list[dict] | None = None,
+    core_spread_type: str | None = 'TenorSpread',
 ) -> list[str]:
     """Select up to *n* instruments using greedy maximin diversity.
 
@@ -93,10 +95,34 @@ def select_diverse_instruments(
         Hard ceiling on pairwise |corr| for acceptance into the curated list.
         Instruments whose |corr| with any already-selected peer exceeds this
         are skipped.  Default 1.0 (no filtering).
+    locked :
+        Instruments to treat as already selected from the start -- e.g. the
+        Alpha core (default TenorSpread) book's current holdings (see
+        ``web.tabs.alpha.data.load_core_seed`` and
+        docs/plans/portfolio_construction_beta_alpha.md §5.2). Locked
+        instruments count toward every later candidate's max-|corr| check
+        (so a satellite candidate too correlated with the core gets rejected
+        same as if it were too correlated with another satellite pick), but
+        never occupy one of the *n* output slots and are never returned --
+        they're the fixed backdrop being diversified against, not new picks.
+        Dicts use the same ``{ID, spread_type, ...}`` shape as *candidates*;
+        entries not present in ``corr_matrix.columns`` are silently dropped
+        (e.g. insufficient price history for the correlation lookback).
+    core_spread_type :
+        Candidates of this ``spread_type`` are excluded from *candidates*
+        entirely (never eligible for a seed/output slot), not just from the
+        seed via ``locked`` -- ``locked`` only carries load_core_seed's
+        quarterly-cached membership snapshot, so a TenorSpread instrument
+        that newly qualifies for the core book but hasn't reached that cache
+        yet would otherwise still be eligible to win one of the *n* output
+        slots if it was manually added to *candidates* (e.g. "Add" from the
+        main scan). The core book is diversified against, never picked from,
+        regardless of cache freshness. Pass ``None`` to disable.
 
     Returns
     -------
     List of display_key strings in selection order (most diverse first).
+    Locked instruments are never included in this list.
     """
     from .data import display_key as _display_key
 
@@ -107,34 +133,84 @@ def select_diverse_instruments(
         stype = str(c.get('spread_type', '') or '')
         if not inst or not stype:
             continue
+        if core_spread_type and stype == core_spread_type:
+            continue
         dk = _display_key(stype, inst)
         if dk in corr_matrix.columns and dk not in cand_meta:
             cand_meta[dk] = c
 
     available = list(cand_meta.keys())
     if not available:
-        # No candidates match — fall back to all matrix columns.
-        available = list(corr_matrix.columns)
+        # No candidates match — fall back to all matrix columns. Still must not
+        # admit core-book columns here (e.g. the locked seed's own price
+        # series, which correlation_callbacks.py includes in corr_matrix) --
+        # cand_meta has no entry for them either way, so the core_spread_type
+        # check above never ran against them on this path. display_key() has
+        # no reversible spread_type prefix in general, so identify core
+        # columns from `locked` (the actual core-seed rows the caller passed)
+        # rather than trying to parse the column string.
+        excluded_cols: set[str] = set()
+        if core_spread_type:
+            for c in (locked or []):
+                if str(c.get('spread_type', '') or '') == core_spread_type:
+                    inst = str(c.get('ID', '') or '')
+                    if inst:
+                        excluded_cols.add(_display_key(core_spread_type, inst))
+        available = [col for col in corr_matrix.columns if col not in excluded_cols]
 
     abs_corr = corr_matrix.abs()
 
     selected: list[str] = []
     selected_stypes: set[str] = set()
 
-    # Seed: pick the instrument with the highest |z-score| among all available.
+    # Seed the selection with locked instruments (e.g. the live core book) so
+    # every candidate's max-|corr| check below is measured against them from
+    # the start, without ever letting them consume one of the n output slots.
+    locked_keys: set[str] = set()
+    for c in (locked or []):
+        inst  = str(c.get('ID', '') or '')
+        stype = str(c.get('spread_type', '') or '')
+        if not inst or not stype:
+            continue
+        dk = _display_key(stype, inst)
+        if dk not in corr_matrix.columns or dk in locked_keys:
+            continue
+        locked_keys.add(dk)
+        selected.append(dk)
+        selected_stypes.add(stype)
+        # A locked instrument might also appear in `candidates` (e.g. the
+        # core book itself was included in the scan) -- don't let it be
+        # picked again as a "new" selection.
+        if dk in available:
+            available.remove(dk)
+
+    # Seed: pick the instrument with the highest |z-score| among all available
+    # -- but still subject to max_abs_corr against anything already selected
+    # (i.e. locked). Without this check the seed step would ignore the locked
+    # core book entirely and admit a candidate purely on z-score even when
+    # it's highly correlated with an existing core holding.
     def _zscore(dk: str) -> float:
         try:
             return abs(float(cand_meta.get(dk, {}).get('Zscore', 0) or 0))
         except (TypeError, ValueError):
             return 0.0
 
-    remaining = list(available)
-    seed = max(remaining, key=_zscore)
-    selected.append(seed)
-    selected_stypes.add(str(cand_meta.get(seed, {}).get('spread_type', '')))
-    remaining.remove(seed)
+    def _max_corr_with_selected(dk: str) -> float:
+        if not selected or dk not in abs_corr.index:
+            return 0.0
+        return float(abs_corr.loc[dk, selected].max())
 
-    while remaining and len(selected) < n:
+    remaining = list(available)
+    n_locked = len(selected)
+    if remaining and len(selected) - n_locked < n:
+        seed_pool = [dk for dk in remaining if _max_corr_with_selected(dk) <= max_abs_corr]
+        if seed_pool:
+            seed = max(seed_pool, key=_zscore)
+            selected.append(seed)
+            selected_stypes.add(str(cand_meta.get(seed, {}).get('spread_type', '')))
+            remaining.remove(seed)
+
+    while remaining and (len(selected) - n_locked) < n:
         best_dk: str | None = None
         best_score: float = float('inf')   # lower = more diverse
 
@@ -144,7 +220,8 @@ def select_diverse_instruments(
             corr_with_selected = abs_corr.loc[dk, selected]
             max_corr_with_selected = float(corr_with_selected.max())
 
-            # Hard reject: too correlated with an already-selected instrument.
+            # Hard reject: too correlated with an already-selected instrument
+            # (locked or previously picked).
             if max_corr_with_selected > max_abs_corr:
                 continue
 
@@ -168,7 +245,7 @@ def select_diverse_instruments(
         selected_stypes.add(str(cand_meta.get(best_dk, {}).get('spread_type', '')))
         remaining.remove(best_dk)
 
-    return selected
+    return [dk for dk in selected if dk not in locked_keys]
 
 
 def risk_parity_weights(

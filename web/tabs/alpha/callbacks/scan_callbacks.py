@@ -400,7 +400,31 @@ def register_scan_callbacks(app) -> None:
         # buckets; check df_uncertain directly (e.g. via a debugger or the
         # regime summary text) if that count is ever unexpectedly large.
 
+        # Open Positions (Core): TenorSpread instruments the book actually
+        # holds today, shown regardless of whether they clear today's fresh-
+        # entry z-score gate -- the scan above only ever finds NEW entries, so
+        # a held core position with a since-mean-reverted z-score silently
+        # never appeared here before, even though it's live risk. Per user
+        # 2026-09-25: these should be visible in Candidates & Correlation
+        # Check, not just an invisible locked backdrop in the correlation
+        # matrix on the right (see correlation_callbacks.py's core_seed_note).
+        open_core_rows = [
+            p for p in _load_alpha_book_positions()
+            if str(p.get('spread_type', '') or '') == 'TenorSpread'
+        ]
+        open_core_cards = _signal_cards(open_core_rows) if open_core_rows else []
+
         sections = []
+        if open_core_cards:
+            sections.append(html.Div([
+                _section_header('Open Positions (Core)', len(open_core_rows), THEME['accent']),
+                html.P(
+                    "Currently held -- not a fresh scan signal, may not clear today's entry gate.",
+                    style={'color': THEME['text_sub'], 'fontSize': '9px', 'fontStyle': 'italic', 'marginTop': '-4px', 'marginBottom': '8px'},
+                ),
+                _three_col_grid(open_core_cards),
+            ], style={'marginBottom': '18px'}))
+
         if mr_cards:
             sections.append(html.Div([
                 _section_header('Mean-Reversion', len(mr_rows), THEME['success']),
@@ -468,16 +492,19 @@ def register_scan_callbacks(app) -> None:
          Output('alpha-selected-candidates', 'data'),
          Output('alpha-regime-store', 'data')],
         Input('alpha-scan-btn', 'n_clicks'),
-        [State('alpha-spread-categories', 'value'),
+        [State('alpha-spread-categories-core', 'value'),
+         State('alpha-spread-categories-satellite', 'value'),
          State('alpha-zscore-threshold', 'value'),
          State('alpha-direction-filter', 'value'),
          State('seasonal-prefilter-toggle', 'value'),
          State('seasonal-prefilter-min-consistency', 'value'),
          State('seasonal-prefilter-p-thresh', 'value'),
-         State('alpha-trend-score-min', 'value')],
+         State('alpha-trend-score-min', 'value'),
+         State('alpha-carry-min-bp', 'value')],
         prevent_initial_call=True,
     )
-    def scan_candidates(n_clicks, categories, zscore_thd, direction, seasonal_prefilter, seasonal_min_consistency, seasonal_p_thresh, trend_score_min):
+    def scan_candidates(n_clicks, core_categories, satellite_categories, zscore_thd, direction, seasonal_prefilter, seasonal_min_consistency, seasonal_p_thresh, trend_score_min, carry_min_bp):
+        categories = list(core_categories or []) + list(satellite_categories or [])
         if not n_clicks or not categories:
             return html.Div("Select spread categories and click Scan.", style={'color': THEME['text_sub']}), "", [], {}
 
@@ -741,6 +768,26 @@ def register_scan_callbacks(app) -> None:
                 _fails_gate = _is_trend_f & ~_z_f.abs().ge(_trend_score_thd)
                 if _fails_gate.any():
                     df_all = df_all[~_fails_gate].copy()
+
+        # Carry bp filter: re-applies |carry_roll| >= threshold on top of
+        # build_alpha_candidates' own bake-in (CARRY_MIN_ROLL_BP, currently
+        # 5.0bp -- see alpha_candidates.py), so the live UI threshold can
+        # tighten it without a full rebuild, same pattern as the Momentum
+        # Zscore filter above. Carry bucket only -- Mean-Reversion gates on
+        # composite_z/entry_z, Momentum on its own Zscore filter, and
+        # Event-Driven is ungated.
+        try:
+            _carry_min_bp_thd = float(carry_min_bp) if carry_min_bp is not None else 5.0
+        except (TypeError, ValueError):
+            _carry_min_bp_thd = 5.0
+        if _carry_min_bp_thd > 0 and 'carry_roll' in df_all.columns and 'style' in df_all.columns:
+            _style_c = df_all['style'].astype(str).str.strip().str.lower()
+            _is_carry_c = _style_c.eq('carry')
+            if _is_carry_c.any():
+                _cr_c = pd.to_numeric(df_all['carry_roll'], errors='coerce')
+                _fails_carry_gate = _is_carry_c & ~_cr_c.abs().ge(_carry_min_bp_thd)
+                if _fails_carry_gate.any():
+                    df_all = df_all[~_fails_carry_gate].copy()
 
         table_out, candidate_data, regime_store = _render_candidates_from_df(df_all)
         style_counts = (

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dash import dcc, html
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 
 from web.tabs.beta.data import THEME
@@ -26,22 +26,39 @@ def _stat(value: str, label: str, color: str, border: bool = True) -> html.Div:
     ], style=style)
 
 
-def _metric_card(title: str, metrics: dict, accent: str, extra=None) -> html.Div:
+def _metric_card(title: str, metrics: dict, accent: str, pnl_mm: float,
+                  margin_ann_return: Optional[float] = None, extra=None) -> html.Div:
     def row(label, value):
         return html.Div([
             html.Span(label, style={'color': THEME['text_sub'], 'fontSize': '11px'}),
             html.Span(value, style={'color': THEME['text_main'], 'fontSize': '11px', 'fontWeight': '600'}),
         ], style={'display': 'flex', 'justifyContent': 'space-between', 'padding': '2px 0'})
 
+    pnl_color = THEME['success'] if pnl_mm >= 0 else THEME['danger']
+
+    # margin_ann_return (Alpha only): the book's annualized return on its own
+    # usable MARGIN rather than its notional -- what the capital it actually
+    # ties up earned, as opposed to 'Ann. Return' above (notional-based,
+    # unlevered, comparable to Beta's own capital-based figure). See
+    # build_combination's m_alpha_margin for the derivation.
+    margin_row = (
+        [row('Ann. Return (on margin)', f"{margin_ann_return * 100:+.2f}%")]
+        if margin_ann_return is not None else []
+    )
+
     return html.Div([
         html.Div(title, style={'color': THEME['text_sub'], 'fontSize': '11px',
                                 'textTransform': 'uppercase', 'letterSpacing': '.06em',
                                 'marginBottom': '6px'}),
         html.Div(f"{metrics['sharpe']:.2f}", style={'fontSize': '22px', 'fontWeight': '700',
-                                                     'color': accent, 'marginBottom': '8px'}),
+                                                     'color': accent, 'marginBottom': '4px'}),
+        html.Div(f"{pnl_mm:+,.1f} MM CNY", style={'fontSize': '13px', 'fontWeight': '600',
+                                                   'color': pnl_color, 'marginBottom': '8px'}),
         row('Ann. Vol', f"{metrics['vol'] * 100:.2f}%"),
         row('Ann. Return', f"{metrics['ann_return'] * 100:+.2f}%"),
+    ] + margin_row + [
         row('Total Return', f"{metrics['total_return'] * 100:+.2f}%"),
+        row('Total PnL (net of cost)', f"{pnl_mm:+,.1f} MM"),
         row('Max Drawdown', f"{metrics['max_drawdown'] * 100:.2f}%"),
     ] + ([extra] if extra is not None else []), style={
         'backgroundColor': THEME['bg_main'], 'padding': '12px 14px', 'borderRadius': '6px',
@@ -55,12 +72,15 @@ def register_combination_callbacks(app):
     @app.callback(
         [Output('summary-combo-strip', 'children'),
          Output('summary-combo-body', 'children'),
-         Output('summary-combo-margin-hint', 'children')],
+         Output('summary-combo-margin-hint', 'children'),
+         Output('summary-combo-formula', 'children')],
         [Input('summary-combo-total-capital', 'value'),
          Input('summary-combo-alpha-margin-share', 'value'),
-         Input('summary-combo-refresh', 'n_clicks')],
+         Input('summary-combo-refresh', 'n_clicks'),
+         Input('summary-combo-run', 'n_clicks')],
+        [State('summary-combo-window', 'value')],
     )
-    def _render_combination(total_capital_mm, alpha_margin_share_pct, _refresh_clicks):
+    def _render_combination(total_capital_bn, alpha_margin_share_pct, _refresh_clicks, _run_clicks, window):
         # Imported here, not at module scope: both loaders touch the
         # filesystem, and the saved files can be rewritten by the Alpha /
         # Multi-Asset tabs while this session is open -- re-reading on every
@@ -71,42 +91,48 @@ def register_combination_callbacks(app):
         beta_result = load_last_backtest_result()
         alpha_result = load_portfolio_backtest_result()
 
-        total_capital = float(total_capital_mm) if total_capital_mm else 0.0
+        # UI input is BN CNY (billions); build_combination and everything it
+        # returns (beta_notional_mm, alpha_margin_mm, pnl_*_mm, ...) works in
+        # MM CNY, so convert once here at the boundary.
+        total_capital = (float(total_capital_bn) if total_capital_bn else 0.0) * 1000.0
+        window = window or 'MAX'
 
-        # No margin share typed yet (fresh load / cleared input): default the
-        # "Selected" split to the max-Sharpe point rather than an arbitrary
-        # 50/50, so the combined-book view shown by default is the optimum,
-        # not a placeholder. max_sharpe_margin_share doesn't depend on the
-        # requested split, so a first pass at any placeholder share reads it
-        # off the sweep; an explicit 0 from the user is still respected.
-        if alpha_margin_share_pct is None:
-            probe = build_combination(beta_result, alpha_result, total_capital, 0.5,
-                                       max_margin_utilization=MAX_MARGIN_UTILIZATION)
-            if 'error' in probe:
-                strip = html.Span(probe['error'], style={'color': THEME['warning'], 'fontSize': '12px'})
-                body = html.Div(probe['error'], style={'color': THEME['warning'], 'fontSize': '12px',
-                                                        'padding': '12px 0'})
-                return strip, body, ""
-            margin_share = probe['max_sharpe_margin_share']
-        else:
-            margin_share = float(alpha_margin_share_pct) / 100.0
+        # Margin share is a fixed, explicit split (default 10%, set on the
+        # input itself) -- NOT auto-recomputed to the max-Sharpe point.
+        # Auto-optimizing here used to mean switching the backtest window
+        # silently changed the split too (a different window has different
+        # realized vol/correlation, and because alpha is margined a small
+        # shift in optimal margin share is a much larger shift in notional
+        # weight), making "the split changed" indistinguishable from "the
+        # window changed". A cleared input falls back to the same fixed 10%
+        # default rather than re-optimizing. The max-Sharpe/risk-parity
+        # points for the current window are still surfaced in "Suggested
+        # Splits" below for reference -- they're just not auto-applied.
+        margin_share = float(alpha_margin_share_pct) / 100.0 if alpha_margin_share_pct is not None else 0.10
 
         result = build_combination(beta_result, alpha_result, total_capital, margin_share,
-                                    max_margin_utilization=MAX_MARGIN_UTILIZATION)
+                                    max_margin_utilization=MAX_MARGIN_UTILIZATION, window=window)
 
         if 'error' in result:
             strip = html.Span(result['error'], style={'color': THEME['warning'], 'fontSize': '12px'})
             body = html.Div(result['error'], style={'color': THEME['warning'], 'fontSize': '12px',
                                                      'padding': '12px 0'})
-            return strip, body, ""
+            return strip, body, "", ""
 
         combined = result['combined']
         corr = result['correlation']
+        rolling_corr = result['rolling_correlation']
+        worst_corr = result['worst_window_correlation']
+        corr_window = result['rolling_correlation_window']
+        corr_flag = result['rolling_correlation_flag']
         div_ratio = result['diversification_ratio']
         ms = result['alpha_margin_share']
         w = result['alpha_weight']
         util = result['max_margin_utilization']
 
+        # Blend-math note -- rendered into 'summary-combo-formula' at the top
+        # of the panel (see layout.py), not inside the Combined card: it
+        # explains where every card's numbers come from, not just Combined's.
         formula = html.Div([
             html.Div(
                 f"Return = {1 - ms:.2f} × Beta + {w:.2f} × Alpha "
@@ -125,8 +151,7 @@ def register_combination_callbacks(app):
                 f"the weighted-average of the two books' vols).",
                 style={'marginTop': '3px', 'fontStyle': 'italic'},
             ),
-        ], style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '8px',
-                  'paddingTop': '8px', 'borderTop': f'1px solid {THEME["table_header"]}'})
+        ])
 
         total_capital_mm = result['total_capital_mm']
         beta_notional_mm = result['beta_notional_mm']
@@ -142,8 +167,12 @@ def register_combination_callbacks(app):
             _stat(f"{corr:+.2f}", 'Correlation',
                   THEME['success'] if corr < 0.3 else THEME['warning']),
             _stat(f"{div_ratio:.2f}x", 'Diversification', THEME['success'] if div_ratio > 1.1 else THEME['text_sub'],
+                  border=worst_corr is not None),
+        ] + ([
+            _stat(f"{worst_corr:+.2f}", f'Worst {corr_window}d Corr.',
+                  THEME['danger'] if worst_corr >= corr_flag else THEME['text_sub'],
                   border=False),
-        ], style={'display': 'flex', 'alignItems': 'center'})
+        ] if worst_corr is not None else []), style={'display': 'flex', 'alignItems': 'center'})
 
         # --- Capital allocation: beta's notional and alpha's margin at the
         # requested split (both drawn from the same total_capital_mm pool),
@@ -221,13 +250,63 @@ def register_combination_callbacks(app):
             frontier.add_vline(x=wt * 100, line_dash='dot', line_color=color,
                                annotation_text=label, annotation_position='top',
                                annotation_font={'size': 9, 'color': color})
+        # Subtitle names the window/day-count the curve was fit on -- this
+        # frontier is a statistic of one finite sample (realized vol/Sharpe/
+        # correlation over exactly these days), not a fixed reference curve:
+        # a different window (different realized correlation especially,
+        # amplified further at higher margin share since alpha's notional
+        # weight w = ms*util/margin_ratio grows fast with ms) can reshape it
+        # substantially. Naming the window makes that sample-dependence
+        # visible instead of implying the curve is stable across periods.
+        window_label = result.get('window', 'MAX')
+        window_text = 'full history' if window_label == 'MAX' else window_label
         frontier.update_layout(
-            title={'text': 'Diversification Frontier', 'font': {'size': 12, 'color': THEME['text_sub']}},
+            title={'text': f'Diversification Frontier — {window_text} ({result["n_days"]}d)',
+                   'font': {'size': 12, 'color': THEME['text_sub']}},
             xaxis={'title': 'Alpha margin share of capital (%)', 'gridcolor': THEME['bg_card']},
             yaxis={'title': 'Combined Sharpe', 'gridcolor': THEME['bg_card']},
             template='plotly_dark', paper_bgcolor=THEME['bg_card'], plot_bgcolor=THEME['bg_card'],
             height=320, margin={'l': 55, 'r': 20, 't': 40, 'b': 45}, showlegend=False,
         )
+
+        # --- Rolling correlation: is the diversification stable over time, or
+        # does the full-sample number hide a stress-period spike? See
+        # docs/plans/portfolio_construction_beta_alpha.md §5.1.
+        if rolling_corr is not None and not rolling_corr.empty:
+            rolling_chart = go.Figure()
+            rolling_chart.add_hrect(
+                y0=corr_flag, y1=1.0, fillcolor='rgba(213,107,107,0.10)', line_width=0,
+            )
+            rolling_chart.add_trace(go.Scatter(
+                x=rolling_corr.index, y=rolling_corr.values, mode='lines',
+                name=f'{corr_window}d rolling correlation',
+                line={'color': THEME['accent'], 'width': 1.6},
+            ))
+            rolling_chart.add_hline(y=corr_flag, line_dash='dot', line_color=THEME['danger'],
+                                     annotation_text=f'flag ≥ {corr_flag:+.1f}',
+                                     annotation_position='top left',
+                                     annotation_font={'size': 9, 'color': THEME['danger']})
+            rolling_chart.add_hline(y=corr, line_dash='dot', line_color=THEME['text_sub'],
+                                     annotation_text='full-sample',
+                                     annotation_position='bottom left',
+                                     annotation_font={'size': 9, 'color': THEME['text_sub']})
+            rolling_chart.update_layout(
+                title={'text': f'{corr_window}d Rolling Beta↔Alpha Correlation',
+                       'font': {'size': 12, 'color': THEME['text_sub']}},
+                xaxis={'title': '', 'gridcolor': THEME['bg_card'], 'tickformat': '%b\n%Y'},
+                yaxis={'title': 'Correlation', 'gridcolor': THEME['bg_card'], 'range': [-1, 1]},
+                template='plotly_dark', paper_bgcolor=THEME['bg_card'], plot_bgcolor=THEME['bg_card'],
+                height=260, margin={'l': 55, 'r': 20, 't': 40, 'b': 35}, showlegend=False,
+            )
+            rolling_corr_section = dcc.Graph(figure=rolling_chart, config={'displayModeBar': False})
+        else:
+            rolling_corr_section = html.Div(
+                f"Not enough overlapping history for a {corr_window}d rolling-correlation view yet "
+                f"({result['n_days']} days available) — full-sample correlation above is the only "
+                f"diversification read until more saved-backtest history accumulates.",
+                style={'color': THEME['text_sub'], 'fontSize': '11px', 'fontStyle': 'italic',
+                       'padding': '30px', 'textAlign': 'center'},
+            )
 
         rp_ms = result['risk_parity_margin_share']
         ms_best = result['max_sharpe_margin_share']
@@ -255,20 +334,31 @@ def register_combination_callbacks(app):
         ], style={'backgroundColor': THEME['bg_main'], 'padding': '12px 14px', 'borderRadius': '6px',
                   'border': f'1px solid {THEME["table_header"]}', 'flex': '1', 'minWidth': '170px'})
 
+        worst_corr_note = (
+            f" Worst {corr_window}d window seen: {worst_corr:+.2f}"
+            f"{' (≥ flag)' if worst_corr >= corr_flag else ''}."
+            if worst_corr is not None else ""
+        )
         overlap = html.Div(
             f"Overlapping window: {result['start']:%Y-%m-%d} → {result['end']:%Y-%m-%d} "
             f"({result['n_days']} days). Correlation {corr:+.2f}, diversification ratio "
             f"{div_ratio:.2f}x (weighted-average standalone vol ÷ realised combined vol; "
-            f">1 means the books genuinely offset each other).",
+            f">1 means the books genuinely offset each other)." + worst_corr_note +
+            " The Diversification Frontier is fit on this same window only — expect it to "
+            "reshape materially when the window changes (realized correlation is a noisy "
+            "estimate on finite daily samples, and its effect is amplified at higher margin "
+            "share since alpha's notional weight grows fast with margin share). Treat its "
+            "curve as \"what this sample says\", not a fixed reference.",
             style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '10px'},
         )
 
         body = html.Div([
             # Row 1: per-book metrics + capital allocation + suggested splits (5 cards)
             html.Div([
-                _metric_card('Beta Book', result['beta'], THEME['accent']),
-                _metric_card('Alpha Book', result['alpha'], THEME['warning']),
-                _metric_card('Combined', combined, THEME['success'], extra=formula),
+                _metric_card('Beta Book', result['beta'], THEME['accent'], result['pnl_beta_mm']),
+                _metric_card('Alpha Book', result['alpha'], THEME['warning'], result['pnl_alpha_mm'],
+                              margin_ann_return=result['alpha_margin_metrics']['ann_return']),
+                _metric_card('Combined', combined, THEME['success'], result['pnl_combined_mm']),
                 alloc_card,
                 reco,
             ], style={'display': 'flex', 'gap': '10px', 'flexWrap': 'wrap', 'marginBottom': '14px'}),
@@ -278,7 +368,9 @@ def register_combination_callbacks(app):
                          style={'flex': '1', 'minWidth': '260px'}),
                 html.Div([dcc.Graph(figure=combined_chart, config={'displayModeBar': False})],
                          style={'flex': '3', 'minWidth': '400px'}),
-            ], style={'display': 'flex', 'gap': '10px', 'flexWrap': 'wrap'}),
+            ], style={'display': 'flex', 'gap': '10px', 'flexWrap': 'wrap', 'marginBottom': '14px'}),
+            # Row 3: rolling correlation diagnostic, full width
+            html.Div([rolling_corr_section]),
             overlap,
         ])
 
@@ -294,4 +386,4 @@ def register_combination_callbacks(app):
         else:
             margin_hint = ""
 
-        return strip, body, margin_hint
+        return strip, body, margin_hint, formula

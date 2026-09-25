@@ -49,6 +49,22 @@ def _default_style_for_spread(spread_type: str) -> str:
     return 'mr'
 
 
+def _allow_trend_style_for(spread_type: str, instrument: str) -> bool:
+    """Whether the monthly regime router may assign 'trend' for this instrument.
+
+    ``build_monthly_style_schedule``'s own default (``ALLOW_TREND_STYLE_DEFAULT
+    = False``) routes every month to MR book-wide -- see that flag's docstring:
+    a prior monthly regime router mislabeled trend broadly and hurt Sharpe, so
+    trend-style months fall back to MR everywhere by default. The individual
+    backtest panel (and its Save Parameters action) is the one place that
+    should override that default, and only for instruments already reviewed
+    and confirmed structurally MR-broken via ``TREND_ROUTED_INSTRUMENTS`` (see
+    ``curves/calibration/trend_scan.py``) -- everything else keeps the
+    book-wide MR-only behaviour unchanged.
+    """
+    return (spread_type, instrument) in TREND_ROUTED_INSTRUMENTS
+
+
 def _build_monthly_style_schedule(
     spread_ts: pd.Series,
     spread_type: str,
@@ -151,6 +167,7 @@ def _run_monthly_style_switch_backtest(
     max_hold: Optional[int] = None,
     month_to_style_override: Optional[dict] = None,
     mr_lookback: int = 120,
+    allow_trend_style: bool = False,
 ):
     """Run one continuous backtest whose entry style is routed by the monthly review.
 
@@ -175,6 +192,15 @@ def _run_monthly_style_switch_backtest(
     ``mr_lookback``: trailing window (trading days) for the MR fair-value
     anchor, forwarded to ``run_monthly_style_backtest`` -- see that function's
     docstring for the per-instrument rationale.
+
+    ``allow_trend_style``: forwarded to ``build_monthly_style_schedule``. False
+    (the book-wide default) keeps every month routed to MR even when the
+    regime classifier votes 'trending' -- see ``ALLOW_TREND_STYLE_DEFAULT``'s
+    rationale. Pass True only for an instrument confirmed structurally
+    MR-broken and trend-routed (``TREND_ROUTED_INSTRUMENTS`` -- see
+    ``_allow_trend_style_for``); ignored when ``month_to_style_override`` is
+    given, since a saved schedule already encodes whatever routing decision
+    was in effect when it was reviewed and saved.
     """
     if month_to_style_override is not None:
         month_to_style = month_to_style_override
@@ -185,6 +211,7 @@ def _run_monthly_style_switch_backtest(
     else:
         schedule, month_to_style = build_monthly_style_schedule(
             ts, _default_style_for_spread(spread_type), uncertain_policy=uncertain_policy,
+            allow_trend_style=allow_trend_style,
         )
     if not month_to_style:
         return {'error': 'No valid datetime observations for monthly style backtest.'}
@@ -706,6 +733,7 @@ def register_backtest_callbacks(app) -> None:
                 ou_mean=ou_mean,
                 carry_z_weight=float(carry_z_weight) if carry_z_weight is not None else 0.5,
                 mr_lookback=int(mr_lookback) if mr_lookback is not None else 120,
+                allow_trend_style=_allow_trend_style_for(spread_type, instrument),
             )
 
             # For YTM-based spreads: restore original display signs after internal inversion.
@@ -819,6 +847,7 @@ def register_backtest_callbacks(app) -> None:
 
             schedule, month_to_style = build_monthly_style_schedule(
                 ts_for_schedule, _default_style_for_spread(spread_type),
+                allow_trend_style=_allow_trend_style_for(spread_type, instrument),
             )
             if schedule.empty:
                 return "Could not build a monthly regime schedule (insufficient history)."

@@ -247,6 +247,17 @@ def register_beta_book_table_callbacks(app):
                     cap_mm_str = f"{_cap_raw / 1e6:,.2f}" if _cap_raw else ''
                 except (ValueError, TypeError):
                     cap_mm_str = ''
+                if not cap_mm_str:
+                    # Some sources (e.g. summary_beta_display.parquet, which is
+                    # re-persisted from already-rendered rows on Refresh) only
+                    # carry the display column, already in MM CNY — use it
+                    # directly rather than re-deriving from a missing raw column.
+                    _cap_mm_raw = str(row.get('Capital (MM CNY)', '') or '').replace(',', '').strip()
+                    if _cap_mm_raw:
+                        try:
+                            cap_mm_str = f"{float(_cap_mm_raw):,.2f}"
+                        except (ValueError, TypeError):
+                            pass
     
                 try:
                     _wt_raw = str(row.get('Weight (%)', '') or '').replace('%', '').replace(',', '').strip()

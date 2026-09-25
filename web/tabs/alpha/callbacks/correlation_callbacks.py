@@ -25,14 +25,16 @@ def register_correlation_callbacks(app) -> None:
          Output('alpha-corr-matrix-store', 'data'),
          Output('alpha-curated-instruments-store', 'data')],
         Input('alpha-corr-btn', 'n_clicks'),
-        [State('alpha-spread-categories', 'value'),
+        [State('alpha-spread-categories-core', 'value'),
+         State('alpha-spread-categories-satellite', 'value'),
          State('alpha-corr-lookback', 'value'),
          State('alpha-max-corr', 'value'),
          State('alpha-corr-candidate-count', 'value'),
          State('alpha-selected-candidates', 'data')],
         prevent_initial_call=True,
     )
-    def check_correlation(n_clicks, categories, lookback, max_corr, candidate_count, all_candidates):
+    def check_correlation(n_clicks, core_categories, satellite_categories, lookback, max_corr, candidate_count, all_candidates):
+        categories = list(core_categories or []) + list(satellite_categories or [])
         if not n_clicks or not categories:
             return html.Div("Select categories and click Check Correlation.", style={'color': THEME['text_sub']}), [], {}, []
 
@@ -43,13 +45,34 @@ def register_correlation_callbacks(app) -> None:
 
         corr_matrix = None
 
+        # Core (default TenorSpread) book seed: diversify satellite candidates
+        # against the book's *actual current holdings*, not only against each
+        # other -- see docs/plans/portfolio_construction_beta_alpha.md §5.2.
+        # Locked to instruments with an OPEN POSITION today (from the live
+        # alpha_book_positions parquet), not load_core_seed's full ~24-name
+        # structural membership list -- the correlation matrix should reflect
+        # what's actually held, not the whole eligible universe. Corrected
+        # 2026-09-25 per user: the full core seed made an ordinary 5-candidate
+        # check render a 24+-instrument matrix, most of it names with no
+        # position on today.
+        core_seed = [
+            p for p in _load_alpha_book_positions()
+            if str(p.get('spread_type', '') or '') == 'TenorSpread'
+        ]
+
         if all_candidates and len(all_candidates) > 0:
             df_candidates = pd.DataFrame(all_candidates)
             if 'ID' in df_candidates.columns and 'spread_type' in df_candidates.columns:
                 _ts_cache: dict[str, pd.DataFrame | None] = {}
                 all_spreads = {}
                 duration_by_key: dict[str, float] = {}
-                for _, row in df_candidates.iterrows():
+                # Include the locked core seed's price series in the same
+                # duration-adjusted matrix as the scanned candidates, so
+                # select_diverse_instruments' locked=core_seed check below has
+                # actual correlation values to compare against -- a locked
+                # instrument missing from corr_matrix.columns is silently
+                # dropped there.
+                for _, row in pd.concat([df_candidates, pd.DataFrame(core_seed)], ignore_index=True).iterrows():
                     trade_id = row.get('ID', '')
                     spread_type = row.get('spread_type', '')
                     if not trade_id or not spread_type:
@@ -59,6 +82,8 @@ def register_correlation_callbacks(app) -> None:
                     ts = _ts_cache[spread_type]
                     if ts is not None and isinstance(ts, pd.DataFrame) and trade_id in ts.columns:
                         col_key = display_key(spread_type, trade_id)
+                        if col_key in all_spreads:
+                            continue
                         series = ts[trade_id]
                         if series.index.has_duplicates:
                             series = series[~series.index.duplicated(keep='last')]
@@ -90,6 +115,11 @@ def register_correlation_callbacks(app) -> None:
             for cat in categories:
                 if cat in SPREAD_CATEGORIES:
                     spread_types.extend(SPREAD_CATEGORIES[cat]['types'])
+            # Make sure the core seed's own category is in the universe even
+            # if the user's checklist doesn't include it -- otherwise the
+            # locked seed has no columns to be found in below.
+            if core_seed and 'TenorSpread' not in spread_types:
+                spread_types.append('TenorSpread')
 
             if len(spread_types) == 0:
                 return html.Div("No spread types selected.", style={'color': THEME['warning']}), [], {}, []
@@ -119,15 +149,42 @@ def register_correlation_callbacks(app) -> None:
         diverse_keys = select_diverse_instruments(
             corr_matrix, all_candidates or [], n=target_count,
             max_abs_corr=float(max_corr) if max_corr is not None else 1.0,
+            locked=core_seed,
         )
-        heatmap_assets = [k for k in diverse_keys if k in corr_matrix.columns]
+        locked_in_matrix = [display_key(c['spread_type'], c['ID']) for c in core_seed
+                            if display_key(c['spread_type'], c['ID']) in corr_matrix.columns]
+        heatmap_assets = [k for k in (locked_in_matrix + diverse_keys) if k in corr_matrix.columns]
+
+        # Explain the matrix's scope up front, above the heatmap, not just as
+        # a trailing caption -- otherwise a 5-candidate check next to a
+        # locked core position or two reads as "why does this have more rows
+        # than I asked for" (see prior 24-name core-seed version of this note).
+        core_seed_note = html.Div()
+        if core_seed:
+            n_dropped = len(core_seed) - len(locked_in_matrix)
+            dropped_txt = f', {n_dropped} without price history for this lookback' if n_dropped > 0 else ''
+            core_seed_note = html.Div(
+                f"ℹ️ Showing {len(diverse_keys)} candidate(s) + {len(locked_in_matrix)} open core "
+                f"(TenorSpread) position(s) as a fixed diversification backdrop{dropped_txt} -- "
+                "core positions are locked in, not new picks.",
+                style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'},
+            )
+        elif diverse_keys or heatmap_assets:
+            core_seed_note = html.Div(
+                f"ℹ️ Showing {len(diverse_keys)} candidate(s). No open core (TenorSpread) "
+                "positions today, so nothing else is locked into the matrix.",
+                style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'},
+            )
 
         if len(heatmap_assets) >= 2:
             sub_corr = corr_matrix.loc[heatmap_assets, heatmap_assets]
             corr_vals = sub_corr.values.copy()
             mask_upper = np.triu(np.ones(corr_vals.shape), k=0).astype(bool)
             corr_vals[mask_upper] = np.nan
-            heatmap_div = dcc.Graph(figure=_build_heatmap(corr_vals, title=f'Duration-Adjusted Correlation Matrix — {len(heatmap_assets)} instruments (max |corr| ≤ {max_corr})', height=max(350, 28 * len(heatmap_assets) + 100)), config={'displayModeBar': False}, style={'height': f'{max(350, 28 * len(heatmap_assets) + 100)}px'})
+            title = f'Duration-Adjusted Correlation Matrix — {len(heatmap_assets)} instruments (max |corr| ≤ {max_corr})'
+            if locked_in_matrix:
+                title += f', {len(locked_in_matrix)} open core position(s)'
+            heatmap_div = dcc.Graph(figure=_build_heatmap(corr_vals, title=title, height=max(350, 28 * len(heatmap_assets) + 100), labels=heatmap_assets), config={'displayModeBar': False}, style={'height': f'{max(350, 28 * len(heatmap_assets) + 100)}px'})
         else:
             heatmap_div = html.Div("Not enough assets passed the correlation filter.", style={'color': THEME['text_sub']})
 
@@ -184,7 +241,7 @@ def register_correlation_callbacks(app) -> None:
         else:
             corr_matrix_store = corr_matrix
 
-        return html.Div([heatmap_div, warning_div]), [], corr_matrix_store.to_dict(), curated_instruments
+        return html.Div([core_seed_note, heatmap_div, warning_div]), [], corr_matrix_store.to_dict(), curated_instruments
 
     @app.callback(
         [Output('alpha-add-instrument', 'options'),

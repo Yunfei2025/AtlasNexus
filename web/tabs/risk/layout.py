@@ -136,10 +136,30 @@ def build_risk_layout():
         # ── Books subtab ─────────────────────────────────────────────────────
         html.Div(id='summary-tab-books', children=[
 
-        # 1. Combination Section — collapsed summary strip, expandable on click.
-        # Both the strip and the detail body are rendered by a callback from
-        # the two books' *saved* backtest results (see books/combination.py);
-        # nothing here is computed at layout time.
+        # Books has two pages of its own -- Portfolio Combination (Beta+Alpha
+        # blend analytics) and Portfolio Allocation Snapshot (per-book trade
+        # tables) -- switched the same way Alpha > Backtest switches
+        # Individual/Portfolio: a dcc.Tabs pill bar, both pages mounted at
+        # once, visibility toggled by CSS display (see
+        # toggle_books_page_visibility in books/controls.py) so neither
+        # page's inputs/results reset when you switch back and forth.
+        dcc.Tabs(
+            id='summary-books-page-tabs', value='combination',
+            className='tab-container an-pill-toggle',
+            children=[
+                dcc.Tab(label='Portfolio Combination', value='combination',
+                        className='tab an-pill-toggle', selected_className='tab an-pill-toggle an-pill-toggle--selected'),
+                dcc.Tab(label='Portfolio Allocation Snapshot', value='allocation',
+                        className='tab an-pill-toggle', selected_className='tab an-pill-toggle an-pill-toggle--selected'),
+            ],
+            style={'marginBottom': '16px', 'width': 'fit-content'},
+        ),
+
+        # 1. Combination page — full page, no collapse. Both the strip and the
+        # detail body are rendered by a callback from the two books' *saved*
+        # backtest results (see books/combination.py); nothing here is
+        # computed at layout time.
+        html.Div(id='summary-books-page-combination', children=[
         html.Div([
             html.Div([
                 html.Span("Portfolio Combination", style={
@@ -151,22 +171,31 @@ def build_risk_layout():
                 html.Span("🔄", id='summary-combo-refresh', n_clicks=0, title="Reload saved Beta/Alpha backtests from disk",
                            style={'fontSize': '13px', 'color': THEME['text_sub'], 'marginLeft': '8px', 'flexShrink': '0',
                                   'cursor': 'pointer', 'padding': '2px 4px'}),
-                html.Span("▼ details", id='summary-combo-chevron', style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginLeft': '12px', 'flexShrink': '0'}),
-            ], id='summary-combo-toggle', n_clicks=0, style={'display': 'flex', 'alignItems': 'center', 'cursor': 'pointer', 'userSelect': 'none', 'padding': '4px 0'}),
+            ], style={'display': 'flex', 'alignItems': 'center', 'padding': '4px 0'}),
 
-            # Expanded detail — collapsed by default
-            html.Div(id='summary-combo-detail', children=[
+            html.Div([
                 html.Hr(style={'borderColor': THEME['table_header'], 'margin': '12px 0'}),
+
+                # --- Blend-math note: how Combined return/vol are derived. Lives
+                # at the top of the panel (not inside the Combined card) since it
+                # explains all three cards' numbers, not just one.
+                html.Div(id='summary-combo-formula', style={
+                    'fontSize': '10px', 'color': THEME['text_sub'], 'marginBottom': '14px',
+                    'paddingBottom': '10px', 'borderBottom': f'1px solid {THEME["table_header"]}'}),
 
                 # --- Controls: total capital + alpha margin share (plain inputs, no slider) ---
                 html.Div([
                     html.Div([
-                        html.Label("Total Capital (MM CNY)", style={
+                        html.Label("Total Capital (BN CNY)", style={
                             'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
                             'textTransform': 'uppercase', 'color': THEME['text_sub'],
                             'display': 'block', 'marginBottom': '6px'}),
+                        # Input is BN CNY (billions); converted to the MM CNY
+                        # build_combination works in right where it's read
+                        # (see _render_combination) -- nothing downstream of
+                        # that conversion point needs to know the UI's unit.
                         dcc.Input(id='summary-combo-total-capital', type='number',
-                                  value=2000, min=1, step=100, debounce=True,
+                                  value=20, min=0.001, step=1, debounce=True,
                                   style={'width': '140px', 'backgroundColor': THEME['bg_input'],
                                          'border': f'1px solid {THEME["table_header"]}',
                                          'borderRadius': '4px', 'padding': '7px 9px',
@@ -180,17 +209,61 @@ def build_risk_layout():
                             'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
                             'textTransform': 'uppercase', 'color': THEME['text_sub'],
                             'display': 'block', 'marginBottom': '6px'}),
+                        # Fixed default (not None/"auto") -- an auto max-Sharpe
+                        # default silently re-optimizes the split every time
+                        # the backtest window changes (a different window
+                        # gives different realized vol/correlation, and
+                        # because alpha is margined a small shift in the
+                        # optimal margin share is a much larger shift in its
+                        # notional weight -- see w = ms*util/margin_ratio).
+                        # That made the split look like it "changed" 10% ->
+                        # 50% just from picking a different window, when
+                        # nothing about the actual allocation had changed.
+                        # Pinning a fixed value here means changing the
+                        # window only changes the *performance measured at
+                        # this split*, not the split itself.
                         dcc.Input(id='summary-combo-alpha-margin-share', type='number',
-                                  value=None, min=0, max=100, step=5, debounce=True,
-                                  placeholder='auto (max Sharpe)',
+                                  value=10, min=0, max=100, step=5, debounce=True,
                                   style={'width': '90px', 'backgroundColor': THEME['bg_input'],
                                          'border': f'1px solid {THEME["table_header"]}',
                                          'borderRadius': '4px', 'padding': '7px 9px',
                                          'color': THEME['text_main'], 'fontSize': '13px'}),
                         html.Div("Beta takes the remainder as notional. Alpha's own notional is "
-                                 "derived from its margin ratio. Left blank, defaults to the "
-                                 "max-Sharpe split.",
+                                 "derived from its margin ratio. Fixed at this split across "
+                                 "windows -- see \"Suggested Splits\" below for the max-Sharpe/"
+                                 "risk-parity points at the currently selected window, and set "
+                                 "this explicitly rather than leaving it on auto.",
                                  style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '240px'}),
+                    ]),
+                    html.Div([
+                        html.Label("Backtest Window", style={
+                            'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
+                            'textTransform': 'uppercase', 'color': THEME['text_sub'],
+                            'display': 'block', 'marginBottom': '6px'}),
+                        html.Div([
+                            dcc.Dropdown(
+                                id='summary-combo-window',
+                                options=[
+                                    {'label': '1Y', 'value': '1Y'},
+                                    {'label': '2Y', 'value': '2Y'},
+                                    {'label': '5Y', 'value': '5Y'},
+                                    {'label': '10Y', 'value': '10Y'},
+                                    {'label': 'Max', 'value': 'MAX'},
+                                ],
+                                value='MAX', clearable=False, searchable=False,
+                                style={'width': '110px', 'fontSize': '13px', 'color': '#111'},
+                            ),
+                            html.Button("Run Analysis", id='summary-combo-run', n_clicks=0,
+                                        style={'fontSize': '11px', 'padding': '7px 14px',
+                                               'backgroundColor': THEME['bg_input'],
+                                               'color': THEME['text_main'],
+                                               'border': f'1px solid {THEME["accent"]}',
+                                               'borderRadius': '4px', 'cursor': 'pointer',
+                                               'marginLeft': '10px', 'whiteSpace': 'nowrap'}),
+                        ], style={'display': 'flex', 'alignItems': 'center'}),
+                        html.Div("Trims both books' saved backtests to the trailing window "
+                                 "before recomputing Sharpe/vol/PnL below.",
+                                 style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '220px'}),
                     ]),
                     html.Div(id='summary-combo-margin-hint',
                              style={'fontSize': '10px', 'color': THEME['text_sub'], 'flex': '1', 'minWidth': '200px', 'alignSelf': 'center'}),
@@ -200,10 +273,12 @@ def build_risk_layout():
                 # --- Rendered analysis: metric cards, frontier, equity curves ---
                 dcc.Loading(id='summary-combo-loading', type='circle', color=THEME['accent'],
                             children=html.Div(id='summary-combo-body')),
-            ], style={'display': 'none', 'overflow': 'hidden'}),
-        ], style={'backgroundColor': THEME['bg_card'], 'padding': '14px 20px', 'borderRadius': '5px', 'marginBottom': '20px'}),
+            ]),
+        ], style={'backgroundColor': THEME['bg_card'], 'padding': '14px 20px', 'borderRadius': '5px'}),
+        ]),  # end summary-books-page-combination
 
-        # 2. Portfolio Allocation Snapshot — full-width Beta/Alpha toggle
+        # 2. Portfolio Allocation Snapshot page — full-width Beta/Alpha toggle
+        html.Div(id='summary-books-page-allocation', style={'display': 'none'}, children=[
         html.Div([
             html.Div([
                 html.Span("Portfolio Allocation Snapshot",
@@ -258,6 +333,8 @@ def build_risk_layout():
             html.Div(id='summary-alpha-table-container', style={'minHeight': '60px', 'display': 'none'}),
 
         ], style={'backgroundColor': THEME['bg_card'], 'padding': '16px 20px', 'borderRadius': '5px'}),
+        ]),  # end summary-books-page-allocation
+
         ]),  # end summary-tab-books
 
         # ── Risk subtab ──────────────────────────────────────────────────────

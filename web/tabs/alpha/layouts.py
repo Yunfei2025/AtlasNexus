@@ -18,7 +18,7 @@ _BACKTEST_SPREAD_TYPE_OPTIONS = [
     {'label': 'Policybank BondSwap', 'value': 'CBondSwap'},
     {'label': 'New-Issue OTR/OFR Event', 'value': 'BondNewIssue'},
     {'label': 'Swaps', 'value': 'SwapSpread'},
-    {'label': 'Curve & Cross-Asset Spreads', 'value': 'TenorSpread'},
+    {'label': 'Curve & Cross-Asset (Core)', 'value': 'TenorSpread'},
     {'label': 'Cash-and-Carry', 'value': 'NetBasis'},
     {'label': 'Calendar Spread', 'value': 'TermBasis'},
     {'label': 'Futures Swap', 'value': 'FuturesSwap'},
@@ -143,7 +143,7 @@ def build_candidates_layout() -> html.Div:
         # ── Card 1: Filters ─────────────────────────────────────────────────
         html.Div([
             _alpha_card_header(
-                "Filters", badge_text="Spread Categories · Direction · Z-Score",
+                "Filters", badge_text="Core · Satellites · Direction · Z-Score · Seasonal Gate",
                 action=html.Button(
                     "🔍 Scan Candidates", id='alpha-scan-btn', n_clicks=0,
                     style={'padding': '5px 14px', 'background': 'var(--accent-amber)', 'color': 'var(--navy-950)',
@@ -152,21 +152,48 @@ def build_candidates_layout() -> html.Div:
                 ),
             ),
             html.Div([
-                # Spread Categories
+                # Spread Categories — Core book pinned above the Satellite grid
                 html.Div([
                     html.Label("Spread Categories", style={**_label_style, 'fontSize': '11px', 'marginBottom': '10px'}),
+
+                    # Core: the standing Curve & Cross-Asset book (see core_seed.py) —
+                    # highlighted and always listed first, not just another checkbox
+                    # in the satellite grid.
+                    html.Div([
+                        html.Span("CORE", style={
+                            'fontSize': '9px', 'fontWeight': '700', 'letterSpacing': '0.08em',
+                            'color': THEME['accent'], 'background': 'rgba(224, 162, 60, 0.14)',
+                            'border': '1px solid rgba(224, 162, 60, 0.4)', 'borderRadius': '3px',
+                            'padding': '2px 6px', 'marginRight': '10px', 'flexShrink': '0',
+                        }),
+                        dcc.Checklist(
+                            id='alpha-spread-categories-core',
+                            options=[
+                                {'label': ' Curve & Cross-Asset (Core)', 'value': 'Tenor-Spread'},
+                            ],
+                            value=['Tenor-Spread'],
+                            inputStyle={'marginRight': '7px', 'accentColor': THEME['accent']},
+                            labelStyle={'color': 'var(--text-primary)', 'fontSize': '13px',
+                                        'fontWeight': '600', 'cursor': 'pointer'},
+                        ),
+                    ], style={'display': 'flex', 'alignItems': 'center', 'padding': '8px 10px',
+                              'background': 'rgba(224, 162, 60, 0.06)', 'border': '1px solid rgba(224, 162, 60, 0.25)',
+                              'borderRadius': '5px', 'marginBottom': '10px'}),
+
+                    html.Label("Satellites", style={
+                        **_label_style, 'fontSize': '9px', 'marginBottom': '6px', 'color': THEME['text_sub'],
+                    }),
                     dcc.Checklist(
-                        id='alpha-spread-categories',
+                        id='alpha-spread-categories-satellite',
                         options=[
                             {'label': ' Bond-Curve', 'value': 'Bond-Curve'},
                             {'label': ' Swap Spreads', 'value': 'Swap-Spread'},
-                            {'label': ' Curve & Cross-Asset', 'value': 'Tenor-Spread'},
                             {'label': ' New-Issue Event', 'value': 'New-Issue'},
                             {'label': ' Bond-Futures', 'value': 'Bond-Futures'},
                             {'label': ' Calendar Spreads', 'value': 'Futures-Term'},
                             {'label': ' Futures-Swap', 'value': 'Futures-Swap'},
                         ],
-                        value=['Bond-Curve', 'Swap-Spread', 'Tenor-Spread'],
+                        value=['Bond-Curve', 'Swap-Spread'],
                         inputStyle={'marginRight': '7px', 'accentColor': THEME['accent']},
                         labelStyle={'color': 'var(--text-primary)', 'fontSize': '13px', 'cursor': 'pointer'},
                         style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '6px 16px'},
@@ -205,59 +232,35 @@ def build_candidates_layout() -> html.Div:
                         ),
                     ], style={'flex': '1', 'paddingLeft': '20px'}),
                 ], style={'display': 'flex', 'alignItems': 'flex-start', **_filter_panel}),
-            ], style={'padding': '14px 16px', 'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '14px'}),
 
-            # ── Seasonal Gate — collapsible <details> ──────────────────────
-            html.Details([
-                html.Summary([
+                # Seasonal Gate — satellite-only pre-scan quality screen (core
+                # book rows and MR rows are always exempt, see
+                # _apply_seasonal_quality_gate in callbacks/helpers.py).
+                # Simplified to a single toggle: min-consistency/p-value are
+                # fixed at reviewed defaults (75% / p<0.10) rather than exposed
+                # as tuning dropdowns -- see [[alpha-backtest-no-param-tuning]].
+                html.Div([
+                    html.Label("Seasonal Gate", style=_label_style),
                     dcc.Checklist(
                         id='seasonal-prefilter-toggle',
-                        options=[{'label': ' Apply seasonal gate before scan (exclude noise months)', 'value': 'on'}],
+                        options=[{'label': ' Apply before scan', 'value': 'on'}],
                         value=[],
-                        inputStyle={'marginRight': '6px', 'accentColor': THEME['accent']},
-                        labelStyle={'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600', 'cursor': 'pointer'},
+                        inputStyle={'marginRight': '7px', 'accentColor': THEME['accent']},
+                        labelStyle={'color': 'var(--text-primary)', 'fontSize': '13px', 'cursor': 'pointer'},
                     ),
-                    html.Span("▾ expand", style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginLeft': 'auto'}),
-                ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px', 'listStyle': 'none',
-                          'padding': '10px 16px', 'cursor': 'pointer'}),
-
-                html.Div([
                     html.P(
-                        "When ON: only trend/uncertain trades are pre-filtered. "
-                        "Mean-reversion trades are not blocked by this seasonal gate.",
-                        style={'fontStyle': 'italic', 'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '4px'},
+                        "Excludes satellite trend/uncertain rows in historically noisy months. "
+                        "Core book and mean-reversion rows are never affected.",
+                        style={'color': THEME['text_sub'], 'fontSize': '10px', 'fontStyle': 'italic', 'marginTop': '8px'},
                     ),
-                    html.Div([
-                        html.Div([
-                            html.Label("Min consistency (%)", style=_label_style),
-                            dcc.Dropdown(
-                                id='seasonal-prefilter-min-consistency',
-                                options=[
-                                    {'label': f'{v}%', 'value': v}
-                                    for v in [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]
-                                ],
-                                value=75,
-                                clearable=False,
-                                style={'minWidth': '180px', 'fontSize': '12px'},
-                            ),
-                        ], style={'flex': '1'}),
-                        html.Div([
-                            html.Label("p-value threshold", style=_label_style),
-                            dcc.Dropdown(
-                                id='seasonal-prefilter-p-thresh',
-                                options=[
-                                    {'label': '0.05 (strict)', 'value': 0.05},
-                                    {'label': '0.10',           'value': 0.10},
-                                    {'label': '0.20 (loose)',   'value': 0.20},
-                                ],
-                                value=0.10,
-                                clearable=False,
-                                style={'width': '150px', 'fontSize': '12px'},
-                            ),
-                        ], style={'flexShrink': '0', 'width': '150px'}),
-                    ], style={'display': 'flex', 'gap': '20px', 'alignItems': 'flex-end'}),
-                ], style={'padding': '4px 16px 14px', 'borderTop': '1px solid var(--border-default)'}),
-            ], className='seasonal-gate', style={'borderTop': '1px solid var(--border-strong)'}),
+                    # Fixed defaults, kept as hidden inputs so scan_candidates'
+                    # existing State signature needs no change.
+                    dcc.Dropdown(id='seasonal-prefilter-min-consistency', options=[{'label': '75%', 'value': 75}],
+                                 value=75, clearable=False, style={'display': 'none'}),
+                    dcc.Dropdown(id='seasonal-prefilter-p-thresh', options=[{'label': '0.10', 'value': 0.10}],
+                                 value=0.10, clearable=False, style={'display': 'none'}),
+                ], style=_filter_panel),
+            ], style={'padding': '14px 16px', 'display': 'grid', 'gridTemplateColumns': '1fr 1fr 1fr', 'gap': '14px'}),
         ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden',
                   'marginBottom': '10px'}),
 
@@ -312,7 +315,18 @@ def build_candidates_layout() -> html.Div:
                             type='number', value=1.0, min=0, step=0.1, debounce=True,
                             style={'width': '64px', 'fontSize': '11px'},
                         ),
-                        html.Span("(Momentum only; keeps rows with |Zscore (pullback σ)| ≥ value. Carry and Event-Driven use their own gates.)", style={
+                        html.Span("(Momentum only; keeps rows with |Zscore (pullback σ)| ≥ value.)", style={
+                            'fontSize': '9px', 'color': THEME['text_sub'], 'fontStyle': 'italic',
+                        }),
+                        html.Span("Carry ≥ (bp):", style={
+                            'fontSize': '9px', 'color': THEME['text_sub'], 'whiteSpace': 'nowrap', 'marginLeft': '10px',
+                        }),
+                        dcc.Input(
+                            id='alpha-carry-min-bp',
+                            type='number', value=5.0, min=0, step=0.5, debounce=True,
+                            style={'width': '64px', 'fontSize': '11px'},
+                        ),
+                        html.Span("(Carry only; keeps rows with |carry_roll| ≥ value. Event-Driven is ungated.)", style={
                             'fontSize': '9px', 'color': THEME['text_sub'], 'fontStyle': 'italic',
                         }),
                     ], style={'display': 'flex', 'alignItems': 'center', 'gap': '8px',
@@ -864,7 +878,7 @@ def build_portfolio_backtest_panel(saved_selection: dict | None = None) -> html.
                             id='bt-portfolio-source',
                             options=[
                                 {'label': "Client Portfolio (from Portfolio tab)", 'value': 'client'},
-                                {'label': "Default: Curve & Cross-Asset Spreads", 'value': 'default_tenor_spread'},
+                                {'label': "Default: Curve & Cross-Asset (Core)", 'value': 'default_tenor_spread'},
                             ],
                             value=saved_selection.get('portfolio_source') or 'client', clearable=False,
                             style={'fontSize': '13px'},

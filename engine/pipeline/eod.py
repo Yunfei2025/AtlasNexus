@@ -16,6 +16,7 @@ _EOD_STEPS: list[tuple[str, str, str]] = [
     ("curves",      "curves.interface",      "calibrate"),
     ("otr_ofr",     "curves.interface",      "calibrate_otr_ofr"),
     ("termbasis_event", "curves.interface",  "calibrate_termbasis_event"),
+    ("trend_routing", "curves.interface",    "calibrate_trend_routing"),
     ("factors",     "factors.interface",      "calibrate"),
     ("futures",     "futures.interface",      "calibrate"),
     ("multiasset",  "multiasset.interface",   "calibrate"),

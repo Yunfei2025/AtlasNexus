@@ -55,6 +55,17 @@ from web.tabs.alpha.data import load_spread_data, load_spread_timeseries
 
 SPREAD_TYPE = "SectorPCASpread"
 
+# FR007.IR is the bare 7-day repo fixing, not a tradable instrument -- unlike
+# every other ticker in this panel (TBond/CBond tenors, FR007S/SHI3MS swap
+# tenors) there is no way to actually put on a position in it, so it must
+# never surface as a pair leg regardless of how extreme its PCA residual
+# reads. curves/generators/stat.py's compute_irs_spreads() already excludes
+# it from the IRS spot panel that feeds compute_pca_spreads, but excluding it
+# again here too, right where legs are built from stat_info.index, means this
+# screen can't resurface it even if an older/unfiltered Misc-spds.pkl is on
+# disk -- see [[sector-pca-fr007ir-excluded]].
+_EXCLUDED_TICKERS = {"FR007.IR"}
+
 # Screening thresholds. Set once on defensible grounds (not tuned on this
 # spread's own backtest -- see [[alpha-backtest-no-param-tuning]]).
 MIN_ABS_ZSCORE = 2.0          # floor: matches ZSCORE_ENTRY_THRESHOLD elsewhere in the book
@@ -193,7 +204,11 @@ def screen_sector_pca_pairs(top_n: int = 3) -> List[PairCandidate]:
         stat_info = stat_info.copy()
         stat_info["Zscore"] = np.nan
 
-    legs = {t: _screen_leg(t, stat_info, resid_ts) for t in stat_info.index if t in resid_ts.columns}
+    legs = {
+        t: _screen_leg(t, stat_info, resid_ts)
+        for t in stat_info.index
+        if t in resid_ts.columns and t not in _EXCLUDED_TICKERS
+    }
     if len(legs) < 2:
         return []
 

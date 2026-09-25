@@ -26,13 +26,30 @@ trend-routing candidate:
      scan's output).
   2. Empirical backtest comparison: MR (engine_mr, fixed preset params) is
      flat-to-losing (near-zero trade count OR non-positive Sharpe) while
-     trend (engine_trend, fixed preset params) is clearly and consistently
-     profitable, over BOTH full history and a recent window -- the same bar
-     the original scan used (see TREND_ROUTED_INSTRUMENTS's docstring: MR
-     positive on 13/14 instruments, trend only won convincingly on
-     CGB-10s30s). Fixed params across every instrument, deliberately -- see
-     alpha-backtest-no-param-tuning: this is a routing test, not a tuning
-     exercise, and per-instrument-tuned parameters would not generalize.
+     trend, run through the SAME engine that actually trades a whitelisted
+     instrument (engine_monthly.run_monthly_style_backtest, with
+     allow_trend_style forced True and an all-'trend' schedule -- not
+     engine_trend.run_trend_backtest standalone, see the correction below),
+     is clearly and consistently profitable, over BOTH full history and a
+     recent window -- the same bar the original scan used (see
+     TREND_ROUTED_INSTRUMENTS's docstring: MR positive on 13/14 instruments,
+     trend only won convincingly on CGB-10s30s). Fixed params across every
+     instrument, deliberately -- see alpha-backtest-no-param-tuning: this is
+     a routing test, not a tuning exercise, and per-instrument-tuned
+     parameters would not generalize.
+
+     CORRECTED 2026-09-25: this scan previously validated the trend leg with
+     engine_trend.run_trend_backtest directly. That is NOT the engine a
+     reviewed/whitelisted instrument actually trades under -- the individual
+     backtest panel and the portfolio backtest's saved-state branch both run
+     engine_monthly.run_monthly_style_backtest, which additionally applies
+     trend_max_flip_age (a freshness gate on the first entry into a momentum
+     flip, with no equivalent in run_trend_backtest) and the monthly review
+     cadence. This mismatch let CGB-10s20s30s pass this scan
+     (run_trend_backtest: full=0.51, recent=0.70) while actually losing money
+     under the engine that trades it (run_monthly_style_backtest: 2y Sharpe
+     -1.41, 5y -0.16) -- see TREND_ROUTED_INSTRUMENTS's removal note. Fixed
+     by validating against run_monthly_style_backtest instead.
 
 Only EventDriven types (BondNewIssue, TermBasisEvent) are excluded --
 they have no continuous z-score history to run engine_mr/engine_trend
@@ -63,7 +80,15 @@ from curves.calibration.regime import compute_regime_features_dual, LONG_REGIME_
 # Fixed preset params, identical for every instrument in the scan -- see
 # module docstring on why these must not be tuned per instrument.
 _MR_PARAMS: Dict[str, Any] = dict(entry_z=2.0, exit_z=0.5, stop_z=3.0, min_hold=7)
-_TREND_PARAMS: Dict[str, Any] = dict(theta_z=1.25, mom_window=20, vol_window=60, trailing_mult=1.5)
+# Matches backtest_tab.py's preset_backtest_params TenorSpread preset -- the
+# actual default an unreviewed instrument would run under in production,
+# since the trend leg is now validated through run_monthly_style_backtest
+# (see module docstring's 2026-09-25 correction), not the standalone
+# run_trend_backtest engine.
+_TREND_PARAMS: Dict[str, Any] = dict(
+    entry_z=2.5, exit_z=0.25, stop_z=3.0, min_hold=10,
+    theta_z=1.5, mom_window=30, vol_window=90, trailing_mult=2.0,
+)
 
 # MR must trade almost nothing, or lose money, for trend-routing to even be
 # considered -- matches the original scan's "MR barely trades it (near-zero
@@ -150,7 +175,7 @@ def scan_instrument(
     compute_regime_features_dual's own, looser warm-up floor).
     """
     from web.tabs.alpha.backtest.engine_mr import run_spread_backtest
-    from web.tabs.alpha.backtest.engine_trend import run_trend_backtest
+    from web.tabs.alpha.backtest.engine_monthly import run_monthly_style_backtest
 
     s = pd.to_numeric(spread_ts, errors='coerce').dropna()
     if not isinstance(s.index, pd.DatetimeIndex):
@@ -169,7 +194,23 @@ def scan_instrument(
 
     mr_result = run_spread_backtest(s, spread_type=spread_type, **_MR_PARAMS)
 
-    trend_full = run_trend_backtest(s, spread_type=spread_type, **_TREND_PARAMS)
+    def _all_trend_schedule(series: pd.Series) -> Dict[pd.Period, str]:
+        """Every calendar month covered by `series` mapped to 'trend'.
+
+        This scan asks "if this instrument were fully trend-routed, would the
+        actual production engine make money on it" -- not "what does the
+        monthly regime classifier decide" (that is a separate, orthogonal
+        question the classifier answers for real at trade time, gated by
+        allow_trend_style; see build_monthly_style_schedule). Using an
+        all-trend schedule here isolates the engine/parameter comparison from
+        the classifier's own monthly accuracy, matching what _TREND_PARAMS
+        already does for the rest of this scan (fixed, uniform conditions).
+        """
+        return {p: 'trend' for p in series.index.to_period('M').unique()}
+
+    trend_full = run_monthly_style_backtest(
+        s, _all_trend_schedule(s), allow_short=True, spread_type=spread_type, **_TREND_PARAMS
+    )
 
     # The recent window must be a genuinely distinct sub-period -- i.e. there
     # must be enough history *before* the cutoff too, or "recent" degenerates
@@ -184,7 +225,10 @@ def scan_instrument(
         trend_recent = {'n_trades': 0, 'sharpe': 0.0}
         notes.append('recent_window_not_a_distinct_subperiod')
     else:
-        trend_recent = run_trend_backtest(s_recent, spread_type=spread_type, **_TREND_PARAMS)
+        trend_recent = run_monthly_style_backtest(
+            s_recent, _all_trend_schedule(s_recent), allow_short=True,
+            spread_type=spread_type, **_TREND_PARAMS,
+        )
 
     mr_sparse_or_losing = _mr_sparse_or_losing(mr_result)
     trend_ok = _trend_convincing(trend_full, trend_recent)
@@ -280,6 +324,51 @@ def print_report(results: List[InstrumentScanResult]) -> None:
                   f"could be a temporary regime shift rather than a durable change)")
     print("\nThis script never mutates TREND_ROUTED_INSTRUMENTS automatically -- "
           "update web/tabs/alpha/data/constants.py by hand after review.")
+
+
+def scan_report_dict(recent_years: int = RECENT_YEARS_DEFAULT) -> Dict[str, Any]:
+    """JSON-serializable version of :func:`print_report`, for the EOD pipeline.
+
+    Never mutates ``TREND_ROUTED_INSTRUMENTS`` (same contract as the CLI) --
+    this is a report for a human to review, not an auto-apply. See
+    ``calibrate_trend_routing`` in ``curves/interface.py`` for the caller that
+    persists this as a run artifact on a monthly cadence.
+    """
+    from web.tabs.alpha.data.constants import TREND_ROUTED_INSTRUMENTS
+
+    results = run_full_scan(recent_years=recent_years)
+    recommended = {(r.spread_type, r.instrument) for r in results if r.recommend_trend_route}
+    current = set(TREND_ROUTED_INSTRUMENTS)
+    added = sorted(f"{st}/{inst}" for st, inst in (recommended - current))
+    removed = sorted(f"{st}/{inst}" for st, inst in (current - recommended))
+
+    flagged = sorted(
+        (r for r in results if r.recommend_trend_route or r.currently_whitelisted),
+        key=lambda r: (not r.recommend_trend_route, r.spread_type, r.instrument),
+    )
+    return {
+        'n_scanned': len(results),
+        'recent_years': recent_years,
+        'current_whitelist': sorted(f"{st}/{inst}" for st, inst in current),
+        'recommend_add': added,
+        'recommend_remove': removed,
+        'in_sync': not added and not removed,
+        'flagged': [
+            {
+                'spread_type': r.spread_type,
+                'instrument': r.instrument,
+                'regime_long': r.regime_long,
+                'mr_n_trades': r.mr_n_trades,
+                'mr_sharpe': r.mr_sharpe,
+                'trend_full_sharpe': r.trend_full_sharpe,
+                'trend_recent_sharpe': r.trend_recent_sharpe,
+                'currently_whitelisted': r.currently_whitelisted,
+                'recommend_trend_route': r.recommend_trend_route,
+                'notes': r.notes,
+            }
+            for r in flagged
+        ],
+    }
 
 
 def main() -> None:

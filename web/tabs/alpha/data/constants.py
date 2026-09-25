@@ -63,7 +63,7 @@ SPREAD_CATEGORIES = {
         'style': 'Mixed',
     },
     'Tenor-Spread': {
-        'label': 'Curve & Cross-Asset Spreads',
+        'label': 'Curve & Cross-Asset (Core)',
         'types': ['TenorSpread'],
         'description': (
             'Curve slope, cross-curve, and bond/CD-vs-repo spreads (e.g. 5s10s, CDBCGB, '
@@ -162,6 +162,40 @@ MAX_CORRELATION_THRESHOLD = 0.6
 # candidates across the book found no other spread meeting this bar, so this
 # is an explicit, reviewed whitelist rather than a `style`/regime-based rule
 # (a prior monthly regime router mislabeled trend broadly and was disabled).
+#
+# Re-validated 2026-09-24 via `python -m curves.calibration.trend_scan`
+# (see that module's docstring -- this whitelist has no automatic
+# re-validation in the pipeline, so it must be re-run and reviewed by hand
+# periodically). That run:
+#   - CGB-10s30s no longer clears the bar on its own (trend_full_sharpe=0.25,
+#     just under the scan's 0.30 full-history threshold, and regime_long has
+#     drifted from 'trending' to 'uncertain'), but its recent-window trend
+#     Sharpe is still positive (0.54) and MR is still losing (-0.28) on it --
+#     kept for now as a borderline case rather than dropped back to MR on one
+#     scan. Re-check next run; remove if it doesn't recover.
+#   - CGB-10s20s30s: initially added here on trend_scan.py's numbers
+#     (trend_full=0.51, trend_recent=0.70), but that scan validates against
+#     engine_trend.run_trend_backtest directly -- NOT
+#     engine_monthly.run_monthly_style_backtest, which is what the individual
+#     panel and portfolio backtest's saved-state branch actually run for a
+#     reviewed instrument. Re-reviewed 2026-09-25: under
+#     run_monthly_style_backtest (monthly-router-gated, same trend_scan preset
+#     params) this instrument is negative at every window tested (2y Sharpe
+#     -1.41, 5y -0.16), even with the router correctly assigning 'trend' to
+#     essentially every eligible month. Root cause: run_monthly_style_backtest
+#     has a trend_max_flip_age=25 freshness gate with no equivalent in
+#     run_trend_backtest -- disabling it alone recovers most of the gap
+#     (-0.02 -> +0.21), but a sweep shows a hard cliff between age=60 (still
+#     negative) and age=90 (+0.21), not a plateau -- a single-instrument
+#     threshold artifact, not a real effect, and not currently a reviewable
+#     per-instrument parameter anyway. Removed rather than kept on a whitelist
+#     entry whose validation used a different engine than the one that trades
+#     it. Its saved individual-backtest state was ALSO cleared
+#     (web/tabs/alpha/data/saved_state.clear_instrument_state) -- the
+#     portfolio backtest's saved-state branch is keyed on has_saved_state(),
+#     not on this whitelist, so leaving the saved state in place would have
+#     kept feeding its stale 63/63-all-MR schedule (2y Sharpe -1.41) into the
+#     default portfolio regardless of this removal.
 TREND_ROUTED_INSTRUMENTS = {
     ('TenorSpread', 'CGB-10s30s'),
 }

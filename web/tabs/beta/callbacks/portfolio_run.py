@@ -898,11 +898,25 @@ def register_portfolio_run_callbacks(app):
                 '_factor_pool':     ','.join(sorted(_factor_pool_all)),
                 '_max_duration':    float(max_duration or 5),
             }
+            # Snapshot the *final* Portfolio Allocation Results — i.e. the
+            # rounded, DV01-capped target volumes actually shown in the Run
+            # Analysis table (portfolio_table_df) — not the pre-rounding
+            # portfolio_df, so "Add to Portfolio" reflects what the user sees.
+            _snap_source = portfolio_table_df if not portfolio_table_df.empty else portfolio_df
+            _snap_source = _snap_source[_snap_source.get('Asset Type', pd.Series(dtype=object)) != 'TOTAL'] \
+                if 'Asset Type' in _snap_source.columns else _snap_source
             _keep_cols = [c for c in [
                 'Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument',
                 'Duration', 'Capital (CNY)', 'DV01 (MM CNY)', 'Weight (%)',
-            ] if c in portfolio_df.columns]
-            _snap = portfolio_df[_keep_cols].copy()
+            ] if c in _snap_source.columns]
+            _snap = _snap_source[_keep_cols].copy()
+            # portfolio_table_df's 'Capital (CNY)' is a display string already
+            # in MM CNY (see _display_df above) — convert back to raw CNY so
+            # downstream readers (which expect raw CNY / 1e6) stay correct.
+            if _snap_source is portfolio_table_df and 'Capital (CNY)' in _snap.columns:
+                _snap['Capital (CNY)'] = pd.to_numeric(
+                    _snap['Capital (CNY)'].astype(str).str.replace(',', ''), errors='coerce',
+                ) * 1_000_000.0
             for _mk, _mv in _run_meta.items():
                 _snap[_mk] = _mv
             for _c in ('Duration', 'Capital (CNY)', 'DV01 (MM CNY)'):

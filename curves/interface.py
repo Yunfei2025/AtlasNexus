@@ -184,3 +184,58 @@ def calibrate_termbasis_event(cfg: RunConfig, store: ArtifactStore) -> dict:
     except Exception:
         logger.exception("[curves] TermBasisEvent refresh failed")
         return {"status": "failed"}
+
+
+# ── TREND_ROUTED_INSTRUMENTS re-validation (report-only) ───────────────────
+
+_TREND_SCAN_MARKER = "trend_scan_last_run.json"
+
+
+def calibrate_trend_routing(cfg: RunConfig, store: ArtifactStore) -> dict:
+    """Re-run ``curves.calibration.trend_scan`` once per calendar month and
+    persist its diff-vs-whitelist report as a run artifact.
+
+    This never mutates ``web/tabs/alpha/data/constants.py``'s
+    ``TREND_ROUTED_INSTRUMENTS`` -- see that module's docstring: the scan is
+    a report for a human to review by hand, on purpose (routing decisions
+    change which engine trades an instrument, so an automatic flip is not a
+    "best-effort, skip on failure" kind of step like the rest of EOD).
+
+    Cadence gate: the scan is expensive (backtests every instrument in the
+    book twice) and is designed to catch slow regime drift, not react to a
+    single day — running it on every EOD call would be daily-noise-chasing
+    exactly like the disabled monthly regime router. A marker file in
+    ``DIR_INPUT`` (survives across runs, unlike the per-run ``runs/<id>/``
+    dir) records the asof of the last scan; this step is a no-op until a new
+    calendar month starts.
+    """
+    from curves.calibration.trend_scan import scan_report_dict
+
+    last_run_month = None
+    if store.exists(_TREND_SCAN_MARKER):
+        try:
+            last_run_month = store.read_json(_TREND_SCAN_MARKER).get('asof_month')
+        except Exception:
+            last_run_month = None
+
+    this_month = cfg.asof.strftime('%Y-%m')
+    if last_run_month == this_month:
+        logger.info("[curves] trend_scan already ran this month (%s) — skipping", this_month)
+        return {"status": "skipped", "reason": "already_ran_this_month", "asof_month": this_month}
+
+    logger.info("[curves] Running TREND_ROUTED_INSTRUMENTS re-validation scan")
+    try:
+        report = scan_report_dict()
+        store.write_json(_TREND_SCAN_MARKER, {"asof_month": this_month, "asof": cfg.asof.isoformat()})
+        if not report.get('in_sync', True):
+            logger.warning(
+                "[curves] trend_scan whitelist drift detected: +ADD %s  -REMOVE %s "
+                "(report-only — update web/tabs/alpha/data/constants.py by hand after review)",
+                report.get('recommend_add'), report.get('recommend_remove'),
+            )
+        else:
+            logger.info("[curves] trend_scan: whitelist still matches this run's conclusions")
+        return {"status": "ok", **report}
+    except Exception:
+        logger.exception("[curves] trend_scan failed")
+        return {"status": "failed", "asof_month": this_month}
