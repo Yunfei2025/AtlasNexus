@@ -86,28 +86,50 @@ def test_no_locked_instruments_is_unchanged_from_prior_behavior():
     assert without_locked_arg == with_empty_locked == ['SAT-A', 'SAT-B']
 
 
-def test_core_spread_type_candidate_excluded_even_when_not_locked():
+def test_tenorspread_candidate_eligible_when_not_itself_locked():
     # A TenorSpread candidate manually added to `candidates` (e.g. "Add" from
-    # the main scan) but NOT present in `locked` -- simulating an instrument
-    # that newly qualifies for the core book before load_core_seed's quarterly
-    # cache has picked it up. It must still never win an output slot: the
-    # core book is diversified against, never picked from, regardless of
-    # whether the cache happens to already know about it.
-    corr = _corr_matrix({('SAT-A', 'NEW-CORE'): 0.1})
+    # the main scan) that is NOT itself an open core position -- it must be
+    # eligible for an output slot like any other candidate. Corrected
+    # 2026-09-25 per user: an earlier version excluded every TenorSpread
+    # candidate outright just for sharing the core's spread_type, which
+    # silently dropped manually-picked core-category candidates from a
+    # 14-candidate correlation check down to a handful.
+    corr = _corr_matrix({('SAT-A', 'TS-PICK'): 0.1})
     candidates = [
         {'ID': 'SAT-A', 'spread_type': 'CarrySpread', 'Zscore': 1.0},
-        {'ID': 'NEW-CORE', 'spread_type': 'TenorSpread', 'Zscore': 5.0},  # highest |z|, would win on z-score alone
+        {'ID': 'TS-PICK', 'spread_type': 'TenorSpread', 'Zscore': 5.0},
     ]
 
     result = scoring_mod.select_diverse_instruments(
         corr, candidates, n=2, max_abs_corr=1.0, locked=[],
     )
 
-    assert 'NEW-CORE' not in result
-    assert result == ['SAT-A']
+    assert set(result) == {'SAT-A', 'TS-PICK'}
 
 
-def test_core_spread_type_excluded_from_fallback_when_no_candidates_match():
+def test_tenorspread_candidate_excluded_only_when_itself_locked():
+    # CORE-1 is both a locked (open) core position AND happens to also be
+    # present in `candidates` (e.g. the scan included it) -- it must not be
+    # double-counted as a "new" pick. A DIFFERENT TenorSpread candidate
+    # (TS-OTHER) that is not itself locked remains eligible.
+    corr = _corr_matrix({('CORE-1', 'TS-OTHER'): 0.1, ('CORE-1', 'SAT-A'): 0.1,
+                          ('TS-OTHER', 'SAT-A'): 0.1})
+    candidates = [
+        {'ID': 'CORE-1', 'spread_type': 'TenorSpread', 'Zscore': 9.0},
+        {'ID': 'TS-OTHER', 'spread_type': 'TenorSpread', 'Zscore': 5.0},
+        {'ID': 'SAT-A', 'spread_type': 'CarrySpread', 'Zscore': 1.0},
+    ]
+    locked = [{'ID': 'CORE-1', 'spread_type': 'TenorSpread'}]
+
+    result = scoring_mod.select_diverse_instruments(
+        corr, candidates, n=3, max_abs_corr=1.0, locked=locked,
+    )
+
+    assert 'CORE-1' not in result
+    assert set(result) == {'TS-OTHER', 'SAT-A'}
+
+
+def test_locked_instruments_own_column_excluded_from_fallback():
     # cand_meta ends up empty (no candidate matches a corr_matrix column), so
     # the function falls back to all matrix columns -- that fallback must
     # still exclude the locked core instrument's own column.

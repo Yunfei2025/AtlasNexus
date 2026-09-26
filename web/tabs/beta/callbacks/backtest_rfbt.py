@@ -302,26 +302,39 @@ def register_backtest_rfbt_callbacks(app):
                 }
 
             # ── Section 2: Performance + IC statistics table ────────────
-            # No risk-free-rate deduction here: 'position' is a signal-strength
-            # scalar in [-1, 1] (or [0, 1] for long-only), not a leveraged
-            # capital allocation — it rarely approaches 1.0, so strategy_returns
-            # has a much smaller vol than a fully-invested portfolio would.
-            # Subtracting RiskModelConfig.RISK_FREE_RATE (2%, calibrated for
-            # compute_portfolio_metrics on an actual NAV series in
-            # backtest_hist.py) swamps this factor-level return/vol scale and
-            # produces wildly negative Sharpe unrelated to signal quality
+            # No blanket risk-free-rate deduction here: 'position' is a
+            # signal-strength scalar in [-1, 1] (or [0, 1] for long-only),
+            # not a leveraged capital allocation — it rarely approaches 1.0,
+            # so strategy_returns has a much smaller vol than a fully-invested
+            # portfolio would. Subtracting RiskModelConfig.RISK_FREE_RATE (2%,
+            # calibrated for compute_portfolio_metrics on an actual NAV series
+            # in backtest_hist.py) swamps this factor-level return/vol scale
+            # and produces wildly negative Sharpe unrelated to signal quality
             # (e.g. -17 instead of -0.3 for the same P&L). RF-rate adjustment
             # belongs at the portfolio/NAV level, not the per-factor diagnostic.
+            #
+            # IRDL's funding/repo cost is instead already netted into
+            # 'strategy_returns' itself, as a daily position-scaled cost (see
+            # funding_cost_series() / _apply_funding_cost() in
+            # factor_backtest.py) — charged only on the days, and to the
+            # extent, the position actually held duration exposure. An
+            # earlier version deducted a flat annualised rate here via
+            # risk_free_rate regardless of position size, which overcharged
+            # a lightly-positioned strategy and, because strategy-return vol
+            # scales down with position size while a flat deduction doesn't,
+            # could swing Sharpe by many points off a tiny vol denominator
+            # (e.g. +4.6 -> -5.4 for the same P&L). Charging it into the
+            # daily series instead keeps the deduction proportionate.
             metric_rows = []
             for factor, df in results.items():
                 m = compute_metrics(df, risk_free_rate=0.0,
                                     geometric_annualisation=True)
-                # NOTE: strategy_returns_gross == strategy_returns for every
-                # factor right now (transaction cost is deliberately zero —
-                # see factor_tx_cost_per_unit), so 'Sharpe(gr)' below will
-                # always match 'Sharpe'. Left in place as the seam for when
-                # a real (likely leg-weighted, for IRSL/IRCV) tx-cost model
-                # is reintroduced, at which point the two will diverge again.
+                # 'Sharpe(gr)' reads strategy_returns_gross — pre-funding-cost
+                # AND pre-transaction-cost P&L. For IRDL these two now
+                # diverge from 'Sharpe' by the funding-cost deduction (tx
+                # cost is still zero everywhere, so that part of the gap
+                # stays at zero pending a real per-leg tx-cost model — see
+                # factor_tx_cost_per_unit).
                 if 'strategy_returns_gross' in df.columns:
                     m_gross = compute_metrics(
                         df.assign(strategy_returns=df['strategy_returns_gross']),
@@ -333,18 +346,42 @@ def register_backtest_rfbt_callbacks(app):
                 # Ann Ret is reported GROSS OF FUNDING COST — what the factor
                 # itself earned. Funding is a financing choice, not part of
                 # the asset's own return, so it isn't deducted from the
-                # return figure (unlike Sharpe/vol/DD below, which stay net
-                # of funding — see _yield_carry / strategy_returns_gross_of_funding
-                # docstrings for why the two use different conventions).
-                # Falls back to the net series for factors with no separate
-                # gross-of-funding column (non-IRDL — identical anyway).
-                ann_ret_col = ('strategy_returns_gross_of_funding'
-                              if 'strategy_returns_gross_of_funding' in df.columns
-                              else 'strategy_returns')
+                # return figure (unlike Sharpe above, which nets IRDL's
+                # funding cost via strategy_returns). Prefers the explicit
+                # gross_of_funding column (FactorModel); falls back to
+                # strategy_returns_gross (MA/Bollinger/Momentum/Z-Score,
+                # which don't carry a separate gross_of_funding column but
+                # have the same pre-funding-cost quantity under that name —
+                # NOT 'strategy_returns' itself, which is funding-net for
+                # IRDL in both cases).
+                if 'strategy_returns_gross_of_funding' in df.columns:
+                    ann_ret_col = 'strategy_returns_gross_of_funding'
+                elif 'strategy_returns_gross' in df.columns:
+                    ann_ret_col = 'strategy_returns_gross'
+                else:
+                    ann_ret_col = 'strategy_returns'
                 m_ann_ret = compute_metrics(
                     df.assign(strategy_returns=df[ann_ret_col]),
                     risk_free_rate=0.0, geometric_annualisation=True,
                 )
+                # Buy & Hold reference: what the factor itself earned held
+                # outright (position=1 always), i.e. 'returns' un-scaled by
+                # the model's signal. 'Ann Ret' above is the STRATEGY's own
+                # realized return (position-scaled — often << B&H when the
+                # model sits flat or under-sized much of the time, e.g. an
+                # avg |position| of 0.3 and flat 36% of days on IRDL.CN
+                # nets ~1% vs B&H's ~2.9%, purely from position sizing, not
+                # from carry/return being computed wrong). Shown side by
+                # side so a low 'Ann Ret' isn't mistaken for a broken carry
+                # calculation when it's really the model choosing not to be
+                # fully invested.
+                if 'returns' in df.columns:
+                    m_bh = compute_metrics(
+                        df.assign(strategy_returns=df['returns']),
+                        risk_free_rate=0.0, geometric_annualisation=True,
+                    )
+                else:
+                    m_bh = {}
                 avg_turnover = float(df['turnover'].abs().mean()) if 'turnover' in df.columns else 0.0
                 # Max daily position move in B/day (position ±1 = ±10B → ×10). Feasibility check.
                 if 'position' in df.columns:
@@ -359,6 +396,7 @@ def register_backtest_rfbt_callbacks(app):
                     'Factor':    factor,
                     'Duration':  dur_str,
                     'Ann Ret':   f"{m_ann_ret.get('Ann. Return', 0):.2%}",
+                    'B&H Ann Ret': f"{m_bh.get('Ann. Return', 0):.2%}",
                     'Ann Vol':   f"{m.get('Ann. Vol', 0):.2%}",
                     'Sharpe':    f"{m.get('Sharpe', 0):.2f}",
                     'Sharpe(gr)':f"{m_gross.get('Sharpe', 0):.2f}",

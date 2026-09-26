@@ -276,7 +276,7 @@ def _build_results_from_saved_artifact(
     """
     import dataclasses as _dc
 
-    from multiasset.factor_backtest import load_factor_rates
+    from multiasset.factor_backtest import load_factor_rates, _apply_funding_cost
     from multiasset.factor_model import (
         build_features, _compute_target_returns, _predict_ic_model,
         build_position_series, FactorModelConfig,
@@ -321,14 +321,13 @@ def _build_results_from_saved_artifact(
             result = pd.DataFrame(index=preds.index)
             result['predicted_return'] = preds
             result['n_features'] = len(fa.get('selected_factors', []) or trained_model.get('feature_names', []))
-            # 'returns' is net of funding cost (risk-metric convention);
-            # 'returns_gross_of_funding' is what the factor itself earned
-            # (Ann./Total Return convention) — see run_factor_model_backtest
-            # and _yield_carry docstrings. Identical for non-IRDL factors.
+            # 'returns' is always gross of funding cost — funding is never
+            # netted into the return/P&L series (see _yield_carry). Kept as
+            # its own column for callers that read 'returns_gross_of_funding'
+            # explicitly; for IRDL, funding cost is deducted only at the
+            # strategy_returns, via funding_cost_series() in factor_backtest.
             result['returns'] = daily_returns.reindex(result.index)
-            result['returns_gross_of_funding'] = _compute_target_returns(
-                factor, factor_levels, net_of_funding=False,
-            ).reindex(result.index)
+            result['returns_gross_of_funding'] = result['returns']
 
             # Apply this factor's sizing override (e.g. a factor pinned to
             # 'tilt') unless the caller explicitly asked for a specific mode.
@@ -351,14 +350,21 @@ def _build_results_from_saved_artifact(
             result['turnover'] = pos['turnover']
 
             # No transaction-cost deduction — see run_factor_model_backtest /
-            # factor_tx_cost_per_unit: the only cost modelled is funding,
-            # already netted into 'returns' for IRDL via FR007. 'strategy_returns'
-            # and 'strategy_returns_gross' are identical for the same reason.
+            # factor_tx_cost_per_unit: no transaction cost of any kind is
+            # modelled. Funding is never netted into 'returns' (see
+            # _yield_carry) — it's deducted from 'strategy_returns' only, as
+            # a daily position-scaled cost (see funding_cost_series()), for
+            # IRDL. 'strategy_returns_gross'/'strategy_returns_gross_of_funding'
+            # are the pre-funding-cost P&L (identical to each other, since
+            # transaction cost is zero).
             result['strategy_returns_gross'] = result['position'].shift(1) * result['returns']
             result['strategy_returns_gross_of_funding'] = (
                 result['position'].shift(1) * result['returns_gross_of_funding']
             )
-            result['strategy_returns'] = result['strategy_returns_gross']
+            result['strategy_returns'] = _apply_funding_cost(
+                result['strategy_returns_gross'], result['position'],
+                factor_levels[factor], factor,
+            )
             result['cumulative_returns'] = (1 + result['strategy_returns'].fillna(0)).cumprod()
             results[factor] = result
         except Exception as e:

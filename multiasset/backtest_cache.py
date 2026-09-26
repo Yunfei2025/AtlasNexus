@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Disk cache for the Beta Book historical portfolio backtest
-(web/tabs/beta/callbacks/backtest_hist.py).
+(web/tabs/beta/callbacks/backtest_hist/orchestrator.py).
 
 Two pieces are cached independently so that adding a new factor to the
 factor-scaling pool does not force a recompute of the pure risk-parity (RP)
@@ -92,7 +92,7 @@ def scalar_to_coeff(scalar: float, factor_name: str) -> float:
     two-sided: a bearish FactorModel signal on USDCNY should be expressible as
     a short, not just a shrink-to-zero long. Direction and size both come from
     the signal — a Pure Risk Parity base has no signal, so it stays long-only/
-    flat via the trend-veto in backtest_hist.py instead of this function.
+    flat via the trend-veto in backtest_hist/_signals.py instead of this function.
 
     Bump FactorTiltCacheParams.scalar_to_coeff_version whenever the clip
     bounds below change, so cached tilts computed under the old bounds are

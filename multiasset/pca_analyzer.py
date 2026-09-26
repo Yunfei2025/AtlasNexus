@@ -11,6 +11,7 @@ from pathlib import Path
 from sklearn.decomposition import PCA
 
 from .config import CURVE_CONFIG, SPREAD_CONFIG, CREDIT_CONFIG, CREDIT_NO_CURVATURE, get_credit_weights
+from .pickle_repair import load_pickle_with_blockmanager_repair
 
 
 def _load_fx_curve_artifact(input_dir: str) -> dict:
@@ -18,7 +19,7 @@ def _load_fx_curve_artifact(input_dir: str) -> dict:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"fxcurve_ts.pkl not found in {input_dir}")
     try:
-        return pd.read_pickle(file_path)
+        return load_pickle_with_blockmanager_repair(file_path)
     except Exception as exc_pandas:
         try:
             with open(file_path, 'rb') as file:

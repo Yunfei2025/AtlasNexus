@@ -40,11 +40,13 @@ from settings.paths import DIR_INPUT, DIR_DATA, DIR_MODELS
 from factors.engine.selector import FactorSelector
 from scipy.stats import spearmanr, rankdata
 
+from multiasset.pickle_repair import load_pickle_with_blockmanager_repair
 from multiasset.factor_backtest import (
     load_factor_rates,
     _yield_to_return,
     _price_to_return,
     _is_yield_factor,
+    _apply_funding_cost,
     get_factor_duration,
     compute_metrics,
 )
@@ -396,10 +398,16 @@ def _load_curve_data(factor_code: str, input_dir: str) -> Optional[pd.DataFrame]
         if prefix in ('IRDL', 'IRSL', 'IRCV'):
             cfg = CURVE_CONFIG.get(suffix)
             if cfg is None:
-                # Foreign curves from fxcurve_ts.pkl
+                # Foreign curves from fxcurve_ts.pkl. Uses the BlockManager-
+                # repair loader (see multiasset/pickle_repair.py), not a bare
+                # pd.read_pickle -- a frame in this artifact can unpickle
+                # with an internally aliased BlockManager that silently
+                # returns wrong values on whole-frame access even when it
+                # doesn't raise, so recovering through it matters even
+                # though this call site already tolerates a load failure.
                 fxcurve_path = os.path.join(input_dir, 'fxcurve_ts.pkl')
                 if os.path.exists(fxcurve_path):
-                    fxcurve = pd.read_pickle(fxcurve_path)
+                    fxcurve = load_pickle_with_blockmanager_repair(fxcurve_path)
                     if suffix in fxcurve:
                         data = fxcurve[suffix]
             else:
@@ -1272,21 +1280,21 @@ def factor_sizing_override(factor_code: str) -> Dict:
 def _compute_target_returns(
     factor_code: str,
     factor_levels: pd.DataFrame,
-    net_of_funding: bool = True,
 ) -> pd.Series:
     """Compute daily returns for a factor (duration-adjusted for yields).
 
-    ``net_of_funding`` (default True): for IRDL, whether carry is netted
-    against the funding/repo rate — see _yield_to_return / _yield_carry.
-    Risk metrics (Sharpe, vol) use the net (default) series; return figures
-    (Total/Ann. Return) should request ``net_of_funding=False``.
+    Carry is always gross of funding/repo cost (see _yield_to_return /
+    _yield_carry) — funding is never netted into this return/P&L series.
+    For IRDL, the funding-rate cost is instead deducted from
+    strategy_returns as a daily position-scaled cost — see
+    funding_cost_series() in multiasset.factor_backtest.
     """
     level = factor_levels[factor_code].dropna()
     is_yield = _is_yield_factor(factor_code)
     mod_dur = get_factor_duration(factor_code)
 
     if is_yield:
-        return _yield_to_return(level, mod_dur, factor_code, net_of_funding=net_of_funding)
+        return _yield_to_return(level, mod_dur, factor_code)
     else:
         return _price_to_return(level)
 
@@ -1576,18 +1584,16 @@ def run_factor_model_backtest(
     result['n_features'] = pred_full['n_features']
     result['effective_horizon'] = pred_full['effective_horizon']
 
-    # Actual daily returns (for PnL, always use 1-day returns).
-    # 'returns' is NET of funding cost (the risk-metric convention: Sharpe/
-    # vol/drawdown should reflect the real day-to-day P&L risk of a funded
-    # position). 'returns_gross_of_funding' is what the factor itself
-    # actually earned (Total/Ann. Return convention — funding is a
-    # financing choice, not part of the asset's own return). See
-    # _yield_to_return / _yield_carry docstrings. Identical for non-IRDL
-    # factors, where there is no funding-rate netting to begin with.
+    # Actual daily returns (for PnL, always use 1-day returns). Always
+    # GROSS of funding/repo cost (see _yield_to_return / _yield_carry) —
+    # funding is a financing choice, not part of the asset's own return,
+    # and is never netted into this series. 'returns_gross_of_funding' is
+    # kept as an alias of 'returns' for callers that still read that column
+    # name; for IRDL the funding cost is instead deducted from
+    # strategy_returns below, via funding_cost_series() in
+    # multiasset.factor_backtest.
     result['returns'] = daily_returns.reindex(result.index)
-    result['returns_gross_of_funding'] = _compute_target_returns(
-        factor_code, factor_levels, net_of_funding=False,
-    ).reindex(result.index)
+    result['returns_gross_of_funding'] = result['returns']
 
     # Long-only flag comes from factor metadata, not string inspection.
     _long_only = _is_long_only(factor_code)
@@ -1625,26 +1631,27 @@ def run_factor_model_backtest(
     result['turnover'] = pos['turnover']
 
     # PnL. Transaction cost is NOT deducted — by design (see
-    # factor_tx_cost_per_unit): the only cost modelled for these factors is
-    # funding, already netted into 'returns' for IRDL (see _yield_carry /
-    # FR007). IRSL/IRCV are long-short spreads with no funded-outright
-    # interpretation and get no cost of any kind — same as their carry,
-    # which is exactly zero for the same reason (weights sum to zero, see
-    # _yield_carry's Slope/Curvature note).
+    # factor_tx_cost_per_unit): no transaction cost of any kind is modelled
+    # here. Funding is never netted into 'returns' (see _yield_carry /
+    # FR007) — it's deducted only from 'strategy_returns', as a daily
+    # position-scaled cost (see funding_cost_series()), for IRDL. IRSL/IRCV
+    # are long-short spreads with no funded-outright interpretation and get
+    # no cost of any kind either — same as their carry, which is exactly
+    # zero for the same reason (weights sum to zero, see _yield_carry's
+    # Slope/Curvature note).
     #
-    # 'strategy_returns' and 'strategy_returns_gross' are therefore
-    # identical (cost = 0). Both columns are kept, rather than removed, so
-    # callers that read one or the other (the gross/net split still matters
-    # for 'strategy_returns_gross_of_funding' vs 'strategy_returns', which
-    # differ by the FUNDING deduction, not a transaction-cost one) don't
-    # need special-casing, and so a real per-leg tx-cost model can be
-    # reintroduced later (see factor_tx_cost_per_unit docstring) without
-    # restructuring this block again.
+    # 'strategy_returns_gross' and 'strategy_returns_gross_of_funding' are
+    # the pre-funding-cost P&L (identical to each other, since transaction
+    # cost is zero); 'strategy_returns' is net of IRDL's funding cost —
+    # the actual P&L this strategy would have realised holding a repo'd
+    # position. All three columns are kept so callers that read any one of
+    # them don't need special-casing, and so a real per-leg tx-cost model
+    # can be reintroduced later (see factor_tx_cost_per_unit docstring)
+    # without restructuring this block again.
     result['strategy_returns_gross'] = pos['position'].shift(1) * result['returns']
-    result['strategy_returns_gross_of_funding'] = (
-        pos['position'].shift(1) * result['returns_gross_of_funding']
-    )
-    result['strategy_returns'] = result['strategy_returns_gross']
+    result['strategy_returns_gross_of_funding'] = result['strategy_returns_gross']
+    result['strategy_returns'] = _apply_funding_cost(
+        result['strategy_returns_gross'], pos['position'], level, factor_code)
     result['cumulative_returns'] = (1 + result['strategy_returns'].fillna(0)).cumprod()
 
     return result

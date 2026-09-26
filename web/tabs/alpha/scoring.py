@@ -72,7 +72,6 @@ def select_diverse_instruments(
     n: int = 10,
     max_abs_corr: float = 1.0,
     locked: list[dict] | None = None,
-    core_spread_type: str | None = 'TenorSpread',
 ) -> list[str]:
     """Select up to *n* instruments using greedy maximin diversity.
 
@@ -97,8 +96,7 @@ def select_diverse_instruments(
         are skipped.  Default 1.0 (no filtering).
     locked :
         Instruments to treat as already selected from the start -- e.g. the
-        Alpha core (default TenorSpread) book's current holdings (see
-        ``web.tabs.alpha.data.load_core_seed`` and
+        Alpha core (default TenorSpread) book's current OPEN positions (see
         docs/plans/portfolio_construction_beta_alpha.md §5.2). Locked
         instruments count toward every later candidate's max-|corr| check
         (so a satellite candidate too correlated with the core gets rejected
@@ -108,16 +106,16 @@ def select_diverse_instruments(
         Dicts use the same ``{ID, spread_type, ...}`` shape as *candidates*;
         entries not present in ``corr_matrix.columns`` are silently dropped
         (e.g. insufficient price history for the correlation lookback).
-    core_spread_type :
-        Candidates of this ``spread_type`` are excluded from *candidates*
-        entirely (never eligible for a seed/output slot), not just from the
-        seed via ``locked`` -- ``locked`` only carries load_core_seed's
-        quarterly-cached membership snapshot, so a TenorSpread instrument
-        that newly qualifies for the core book but hasn't reached that cache
-        yet would otherwise still be eligible to win one of the *n* output
-        slots if it was manually added to *candidates* (e.g. "Add" from the
-        main scan). The core book is diversified against, never picked from,
-        regardless of cache freshness. Pass ``None`` to disable.
+        A candidate that happens to share (spread_type, ID) with a locked
+        entry is excluded from *candidates* too (it's the same instrument,
+        already occupying its slot as the locked backdrop) -- but a
+        candidate merely sharing ``spread_type`` with a locked entry (e.g.
+        another TenorSpread instrument that is NOT itself currently held) is
+        NOT excluded on that basis alone; it competes for an output slot
+        like any other candidate. Corrected 2026-09-25 per user: an earlier
+        version excluded every TenorSpread candidate outright, which silently
+        dropped manually-picked core-category candidates that were never
+        actually locked/held.
 
     Returns
     -------
@@ -126,6 +124,19 @@ def select_diverse_instruments(
     """
     from .data import display_key as _display_key
 
+    # Locked instruments' keys, computed up front so candidate-pool building
+    # can exclude only the specific instruments already locked (not their
+    # whole spread_type -- see the `locked` docstring note above).
+    locked_keys: set[str] = set()
+    for c in (locked or []):
+        inst  = str(c.get('ID', '') or '')
+        stype = str(c.get('spread_type', '') or '')
+        if not inst or not stype:
+            continue
+        dk = _display_key(stype, inst)
+        if dk in corr_matrix.columns:
+            locked_keys.add(dk)
+
     # Build a lookup from display_key → candidate metadata.
     cand_meta: dict[str, dict] = {}
     for c in (candidates or []):
@@ -133,30 +144,20 @@ def select_diverse_instruments(
         stype = str(c.get('spread_type', '') or '')
         if not inst or not stype:
             continue
-        if core_spread_type and stype == core_spread_type:
-            continue
         dk = _display_key(stype, inst)
+        if dk in locked_keys:
+            continue
         if dk in corr_matrix.columns and dk not in cand_meta:
             cand_meta[dk] = c
 
     available = list(cand_meta.keys())
     if not available:
-        # No candidates match — fall back to all matrix columns. Still must not
-        # admit core-book columns here (e.g. the locked seed's own price
-        # series, which correlation_callbacks.py includes in corr_matrix) --
-        # cand_meta has no entry for them either way, so the core_spread_type
-        # check above never ran against them on this path. display_key() has
-        # no reversible spread_type prefix in general, so identify core
-        # columns from `locked` (the actual core-seed rows the caller passed)
-        # rather than trying to parse the column string.
-        excluded_cols: set[str] = set()
-        if core_spread_type:
-            for c in (locked or []):
-                if str(c.get('spread_type', '') or '') == core_spread_type:
-                    inst = str(c.get('ID', '') or '')
-                    if inst:
-                        excluded_cols.add(_display_key(core_spread_type, inst))
-        available = [col for col in corr_matrix.columns if col not in excluded_cols]
+        # No candidates match — fall back to all matrix columns, still
+        # excluding locked instruments' own columns (e.g. the locked seed's
+        # own price series, which correlation_callbacks.py includes in
+        # corr_matrix so `locked`'s max-|corr| check has values to compare
+        # against).
+        available = [col for col in corr_matrix.columns if col not in locked_keys]
 
     abs_corr = corr_matrix.abs()
 
@@ -166,16 +167,16 @@ def select_diverse_instruments(
     # Seed the selection with locked instruments (e.g. the live core book) so
     # every candidate's max-|corr| check below is measured against them from
     # the start, without ever letting them consume one of the n output slots.
-    locked_keys: set[str] = set()
     for c in (locked or []):
         inst  = str(c.get('ID', '') or '')
         stype = str(c.get('spread_type', '') or '')
         if not inst or not stype:
             continue
         dk = _display_key(stype, inst)
-        if dk not in corr_matrix.columns or dk in locked_keys:
+        if dk not in locked_keys:
             continue
-        locked_keys.add(dk)
+        if dk in selected:
+            continue
         selected.append(dk)
         selected_stypes.add(stype)
         # A locked instrument might also appear in `candidates` (e.g. the

@@ -12,21 +12,26 @@ long-short, net-zero-notional contrasts across tenors, where a level-based
 carry has no economic meaning — their carry is intentionally left at zero
 pending a leg-difference formula (see _yield_carry docstring).
 
-IRDL specifically is further netted against its country's funding/repo
-rate (FR007 for CN, etc. — see _IRDL_FUNDING_RATE_MACRO_COL): holding a
-government bond is a funded position, and gross yield/252 alone produced
-an unrealistic ~9.3 Sharpe once carry (a near-deterministic daily addition)
-dominated the return series' volatility. Net-of-funding carry on IRDL.CN
-brought full-history Sharpe down to ~2.5 — still elevated versus a typical
-strategy Sharpe, but no longer absurd. SPDL/CRDL (already credit/swap
-spread levels, not raw yields) are NOT netted against a funding rate —
+Carry (``_yield_carry`` / ``_yield_to_return``) is always GROSS of
+funding/repo cost — funding is never netted into the return/P&L series,
+including for IRDL. Holding a government bond is a funded position, so
+IRDL's Sharpe should still reflect the cost of that leverage; that
+deduction is instead applied to ``strategy_returns`` as a daily,
+position-scaled cost — see ``funding_cost_series()`` /
+``_apply_funding_cost()`` — charged only on the days, and to the extent,
+the position actually held duration exposure. A flat annualised deduction
+regardless of position size was tried first and rejected: it overcharged
+a lightly-positioned strategy and, because strategy-return vol scales down
+with position size while a flat deduction doesn't, could swing Sharpe by
+many points off a tiny vol denominator. SPDL/CRDL (already credit/swap
+spread levels, not raw yields) get no funding-rate deduction anywhere —
 see module-level comment in factor_backtest.py for why that's a separate,
 unresolved question rather than assumed.
 
 Tests use SPDL/CRDL (gross carry, no funding-rate lookup) to isolate the
 basic carry formula deterministically, and inject a fake funding-rate
-series via monkeypatch to test the net-of-funding path without depending
-on the real macro-px.pkl file's contents.
+series via monkeypatch to test funding_cost_series() without depending on
+the real macro-px.pkl file's contents.
 """
 from __future__ import annotations
 
@@ -40,6 +45,8 @@ from multiasset.factor_backtest import (
     _yield_carry,
     _yield_to_return,
     factor_level_to_price_return,
+    funding_cost_series,
+    _apply_funding_cost,
 )
 
 
@@ -74,18 +81,19 @@ def test_level_factor_gross_carry_is_positive_and_proportional_to_yield():
     assert np.isclose(carry.dropna().iloc[-1], expected_daily, rtol=1e-9)
 
 
-def test_irdl_without_funding_rate_falls_back_to_gross_carry():
+def test_irdl_carry_is_gross_with_no_funding_rate_available():
     """With no funding-rate series available (the default in this test file
-    via the autouse fixture), IRDL must still get carry — gross, not none."""
+    via the autouse fixture), IRDL must still get carry — gross, as always."""
     level = _rising_yield_series(step=0.0)
     carry = _yield_carry(level, 'IRDL.CN')
     expected_daily = level.iloc[0] / 100.0 / 252.0
     assert np.isclose(carry.dropna().iloc[-1], expected_daily, rtol=1e-9)
 
 
-def test_irdl_carry_nets_against_funding_rate(monkeypatch):
-    """IRDL carry must be (yield - funding_rate)/252, not gross yield/252,
-    when a funding-rate series is available."""
+def test_irdl_carry_is_gross_even_with_a_funding_rate_available(monkeypatch):
+    """IRDL carry must stay gross yield/252 — never netted against the
+    funding rate — even when a funding-rate series is available. Funding
+    cost is deducted from strategy_returns, not inside carry/returns."""
     level = _rising_yield_series(n=100, start=3.0, step=0.0)  # flat 3.0% yield
     funding = pd.Series(1.0, index=level.index)  # flat 1.0% funding rate
 
@@ -93,44 +101,87 @@ def test_irdl_carry_nets_against_funding_rate(monkeypatch):
     factor_backtest._funding_rate_cache.clear()
 
     carry = _yield_carry(level, 'IRDL.CN')
-    expected_net_daily = (3.0 - 1.0) / 100.0 / 252.0
-    assert np.isclose(carry.dropna().iloc[-1], expected_net_daily, rtol=1e-9)
-
     gross_daily = 3.0 / 100.0 / 252.0
-    assert carry.dropna().iloc[-1] < gross_daily, "netting funding cost must reduce carry vs gross"
+    assert np.isclose(carry.dropna().iloc[-1], gross_daily, rtol=1e-9)
 
 
-def test_irdl_net_carry_can_go_negative_when_funding_exceeds_yield(monkeypatch):
-    """A funding squeeze (repo rate > bond yield) must show as negative carry,
-    not be floored at zero — that's a real, meaningful cost of holding a
-    funded position, not a data error."""
-    level = _rising_yield_series(n=50, start=2.0, step=0.0)
-    funding = pd.Series(5.0, index=level.index)  # funding cost exceeds bond yield
-
-    monkeypatch.setattr(factor_backtest, '_load_funding_rate', lambda country: funding)
-    factor_backtest._funding_rate_cache.clear()
-
-    carry = _yield_carry(level, 'IRDL.CN')
-    assert (carry.dropna() < 0).all(), "funding cost above yield must produce negative carry"
-
-
-def test_irdl_falls_back_to_gross_before_funding_series_inception(monkeypatch):
-    """Dates before the funding-rate series' own history starts (e.g. FR007
-    begins partway through IRDL.CN's history) must use gross carry, not NaN."""
+def test_funding_cost_series_scales_with_position(monkeypatch):
+    """funding_cost_series() must charge position_{t-1} * funding_rate_{t-1}/252,
+    not a flat rate regardless of position size — a half-sized position
+    should be charged half the cost of a full position."""
     level = _rising_yield_series(n=100, start=3.0, step=0.0)
-    # Funding rate only exists for the second half of the level series.
-    funding = pd.Series(1.0, index=level.index[50:])
+    funding = pd.Series(1.0, index=level.index)  # flat 1.0% funding rate
 
     monkeypatch.setattr(factor_backtest, '_load_funding_rate', lambda country: funding)
     factor_backtest._funding_rate_cache.clear()
 
-    carry = _yield_carry(level, 'IRDL.CN')
-    gross_daily = 3.0 / 100.0 / 252.0
-    net_daily = (3.0 - 1.0) / 100.0 / 252.0
+    full_position = pd.Series(1.0, index=level.index)
+    half_position = pd.Series(0.5, index=level.index)
 
-    assert not carry.iloc[1:49].isna().any(), "pre-inception dates must not be NaN"
-    assert np.allclose(carry.iloc[1:49], gross_daily, rtol=1e-9), "pre-inception must be gross"
-    assert np.isclose(carry.iloc[-1], net_daily, rtol=1e-9), "post-inception must be net"
+    cost_full = funding_cost_series(full_position, level, 'IRDL.CN')
+    cost_half = funding_cost_series(half_position, level, 'IRDL.CN')
+
+    expected_full_daily = 1.0 / 100.0 / 252.0
+    assert np.isclose(cost_full.dropna().iloc[-1], expected_full_daily, rtol=1e-9)
+    assert np.isclose(cost_half.dropna().iloc[-1], expected_full_daily / 2.0, rtol=1e-9)
+
+
+def test_funding_cost_series_is_zero_when_flat(monkeypatch):
+    """A zero position (flat/out of the market) must incur zero funding cost,
+    even when a funding-rate series is available."""
+    level = _rising_yield_series(n=50, start=3.0, step=0.0)
+    funding = pd.Series(2.0, index=level.index)
+    monkeypatch.setattr(factor_backtest, '_load_funding_rate', lambda country: funding)
+    factor_backtest._funding_rate_cache.clear()
+
+    flat_position = pd.Series(0.0, index=level.index)
+    cost = funding_cost_series(flat_position, level, 'IRDL.CN')
+    assert (cost.fillna(0) == 0).all()
+
+
+def test_funding_cost_series_is_zero_for_non_irdl_factors(monkeypatch):
+    """SPDL/CRDL/IRSL/IRCV etc. get no funding-rate deduction at all —
+    scoped to IRDL only (see funding_cost_series docstring)."""
+    level = _rising_yield_series(n=50, start=2.0, step=0.0)
+    funding = pd.Series(5.0, index=level.index)
+    monkeypatch.setattr(factor_backtest, '_load_funding_rate', lambda country: funding)
+    factor_backtest._funding_rate_cache.clear()
+
+    position = pd.Series(1.0, index=level.index)
+    for code in ('SPDL.CDB', 'CRDL.LGB', 'IRSL.CN', 'IRCV.CN'):
+        cost = funding_cost_series(position, level, code)
+        assert (cost.fillna(0) == 0).all(), f"{code} should have zero funding cost"
+
+
+def test_funding_cost_series_is_zero_when_no_funding_series_available(monkeypatch):
+    """Falls back to an all-zero cost series (no charge) rather than raising
+    or propagating NaN when the funding-rate series can't be loaded at all."""
+    level = _rising_yield_series(n=50, start=3.0, step=0.0)
+    monkeypatch.setattr(factor_backtest, '_load_funding_rate', lambda country: None)
+    factor_backtest._funding_rate_cache.clear()
+
+    position = pd.Series(1.0, index=level.index)
+    cost = funding_cost_series(position, level, 'IRDL.CN')
+    assert (cost.fillna(0) == 0).all()
+
+
+def test_apply_funding_cost_reduces_irdl_strategy_returns(monkeypatch):
+    """_apply_funding_cost must subtract the position-scaled funding cost
+    from strategy_returns for IRDL, and be a no-op (unchanged) for a
+    non-IRDL factor code."""
+    level = _rising_yield_series(n=50, start=3.0, step=0.0)
+    funding = pd.Series(1.0, index=level.index)
+    monkeypatch.setattr(factor_backtest, '_load_funding_rate', lambda country: funding)
+    factor_backtest._funding_rate_cache.clear()
+
+    position = pd.Series(1.0, index=level.index)
+    gross_returns = pd.Series(0.0001, index=level.index)
+
+    net_irdl = _apply_funding_cost(gross_returns, position, level, 'IRDL.CN')
+    assert (net_irdl < gross_returns).any(), "IRDL funding cost must reduce strategy_returns"
+
+    net_non_irdl = _apply_funding_cost(gross_returns, position, level, 'SPDL.CDB')
+    pd.testing.assert_series_equal(net_non_irdl, gross_returns)
 
 
 def test_slope_and_curvature_factors_have_zero_carry():
