@@ -137,6 +137,62 @@ class RiskModelConfig:
     # Default cap for any asset class not listed above
     CLASS_CAP_DEFAULT: float = 0.30
 
+    # ── Capital constraint (docs/plans/beta_book_exposure_vs_capital.md
+    #    Step 7) ─────────────────────────────────────────────────────────
+    # Long-only, unlevered ceiling on deployed capital: sum(|notional|) <=
+    # CAPITAL_UTILISATION_MAX * total_capital. The 5% buffer below 1.0
+    # accounts for settlement timing, coupon reinvestment lag, and the
+    # practical impossibility of ever hitting exactly 100% deployment.
+    # Before this step, the book was always fully invested (weights summed
+    # to exactly 1.0 every day) regardless of how bearish the signal was —
+    # this is what lets a bearish day genuinely de-risk instead of only
+    # rotating exposure between assets.
+    CAPITAL_UTILISATION_MAX: float = 0.95
+
+    # ── Sleeve DV01 target (factor_scaling mode only) ───────────────────────
+    # Same convention as the Portfolio tab's "max_duration" input
+    # (web/tabs/beta/callbacks/portfolio_run/_run_analysis.py): book DV01 <=
+    # MAX_DV01_PER_CAPITAL * total_capital / 1e10, i.e. a 10BN book's DV01
+    # may reach 5 * 1e10/1e10 = 5 MM CNY per bp. signed_sleeve_weights_daily
+    # produces weights that are DV01-equalised PER FACTOR UNIT (sum to the
+    # factor's own budget share), not sized to any capital/risk target —
+    # orchestrator.py scales the whole day's sleeve notional up toward this
+    # DV01 budget (capped separately by CAPITAL_UTILISATION_MAX gross), since
+    # otherwise the book sits at ~10% utilisation regardless of what capital
+    # or risk the user actually wants deployed. Measured: for this pool's
+    # sleeve construction (Level/Slope/Curvature spread across all 6 CN
+    # tenors, never concentrated in the long end), CAPITAL_UTILISATION_MAX
+    # binds on ~95%+ of days at any target above ~5 — a higher target
+    # (e.g. the original 10) is unreachable without leverage this book
+    # doesn't take, so it just leaves MORE days gross-capped without moving
+    # the achieved DV01. 5 is the level a 95%-gross, no-leverage book can
+    # actually get close to on an ordinary day.
+    MAX_DV01_PER_CAPITAL: float = 5.0
+
+    # ── Short-end carry floor (factor_scaling mode only) ────────────────────
+    # IRSL/IRCV's steepener/curvature trades short one end of the curve and
+    # go long the other; a net short position on the SHORT end pays away
+    # carry instead of collecting it, and — being short duration — earns
+    # little capital-gain P&L to compensate (measured: the signed book gave
+    # up ~0.92%/yr of capital vs. a same-risk-size steady-long benchmark,
+    # almost entirely from short-end days). These tenors' NET summed weight
+    # (across all factors) is floored at 0 in signed_sleeve_weights_daily —
+    # dropped from the trade on a day it would go net short, not re-expressed
+    # via another instrument (no IRS asset exists in this codebase yet; the
+    # user's intent is to eventually hedge this via a 1-5Y swap instead of a
+    # cash bond). CN10Y/CN20Y/CN30Y stay fully signed.
+    SHORT_END_LONG_ONLY_TENORS: tuple = ('CN1Y', 'CN2Y', 'CN5Y')
+
+    # ── Transaction cost (docs/plans/beta_book_exposure_vs_capital.md
+    #    Step 8) ─────────────────────────────────────────────────────────
+    # Basis points per unit ONE-WAY turnover (round-trip = 2x), charged on
+    # DAILY notional deltas now that positions can move daily (Step 4) —
+    # previously 0.5bp charged only at monthly rebalance dates. Lowered
+    # alongside the cadence change since a real desk re-hedging daily in
+    # small increments pays materially less per adjustment than a monthly
+    # rebalance moving the whole book at once.
+    TX_COST_BP: float = 0.1
+
     # ── Portfolio construction ────────────────────────────────────────────────
     # Standard lot size for bond positions (CNY)
     LOT_SIZE_BOND_CNY: int = 10_000_000

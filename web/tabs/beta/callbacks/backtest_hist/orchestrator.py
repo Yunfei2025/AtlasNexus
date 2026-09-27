@@ -15,7 +15,6 @@ steps.
 
 from __future__ import annotations
 
-import os
 import traceback
 
 import numpy as np
@@ -26,13 +25,9 @@ from multiasset.data import load_raw_market_data, get_asset_type
 from multiasset.main import create_custom_portfolio
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
-from multiasset.factor_backtest import compute_portfolio_metrics
+from multiasset.factor_backtest import compute_portfolio_metrics, compute_metrics
 from multiasset.config import RiskModelConfig
-from multiasset.backtest_cache import (
-    RPCacheParams, FactorTiltCacheParams,
-    load_rp, save_rp, load_factor_tilt, save_factor_tilt,
-    scalar_to_coeff, rp_hash,
-)
+from multiasset.backtest_cache import RPCacheParams, load_rp, save_rp, rp_hash
 from settings.paths import DIR_INPUT
 
 from ...data import SELECTED_FACTOR_POOL, get_assets_from_factors, FACTOR_TO_ASSET_MAP
@@ -40,10 +35,9 @@ from ._signals import (
     load_factor_signal_series, factor_signal_asof,
     build_trend_factor_by_asset, trend_sign_asof,
 )
-from ._pnl import (
-    build_returns_matrix, build_daily_allocation, compute_daily_pnl_m,
-    compute_turnover_and_tx_cost,
-)
+from ._pnl import compute_turnover_and_tx_cost
+from multiasset.book.pnl import compute_book_pnl
+from multiasset.book.capital import weights_to_notional
 
 
 class NoSignalsAvailable(Exception):
@@ -264,12 +258,19 @@ def run_historical_allocation(
         asset_pools_by_date = cached_rp['asset_pools_by_date']
         screened_factors_by_date = cached_rp['screened_factors_by_date']
         last_corr_matrix = cached_rp.get('last_corr_matrix')
+        stage2_ctx_by_date = cached_rp.get('stage2_ctx_by_date', {})
         rp_h = rp_hash(rp_params)
         print(f"  RP base: cache hit ({rp_h})")
     else:
         rp_weights_by_date = {}  # rebalance_date -> {asset_name: weight}
         asset_pools_by_date = {}
         screened_factors_by_date = {}  # rebalance_date -> [factor_code, ...]
+        # rebalance_date -> Stage2Context | None (None when fit_and_calculate
+        # took the _optimize_weights branch). Lets Step 4's daily loop
+        # rebuild per-tenor weights with a rescaled factor budget without
+        # re-running Stage 1's SLSQP solve — see
+        # docs/plans/beta_book_exposure_vs_capital.md Step 4.
+        stage2_ctx_by_date = {}
 
         # Cache of portfolio+optimizer keyed by frozenset of asset names.
         # Re-using objects avoids redundant construction for recurring asset sets
@@ -369,111 +370,92 @@ def run_historical_allocation(
             filtered_assets = [a for a in selected_assets if a['name'] in weights]
             asset_pools_by_date[rebalance_date] = filtered_assets
             screened_factors_by_date[rebalance_date] = low_corr_factors_list
+            stage2_ctx_by_date[rebalance_date] = optimizer_cache[key].stage2_context()
 
             print(f"  {rebalance_date.date()}: {len(selected_asset_names)} assets, {len(low_corr_factors_list)} screened factors (of {len(available_factors)} total)")
 
-        rp_h = save_rp(input_dir, rp_params, rp_weights_by_date, asset_pools_by_date, screened_factors_by_date, last_corr_matrix)
+        rp_h = save_rp(input_dir, rp_params, rp_weights_by_date, asset_pools_by_date, screened_factors_by_date, last_corr_matrix, stage2_ctx_by_date)
         print(f"  RP base: computed and cached ({rp_h})")
 
-    # ── Step B: factor-scaling tilts — cached per factor, each keyed on
-    #    the RP base it was tilted from. Adding factor N+1 only computes
-    #    factor N+1's tilt; previously-cached factors are reused as-is.
-    factor_tilts_by_factor: dict = {}
+    # ── Step B/C: daily positions. Stage 1 (above) stays MONTHLY and is the
+    #    Pure Risk Parity base. factor_scaling does NOT resize that long-only
+    #    base any more: it holds signed per-factor sleeves (each factor's own
+    #    mimicking portfolio x its lagged FactorModel position), rebuilt daily
+    #    — see multiasset.book.sizing.signed_sleeve_weights_daily. The old
+    #    resize-the-RP-base path could not express short/flat level views or
+    #    slope/curvature long-short factor returns, so it scored ~0.03 Sharpe
+    #    against ~1.36 for the same signals traded as factors.
+    all_dates = sorted(risk_factors.loc[(risk_factors.index >= start_date) & (risk_factors.index <= end_date)].index)
+    daily_idx = pd.DatetimeIndex(all_dates)
+
+    unreplicated_factors: list = []
     if alloc_mode == 'factor_scaling':
-        try:
-            signal_pkl_mtime = os.path.getmtime(os.path.join(str(input_dir), 'factor-backtest.pkl'))
-        except OSError:
-            signal_pkl_mtime = 0.0
+        # Signed factor sleeves: each factor holds budget_f x position_f x its
+        # own mimicking portfolio (see multiasset.book.sizing), so the book
+        # earns the combination of the Individual Factors strategies instead
+        # of a long-only bond book that can't express short/flat or
+        # slope/curvature views. Stage 1's monthly reference budget (the
+        # vol^0.5-constrained ERC) still sets each factor's capital share.
+        from multiasset.book.sizing import signed_sleeve_weights_daily, pool_sleeve_budgets
+        from multiasset.factor_backtest import compute_ewma_factor_vols
 
-        for f_code in sorted(factor_signal_series.keys()):
-            tilt_params = FactorTiltCacheParams(
-                factor_code=f_code,
-                scalar_to_coeff_version="v2",  # v2: FXDL is now directional (can short)
-                factor_to_asset_map_version="v1",
-                signal_pkl_mtime=signal_pkl_mtime,
-                class_caps_version="RiskModelConfig.v1",
+        # Sleeve capital budgets over the pool's OWN screened factors each
+        # month (vol^0.5 for IR, equal otherwise — same rule as the
+        # Portfolio tab), from EWMA vol on data up to the rebalance date.
+        budget_by_rebalance_date = {}
+        for rebalance_date, pool_factors in screened_factors_by_date.items():
+            window = risk_factors.loc[
+                (risk_factors.index >= rebalance_date - relativedelta(months=vol_lookback_months))
+                & (risk_factors.index <= rebalance_date), list(pool_factors)
+            ]
+            vol_map = compute_ewma_factor_vols(window, ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA)
+            budget_by_rebalance_date[rebalance_date] = pool_sleeve_budgets(pool_factors, vol_map)
+        weights_daily, mod_dur_daily, unreplicated_factors = signed_sleeve_weights_daily(
+            budget_by_rebalance_date, factor_signal_series, daily_idx,
+            FACTOR_TO_ASSET_MAP, market_data,
+            long_only_assets=RiskModelConfig.SHORT_END_LONG_ONLY_TENORS,
+        )
+        if unreplicated_factors:
+            print(f"  factor_scaling: no sleeve (not replicable or no saved signal): {unreplicated_factors}")
+        if weights_daily.empty or not weights_daily.abs().to_numpy().any():
+            raise BacktestInputError(
+                "No valid rebalance periods found", "No valid periods", themed=False,
             )
-            cached_tilt = load_factor_tilt(input_dir, rp_h, tilt_params)
-            if cached_tilt is not None:
-                factor_tilts_by_factor[f_code] = cached_tilt['tilt_weights_by_date']
-                print(f"  Factor {f_code}: cache hit")
-                continue
+        all_assets_ever.update(weights_daily.columns)
 
-            tilt_rows = {}
-            for rebalance_date, weights in rp_weights_by_date.items():
-                # Only tilt with this factor on dates where it was actually
-                # screened in (low_corr_factors_list) — matches the original
-                # per-date asset_to_factors gating exactly.
-                if f_code not in screened_factors_by_date.get(rebalance_date, ()):
-                    continue
-                mapped_assets = {a['name'] for a in FACTOR_TO_ASSET_MAP.get(f_code, [])}
-                sig = _factor_signal_asof(f_code, pd.Timestamp(rebalance_date))
-                if sig is None:
-                    continue
-                coeff = scalar_to_coeff(sig, f_code)
-                tilt_rows[rebalance_date] = {
-                    name: weight * coeff for name, weight in weights.items()
-                    if name in mapped_assets
-                }
-            tilt_df = pd.DataFrame(tilt_rows).T
-            factor_tilts_by_factor[f_code] = tilt_df
-            save_factor_tilt(input_dir, rp_h, tilt_params, tilt_df)
-            print(f"  Factor {f_code}: computed and cached")
-
-    # ── Step C: blend per-date — average each asset's tilted weight
-    #    across the factors that touch it, falling back to the RP
-    #    weight for assets touched by zero factors, then renormalise,
-    #    apply class caps, and finally apply capital ONCE to the
-    #    blended vector (never per-factor, so summing contributions
-    #    from N factors cannot inflate total deployed capital).
-    class_caps = RiskModelConfig.CLASS_CAPS
-
-    for rebalance_date, weights in rp_weights_by_date.items():
-        if alloc_mode == 'factor_scaling' and factor_tilts_by_factor:
-            blended = {}
-            for name, rp_weight in weights.items():
-                tilted_vals = []
-                for f_code, tilt_df in factor_tilts_by_factor.items():
-                    if rebalance_date in tilt_df.index and name in tilt_df.columns:
-                        v = tilt_df.loc[rebalance_date, name]
-                        if pd.notna(v):
-                            tilted_vals.append(float(v))
-                blended[name] = float(np.mean(tilted_vals)) if tilted_vals else rp_weight
-
-            # FXDL is directional (scalar_to_coeff can return a negative
-            # coefficient), so a bearish tilt can leave `blended[name]`
-            # negative for an FX asset. Normalise by GROSS exposure
-            # (sum of |v|), not net sum — net-sum normalisation would
-            # distort every other asset's weight whenever a short
-            # partially offsets the book's net total, and could blow up
-            # if the net total crosses zero.
-            total_scaled = sum(abs(v) for v in blended.values())
-            if total_scaled > 1e-9:
-                weights = {k: v / total_scaled for k, v in blended.items()}
-                # Apply per-class caps then renormalise (iterate to spread
-                # any excess evenly across uncapped assets). FX keeps a
-                # signed cap [-cap, +cap] since it's directional; every
-                # other class stays long-only clamped to [0, cap].
-                for _ in range(3):
-                    capped = {}
-                    for k, v in weights.items():
-                        cap = class_caps.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT)
-                        lo = -cap if get_asset_type(k) == 'FX' else 0.0
-                        capped[k] = max(lo, min(v, cap))
-                    cap_total = sum(abs(v) for v in capped.values())
-                    if cap_total > 1e-9:
-                        weights = {k: v / cap_total for k, v in capped.items()}
-            else:
-                print(f"  {rebalance_date.date()}: All signals zero, using RP weights")
-                # weights already set from RP optimizer above, leave unchanged
-        else:
-            # Pure Risk Parity: no directional signal drives this mode, so it
-            # otherwise holds every FX pair and commodity long unconditionally.
-            # Zero out (long-only, so "short" isn't representable) any FX/
-            # commodity asset whose 3M momentum is negative, then redistribute
-            # the freed capital across the remaining assets. Factor Model
-            # Scaling is untouched — it already gets FX/commodity direction
-            # from the FactorModel signal via scalar_to_coeff.
+        # Scale the sleeve book up toward a DV01 target — signed_sleeve_
+        # weights_daily's weights are DV01-equalised PER FACTOR UNIT, not
+        # sized to any capital/risk target (unscaled, the book sits at
+        # whatever gross the vol^0.5 budgets happen to produce — measured
+        # ~11% average for a 3-factor CN pool). See scale_sleeve_to_dv01_target.
+        from multiasset.book.sizing import scale_sleeve_to_dv01_target
+        weights_daily = scale_sleeve_to_dv01_target(
+            weights_daily, mod_dur_daily, total_capital_cny,
+            RiskModelConfig.MAX_DV01_PER_CAPITAL, RiskModelConfig.CAPITAL_UTILISATION_MAX,
+        )
+        # Kept for the 'book_dv01_mm' KPI below — the DV01 actually achieved
+        # after scaling, in MM CNY/bp, same units as the Portfolio tab's
+        # DV01 display and RiskModelConfig.MAX_DV01_PER_CAPITAL's target.
+        book_dv01_daily_mm = ((weights_daily * mod_dur_daily).abs().sum(axis=1)
+                              * (total_capital_cny / 1e10))
+    else:
+        book_dv01_daily_mm = None
+        # Pure Risk Parity: no directional signal drives this mode, so it
+        # otherwise holds every FX pair and commodity long unconditionally.
+        # Zero out (long-only, so "short" isn't representable) any FX/
+        # commodity asset whose 3M momentum is negative, then redistribute
+        # the freed capital across the remaining assets. Evaluated ONLY at
+        # each rebalance_date (monthly), same as before Step 4 of
+        # docs/plans/beta_book_exposure_vs_capital.md — unlike
+        # factor_scaling's FactorModel signal, the trend veto's cadence was
+        # never part of that step's scope (it materially changes results —
+        # measured ~28% of days across ~60% of months differ between daily
+        # and monthly evaluation on a 3yr window — and wasn't a decision
+        # made for this refactor), so it stays exactly as it was: computed
+        # once per rebalance month, then forward-filled onto every trading
+        # day until the next rebalance.
+        monthly_weights: dict = {}
+        for rebalance_date, weights in rp_weights_by_date.items():
             trended = {
                 k: v for k, v in weights.items()
                 if _trend_sign_asof(k, pd.Timestamp(rebalance_date)) > 0
@@ -484,21 +466,90 @@ def run_historical_allocation(
             # else: every trend-filtered asset was vetoed (all momentum
             # negative) — keep the unfiltered RP weights rather than
             # producing an empty allocation for this rebalance.
+            monthly_weights[rebalance_date] = weights
+            all_assets_ever.update(weights.keys())
 
-        all_assets_ever.update(weights.keys())
+        rp_dates = sorted(monthly_weights.keys())
+        weights_rows: dict = {}
+        rb_idx = 0
+        current_rb = None
+        for d in daily_idx:
+            while rb_idx < len(rp_dates) and rp_dates[rb_idx] <= d:
+                current_rb = rp_dates[rb_idx]
+                rb_idx += 1
+            if current_rb is None:
+                continue
+            weights_rows[d] = pd.Series(monthly_weights[current_rb])
 
-        # Calculate allocations — capital applied once, on the final
-        # (blended + capped, or pure-RP) weight vector.
+        weights_daily = pd.DataFrame(weights_rows).T if weights_rows else pd.DataFrame()
+        if weights_daily.empty:
+            raise BacktestInputError(
+                "No valid rebalance periods found", "No valid periods", themed=False,
+            )
+
+    # Capital applied once, on the daily weight matrix (never per-factor,
+    # so summing contributions from N factors cannot inflate total deployed
+    # capital), via weights_to_notional's long-only (except FX)
+    # utilisation-capped sizing — see
+    # docs/plans/beta_book_exposure_vs_capital.md Step 7. Applied ROW BY
+    # ROW (once per day), not once per rebalance — a single day where
+    # several factors' daily coefficients spike together must still be
+    # caught and scaled back to the 95% ceiling, independent of how the
+    # monthly reference budget was sized (see
+    # test_single_day_spike_across_multiple_factors_still_respects_cap in
+    # tests/test_capital_constraint.py). This is the change that lets a
+    # bearish day genuinely de-risk (gross < 95%, remainder in cash — see
+    # multiasset.book.funding.cash_return_daily) instead of always being
+    # renormalised back up to 100% invested, which is what the pre-Step-7
+    # code did unconditionally.
+    weights_daily = weights_daily.fillna(0.0)
+    asset_class_of_capital = {
+        name: {'Commodities': 'comm', 'FX': 'fx', 'Credit': 'credit'}.get(get_asset_type(name), 'bond')
+        for name in weights_daily.columns
+    }
+    # factor_scaling holds signed sleeves (shorts are part of the replicated
+    # strategies); Pure Risk Parity stays long-only except FX.
+    signed_classes = ('fx', 'bond', 'comm', 'credit') if alloc_mode == 'factor_scaling' else ('fx',)
+    notional_rows = {
+        d: weights_to_notional(weights_daily.loc[d], total_capital_cny,
+                               asset_class_of=asset_class_of_capital, signed_classes=signed_classes)
+        for d in weights_daily.index
+    }
+    allocations_daily = pd.DataFrame(notional_rows).T.reindex(columns=weights_daily.columns).fillna(0.0)
+
+    # history_data / allocations_by_date / final_weights_by_date stay
+    # MONTHLY (one row per rebalance date) for the allocation chart and the
+    # "final weights" payload used elsewhere — sampling the (now daily)
+    # weights_daily at each rebalance date reproduces exactly what those
+    # consumers expect, while the P&L path below uses the full daily series.
+    for rebalance_date in sorted(rp_weights_by_date.keys()):
+        # rebalance_date is the 1st of the month, which is frequently not a
+        # trading day (weekend/holiday) and so is never itself a row in
+        # weights_daily (indexed by actual trading days from daily_idx) —
+        # sample the first trading day ON OR AFTER it instead. This mirrors
+        # what the old monthly forward-fill implicitly did (a rebalance on
+        # a non-trading day took effect on the next trading day).
+        candidates = weights_daily.index[weights_daily.index >= rebalance_date]
+        if len(candidates) == 0:
+            continue
+        sample_date = candidates[0]
+        row_weights = weights_daily.loc[sample_date]
+        # Use the capital-constrained notional (allocations_daily), not a
+        # fresh weight*capital recompute — a day where gross weight exceeds
+        # the utilisation ceiling has already been scaled down by
+        # weights_to_notional above, and the displayed/saved allocation
+        # must reflect that, not the pre-cap weight.
+        row_alloc = allocations_daily.loc[sample_date]
         row = {'Date': rebalance_date}
         current_allocations = {}
-        for name, weight in weights.items():
-            alloc = weight * total_capital_cny
-            row[name] = alloc / 1_000_000  # Store in millions for chart
-            current_allocations[name] = alloc
-
+        for name, alloc in row_alloc.items():
+            if alloc == 0.0:
+                continue
+            row[name] = float(alloc) / 1_000_000  # Store in millions for chart
+            current_allocations[name] = float(alloc)
         history_data.append(row)
         allocations_by_date[rebalance_date] = current_allocations
-        final_weights_by_date[rebalance_date] = dict(weights)
+        final_weights_by_date[rebalance_date] = {k: float(v) for k, v in row_weights.items() if v != 0.0}
 
     if not history_data:
         raise BacktestInputError(
@@ -508,24 +559,74 @@ def run_historical_allocation(
     # Use user-selected date range for display (we already validated it's valid)
     display_start = start_date
     display_end = end_date
-
-    # --- Calculate Daily PnL ---
-    all_dates = sorted(risk_factors.loc[(risk_factors.index >= start_date) & (risk_factors.index <= end_date)].index)
     sorted_rebalance_dates = sorted(allocations_by_date.keys())
 
-    # --- Vectorised daily PnL ---
-    daily_idx = pd.DatetimeIndex(all_dates)
-    rets_matrix = build_returns_matrix(all_assets_ever, market_data, start_date, end_date, daily_idx)
-    alloc_daily = build_daily_allocation(allocations_by_date, rets_matrix.columns, daily_idx)
-    daily_pnl_m = compute_daily_pnl_m(alloc_daily, rets_matrix)
-
-    turnover_by_date, tx_cost_m, total_tx_cost_m = compute_turnover_and_tx_cost(
-        allocations_by_date, rets_matrix.columns, daily_idx, total_capital_cny,
+    # --- Vectorised daily PnL, split into capital gain vs carry ───────────
+    # allocations_daily is already a genuinely daily (not monthly-forward-
+    # filled) CNY notional matrix — see Step B/C above.
+    # compute_book_pnl (Step 5, multiasset/book/pnl.py) reads each asset's
+    # calculate_daily_returns_series ONCE and keeps ['carry','capital','total']
+    # together — capital_gain[d,a] = notional[d,a]*capital[d,a] (== DV01 x dy),
+    # carry[d,a] = notional[d,a]*carry[d,a] (== notional x yield/365), and
+    # `other` for FX/commodity assets where no clean split exists (their
+    # whole P&L, unsplit — see returns_split_is_exact). `daily_pnl_m` below
+    # is BookPnL.total (all three combined) in millions CNY, matching the
+    # pre-Step-5 combined-return convention exactly — nothing downstream of
+    # this changes shape; the split components are exposed in the returned
+    # dict for callers that want to report them separately (e.g. a future
+    # carry/capital-gain breakdown panel), but this function's own NAV/
+    # Sharpe/turnover math is unaffected either way.
+    alloc_daily = (
+        allocations_daily
+        .reindex(daily_idx)
+        .reindex(columns=sorted(all_assets_ever))
+        .fillna(0.0)
     )
-    n_years = max((end_date - start_date).days / 365.25, 1e-3)
-    ann_turnover = float(turnover_by_date.sum()) / n_years
+    book_pnl = compute_book_pnl(alloc_daily, market_data, start_date, end_date)
+    daily_pnl_m = book_pnl.total / 1_000_000
 
-    gross_daily = daily_pnl_m.sum(axis=1)
+    # ── Step 6: funding hurdle (Sharpe only, never in P&L) + cash return
+    #    on undeployed capital (decision #7 — real earned return, IS added
+    #    to P&L). See docs/plans/beta_book_exposure_vs_capital.md Step 6 /
+    #    multiasset/book/funding.py.
+    from multiasset.book.funding import build_domicile_of, book_funding_cost_daily, cash_return_daily
+    domicile_of = build_domicile_of(alloc_daily.columns, market_data)
+    funding_cost_cny = book_funding_cost_daily(alloc_daily, domicile_of)
+    # Decimal RATE series (not CNY) for compute_portfolio_metrics's
+    # funding_hurdle param — that function annualises and subtracts it from
+    # the Sharpe numerator only, never from Ann. Return/Vol (see its
+    # docstring for why: funding must never enter the vol denominator).
+    funding_hurdle_rate = (funding_cost_cny / total_capital_cny).reindex(daily_idx).fillna(0.0)
+    # cash_return_daily needs Step 7's max_utilisation to know how much
+    # capital is "undeployed" — Step 7 hasn't landed yet, so this call uses
+    # the default (0.95) as a placeholder; it will start reflecting actual
+    # de-risking once weights_to_notional enforces that ceiling upstream.
+    cash_daily_cny = cash_return_daily(alloc_daily, total_capital_cny)
+    cash_daily_m = cash_daily_cny.reindex(daily_idx).fillna(0.0) / 1_000_000
+
+    # Average capital usage / cash income — for the KPI panel, so a modest
+    # DV01 target (or a signal that's often flat) is visible as "most of the
+    # book sits in cash, earning FR007" rather than a mysteriously low
+    # post-funding Sharpe with no explanation.
+    avg_capital_usage = float((alloc_daily.abs().sum(axis=1) / total_capital_cny).mean())
+    avg_cash_income_pct = float(cash_daily_cny.sum() / total_capital_cny
+                                / max((end_date - start_date).days / 365.25, 1e-3))
+
+    # Step 8: turnover/tx-cost on DAILY notional deltas (alloc_daily is
+    # already the capital-constrained notional from Step 7), not monthly
+    # weight deltas — positions can move every day since Step 4, so a cost
+    # model that only charges at rebalance dates silently missed every
+    # day's actual trading.
+    turnover_daily, tx_cost_m, total_tx_cost_m = compute_turnover_and_tx_cost(alloc_daily)
+    n_years = max((end_date - start_date).days / 365.25, 1e-3)
+    # turnover_daily is raw CNY notional traded; ann_turnover is reported as
+    # a MULTIPLE of total capital (e.g. "487%" via the KPI grid's `.0%`
+    # formatting) — divide by total_capital_cny, not just by n_years, or
+    # this comes out in raw CNY units (previously this was already a weight
+    # fraction, since the pre-Step-8 version worked on wt_df, not notional).
+    ann_turnover = float(turnover_daily.sum()) / total_capital_cny / n_years
+
+    gross_daily = daily_pnl_m.sum(axis=1) + cash_daily_m
     cumulative_m = daily_pnl_m.cumsum()
     cumulative_m.insert(0, 'Date', daily_idx)
     cumulative_m['Total'] = gross_daily.cumsum()
@@ -533,6 +634,10 @@ def run_historical_allocation(
 
     df_history = pd.DataFrame(history_data)
     df_pnl = cumulative_m.reset_index(drop=True)
+    # Unrounded copy for NAV/Sharpe/drawdown — the rounding below is for
+    # display only. Computing metrics on whole-million P&L quantised a
+    # 100MM book to 1% NAV steps and distorted every Sharpe/drawdown.
+    df_pnl_exact = df_pnl.copy()
 
     # Round time series to integers (million CNY)
     for col in df_history.columns:
@@ -548,8 +653,8 @@ def run_historical_allocation(
     nav_net_series = None
     if not df_pnl.empty and len(df_pnl) > 1:
         initial_capital = total_capital_cny / 1_000_000
-        portfolio_values = initial_capital + df_pnl['Total']
-        net_portfolio_values = initial_capital + df_pnl['Total (net)']
+        portfolio_values = initial_capital + df_pnl_exact['Total']
+        net_portfolio_values = initial_capital + df_pnl_exact['Total (net)']
         nav_series = (portfolio_values / portfolio_values.iloc[0]) * 1000
         nav_net_series = (net_portfolio_values / net_portfolio_values.iloc[0]) * 1000
 
@@ -561,15 +666,70 @@ def run_historical_allocation(
             net_portfolio_values,
             risk_free_rate=RiskModelConfig.RISK_FREE_RATE,
         )
+        # portfolio_values has a plain RangeIndex (df_pnl was reset_index'd),
+        # while funding_hurdle_rate is indexed by daily_idx (Timestamps) —
+        # compute_metrics's internal .reindex(rets.index) would silently
+        # zero the hurdle on a type mismatch, so align positionally here
+        # (funding_hurdle_rate and daily_pnl_m/df_pnl are already built off
+        # the same daily_idx, so position i in one corresponds to position i
+        # in the other).
+        funding_hurdle_for_metrics = pd.Series(
+            funding_hurdle_rate.to_numpy(), index=portfolio_values.index,
+        )
+        # risk_free_rate=0.0 here, NOT RiskModelConfig.RISK_FREE_RATE: FR007
+        # (funding_hurdle, the book's actual position-weighted repo cost) and
+        # the flat 2% risk-free rate are both proxies for "what CNY cash
+        # could otherwise earn" — subtracting both double-counts the same
+        # opportunity cost. Sharpe (gross)/(net tx) above still use the flat
+        # hurdle (they have no funding line to compare against instead);
+        # post-funding's hurdle IS the funding cost, already computed from
+        # real notional x real FR007 (see book_funding_cost_daily), which is
+        # the more accurate of the two for this line.
+        perf_post_funding = compute_portfolio_metrics(
+            portfolio_values,
+            risk_free_rate=0.0,
+            funding_hurdle=funding_hurdle_for_metrics,
+        )
         annualized_return = perf.get('Ann. Return', 0.0)
         sharpe_ratio = perf.get('Sharpe', 0.0) or 0.0
         max_drawdown = perf.get('Max Drawdown', 0.0)
         sharpe_net = perf_net.get('Sharpe', 0.0) or 0.0
+        sharpe_post_funding = perf_post_funding.get('Sharpe', 0.0) or 0.0
+        ann_funding_cost = perf_post_funding.get('Ann. Funding Cost', 0.0) or 0.0
+
+        # Sharpe on the SAME basis as the Individual Factors tab: price-only
+        # P&L (no carry, no cash on undeployed capital), rf = 0. This is the
+        # number to compare against the per-factor Sharpes; the gross/net/
+        # post-funding Sharpes above are total-return book metrics.
+        price_pnl = (book_pnl.capital_gain.sum(axis=1)
+                     .add(book_pnl.other.sum(axis=1), fill_value=0.0)
+                     .reindex(daily_idx).fillna(0.0))
+        perf_price_only = compute_metrics(
+            (price_pnl / total_capital_cny).rename('strategy_returns').to_frame(),
+            risk_free_rate=0.0, geometric_annualisation=True,
+        )
+        sharpe_price_only = perf_price_only.get('Sharpe', 0.0) or 0.0
+
+        # Average book DV01 achieved (factor_scaling only) — compare against
+        # RiskModelConfig.MAX_DV01_PER_CAPITAL * total_capital_cny/1e10, the
+        # target scale_sleeve_to_dv01_target aims for. None for risk_parity
+        # (no sleeve DV01 series is built for that mode).
+        avg_book_dv01_mm = (
+            float(book_dv01_daily_mm.reindex(daily_idx).fillna(0.0).mean())
+            if book_dv01_daily_mm is not None else None
+        )
 
         metrics = {
             'annualized_return': annualized_return,
             'sharpe_ratio': sharpe_ratio,
             'sharpe_net': sharpe_net,
+            'sharpe_post_funding': sharpe_post_funding,
+            'sharpe_price_only': sharpe_price_only,
+            'avg_book_dv01_mm': avg_book_dv01_mm,
+            'avg_capital_usage': avg_capital_usage,
+            'avg_cash_income_pct': avg_cash_income_pct,
+            'unreplicated_factors': unreplicated_factors,
+            'ann_funding_cost': ann_funding_cost,
             'max_drawdown': max_drawdown,
             'n_rebalances': len(allocations_by_date),
             'ann_turnover': ann_turnover,
@@ -613,7 +773,7 @@ def run_historical_allocation(
             # which the beta+alpha combination panel reads via load_last_backtest_result.
             'equity_series': [
                 {'date': d.strftime('%Y-%m-%d'), 'value': float(v)}
-                for d, v in zip(df_pnl['Date'], df_pnl['Total'])
+                for d, v in zip(df_pnl_exact['Date'], df_pnl_exact['Total'])
             ] if not df_pnl.empty else [],
             'sharpe': float(metrics['sharpe_ratio']) if metrics is not None else 0.0,
             'annualized_return': float(metrics['annualized_return']) if metrics is not None else 0.0,

@@ -241,7 +241,7 @@ def build_multiasset_portfolio_layout():
     risk_budgets = html.Div([
         html.Div([
             html.Span("Risk Budgets", style=_CARD_TITLE),
-            html.Span("Vol from 1Y EWMA · Budget = vol^0.5 · Level > Slope > Curvature · Floor 3%, Cap 25%",
+            html.Span("Vol from 1Y EWMA · Budget = vol^0.5 · Level > Slope > Curvature",
                       style={'fontSize': '9px', 'color': 'var(--text-muted)'}),
         ], style={'display': 'flex', 'alignItems': 'baseline', 'gap': '10px', 'marginBottom': '10px',
                   'flexWrap': 'wrap'}),

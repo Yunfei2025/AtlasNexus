@@ -46,7 +46,6 @@ from multiasset.factor_backtest import (
     _yield_to_return,
     _price_to_return,
     _is_yield_factor,
-    _apply_funding_cost,
     get_factor_duration,
     compute_metrics,
 )
@@ -861,9 +860,8 @@ def factor_tx_cost_per_unit(factor_code: str, cfg: FactorModelConfig) -> float:
     """Transaction cost per unit of position turnover, in **return space**.
 
     NOT CURRENTLY USED by run_factor_model_backtest / the saved-artifact
-    path — as of the funding-cost work, the only cost modelled for these
-    factors is funding (netted into 'returns' for IRDL via FR007; see
-    _yield_carry), and transaction cost is deliberately zero everywhere.
+    path — no cost of any kind (transaction cost or funding) is modelled
+    at the factor level; transaction cost is deliberately zero everywhere.
     Kept (rather than removed) as the seam to reintroduce a real cost
     later: the flat ``FACTOR_TX_COST_BP`` this used to return was
     calibrated to CN treasury FUTURES spreads (a single outright
@@ -1283,11 +1281,10 @@ def _compute_target_returns(
 ) -> pd.Series:
     """Compute daily returns for a factor (duration-adjusted for yields).
 
-    Carry is always gross of funding/repo cost (see _yield_to_return /
-    _yield_carry) — funding is never netted into this return/P&L series.
-    For IRDL, the funding-rate cost is instead deducted from
-    strategy_returns as a daily position-scaled cost — see
-    funding_cost_series() in multiasset.factor_backtest.
+    Price-only: no carry, no funding of any kind — see _yield_to_return /
+    _yield_carry and docs/plans/beta_book_exposure_vs_capital.md Step 3.
+    Carry and funding are computed independently at the book level — see
+    multiasset/book/pnl.py, multiasset/book/funding.py.
     """
     level = factor_levels[factor_code].dropna()
     is_yield = _is_yield_factor(factor_code)
@@ -1584,14 +1581,11 @@ def run_factor_model_backtest(
     result['n_features'] = pred_full['n_features']
     result['effective_horizon'] = pred_full['effective_horizon']
 
-    # Actual daily returns (for PnL, always use 1-day returns). Always
-    # GROSS of funding/repo cost (see _yield_to_return / _yield_carry) —
-    # funding is a financing choice, not part of the asset's own return,
-    # and is never netted into this series. 'returns_gross_of_funding' is
-    # kept as an alias of 'returns' for callers that still read that column
-    # name; for IRDL the funding cost is instead deducted from
-    # strategy_returns below, via funding_cost_series() in
-    # multiasset.factor_backtest.
+    # Actual daily returns (for PnL, always use 1-day returns). Price-only —
+    # no carry, no funding of any kind (see _yield_to_return / _yield_carry
+    # and module docstring). 'returns_gross_of_funding' is kept as an alias
+    # of 'returns' for callers that still read that column name; the book-
+    # level funding hurdle (Sharpe only) lives in multiasset/book/funding.py.
     result['returns'] = daily_returns.reindex(result.index)
     result['returns_gross_of_funding'] = result['returns']
 
@@ -1631,27 +1625,23 @@ def run_factor_model_backtest(
     result['turnover'] = pos['turnover']
 
     # PnL. Transaction cost is NOT deducted — by design (see
-    # factor_tx_cost_per_unit): no transaction cost of any kind is modelled
-    # here. Funding is never netted into 'returns' (see _yield_carry /
-    # FR007) — it's deducted only from 'strategy_returns', as a daily
-    # position-scaled cost (see funding_cost_series()), for IRDL. IRSL/IRCV
-    # are long-short spreads with no funded-outright interpretation and get
-    # no cost of any kind either — same as their carry, which is exactly
-    # zero for the same reason (weights sum to zero, see _yield_carry's
-    # Slope/Curvature note).
+    # factor_tx_cost_per_unit): no cost of any kind is modelled at the
+    # factor level, including funding — see _yield_carry / module docstring
+    # and docs/plans/beta_book_exposure_vs_capital.md Step 3. Funding is
+    # instead applied only as a Sharpe-step hurdle at the BOOK level (never
+    # netted into any factor-level return series) — see
+    # multiasset/book/funding.py.
     #
-    # 'strategy_returns_gross' and 'strategy_returns_gross_of_funding' are
-    # the pre-funding-cost P&L (identical to each other, since transaction
-    # cost is zero); 'strategy_returns' is net of IRDL's funding cost —
-    # the actual P&L this strategy would have realised holding a repo'd
-    # position. All three columns are kept so callers that read any one of
-    # them don't need special-casing, and so a real per-leg tx-cost model
-    # can be reintroduced later (see factor_tx_cost_per_unit docstring)
-    # without restructuring this block again.
+    # 'strategy_returns', 'strategy_returns_gross' and
+    # 'strategy_returns_gross_of_funding' are therefore all identical (no
+    # transaction cost, no funding netting). All three columns are kept so
+    # callers that read any one of them don't need special-casing, and so a
+    # real per-leg tx-cost model can be reintroduced later (see
+    # factor_tx_cost_per_unit docstring) without restructuring this block
+    # again.
     result['strategy_returns_gross'] = pos['position'].shift(1) * result['returns']
     result['strategy_returns_gross_of_funding'] = result['strategy_returns_gross']
-    result['strategy_returns'] = _apply_funding_cost(
-        result['strategy_returns_gross'], pos['position'], level, factor_code)
+    result['strategy_returns'] = result['strategy_returns_gross']
     result['cumulative_returns'] = (1 + result['strategy_returns'].fillna(0)).cumprod()
 
     return result

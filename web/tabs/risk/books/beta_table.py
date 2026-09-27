@@ -280,6 +280,13 @@ def register_beta_book_table_callbacks(app):
                     except (ValueError, TypeError):
                         pass
     
+                # Stale marker: Capital/Weight came back empty after parsing,
+                # meaning the persisted snapshot row never got valid numeric
+                # values (e.g. rows written before the Weight (%) '%'-strip
+                # fix in build_allocation_results) — flag rather than silently
+                # show 0/blank so the user knows to delete + re-add the book.
+                _is_stale = not cap_mm_str or not weight_str
+
                 display_rows.append({
                     '__row_key':        str(_row_idx),
                     'Asset Type':       asset_type,
@@ -298,6 +305,7 @@ def register_beta_book_table_callbacks(app):
                     '_asset_color':     _ASSET_TYPE_COLOR.get(asset_type, 'rgba(61,139,212,0.55)'),
                     '_asset_badge_bg':  _ASSET_TYPE_BADGE_BG.get(asset_type, 'rgba(61,139,212,0.15)'),
                     '_asset_text':      _ASSET_TYPE_TEXT.get(asset_type, '#3d8bd4'),
+                    '_stale':           _is_stale,
                 })
     
             if not display_rows:
@@ -389,11 +397,18 @@ def register_beta_book_table_callbacks(app):
                 val = row.get(col, '')
                 base_style = {'padding': '5px 10px', 'textAlign': align, 'color': THEME['text_main']}
                 if col == '__delete':
+                    is_stale = row.get('_stale', False)
                     return html.Td(
-                        html.Button('×', id={'type': 'beta-row-delete', 'row': row_idx}, n_clicks=0, style={
-                            'background': 'none', 'border': 'none', 'color': THEME['text_sub'],
-                            'cursor': 'pointer', 'fontSize': '14px', 'padding': '0 4px',
-                        }),
+                        html.Button('×', id={'type': 'beta-row-delete', 'row': row_idx}, n_clicks=0,
+                            title=('Capital/Weight missing on this row — delete and re-add '
+                                   'via Beta Portfolio > Add to Portfolio to refresh it.')
+                                  if is_stale else None,
+                            style={
+                                'background': 'none', 'border': 'none',
+                                'color': '#f87171' if is_stale else THEME['text_sub'],
+                                'cursor': 'pointer', 'fontSize': '14px', 'padding': '0 4px',
+                                'fontWeight': 'bold' if is_stale else 'normal',
+                            }),
                         style={'padding': '5px 6px', 'textAlign': 'center'},
                     )
                 if col == 'Asset Type':
@@ -431,9 +446,17 @@ def register_beta_book_table_callbacks(app):
             for i, row in enumerate(body_rows):
                 row_idx = _row_key(row, i)
                 row_bg = THEME['bg_card'] if i % 2 == 1 else 'transparent'
+                row_style = {'background': row_bg, 'borderBottom': '1px solid rgba(255,255,255,0.04)'}
+                if row.get('_stale'):
+                    # Reddish tint over the alternating stripe so a bad row is
+                    # visible at a glance without hiding it — the user asked
+                    # to see and choose to delete stale rows, not have them
+                    # silently dropped.
+                    row_style['background'] = 'rgba(239,68,68,0.10)'
+                    row_style['borderLeft'] = '2px solid rgba(239,68,68,0.6)'
                 body_trs.append(html.Tr(
                     [_cell(row_idx, c, row, a) for c, a in _cols],
-                    style={'background': row_bg, 'borderBottom': '1px solid rgba(255,255,255,0.04)'},
+                    style=row_style,
                 ))
             for trow in total_rows:
                 body_trs.append(html.Tr(

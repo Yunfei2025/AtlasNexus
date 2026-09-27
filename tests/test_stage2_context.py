@@ -143,6 +143,47 @@ def test_rebuild_asset_weights_respects_long_only_bond_bounds():
     assert abs(w.sum() - 1.0) < 1e-6
 
 
+def test_negative_slope_budget_does_not_invert_group_direction():
+    """A negative slope/curve budget (e.g. from scalar_to_coeff's directional
+    [-1.5, 1.5] branch, used in daily resizing — see
+    docs/plans/beta_book_exposure_vs_capital.md Step 4) must bend the tenor
+    SHAPE, not flip the sign of the group's overall capital scale. This is
+    the regression guard for the level-only budget_group fix in
+    rebuild_asset_weights (factor_optimizer.py) — before that fix, a
+    strongly negative slope/curve budget summed into budget_group could
+    make it negative, inverting every tenor's weight in the group."""
+    assets = ['CN1Y', 'CN2Y', 'CN5Y', 'CN10Y', 'CN20Y', 'CN30Y']
+    opt = _make_optimizer(assets)
+
+    opt.fit_and_calculate(REBALANCE_DATE, use_dv01_shape=True)
+    ctx = opt.stage2_context()
+    if ctx is None:
+        pytest.skip("fit_and_calculate took the empty-exposure-matrix fallback path")
+
+    group = next((g for g in ctx.groups if g.slope_factor), None)
+    if group is None:
+        pytest.skip("no IR group with a slope factor present for this pool")
+
+    # A large NEGATIVE slope budget, comfortably outweighing the (small,
+    # positive) level budget in magnitude -- exactly the scenario the old
+    # level+slope+curve summation would have mishandled.
+    negative_budget = dict(ctx.reference_factor_budget)
+    negative_budget[group.level_factor] = 0.05
+    negative_budget[group.slope_factor] = -0.5
+    if group.curve_factor:
+        negative_budget[group.curve_factor] = 0.0
+
+    w = opt.rebuild_asset_weights(ctx, negative_budget)
+
+    # The group's tenors must stay LONG-ONLY (no sign inversion) and the
+    # group's aggregate weight must still reflect the (small, positive)
+    # level budget's scale, not a large negative one.
+    group_weight = float(w.iloc[list(group.asset_indices)].sum())
+    assert (w.iloc[list(group.asset_indices)].values >= -1e-9).all(), \
+        "negative slope budget must not invert tenor weights to negative"
+    assert group_weight > 0, "group's aggregate weight must stay positive (capital scale is long-only)"
+
+
 def test_stage2_context_reference_budget_sums_to_one():
     """Stage 1's ERC output (reference_factor_budget) must sum to 1 —
     it's a fraction-of-capital budget, not a raw weight."""

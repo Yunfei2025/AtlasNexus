@@ -17,7 +17,7 @@ from dash import html, dcc
 
 from settings.paths import DIR_INPUT
 from multiasset.factor_model import rolling_spearman_ic, mean_ic_at_effective_horizon
-from ..data import THEME
+from ...data import THEME
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -276,7 +276,7 @@ def _build_results_from_saved_artifact(
     """
     import dataclasses as _dc
 
-    from multiasset.factor_backtest import load_factor_rates, _apply_funding_cost
+    from multiasset.factor_backtest import load_factor_rates
     from multiasset.factor_model import (
         build_features, _compute_target_returns, _predict_ic_model,
         build_position_series, FactorModelConfig,
@@ -321,11 +321,11 @@ def _build_results_from_saved_artifact(
             result = pd.DataFrame(index=preds.index)
             result['predicted_return'] = preds
             result['n_features'] = len(fa.get('selected_factors', []) or trained_model.get('feature_names', []))
-            # 'returns' is always gross of funding cost — funding is never
-            # netted into the return/P&L series (see _yield_carry). Kept as
-            # its own column for callers that read 'returns_gross_of_funding'
-            # explicitly; for IRDL, funding cost is deducted only at the
-            # strategy_returns, via funding_cost_series() in factor_backtest.
+            # Price-only — no carry, no funding of any kind (see
+            # _yield_carry / module docstring in factor_backtest.py).
+            # 'returns_gross_of_funding' is kept as an alias for callers that
+            # still read that column name; the book-level funding hurdle
+            # (Sharpe only) lives in multiasset/book/funding.py.
             result['returns'] = daily_returns.reindex(result.index)
             result['returns_gross_of_funding'] = result['returns']
 
@@ -349,22 +349,17 @@ def _build_results_from_saved_artifact(
             result['position'] = pos['position']
             result['turnover'] = pos['turnover']
 
-            # No transaction-cost deduction — see run_factor_model_backtest /
-            # factor_tx_cost_per_unit: no transaction cost of any kind is
-            # modelled. Funding is never netted into 'returns' (see
-            # _yield_carry) — it's deducted from 'strategy_returns' only, as
-            # a daily position-scaled cost (see funding_cost_series()), for
-            # IRDL. 'strategy_returns_gross'/'strategy_returns_gross_of_funding'
-            # are the pre-funding-cost P&L (identical to each other, since
-            # transaction cost is zero).
+            # No transaction-cost or funding deduction — see
+            # run_factor_model_backtest / factor_tx_cost_per_unit: no cost of
+            # any kind is modelled at the factor level (see module docstring
+            # in factor_backtest.py). 'strategy_returns',
+            # 'strategy_returns_gross' and 'strategy_returns_gross_of_funding'
+            # are therefore all identical.
             result['strategy_returns_gross'] = result['position'].shift(1) * result['returns']
             result['strategy_returns_gross_of_funding'] = (
                 result['position'].shift(1) * result['returns_gross_of_funding']
             )
-            result['strategy_returns'] = _apply_funding_cost(
-                result['strategy_returns_gross'], result['position'],
-                factor_levels[factor], factor,
-            )
+            result['strategy_returns'] = result['strategy_returns_gross']
             result['cumulative_returns'] = (1 + result['strategy_returns'].fillna(0)).cumprod()
             results[factor] = result
         except Exception as e:

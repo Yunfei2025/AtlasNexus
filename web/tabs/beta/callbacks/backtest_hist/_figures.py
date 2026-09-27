@@ -164,19 +164,48 @@ def build_pnl_figure(df_pnl, all_assets_ever, display_start, display_end,
 def build_metrics_kpis(metrics: dict) -> html.Div:
     annualized_return = metrics['annualized_return']
     sharpe_ratio = metrics['sharpe_ratio']
-    sharpe_net = metrics['sharpe_net']
+    sharpe_post_funding = metrics.get('sharpe_post_funding', sharpe_ratio)
+    ann_funding_cost = metrics.get('ann_funding_cost', 0.0)
     max_drawdown = metrics['max_drawdown']
 
+    avg_book_dv01_mm = metrics.get('avg_book_dv01_mm')
+    avg_capital_usage = metrics.get('avg_capital_usage')
+
+    # Post-funding Sharpe is THE headline number — full carry, full funding
+    # cost, real hurdle rate (RiskModelConfig.RISK_FREE_RATE), same
+    # convention fixed-income desks actually report. Sharpe (gross)/(net tx)/
+    # (factor basis) were diagnostic — cost attribution and a sanity check
+    # against the Individual Factors tab during construction — not numbers
+    # to read day to day, so they're dropped from this panel (still in
+    # `metrics` for anything that wants them).
     kpi_cells = [
         ("Ann. Return", f"{annualized_return:.2%}",
          'var(--positive)' if annualized_return >= 0 else 'var(--negative)'),
-        ("Sharpe (gross)", f"{sharpe_ratio:.2f}",
-         'var(--positive)' if sharpe_ratio >= 1 else ('var(--accent-amber)' if sharpe_ratio >= 0 else 'var(--negative)')),
-        ("Sharpe (net tx)", f"{sharpe_net:.2f}",
-         'var(--positive)' if sharpe_net >= 1 else ('var(--accent-amber)' if sharpe_net >= 0 else 'var(--negative)')),
+        ("Sharpe (post-funding)", f"{sharpe_post_funding:.2f}",
+         'var(--positive)' if sharpe_post_funding >= 1 else ('var(--accent-amber)' if sharpe_post_funding >= 0 else 'var(--negative)')),
+    ]
+    if avg_book_dv01_mm is not None:
+        # Average DV01 the signed-sleeve book actually achieved (factor_
+        # scaling only) — compare against RiskModelConfig.MAX_DV01_PER_CAPITAL
+        # * total_capital/1e10, the target scale_sleeve_to_dv01_target aims
+        # for (same "MM CNY per bp" convention as the Portfolio tab's DV01
+        # display).
+        kpi_cells.append(("Avg Book DV01 (MM/bp)", f"{avg_book_dv01_mm:.2f}", 'var(--text-primary)'))
+    if avg_capital_usage is not None:
+        # Average gross notional deployed, as a fraction of total capital —
+        # the complement sits in cash, earning FR007 (multiasset.book.
+        # funding.cash_return_daily, already folded into Ann. Return above),
+        # not forfeited: RiskModelConfig.CAPITAL_UTILISATION_MAX (0.95) is a
+        # ceiling, not a target, so a modest DV01/signal-flat book can sit
+        # well under it on an ordinary day.
+        kpi_cells.append(("Avg Capital Usage", f"{avg_capital_usage:.1%}", 'var(--text-primary)'))
+    # Avg Cash Income, # Rebalances, and Ann. Turnover are dropped from this
+    # panel per request — avg_cash_income_pct is still computed and kept in
+    # `metrics` (it's folded into Ann. Return/Sharpe already), just not
+    # surfaced as its own KPI cell here.
+    kpi_cells += [
+        ("Ann. Funding Cost", f"{ann_funding_cost:.2%}", 'var(--text-secondary)'),
         ("Max Drawdown", f"{max_drawdown:.2%}", 'var(--negative)'),
-        ("# Rebalances", f"{metrics['n_rebalances']}", 'var(--text-primary)'),
-        ("Ann. Turnover", f"{metrics['ann_turnover']:.0%}", 'var(--text-primary)'),
         ("Total Tx Cost (MM)", f"{metrics['total_tx_cost_m']:.2f}", 'var(--text-secondary)'),
     ]
     return html.Div([

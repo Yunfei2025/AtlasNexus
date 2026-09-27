@@ -3,16 +3,24 @@
 Disk cache for the Beta Book historical portfolio backtest
 (web/tabs/beta/callbacks/backtest_hist/orchestrator.py).
 
-Two pieces are cached independently so that adding a new factor to the
-factor-scaling pool does not force a recompute of the pure risk-parity (RP)
-base or of factors that were already computed:
+Only ONE piece is cached — the expensive part:
 
-  - beta_rp_cache.pkl         one shared cache of RP weights per rebalance
-                              date, keyed by a hash of RP-only params.
-  - beta_factor_tilt_cache.pkl  per-factor tilted-weight contributions,
-                              keyed by (factor_code, factor_hash, rp_hash) so
-                              a tilt automatically misses cache if its RP base
-                              changed.
+  - beta_rp_cache.pkl   one shared cache of RP weights (Stage 1's SLSQP ERC
+                        solve) AND each rebalance date's Stage2Context (see
+                        multiasset.factor_optimizer), per rebalance date,
+                        keyed by a hash of RP-only params.
+
+Per-factor tilted-weight caching (formerly beta_factor_tilt_cache.pkl,
+FactorTiltCacheParams / factor_hash / load_factor_tilt / save_factor_tilt)
+was REMOVED in docs/plans/beta_book_exposure_vs_capital.md Step 4: daily
+factor-scaling resizing (multiasset.book.sizing) recomputes the cheap
+Stage-2 tenor tilt (a closed-form solve, ~24us/group) directly from the
+cached Stage2Context on every call — measured at ~0.03s for a full
+multi-year daily backtest, which is faster than loading/pruning/rewriting a
+multi-MB pickle cache would have been, and the cache would otherwise have
+needed to store an (n_factors x n_days x n_assets) cube per version. A
+`beta_factor_tilt_cache.pkl` file from before this change may still exist
+on disk; it is simply never read any more (nothing auto-deletes it).
 
 Cache keys are content hashes (sha256 of sorted-key JSON), not in-memory
 `hash()`, because the cache must remain valid across process restarts and
@@ -53,16 +61,20 @@ class RPCacheParams:
     hedge_asset_names: tuple = field(default_factory=tuple)
     neutral_asset_names: tuple = field(default_factory=tuple)
     bounds_version: str = "RiskModelConfig.v3"
-
-
-@dataclass(frozen=True)
-class FactorTiltCacheParams:
-    """Params that fully determine one factor's tilted-weight contribution."""
-    factor_code: str = ''
-    scalar_to_coeff_version: str = "v1"
-    factor_to_asset_map_version: str = "v1"
-    signal_pkl_mtime: float = 0.0
-    class_caps_version: str = "RiskModelConfig.v1"
+    # Bumped whenever the factor-level return convention that
+    # compute_ewma_factor_vols/compute_ewma_factor_covariance feed into
+    # Stage 1's ERC solve changes — e.g. Step 3 of
+    # docs/plans/beta_book_exposure_vs_capital.md, which made factor-level
+    # returns price-only (previously IRDL/SPDL/CRDL included carry). Without
+    # this, a cached RP base computed under the old convention would be
+    # silently reused and the carry-removal change would be invisible.
+    returns_convention: str = "price_only_v1"
+    # Bumped whenever Stage 1's budgeting scheme changes. "volsqrt_v1":
+    # use_vol_sqrt_budgets now actually pins slope/curve budgets to level by
+    # sqrt(vol) inside the SLSQP solve (it was previously a no-op flag), so
+    # entries cached under the same use_vol_sqrt_budgets=True key before that
+    # change hold plain-ERC weights and must not be reused.
+    stage1_scheme: str = "volsqrt_v1"
 
 
 def _stable_hash(obj) -> str:
@@ -72,10 +84,6 @@ def _stable_hash(obj) -> str:
 
 
 def rp_hash(params: RPCacheParams) -> str:
-    return _stable_hash(params)
-
-
-def factor_hash(params: FactorTiltCacheParams) -> str:
     return _stable_hash(params)
 
 
@@ -94,9 +102,10 @@ def scalar_to_coeff(scalar: float, factor_name: str) -> float:
     the signal — a Pure Risk Parity base has no signal, so it stays long-only/
     flat via the trend-veto in backtest_hist/_signals.py instead of this function.
 
-    Bump FactorTiltCacheParams.scalar_to_coeff_version whenever the clip
-    bounds below change, so cached tilts computed under the old bounds are
-    never reused.
+    The clip bounds below are no longer cache-keyed (the old per-factor
+    tilt cache was removed — see module docstring), since the daily
+    resizing path recomputes this on every call anyway; changing them
+    simply takes effect on the next run.
     """
     factor_prefix = factor_name.split('.')[0] if '.' in factor_name else factor_name
     if factor_prefix in ('IRSL', 'IRCV', 'FXDL'):
@@ -130,14 +139,39 @@ def _prune_lru(entries: dict, key_fn: Callable[[object], bool], max_versions: in
 # ─────────────────────────── RP cache ───────────────────────────
 
 def load_rp(input_dir, params: RPCacheParams) -> Optional[dict]:
+    """Returns None (cache miss) if the cached entry predates
+    ``stage2_ctx_by_date`` being saved (see save_rp) — an older cache entry
+    can't half-hydrate a caller that needs the context for daily resizing
+    (docs/plans/beta_book_exposure_vs_capital.md Step 4); it's simpler and
+    safer to force a full recompute than to reconstruct it after the fact.
+    """
     h = rp_hash(params)
     cache = _load_pkl(_pkl_path(input_dir, 'beta_rp_cache.pkl'))
-    return cache.get(h)
+    entry = cache.get(h)
+    if entry is not None and 'stage2_ctx_by_date' not in entry:
+        return None
+    # Contexts pickled before Stage2Context gained asset_class_of can't be
+    # consumed by the staticmethod rebuild_asset_weights — treat as a miss.
+    if entry is not None and any(
+        ctx is not None and not hasattr(ctx, 'asset_class_of')
+        for ctx in entry['stage2_ctx_by_date'].values()
+    ):
+        return None
+    return entry
 
 
 def save_rp(input_dir, params: RPCacheParams, weights_by_date: pd.DataFrame,
             asset_pools_by_date: dict, screened_factors_by_date: dict,
-            last_corr_matrix=None) -> str:
+            last_corr_matrix=None, stage2_ctx_by_date: Optional[dict] = None) -> str:
+    """``stage2_ctx_by_date``: {rebalance_date -> Stage2Context | None},
+    one entry per successful rebalance date in weights_by_date — None on
+    dates where fit_and_calculate took the _optimize_weights branch instead
+    of the two-stage path (Stage2Context wasn't populated there). Consumed
+    by the daily-resizing loop (Step 4) to rebuild per-tenor weights with a
+    rescaled factor budget without re-running Stage 1's SLSQP solve.
+    Stage2Context is a plain frozen dataclass of numpy arrays / dicts /
+    tuples, so it pickles the same way weights_by_date already does.
+    """
     h = rp_hash(params)
     path = _pkl_path(input_dir, 'beta_rp_cache.pkl')
     cache = _load_pkl(path)
@@ -148,33 +182,8 @@ def save_rp(input_dir, params: RPCacheParams, weights_by_date: pd.DataFrame,
         'asset_pools_by_date': asset_pools_by_date,
         'screened_factors_by_date': screened_factors_by_date,
         'last_corr_matrix': last_corr_matrix,
+        'stage2_ctx_by_date': stage2_ctx_by_date or {},
     }
     cache = _prune_lru(cache, key_fn=lambda k: True, max_versions=_MAX_VERSIONS_PER_FAMILY)
     pd.to_pickle(cache, path)
     return h
-
-
-# ─────────────────────────── Factor tilt cache ───────────────────────────
-
-def load_factor_tilt(input_dir, rp_h: str, params: FactorTiltCacheParams) -> Optional[dict]:
-    key = (params.factor_code, factor_hash(params), rp_h)
-    cache = _load_pkl(_pkl_path(input_dir, 'beta_factor_tilt_cache.pkl'))
-    return cache.get(key)
-
-
-def save_factor_tilt(input_dir, rp_h: str, params: FactorTiltCacheParams,
-                      tilt_weights_by_date: pd.DataFrame) -> tuple:
-    key = (params.factor_code, factor_hash(params), rp_h)
-    path = _pkl_path(input_dir, 'beta_factor_tilt_cache.pkl')
-    cache = _load_pkl(path)
-    cache[key] = {
-        'created': datetime.now().isoformat(),
-        'tilt_weights_by_date': tilt_weights_by_date,
-    }
-    cache = _prune_lru(
-        cache,
-        key_fn=lambda k: k[0] == params.factor_code,
-        max_versions=_MAX_VERSIONS_PER_FAMILY,
-    )
-    pd.to_pickle(cache, path)
-    return key

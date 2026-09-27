@@ -114,39 +114,34 @@ def _is_yield_factor(factor_code: str) -> bool:
 
 # 'DL' (Level) factors are equal-weighted (sum=1) portfolios of outright
 # tenor yields — see DETERMINISTIC_WEIGHTS / CN_DETERMINISTIC_WEIGHTS in
-# pca_analyzer.py. The factor level *is* a genuine yield, so daily accrual
-# (carry) is unambiguous in principle: level/100/252.
+# pca_analyzer.py. 'SL' (Slope) and 'CV' (Curvature) factors are long-short
+# (weights sum to 0) contrasts across tenors.
 #
-# 'SL' (Slope) and 'CV' (Curvature) factors are long-short (weights sum to
-# 0) contrasts across tenors — the level has no accrual interpretation on
-# its own (e.g. a negative slope reading is not "negative carry" the way a
-# negative yield level would be; it depends on the actual long/short leg
-# notionals). Their carry is the *difference* of each leg's own carry+roll,
-# which needs the per-tenor data and loading weights this module doesn't
-# currently thread through (see multiasset.rolldown.carry_rolldown for the
-# per-tenor carry+roll-down calc used elsewhere, in tenor-selection tilt —
-# not yet wired into the Slope/Curvature *level* return series). Left as a
-# documented gap rather than guessed at.
+# _is_level_factor / _LEVEL_FACTOR_PREFIXES no longer gate any carry
+# behaviour (all factor-level returns are price-only — see _yield_carry) —
+# kept for the tests that assert the Level/Slope/Curvature classification
+# itself, and as the natural place a future book-level module would look up
+# "is this a Level-type factor" if it needed to.
 _LEVEL_FACTOR_PREFIXES: frozenset = frozenset({'IRDL', 'SPDL', 'CRDL'})
 
 
 def _is_level_factor(factor_code: str) -> bool:
-    """Return True if this is a Level-type yield factor (has unambiguous carry)."""
+    """Return True if this is a Level-type (outright, not long-short) yield factor."""
     return factor_code.split('.')[0] in _LEVEL_FACTOR_PREFIXES
 
 
 # IRDL is the raw government-bond yield level for a country, held on a
-# funded (repo/reverse-repo) basis. The funding/repo cost is NOT netted
-# into carry — gross yield/252 is the return the position actually earns,
-# and financing cost is a leverage decision, not part of the asset's own
-# return. Instead, the funding cost is deducted from 'strategy_returns' as
-# a daily, position-scaled cost — see funding_cost_series() /
-# _apply_funding_cost() — charged only on the days, and to the extent, the
-# position actually held duration exposure.
+# funded (repo/reverse-repo) basis. Factor-level backtests here are
+# price-only and never apply a funding deduction (see module docstring) —
+# _load_funding_rate / _IRDL_FUNDING_RATE_MACRO_COL / funding_cost_series
+# below are kept because the BOOK-level funding hurdle (Sharpe only, never
+# netted into P&L — see multiasset/book/funding.py,
+# docs/plans/beta_book_exposure_vs_capital.md Step 6) reuses this same
+# per-country funding-rate lookup rather than duplicating it.
 #
-# Scoped to IRDL only for now: SPDL/CRDL (credit/swap spread levels — CDB
-# vs Treasury, IRS spread, LGB, etc.) are already spreads over a
-# risk-free curve, so it's not established that the same funding-rate
+# Scoped to IRDL/CN-US-DE-UK-JP for now: SPDL/CRDL (credit/swap spread
+# levels — CDB vs Treasury, IRS spread, LGB, etc.) are already spreads over
+# a risk-free curve, so it's not established that the same funding-rate
 # deduction applies to them the same way without double-netting an
 # already-embedded funding cost — left as a separate question rather than
 # assumed here.
@@ -195,55 +190,72 @@ def _load_funding_rate(country: str) -> Optional[pd.Series]:
     return _funding_rate_cache[country]
 
 
-def _yield_carry(level: pd.Series, factor_code: str) -> pd.Series:
-    """Daily accrual (carry) for a Level-type yield factor, in return space.
-
-    Always GROSS: ``carry_t = yield_{t-1} / 100 / 252``. Funding/repo cost
-    is a financing choice, not part of the bond's own return, so it is
-    never netted into the return series here — see funding_cost_series()
-    for where the funding cost is deducted instead (from strategy_returns,
-    as a daily position-scaled cost, not from the underlying P&L itself).
-
-    Returns an all-zero series for non-Level factors (Slope/Curvature —
-    see _is_level_factor) so callers can add this unconditionally without
-    an extra branch, until Slope/Curvature carry is implemented.
+def load_funding_rate(country: str) -> Optional[pd.Series]:
+    """Public alias for _load_funding_rate — this module's IRDL funding-rate
+    lookup is reused at the book level (multiasset/book/funding.py, see
+    docs/plans/beta_book_exposure_vs_capital.md Step 6) for the funding
+    hurdle applied to Sharpe, rather than duplicating the macro-px.pkl
+    read/parse logic there. ``country`` here means the same 2-letter code
+    _IRDL_FUNDING_RATE_MACRO_COL keys ('CN','US','DE','UK','JP') — callers
+    coming from asset-level country codes (e.g. get_asset_yield_series's
+    'EU' for German bonds) must normalise first — see
+    multiasset.book.funding.normalise_domicile.
     """
-    if not _is_level_factor(factor_code):
-        return pd.Series(0.0, index=level.index)
+    return _load_funding_rate(country)
 
-    return level.shift(1) / 100.0 / 252.0
+
+def _yield_carry(level: pd.Series, factor_code: str) -> pd.Series:
+    """Carry for a factor-level yield/spread series — ALWAYS ZERO.
+
+    Factor-level backtests (this module, factor_model.py, and the RFBT
+    trainer replay path) are price-only: ``r_t ≈ -D_mod × Δy_t / 100``, with
+    no coupon/carry accrual term. Carry (and funding, and capital usage) are
+    now computed independently at the BOOK level, on real per-tenor
+    notional — see multiasset/book/pnl.py and
+    docs/plans/beta_book_exposure_vs_capital.md Step 3.
+
+    An earlier version of this function added ``yield_{t-1}/100/252`` for
+    Level-type factors (IRDL/SPDL/CRDL), which understated IRSL/IRCV/CRSL/
+    CRCV's real return (their carry was always zero pending a leg-difference
+    formula — see the removed ``_is_level_factor`` gate) and made IRDL's
+    Sharpe artificially higher than the other two legs of the same triplet,
+    biasing the Stage-1 risk-parity solve in ``factor_optimizer.py`` toward
+    IRDL for reasons that had nothing to do with genuine risk-adjusted
+    quality. Measured impact of removing it on Stage-1 factor vols: ≤0.50%
+    change, typically <0.2% — carry was a near-deterministic drift that
+    contributed almost nothing to VOLATILITY, so this does not materially
+    disturb the risk-parity budgets it feeds.
+
+    Kept as a function (rather than removing the ``+ _yield_carry(...)``
+    call sites entirely) so the diff at each call site stays reviewable and
+    the revert is trivial if ever needed. Returns an all-zero series
+    regardless of ``factor_code``.
+    """
+    return pd.Series(0.0, index=level.index)
 
 
 def funding_cost_series(position: pd.Series, level: pd.Series, factor_code: str) -> pd.Series:
     """Daily funding/repo cost of holding ``position`` in an IRDL factor.
 
-    IRDL is the raw government-bond yield level for a country, held on a
-    funded (repo/reverse-repo) basis — the real risk-adjusted return of
-    holding it is the spread earned over the cost of financing it. Gross
-    carry (see ``_yield_carry``) never nets this out of the return/P&L
-    series (funding is a financing choice, not part of the asset's own
-    return — the book's return convention elsewhere doesn't deduct
-    financing cost from return figures either).
-
-    Instead, funding cost is charged only on the days, and to the extent,
-    the position actually holds duration exposure:
+    NOT currently called from any factor-level backtest path (see module
+    docstring / _yield_carry — factor-level returns are price-only, no
+    funding deduction of any kind). Kept as a reusable primitive for the
+    book-level funding hurdle (Sharpe only, never netted into P&L) — see
+    multiasset/book/funding.py, docs/plans/beta_book_exposure_vs_capital.md
+    Step 6, which needs the same "cost proportional to position/notional
+    actually held" logic this function implements:
 
         cost_t = position_{t-1} * funding_rate_{t-1} / 100 / 252
 
-    matching how ``strategy_returns`` itself is built from
-    ``position.shift(1) * returns``. A flat annualised deduction applied
-    regardless of position size (an earlier version of this function)
-    overcharges a strategy that is flat or lightly positioned most of the
-    time, and — because strategy-return vol scales down with position size
-    while a flat-rate deduction doesn't — can swing Sharpe by many points
-    off a tiny vol denominator. Charging it on the actual (signed, scaled)
-    exposure keeps the deduction proportionate to the risk actually run.
-
-    ``position`` may be a signal in {-1, 0, 1} (MA/Bollinger/Momentum/
-    Z-Score's ``signal`` column) or continuous in [-1, 1] (FactorModel's
-    ``position`` column) — either way the caller passes whichever column
-    it built ``strategy_returns`` from, so the funding charge is levied on
-    the same exposure that earned the carry.
+    A flat annualised deduction applied regardless of position size (an
+    earlier version of this function, when it WAS wired into
+    strategy_returns) overcharges a strategy that is flat or lightly
+    positioned most of the time, and — because strategy-return vol scales
+    down with position size while a flat-rate deduction doesn't — swung
+    Sharpe by many points off a tiny vol denominator. Charging it on the
+    actual (signed, scaled) exposure keeps the deduction proportionate to
+    the risk actually run; the book-level equivalent uses real notional
+    instead of a [-1, 1] position for the same reason.
 
     Scoped to IRDL only: SPDL/CRDL (credit/swap spread levels — CDB vs
     Treasury, IRS spread, LGB, etc.) are already spreads over a risk-free
@@ -273,9 +285,9 @@ def factor_level_to_price_return(
 ) -> pd.Series:
     """Convert a factor level series into factor portfolio returns.
 
-    Despite the name (kept for backward compatibility with existing
-    callers), this now includes carry for Level-type yield factors — see
-    _yield_carry — not price return alone. Returns are emitted in decimal
+    Price-only: ``-D * dy`` for yield/spread factors, plain pct_change for
+    price factors — see _yield_carry (always zero now; carry lives at the
+    book level, see multiasset/book/pnl.py). Returns are emitted in decimal
     form by default for backtests, and in percent form when
     ``output_in_percent=True`` for dashboards/optimizer reporting.
     """
@@ -569,54 +581,23 @@ def _yield_to_return(
     mod_dur: float,
     factor_code: Optional[str] = None,
 ) -> pd.Series:
-    """Convert yield level series to approximated bond TOTAL return series.
+    """Convert yield level series to a PRICE-ONLY approximated return series.
 
-    r_t ≈ -D_mod × Δy_t / 100 + carry_t
+    r_t ≈ -D_mod × Δy_t / 100
 
-    The price-return term (-D×Δy/100) was previously the whole formula —
-    it captures only mark-to-market from yield changes and omits the
-    coupon/carry accrual a bond actually earns while held. On IRDL.CN this
-    understated the full-history annualised return by ~2.8 percentage
-    points (0.17% price-only vs ~3.0% price+carry, against a ~2.8% average
-    yield level) — carry, not price movement, is most of a duration
-    factor's real return.
-    ``factor_code`` is optional and, when omitted or not a Level-type
-    factor (see _is_level_factor), the carry term is exactly zero — the
-    pre-fix behaviour, and the current state for Slope/Curvature factors
-    pending their own (leg-difference, not level-based) carry formula.
-
-    Carry here is always GROSS of funding/repo cost (see _yield_carry) —
-    funding is a financing choice, not part of the bond's own return, and
-    is never netted into the P&L. For IRDL, the funding-rate cost is
-    instead deducted from strategy_returns as a daily position-scaled cost
-    — see funding_cost_series() / _apply_funding_cost().
+    ``factor_code`` is accepted for backward-compatible call signatures and
+    is currently unused (carry — see _yield_carry — is always zero; funding
+    is never applied to factor-level returns — see module docstring and
+    docs/plans/beta_book_exposure_vs_capital.md Step 3). Carry and funding
+    are computed independently at the book level on real per-tenor notional
+    — see multiasset/book/pnl.py, multiasset/book/funding.py.
     """
-    price_return = -mod_dur * series.diff() / 100.0
-    if factor_code is None:
-        return price_return
-    return price_return + _yield_carry(series, factor_code)
+    return -mod_dur * series.diff() / 100.0
 
 
 def _price_to_return(series: pd.Series) -> pd.Series:
     """Simple percentage return for price-based factors (FX, Cmdty)."""
     return series.pct_change()
-
-
-def _apply_funding_cost(
-    strategy_returns: pd.Series,
-    position: pd.Series,
-    levels: pd.Series,
-    factor_code: Optional[str],
-) -> pd.Series:
-    """Subtract IRDL's position-scaled daily funding cost from strategy_returns.
-
-    No-op (returns ``strategy_returns`` unchanged) for any non-IRDL factor,
-    or when ``factor_code`` is None — see funding_cost_series().
-    """
-    if factor_code is None:
-        return strategy_returns
-    cost = funding_cost_series(position, levels, factor_code)
-    return strategy_returns - cost.reindex(strategy_returns.index).fillna(0.0)
 
 
 def run_ma_yield_strategy(
@@ -649,9 +630,12 @@ def run_ma_yield_strategy(
     else:
         df['returns'] = _price_to_return(levels)
 
+    # No funding deduction at factor level (see module docstring / Step 3 of
+    # docs/plans/beta_book_exposure_vs_capital.md) — strategy_returns_gross
+    # and strategy_returns are identical; kept as two columns for callers
+    # that read one or the other.
     df['strategy_returns_gross'] = df['signal'].shift(1) * df['returns']
-    df['strategy_returns'] = _apply_funding_cost(
-        df['strategy_returns_gross'], df['signal'], levels, factor_code)
+    df['strategy_returns'] = df['strategy_returns_gross']
     df['cumulative_returns'] = (1 + df['strategy_returns'].fillna(0)).cumprod()
     return df
 
@@ -710,9 +694,9 @@ def run_bollinger_yield_strategy(
     else:
         df['returns'] = _price_to_return(levels)
 
+    # No funding deduction at factor level — see run_ma_yield_strategy note.
     df['strategy_returns_gross'] = df['signal'].shift(1) * df['returns']
-    df['strategy_returns'] = _apply_funding_cost(
-        df['strategy_returns_gross'], df['signal'], levels, factor_code)
+    df['strategy_returns'] = df['strategy_returns_gross']
     df['cumulative_returns'] = (1 + df['strategy_returns'].fillna(0)).cumprod()
     return df
 
@@ -743,9 +727,9 @@ def run_momentum_yield_strategy(
     else:
         df['returns'] = _price_to_return(levels)
 
+    # No funding deduction at factor level — see run_ma_yield_strategy note.
     df['strategy_returns_gross'] = df['signal'].shift(1) * df['returns']
-    df['strategy_returns'] = _apply_funding_cost(
-        df['strategy_returns_gross'], df['signal'], levels, factor_code)
+    df['strategy_returns'] = df['strategy_returns_gross']
     df['cumulative_returns'] = (1 + df['strategy_returns'].fillna(0)).cumprod()
     return df
 
@@ -800,9 +784,9 @@ def run_zscore_yield_strategy(
     else:
         df['returns'] = _price_to_return(levels)
 
+    # No funding deduction at factor level — see run_ma_yield_strategy note.
     df['strategy_returns_gross'] = df['signal'].shift(1) * df['returns']
-    df['strategy_returns'] = _apply_funding_cost(
-        df['strategy_returns_gross'], df['signal'], levels, factor_code)
+    df['strategy_returns'] = df['strategy_returns_gross']
     df['cumulative_returns'] = (1 + df['strategy_returns'].fillna(0)).cumprod()
     return df
 
@@ -977,6 +961,7 @@ def compute_metrics(
     returns_col: str = 'strategy_returns',
     risk_free_rate: float = 0.0,
     geometric_annualisation: bool = False,
+    funding_hurdle: Optional[pd.Series] = None,
 ) -> Dict[str, float]:
     """Compute performance metrics from a return series.
 
@@ -987,6 +972,24 @@ def compute_metrics(
         geometric_annualisation: If True, use compound (geometric) annualisation
             ``(1+r_total)^(252/N) - 1``; otherwise arithmetic ``mean * 252``.
             The geometric form is preferred for multi-year series.
+        funding_hurdle: Optional daily (decimal) funding-rate series, e.g.
+            from ``multiasset.book.funding.book_funding_cost_daily`` or
+            ``funding_cost_series``. Reindexed to ``rets.index`` and
+            annualised (``.mean() * 252``), then subtracted from
+            ``ann_return`` ALONGSIDE ``risk_free_rate`` when computing
+            Sharpe — but ``ann_vol`` and the returned ``'Ann. Return'`` are
+            left untouched. This is deliberately a hurdle applied only at
+            the Sharpe step, not a P&L deduction: the book (or factor)
+            still reports what it actually earned; Sharpe answers "was that
+            good enough to beat the cost of financing it." Keeping funding
+            out of the vol denominator matters — an earlier attempt at
+            netting a flat rate into the numerator only (this function's
+            existing risk_free_rate) with a low-vol return series could
+            swing Sharpe from +4.6 to -5.4 for the same P&L; the fix was to
+            make the deduction proportional to position/notional actually
+            held (a per-day series) rather than a flat annualised number,
+            which is exactly what a properly-built ``funding_hurdle``
+            series already is.
     """
     rets = result_df[returns_col].dropna()
     if rets.empty:
@@ -999,7 +1002,13 @@ def compute_metrics(
     else:
         ann_return = float(rets.mean() * 252)
     ann_vol = float(rets.std() * np.sqrt(252))
-    excess = ann_return - risk_free_rate
+
+    ann_funding = 0.0
+    if funding_hurdle is not None:
+        aligned = funding_hurdle.reindex(rets.index).fillna(0.0)
+        ann_funding = float(aligned.mean() * 252)
+
+    excess = ann_return - risk_free_rate - ann_funding
     sharpe = excess / ann_vol if ann_vol > 0 else np.nan
 
     cum = (1 + rets).cumprod()
@@ -1014,6 +1023,8 @@ def compute_metrics(
         'Ann. Return': ann_return,
         'Ann. Vol': ann_vol,
         'Sharpe': sharpe,
+        'Ann. Funding Cost': ann_funding,
+        'Sharpe (gross of funding)': (ann_return - risk_free_rate) / ann_vol if ann_vol > 0 else np.nan,
         'Max Drawdown': max_dd,
         'Win Rate': win_rate,
         'Days': n,
@@ -1023,12 +1034,15 @@ def compute_metrics(
 def compute_portfolio_metrics(
     portfolio_values: pd.Series,
     risk_free_rate: float = 0.0,
+    funding_hurdle: Optional[pd.Series] = None,
 ) -> Dict[str, float]:
     """Compute performance metrics from a portfolio NAV/value series.
 
     Args:
         portfolio_values: Series of portfolio values (not returns) indexed by date.
         risk_free_rate: Annualised risk-free rate for Sharpe (decimal).
+        funding_hurdle: See compute_metrics — same semantics, applied to the
+            daily-return series derived from ``portfolio_values``.
     """
     daily_rets = portfolio_values.pct_change().dropna()
     if daily_rets.empty:
@@ -1039,4 +1053,5 @@ def compute_portfolio_metrics(
         returns_col='strategy_returns',
         risk_free_rate=risk_free_rate,
         geometric_annualisation=True,
+        funding_hurdle=funding_hurdle,
     )

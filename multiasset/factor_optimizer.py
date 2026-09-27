@@ -64,6 +64,13 @@ class Stage2Context:
     # "else" branch: commodities/FX/equity, one factor per asset in practice).
     nonrate_factor_indices: Dict[str, Tuple[int, ...]]
     tilt_lambda: Optional[float]
+    # asset_name -> 'comm' | 'fx' | 'credit' | 'bond'. Captured at Stage-1
+    # time (static Portfolio-construction metadata, not date-dependent) so
+    # rebuild_asset_weights's asset-class bound lookup needs no further
+    # access to self.portfolio.assets — makes the context fully
+    # self-contained for callers that only have a cached/deserialised ctx
+    # and no live optimizer instance (e.g. a cache-hit path).
+    asset_class_of: Dict[str, str]
 
 
 class FactorRiskParityOptimizer:
@@ -132,9 +139,13 @@ class FactorRiskParityOptimizer:
             total_capital: Total capital for absolute risk budget calculation
             hedge_asset_names: Optional list of asset names that are allowed to
                 take short positions (bounds [-0.3, 0.3] instead of [0, 1]).
-            use_vol_sqrt_budgets: Kept for API compatibility. IR √vol ratio
-                constraints are now always applied when risk_budgets is None,
-                so this flag has no additional effect.
+            use_vol_sqrt_budgets: When True and ``risk_budgets is None``, pins
+                each IR/credit group's slope and curvature Stage-1 budget to
+                its level budget by √vol ratio (budget ∝ √vol within the
+                group) instead of plain ERC, which gives low-vol curvature
+                equal risk contribution and therefore far more capital. When
+                False (default), or when ``risk_budgets`` is supplied, Stage 1
+                is unconstrained ERC.
             use_dv01_shape: When True (default), intra-group bond weights start
                 from the DV01-equalised (inverse-duration) shape and are tilted
                 toward the group's realised level/slope/curvature budget split
@@ -170,12 +181,15 @@ class FactorRiskParityOptimizer:
         factor_cov = compute_ewma_factor_covariance(factor_window, ewma_lambda=self.ewma_lambda)
         self._factor_cov = factor_cov
 
-        # use_vol_sqrt_budgets: IR √vol ratio constraints are now injected inside
-        # _optimize_weights whenever risk_budgets is None, so no pre-derivation needed.
-        # The flag is kept for API compatibility but no longer overrides risk_budgets.
+        # use_vol_sqrt_budgets: forwarded to _stage1_context, which adds IR/credit
+        # √vol ratio equality constraints to the Stage-1 SLSQP solve. No effect on
+        # the _optimize_weights branch (risk_budgets supplied or use_dv01_shape=False).
 
         if use_dv01_shape and risk_budgets is None:
-            ctx_or_series = self._stage1_context(factor_vols, factor_cov, tilt_lambda)
+            ctx_or_series = self._stage1_context(
+                factor_vols, factor_cov, tilt_lambda,
+                use_vol_sqrt_budgets=use_vol_sqrt_budgets,
+            )
             if isinstance(ctx_or_series, pd.Series):
                 weights = ctx_or_series
                 self._stage2_ctx = None
@@ -248,7 +262,8 @@ class FactorRiskParityOptimizer:
     def _stage1_context(self,
                         factor_vols: pd.Series,
                         factor_cov: Optional[pd.DataFrame] = None,
-                        tilt_lambda: Optional[float] = None) -> "Stage2Context | pd.Series":
+                        tilt_lambda: Optional[float] = None,
+                        use_vol_sqrt_budgets: bool = False) -> "Stage2Context | pd.Series":
         """
         EXPENSIVE. Stage 1 (SLSQP ERC across factors) plus all the group/
         loadings bookkeeping Stage 2 needs — everything that depends on
@@ -301,11 +316,32 @@ class FactorRiskParityOptimizer:
             return float(np.sum((rc - rc.mean()) ** 2))
 
         e0 = np.ones(n_factors) / n_factors
+
+        _stage1_constraints = [{'type': 'eq', 'fun': lambda e: e.sum() - 1.0}]
+        if use_vol_sqrt_budgets:
+            # Pin each IR/credit group's slope and curvature budget to its
+            # level budget by √vol ratio: e_slope / e_level == √vol_slope / √vol_level
+            # (same for curvature) — the vol^0.5 scheme the Portfolio tab
+            # documents (multiasset/budget.py), applied inside the solve.
+            _lvl = {fn.split('.', 1)[1]: k for k, fn in enumerate(factor_names) if fn.startswith(('IRDL.', 'CRDL.'))}
+            _slp = {fn.split('.', 1)[1]: k for k, fn in enumerate(factor_names) if fn.startswith(('IRSL.', 'CRSL.'))}
+            _crv = {fn.split('.', 1)[1]: k for k, fn in enumerate(factor_names) if fn.startswith(('IRCV.', 'CRCV.'))}
+            for _suffix, _lk in _lvl.items():
+                _sv_l = float(np.sqrt(max(sigma_f[_lk], 1e-12)))
+                for _other in (_slp, _crv):
+                    _ok = _other.get(_suffix)
+                    if _ok is None:
+                        continue
+                    _sv_o = float(np.sqrt(max(sigma_f[_ok], 1e-12)))
+                    def _make_ratio_con(lk=_lk, ok=_ok, sv_l=_sv_l, sv_o=_sv_o):
+                        return lambda e: e[ok] * sv_l - e[lk] * sv_o
+                    _stage1_constraints.append({'type': 'eq', 'fun': _make_ratio_con()})
+
         res = minimize(
             _erc_objective, e0,
             method='SLSQP',
             bounds=[(0.0, 1.0)] * n_factors,
-            constraints=[{'type': 'eq', 'fun': lambda e: e.sum() - 1.0}],
+            constraints=_stage1_constraints,
             options={'maxiter': 500, 'ftol': 1e-10},
         )
         if not res.success:
@@ -395,26 +431,45 @@ class FactorRiskParityOptimizer:
                 idxs = np.where(active)[0]
                 nonrate_factor_indices[fname] = tuple(int(ix) for ix in idxs)
 
+        from multiasset.assets import CommodityAsset, FXAsset, FXCrossAsset, MultiFactorCreditAsset
+        asset_class_of: Dict[str, str] = {}
+        for name in asset_names:
+            a = self.portfolio.assets.get(name)
+            if isinstance(a, CommodityAsset):
+                asset_class_of[name] = 'comm'
+            elif isinstance(a, (FXAsset, FXCrossAsset)):
+                asset_class_of[name] = 'fx'
+            elif isinstance(a, MultiFactorCreditAsset):
+                asset_class_of[name] = 'credit'
+            else:
+                asset_class_of[name] = 'bond'
+
         return Stage2Context(
             asset_names=tuple(asset_names),
             factor_names=tuple(factor_names),
             reference_factor_budget=factor_budget,
             groups=tuple(groups),
+            asset_class_of=asset_class_of,
             nonrate_factor_indices=nonrate_factor_indices,
             tilt_lambda=tilt_lambda,
         )
 
-    def rebuild_asset_weights(self, ctx: "Stage2Context",
+    @staticmethod
+    def rebuild_asset_weights(ctx: "Stage2Context",
                               factor_budget: Optional[Dict[str, float]] = None) -> pd.Series:
         """
         CHEAP. Stage 2 only — redistribute ``factor_budget`` (default:
         ``ctx.reference_factor_budget``, reproducing the original weights
         EXACTLY) across assets, using ``ctx``'s pre-computed per-group
-        loadings. No SLSQP, no access to ``self.portfolio`` or the rolling
-        factor covariance — only ``self.portfolio.assets`` for the
-        asset-class bound lookup (bonds/FX/commodities/credit), which is
-        static Portfolio-construction metadata, not anything derived from
-        the current rebalance date's market data.
+        loadings. No SLSQP, no access to any live Portfolio/optimizer
+        instance at all — ``ctx.asset_class_of`` (captured once at Stage-1
+        time, since it's static Portfolio-construction metadata, not
+        anything derived from the current rebalance date's market data)
+        covers the asset-class bound lookup this used to need
+        ``self.portfolio.assets`` for. This is what makes ``ctx`` fully
+        self-contained for a caller that only has a cached/deserialised
+        context and no live optimizer instance (e.g. Step 4's daily-
+        resizing loop, run against a cache-hit RP base).
 
         Distribute each group's pooled budget via the DV01-anchored,
         ridge-regularised tilt (``_tilt_group_shape``):
@@ -445,24 +500,27 @@ class FactorRiskParityOptimizer:
         _credit_group_of_idx: dict = {}   # asset idx -> group suffix (CRDL groups)
 
         for g in ctx.groups:
-            # NOTE: summing level+slope+curve here is correct as long as every
-            # factor_budget value is >= 0 — true today, since Stage 1's ERC
-            # output is clipped non-negative (see _stage1_context) and this is
-            # the only caller of rebuild_asset_weights. It stops being safe
-            # once a caller rescales the budget with something that CAN go
-            # negative (e.g. scalar_to_coeff's directional [-1.5, 1.5] branch
-            # for IRSL/IRCV/CRSL/CRCV, used in daily resizing — see
-            # docs/plans/beta_book_exposure_vs_capital.md Step 4): a negative
-            # slope/curve budget could then flip the sign of budget_group and
-            # invert the whole group's direction. Step 4 must change this line
-            # to `budget_group = max(factor_budget.get(g.level_factor, 0.0), 0.0)`
-            # — capital SCALE stays long-only/level-only; slope/curve only
-            # bend the tenor SHAPE via group_sub_budget below, never the size.
-            budget_group = (
-                factor_budget.get(g.level_factor, 0.0)
-                + (factor_budget.get(g.slope_factor, 0.0) if g.slope_factor else 0.0)
-                + (factor_budget.get(g.curve_factor, 0.0) if g.curve_factor else 0.0)
-            )
+            # budget_group is the group's CAPITAL SCALE — how much of total
+            # capital this country/universe group gets, long-only by
+            # construction (max(..., 0.0)). It intentionally uses ONLY the
+            # level factor's budget, not level+slope+curve summed: once a
+            # caller rescales the budget with something that CAN go negative
+            # (e.g. scalar_to_coeff's directional [-1.5, 1.5] branch for
+            # IRSL/IRCV/CRSL/CRCV, used in daily resizing — see
+            # docs/plans/beta_book_exposure_vs_capital.md Step 4), summing
+            # would let a negative slope/curve budget flip the sign of
+            # budget_group and invert the whole group's direction. Slope and
+            # curvature instead only bend the tenor SHAPE via
+            # group_sub_budget below (where a negative value is exactly
+            # right — it's what lets a bearish slope view tilt the curve the
+            # other way), never the capital scale. When Stage 1's own ERC
+            # output feeds this directly (factor_budget is
+            # ctx.reference_factor_budget, unscaled), level/slope/curve are
+            # all already >= 0 (see _stage1_context's np.maximum clip), so
+            # this is a no-op change from the old level+slope+curve sum in
+            # that case — the difference only shows up once a caller
+            # supplies a rescaled, possibly-negative budget.
+            budget_group = max(factor_budget.get(g.level_factor, 0.0), 0.0)
             group_sub_budget = np.array([
                 factor_budget.get(g.level_factor, 0.0),
                 factor_budget.get(g.slope_factor, 0.0) if g.slope_factor else 0.0,
@@ -471,7 +529,7 @@ class FactorRiskParityOptimizer:
             for ix in g.asset_indices:
                 (_credit_group_of_idx if g.is_credit else _bond_group_of_idx)[ix] = g.suffix
 
-            shares = self._tilt_group_shape(g.loadings, group_sub_budget, ctx.tilt_lambda)
+            shares = FactorRiskParityOptimizer._tilt_group_shape(g.loadings, group_sub_budget, ctx.tilt_lambda)
             for j, ix in enumerate(g.asset_indices):
                 asset_weight[ix] += budget_group * shares[j]
 
@@ -495,10 +553,9 @@ class FactorRiskParityOptimizer:
         # 6-tenor CN group gets the concentration room of one bond position,
         # with the DV01/tilt shape (above) still setting each tenor's share
         # within it. See RiskModelConfig.scaled_bounds docstring.
-        from multiasset.assets import CommodityAsset, FXAsset, FXCrossAsset, MultiFactorCreditAsset
-        _comm_set   = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), CommodityAsset)}
-        _fx_set     = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), (FXAsset, FXCrossAsset))}
-        _credit_set = {n for n in asset_names if isinstance(self.portfolio.assets.get(n), MultiFactorCreditAsset)}
+        _comm_set   = {n for n in asset_names if ctx.asset_class_of.get(n) == 'comm'}
+        _fx_set     = {n for n in asset_names if ctx.asset_class_of.get(n) == 'fx'}
+        _credit_set = {n for n in asset_names if ctx.asset_class_of.get(n) == 'credit'}
 
         _bond_units = len(set(_bond_group_of_idx.values())) + sum(
             1 for i, name in enumerate(asset_names)
@@ -1202,6 +1259,9 @@ class FactorRiskParityOptimizer:
             total_capital=total_capital,
             hedge_asset_names=hedge_asset_names,
             neutral_asset_names=neutral_asset_names,
+            # Same vol^0.5 Stage-1 budgeting as the historical backtest
+            # (orchestrator.py), so Portfolio tab and backtest agree.
+            use_vol_sqrt_budgets=True,
         )
         
         # Construct summary

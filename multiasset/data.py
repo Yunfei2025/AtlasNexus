@@ -228,7 +228,14 @@ def get_asset_yield_series(asset_name, market_data):
         country_map = {
             'China Gov Bond': 'CN',
             'US Gov Bond': 'US',
-            'DE Gov Bond': 'EU',
+            # 'DE' (not 'EU') to match fx_curves' actual key
+            # (load_raw_market_data's fx_curves dict is keyed by
+            # {'US','JP','DE','UK'}) -- using 'EU' here made
+            # fx_curves[country] raise KeyError('EU') for every German
+            # bond (EU1Y/EU2Y/.../EU30Y). get_fx_series's own fx_map
+            # (below) still keys the FX-hedge lookup under 'EU' AND 'DE'
+            # so this doesn't need a second change there.
+            'DE Gov Bond': 'DE',
             'UK Gov Bond': 'UK',
             'Japan Gov Bond': 'JP'
         }
@@ -341,6 +348,9 @@ def get_fx_series(country, market_data):
     fx_map = {
         'US': 'USDCNY.IB',
         'EU': 'EURCNY.IB',
+        'DE': 'EURCNY.IB',  # get_asset_yield_series's country_map now returns
+                            # 'DE' (not 'EU') for German bonds, to match
+                            # fx_curves' key — Germany's FX hedge is still EUR.
         'UK': 'GBPCNY.IB',
         'JP': 'JPYCNY.IB'
     }
@@ -601,11 +611,13 @@ def calculate_asset_monthly_return(asset_name, start_date, end_date, market_data
             
     elif asset_type == 'Rates':
         # Bond Logic
-        # Map universe to country code
+        # Map universe to country code. 'DE' (not 'EU') to match fx_curves'
+        # actual key — see the identical fix + comment in
+        # get_asset_yield_series above.
         country_map = {
             'China Gov Bond': 'CN',
             'US Gov Bond': 'US',
-            'DE Gov Bond': 'EU',  # Using EU for DE
+            'DE Gov Bond': 'DE',
             'UK Gov Bond': 'UK',
             'Japan Gov Bond': 'JP'
         }
@@ -668,6 +680,7 @@ def calculate_asset_monthly_return(asset_name, start_date, end_date, market_data
                 fx_map = {
                     'US': 'USDCNY.IB',
                     'EU': 'EURCNY.IB',
+                    'DE': 'EURCNY.IB',  # country is now 'DE', not 'EU' — same EUR hedge
                     'UK': 'GBPCNY.IB',
                     'JP': 'JPYCNY.IB'
                 }
