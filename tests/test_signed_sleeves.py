@@ -30,7 +30,33 @@ def test_ir_mimicking_weights_match_deterministic_factor_definition():
 
 def test_price_factor_and_unreplicable_factor():
     assert factor_mimicking_weights('FXDL.USDCNY', FACTOR_TO_ASSET_MAP) == ({'USDCNY': 1.0}, False)
-    assert factor_mimicking_weights('CRDL.CDB', FACTOR_TO_ASSET_MAP) is None
+    # CRCV.NCD: NCD is in CREDIT_NO_CURVATURE (too few tenors for a butterfly
+    # read) — genuinely unreplicable, unlike CRDL/CRSL/CRCV.CDB below.
+    assert factor_mimicking_weights('CRCV.NCD', FACTOR_TO_ASSET_MAP) is None
+    assert factor_mimicking_weights('CRDL.XYZ', FACTOR_TO_ASSET_MAP) is None  # unknown universe
+
+
+def test_credit_mimicking_weights_match_get_credit_weights():
+    from multiasset.config import CREDIT_CONFIG, get_credit_weights
+
+    w_lvl, is_yield = factor_mimicking_weights('CRDL.CDB', FACTOR_TO_ASSET_MAP)
+    assert is_yield
+    tenor_years = [t for _, _, t in CREDIT_CONFIG['CDB'][2]]
+    expected_lvl = dict(zip(['CDB1Y', 'CDB2Y', 'CDB5Y', 'CDB10Y', 'CDB30Y'],
+                            get_credit_weights(tenor_years)['Level']))
+    assert w_lvl == pytest.approx(expected_lvl)
+    assert sum(w_lvl.values()) == pytest.approx(1.0)
+
+    w_slp, _ = factor_mimicking_weights('CRSL.CDB', FACTOR_TO_ASSET_MAP)
+    assert w_slp['CDB1Y'] < 0 < w_slp['CDB30Y']          # steepener legs are signed
+    assert sum(w_slp.values()) == pytest.approx(0.0)
+
+    w_crv, _ = factor_mimicking_weights('CRCV.CDB', FACTOR_TO_ASSET_MAP)
+    assert sum(w_crv.values()) == pytest.approx(0.0)
+
+    # NCD has no curvature (CREDIT_NO_CURVATURE) but does have Level/Slope.
+    w_ncd_lvl, _ = factor_mimicking_weights('CRDL.NCD', FACTOR_TO_ASSET_MAP)
+    assert set(w_ncd_lvl) == {'NCD3M', 'NCD6M', 'NCD9M', 'NCD1Y'}
 
 
 def test_pool_sleeve_budgets_vol_sqrt_for_ir_equal_for_rest():

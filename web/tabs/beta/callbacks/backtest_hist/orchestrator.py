@@ -123,6 +123,11 @@ def run_historical_allocation(
     loader = RiskFactorLoader(input_dir)
     risk_factors = loader.load_risk_factors(use_cache=True)
     risk_factors.index = pd.to_datetime(risk_factors.index)
+    # Some factor columns carry stray None entries (vs NaN), which makes the
+    # column object-dtype and breaks .diff() with "unsupported operand
+    # type(s) for -: 'NoneType' and 'float'". Coerce to numeric so gaps are
+    # proper NaN.
+    risk_factors = risk_factors.apply(pd.to_numeric, errors='coerce')
     market_data = load_raw_market_data()
 
     if risk_factors.empty:

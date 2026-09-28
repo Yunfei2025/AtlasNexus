@@ -261,7 +261,11 @@ class DeterministicRiskFactorAnalyzer:
             for factor_name, w in weights_by_factor.items():
                 n_tenors = min(len(w), len(spread_data.columns))
                 tenor_levels = spread_data.iloc[:, :n_tenors]
-                factor_level = (tenor_levels * w[:n_tenors]).sum(axis=1)
+                # min_count=1: a row with no real tenor observations (e.g. a raw
+                # source gap on one leg) must produce NaN, not a spurious 0.0 --
+                # pandas' default sum() over an all-NaN row silently returns 0.0,
+                # which is indistinguishable from a genuine zero credit spread.
+                factor_level = (tenor_levels * w[:n_tenors]).sum(axis=1, min_count=1)
                 col_name = f"{factor_name}.{universe}"
                 all_scores[col_name] = factor_level
 

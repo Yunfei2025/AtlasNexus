@@ -35,10 +35,13 @@ class StatRefresher:
         self.dp = DateConfig.get_date_mappings()['dp'].date()
         self.tenor = list(np.linspace(1, 10, 10))
         _terms = IRSConfig.get_irs_terms()
+        # FR007S7Y/FR007S10Y are kept in (needed for Sector PCA); SHI3M 7y/10y
+        # and the FR007/SHIBOR3M fixings stay excluded. Mirrors
+        # curves/generators/stat.py's compute_irs_spreads() exclusion set.
         self.filtered_irs = [
             k for k in _terms.keys()
             if k not in {
-                'SHIBOR3M.IR', 'SHI3MS7Y.IR', 'SHI3MS10Y.IR', 'FR007.IR', 'FR007S7Y.IR', 'FR007S10Y.IR'
+                'SHIBOR3M.IR', 'SHI3MS7Y.IR', 'SHI3MS10Y.IR', 'FR007.IR'
             }
         ]
         

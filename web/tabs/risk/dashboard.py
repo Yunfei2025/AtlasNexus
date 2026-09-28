@@ -17,6 +17,7 @@ from datetime import datetime
 from web.tabs.beta.data import THEME, ALLOCATION_RESULTS
 from web.tabs.beta.callbacks._common import (
     _SUMMARY_ALPHA_PARQUET,
+    _SUMMARY_BETA_PARQUET,
     _BETA_BOOK_POSITIONS_PARQUET,
 )
 from .charts import (
@@ -156,6 +157,18 @@ def register_risk_dashboard_callbacks(app):
         try:
             if _beta_records:
                 bdf = pd.DataFrame(_beta_records)
+            elif _os.path.exists(_SUMMARY_BETA_PARQUET):
+                # Same priority as Summary > Books' Portfolio Allocation
+                # Snapshot (web/tabs/risk/books/beta_table.py): the canonical
+                # snapshot (Sector/Capital (CNY)/DV01 (MM CNY) schema, same
+                # as the legacy file below) takes precedence over the legacy
+                # beta_book_positions.parquet export — falling straight to
+                # the legacy file here let Net Position by Instrument show
+                # stale rows (e.g. an old MTN5Y sleeve) that the current
+                # snapshot had already dropped. _SUMMARY_BETA_DISPLAY_PARQUET
+                # is skipped: it uses a different schema (Capital (MM CNY),
+                # no Sector/DV01 columns) this loop doesn't read.
+                bdf = pd.read_parquet(_SUMMARY_BETA_PARQUET)
             elif _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
                 bdf = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
             else:

@@ -16,6 +16,8 @@ Data sources
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import traceback
 from typing import Any
@@ -26,6 +28,8 @@ from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output
 
 from settings.paths import DIR_INPUT, DIR_DATA
+
+_OTR_STICKY_STATE_PATH = str(DIR_INPUT / "market_otr_sticky_state.json")
 
 # ── Theme ────────────────────────────────────────────────────────────────────
 THEME = {
@@ -378,8 +382,35 @@ _ON_THE_RUN_TENOR_BANDS: dict[str, tuple[float, float]] = {
 }
 
 
+def _load_otr_sticky_state() -> dict:
+    try:
+        with open(_OTR_STICKY_STATE_PATH, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_otr_sticky_state(state: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(_OTR_STICKY_STATE_PATH), exist_ok=True)
+        with open(_OTR_STICKY_STATE_PATH, "w") as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+
 def _select_on_the_run_bonds(btype: str, tenors: list[str]) -> dict[str, Any]:
-    """Pick the most liquid (highest turnover ratio) bond inside each tenor band."""
+    """Pick the on-the-run bond inside each tenor band, sticky once switched.
+
+    Turnover ratio is noisy day to day — two already-issued bonds in the
+    same tenor band can trade places in single-day turnover repeatedly
+    (e.g. CGB 5Y flipping between 240006.IB and 260008.IB), which made the
+    OTR pick flip back and forth under a plain argmax. Once the book has
+    switched to a NEWER-issued bond (later 起息日期) as OTR, it stays there
+    — a day where the older bond's turnover happens to edge back ahead no
+    longer reverts the pick. Switching forward to an even newer bond is
+    still allowed and expected (that's a real roll, not noise).
+    """
     try:
         bond_info = pd.read_pickle(str(DIR_INPUT / f"{btype}-InstrumentInfo.pkl"))
     except Exception:
@@ -410,6 +441,10 @@ def _select_on_the_run_bonds(btype: str, tenors: list[str]) -> dict[str, Any]:
     else:
         name_mask = bond_info["证券全称"].astype(str).str.contains("国家开发银行", na=False)
 
+    sticky_state = _load_otr_sticky_state()
+    btype_state = sticky_state.setdefault(btype, {})
+    state_changed = False
+
     selected: dict[str, Any] = {}
     for tenor in tenors:
         lo, hi = _ON_THE_RUN_TENOR_BANDS[tenor]
@@ -430,8 +465,34 @@ def _select_on_the_run_bonds(btype: str, tenors: list[str]) -> dict[str, Any]:
             selected[tenor] = "—"
             continue
 
-        # On-the-run = bond with highest turnover ratio (most liquid) in the tenor band
-        selected[tenor] = bucket_turnover.idxmax()
+        # Highest-turnover candidate for today, and its issue date.
+        candidate_id = bucket_turnover.idxmax()
+        candidate_start = start_date.get(candidate_id)
+
+        prev_id = btype_state.get(tenor)
+        prev_start = start_date.get(prev_id) if prev_id in bucket_mask.index and bucket_mask.get(prev_id, False) else None
+
+        if prev_id is None or prev_start is None or pd.isna(prev_start):
+            # No sticky pick yet, or the previously-held bond has rolled off
+            # this tenor band (matured / no longer in the eligible set) —
+            # adopt today's highest-turnover candidate.
+            chosen_id = candidate_id
+        elif candidate_start is not None and pd.notna(candidate_start) and candidate_start > prev_start:
+            # A genuinely newer bond has overtaken the held one — this is a
+            # real roll, not turnover noise between two already-seen bonds.
+            chosen_id = candidate_id
+        else:
+            # Candidate is the same bond, or an older/equal-vintage bond
+            # that's merely winning today's turnover — stay put.
+            chosen_id = prev_id
+
+        if btype_state.get(tenor) != chosen_id:
+            btype_state[tenor] = chosen_id
+            state_changed = True
+        selected[tenor] = chosen_id
+
+    if state_changed:
+        _save_otr_sticky_state(sticky_state)
 
     return selected
 

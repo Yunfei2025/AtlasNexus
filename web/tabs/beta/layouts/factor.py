@@ -87,12 +87,12 @@ def build_multiasset_factor_layout():
         ),
     ], style={'flexShrink': '0'})
 
-    # ── Credit grid: CRDL/CRSL/CRCV rows × LGB/MTN/ICP columns ──
+    # ── Credit grid: CRDL/CRSL/CRCV rows × LGB/MTN/NCD columns ──
     # Same shape as the IR grid above (one Checklist per column, kind options
     # as rows) so factor-selection-cr-{universe} IDs slot into the pool
     # counter / correlation callbacks the same way factor-selection-ir-{d} do.
-    credit_universes = ['CDB', 'LGB', 'MTN', 'ICP']
-    credit_icons = {'CDB': '🏦', 'LGB': '🏛️', 'MTN': '🏢', 'ICP': '🏭'}
+    credit_universes = ['CDB', 'LGB', 'MTN', 'NCD']
+    credit_icons = {'CDB': '🏦', 'LGB': '🏛️', 'MTN': '🏢', 'NCD': '🏭'}
     cr_kinds = ['CRDL', 'CRSL', 'CRCV']
     cr_grid = html.Div([
         _section_label("Credit"),
