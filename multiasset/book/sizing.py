@@ -157,6 +157,7 @@ def daily_weights_from_context(
 # factor portfolio those strategies are scored on.
 
 _IR_BASIS = {'IRDL': 'Level', 'IRSL': 'Slope', 'IRCV': 'Curvature'}
+_CREDIT_BASIS = {'CRDL': 'Level', 'CRSL': 'Slope', 'CRCV': 'Curvature'}
 _PRICE_PREFIXES = ('FXDL', 'CMDL', 'EQDL')
 
 
@@ -164,12 +165,22 @@ def factor_mimicking_weights(factor_code: str,
                              factor_to_asset_map: dict) -> Optional[tuple]:
     """(``{asset_name: w_i}``, is_yield) for ``factor_code``'s mimicking
     portfolio, or ``None`` when it can't be replicated with tradable assets
-    (e.g. credit/spread factors, or an IR tenor with no mapped asset).
+    (e.g. an IR/credit tenor with no mapped asset at all).
 
     IR weights come from pca_analyzer's deterministic grid — the same
     vectors that define the factor level in factor-rates.pkl. Tenor ->
     asset names come from the country's IRDL entry in factor_to_asset_map
     (IRDL lists every tenor; IRSL/IRCV list only their loading tenors).
+
+    Credit (CRDL/CRSL/CRCV) weights come from the same log-tenor-space
+    Level/Slope/Curvature decomposition (multiasset.config.get_credit_weights)
+    that CRDL/CRSL/CRCV's own factor level is built from
+    (multiasset.factor_backtest._credit_weighted_duration uses the same
+    call) — the mimicking portfolio here holds each universe's own bond
+    outright at that weight, unhedged against CGB (see
+    multiasset.data.get_asset_yield_series's Credit branch), matching how
+    the Individual Factors tab prices CRDL/CRSL/CRCV: -D_mod * d(spread)/100,
+    which only requires the own-leg duration, not a CGB hedge leg.
     """
     from multiasset.pca_analyzer import get_deterministic_ir_tenors, get_deterministic_ir_weights
 
@@ -185,6 +196,32 @@ def factor_mimicking_weights(factor_code: str,
             if tenor not in by_tenor:
                 return None
             out[by_tenor[tenor]] = float(w)
+        return (out, True) if out else None
+    if prefix in _CREDIT_BASIS:
+        from multiasset.config import CREDIT_CONFIG, get_credit_weights, CREDIT_NO_CURVATURE
+
+        if suffix not in CREDIT_CONFIG:
+            return None
+        basis = _CREDIT_BASIS[prefix]
+        if basis == 'Curvature' and suffix in CREDIT_NO_CURVATURE:
+            return None
+        tenor_cols = CREDIT_CONFIG[suffix][2]
+        tenor_years = [t for _, _, t in tenor_cols]
+        include_curvature = suffix not in CREDIT_NO_CURVATURE
+        weights_by_basis = get_credit_weights(tenor_years, include_curvature=include_curvature)
+        weights = weights_by_basis.get(basis)
+        if weights is None:
+            return None
+        by_tenor = {a.get('sector'): a['name']
+                    for a in factor_to_asset_map.get(f'CRDL.{suffix}', [])}
+        out = {}
+        for t, w in zip(tenor_years, weights):
+            if abs(w) < 1e-12:
+                continue
+            tenor_label = f"{t:g}Y" if t >= 1 else f"{int(t * 12)}M"
+            if tenor_label not in by_tenor:
+                return None
+            out[by_tenor[tenor_label]] = float(w)
         return (out, True) if out else None
     if prefix in _PRICE_PREFIXES:
         names = [a['name'] for a in factor_to_asset_map.get(factor_code, [])]

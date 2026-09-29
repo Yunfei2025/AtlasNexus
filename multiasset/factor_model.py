@@ -141,7 +141,19 @@ class FactorModelConfig:
     # matching Sharpe benefit in this validation, so there is currently no
     # evidence it earns its cost — revisit if a different factor's exposure
     # profile calls for one.
-    continuous_conviction_cap: float = 1.5        # cap on conviction before the ICIR/leverage scaling
+    #
+    # continuous_conviction_cap was lowered from 1.5 to 1.0 (position now
+    # tops out at 1.0 instead of occasionally running to 1.5). A plain
+    # tighter clip cost ~0.005 Sharpe on IRDL.CN (2016-2026, cached
+    # predictions): every day whose raw conviction fell in the old 1.0-1.5
+    # range got flattened to the same value 1.0, discarding the relative
+    # ordering between "conviction was 1.1" and "conviction was 1.5". Instead
+    # conviction is divided by continuous_conviction_scale (1.5, the old cap)
+    # BEFORE clipping to the new cap, compressing the full old dynamic range
+    # into [0, 1] rather than truncating its tail — this recovered the lost
+    # Sharpe and then some (1.00 -> 1.02 in the same test).
+    continuous_conviction_cap: float = 1.0        # cap on conviction after rescaling, before the ICIR/leverage scaling
+    continuous_conviction_scale: float = 1.5      # divisor applied to raw conviction before the cap above; set to the old cap so the full historical dynamic range compresses into the new one instead of clipping it off
     icir_saturation_continuous: float = 3.0       # wider than icir_saturation: keeps confidence in its mid-range on ordinary days instead of pinning to ~0/~1
     icir_confidence_floor: float = -0.15          # ICIR below this is treated as this value — a small negative floor instead of clip(lower=0), so an ordinary noisy/negative ICIR doesn't snap confidence straight to its minimum
     icir_confidence_floor_weight: float = 0.0     # minimum confidence retained even when ICIR is at its worst; see calibration note above
@@ -172,7 +184,13 @@ class FactorModelConfig:
     ewma_obs_halflife: int = 63
     # ── Fix 4: Longer momentum features + long-only position floor ──────────
     # Mom120 / Mom252 added in _momentum_features; floor enforced here.
-    long_floor: float = 0.30                      # min position during confirmed trend
+    # Raised 0.30 -> 0.40 alongside the continuous_conviction_cap/scale change
+    # above: with the position ceiling lowered to 1.0, a larger floor buys
+    # more time-in-market during confirmed rallies without pushing typical
+    # exposure anywhere near the new cap. Validated together on IRDL.CN
+    # (2016-2026, cached predictions): Sharpe 1.00 (old 1.5 cap) -> 1.06
+    # (new cap + rescale + this floor).
+    long_floor: float = 0.40                      # min position during confirmed trend
     long_floor_confirm_window: int = 120          # medium-term momentum window (days)
     # ── 'tilt' sizing: strategic baseline + bounded model deviation ─────────
     # For CORE holdings (e.g. IRDL.CN duration) the model should tilt around a
@@ -1199,7 +1217,9 @@ def build_position_series(
         daily_returns.rolling(cfg.vol_scale_window).std().shift(1)
     ).reindex(pred.index)
     conviction = smoothed / realised_daily_vol.replace(0, np.nan)
-    conviction = conviction.clip(-cfg.continuous_conviction_cap, cfg.continuous_conviction_cap).fillna(0.0)
+    conviction = (conviction / cfg.continuous_conviction_scale).clip(
+        -cfg.continuous_conviction_cap, cfg.continuous_conviction_cap
+    ).fillna(0.0)
 
     icir = rolling_icir(pred, daily_returns, cfg.icir_window,
                        horizon=effective_horizon).shift(1)

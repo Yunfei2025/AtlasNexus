@@ -109,7 +109,7 @@ def _pair_card(cand) -> html.Div:
     return html.Div([header, legs, reasons_div, add_btn], style={
         'padding': '8px 10px', 'borderRadius': '4px',
         'backgroundColor': THEME['bg_card'], 'borderLeft': f'3px solid {border_color}',
-        'flex': '1 1 220px', 'minWidth': '220px', 'maxWidth': '280px', 'boxSizing': 'border-box',
+        'flex': '1 1 280px', 'minWidth': '280px', 'maxWidth': '340px', 'boxSizing': 'border-box',
     })
 
 

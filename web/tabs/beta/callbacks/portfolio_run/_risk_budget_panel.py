@@ -57,12 +57,12 @@ def collect_active_factors(asset_pool) -> set:
             if asset_name.startswith('CDB'): code = 'CDB'
             elif asset_name.startswith('LGB'): code = 'LGB'
             elif asset_name.startswith('MTN'): code = 'MTN'
-            elif asset_name.startswith('ICP'): code = 'ICP'
+            elif asset_name.startswith('NCD'): code = 'NCD'
             else: code = None
             if code:
                 active_factors.add(f"CRDL.{code}")
                 active_factors.add(f"CRSL.{code}")
-                if code != 'ICP':
+                if code != 'NCD':
                     active_factors.add(f"CRCV.{code}")
 
         elif a_type == 'Commodities':

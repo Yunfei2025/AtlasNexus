@@ -64,7 +64,7 @@ def register_portfolio_pool_callbacks(app):
                 {'label': 'China Development Bond', 'value': 'China Development Bond'},
                 {'label': 'Local Government Bond', 'value': 'Local Government Bond'},
                 {'label': 'Medium Term Note', 'value': 'Medium Term Note'},
-                {'label': 'Interbank Commercial Paper', 'value': 'Interbank Commercial Paper'},
+                {'label': 'NCD (Interbank CD)', 'value': 'NCD (Interbank CD)'},
             ]
             return (
                 {'display': 'flex', 'alignItems': 'center', 'marginBottom': '12px'},
@@ -93,7 +93,7 @@ def register_portfolio_pool_callbacks(app):
         'China Development Bond': ['1Y', '2Y', '5Y', '10Y'],
         'Local Government Bond': ['1Y', '3Y', '5Y', '10Y', '30Y'],
         'Medium Term Note': ['1Y', '2Y', '3Y', '4Y', '5Y'],
-        'Interbank Commercial Paper': ['3M', '6M', '9M', '1Y'],
+        'NCD (Interbank CD)': ['3M', '6M', '9M', '1Y'],
     }
     _RATES_TENORS = ['1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
 
@@ -150,7 +150,7 @@ def register_portfolio_pool_callbacks(app):
                 'China Development Bond': 'CDB',
                 'Local Government Bond': 'LGB',
                 'Medium Term Note': 'MTN',
-                'Interbank Commercial Paper': 'ICP',
+                'NCD (Interbank CD)': 'NCD',
             }
             universe_code = universe_code_map.get(universe, 'XX')
             

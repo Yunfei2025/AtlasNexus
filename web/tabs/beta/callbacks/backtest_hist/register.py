@@ -97,6 +97,21 @@ def register_backtest_hist_callbacks(app):
         metrics_table = build_metrics_kpis(result['metrics']) if result['metrics'] is not None else None
         asset_changes_table = build_holdings_table(result['asset_holdings_rows'])
 
+        # Surface factors that were selected but held no sleeve — a factor
+        # added to the pool without a saved FactorModel run in the
+        # Individual Factors tab is otherwise silently dropped (contributes
+        # zero weight) and the run looks unchanged from before it was added.
+        unreplicated = result.get('unreplicated_factors') or []
+        if unreplicated:
+            warning_banner = html.Div(
+                f"⚠️ No saved FactorModel signal for: {', '.join(unreplicated)} — "
+                f"these factors contributed no sleeve to this run. Run + Save "
+                f"them in the Individual Factors tab first.",
+                style={'color': THEME['warning'], 'padding': '10px', 'marginBottom': '10px',
+                       'border': f"1px solid {THEME['warning']}", 'borderRadius': '4px'},
+            )
+            asset_changes_table = html.Div([warning_banner, asset_changes_table])
+
         return fig_alloc, fig_pnl, metrics_table, asset_changes_table, result['results_payload']
 
     # 6. Save Result — persist the last run so the beta+alpha combination

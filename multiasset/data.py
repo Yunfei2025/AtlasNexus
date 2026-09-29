@@ -119,7 +119,7 @@ def get_asset_type(asset_name):
         return 'FX'
     if asset_name in ['USDCNY', 'EURCNY', 'JPYCNY', 'GBPCNY']:
         return 'FX'
-    if any(x in asset_name for x in ['CDB', 'LGB', 'MTN', 'ICP']):
+    if any(x in asset_name for x in ['CDB', 'LGB', 'MTN', 'NCD']):
         return 'Credit'
     if 'IRS' in asset_name:
         return 'Spread'
@@ -153,8 +153,8 @@ def get_universe(asset_name):
         return 'Local Government Bond'
     if 'MTN' in asset_name:
         return 'Medium Term Note'
-    if 'ICP' in asset_name:
-        return 'Interbank Commercial Paper'
+    if 'NCD' in asset_name:
+        return 'NCD (Interbank CD)'
     if 'US' in asset_name:
         return 'US Gov Bond'
     elif 'EU' in asset_name:
@@ -299,7 +299,7 @@ def get_asset_yield_series(asset_name, market_data):
             'China Development Bond': 'CDB',
             'Local Government Bond': 'LGB',
             'Medium Term Note': 'MTN',
-            'Interbank Commercial Paper': 'ICP',
+            'NCD (Interbank CD)': 'NCD',
         }
         code = universe_to_code.get(universe)
         if not code or code not in CREDIT_CONFIG:
