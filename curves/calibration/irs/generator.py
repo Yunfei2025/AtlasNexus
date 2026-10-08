@@ -40,17 +40,25 @@ class CurveGenerator:
 
         if not self.curve_data_manager.has_date('r7d', prev_date):
             start = target_date - relativedelta(months=1)
-            timewindow = env.loc[start:target_date].dropna().index[-3:]
             for ct in IRSConfig.CURVE_TYPES:
-                self._extract_historical_spots(curve_ts[ct], timewindow, ct)
+                # Scope the window's dropna to this curve type's own tenor
+                # columns, not the full env: a stale/missing quote in an
+                # unrelated instrument elsewhere in env must not empty out
+                # this curve's window (previously used env.loc[...].dropna()
+                # with the default how='any' across ALL of env's columns,
+                # which could leave timewindow empty and make the
+                # downstream pd.concat in _extract_historical_spots raise
+                # "No objects to concatenate").
+                ct_window = curve_ts[ct].loc[start:target_date].dropna(how='all').index[-3:]
+                self._extract_historical_spots(curve_ts[ct], ct_window, ct)
 
         curves = {}
         start = target_date - relativedelta(months=1)
-        timewindow = env.loc[start:target_date].dropna().index
 
         for ct in IRSConfig.CURVE_TYPES:
+            ct_timewindow = curve_ts[ct].loc[start:target_date].dropna(how='all').index
             curves[ct] = self._generate_single_curve(
-                ct, prev_date, target_date, curve_ts[ct], timewindow
+                ct, prev_date, target_date, curve_ts[ct], ct_timewindow
             )
 
         self.curve_data_manager.save()
@@ -166,6 +174,9 @@ class CurveGenerator:
     def _extract_historical_spots(self, curve_ts: pd.Series, timewindow: pd.DatetimeIndex,
                                   curve_type: str):
         """Extract historical spot data for a curve type over a time window."""
+        if len(timewindow) == 0:
+            return
+
         spot_data = {}
         forward_data = {}
         curve_instance = None
@@ -190,6 +201,16 @@ class CurveGenerator:
         curve_data = self.curve_data_manager.load()
         new_spot = pd.concat(spot_data, axis=1).T
         new_forward = pd.concat(forward_data, axis=1).T
+        # curve_data on disk is keyed by datetime.date (see
+        # CurveDataManager.update_curve), while target_date here may be a
+        # pandas Timestamp from the env DatetimeIndex. Normalize before
+        # concatenating so sort_index() doesn't compare Timestamp to date.
+        new_spot.index = [
+            d.date() if hasattr(d, 'date') else d for d in new_spot.index
+        ]
+        new_forward.index = [
+            d.date() if hasattr(d, 'date') else d for d in new_forward.index
+        ]
         existing_spot = curve_data[curve_type]['spot']
         existing_forward = curve_data[curve_type]['forward']
         add_mask_spot = ~new_spot.index.isin(existing_spot.index)

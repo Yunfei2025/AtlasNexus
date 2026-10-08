@@ -1,3 +1,5 @@
 1. alpha portfolio -> pairs, why the subplot fails to show the realtime spread for 2600002.IB  260010.IB？
 2. market monitor -> ON-THE-RUN BONDS, i found CGB 5Y flips between 260008.IB and 240006.IB frequently, can we just use the new one to avoid switching back to old bonds.
 3. alpha portfolio -> portfolio, Sector PCA — Rich/Cheap Screen, the three cards were too narrow that i cannot see the ticker name. widen them.
+
+regarding the risk exposure of IRDL in beta book, we currently use positive only for it. 1. for Bridge water's all weather product, why does it choose long only strategy? is risk parity only applicable for long only? 2. my current strategy is to optimise the portoflio by risk parity, then apply the factor model results on the optised results (which is a reference). Shall we change the 

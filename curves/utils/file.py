@@ -2,6 +2,7 @@
 import os
 import time
 import contextlib
+import datetime as _dt
 import numpy as np
 import pandas as pd
 import pickle
@@ -165,6 +166,69 @@ def loadPKL(file_path: str) -> dict:
 _NO_FFILL_KEYS = {'ytm_act', 'RefBondChange'}
 
 
+def _is_dateish(x) -> bool:
+    # pd.Timestamp and datetime.datetime are both subclasses of datetime.date
+    return isinstance(x, (_dt.date, np.datetime64))
+
+
+def _date_index_kind(idx):
+    """'date' (pure datetime.date), 'timestamp', 'mixed', 'str', or None (not date-like/empty)."""
+    if len(idx) == 0:
+        return None
+    if isinstance(idx, pd.DatetimeIndex):
+        return 'timestamp'
+    if isinstance(idx, pd.MultiIndex) or not (
+            pd.api.types.is_object_dtype(idx) or pd.api.types.is_string_dtype(idx)):
+        return None
+    vals = [x for x in idx if x is not None and x is not pd.NaT]
+    if vals and all(type(x) is _dt.date for x in vals):
+        return 'date'
+    if vals and all(isinstance(x, (pd.Timestamp, _dt.datetime, np.datetime64)) for x in vals):
+        return 'timestamp'
+    if any(_is_dateish(x) for x in vals):
+        return 'mixed'
+    if vals and all(isinstance(x, str) for x in vals):
+        # Only date strings count; bond codes / tenor labels stay untouched.
+        parsed = pd.to_datetime(pd.Index(vals), errors='coerce', format='mixed')
+        return 'str' if parsed.notna().mean() >= 0.5 else None
+    return None
+
+
+def _coerce_index(obj, convention):
+    """Coerce a date-like index to `convention`, dropping entries that aren't dates."""
+    vals = [x if isinstance(x, (_dt.date, np.datetime64, str)) else None for x in obj.index]
+    ts = pd.to_datetime(pd.Index(vals, dtype=object), errors='coerce', format='mixed')
+    obj = obj[~ts.isna()]
+    ts = ts[~ts.isna()]
+    obj.index = pd.Index(ts.date, dtype=object) if convention == 'date' else pd.DatetimeIndex(ts)
+    return obj
+
+
+def _align_date_indexes(target, new):
+    """Bring `new` (and a mixed `target`) onto the target's date-index convention.
+
+    Pickles in DIR_INPUT use either datetime.date or Timestamp indexes and
+    readers depend on that (e.g. `some_date in df.index` is False against a
+    DatetimeIndex), so the existing file's convention wins. Non-date indexes
+    (bond codes, tenors, ints) are never touched.
+    """
+    kt, kn = _date_index_kind(target.index), _date_index_kind(new.index)
+    if kt in ('date', 'timestamp'):
+        conv = kt
+    elif kn in ('date', 'timestamp'):
+        conv = kn
+    elif 'mixed' in (kt, kn):
+        has_date = any(type(x) is _dt.date for x in list(target.index) + list(new.index))
+        conv = 'date' if has_date else 'timestamp'
+    else:
+        return target, new
+    if kt is not None and kt != conv:
+        target = _coerce_index(target, conv)
+    if kn is not None and kn != conv:
+        new = _coerce_index(new, conv)
+    return target, new
+
+
 def updatePKL(dictn, file_path, rewrite=False):
     if rewrite:
         # Callers doing their own external loadPKL -> merge -> updatePKL(rewrite=True)
@@ -187,8 +251,7 @@ def updatePKL(dictn, file_path, rewrite=False):
                 def _update_dataframe(target_df, new_df, ffill=True):
                     if target_df is None or not isinstance(target_df, pd.DataFrame):
                         target_df = pd.DataFrame()
-                    target_df = target_df.copy()
-                    new_df = new_df.copy()
+                    target_df, new_df = _align_date_indexes(target_df.copy(), new_df.copy())
 
                     # If the incoming frame contains object/string data for a column,
                     # preserve that column as object so bond codes and other labels
@@ -222,8 +285,7 @@ def updatePKL(dictn, file_path, rewrite=False):
                 def _update_series(target_ser, new_ser):
                     if target_ser is None or not isinstance(target_ser, pd.Series):
                         target_ser = pd.Series(dtype=float)
-                    target_ser = target_ser.copy()
-                    new_ser = new_ser.copy()
+                    target_ser, new_ser = _align_date_indexes(target_ser.copy(), new_ser.copy())
                     if not target_ser.index.is_unique:
                         target_ser = target_ser[~target_ser.index.duplicated(keep='last')]
                     if not new_ser.index.is_unique:

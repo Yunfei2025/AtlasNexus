@@ -16,7 +16,7 @@ from settings.fixed_income import BondConfig
 from settings.general import DateConfig
 import curves.affine.bootstrap as bs
 import curves.affine.pricingYield as yd
-from ..utils.file import updatePKL, loadPKL
+from ..utils.file import updatePKL, loadPKL, _align_date_indexes
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 
@@ -99,6 +99,18 @@ def get_offtherun_bond(turnover: pd.Series, n_exclude: int = 1) -> str:
         return turnover.idxmax()
     ranked = turnover.sort_values(ascending=False)
     return ranked.index[n_exclude]
+
+
+def _date_like(container, d):
+    """Cast d to the date convention of `container` (an Index or a Series of dates).
+
+    Pickled data mixes datetime.date and Timestamp conventions, and pandas
+    refuses to compare the two, so match whichever one the container uses.
+    """
+    if isinstance(container, pd.DatetimeIndex) or (
+            isinstance(container, pd.Series) and pd.api.types.is_datetime64_any_dtype(container)):
+        return pd.Timestamp(d)
+    return d.date() if isinstance(d, datetime) else d
 
 
 def _as_scalar_bond_id(bond_id):
@@ -356,6 +368,9 @@ class RefBondSelector:
         # Merge new rows (if any) and persist
         if new_rows:
             new_rows_df = pd.DataFrame(new_rows).T
+            # Stored history and this run's dates can differ in type
+            # (Timestamp vs datetime.date); the stored convention wins.
+            existing_result_df, new_rows_df = _align_date_indexes(existing_result_df, new_rows_df)
             result_df = pd.concat(
                 [existing_result_df, new_rows_df]
             ).loc[lambda df: ~df.index.duplicated(keep='last')]
@@ -393,6 +408,13 @@ class RefBondSelector:
             new_events_df = pd.DataFrame(change_events).set_index(['date', 'bucket'])
             existing_events = existing_data.get('RefBondChange')
             if isinstance(existing_events, pd.DataFrame) and not existing_events.empty:
+                stored_dates = existing_events.index.get_level_values('date')
+                if isinstance(stored_dates, pd.DatetimeIndex):
+                    to_conv = pd.Timestamp
+                else:
+                    to_conv = lambda d: pd.Timestamp(d).date()
+                existing_events = existing_events.rename(index=to_conv, level='date')
+                new_events_df = new_events_df.rename(index=to_conv, level='date')
                 events_df = pd.concat([existing_events, new_events_df])
                 events_df = events_df[~events_df.index.duplicated(keep='last')]
             else:
@@ -473,22 +495,26 @@ class RefBondSelector:
         available_bonds = bonds['bonds'].intersection(type_filtered)
         
         # Filter by start date
-        started_mask = bonds['start_date'][available_bonds] < current_date
-        end_mask = bonds['maturity'][available_bonds] > current_date
+        start_dates = bonds['start_date'][available_bonds]
+        maturities = bonds['maturity'][available_bonds]
+        started_mask = start_dates < _date_like(start_dates, current_date)
+        end_mask = maturities > _date_like(maturities, current_date)
         available_bonds = available_bonds[started_mask & end_mask]
         
         if len(available_bonds) == 0:
             return day_results
         
         # Calculate terms — direct date arithmetic avoids strftime round-trips
-        terms = (bonds['maturity'][available_bonds] - current_date).apply(
+        maturities = bonds['maturity'][available_bonds]
+        terms = (maturities - _date_like(maturities, current_date)).apply(
             lambda d: d.days / 365
         )
-        
+
         # Get turnover for this date
         date_turnover = pd.Series(dtype=float)
-        if current_date in bonds['turnover'].index:
-            date_turnover = bonds['turnover'].loc[current_date, available_bonds]#.dropna()
+        turnover_key = _date_like(bonds['turnover'].index, current_date)
+        if turnover_key in bonds['turnover'].index:
+            date_turnover = bonds['turnover'].loc[turnover_key, available_bonds]#.dropna()
         else:
             raise MissingVolumeDataError(
                 f"Missing Volume data for date {current_date}; cannot select "
@@ -584,7 +610,11 @@ class RefBondSelector:
                 return bool(pd.notna(candidate_term)
                             and min_term < candidate_term <= max_term)
 
-            previous_dates = existing_results.index[existing_results.index < current_date]
+            prior_index = existing_results.index
+            previous_dates = (
+                prior_index[prior_index < _date_like(prior_index, current_date)]
+                if len(prior_index) else prior_index
+            )
             if len(previous_dates) > 0:
                 prev_date = previous_dates[-1]
                 prev_bond = _as_scalar_bond_id(existing_results.loc[prev_date, bucket_name])

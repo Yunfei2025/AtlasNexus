@@ -312,9 +312,20 @@ def retrieveCNBDTS():
     ts['IRS'] = pd.concat([fixing,irs_curve],axis=1).sort_index()#.dropna()
 
     for k in WindConfig.KTID.keys():
-        tlist = ','.join(WindConfig.KTID[k].keys())
+        ids = list(WindConfig.KTID[k].keys())
+        tlist = ','.join(ids)
         edb_ts = _edb(tlist, starts, ds)
-        edb_ts.columns = [WindConfig.KTID[k][c] for c in edb_ts.columns]
+        if edb_ts.empty:
+            ts[k] = edb_ts
+            continue
+        # WindPy's usedf=True sometimes names edb columns by field (e.g.
+        # 'close') instead of by the requested EDB id, depending on how
+        # many ids/fields are in the request. Map positionally against the
+        # requested id list rather than relying on the returned column
+        # labels, as long as the shape matches what we asked for.
+        if len(edb_ts.columns) == len(ids) and list(edb_ts.columns) != ids:
+            edb_ts.columns = ids
+        edb_ts.columns = [WindConfig.KTID[k].get(c, c) for c in edb_ts.columns]
         ts[k] = edb_ts
     file_path = os.path.join(DIR_INPUT, 'database-px.pkl')
     ts = updatePKL(ts, file_path)

@@ -61,6 +61,7 @@ class CurveDataManager:
         if self._curve_data is None or force_reload:
             if os.path.exists(self.data_path):
                 self._curve_data = pd.read_pickle(self.data_path)
+                self._normalize_date_keys()
                 if not self._did_migrate_legacy_tenors:
                     if self._migrate_legacy_tenors():
                         print("Migrated legacy tenors in IRS-cvdata (e.g., 3m -> 1s).")
@@ -77,7 +78,19 @@ class CurveDataManager:
         """Save curve data to pickle file."""
         if self._curve_data is not None:
             self._curve_data = updatePKL(self._curve_data, self.data_path)
+            self._normalize_date_keys()
         return self._curve_data
+
+    def _normalize_date_keys(self):
+        # Callers key this data by datetime.date; a DatetimeIndex would make
+        # has_date() always False and break concat/sort_index in the generator.
+        for ct_data in self._curve_data.values():
+            if not isinstance(ct_data, dict):
+                continue
+            for kind in ('spot', 'forward'):
+                df = ct_data.get(kind)
+                if isinstance(df, pd.DataFrame) and isinstance(df.index, pd.DatetimeIndex):
+                    df.index = pd.Index(df.index.date, dtype=object)
 
     def update_curve(self, curve_type: str, date: date, spot_values: pd.Series,
                      forward_values: pd.Series, tenor_labels: List[str]):
