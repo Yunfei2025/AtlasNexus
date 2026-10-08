@@ -17,6 +17,9 @@ Scope: give `signed_sleeve_weights_daily`
 instead of simply dropped (clipped to 0). Cash bond legs stay long-only everywhere
 in the book; only the hedge overlay can go short.
 
+**Verdict (2026-10-08): worth building, but phase it — TF (5Y) first, TS (2Y)
+only if TF proves out.** See §6 for the basis-risk measurement behind this call.
+
 ---
 
 ## 1. Why (problem statement)
@@ -61,11 +64,11 @@ still be expressed.
 
 | # | Decision |
 |---|---|
-| 1 | **Only CN1Y/CN2Y/CN5Y's negative residual is hedged**, via **TS (2Y)** for CN1Y/CN2Y and **TF (5Y)** for CN5Y — the nearest-maturity contract, following the same per-tenor granularity the cash-bond floor already uses. CN10Y+ stays exactly as-is (fully signed cash bonds, no futures). |
+| 1 | **Only CN1Y/CN2Y/CN5Y's negative residual is hedged**, via **TS (2Y)** for CN1Y/CN2Y and **TF (5Y)** for CN5Y — the nearest-maturity contract, following the same per-tenor granularity the cash-bond floor already uses. CN10Y+ stays exactly as-is (fully signed cash bonds, no futures). **Phased per §6's basis-risk result: ship CN5Y/TF first; gate CN1Y/CN2Y/TS on TF's validated outcome** rather than building both legs simultaneously. |
 | 2 | **Two-leg weight**: `net_tenor_weight = cash_weight (clipped ≥ 0) + futures_weight (≤ 0, only active when net_tenor_weight would have been negative)`. The futures leg is sized so the *combined* DV01 matches what the uncapped signed sleeve wanted — i.e. the futures hedge restores the factor exposure the clip used to destroy, it doesn't add a new independent view. |
 | 3 | **Futures duration proxy**: reuse the existing annuity-formula mod-duration (`sizing.py:311`: `(1-(1+y)^-n)/(y(1+y))`) with `n = CONTRACT_TENOR[symbol]` and `y` = the corresponding cash-bond yield (CN2Y for TS, CN5Y for TF) as a CTD proxy. This is a simplification (ignores actual CTD switch, conversion factor) and must be labeled as such in code and in the Risk Budget panel — not a precise futures DV01. |
 | 4 | **Funding treatment is NOT the same as `SHORT_END_LONG_ONLY_TENORS`'s today.** A short future carries margin (small, roughly the exchange margin rate × notional) and a basis P&L term (future vs. CTD cash yield), not a bond repo cost. `ann_funding_cost` needs a distinct component for the futures leg rather than reusing the bond funding-hurdle path. |
-| 5 | **Basis risk is reported, not hedged away.** The futures-vs-cash-bond tracking error (CTD switches, repo-implied carry in the future's price, contract roll) is real slippage against the theoretical factor-mimicking portfolio that the cash-only sleeves don't have. Step 4 below quantifies this before any Sharpe claim is made on the hedged variant. |
+| 5 | **Basis risk is reported, not hedged away.** The futures-vs-cash-bond tracking error (CTD switches, repo-implied carry in the future's price, contract roll) is real slippage against the theoretical factor-mimicking portfolio that the cash-only sleeves don't have. **Quantified in §6** (measured ahead of implementation, not deferred to post-build): monthly R²=0.85 for TF, 0.64 for TS — the gap is why TS and TF are no longer treated as one combined decision. |
 | 6 | **No change to any factor-scaling behavior above CN5Y, and no change to Pure Risk Parity mode** — this only touches the short end's floor-residual routing in `signed_sleeve_weights_daily`, gated behind a new flag (e.g. `use_futures_hedge: bool`) so the current (floor-and-drop) behavior remains the default / A-B comparable. |
 
 **Step 0 resolved (2026-10-08):** the continuous main-contract daily data
@@ -76,7 +79,16 @@ be extended to surface it.
 
 ---
 
-## 3. Data/code gaps (Step 0 — resolved)
+## 3. Basis risk (Step 4, measured early — see §6 for the full writeup)
+
+Before scoping Steps 1-3's effort, Step 4's basis-risk question was measured
+directly rather than left for after implementation (methodology and full
+numbers in §6). Headline: **TF/CN5Y tracks well (monthly R²=0.85, stable hedge
+ratio); TS/CN2Y is noticeably weaker and noisier (monthly R²=0.64, unstable
+hedge ratio 0.65-0.87 across horizons).** This is why §2 Decision 1 now phases
+TS and TF separately instead of building both at once.
+
+## 4. Data/code gaps (Step 0 — resolved)
 
 - [x] **TS/TF/T/TL daily data confirmed present**, at `../input/futures-dailyK_con.pkl`
   (`DIR_INPUT/futures-dailyK_con.pkl`, i.e. `settings.paths.DIR_INPUT`). It is
@@ -116,13 +128,19 @@ be extended to surface it.
   the user signs off on before implementation — do not invent a number
   silently.
 
-## 4. Implementation steps
+## 5. Implementation steps
+
+**Phasing (revised per §6's basis-risk measurement): implement and validate
+the TF (5Y) leg first.** Steps 1-2 below can be built for both symbols at
+once (the code is symmetric either way), but Step 5's A/B validation and any
+decision to flip the default on should be evaluated for TF alone before TS is
+added — don't greenlight TS on the strength of TF's result.
 
 1. **Load the futures artifact and add a `multiasset/data.py` branch.**
    Add a `_load_futures_artifact()` next to the existing `_load_macro_artifact()`
    (`multiasset/data.py:45`) that reads `futures-dailyK_con.pkl` from `DIR_INPUT`
    the same way (`dict[str, pd.DataFrame]` keyed by `'TS.CFE'`/`'TF.CFE'`/etc.,
-   columns `Open/High/Low/Close/Volume` — confirmed in §3), and thread it
+   columns `Open/High/Low/Close/Volume` — confirmed in §4), and thread it
    through `load_raw_market_data()`'s return value. **Caller audit done**:
    `load_raw_market_data()` currently returns `(fx_curves, cn_data, macro_data)`;
    every caller except one binds the full return to a single `market_data`
@@ -151,18 +169,55 @@ be extended to surface it.
    funding-hurdle Sharpe step) and a separate turnover/tx-cost line for futures
    (futures tx costs are typically far lower bps than cash bond turnover —
    don't reuse the bond tx-cost bps assumption uncritically).
-4. **Quantify basis risk (Decision 5) before trusting any Sharpe number**:
-   backtest the TS/TF-vs-CN2Y/CN5Y tracking error over the same 2022-2026
-   window used in the floor A/B test, report correlation and realized basis
-   P&L stdev, independent of whether the hedge leg "worked" directionally.
+4. **Basis risk (Decision 5) is already quantified — see §6.** No further
+   measurement is needed before Step 5; this step is retained in the numbering
+   only as a pointer back to §6 for anyone picking up this plan later.
 5. **Re-run the floor A/B test** (same methodology as the CN1Y/2Y/5Y
    floor-on/floor-off comparison already done) with a third variant: floor-on
-   + futures-hedge-on. Compare against both existing variants on gross/net/
-   post-funding Sharpe, max drawdown, and total realized capital-weighted
-   coupon income (the metric this whole feature exists to protect) before
-   recommending it replace the current default.
+   + futures-hedge-on, **TF leg only first**. Compare against both existing
+   variants on gross/net/post-funding Sharpe, max drawdown, and total realized
+   capital-weighted coupon income (the metric this whole feature exists to
+   protect) before recommending it replace the current default. Only add a
+   TS variant to this comparison once TF's result is in — per §6, TS's weaker,
+   less stable hedge ratio means it should not be assumed to replicate
+   whatever TF shows.
 
-## 5. What this explicitly does NOT change
+## 6. Basis-risk measurement (resolves Decision 5 / Step 4 ahead of implementation)
+
+Measured directly (2026-10-08) against `futures-dailyK_con.pkl` (§4) and
+`database-px.pkl`'s CGB cash yield curve, 2022-01 to 2026-09 (same window as
+the floor A/B test in §1). Method: build the "theoretical" cash-bond daily
+return from the same annuity-formula duration proxy Decision 3 specifies
+(`-mod_dur.shift(1) * Δyield`), regress the futures' own daily return on it to
+get the realistic hedge ratio (beta) rather than assuming beta=1, and measure
+the residual (basis) as the tracking error that hedge ratio leaves behind.
+Checked at daily, weekly, and monthly aggregation — monthly matters most since
+that's the book's actual rebalance cadence (daily basis noise from settlement
+timing/contract-roll mechanics substantially washes out by then).
+
+| | TS.CFE (2Y) | TF.CFE (5Y) |
+|---|---|---|
+| Daily R² | 0.52 | 0.66 |
+| Weekly R² | 0.60 | 0.81 |
+| **Monthly R²** | **0.64** | **0.85** |
+| Hedge ratio (beta), daily→monthly | 0.87 → 0.65 (unstable) | 0.93 → 0.85 (stable) |
+| Monthly tracking-error stdev vs. monthly signal stdev | 9.6bp vs 19.8bp (~48%) | 15.1bp vs 41.7bp (~36%) |
+
+**Reading:** TF/CN5Y is a genuinely good hedge — at monthly cadence it
+explains 85% of the cash bond's return with a hedge ratio that stays close to
+0.85-0.95 across horizons, so the "right" notional to trade is stable, not
+just the average fit. TS/CN2Y is markedly weaker (monthly R²=0.64) **and** its
+hedge ratio drifts a lot across horizons (0.65 to 0.87) — meaning model risk
+(what hedge ratio to even use) stacks on top of basis risk (how well that
+ratio tracks once chosen). A view expressed via TS is close to a 50/50 bet on
+whether the futures leg captures it cleanly enough to beat today's
+floor-and-drop baseline; a view expressed via TF is much more likely to.
+
+**This is why §2 Decision 1 and §5's phasing both now treat TS and TF as two
+separate bets, not one combined hedge leg**, and why the plan's overall
+verdict (top of file) is "build TF first" rather than "build both."
+
+## 7. What this explicitly does NOT change
 
 - Cash bond holdings anywhere in the book remain long-only. No cash bond is ever
   shorted by this design — only futures carry negative exposure.
