@@ -7,28 +7,21 @@ echo AtlasNexus Daily Console Launcher
 echo ============================================================
 echo.
 
-REM Activate conda environment
-echo [1/3] Activating conda environment 'prod'...
+REM Activate standalone 'prod' env (no conda.bat needed)
+echo [1/3] Activating standalone env 'prod'...
 
-set CONDA_BAT=
-if exist "%USERPROFILE%\anaconda3\condabin\conda.bat"   set CONDA_BAT=%USERPROFILE%\anaconda3\condabin\conda.bat
-if exist "%USERPROFILE%\miniconda3\condabin\conda.bat"  set CONDA_BAT=%USERPROFILE%\miniconda3\condabin\conda.bat
-if exist "C:\ProgramData\anaconda3\condabin\conda.bat"  set CONDA_BAT=C:\ProgramData\anaconda3\condabin\conda.bat
-if exist "C:\ProgramData\miniconda3\condabin\conda.bat" set CONDA_BAT=C:\ProgramData\miniconda3\condabin\conda.bat
-if exist "D:\ProgramData\Miniconda3\condabin\conda.bat" set CONDA_BAT=D:\ProgramData\Miniconda3\condabin\conda.bat
+set PROD_ENV=D:\cmbc\.conda\envs\prod
 
-if "%CONDA_BAT%"=="" (
-    echo ERROR: Could not find conda.bat. Please check your Anaconda/Miniconda installation.
+if not exist "%PROD_ENV%\python.exe" (
+    echo ERROR: Could not find python.exe under %PROD_ENV%.
     pause
     exit /b 1
 )
 
-call "%CONDA_BAT%" activate prod >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Could not activate conda env 'prod'.
-    echo        Run: conda create -n prod python=3.13
-    pause & exit /b 1
-)
+set "PATH=%PROD_ENV%;%PROD_ENV%\Scripts;%PROD_ENV%\Library\bin;%PATH%"
+set CONDA_PREFIX=%PROD_ENV%
+set CONDA_DEFAULT_ENV=prod
+
 echo       OK
 echo.
 
