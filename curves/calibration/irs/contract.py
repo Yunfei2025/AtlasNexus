@@ -76,6 +76,10 @@ class IRSContract:
         """
         cashflow = pd.DataFrame(index=self.schedule[:-1])
         P = notional
+        # self.schedule holds plain datetime.date (see scheduleDate); callers
+        # pass valuation_date as a pandas Timestamp, so normalize once here
+        # rather than at every comparison site.
+        valuation_date = valuation_date.date() if hasattr(valuation_date, 'date') else valuation_date
 
         for i in range(len(self.schedule) - 1):
             s = self.schedule[i]

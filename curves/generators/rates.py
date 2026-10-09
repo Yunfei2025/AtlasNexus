@@ -328,7 +328,13 @@ class BondCurveGenerator:
     def save_curve_objects(self, curve_objs: Dict, dp: datetime.date, curve: Curve) -> None:
         """save curve objects"""
         try:
-            curve_objs[dp] = curve
+            # dp can be a pandas Timestamp (CurveConfig.calculation_date is
+            # built from pd.to_datetime(...).normalize() in main()) even
+            # though this dict's keys are otherwise plain datetime.date --
+            # normalize so lookups by date (e.g. CreditSpreadGenerator's
+            # prev_business_day) don't silently miss an existing entry.
+            dp_key = dp.date() if hasattr(dp, 'date') else dp
+            curve_objs[dp_key] = curve
             curve_objs = updatePKL(curve_objs, os.path.join(DIR_INPUT, f"{self.config.bond_type}-cvobj.pkl"))
             self.logger.info("save curve objects successfully")
         except Exception as e:
@@ -534,7 +540,7 @@ class BondCurveGenerator:
         return True
 
 
-def main(bond_type='TBond', date=None):
+def main(bond_type='CBond', date=None):
     print(f"🚀 Starting {bond_type} curve generation.")
     try:
         success = BondCurveGenerator.main(bond_type=bond_type, date=date)

@@ -38,25 +38,22 @@ class CurveGenerator:
 
         self.curve_data_manager.load()
 
-        if not self.curve_data_manager.has_date('r7d', prev_date):
-            start = target_date - relativedelta(months=1)
-            for ct in IRSConfig.CURVE_TYPES:
-                # Scope the window's dropna to this curve type's own tenor
-                # columns, not the full env: a stale/missing quote in an
-                # unrelated instrument elsewhere in env must not empty out
-                # this curve's window (previously used env.loc[...].dropna()
-                # with the default how='any' across ALL of env's columns,
-                # which could leave timewindow empty and make the
-                # downstream pd.concat in _extract_historical_spots raise
-                # "No objects to concatenate").
-                ct_window = curve_ts[ct].loc[start:target_date].dropna(how='all').index[-3:]
-                self._extract_historical_spots(curve_ts[ct], ct_window, ct)
+        # Always top up the persisted spot/forward cache for whatever dates
+        # in the lookback window are still missing (add_mask_* in
+        # _extract_historical_spots skips dates already cached, so this is
+        # cheap and idempotent). Gating this on `has_date(prev_date)` alone
+        # used to skip the whole backfill once ANY recent date was cached,
+        # even after a multi-day holiday gap left several dates in between
+        # un-backfilled -- leaving _generate_single_curve's `common` window
+        # empty downstream.
+        for ct in IRSConfig.CURVE_TYPES:
+            ct_window = self._lookback_window(curve_ts[ct], target_date)
+            self._extract_historical_spots(curve_ts[ct], ct_window, ct)
 
         curves = {}
-        start = target_date - relativedelta(months=1)
 
         for ct in IRSConfig.CURVE_TYPES:
-            ct_timewindow = curve_ts[ct].loc[start:target_date].dropna(how='all').index
+            ct_timewindow = self._lookback_window(curve_ts[ct], target_date)
             curves[ct] = self._generate_single_curve(
                 ct, prev_date, target_date, curve_ts[ct], ct_timewindow
             )
@@ -65,13 +62,41 @@ class CurveGenerator:
 
         return curves
 
+    @staticmethod
+    def _lookback_window(curve_ts: pd.Series, target_date: date,
+                          min_obs: int = 20) -> pd.DatetimeIndex:
+        """Last `min_obs` actual (non-NaN) observations up to target_date.
+
+        A fixed 1-calendar-month window can span a multi-day holiday
+        cluster (e.g. China's National Day Golden Week) and leave too few
+        valid trading-day rows for calAffineCov's minimum sample size. Grow
+        the calendar lookback instead of fixing it, so the window always
+        captures `min_obs` actual trading-day observations regardless of
+        how many holidays fall inside it.
+        """
+        target_date = pd.Timestamp(target_date)
+        window = relativedelta(months=1)
+        for _ in range(6):  # cap: ~6 months back is more than enough slack
+            start = target_date - window
+            idx = curve_ts.loc[start:target_date].dropna(how='all').index
+            if len(idx) >= min_obs or start <= curve_ts.index.min():
+                return idx
+            window += relativedelta(months=1)
+        return idx
+
     def _generate_single_curve(self, curve_type: str, prev_date: date,
                                target_date: date, curve_ts: pd.Series,
                                timewindow: pd.DatetimeIndex) -> IRSCurve:
         """Generate a single curve for a given curve type."""
         curve_data = self.curve_data_manager.load()
         spot_data = curve_data[curve_type]['spot']
-        common = [d for d in timewindow if d in spot_data.index]
+        # spot_data (persisted cache) is keyed by plain datetime.date (see
+        # _extract_historical_spots), while timewindow/prev_date come from
+        # curve_ts's DatetimeIndex (pandas Timestamp) -- normalize to date
+        # for the lookup, otherwise `d in spot_data.index` and `.loc[prev_date]`
+        # silently/explicitly fail to match and `common` collapses to empty.
+        window_dates = [d.date() if hasattr(d, 'date') else d for d in timewindow]
+        common = [d for d in window_dates if d in spot_data.index]
         spot_data = spot_data.loc[common]
         spot_data = self._normalize_tenor_columns(spot_data)
 
@@ -87,14 +112,16 @@ class CurveGenerator:
             columns=spot_key.columns
         )
 
+        prev_date_key = prev_date.date() if hasattr(prev_date, 'date') else prev_date
+
         curve = IRSCurve(prev_date, curve_type)
         curve.extractKeySpot(curve_ts.loc[prev_date])
         curve.interpolateCurve()
         curve.calibrate(term_data.dropna(), spot_key.dropna())
 
         df_ref = pd.Series(
-            spot_key.loc[prev_date].values,
-            index=term_data.loc[prev_date].values,
+            spot_key.loc[prev_date_key].values,
+            index=term_data.loc[prev_date_key].values,
             name='Ref Spot'
         )
         curve.extractFactors(df_ref)
@@ -103,7 +130,7 @@ class CurveGenerator:
         sr = curve.anchor['SpotRate']
         terms = self.tenor_converter.to_string(sr.index.tolist())
         fr = curve.anchor['ForwardRate']
-        self.curve_data_manager.update_curve(curve_type, prev_date, sr.values, fr.values, terms)
+        self.curve_data_manager.update_curve(curve_type, prev_date_key, sr.values, fr.values, terms)
 
         return curve
 

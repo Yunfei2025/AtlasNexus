@@ -19,7 +19,7 @@ from utils.log_window import get_logger
 logger = get_logger(__name__)
 
 # Instrument type: 'TBond', 'CBond', or 'IRS'
-btype = "IRS"
+btype = "LBond"
 # Update flags: list of strings from ['pool', 'bonds']
 update_list = []
 
@@ -28,8 +28,8 @@ from settings.general import DateConfig
 from dateutil.relativedelta import relativedelta
 end_dt = DateConfig.get_date_mappings()['dp'].date()
 start_dt = end_dt - relativedelta(months=3)
-start = '2017-01-01'#start_dt.strftime('%Y-%m-%d')
-end = '2019-01-01'#end_dt.strftime('%Y-%m-%d')
+start = '2026-06-30'#start_dt.strftime('%Y-%m-%d')
+end = '2026-09-30'#end_dt.strftime('%Y-%m-%d')
 
 # Performance settings
 processes = 4   # Number of parallel workers

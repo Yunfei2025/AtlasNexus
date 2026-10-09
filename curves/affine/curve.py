@@ -143,7 +143,7 @@ def _instantaneous_forward_from_spot(spot_rates, tenors):
 
 class Curve:
     def __init__(self,d,btype):
-        self.day = d
+        self.day = pd.Timestamp(d)
         self.type = btype
         self.gamma = GeneralConfig.GAMMA
         self.mtype = GeneralConfig.MODEL_TYPE
@@ -266,8 +266,8 @@ class Curve:
                 print('\rAffine pricing: ',b,'%.2f%% completed.'%percentage,' '*100, end='')
             row = bonds.loc[b]
             name = row['证券全称']
-            mats = row['起息日期']
-            mate = row['到期日期']
+            mats = pd.Timestamp(row['起息日期'])
+            mate = pd.Timestamp(row['到期日期'])
             freq = row['每年付息次数']
             # Use a single no-tax convention for both calibration and pricing.
             # TBond and CDB quotes are both generated directly from the affine
@@ -309,8 +309,8 @@ class Curve:
         
     def Pricing(self,bonds_quo,bonds,*args,hist=False,ytm_other=False):
         quote = pd.DataFrame(index=bonds_quo,columns=['全价','净价','收益率','剩余期限'])
-        # pricing bonds_quo with maturities between 1Y and 10Y 
-        mat = bonds['到期日期'] - self.day
+        # pricing bonds_quo with maturities between 1Y and 10Y
+        mat = pd.to_datetime(bonds['到期日期']) - self.day
         bonds['剩余期限'] = [i.days/365 for i in mat]
         schedule = {}
         total = len(bonds_quo)
@@ -321,8 +321,8 @@ class Curve:
                 print('\rConverting YTM to dirty/clean price: ',b,'%.2f%% completed.'%percentage,' '*100, end='')
             row = bonds.loc[b]
             name = row['证券全称']
-            mats = row['起息日期']
-            mate = row['到期日期']
+            mats = pd.Timestamp(row['起息日期'])
+            mate = pd.Timestamp(row['到期日期'])
             freq = row['每年付息次数']
             if ytm_other:
                 ytm  = args[0].loc[b]
@@ -361,8 +361,8 @@ class Curve:
     
     def PricingYTM(self,bond_price,bonds):
         quote = pd.DataFrame(index=bond_price.index,columns=['全价','收益率','剩余期限'])
-        # pricing bonds_quo with maturities between 1Y and 10Y 
-        mat = bonds['到期日期'] - self.day
+        # pricing bonds_quo with maturities between 1Y and 10Y
+        mat = pd.to_datetime(bonds['到期日期']) - self.day
         bonds['剩余期限'] = [i.days/365 for i in mat]
         schedule = {}
         total = bond_price.shape[0]
@@ -373,8 +373,8 @@ class Curve:
                 print('\rConverting dirty price to YTM: ',b,'%.2f%% completed.'%percentage,' '*100, end='')
             row = bonds.loc[b]
             name = row['证券全称']
-            mats = row['起息日期']
-            mate = row['到期日期']
+            mats = pd.Timestamp(row['起息日期'])
+            mate = pd.Timestamp(row['到期日期'])
             freq = row['每年付息次数']
             price  = bond_price.loc[b]
             # See affine plan F1 / item 1.1: never fabricate a synthetic freq

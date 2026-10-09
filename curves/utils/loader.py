@@ -24,11 +24,16 @@ class LegacyPickleCompatibilityError(RuntimeError):
 
 
 def _coerce_date_index(df):
-    """Normalize date-like pandas indexes to DatetimeIndex when every label parses."""
+    """Normalize date-like pandas indexes to a sorted, deduplicated DatetimeIndex when every label parses."""
     if not isinstance(df, pd.DataFrame) or df.empty:
         return df
     idx = df.index
-    if isinstance(idx, pd.MultiIndex) or isinstance(idx, pd.DatetimeIndex):
+    if isinstance(idx, pd.MultiIndex):
+        return df
+    if isinstance(idx, pd.DatetimeIndex):
+        if idx.hasnans or idx.has_duplicates or not idx.is_monotonic_increasing:
+            df = df[idx.notna()]
+            df = df[~df.index.duplicated(keep='last')].sort_index()
         return df
     try:
         parsed = pd.to_datetime(pd.Index(idx, dtype=object), errors='coerce', utc=False)
@@ -37,6 +42,8 @@ def _coerce_date_index(df):
     if parsed.notna().all() and len(parsed) == len(df):
         df = df.copy()
         df.index = pd.DatetimeIndex(parsed)
+        df = df[df.index.notna()]
+        df = df[~df.index.duplicated(keep='last')].sort_index()
     return df
 
 

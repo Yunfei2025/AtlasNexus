@@ -265,7 +265,7 @@ def main(date:  Optional[str] = None, *, backfill: bool = False,
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Generate or backfill IRS curve history')
-    parser.add_argument('--date', default='20260609', help='Target date in YYYYMMDD or YYYY-MM-DD format')
+    parser.add_argument('--date', default=None, help='Target date in YYYYMMDD or YYYY-MM-DD format (default: today)')
     parser.add_argument('--backfill', action='store_true', help='Backfill historical IRS curve-price data')
     parser.add_argument('--start-date', dest='start_date', default=None, help='Backfill start date in YYYYMMDD or YYYY-MM-DD format')
     parser.add_argument('--end-date', dest='end_date', default=None, help='Backfill end date in YYYYMMDD or YYYY-MM-DD format')

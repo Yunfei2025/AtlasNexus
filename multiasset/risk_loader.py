@@ -12,13 +12,18 @@ from multiasset.pca_analyzer import PCARiskFactorAnalyzer, DeterministicRiskFact
 def _load_macro_artifact(input_dir: str):
     macro_path = os.path.join(input_dir, 'macro-px.pkl')
     try:
-        return pd.read_pickle(macro_path)
+        macro_data = pd.read_pickle(macro_path)
     except Exception as exc:
         print(f"Warning: could not load macro data from {macro_path}: {exc}")
         return {
             "fx": pd.DataFrame(),
             "commodity": pd.DataFrame(),
         }
+    if isinstance(macro_data, dict):
+        for key, value in macro_data.items():
+            if isinstance(value, pd.DataFrame) and value.index.has_duplicates:
+                macro_data[key] = value[~value.index.duplicated(keep='last')]
+    return macro_data
 
 
 class RiskFactorLoader:
@@ -60,25 +65,25 @@ class RiskFactorLoader:
         
         macro_data = _load_macro_artifact(self.input_dir)
         risk_factors = pd.DataFrame()
-        
+
         # Interest rate factors
-        risk_factors = self._load_ir_factors(risk_factors)
+        risk_factors = self._dedup_index(self._load_ir_factors(risk_factors))
 
         # Credit spread factors (CDB/LGB/MTN/ICP vs CGB). Replaces the
         # legacy SPDL/SPSL naming (_load_sp_factors, removed) — CRDL/CRSL/
         # CRCV cover the same and a broader universe (LGB, MTN added; full
         # Curvature coverage SPDL/SPSL never had) under the current naming
         # convention.
-        risk_factors = self._load_cr_factors(risk_factors)
+        risk_factors = self._dedup_index(self._load_cr_factors(risk_factors))
 
         # FX factors
-        risk_factors = self._load_fx_factors(risk_factors, macro_data)
-        
+        risk_factors = self._dedup_index(self._load_fx_factors(risk_factors, macro_data))
+
         # Commodity factors
-        risk_factors = self._load_commodity_factors(risk_factors, macro_data)
+        risk_factors = self._dedup_index(self._load_commodity_factors(risk_factors, macro_data))
 
         # Equity index futures factors
-        risk_factors = self._load_equity_factors(risk_factors, macro_data)
+        risk_factors = self._dedup_index(self._load_equity_factors(risk_factors, macro_data))
         
         # Drop NaN values
         # risk_factors = risk_factors.dropna()
@@ -89,6 +94,18 @@ class RiskFactorLoader:
 
         self._risk_factors_cache = risk_factors
         return risk_factors
+
+    @staticmethod
+    def _dedup_index(df: pd.DataFrame) -> pd.DataFrame:
+        """Drop duplicate index labels, keeping the last occurrence.
+
+        Source pickles (per-country curve/credit data) can carry duplicate
+        dates; a plain column assignment unions them into risk_factors.index,
+        which later breaks any reindex-based assignment (e.g. FX columns).
+        """
+        if df.index.has_duplicates:
+            df = df[~df.index.duplicated(keep='last')]
+        return df
 
     def last_date(self) -> Optional[pd.Timestamp]:
         """Return the last date present in the loaded risk-factor data, or None."""

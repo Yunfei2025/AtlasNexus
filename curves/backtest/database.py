@@ -11,6 +11,7 @@ import pickle
 from settings.paths import DIR_INPUT, DIR_DATA
 from curves.utils.retrieve import retrieveWindBondTS, retrieveWindBacktestPool
 from curves.utils.file import updatePKL
+from curves.utils.loader import _coerce_date_index
 
 def loadBondDataPKL(btype,prange,update=False):
     try:
@@ -34,7 +35,11 @@ def loadBondDataPKL(btype,prange,update=False):
             print(f"Warning: Error loading {btype}-px.pkl with pd.read_pickle: {e}")
             print("Falling back to pickle.load...")
             with open(os.path.join(DIR_DATA,btype+'-px.pkl'), 'rb') as file:
-                database_bond = pickle.load(file)    
+                database_bond = pickle.load(file)
+    if isinstance(database_bond, dict):
+        for key, frame in database_bond.items():
+            if isinstance(frame, pd.DataFrame):
+                database_bond[key] = _coerce_date_index(frame)
     return database_bond
 
 def loadIRSPKL(update=False):
@@ -52,6 +57,13 @@ def loadIRSPKL(update=False):
         from curves.utils.retrieve import retrieveCNBDTS
         retrieveCNBDTS()
     cvdata = pd.read_pickle(os.path.join(DIR_INPUT,'database-px.pkl'))
+    # database-px.pkl can carry NaT/duplicate/unsorted index rows (see the
+    # same fix applied to loadCNBDTS) -- this direct read bypassed that
+    # normalization, causing "cannot get right slice bound" errors on a
+    # later .loc[start:end] slice.
+    for key, frame in cvdata.items():
+        if isinstance(frame, pd.DataFrame):
+            cvdata[key] = _coerce_date_index(frame)
     return cvdata
 
 

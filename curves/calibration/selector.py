@@ -953,6 +953,10 @@ def compute_spot_term_panels(
 
 def update_price(df_price, quote0, sen0, bonds, d0):
     """Update bond pricing data with new quotes and sensitivities."""
+    d0 = pd.Timestamp(d0)
+    for k in df_price.keys():
+        if not isinstance(df_price[k].index, pd.DatetimeIndex):
+            df_price[k].index = pd.to_datetime(df_price[k].index)
     bonds_ = quote0.index
     df_price['ytm_act'].loc[d0, bonds.index] = bonds.loc[bonds.index, '收盘收益率(%)']
     df_price['ytm_quo'].loc[d0, bonds_] = quote0.loc[bonds_, '收益率']

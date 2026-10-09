@@ -248,9 +248,10 @@ def updateInstrumentDef(asof=None, on_demand=False):
             else:
                 from curves.utils.generator_utils import get_mtime_date
                 def_file = DIR_INPUT / (btype + "-InstrumentInfo.pkl")
-                interval = get_mtime_date(def_file) - dp.date()
+                mtime = get_mtime_date(def_file)
+                interval = (pd.Timestamp(dp) - mtime) if mtime is not None else None
 
-                if on_demand or interval.days == 7: # always update on demand, otherwise every 7 days
+                if on_demand or interval is None or interval.days >= 7: # always update on demand, otherwise every 7 days
                     pool = updateInstrumentPool(btype, dps, on_demand=on_demand)
                     bonds = pool.index
                 else:

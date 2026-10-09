@@ -175,7 +175,8 @@ def getSpot(td, curve, fixing, adj=False):
     anchor_spot = anchor_spot.sort_index()
     anchor_spot = anchor_spot[anchor_spot.index <= 0.3]
     combined_spot = pd.concat([anchor_spot, spot_curve], axis=0).sort_index()
-    terms = [(day - td).days / GeneralConfig.YN for day in workdays]
+    td_date = td.date() if hasattr(td, 'date') else td
+    terms = [(day - td_date).days / GeneralConfig.YN for day in workdays]
     combined_spot.loc[terms[-1]] = combined_spot.iloc[-1]
     spot_values = interpolate_with_extrapolation(combined_spot.index, combined_spot.values, terms)
     result = pd.Series(spot_values, index=workdays)
@@ -209,12 +210,20 @@ def curves2Fixings(d, env_ts, curves, adj=False):
         anchor_fixing = anchor_fixing[anchor_fixing.index < 0.25]
         forward_curve = curves[ct].adjcurves['ForwardRate'] if adj else curves[ct].curves['ForwardRate']
         combined_fixing = pd.concat([anchor_fixing, forward_curve], axis=0).sort_index().dropna()
-        terms = [(day - d).days / GeneralConfig.YN for day in workdays]
+        d_date = d.date() if hasattr(d, 'date') else d
+        terms = [(day - d_date).days / GeneralConfig.YN for day in workdays]
         combined_fixing.loc[terms[-1]] = combined_fixing.iloc[-1]
         fixing_values = interpolate_with_extrapolation(combined_fixing.index, combined_fixing.values, terms)
         fixing_fwd_ts[ct] = pd.Series(fixing_values, index=workdays)
         fixing_fwd_ts[ct].iloc[0] = fixings['close'][ct]
         spot_ts[ct] = getSpot(d, curves[ct], fixings['close'][ct], adj)
-        historical_days = [day for day in fixing_set_ts[ct].index if day not in fixing_fwd_ts[ct].index]
-        fixing_ts[ct] = pd.concat([fixing_set_ts[ct].loc[historical_days], fixing_fwd_ts[ct]], axis=0)
+        # fixing_set_ts (historical, from env_ts) is Timestamp-indexed while
+        # fixing_fwd_ts (projected, from workdays) is date-indexed -- normalize
+        # both to date for the membership check and the concat, otherwise
+        # `day not in fixing_fwd_ts[ct].index` never matches and the combined
+        # series ends up with a mixed-type, non-monotonic index.
+        historical_series = fixing_set_ts[ct].copy()
+        historical_series.index = [day.date() if hasattr(day, 'date') else day for day in historical_series.index]
+        historical_days = [day for day in historical_series.index if day not in fixing_fwd_ts[ct].index]
+        fixing_ts[ct] = pd.concat([historical_series.loc[historical_days], fixing_fwd_ts[ct]], axis=0).sort_index()
     return {'fixing': fixing_ts, 'spot': spot_ts, 'date': d}

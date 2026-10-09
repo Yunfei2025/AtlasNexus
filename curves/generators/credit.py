@@ -90,9 +90,13 @@ class CreditSpreadGenerator:
 
     def _persist(self, quote0: pd.DataFrame, sen0: pd.DataFrame) -> None:
         obond_px = loadCurvePxTS(self.object_type)
+        # update_price() already normalizes each frame's index to a sorted
+        # DatetimeIndex -- rebuilding it as a plain list here used to
+        # downgrade it back to object dtype (list of Timestamps), which
+        # made every later direct .loc[:date] slice elsewhere (e.g.
+        # StatGenerator.compute_other_bond_spreads) compare a Timestamp
+        # against a non-DatetimeIndex and intermittently raise/misbehave.
         obond_px = update_price(obond_px, quote0, sen0, self._env['Def'], self.prev_business_day)
-        for k in obond_px.keys():
-            obond_px[k].index = [d for d in obond_px[k].index]
         updatePKL(obond_px, os.path.join(DIR_INPUT, f'{self.object_type}-cvpx.pkl'))
 
     def run(self) -> None:
@@ -131,7 +135,7 @@ class CreditSpreadGenerator:
         instance = cls(bond_type, num_cores, date=date)
         instance.run()
 
-def main(bond_type = 'LBond', date="20260604"):#None):
+def main(bond_type = 'LBond', date=None):
     print(f"🚀 Starting {bond_type} curve generation.")
     try:
         CreditSpreadGenerator.main(bond_type=bond_type, date=date)

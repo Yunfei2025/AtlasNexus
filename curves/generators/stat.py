@@ -14,7 +14,7 @@ from typing import Optional, Dict, Tuple
 PATH = pathlib.Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PATH))
 
-from curves.utils.loader import loadInstrumentDefinition, loadCNBDTS, loadRefData
+from curves.utils.loader import loadInstrumentDefinition, loadCNBDTS, loadRefData, _coerce_date_index
 import curves.calibration.stat as st
 from curves.calibration import irscurves as irs
 from curves.utils.file import updatePKL, loadPKL
@@ -182,8 +182,13 @@ class StatGenerator:
 
             curve_objs = updatePKL({}, os.path.join(DIR_INPUT, f'{btype}-cvobj.pkl'))
             bond_px = updatePKL({}, os.path.join(DIR_INPUT, f'{btype}-cvpx.pkl'))
+            bond_px = {k: (_coerce_date_index(v) if isinstance(v, pd.DataFrame) else v) for k, v in bond_px.items()}
             ref = loadRefData(btype)
-            curve = curve_objs[self.dp]
+            # curve_objs is keyed by plain datetime.date (see
+            # BondCurveGenerator.save_curve_objects), while self.dp is a
+            # pandas Timestamp -- normalize for the lookup.
+            dp_key = self.dp.date() if hasattr(self.dp, 'date') else self.dp
+            curve = curve_objs[dp_key]
             # Use full history (not self.start:self.da) so Spread/BondCarry retain
             # all available history for seasonal charting; statAnalysis_BC/_BS
             # internally restrict OU/z-score calibration to a rolling window.
@@ -266,8 +271,12 @@ class StatGenerator:
                 curve_data['spot'] = pd.DataFrame()
             if 'forward' not in curve_data or not isinstance(curve_data.get('forward'), pd.DataFrame):
                 curve_data['forward'] = pd.DataFrame()
-            curve_data['spot'].loc[self.dp, fitted['SpotRate'].index] = fitted['SpotRate'].values
-            curve_data['forward'].loc[self.dp, fitted['ForwardRate'].index] = fitted['ForwardRate'].values
+            # curve_data['spot']/['forward'] on disk may carry a plain-date
+            # or Timestamp index depending on which generator last wrote
+            # them -- use the same dp_key (date) so this write doesn't
+            # introduce yet another mixed-type index entry.
+            curve_data['spot'].loc[dp_key, fitted['SpotRate'].index] = fitted['SpotRate'].values
+            curve_data['forward'].loc[dp_key, fitted['ForwardRate'].index] = fitted['ForwardRate'].values
             updatePKL(curve_data, curve_data_path)
 
             # Bond groups by tenor buckets
@@ -426,6 +435,7 @@ class StatGenerator:
         for obtype in BondConfig.INCLUDE_FILTERS.keys():
             env_obond = loadInstrumentDefinition(obtype)
             obond_px = updatePKL({}, os.path.join(DIR_INPUT, f'{obtype}-cvpx.pkl'))
+            obond_px = {k: (_coerce_date_index(v) if isinstance(v, pd.DataFrame) else v) for k, v in obond_px.items()}
 
             # Use full history (not self.start:self.da) so Spread retains all
             # available history for seasonal charting; statAnalysis_BC internally

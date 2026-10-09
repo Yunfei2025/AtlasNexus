@@ -18,6 +18,8 @@ import pathlib
 import sys
 import traceback
 
+import pandas as pd
+
 # Minimal bootstrap for direct execution: add project root so absolute
 # package imports work when running `python curves\initialise.py`.
 if __name__ == "__main__":
@@ -52,6 +54,7 @@ def _initialise_marker_path(asof: datetime.date) -> pathlib.Path:
 
 
 def _daily_inputs_ready(asof: datetime.date) -> tuple[bool, list[str]]:
+    asof_ts = pd.Timestamp(asof)
     pending: list[str] = []
     for label, path in _REQUIRED_DAILY_INPUTS.items():
         mtime = get_mtime_date(path)
@@ -60,7 +63,7 @@ def _daily_inputs_ready(asof: datetime.date) -> tuple[bool, list[str]]:
             continue
 
         # Daily inputs (bond_database, futures_database) must be from today
-        if mtime < asof:
+        if mtime < asof_ts:
             pending.append(f"{label} ({path.name}: dated {mtime.isoformat()})")
     return (len(pending) == 0, pending)
 
@@ -86,7 +89,8 @@ def _generation_completed_today(asof: datetime.date) -> bool:
 
 
 def _completion_artifact_ready(asof: datetime.date) -> bool:
-    return get_mtime_date(_COMPLETION_ARTIFACT) == asof
+    mtime = get_mtime_date(_COMPLETION_ARTIFACT)
+    return mtime is not None and mtime == pd.Timestamp(asof)
 
 
 def _write_completion_marker(
@@ -200,7 +204,7 @@ def main(asof: datetime.date | None = None) -> str:
                 spec = importlib.import_module(f"curves.generators.{module_name}")
                 generator_class = getattr(spec, generator_name)
 
-                if generator_name == "BondCurveGenerator":
+                if generator_name == "BondCurveGenerator": 
                     for bond_type in ['TBond', 'CBond']:
                         print(f"INFO: Generating {bond_type} curve...")
                         generator_class.main(bond_type=bond_type, date=asof_str)
