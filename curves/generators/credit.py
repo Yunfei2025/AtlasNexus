@@ -30,14 +30,14 @@ from settings.paths import DIR_INPUT
 from settings.general import GeneralConfig, DateConfig
 
 
-def _parse_date(date_value=None) -> datetime.date:
+def _parse_date(date_value=None) -> pd.Timestamp:
     if date_value is None:
-        return DateConfig.get_date_mappings()['d'].date()
+        return pd.to_datetime(DateConfig.get_date_mappings()['d']).normalize()
     if isinstance(date_value, datetime.datetime):
-        return date_value.date()
+        return pd.to_datetime(date_value).normalize()
     if isinstance(date_value, datetime.date):
-        return date_value
-    return datetime.datetime.strptime(str(date_value), "%Y%m%d").date()
+        return pd.to_datetime(date_value).normalize()
+    return pd.to_datetime(datetime.datetime.strptime(str(date_value), "%Y%m%d")).normalize()
 
 class CreditSpreadGenerator:
     """Compute and persist daily curve pricing for a given bond type."""

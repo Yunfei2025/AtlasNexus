@@ -8,6 +8,7 @@ creating mock generators, and managing parallel execution.
 """
 
 import datetime
+import pandas as pd
 import pathlib
 import sys
 import threading
@@ -20,10 +21,10 @@ def get_project_root() -> pathlib.Path:
     return pathlib.Path(__file__).parent.parent.parent
 
 def get_mtime_date(path_obj: pathlib.Path):
-    """Get modification date of a file, return None if file doesn't exist."""
+    """Get modification date of a file as a pandas Timestamp, return None if file doesn't exist."""
     try:
         p = pathlib.Path(path_obj)
-        return datetime.datetime.fromtimestamp(p.stat().st_mtime).date()
+        return pd.to_datetime(datetime.datetime.fromtimestamp(p.stat().st_mtime)).normalize()
     except FileNotFoundError:
         return None
 

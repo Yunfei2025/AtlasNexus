@@ -51,8 +51,9 @@ def _normalize_legacy_repo_frame(frame):
 
 class IRSRefresher:
 	def __init__(self, skip_excel_update: bool = True):
-		self.today_date = DateConfig.get_date_mappings()['d'].date()
-		self.previous_bday = (self.today_date - pd.tseries.offsets.BDay(1)).date()
+		# Use pandas Timestamps for date arithmetic and indexing
+		self.today_date = pd.to_datetime(DateConfig.get_date_mappings()['d']).normalize()
+		self.previous_bday = (self.today_date - pd.tseries.offsets.BDay(1)).normalize()
 		self.skip_excel_update = skip_excel_update
 		self.environment = None
 		self.environment_time_series = None

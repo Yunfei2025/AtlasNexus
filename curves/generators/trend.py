@@ -25,7 +25,11 @@ from curves.utils.file import updatePKL
 
 class TrendGenerator:
     def __init__(self, as_of_date=None):
-        self.as_of_date = as_of_date or DateConfig.get_date_mappings()['d'].date()
+        # Keep as pandas Timestamp normalized to midnight for safe indexing
+        if as_of_date is not None:
+            self.as_of_date = pd.to_datetime(as_of_date).normalize()
+        else:
+            self.as_of_date = pd.to_datetime(DateConfig.get_date_mappings()['d']).normalize()
         self.start_date = self.as_of_date - relativedelta(years=1)
         self.dir_input = pathlib.Path(DIR_INPUT)
         self.dir_data = pathlib.Path(DIR_DATA)
@@ -135,7 +139,9 @@ class TrendGenerator:
                         pos_ = positions_df.loc[inst, b].replace('--', 0)
                         pos_ = pos_.astype(float).to_frame().T
                         pos_.columns = [f"{b}:{t}" for t in InstitutionConfig.TERM_BUCKETS]
-                        positions[inst].loc[as_of, pos_.columns] = pos_.values
+                        # Use Timestamp index labels to match self.as_of_date
+                        asof_ts = pd.to_datetime(as_of).normalize()
+                        positions[inst].loc[asof_ts, pos_.columns] = pos_.values
                     except Exception:
                         print(f"WARNING: TrendGenerator: failed to process inst={inst} bond={b} in file {fname}", flush=True)
                         print(traceback.format_exc(), flush=True)

@@ -222,6 +222,17 @@ def test_splice_removes_roll_step_from_vol_but_keeps_history():
     assert len(spliced) == len(df)           # full history retained
 
 
+def test_date_like_index_normalizes_to_timestamp_index():
+    import datetime as _dt
+    from curves.utils.loader import _coerce_date_index
+
+    df = pd.DataFrame({'v': [1.0, 2.0]}, index=[_dt.date(2026, 1, 1), _dt.date(2026, 1, 2)])
+    converted = _coerce_date_index(df)
+
+    assert isinstance(converted.index, pd.DatetimeIndex)
+    assert converted.loc[pd.Timestamp('2026-01-01'):pd.Timestamp('2026-01-02')].shape[0] == 2
+
+
 def test_splice_preserves_end_level():
     """Downstream 'close'/'mean' comparisons are on the raw scale, so the
     spliced series must end at the same level as the input."""

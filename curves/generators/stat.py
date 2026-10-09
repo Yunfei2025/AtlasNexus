@@ -88,11 +88,12 @@ class StatGenerator:
     def __init__(self, asof: Optional[datetime.date] = None) -> None:
         # Dates and windows — anchored to asof to prevent lookahead bias
         dates = DateConfig.get_date_mappings(asof=asof)
-        self.d: datetime.date = dates['d'].date()
-        self.dp: datetime.date = dates['dp'].date()
-        self.start: datetime.date = (self.d - relativedelta(months=GeneralConfig.STAT_WINDOW))
-        self.start1y: datetime.date = (self.d - relativedelta(years=1))
-        self.da: datetime.date = self.d  # upper bound for all historical slices
+        # Keep as pandas Timestamps normalized to midnight for consistent comparisons
+        self.d = pd.to_datetime(dates['d']).normalize()
+        self.dp = pd.to_datetime(dates['dp']).normalize()
+        self.start = self.d - relativedelta(months=GeneralConfig.STAT_WINDOW)
+        self.start1y = self.d - relativedelta(years=1)
+        self.da = self.d  # upper bound for all historical slices
 
         # Global env time series — re-fetch from Wind if the IRS data is stale.
         # retrieveCNBDTS may have run before Wind published the day-end fixings;
@@ -100,7 +101,7 @@ class StatGenerator:
         self.env_ts: dict = loadCNBDTS()
         if asof is None:
             swap_ts = self.env_ts.get('SwapTS')
-            swap_last = pd.Timestamp(swap_ts.index[-1]).date() if (swap_ts is not None and not swap_ts.empty) else None
+            swap_last = pd.Timestamp(swap_ts.index[-1]).normalize() if (swap_ts is not None and not swap_ts.empty) else None
             if swap_last is not None and swap_last < self.dp:
                 print(f"INFO: database-px.pkl IRS data ends {swap_last}, expected {self.dp} — re-fetching from Wind...")
                 try:
@@ -108,7 +109,7 @@ class StatGenerator:
                     retrieveCNBDTS()
                     self.env_ts = loadCNBDTS()
                     swap_ts2 = self.env_ts.get('SwapTS')
-                    new_last = pd.Timestamp(swap_ts2.index[-1]).date() if (swap_ts2 is not None and not swap_ts2.empty) else swap_last
+                    new_last = pd.Timestamp(swap_ts2.index[-1]).normalize() if (swap_ts2 is not None and not swap_ts2.empty) else swap_last
                     print(f"INFO: after re-fetch, IRS data ends {new_last}")
                 except Exception as exc:
                     print(f"WARN: Could not re-fetch IRS data from Wind: {exc}")

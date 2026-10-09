@@ -46,16 +46,19 @@ def retrieveFXIRCurves():
         from multiasset.utils import updatePKL
         from WindPy import w
         w.start()
-        _dates_strs = DateConfig.get_date_mappings()
-        _dates_strs = DateConfig.get_date_strings()
-        dps = _dates_strs['d7d']
-        ds = _dates_strs['dp']
+        _dates = DateConfig.get_date_mappings()
+        _date_strs = DateConfig.get_date_strings()
+        dps = pd.Timestamp(_dates['d7d']).strftime('%Y%m%d')
+        ds = pd.Timestamp(_dates['dp']).strftime('%Y%m%d')
         curves_ts = {}
         for country, codes in ticker_dict.items():
             a = ",".join(codes)
-            data = w.edb(a, dps, ds,"Fill=Previous",usedf=True)[1]
+            data = w.edb(a, dps, ds, "Fill=Previous", usedf=True)[1]
             df = pd.DataFrame(data, columns=codes)
+            parsed = pd.to_datetime(pd.Index(df.index, dtype=object), errors='coerce', utc=False)
+            if parsed.notna().all():
+                df.index = pd.DatetimeIndex(parsed)
             curves_ts[country] = df
-            curves_ts[country].columns = [ country+t for t in tenorlist ]
+            curves_ts[country].columns = [country + t for t in tenorlist]
         # Write single artifact with regenerated data
         curves_ts = updatePKL(curves_ts, file_path)

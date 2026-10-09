@@ -23,6 +23,23 @@ class LegacyPickleCompatibilityError(RuntimeError):
     pass
 
 
+def _coerce_date_index(df):
+    """Normalize date-like pandas indexes to DatetimeIndex when every label parses."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    idx = df.index
+    if isinstance(idx, pd.MultiIndex) or isinstance(idx, pd.DatetimeIndex):
+        return df
+    try:
+        parsed = pd.to_datetime(pd.Index(idx, dtype=object), errors='coerce', utc=False)
+    except Exception:
+        return df
+    if parsed.notna().all() and len(parsed) == len(df):
+        df = df.copy()
+        df.index = pd.DatetimeIndex(parsed)
+    return df
+
+
 def _read_pickle_compat(file_path, label=None, *, allow_pickle_fallback=False):
     import warnings as _warnings
     with _warnings.catch_warnings():
@@ -76,19 +93,15 @@ def loadCNBDTS():
             'Factors': empty_frame,
         }
     env = {}
-    env['SwapTS'] = ts['IRS']
-    env['CGB'] = ts['CGB']
-    env['CDB'] = ts['CDB']
-    env['ICP'] = ts.get('ICP', pd.DataFrame())
-    env['LGB'] = ts.get('LGB', pd.DataFrame())  # local government bonds
-    env['MTN'] = ts.get('MTN', pd.DataFrame())  # medium-term notes
-    env['SOFR'] = ts['sofr']
-    env['FX'] = ts['fx']
-    env['FXSwap'] = ts['fxswap']
+    for key in ['IRS', 'CGB', 'CDB', 'ICP', 'LGB', 'MTN', 'sofr', 'fx', 'fxswap']:
+        frame = ts.get(key, pd.DataFrame()) if key not in {'IRS', 'CGB', 'CDB'} else ts[key]
+        env[key if key not in {'IRS', 'CGB', 'CDB', 'sofr', 'fx', 'fxswap'} else {
+            'IRS': 'SwapTS', 'CGB': 'CGB', 'CDB': 'CDB', 'sofr': 'SOFR', 'fx': 'FX', 'fxswap': 'FXSwap'
+        }[key]] = _coerce_date_index(frame)
     file_path = os.path.join(DIR_INPUT, 'TBond-cvref.pkl')
     # Direct load to avoid unnecessary rewrite
     ref = _read_pickle_compat(file_path)
-    env['Factors'] = ref['Factors']
+    env['Factors'] = _coerce_date_index(ref['Factors'])
     return env
 
 def loadInstrumentDefinition(btype):

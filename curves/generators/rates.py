@@ -407,8 +407,18 @@ class BondCurveGenerator:
                     return df.loc[start_date:end_date]
                 except (TypeError, KeyError):
                     df_copy = df.copy()
-                    df_copy.index = [idx.date() if hasattr(idx, 'date') else idx for idx in df_copy.index]
-                    return df_copy.loc[start_date:end_date]
+                    # Normalize index to pandas Timestamps to enable homogeneous comparisons
+                    try:
+                        df_copy.index = pd.to_datetime(df_copy.index).normalize()
+                        start_ts = pd.to_datetime(start_date).normalize()
+                        end_ts = pd.to_datetime(end_date).normalize()
+                        return df_copy.loc[start_ts:end_ts]
+                    except Exception:
+                        # Last-resort: fall back to python.date slicing if necessary
+                        df_copy.index = [idx.date() if hasattr(idx, 'date') else idx for idx in df_copy.index]
+                        start_d = start_date.date() if hasattr(start_date, 'date') else start_date
+                        end_d = end_date.date() if hasattr(end_date, 'date') else end_date
+                        return df_copy.loc[start_d:end_d]
 
             # Drop reference-bucket columns whose latest TTM is outside
             # [FIT_MIN_TTM, FIT_MAX_TTM].  Near-maturity bonds (< FIT_MIN_TTM)
@@ -499,12 +509,14 @@ class BondCurveGenerator:
             # create configuration
             date_mappings = _pricing_date_mappings(date)
             d = date_mappings['d']
-            start = d.date() - relativedelta(days=7)
-            
+            # Use pandas Timestamps normalized to midnight for calculation_date
+            d_ts = pd.to_datetime(d).normalize()
+            start_ts = (d_ts - pd.Timedelta(days=7)).normalize()
+
             config = CurveConfig(
                 bond_type=bond_type,
-                calculation_date=d.date(),
-                start_date=start  # start is already a date object
+                calculation_date=d_ts,
+                start_date=start_ts
             )
             
             # create generator and run

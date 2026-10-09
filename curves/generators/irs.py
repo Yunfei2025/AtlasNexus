@@ -58,8 +58,9 @@ class IRSGenerator:
     def __init__(self, btype: str = 'IRS', asof: Optional[date] = None) -> None:
         self.btype = btype
         dates = DateConfig.get_date_mappings(asof=asof)
-        self.trade_date = dates['d'].date()
-        self.pricing_date = dates['dp'].date()
+        # Use pandas Timestamps normalized to midnight
+        self.trade_date = pd.to_datetime(dates['d']).normalize()
+        self.pricing_date = pd.to_datetime(dates['dp']).normalize()
         self.environment = None
         self.environment_ts = None
         self.curves = {}
@@ -72,7 +73,7 @@ class IRSGenerator:
         swap_ts = _normalize_legacy_repo_frame(loadCNBDTS()['SwapTS'])
         # If the cached data doesn't reach pricing_date, re-fetch from Wind so
         # evaluate_contracts can do a .loc[pricing_date] lookup without a KeyError.
-        swap_last = pd.Timestamp(swap_ts.index[-1]).date() if (swap_ts is not None and not swap_ts.empty) else None
+        swap_last = pd.Timestamp(swap_ts.index[-1]).normalize() if (swap_ts is not None and not swap_ts.empty) else None
         if swap_last is not None and swap_last < self.pricing_date:
             print(f"INFO: database-px.pkl IRS data ends {swap_last}, need {self.pricing_date} — re-fetching from Wind...")
             try:
@@ -88,8 +89,8 @@ class IRSGenerator:
     def _set_asof(self, asof: date) -> None:
         """Set the trading and pricing dates for a specific historical day."""
         dates = DateConfig.get_date_mappings(asof=asof)
-        self.trade_date = dates['d'].date()
-        self.pricing_date = dates['dp'].date()
+        self.trade_date = pd.to_datetime(dates['d']).normalize()
+        self.pricing_date = pd.to_datetime(dates['dp']).normalize()
 
     def backfill_history(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> None:
         """Rebuild IRS curve-price history across a historical date range.

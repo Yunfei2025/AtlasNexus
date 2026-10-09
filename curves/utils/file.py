@@ -276,6 +276,15 @@ def updatePKL(dictn, file_path, rewrite=False):
                     combined = new_df.combine_first(target_df)
                     if not combined.index.is_unique:
                         combined = combined[~combined.index.duplicated(keep='last')]
+                    # Normalize mixed-type indexes (str vs datetime.date) to a
+                    # homogeneous DatetimeIndex when possible so sort_index()
+                    # does not raise TypeError comparing strings with dates.
+                    try:
+                        parsed_idx = pd.to_datetime(pd.Index(combined.index), errors='coerce', utc=False)
+                        if parsed_idx.notna().any():
+                            combined.index = pd.DatetimeIndex(parsed_idx)
+                    except Exception:
+                        pass
                     combined = combined.sort_index()
                     if ffill:
                         combined = combined.ffill()
@@ -293,6 +302,13 @@ def updatePKL(dictn, file_path, rewrite=False):
                     combined = new_ser.combine_first(target_ser)
                     if not combined.index.is_unique:
                         combined = combined[~combined.index.duplicated(keep='last')]
+                    # Normalize mixed index types to DatetimeIndex when possible
+                    try:
+                        parsed_idx = pd.to_datetime(pd.Index(combined.index), errors='coerce', utc=False)
+                        if parsed_idx.notna().any():
+                            combined.index = pd.DatetimeIndex(parsed_idx)
+                    except Exception:
+                        pass
                     combined = combined.sort_index().dropna(axis=0, how="all")
                     return combined
 

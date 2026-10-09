@@ -293,7 +293,8 @@ class RefBondSelector:
 
         # Determine dates to process
         if daily:
-            dates_to_process = [DateConfig.get_date_mappings()['dp'].date()]
+            # Use pandas Timestamp for consistency with DatetimeIndex in price series
+            dates_to_process = [pd.to_datetime(DateConfig.get_date_mappings()['dp']).normalize()]
         else:
             px_file = os.path.join(DIR_DATA, f'{bond_type}-px.pkl')
             datelist = loadPKL(px_file)['Close'].index

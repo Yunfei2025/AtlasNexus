@@ -19,7 +19,7 @@ from curves.calibration.irs.contract import IRSContract
 
 def evalueContract(di, quote_rt, fwddata, pshift):
     """Evaluate IRS contracts and compute carry/roll/carry-roll metrics."""
-    d = DateConfig.get_date_mappings()['d'].date()
+    d = pd.to_datetime(DateConfig.get_date_mappings()['d']).normalize()
     fixing_ts, spot_ts, fwd_date = fwddata['fixing'], fwddata['spot'], fwddata['date']
     # spot_ts is built from the smooth affine spot curve (see getSpot in fixings.py).
     # Linear interpolation between adjacent daily points of an already-smooth

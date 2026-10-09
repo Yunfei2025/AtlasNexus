@@ -145,10 +145,18 @@ class BondCurveRefresher:
         # ensure 剩余期限 exists or derive it
         if '剩余期限' not in self.env['Def'].columns:
             if '到期日期' in self.env['Def'].columns:
-                # Convert curve.day to Timestamp to match the 到期日期 column type
-                curve_day_ts = pd.Timestamp(self.curve.day).date()
+                # Convert curve.day to a pandas Timestamp so arithmetic with
+                # `到期日期` (which is typically a DatetimeIndex/Series) is
+                # performed between compatible types and does not raise.
+                curve_day_ts = pd.Timestamp(self.curve.day)
                 mat = self.env['Def']['到期日期'] - curve_day_ts
-                self.env['Def']['剩余期限'] = [ d.days / 365 for d in mat ]
+                # `mat` may be a Series of Timedelta-like objects; convert to
+                # days in a robust way.
+                try:
+                    days = mat.dt.days if hasattr(mat, 'dt') else [int(d.days) for d in mat]
+                except Exception:
+                    days = [int(getattr(d, 'days', d // pd.Timedelta(days=1))) for d in mat]
+                self.env['Def']['剩余期限'] = [float(d) / 365.0 for d in days]
         filt = (self.env['Def']['剩余期限'] > self.min_maturity) & (self.env['Def']['剩余期限'] < self.max_maturity)
         bonds = self.env['Def'][filt].index
 

@@ -137,7 +137,7 @@ def px2Fixings(td):
 
 def refIRSCurves(env, curves, irs_ref, fallback_quotes=None):
     """Refresh IRS curves with real-time data."""
-    d = DateConfig.get_date_mappings()['d'].date()
+    d = pd.to_datetime(DateConfig.get_date_mappings()['d']).normalize()
     curve_instruments = {
         ct: get_swap_mid_quotes(env['SwapRT'], irs_ref[ct], fallback_quotes=fallback_quotes)
         for ct in IRSConfig.CURVE_TYPES

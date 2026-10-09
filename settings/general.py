@@ -5,6 +5,7 @@ General application configuration, including dates and app constants.
 """
 import datetime
 from datetime import date
+import pandas as pd
 from dateutil.relativedelta import relativedelta
 from typing import Optional
 from curves.utils.cn_calendar import is_cn_workday, is_cn_holiday, get_cn_holiday_detail
@@ -65,6 +66,12 @@ class DateConfig:
             d -= datetime.timedelta(days=1)
         return d
 
+    @staticmethod
+    def _as_timestamp(value):
+        if value is None:
+            return None
+        return pd.Timestamp(value).normalize()
+
     @classmethod
     def get_date_mappings(cls, asof: Optional[date] = None):
         """Return date mappings anchored to *asof* (defaults to today).
@@ -78,16 +85,19 @@ class DateConfig:
         else:
             today = datetime.datetime.combine(asof, datetime.time.min)
         d_prev = cls.prev_cn_workday(today.date() - datetime.timedelta(days=1))
+        # Return pandas Timestamps normalized to midnight for consistency.
+        # This avoids mixed datetime.date / Timestamp comparisons in loaders,
+        # generators, and retrievers when externally-sourced frames are sliced.
         return {
-            'd': today,
-            'dp': datetime.datetime.combine(d_prev, datetime.time.min),
-            'd2d': today - relativedelta(days=2),
-            'd7d': today - relativedelta(days=7),
-            'd1m': today - relativedelta(months=1),
-            'd3m': today - relativedelta(months=3),
-            'd6m': today - relativedelta(months=6),
-            'd1y': today - relativedelta(years=1),
-            'd10y': today - relativedelta(years=10)
+            'd': cls._as_timestamp(today),
+            'dp': cls._as_timestamp(datetime.datetime.combine(d_prev, datetime.time.min)),
+            'd2d': cls._as_timestamp(today - relativedelta(days=2)),
+            'd7d': cls._as_timestamp(today - relativedelta(days=7)),
+            'd1m': cls._as_timestamp(today - relativedelta(months=1)),
+            'd3m': cls._as_timestamp(today - relativedelta(months=3)),
+            'd6m': cls._as_timestamp(today - relativedelta(months=6)),
+            'd1y': cls._as_timestamp(today - relativedelta(years=1)),
+            'd10y': cls._as_timestamp(today - relativedelta(years=10)),
         }
 
     @classmethod

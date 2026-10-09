@@ -1,5 +1,6 @@
 import os
 import datetime as dt
+import pandas as pd
 from settings.paths import DIR_INPUT
 from settings.general import DateConfig, GeneralConfig
 from data.providers.retrieve import _wsd
@@ -56,8 +57,8 @@ def retrieveMarcoPx(cfg=None):
     print("Updating macroeconomic time series...")
     from factors.config import MACRO_SYMBOLS
 
-    starts = _date_strs['d7d'] if GeneralConfig.DSHIFT == 1 else _date_strs['d1m']
-    dps = _date_strs['dp']
+    starts = pd.Timestamp(_dates['d7d']).strftime('%Y%m%d') if GeneralConfig.DSHIFT == 1 else pd.Timestamp(_dates['d1m']).strftime('%Y%m%d')
+    dps = pd.Timestamp(_dates['dp']).strftime('%Y%m%d')
     macro_ts = {}
     for macro_name, symbol in MACRO_SYMBOLS.items():
         macro_ts[macro_name] = _wsd(symbol, "close", starts, dps)

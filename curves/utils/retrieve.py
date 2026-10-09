@@ -63,8 +63,10 @@ def filterInstrument(bond_info,btype,hist=False):
     bond_info = bond_info[~bond_info['FULLNAME'].str.contains('|'.join(BondConfig.EXCLUDE_KEYWORDS))]
     bond_info = bond_info[~bond_info['INTERESTTYPE'].str.contains('浮动')]
     bond_info['INTERESTFREQUENCY'] = bond_info['INTERESTFREQUENCY'].fillna(1)
-    bond_info['CARRYDATE'] = [d.date() for d in bond_info['CARRYDATE']]
-    bond_info['MATURITYDATE'] = [d.date() for d in bond_info['MATURITYDATE']]
+    # Keep as pandas Timestamps (normalized to midnight) so downstream
+    # code can safely perform timestamp arithmetic and comparisons.
+    bond_info['CARRYDATE'] = pd.to_datetime(bond_info['CARRYDATE']).dt.normalize()
+    bond_info['MATURITYDATE'] = pd.to_datetime(bond_info['MATURITYDATE']).dt.normalize()
     if not hist:
         # bond_info = bond_info[(bond_info['PTMYEAR']<=10)|
                              # ((bond_info['PTMYEAR']>=25.0)&(bond_info['PTMYEAR']<=30.0))]
@@ -380,8 +382,9 @@ def _get_next_season_contract(contract_df, dps, ds):
     ds : str
         End date in YYYYMMDD format
     """
-    start_date = pd.to_datetime(dps, format='%Y%m%d').date()
-    end_date = pd.to_datetime(ds, format='%Y%m%d').date()
+    # Use pandas Timestamp for comparisons with contract_df.index
+    start_date = pd.to_datetime(dps, format='%Y%m%d')
+    end_date = pd.to_datetime(ds, format='%Y%m%d')
 
     # Filter to date range
     mask = (contract_df.index >= start_date) & (contract_df.index <= end_date)

@@ -8,6 +8,9 @@ import os
 import pandas as pd
 import pickle
 
+# Use the shared safe pickle loader from curves utils to handle incompatible/corrupted pickles
+from curves.utils.file import _safe_read_pickle
+
 tenorlist = ["1Y","2Y","5Y","10Y", "30Y"]
 countrylist = ["US","JP","DE","UK"]
 
@@ -85,7 +88,7 @@ def updatePKL(dictn,file_path,rewrite=False):
     else:
         if os.path.exists(file_path):
             # Load existing object using safe loading
-            dict_ = pd.read_pickle(file_path)
+            dict_ = _safe_read_pickle(file_path)
             if dict_ is None:
                 print(f"Starting with empty dictionary for {file_path}")
                 dict_ = {}
@@ -99,6 +102,13 @@ def updatePKL(dictn,file_path,rewrite=False):
                 union_cols = target_df.columns.union(new_df.columns)
                 target_df = target_df.reindex(index=union_idx, columns=union_cols)
                 target_df.loc[new_df.index, new_df.columns] = new_df
+                # Normalize mixed index types to DatetimeIndex when possible
+                try:
+                    parsed_idx = pd.to_datetime(pd.Index(target_df.index), errors='coerce')
+                    if parsed_idx.notna().mean() >= 0.5:
+                        target_df.index = pd.DatetimeIndex(parsed_idx)
+                except Exception:
+                    pass
                 target_df = target_df.sort_index().dropna(axis=0, how="all")
                 return target_df
 
@@ -108,6 +118,12 @@ def updatePKL(dictn,file_path,rewrite=False):
                 union_idx = target_ser.index.union(new_ser.index)
                 target_ser = target_ser.reindex(union_idx)
                 target_ser.loc[new_ser.index] = new_ser
+                try:
+                    parsed_idx = pd.to_datetime(pd.Index(target_ser.index), errors='coerce')
+                    if parsed_idx.notna().mean() >= 0.5:
+                        target_ser.index = pd.DatetimeIndex(parsed_idx)
+                except Exception:
+                    pass
                 target_ser = target_ser.sort_index().dropna(axis=0, how="all")
                 return target_ser
 
