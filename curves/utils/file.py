@@ -283,6 +283,13 @@ def updatePKL(dictn, file_path, rewrite=False):
                         parsed_idx = pd.to_datetime(pd.Index(combined.index), errors='coerce', utc=False)
                         if parsed_idx.notna().any():
                             combined.index = pd.DatetimeIndex(parsed_idx)
+                            # A row whose original index value failed to parse
+                            # becomes NaT here -- drop it rather than silently
+                            # carrying a NaT-indexed row forward (NaT sorts
+                            # last, so it masquerades as the latest observation
+                            # downstream and breaks index[-1]-based lookups).
+                            if combined.index.isna().any():
+                                combined = combined[~combined.index.isna()]
                     except Exception:
                         pass
                     combined = combined.sort_index()
@@ -307,6 +314,8 @@ def updatePKL(dictn, file_path, rewrite=False):
                         parsed_idx = pd.to_datetime(pd.Index(combined.index), errors='coerce', utc=False)
                         if parsed_idx.notna().any():
                             combined.index = pd.DatetimeIndex(parsed_idx)
+                            if combined.index.isna().any():
+                                combined = combined[~combined.index.isna()]
                     except Exception:
                         pass
                     combined = combined.sort_index().dropna(axis=0, how="all")

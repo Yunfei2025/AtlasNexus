@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 import json as _json
 
@@ -25,6 +26,8 @@ from .helpers import (
     _normalize_curated_entry,
     _style_to_regime,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def register_scan_callbacks(app) -> None:
@@ -538,9 +541,13 @@ def register_scan_callbacks(app) -> None:
                 df_all = pd.DataFrame()
             if not isinstance(df_low, pd.DataFrame):
                 df_low = pd.DataFrame()
-        except Exception:
-            df_all = pd.DataFrame()
-            df_low = pd.DataFrame()
+        except Exception as exc:
+            logger.exception("Alpha candidate scan failed")
+            scanned_time = datetime.now().strftime('%H:%M:%S')
+            return (
+                html.Div(f"Scan failed: {exc}", style={'color': THEME['warning']}),
+                f"Scan error at {scanned_time}", [], {},
+            )
 
         scanned_time = datetime.now().strftime('%H:%M:%S')
 

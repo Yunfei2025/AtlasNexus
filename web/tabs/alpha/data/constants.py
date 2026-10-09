@@ -228,6 +228,13 @@ def _build_tenor_spread_timeseries(cnbd_data: object) -> dict[str, pd.Series]:
     """Build tenor spread time series from CNBD key-rate history."""
     if not isinstance(cnbd_data, dict) or 'CGB' not in cnbd_data or 'CDB' not in cnbd_data:
         return {}
+    # Drop any stray NaT-indexed rows up front -- a bad upstream parse in
+    # database-px.pkl otherwise sorts to the "latest" row (NaT sorts last)
+    # and masquerades as today's observation in every downstream spread.
+    cnbd_data = {
+        k: (v[~v.index.isna()] if isinstance(v, (pd.DataFrame, pd.Series)) and v.index.hasnans else v)
+        for k, v in cnbd_data.items()
+    }
     try:
         result = {
             'CGB-1s2s': cnbd_data['CGB']['中债国债到期收益率:2年'] - cnbd_data['CGB']['中债国债到期收益率:1年'],

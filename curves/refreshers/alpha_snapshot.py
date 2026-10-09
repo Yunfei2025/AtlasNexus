@@ -212,8 +212,11 @@ def _append_snapshot_spread_to_series(
 	if s_clean.empty:
 		idx = pd.DatetimeIndex([])
 	else:
-		idx = pd.to_datetime(pd.Index(s_clean.index))
-	s_clean = pd.Series(s_clean.to_numpy(dtype=float), index=idx, name=s.name, dtype=float).sort_index()
+		idx = pd.to_datetime(pd.Index(s_clean.index), errors="coerce")
+	s_clean = pd.Series(s_clean.to_numpy(dtype=float), index=idx, name=s.name, dtype=float)
+	if s_clean.index.isna().any():
+		s_clean = s_clean[~s_clean.index.isna()]
+	s_clean = s_clean.sort_index()
 	spread_num = pd.to_numeric(pd.Series([spread_value]), errors="coerce").iloc[0]
 	if pd.isna(spread_num):
 		return s_clean
