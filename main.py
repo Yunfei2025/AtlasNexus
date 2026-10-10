@@ -266,7 +266,7 @@ def run_atlasnexus_daily_app():
         Timer(1.5, lambda: webbrowser.open_new(browser_url)).start()
 
         try:
-            atlasnexus_daily.app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False)
+            atlasnexus_daily.app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False, threaded=True)
         except KeyboardInterrupt:
             logger.info("AtlasNexus Daily Console stopped by user")
         except Exception as e:
