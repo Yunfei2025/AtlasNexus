@@ -309,6 +309,15 @@ def retrieveCNBDTS():
         starts = _date_strs['d7d']
     else:
         starts = _date_strs['d1m']
+    # EDB (CGB/CDB/ICP/MTN/LGB) window is widened beyond the IRS window's d7d:
+    # a 7-day lookback can't self-heal once this feed falls behind (e.g. a
+    # bad merge silently drops a day -- see 2026-09-28 CNBD freeze, where the
+    # file was stuck for ~9 trading days before anyone noticed the Sector PCA
+    # screen was stale). d1m gives enough buffer that a stalled feed catches
+    # back up on its own within a day or two of the underlying issue being
+    # fixed, instead of requiring a manual wide-window backfill. EDB pulls are
+    # small (a handful of daily closes), so the wider window is cheap.
+    edb_starts = _date_strs['d1m']
     ts = {}
     irs_curve = _wsd(IRSConfig.IRS_LIST, "close", starts, ds)
     fixing = _wsd(IRSConfig.FIXING_LIST, "close", starts, ds)
@@ -317,7 +326,7 @@ def retrieveCNBDTS():
     for k in WindConfig.KTID.keys():
         ids = list(WindConfig.KTID[k].keys())
         tlist = ','.join(ids)
-        edb_ts = _edb(tlist, starts, ds)
+        edb_ts = _edb(tlist, edb_starts, ds)
         if edb_ts.empty:
             ts[k] = edb_ts
             continue
@@ -332,7 +341,31 @@ def retrieveCNBDTS():
         ts[k] = edb_ts
     file_path = os.path.join(DIR_INPUT, 'database-px.pkl')
     ts = updatePKL(ts, file_path)
+    _check_cnbd_staleness(ts, asof=_date_strs['d'])
     return ts
+
+
+def _check_cnbd_staleness(ts: dict, *, asof: str, max_stale_days: int = 5) -> None:
+    """Warn loudly if a CNBD EDB series (CGB/CDB/ICP/MTN/LGB) hasn't advanced
+    recently, instead of letting it silently freeze (the merged file stays
+    on disk and keeps "working" for every reader, so nothing else errors --
+    see 2026-09-28 Sector PCA staleness incident, only caught by a user
+    noticing stale dates in the UI).
+    """
+    asof_ts = pd.Timestamp(asof)
+    for k in WindConfig.KTID.keys():
+        df = ts.get(k)
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            print(f"WARNING: CNBD series '{k}' is empty after update — database-px.pkl may be stale.")
+            continue
+        last_idx = pd.Timestamp(df.index.max())
+        stale_days = (asof_ts.normalize() - last_idx.normalize()).days
+        if stale_days > max_stale_days:
+            print(
+                f"WARNING: CNBD series '{k}' last update is {last_idx.date()} "
+                f"({stale_days}d behind {asof_ts.date()}) — database-px.pkl may be "
+                f"stuck; check Wind EDB connectivity/permissions for this series."
+            )
 
 def _extract_contract_close(contract_df, close_df):
     """Extract close prices for contracts based on their codes.
