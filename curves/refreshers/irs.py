@@ -49,7 +49,31 @@ def _normalize_legacy_repo_frame(frame):
 		out.columns = out.columns.map(_normalize_legacy_repo_label)
 	return out
 
+
+def _normalize_date_index(obj):
+	"""Coerce date-like indexes to a consistent DatetimeIndex.
+
+	Pandas raises ``TypeError`` when a ``Timestamp`` is compared against a plain
+	``datetime.date`` object in object-typed indexes. Several legacy curve files
+	still store dates as dates, while the refresher builds lookups with
+	``Timestamp`` keys, so normalize at the boundary before any ``loc`` access.
+	"""
+	if obj is None:
+		return obj
+	out = obj.copy()
+	try:
+		parsed = pd.to_datetime(pd.Index(out.index, dtype=object), errors='coerce')
+	except Exception:
+		return out
+	if parsed.notna().all():
+		out.index = pd.DatetimeIndex(parsed)
+	return out
+
 class IRSRefresher:
+	@staticmethod
+	def _normalize_date_index(obj):
+		return _normalize_date_index(obj)
+
 	def __init__(self, skip_excel_update: bool = True):
 		# Use pandas Timestamps for date arithmetic and indexing
 		self.today_date = pd.to_datetime(DateConfig.get_date_mappings()['d']).normalize()
@@ -88,14 +112,14 @@ class IRSRefresher:
 		logger.info("Loaded instrument definition for TBond")
 		self.environment = retrieveEnvRT(self.environment, 'TBond')
 		logger.info("Retrieved real-time environment data")
-		self.environment_time_series = loadCNBDTS()['SwapTS']
+		self.environment_time_series = _normalize_date_index(loadCNBDTS()['SwapTS'])
 		logger.info("Loaded CNBD time series data")
 
-		fr007 = self.environment_time_series['FR007.IR'].dropna()
+		fr007 = _normalize_date_index(self.environment_time_series['FR007.IR'].dropna())
 		if self.previous_bday not in fr007.index:
 			self.previous_bday = fr007.index[-1]
 			logger.info(f"Adjusted previous business day to {self.previous_bday}")
-		shibor3m = self.environment_time_series['SHIBOR3M.IR'].dropna()
+		shibor3m = _normalize_date_index(self.environment_time_series['SHIBOR3M.IR'].dropna())
 		
 		logger.info(f"Using business day: {self.previous_bday}")
 		
@@ -222,8 +246,8 @@ class IRSRefresher:
 		self.forward_data = irs.curves2Fixings(self.today_date, self.environment_time_series, self.curves['inst'])
 		logger.info("Generated forward data from curves")
 		
-		self.r7d_forward = self.forward_data['fixing']['r7d'].loc[self.today_date:]
-		self.s3m_forward = self.forward_data['fixing']['s3m'].loc[self.today_date:]
+		self.r7d_forward = _normalize_date_index(self.forward_data['fixing']['r7d']).loc[self.today_date:]
+		self.s3m_forward = _normalize_date_index(self.forward_data['fixing']['s3m']).loc[self.today_date:]
 		logger.info(f"Extracted forward rates: R7D ({len(self.r7d_forward)} periods), S3M ({len(self.s3m_forward)} periods)")
 		
 		fallback_quotes = self._get_fallback_swap_quotes()
@@ -419,17 +443,20 @@ class IRSRefresher:
 		# Get forward rates for each period
 		r7d_forwards = []
 		s3m_forwards = []
+		r7d_index = _normalize_date_index(self.r7d_forward).index
+		s3m_index = _normalize_date_index(self.s3m_forward).index
 		for date in time_periods:
-			if date in self.r7d_forward.index:
-				r7d_forwards.append(self.r7d_forward.loc[date])
+			date_ts = pd.Timestamp(date)
+			if date_ts in r7d_index:
+				r7d_forwards.append(self.r7d_forward.loc[date_ts])
 			else:
-				pos = self.r7d_forward.index.get_indexer([date], method='nearest')[0]
+				pos = r7d_index.get_indexer([date_ts], method='nearest')[0]
 				r7d_forwards.append(self.r7d_forward.iloc[pos])
 			
-			if date in self.s3m_forward.index:
-				s3m_forwards.append(self.s3m_forward.loc[date])
+			if date_ts in s3m_index:
+				s3m_forwards.append(self.s3m_forward.loc[date_ts])
 			else:
-				pos = self.s3m_forward.index.get_indexer([date], method='nearest')[0]
+				pos = s3m_index.get_indexer([date_ts], method='nearest')[0]
 				s3m_forwards.append(self.s3m_forward.iloc[pos])
 		
 		time_based_df = pd.DataFrame({
