@@ -21,6 +21,12 @@ class MacroFactors:
             macro_df = pd.read_pickle(f)
         macro_df = pd.concat(macro_df, axis=1).droplevel(0, axis=1)
         macro_df.columns = [i.split(".")[0] for i in macro_df.columns]
+        # Each of the source pickle's groups (commodity/fx/currency) carries
+        # its own stray 'CLOSE' column (not a real ticker). Concatenating the
+        # groups turns that into 3 duplicate 'CLOSE' columns, which makes
+        # macro_df['CLOSE'] return a DataFrame instead of a Series downstream
+        # and crashes build_features() for every factor, not just this one.
+        macro_df = macro_df.loc[:, ~macro_df.columns.duplicated()]
         # The source pickle stores its index as plain datetime.date objects,
         # while every other series in the factor pipeline (factor-rates.pkl,
         # curve data, etc.) uses pandas Timestamp / DatetimeIndex. Building a

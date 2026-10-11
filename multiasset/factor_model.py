@@ -510,6 +510,12 @@ def build_features(
     if _need_macro:
         macro_df = _load_macro_features()
         if not macro_df.empty:
+            # A duplicated column name makes macro_df[col] return a DataFrame
+            # instead of a Series, which pd.DataFrame(feats) below rejects
+            # with "Data must be 1-dimensional" and aborts the whole factor's
+            # feature build. Guard here so one dirty source column can't take
+            # down every factor's training.
+            macro_df = macro_df.loc[:, ~macro_df.columns.duplicated()]
             for col in macro_df.columns:
                 feats[f'MACRO_{col}'] = macro_df[col]
 

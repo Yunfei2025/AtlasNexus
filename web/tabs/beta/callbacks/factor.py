@@ -372,7 +372,7 @@ def register_factor_callbacks(app):
                                  cr_cdb, cr_lgb, cr_mtn, cr_icp,
                                  fx_outright, fx_cross, eq_factors, cmd_factors):
         if not n_clicks:
-            return html.Div(), html.Div(), []
+            return html.Div(), html.Div(), html.Div(), []
 
         # Merge domicile IR selections and combine with Credit/FX/EQ/CMD
         ir_factors = (ir_cn or []) + (ir_us or []) + (ir_eu or []) + (ir_jp or []) + (ir_uk or [])
@@ -392,7 +392,7 @@ def register_factor_callbacks(app):
         
         if len(selected_factors) < 2:
             return html.Div(), html.Div("⚠️ Please select at least 2 factors for correlation analysis.",
-                          style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}), []
+                          style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}), html.Div(), []
 
         try:
             loader = RiskFactorLoader(DIR_INPUT)
@@ -400,13 +400,13 @@ def register_factor_callbacks(app):
             factor_levels = loader.load_risk_factors(use_cache=True)
 
             if factor_levels is None or factor_levels.empty:
-                return html.Div(), html.Div("No factor data available.", style={'color': THEME['warning']}), []
+                return html.Div(), html.Div("No factor data available.", style={'color': THEME['warning']}), html.Div(), []
 
             # Filter to only selected factors
             available_factors = [f for f in selected_factors if f in factor_levels.columns]
             if len(available_factors) < 2:
                 return html.Div(), html.Div(f"⚠️ Only {len(available_factors)} of selected factors have data. Need at least 2.",
-                              style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}), []
+                              style={'color': THEME['warning'], 'padding': '20px', 'textAlign': 'center'}), html.Div(), []
 
             factor_levels = factor_levels[available_factors]
 
@@ -424,7 +424,7 @@ def register_factor_callbacks(app):
             # Filter data
             df_subset = factor_levels.loc[start_date:end_date]
             if df_subset.empty:
-                 return html.Div(), html.Div(f"No data for period {period}", style={'color': THEME['warning']}), []
+                 return html.Div(), html.Div(f"No data for period {period}", style={'color': THEME['warning']}), html.Div(), []
             
             # Calculate returns for correlation (levels might be non-stationary, but request asked for factors correlation. 
             # Usually we corr changes, but let's stick to simple Correlation of the daily prices/levels if that's what "Factors" implies, 
@@ -438,7 +438,7 @@ def register_factor_callbacks(app):
             df_changes = df_subset.diff().dropna()
             
             if df_changes.empty:
-                 return html.Div(), html.Div("Insufficient data points for correlation.", style={'color': THEME['warning']}), []
+                 return html.Div(), html.Div("Insufficient data points for correlation.", style={'color': THEME['warning']}), html.Div(), []
 
             corr_matrix = df_changes.corr()
 
