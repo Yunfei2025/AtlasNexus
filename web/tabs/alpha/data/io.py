@@ -29,18 +29,38 @@ def _normalize_repo_label(value: Any) -> Any:
     return value
 
 
+def _normalize_datetime_index(index: pd.Index) -> pd.Index:
+    """Convert legacy date-like object indexes to pandas DatetimeIndex."""
+    if not isinstance(index, pd.Index) or index.empty:
+        return index
+    if isinstance(index, pd.DatetimeIndex):
+        return index
+    if index.dtype != object:
+        return index
+    try:
+        converted = pd.to_datetime(pd.Index(index, dtype=object), errors='coerce')
+    except Exception:
+        return index
+    if converted.notna().all():
+        return pd.DatetimeIndex(converted)
+    return index
+
+
 def _normalize_repo_obj(obj: Any) -> Any:
     if isinstance(obj, pd.DataFrame):
         out = obj.copy()
         if out.index.dtype == object:
             out.index = out.index.map(_normalize_repo_label)
+            out.index = _normalize_datetime_index(out.index)
         if out.columns.dtype == object:
             out.columns = out.columns.map(_normalize_repo_label)
+            out.columns = _normalize_datetime_index(out.columns)
         return out
     if isinstance(obj, pd.Series):
         out = obj.copy()
         if out.index.dtype == object:
             out.index = out.index.map(_normalize_repo_label)
+            out.index = _normalize_datetime_index(out.index)
         out.name = _normalize_repo_label(out.name)
         return out
     if isinstance(obj, dict):
@@ -102,6 +122,8 @@ def _normalize_repo_frame(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
     out = df.copy()
     if out.index.dtype == object:
         out.index = out.index.map(lambda x: re.sub(r'^Repo-', 'Repo7d-', str(x), flags=re.IGNORECASE))
+        out.index = _normalize_datetime_index(out.index)
     if out.columns.dtype == object:
         out.columns = out.columns.map(lambda x: re.sub(r'^Repo-', 'Repo7d-', str(x), flags=re.IGNORECASE))
+        out.columns = _normalize_datetime_index(out.columns)
     return out

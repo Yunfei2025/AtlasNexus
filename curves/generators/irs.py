@@ -41,6 +41,30 @@ def _normalize_legacy_repo_label(value):
     return value
 
 
+def _normalize_datetime_index(frame):
+    """Coerce date-like indexes to a normalized DatetimeIndex for Timestamp lookups."""
+    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+    out = frame.copy()
+    if isinstance(out.index, pd.MultiIndex):
+        return out
+    if isinstance(out.index, pd.DatetimeIndex):
+        if out.index.has_duplicates or not out.index.is_monotonic_increasing:
+            out = out[~out.index.duplicated(keep='last')].sort_index()
+        return out
+    try:
+        converted = pd.to_datetime(pd.Index(out.index, dtype=object), errors='coerce')
+    except Exception:
+        return out
+    if converted.notna().all():
+        dt_index = pd.DatetimeIndex(converted)
+        if getattr(dt_index, 'tz', None) is not None:
+            dt_index = dt_index.tz_localize(None)
+        out.index = dt_index.normalize()
+        out = out[~out.index.duplicated(keep='last')].sort_index()
+    return out
+
+
 def _normalize_legacy_repo_frame(frame):
     if not isinstance(frame, pd.DataFrame):
         return frame
@@ -49,7 +73,7 @@ def _normalize_legacy_repo_frame(frame):
         out.index = out.index.map(_normalize_legacy_repo_label)
     if out.columns.dtype == object:
         out.columns = out.columns.map(_normalize_legacy_repo_label)
-    return out
+    return _normalize_datetime_index(out)
 
 
 class IRSGenerator:
@@ -66,25 +90,62 @@ class IRSGenerator:
         self.curves = {}
         self.forward_data = None
         self.contracts = None
-        
+
+    def _resolve_market_date(self, target: pd.Timestamp) -> pd.Timestamp:
+        """Return the latest available market timestamp on or before *target*.
+
+        Some runs land on a weekend/holiday or on a date for which the source
+        database has not yet been refreshed. A strict `.loc[target]` hit then
+        raises a KeyError even though the previous trading day is perfectly valid.
+        """
+        if self.environment_ts is None or self.environment_ts.empty:
+            return target
+
+        idx = pd.DatetimeIndex(self.environment_ts.index)
+        if idx.empty:
+            return target
+        if target in idx:
+            return target
+
+        prior = idx[idx <= target]
+        if prior.empty:
+            return idx[0]
+        return prior.max()
+
     def load_environment(self) -> None:
-        """Load instrument definition and time series"""
+        """Load instrument definition and time series."""
         self.environment = loadInstrumentDefinition(self.btype)
         swap_ts = _normalize_legacy_repo_frame(loadCNBDTS()['SwapTS'])
-        # If the cached data doesn't reach pricing_date, re-fetch from Wind so
-        # evaluate_contracts can do a .loc[pricing_date] lookup without a KeyError.
-        swap_last = pd.Timestamp(swap_ts.index[-1]).normalize() if (swap_ts is not None and not swap_ts.empty) else None
-        if swap_last is not None and swap_last < self.pricing_date:
-            print(f"INFO: database-px.pkl IRS data ends {swap_last}, need {self.pricing_date} — re-fetching from Wind...")
+        # Coerce date-like object indexes to midnight-normalized DatetimeIndex so
+        # Timestamp lookups like .loc[self.pricing_date] always resolve reliably.
+        self.environment_ts = _normalize_datetime_index(swap_ts)
+
+        # Empty or stale `database-px.pkl` files are a common cause of the
+        # Timestamp lookup crash. If the IRS snapshot is empty or clearly stale,
+        # refresh it before any `.loc[self.pricing_date]` access.
+        needs_refresh = self.environment_ts is None or self.environment_ts.empty
+        if not needs_refresh:
+            swap_last = pd.Timestamp(self.environment_ts.index[-1]).normalize()
+            needs_refresh = swap_last < self.pricing_date
+
+        if needs_refresh:
+            print(f"INFO: IRS swap data is empty/stale; re-fetching from Wind for {self.pricing_date.date()}...")
             try:
                 from curves.utils.retrieve import retrieveCNBDTS
                 retrieveCNBDTS()
                 swap_ts = _normalize_legacy_repo_frame(loadCNBDTS()['SwapTS'])
-                new_last = pd.Timestamp(swap_ts.index[-1]).date() if not swap_ts.empty else swap_last
+                self.environment_ts = _normalize_datetime_index(swap_ts)
+                if self.environment_ts is None or self.environment_ts.empty:
+                    raise ValueError("IRS swap snapshot is still empty after re-fetch")
+                new_last = pd.Timestamp(self.environment_ts.index[-1]).normalize()
                 print(f"INFO: after re-fetch, IRS data ends {new_last}")
             except Exception as exc:
                 print(f"WARN: Could not re-fetch IRS data from Wind: {exc}")
-        self.environment_ts = swap_ts
+                if self.environment_ts is None or self.environment_ts.empty:
+                    raise ValueError(
+                        "IRS curve generation cannot continue because the cached SwapTS data is empty/stale "
+                        f"and Wind refresh failed for {self.pricing_date.date()}."
+                    ) from exc
 
     def _set_asof(self, asof: date) -> None:
         """Set the trading and pricing dates for a specific historical day."""
@@ -157,8 +218,11 @@ class IRSGenerator:
     def evaluate_contracts(self) -> None:
         """Evaluate IRS contracts"""
         available = [c for c in IRSConfig.IRS_LIST if c in self.environment_ts.columns]
-        quotes_today = self.environment_ts.reindex(columns=IRSConfig.IRS_LIST).loc[self.pricing_date]
-        self.contracts = evalueContract(self.pricing_date, quotes_today, self.forward_data, 1)
+        pricing_key = self._resolve_market_date(self.pricing_date)
+        if pricing_key != self.pricing_date:
+            print(f"INFO: IRS market data missing at {self.pricing_date.date()}; using latest available date {pricing_key.date()}.")
+        quotes_today = self.environment_ts.reindex(columns=IRSConfig.IRS_LIST).loc[pricing_key]
+        self.contracts = evalueContract(pricing_key, quotes_today, self.forward_data, 1)
         self._available_quote_instruments = available
 
     def update_curve_px_timeseries(self) -> None:
@@ -170,6 +234,7 @@ class IRSGenerator:
         curve_px = loadCurvePxTS(self.btype)
 
         try:
+            pricing_key = self._resolve_market_date(self.pricing_date)
             # Vectorized assignment into wide DataFrames
             if 'ytm_act' in curve_px and 'ytm_quo' in curve_px:
                 contracts = IRSConfig.IRS_LIST
@@ -181,8 +246,8 @@ class IRSGenerator:
                 act_instruments = getattr(self, '_available_quote_instruments', contracts)
                 act_instruments_with_data = [c for c in act_instruments if pd.notna(act_values.loc[c])]
                 if act_instruments_with_data:
-                    curve_px['ytm_act'].loc[self.pricing_date, act_instruments_with_data] = act_values.loc[act_instruments_with_data].values
-                curve_px['ytm_quo'].loc[self.pricing_date, contracts] = quo_values
+                    curve_px['ytm_act'].loc[pricing_key, act_instruments_with_data] = act_values.loc[act_instruments_with_data].values
+                curve_px['ytm_quo'].loc[pricing_key, contracts] = quo_values
 
             # Update carry3m and roll3m time series so StatGenerator can build CarryRoll3m
             for key, col in [('carry3m', 'Carry(3m,bp)'), ('roll3m', 'Roll(3m,bp)')]:
@@ -190,7 +255,7 @@ class IRSGenerator:
                     values = self.contracts['value'].loc[IRSConfig.IRS_LIST, col].values / 100
                     if key not in curve_px:
                         curve_px[key] = pd.DataFrame(columns=IRSConfig.IRS_LIST)
-                    curve_px[key].loc[self.pricing_date, IRSConfig.IRS_LIST] = values
+                    curve_px[key].loc[pricing_key, IRSConfig.IRS_LIST] = values
         except Exception as e:
             print(f'Error: Failed vectorized assignment into curve price TS: {e}')
             raise

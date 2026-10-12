@@ -209,8 +209,8 @@ def run_initialise() -> str:
             refreshed = ensure_daily_required_updates(cfg)
             if refreshed:
                 print(f"Daily required data refreshed: {', '.join(refreshed)}")
-        except Exception as e:
-            print(f"WARNING: Daily required data refresh failed: {e}")
+        except Exception:
+            logger.exception("WARNING: Daily required data refresh failed")
 
         try:
             from curves.utils.retrieve import updateInstrumentDef
@@ -224,14 +224,14 @@ def run_initialise() -> str:
             # Every other call site (main.py, engine/cli.py) already passes
             # on_demand=True; this one was the odd one out.
             updateInstrumentDef(asof=None, on_demand=True)
-        except Exception as e:
+        except Exception:
             # Previously silenced entirely -- a failure here (Wind quota,
             # session drop, etc.) left *-InstrumentInfo.pkl stale with no
             # trace, which fed frozen closing yields into ytm_act for
             # whichever bonds' fetch kept failing. Surface it like the
             # sibling refresh above so repeated failures are at least
             # visible in logs instead of disappearing silently.
-            print(f"WARNING: updateInstrumentDef failed: {e}")
+            logger.exception("WARNING: updateInstrumentDef failed")
 
         if (t.hour >= TradingHoursConfig.START_HOUR) and (t.hour <= TradingHoursConfig.INIT_END_HOUR) and (t.weekday() <= 4):
             print("Updating database and running generators...")
@@ -245,9 +245,9 @@ def run_initialise() -> str:
                 print(error_msg)
                 return error_msg
         return "Finished Curve Initialisation."
-    except Exception as e:
-        error_msg = f"Initialisation failed: {str(e)}"
-        print(error_msg)
+    except Exception:
+        error_msg = "Initialisation failed"
+        logger.exception(error_msg)
         return error_msg
     finally:
         try:
@@ -324,9 +324,9 @@ def _autoruns1_tick() -> None:
         )
         logger.info("Intraday refresh completed: %s", message)
         _set_status("autoruns1", message)
-    except Exception as e:
-        error_msg = f"Auto refresh failed: {e}"
-        print(error_msg)
+    except Exception:
+        error_msg = "Auto refresh failed"
+        logger.exception(error_msg)
         _set_status("autoruns1", error_msg)
     finally:
         try:
@@ -345,9 +345,9 @@ def _autoruns2_tick() -> None:
             return
         # Legacy body intentionally left empty — preserves the previous
         # commented-out behavior of autoruns2.
-    except Exception as e:
-        error_msg = f"Long auto refresh failed: {e}"
-        print(error_msg)
+    except Exception:
+        error_msg = "Long auto refresh failed"
+        logger.exception(error_msg)
         _set_status("autoruns2", error_msg)
     finally:
         try:
@@ -390,8 +390,8 @@ def start_periodic_refresh(interval_seconds: float | None = None) -> None:
                 if now - last_long_tick >= long_interval_seconds:
                     _autoruns2_tick()
                     last_long_tick = now
-            except Exception as exc:
-                logger.warning(f"Periodic refresh tick failed: {exc}")
+            except Exception:
+                logger.exception("Periodic refresh tick failed")
             time.sleep(interval_seconds)
 
     threading.Thread(

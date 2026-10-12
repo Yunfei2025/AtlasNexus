@@ -82,6 +82,16 @@ def loadWorkday(start,end,update=False):
 def loadCNBDTS():
     file_path = os.path.join(DIR_INPUT, 'database-px.pkl')
     # file_path = os.path.join(DIR_DATA, 'CNDBCurve-px.pkl')
+
+    def _empty_irs_snapshot(snapshot):
+        if not isinstance(snapshot, dict):
+            return True
+        for key in ('IRS', 'SwapTS'):
+            frame = snapshot.get(key)
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                return False
+        return True
+
     try:
         ts = _read_pickle_compat(file_path, allow_pickle_fallback=False)
     except LegacyPickleCompatibilityError:
@@ -99,12 +109,31 @@ def loadCNBDTS():
             'FXSwap': empty_frame,
             'Factors': empty_frame,
         }
+
+    if _empty_irs_snapshot(ts):
+        print("INFO: database-px.pkl has an empty IRS snapshot; attempting a Wind refresh before continuing.")
+        try:
+            from curves.utils.retrieve import retrieveCNBDTS
+            ts = retrieveCNBDTS()
+        except Exception as exc:
+            print(f"WARN: IRS snapshot refresh failed: {exc}")
+            raise ValueError(
+                "IRS market data is empty/stale in database-px.pkl and could not be refreshed from Wind."
+            ) from exc
+
     env = {}
+    alias_map = {
+        'IRS': 'SwapTS',
+        'CGB': 'CGB',
+        'CDB': 'CDB',
+        'sofr': 'SOFR',
+        'fx': 'FX',
+        'fxswap': 'FXSwap',
+    }
     for key in ['IRS', 'CGB', 'CDB', 'ICP', 'LGB', 'MTN', 'sofr', 'fx', 'fxswap']:
-        frame = ts.get(key, pd.DataFrame()) if key not in {'IRS', 'CGB', 'CDB'} else ts[key]
-        env[key if key not in {'IRS', 'CGB', 'CDB', 'sofr', 'fx', 'fxswap'} else {
-            'IRS': 'SwapTS', 'CGB': 'CGB', 'CDB': 'CDB', 'sofr': 'SOFR', 'fx': 'FX', 'fxswap': 'FXSwap'
-        }[key]] = _coerce_date_index(frame)
+        frame = ts.get(key, pd.DataFrame())
+        env_key = alias_map.get(key, key)
+        env[env_key] = _coerce_date_index(frame)
     file_path = os.path.join(DIR_INPUT, 'TBond-cvref.pkl')
     # Direct load to avoid unnecessary rewrite
     ref = _read_pickle_compat(file_path)

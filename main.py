@@ -247,8 +247,8 @@ def run_atlasnexus_daily_app():
                 try:
                     status = run_initialise()
                     logger.info(f"AtlasNexus startup initialisation: {status}")
-                except Exception as exc:
-                    logger.warning(f"AtlasNexus background initialisation error: {exc}")
+                except Exception:
+                    logger.exception("AtlasNexus background initialisation error")
 
             threading.Thread(target=_bg_init, daemon=True).start()
         else:
@@ -269,14 +269,14 @@ def run_atlasnexus_daily_app():
             atlasnexus_daily.app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False, threaded=True)
         except KeyboardInterrupt:
             logger.info("AtlasNexus Daily Console stopped by user")
-        except Exception as e:
-            logger.error(f"❌ AtlasNexus Daily Console error: {e}")
+        except Exception:
+            logger.exception("❌ AtlasNexus Daily Console runtime error")
 
-    except ImportError as e:
-        logger.error(f"❌ Failed to import AtlasNexus Daily app: {e}")
+    except ImportError:
+        logger.exception("❌ Failed to import AtlasNexus Daily app")
         logger.info("Make sure all dependencies are installed: pip install -r requirements/production.txt")
-    except Exception as e:
-        logger.error(f"❌ Failed to start AtlasNexus Daily Console: {e}")
+    except Exception:
+        logger.exception("❌ Failed to start AtlasNexus Daily Console")
 
 
 def run_atlasnexus_intraday_app():
@@ -292,14 +292,14 @@ def run_atlasnexus_intraday_app():
             atlasnexus_intraday.app.run(host="0.0.0.0", port=8081, debug=False, use_reloader=False)
         except KeyboardInterrupt:
             logger.info("👋 AtlasNexus Intraday Console stopped by user")
-        except Exception as e:
-            logger.error(f"❌ AtlasNexus Intraday Console error: {e}")
+        except Exception:
+            logger.exception("❌ AtlasNexus Intraday Console runtime error")
 
-    except ImportError as e:
-        logger.error(f"❌ Failed to import AtlasNexus Intraday app: {e}")
+    except ImportError:
+        logger.exception("❌ Failed to import AtlasNexus Intraday app")
         logger.info("Make sure all dependencies are installed: pip install -r requirements/production.txt")
-    except Exception as e:
-        logger.error(f"❌ Failed to start AtlasNexus Intraday Console: {e}")
+    except Exception:
+        logger.exception("❌ Failed to start AtlasNexus Intraday Console")
 
 def main():
     """Main entrypoint.

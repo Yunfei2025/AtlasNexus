@@ -839,6 +839,7 @@ def load_spread_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
         if isinstance(timeseries_data, dict) and spread_type in timeseries_data:
             ts = timeseries_data[spread_type]
             if isinstance(ts, pd.DataFrame) and not ts.empty:
+                ts = _normalize_repo_frame(ts)
                 if spread_type == 'SwapSpread':
                     cols = pd.Index(ts.columns.astype(str))
                     ts = ts.loc[:, ~cols.str.endswith('.IR')].copy()
