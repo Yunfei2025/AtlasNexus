@@ -261,6 +261,22 @@ def setup_logging(show_window: bool = True, level: Optional[int] = None):
 
     logger.addHandler(console)
 
+    # File logging on every platform: the console and GUI window both
+    # disappear if the process is killed hard (OOM, AV, a native-DLL
+    # segfault) or the window just closes, leaving nothing to diagnose a
+    # Windows crash with. A persistent file survives that.
+    try:
+        logs_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
+        os.makedirs(logs_dir, exist_ok=True)
+        log_file = os.path.join(logs_dir, 'app.log')
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(resolved_level)
+        file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
+        logger.addHandler(file_handler)
+        logger.debug("Log file: %s", log_file)
+    except Exception as e:
+        logger.warning(f"Could not set up file logging: {e}")
+
     # Mute noisy HTTP access logs (Werkzeug / Flask dev server)
     for noisy_name in (
         "werkzeug",
@@ -284,18 +300,6 @@ def setup_logging(show_window: bool = True, level: Optional[int] = None):
     if show_window and tk is not None and is_main_process:
         if sys.platform == 'darwin':
             logger.warning("GUI Log Window disabled on macOS due to threading restrictions. Output will be shown in console and logs/app.log")
-            # Add file logging on macOS for better visibility
-            try:
-                logs_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
-                os.makedirs(logs_dir, exist_ok=True)
-                log_file = os.path.join(logs_dir, 'app.log')
-                file_handler = logging.FileHandler(log_file, encoding='utf-8')
-                file_handler.setLevel(resolved_level)
-                file_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-                logger.addHandler(file_handler)
-                logger.debug("Log file: %s", log_file)
-            except Exception as e:
-                logger.warning(f"Could not set up file logging: {e}")
 
             # Redirect stdout/stderr on macOS too so print() is captured
             import sys as _sys
@@ -325,6 +329,25 @@ def setup_logging(show_window: bool = True, level: Optional[int] = None):
             logger.debug("Tkinter not available, GUI log window disabled.")
         elif not is_main_process:
             logger.debug("Child process detected; GUI log window not created.")
+
+    # An unhandled exception on the main thread or a background thread
+    # (the periodic refresh loop, the startup EOD thread, etc.) otherwise
+    # prints to a console/GUI window that disappears the moment the
+    # process dies, leaving no trace of why. Route both into the logger
+    # so they land in logs/app.log too.
+    def _log_unhandled_exception(exc_type, exc_value, exc_tb):
+        logger.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _log_unhandled_exception
+
+    def _log_unhandled_thread_exception(args):
+        logger.critical(
+            "Unhandled exception in thread %r", args.thread.name,
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    threading.excepthook = _log_unhandled_thread_exception
 
     _logging_initialized = True
     return logger, _gui_window
