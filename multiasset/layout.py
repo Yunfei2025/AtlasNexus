@@ -33,8 +33,17 @@ _COMMODITY_TICKER_MAP: dict[str, str] = {
 def get_cgb_otr_map() -> dict[str, str]:
     """Return {tenor: on-the-run bond ID} for CGB (TBond) using highest TOR per bucket.
 
-    Uses fresh InstrumentInfo from DIR_INPUT, matching the Market Data tab's on-the-run selection.
+    Delegates to the Market Data tab's sticky selector so the Portfolio and Market
+    tabs always agree (a plain per-day turnover argmax can flip back to an older
+    bond, e.g. 30Y 2600004.IB vs the newer 2600006.IB).
     """
+    try:
+        from web.tabs.market.data import _select_on_the_run_bonds
+        sticky = _select_on_the_run_bonds("TBond", list(_CGB_TENOR_BANDS))
+        if sticky:
+            return sticky
+    except Exception:
+        pass
     try:
         from settings.paths import DIR_INPUT
         import numpy as np

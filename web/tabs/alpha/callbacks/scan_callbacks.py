@@ -16,6 +16,7 @@ from dash.exceptions import PreventUpdate
 
 from ..data import THEME, ZSCORE_ENTRY_THRESHOLD, TREND_ROUTED_INSTRUMENTS, _get_input_dir, load_spread_data, display_key, get_realtime_spread_bp, _get_ttm_display
 from ..scoring import compute_scan_score
+from .backtest_state import backtest_open_direction
 from .helpers import (
     _ALPHA_CORR_COLORSCALE,
     _apply_seasonal_quality_gate,
@@ -411,10 +412,19 @@ def register_scan_callbacks(app) -> None:
         # 2026-09-25: these should be visible in Candidates & Correlation
         # Check, not just an invisible locked backdrop in the correlation
         # matrix on the right (see correlation_callbacks.py's core_seed_note).
-        open_core_rows = [
-            p for p in _load_alpha_book_positions()
-            if str(p.get('spread_type', '') or '') == 'TenorSpread'
-        ]
+        # Reconciled against the Backtest tab's engine so the card never shows
+        # a saved position the backtest is flat on (and takes the backtest's
+        # direction); a backtest that cannot run leaves the saved row as-is.
+        open_core_rows = []
+        for p in _load_alpha_book_positions():
+            if str(p.get('spread_type', '') or '') != 'TenorSpread':
+                continue
+            state = backtest_open_direction('TenorSpread', str(p.get('instrument', '') or ''))
+            if state == 'FLAT':
+                continue
+            if state in ('BUY', 'SELL'):
+                p = {**p, 'direction': state}
+            open_core_rows.append(p)
         open_core_cards = _signal_cards(open_core_rows) if open_core_rows else []
 
         sections = []
