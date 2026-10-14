@@ -92,14 +92,17 @@ def scalar_meta(c, factor):
     IMPORTANT: the snapshot stores IRSL with its sign flipped (positive =
     steepener) so scalar_to_coeff()'s generic directional formula keeps
     the "up = risk-on" convention for the exposure calc — see the flip
-    in backtest_rfbt.py's snapshot-record builder. That flip must be
-    undone here before deriving the label, and the label vocabulary
-    (Steepener/Flattener, Bullish/Bearish, Concave/Convex, Long/Short)
-    must mirror _sc() in _rfbt_train_helpers.py exactly — otherwise this
-    column disagrees with the direction shown on the Candidates tab.
+    in backtest_rfbt/_train_predict.py's snapshot-record builder. A slope
+    factor's TRUE position > 0 is a flattener (mimicking portfolio is long
+    the long end, earning -d(slope)), so the stored IRSL scalar already
+    reads steepener-positive and is used as-is. CRSL is NOT flipped in the
+    snapshot, so its raw position must be negated here. The label
+    vocabulary (Steepener/Flattener, Bullish/Bearish, Concave/Convex,
+    Long/Short) must mirror _sc() in _rfbt_train_helpers.py exactly —
+    otherwise this column disagrees with the Candidates tab.
     """
     prefix = factor.split('.')[0]
-    raw = -c if prefix == 'IRSL' else c  # undo the storage-time flip
+    raw = -c if prefix == 'CRSL' else c  # positive = steepener for slopes
     if raw == 0:
         return ('Neutral', THEME.get('text_sub', '#aaa'))
     mag = abs(raw)
