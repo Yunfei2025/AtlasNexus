@@ -11,6 +11,7 @@ import traceback
 from datetime import datetime
 
 import dash
+import os
 import pandas as pd
 from dash import html, ALL
 from dash.dependencies import Input, Output, State
@@ -19,7 +20,7 @@ from dateutil.relativedelta import relativedelta
 from settings.paths import DIR_INPUT
 
 from ...data import THEME, ALLOCATION_RESULTS
-from .._common import _SUMMARY_BETA_PARQUET, _upsert_snapshot
+from .._common import _SUMMARY_BETA_PARQUET, _SUMMARY_BETA_DISPLAY_PARQUET, _upsert_snapshot
 from ._risk_budget_panel import build_risk_budget_rows, build_risk_budget_header
 from ._run_analysis import (
     build_risk_budgets, run_optimization, apply_factor_scaling,
@@ -257,6 +258,15 @@ def register_portfolio_run_callbacks(app):
             _id_cols = ['Asset Name'] if 'Asset Name' in _snap.columns else []
             merged = _upsert_snapshot(_snap, _SUMMARY_BETA_PARQUET, _id_cols)
             print(f"✓ Beta snapshot saved → {_SUMMARY_BETA_PARQUET} ({len(merged)} rows)")
+            # The Books tab reads the render-ready display cache BEFORE the
+            # canonical snapshot, so a stale cache keeps showing the previous
+            # run's instruments (e.g. a rolled-over bond code). Drop it; the
+            # next Books render rebuilds from the canonical file. User edits
+            # live in beta_book_user.parquet and survive.
+            try:
+                os.remove(_SUMMARY_BETA_DISPLAY_PARQUET)
+            except FileNotFoundError:
+                pass
             return html.Span(f"✓ Added to Portfolio Summary ({len(_snap)} rows)",
                               style={'color': '#34d399', 'fontWeight': '700'})
         except Exception as e:

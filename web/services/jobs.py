@@ -64,19 +64,47 @@ def tail_log(job_id: str, max_lines: int = 200) -> str:
 
 # ── PID liveness ──────────────────────────────────────────────────────────────
 
+def _win_kernel32():
+    """kernel32 with explicit prototypes.
+
+    Without argtypes/restype ctypes treats HANDLEs as 32-bit C ints and
+    mis-marshals pointers on 64-bit Windows, which can hard-crash the whole
+    server process (no Python traceback) from the header's job-status poll.
+    """
+    import ctypes
+    from ctypes import wintypes
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.OpenProcess.restype = wintypes.HANDLE
+    k.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    k.GetExitCodeProcess.restype = wintypes.BOOL
+    k.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    k.GetProcessTimes.restype = wintypes.BOOL
+    k.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    k.TerminateProcess.restype = wintypes.BOOL
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    k.CloseHandle.restype = wintypes.BOOL
+    return k
+
+
 def _is_pid_running(pid: int) -> bool:
     """Return True if the process with *pid* is still alive."""
     try:
         if sys.platform.startswith("win"):
             import ctypes
+            from ctypes import wintypes
             STILL_ACTIVE = 259
-            handle = ctypes.windll.kernel32.OpenProcess(0x0400, False, pid)  # PROCESS_QUERY_INFORMATION
+            k32 = _win_kernel32()
+            handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
             if not handle:
                 return False
-            ec = ctypes.c_ulong(0)
-            ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(ec))
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return ec.value == STILL_ACTIVE
+            try:
+                ec = wintypes.DWORD(0)
+                if not k32.GetExitCodeProcess(handle, ctypes.byref(ec)):
+                    return False
+                return ec.value == STILL_ACTIVE
+            finally:
+                k32.CloseHandle(handle)
         else:
             os.kill(pid, 0)  # signal 0 = existence check only
             return True
@@ -100,30 +128,22 @@ def _get_process_started_at(pid: int) -> datetime | None:
     try:
         if sys.platform.startswith("win"):
             import ctypes
+            from ctypes import wintypes
 
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            k32 = _win_kernel32()
+            handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
             if not handle:
                 return None
             try:
-                creation_time = ctypes.c_ulonglong(0)
-                exit_time = ctypes.c_ulonglong(0)
-                kernel_time = ctypes.c_ulonglong(0)
-                user_time = ctypes.c_ulonglong(0)
-                ok = ctypes.windll.kernel32.GetProcessTimes(
-                    handle,
-                    ctypes.byref(creation_time),
-                    ctypes.byref(exit_time),
-                    ctypes.byref(kernel_time),
-                    ctypes.byref(user_time),
-                )
-                if not ok:
+                ft = [wintypes.FILETIME() for _ in range(4)]
+                if not k32.GetProcessTimes(handle, *[ctypes.byref(f) for f in ft]):
                     return None
+                ticks = (ft[0].dwHighDateTime << 32) | ft[0].dwLowDateTime
                 windows_epoch = 116444736000000000
-                seconds = (creation_time.value - windows_epoch) / 10_000_000
+                seconds = (ticks - windows_epoch) / 10_000_000
                 return datetime.fromtimestamp(seconds, tz=timezone.utc)
             finally:
-                ctypes.windll.kernel32.CloseHandle(handle)
+                k32.CloseHandle(handle)
     except Exception:
         return None
     return None
@@ -424,10 +444,13 @@ def kill_job(job_id: str) -> str:
         pid = int(pid)
         # Attempt to kill the process
         if sys.platform.startswith("win"):
-            import ctypes
-            ctypes.windll.kernel32.TerminateProcess(
-                ctypes.windll.kernel32.OpenProcess(0x0001, False, pid), 1
-            )
+            k32 = _win_kernel32()
+            h = k32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
+            if h:
+                try:
+                    k32.TerminateProcess(h, 1)
+                finally:
+                    k32.CloseHandle(h)
         else:
             os.kill(pid, 9)  # SIGKILL on Unix
 

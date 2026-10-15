@@ -273,6 +273,9 @@ def register_alpha_book_table_callbacks(app):
                         leg1, leg2 = str(saved_leg1), str(saved_leg2)
                     else:
                         leg1, leg2 = _resolve_bondcurve_legs(spread_type, trade_id, duration)
+                    # Leg 3 only exists for 3-leg flies; blank for every other spread.
+                    saved_leg3 = row.get('Leg3', None)
+                    leg3 = '' if saved_leg3 in (None, '') or pd.isna(saved_leg3) else str(saved_leg3)
                     leg_ratio_val = _leg_volume_ratio(leg1, leg2, spread_type, trade_id, duration, _alpha_duration_snap_cache)
                     leg_ratio = f"{leg_ratio_val:.2f}" if leg_ratio_val is not None else ''
                     leg2_target_volume = (
@@ -344,6 +347,7 @@ def register_alpha_book_table_callbacks(app):
                         'ID':                     trade_id,
                         'Leg 1':                  leg1,
                         'Leg 2':                  leg2,
+                        'Leg 3':                  leg3,
                         'Ratio (V2/V1)':          leg_ratio,
                         'Target Volume Leg2 (MM CNY)': f"{leg2_target_volume:,.1f}" if leg2_target_volume is not None else '',
                         'Margin (MM)':            f"{margin_mm:,.2f}" if margin_mm is not None else '',
@@ -517,7 +521,7 @@ def register_alpha_book_table_callbacks(app):
             body_rows = _apply_sort(body_rows, sort_state, _numeric_cols)
     
             _ALL_COLS = [
-                ('ID', 'left'), ('Leg 1', 'left'), ('Leg 2', 'left'), ('Ratio (V2/V1)', 'right'),
+                ('ID', 'left'), ('Leg 1', 'left'), ('Leg 2', 'left'), ('Leg 3', 'left'), ('Ratio (V2/V1)', 'right'),
                 ('Style', 'left'), ('Direction', 'center'), ('Duration', 'right'),
                 ('Open price (bp)', 'right'), ('Volume (mm)', 'right'), ('Open date', 'right'),
                 ('Z-Score', 'right'), ('Close Price (bp)', 'right'), ('Progress', 'left'),
@@ -573,7 +577,7 @@ def register_alpha_book_table_callbacks(app):
                 base_style = {'padding': '5px 10px', 'textAlign': align, 'color': THEME['text_main']}
                 if col == 'ID':
                     return html.Td(val, style={**base_style, 'fontWeight': '600', 'whiteSpace': 'nowrap'})
-                if col in ('Leg 1', 'Leg 2'):
+                if col in ('Leg 1', 'Leg 2', 'Leg 3'):
                     return html.Td(val, style={**base_style, 'color': THEME['text_sub'], 'fontSize': '9px'})
                 if col == 'Style':
                     return html.Td(_style_badge(val) if val else '', style=base_style)

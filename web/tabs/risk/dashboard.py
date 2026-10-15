@@ -250,7 +250,17 @@ def register_risk_dashboard_callbacks(app):
                     stype     = str(r.get('spread_type', ''))
                     dir_sign  = -1.0 if direction in ('SELL', 'SHORT') else 1.0
 
-                    leg1, leg2 = _resolve_legs(stype, tid, duration, _ld)
+                    # Prefer the legs Alpha Portfolio's Run Optimization actually
+                    # saved (same rule as the Alpha snapshot table); the local
+                    # resolver is only a fallback for older snapshots. It returns
+                    # no legs for e.g. TenorSpread Repo7d-3m1y / NCDRepo7d-*, which
+                    # silently dropped FR007S3M.IR etc. from Net Position / DV01.
+                    _sl1, _sl2 = r.get('Leg1'), r.get('Leg2')
+                    if (_sl1 not in (None, '') and pd.notna(_sl1)
+                            and _sl2 not in (None, '') and pd.notna(_sl2)):
+                        leg1, leg2 = str(_sl1), str(_sl2)
+                    else:
+                        leg1, leg2 = _resolve_legs(stype, tid, duration, _ld)
 
                     # Accurate leg volumes: leg1 carries the full target
                     # notional; leg2 is duration-matched via Ratio (V2/V1) =

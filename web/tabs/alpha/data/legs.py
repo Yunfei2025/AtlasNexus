@@ -78,6 +78,28 @@ def _tenor_str_to_years(tenor: str) -> float:
     return n / 12.0 if unit == 'M' else n
 
 
+def _overlay_sticky_otr(btype: str, picked: dict) -> dict:
+    """Override a plain turnover-argmax OTR pick with the shared sticky pick.
+
+    Beta's Portfolio tab and the Market tab resolve the on-the-run bond with
+    web.tabs.market.data._select_on_the_run_bonds (sticky once a newer-issued
+    bond has taken over). A bare per-day turnover argmax can keep an older
+    bond (e.g. 250020.IB) ahead of the roll (260015.IB), so Alpha/Risk legs
+    disagreed with Beta. Tenors the shared selector doesn't cover (7Y) keep
+    ``picked``'s value.
+    """
+    try:
+        from web.tabs.market.data import _select_on_the_run_bonds
+        sticky = _select_on_the_run_bonds(btype, ['1Y', '2Y', '5Y', '10Y', '20Y', '30Y'])
+    except Exception:
+        return picked
+    out = dict(picked)
+    for tenor, bond_id in (sticky or {}).items():
+        if isinstance(bond_id, str) and bond_id and bond_id != '—':
+            out[tenor] = bond_id
+    return out
+
+
 def _load_leg_data() -> dict:
     """Load instrument data needed for spread position leg resolution."""
     from settings.paths import DIR_INPUT
@@ -128,8 +150,8 @@ def _load_leg_data() -> dict:
             res[tenor] = bkt.idxmax() if not bkt.empty and (bkt > 0).any() else ''
         return res
 
-    ld['otr_cgb'] = _pick_otr('TBond')
-    ld['otr_cdb'] = _pick_otr('CBond')
+    ld['otr_cgb'] = _overlay_sticky_otr('TBond', _pick_otr('TBond'))
+    ld['otr_cdb'] = _overlay_sticky_otr('CBond', _pick_otr('CBond'))
 
     try:
         with warnings.catch_warnings():

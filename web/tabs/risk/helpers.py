@@ -551,8 +551,9 @@ def _load_leg_data() -> dict:
             res[tenor] = bkt.idxmax() if not bkt.empty and (bkt > 0).any() else ''
         return res
 
-    ld['otr_cgb'] = _pick_otr('TBond')
-    ld['otr_cdb'] = _pick_otr('CBond')
+    from web.tabs.alpha.data.legs import _overlay_sticky_otr
+    ld['otr_cgb'] = _overlay_sticky_otr('TBond', _pick_otr('TBond'))
+    ld['otr_cdb'] = _overlay_sticky_otr('CBond', _pick_otr('CBond'))
 
     try:
         with warnings.catch_warnings():

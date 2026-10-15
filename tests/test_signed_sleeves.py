@@ -23,7 +23,7 @@ def test_ir_mimicking_weights_match_deterministic_factor_definition():
     expected = dict(zip(['CN1Y', 'CN2Y', 'CN5Y', 'CN10Y', 'CN20Y', 'CN30Y'],
                         get_deterministic_ir_weights('CN')['Slope']))
     assert w_slp == pytest.approx(expected)
-    assert w_slp['CN1Y'] < 0 < w_slp['CN30Y']          # steepener legs are signed
+    assert w_slp['CN1Y'] < 0 < w_slp['CN30Y']          # slope legs are signed (+ve position = flattener)
     w_crv, _ = factor_mimicking_weights('IRCV.CN', FACTOR_TO_ASSET_MAP)
     assert 'CN2Y' not in w_crv and 'CN20Y' not in w_crv  # zero-weight tenors dropped
 
@@ -48,7 +48,7 @@ def test_credit_mimicking_weights_match_get_credit_weights():
     assert sum(w_lvl.values()) == pytest.approx(1.0)
 
     w_slp, _ = factor_mimicking_weights('CRSL.CDB', FACTOR_TO_ASSET_MAP)
-    assert w_slp['CDB1Y'] < 0 < w_slp['CDB30Y']          # steepener legs are signed
+    assert w_slp['CDB1Y'] < 0 < w_slp['CDB30Y']          # slope legs are signed (+ve position = flattener)
     assert sum(w_slp.values()) == pytest.approx(0.0)
 
     w_crv, _ = factor_mimicking_weights('CRCV.CDB', FACTOR_TO_ASSET_MAP)
@@ -82,8 +82,8 @@ def test_sleeve_uses_previous_day_position_and_keeps_sign():
 
 
 def test_long_only_assets_floor_net_short_but_leave_other_tenors_signed():
-    """A steepener (IRSL.CN: short end negative, long end positive) with a
-    negative position flips into a NET SHORT on the short-end tenors — the
+    """IRSL.CN's mimicking weights (short end negative, long end positive)
+    with a POSITIVE position (a flattener) go net short the short-end tenors — the
     floor must clip those to 0 while leaving the long-end legs (still net
     short, since a negative position on a positive weight is negative) and
     unlisted tenors untouched. Uses real market_data (needed for bond

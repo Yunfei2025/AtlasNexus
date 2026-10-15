@@ -277,6 +277,15 @@ def setup_logging(show_window: bool = True, level: Optional[int] = None):
     except Exception as e:
         logger.warning(f"Could not set up file logging: {e}")
 
+    # Native crashes (access violation in a DLL) bypass Python exceptions and
+    # leave no traceback anywhere; faulthandler dumps the Python stacks to a file.
+    try:
+        import faulthandler
+        _fh = open(os.path.join(logs_dir, 'crash.log'), 'a', encoding='utf-8')
+        faulthandler.enable(file=_fh, all_threads=True)
+    except Exception as e:
+        logger.warning(f"Could not enable faulthandler: {e}")
+
     # Mute noisy HTTP access logs (Werkzeug / Flask dev server)
     for noisy_name in (
         "werkzeug",

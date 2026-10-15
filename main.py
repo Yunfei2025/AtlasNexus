@@ -87,9 +87,11 @@ def _file_mtime_date(path: Path) -> date | None:
 
 
 def _should_run_startup_eod(project_root: Path) -> tuple[bool, str]:
-    env_override = os.environ.get("FI_AUTO_EOD")
-    if env_override is not None and env_override.strip().lower() in {"0", "false", "no", "off"}:
-        return False, "disabled by FI_AUTO_EOD"
+    # Opt-in: the startup EOD is off unless FI_AUTO_EOD=1 (run it manually from
+    # Execution Center instead).
+    env_override = os.environ.get("FI_AUTO_EOD", "")
+    if env_override.strip().lower() not in {"1", "true", "yes", "on"}:
+        return False, "disabled by default; set FI_AUTO_EOD=1 to enable"
 
     from settings.general import DateConfig
 

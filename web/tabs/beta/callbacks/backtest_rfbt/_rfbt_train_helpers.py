@@ -133,11 +133,18 @@ def _render_signal_cards(factor_stats: Dict, artifact=None) -> html.Div:
         # equal to signal already), so use it for the strong/mild threshold.
         ls = stats['last_signal']            # sign = direction
         lp = stats.get('last_position', ls)  # magnitude = conviction
-        strong = lp >= 0.8 or lp <= -0.8
-        arrow_prefix = '↑↑' if lp >= 0.8 else ('↓↓' if lp <= -0.8 else '')
         prefix = factor.split('.')[0]
         is_yield = prefix in _IR_PREFIXES
         is_slope = prefix in ('IRSL', 'CRSL')
+        if is_slope:
+            # A slope factor's mimicking portfolio is long the long end /
+            # short the short end (weights -ve short tenors, +ve long
+            # tenors) and earns -d(slope): a POSITIVE position profits when
+            # the curve FLATTENS. Flip so the label/arrow/colour describe
+            # the trade actually held (positive side = steepener).
+            ls, lp = -ls, -lp
+        strong = lp >= 0.8 or lp <= -0.8
+        arrow_prefix = '↑↑' if lp >= 0.8 else ('↓↓' if lp <= -0.8 else '')
         is_curv = prefix in ('IRCV', 'CRCV')
         if ls > 0:
             if is_slope:
