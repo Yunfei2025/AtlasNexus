@@ -240,6 +240,12 @@ class FactorModelConfig:
     # inputs erases most of the gain, so this acts largely as a commodity-
     # SECTOR trend signal, not a growth/inflation read.
     macro_composite_features: bool = True
+    # Bond-futures features (CN rates + CDB credit; _BOND_FUTURES_PREFIXES):
+    # calendar roll (next/front close − 1) and implied repo − FR007 for
+    # T/TF/TS, from input/futures-analytics.pkl (backfilled 2015-03.., IRR
+    # from 2016-01). New information — positioning / carry in the futures
+    # market — rather than another transform of prices already in the model.
+    bond_futures_features: bool = False
     # ── 'tilt' sizing: strategic baseline + bounded model deviation ─────────
     # For CORE holdings (e.g. IRDL.CN duration) the model should tilt around a
     # policy allocation, not decide whether to hold the asset at all. The
@@ -532,6 +538,41 @@ def _macro_liquidity_features(macro: pd.DataFrame) -> Dict[str, pd.Series]:
     return feats
 
 
+# ── Bond-futures features (see FactorModelConfig.bond_futures_features) ──
+_BOND_FUTURES_PREFIXES: frozenset = frozenset({'IRDL', 'IRSL', 'IRCV', 'CRDL', 'CRSL', 'CRCV'})
+_BOND_FUTURES_CONTRACTS = ('T', 'TF', 'TS')   # TL only from 2023-04: too short
+_BOND_FUTURES_CACHE: Dict[str, pd.DataFrame] = {}
+
+
+def _bond_futures_features(input_dir: str, fr007: Optional[pd.Series]) -> Dict[str, pd.Series]:
+    feats: Dict[str, pd.Series] = {}
+    path = os.path.join(str(input_dir), 'futures-analytics.pkl')
+    if path not in _BOND_FUTURES_CACHE:
+        try:
+            _BOND_FUTURES_CACHE[path] = pd.read_pickle(path)
+        except Exception as e:
+            print(f"Warning: bond-futures features unavailable: {e}")
+            _BOND_FUTURES_CACHE[path] = {}
+    fa = _BOND_FUTURES_CACHE[path]
+    for b in _BOND_FUTURES_CONTRACTS:
+        df = fa.get(b) if isinstance(fa, dict) else None
+        if df is None or df.empty:
+            continue
+        df = df.copy()
+        df.index = pd.to_datetime(df.index)
+        front = pd.to_numeric(df['futures_close'], errors='coerce')
+        nxt = pd.to_numeric(df['next_close'], errors='coerce')
+        roll = (nxt / front.replace(0, np.nan) - 1.0) * 100.0      # % of price
+        feats[f'BF_{b}_Roll'] = roll
+        feats[f'BF_{b}_Roll_Z252'] = _rolling_zscore(roll, 252)
+        if fr007 is not None:
+            irr = pd.to_numeric(df['irr'], errors='coerce')
+            spr = irr - fr007.reindex(df.index).ffill()
+            feats[f'BF_{b}_IRRmFR007'] = spr
+            feats[f'BF_{b}_IRRmFR007_Chg20'] = spr.diff(20)
+    return feats
+
+
 # ── Load raw curve data for a factor ────────────────────────────────────
 def _load_curve_data(factor_code: str, input_dir: str) -> Optional[pd.DataFrame]:
     """Load raw tenor yield data for the factor's underlying curve.
@@ -612,6 +653,7 @@ def build_features(
     macro_growth: bool = True,
     macro_liquidity: bool = True,
     macro_composites: bool = True,
+    bond_futures: bool = True,
 ) -> pd.DataFrame:
     """Build predictive features for a single risk factor.
 
@@ -635,6 +677,7 @@ def build_features(
     if feature_subset is not None:
         _need_cross = any('_vs_' in f for f in feature_subset)
         _need_macro = any(f.startswith('MACRO_') for f in feature_subset)
+        bond_futures = bond_futures and any(f.startswith('BF_') for f in feature_subset)
 
     # Self-based features (always cheap — always compute)
     feats.update(_momentum_features(level, factor_code))
@@ -677,6 +720,13 @@ def build_features(
                 feats.update(_macro_growth_features(macro_df, composites_only=True))
             if macro_liquidity:
                 feats.update(_macro_liquidity_features(macro_df))
+
+    if bond_futures and factor_code.split('.')[0] in _BOND_FUTURES_PREFIXES:
+        try:
+            fr007 = _load_macro_features().get('FR007')
+        except Exception:
+            fr007 = None
+        feats.update(_bond_futures_features(input_dir, fr007))
 
     # Assemble and clean
     result = pd.DataFrame(feats)
@@ -1549,6 +1599,7 @@ def run_factor_model_backtest(
         macro_growth=cfg.macro_growth_features,
         macro_liquidity=cfg.macro_liquidity_features,
         macro_composites=cfg.macro_composite_features,
+        bond_futures=cfg.bond_futures_features,
     )
 
     # Daily returns; forward returns are computed PER horizon inside the loop.

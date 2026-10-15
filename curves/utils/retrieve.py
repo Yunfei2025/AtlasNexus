@@ -420,8 +420,11 @@ def _get_next_season_contract(contract_df, dps, ds):
     start_date = pd.to_datetime(dps, format='%Y%m%d')
     end_date = pd.to_datetime(ds, format='%Y%m%d')
 
-    # Filter to date range
-    mask = (contract_df.index >= start_date) & (contract_df.index <= end_date)
+    # Filter to date range. _wsd returns datetime.date labels, which newer
+    # pandas refuses to compare with Timestamp — convert for the comparison
+    # only, so the returned frame keeps contract_df's own index labels.
+    idx = pd.to_datetime(contract_df.index)
+    mask = (idx >= start_date) & (idx <= end_date)
     contract1_df = contract_df.loc[mask].copy()
 
     def transform_contract(code):
@@ -485,7 +488,14 @@ def fetchFuturesDatabaseWindow(prange, on_demand=False):
     database_update['contract'] = _wsd(flist, "trade_hiscode", dps, ds, "", on_demand=on_demand)
     database_update['contract1'] = _get_next_season_contract(database_update['contract'], dps, ds)
     database_update['contract2'] = _get_next_season_contract(database_update['contract1'], dps, ds)
-    tlist = list(database_update['contract'].iloc[0])+list(database_update['contract1'].iloc[0])+list(database_update['contract2'].iloc[0])
+    # Every contract that is front / next / next-next on ANY date in the window
+    # (not just the first row), so a multi-quarter backfill gets closes for the
+    # contracts it rolls into; skip NaN codes for products not yet listed
+    # (TS before 2018-08, TL before 2023-04).
+    tlist = [c for c in pd.unique(pd.concat([database_update['contract'],
+                                             database_update['contract1'],
+                                             database_update['contract2']]).values.ravel())
+             if isinstance(c, str) and c]
     database_update['close'] = pd.DataFrame(columns=tlist)
     database_update['close'][tlist] = _wsd(tlist, "close", dps, ds, "futurePriceType=1;bondTradingVenue=1;", on_demand=on_demand)
     database_update['contract_cls'] = _extract_contract_close(database_update['contract'], database_update['close'])
