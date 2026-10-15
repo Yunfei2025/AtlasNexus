@@ -60,8 +60,20 @@ Per project notes: do not tune parameters of one factor to fit its history (see 
 ### 3.1 Immediate
 1. **Retrain / Save so the commodity composites take effect.** Saved models and
    `factor-backtest.pkl` are still the old ones until the next retrain or Factor-tab Save.
-2. **US rate factors return empty.** `IRDL/IRSL/IRCV.US` give "No factors pass significance
-   filtering" in every variant including base. Pre-existing; cause not yet investigated.
+2. **US rate factors returned empty — FIXED 2026-10-14 (data, not model).** `IRDL/IRSL/IRCV.US`
+   (and .DE/.JP/.UK) had only 3-135 valid points in `factor-rates.pkl`. Root cause chain:
+   `fxcurve_ts.pkl` had a pandas-3 BlockManager defect (aliased blocks) -> `_safe_read_pickle` set it
+   aside as `fxcurve_ts.pkl.bak_corrupt_mgr` -> `multiasset.utils.updatePKL` (merge mode) saw "no file"
+   and wrote only the newest 7 rows, dropping 2015-2026 history. Repaired by loading the backup with
+   `load_pickle_with_blockmanager_repair`, then filling holes from Wind EDB (full-history fetch matched
+   the stored US/JP/DE values to 0.0000). Also found: the old file's `*2M` column is really the 2Y
+   yield (mislabelled; matches Wind 2Y exactly), and it had a hole 2026-06-17..07-15. UK stored values
+   differ from today's Wind series (mean 0.04-0.09, max 1.4 in 2022) — old values kept, only gaps filled.
+   `updatePKL` now tries the repair loader first so history cannot be dropped this way again.
+   After the fix the foreign-rate factors train (~2,700 days each) but are weak under the current
+   'continuous' sizing: 2016-09+ Sharpe IRDL.US 0.22, IRSL.US -0.02, IRCV.US 0.42, IRDL.DE 0.00,
+   IRDL.JP -1.05, IRDL.UK 0.11. (An older code comment quotes US 0.99 / DE 1.22 under 'discrete'
+   sizing — not re-verified.)
 3. Watch the commodity sleeve out of sample ("commodities only" was chosen after seeing results).
 
 ### 3.2 Model structure (next real lever for rates)
