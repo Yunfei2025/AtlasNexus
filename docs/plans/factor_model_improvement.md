@@ -58,8 +58,16 @@ Per project notes: do not tune parameters of one factor to fit its history (see 
 ## 3. Open work
 
 ### 3.1 Immediate
-1. **Retrain / Save so the commodity composites take effect.** Saved models and
-   `factor-backtest.pkl` are still the old ones until the next retrain or Factor-tab Save.
+1. **Retrain — DONE 2026-10-14** (Train action replica: 35-factor pool, `save_latest_only=True`,
+   ~2.5h, wrote `factor-backtest.pkl` + `factor_model_20261031.joblib`; 32 trained, SPDL.CDB and
+   CRDL/CRSL.ICP not in `factor-rates` so their old cache entries were kept as-is). Comparing old vs
+   new cache is NOT like-for-like on the full window: the old cache had only ~1,270-1,470 rows for
+   many factors (history from ~2020-21) vs up to 2,600+ now. On the common window from 2021-10-15:
+   16+ factor equal-risk book Sharpe 1.67 -> 1.73, ann 2.90% -> 3.80%; commodity sub-book -0.12 -> 0.00;
+   CN rates 1.19 -> 1.10 with NO code change for CN (a run-to-run / data-vintage noise floor of
+   roughly +-0.1-0.15 per book, larger per factor). Treat the retrain gain as modest and mostly from
+   longer history, not proven model improvement. Backups of the pre-retrain artifacts are in the
+   session scratchpad only (not durable).
 2. **US rate factors returned empty — FIXED 2026-10-14 (data, not model).** `IRDL/IRSL/IRCV.US`
    (and .DE/.JP/.UK) had only 3-135 valid points in `factor-rates.pkl`. Root cause chain:
    `fxcurve_ts.pkl` had a pandas-3 BlockManager defect (aliased blocks) -> `_safe_read_pickle` set it
