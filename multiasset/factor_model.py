@@ -192,6 +192,54 @@ class FactorModelConfig:
     # (new cap + rescale + this floor).
     long_floor: float = 0.40                      # min position during confirmed trend
     long_floor_confirm_window: int = 120          # medium-term momentum window (days)
+    # ── Stretch-tail (overbought/oversold) features ─────────────────────────
+    # The linear IC model gives each feature ONE signed weight, so a z-score
+    # can only act as "fade" if it is anti-predictive over the whole window.
+    # ZTail{w} = sign(z)·max(|z|−stretch_tail_z, 0) is zero inside the band and
+    # grows beyond it, letting the model learn a contrarian weight that bites
+    # only when the factor is stretched. Diagnostic (2026-10): forward-return
+    # IC vs stretch is NEGATIVE (reversal) for curvature (IRCV.CN −0.3..−0.5 in
+    # the tails) and long-window slope, POSITIVE (momentum) for duration
+    # (IRDL.CN), so this is a feature, not a blanket fade rule. Walk-forward A/B
+    # (2016-09..2026-09): CN beta book Sharpe 1.58 -> 1.66, CDB credit and
+    # USDCNY +0.17..+0.38, IRDL ~flat, EQDL.IF 0.32 -> 0.15 (hence excluded via
+    # _STRETCH_TAIL_EXCLUDE_PREFIXES). A halve-on-exhaustion position overlay
+    # was also tested and did nothing (+-0.02) — not implemented.
+    # DEFAULT OFF: a 26-window six-month sweep (2016-2026) showed the gain is
+    # not robust — CN book beats base in 13/26 windows (median delta 0.00; mean
+    # +0.06 comes from 2022/2023/2025), CRDL.CDB 7/15 (median 0.00). Only
+    # FXDL.USDCNY is consistent (17/24, median +0.03). Opt in per run via
+    # strategy_kwargs={'stretch_tail_features': True}. build_features() always
+    # computes the columns so a model trained with this on can be predicted live.
+    stretch_tail_features: bool = False
+    stretch_tail_z: float = 1.5
+    # ── Slow macro features (see build_features) ─────────────────────────────
+    # The raw macro block is levels + 1-day % changes, mostly noise for a
+    # model whose targets are 1/5/20-day returns. These re-express the SAME
+    # loaded series as slow signals:
+    #   macro_growth_features    : 20/60/120d log changes + 252d z of
+    #       commodity / equity-index futures, and composites (growth, inflation,
+    #       risk appetite, copper/gold).
+    #   macro_liquidity_features : interbank funding spreads (FR007-DR001,
+    #       SHIBOR3M-FR007) and FR007 changes, as level / z / change.
+    # A/B (2026-10): neither helps CN rates or CDB credit (growth: CN-book
+    # window median -0.14; liquidity: inert, +0.01). Price-derived macro
+    # re-expressions are exhausted for rates — new information (bond-futures
+    # basis / OI, repo volume, fund leverage) is the next lever there.
+    macro_growth_features: bool = False
+    macro_liquidity_features: bool = False
+    # Composites only (Growth / Inflation / RiskApp idx + 20/60d chg, CuAu) —
+    # 12 features instead of growth's 42. ON by default, but only for the
+    # families in _MACRO_COMPOSITE_PREFIXES (commodities). Whole-book A/B
+    # (2026-10, 16 factors equal-risk, 2016-09..2026-09): composites on CMDL,
+    # base elsewhere -> book Sharpe 1.38 -> 1.58, ann 4.39% -> 4.98%, beats
+    # base in 16/26 six-month windows (median +0.13), 9/11 calendar years.
+    # Commodity sub-book 0.31 -> 0.56. On rates / CDB credit every macro
+    # variant was <= base (CN 1.58 vs 1.55, CDB 0.53 vs 0.42), so they are
+    # not enabled there. Caveat: removing a commodity's own price from the
+    # inputs erases most of the gain, so this acts largely as a commodity-
+    # SECTOR trend signal, not a growth/inflation read.
+    macro_composite_features: bool = True
     # ── 'tilt' sizing: strategic baseline + bounded model deviation ─────────
     # For CORE holdings (e.g. IRDL.CN duration) the model should tilt around a
     # policy allocation, not decide whether to hold the asset at all. The
@@ -274,10 +322,31 @@ def _momentum_features(level: pd.Series, name: str) -> Dict[str, pd.Series]:
 
 
 # ── Value / mean-reversion features ─────────────────────────────────────
-def _value_features(level: pd.Series, name: str) -> Dict[str, pd.Series]:
+# Factor families where stretch-tail features hurt out-of-sample (equity index:
+# trending, Sharpe 0.32 -> 0.15 on EQDL.IF). Extend this set, not the code.
+_STRETCH_TAIL_EXCLUDE_PREFIXES: frozenset = frozenset({'EQDL'})
+
+
+def _stretch_tail_features(level: pd.Series, name: str, z_band: float) -> Dict[str, pd.Series]:
+    """Zero inside +-z_band, linear beyond it. Contrarian only when stretched."""
+    feats: Dict[str, pd.Series] = {}
+    for w in [60, 120, 252]:
+        z = _rolling_zscore(level, w)
+        feats[f'{name}_ZTail{w}'] = np.sign(z) * (z.abs() - z_band).clip(lower=0)
+    # stretched AND the last 5d move has turned against the stretch (exhaustion)
+    z120 = _rolling_zscore(level, 120)
+    turned = (np.sign(level.diff(5)) != np.sign(z120)).astype(float)
+    feats[f'{name}_Exhaust'] = np.sign(z120) * (z120.abs() - z_band).clip(lower=0) * turned
+    return feats
+
+
+def _value_features(level: pd.Series, name: str,
+                    stretch_tail: bool = False, z_band: float = 1.5) -> Dict[str, pd.Series]:
     feats: Dict[str, pd.Series] = {}
     for w in [60, 120, 252]:
         feats[f'{name}_ZScore{w}'] = _rolling_zscore(level, w)
+    if stretch_tail:
+        feats.update(_stretch_tail_features(level, name, z_band))
     feats[f'{name}_PctRank252'] = _rolling_percentile(level, 252)
     # Short z − long z  (contrarian distance)
     z20 = _rolling_zscore(level, 20)
@@ -389,6 +458,80 @@ def _load_macro_features() -> pd.DataFrame:
     return _MACRO_CACHE
 
 
+_MACRO_GROWTH_SERIES = ('CU', 'AL', 'ZN', 'RB', 'JM', 'SC', 'AU', 'AG', 'IF', 'IC')
+
+
+# Factor families that get the composite macro features by default
+# (FactorModelConfig.macro_composite_features). Extend this set, not the code.
+_MACRO_COMPOSITE_PREFIXES: frozenset = frozenset({'CMDL'})
+
+
+def _macro_growth_features(macro: pd.DataFrame,
+                           composites_only: bool = False) -> Dict[str, pd.Series]:
+    """Slow commodity / equity-futures signals + macro-regime composites.
+
+    ``composites_only`` drops the per-series Chg/Z columns and keeps only the
+    regime composites (see FactorModelConfig.macro_composite_features).
+
+    Built from the level columns already in the macro block; series that start
+    late (SC from 2018) are averaged over whatever members exist (>= 2).
+    Names avoid '_ZScore'/'_PctRank'/'_ValueMom' so the trend-regime veto
+    (which zeroes those substrings) does not touch them.
+    """
+    feats: Dict[str, pd.Series] = {}
+    lg: Dict[str, pd.Series] = {}
+    z: Dict[str, pd.Series] = {}
+    for c in _MACRO_GROWTH_SERIES:
+        if c not in macro.columns:
+            continue
+        lv = macro[c].where(macro[c] > 0).ffill(limit=5)
+        lg[c] = np.log(lv)
+        z[c] = _rolling_zscore(lg[c], 252)
+        if composites_only:
+            continue
+        for w in (20, 60):
+            feats[f'MACRO_{c}_Chg{w}'] = lg[c].diff(w)
+        feats[f'MACRO_{c}_Z252'] = z[c]
+
+    def _composite(name: str, members: List[str], signs: Optional[List[float]] = None):
+        have = [(m, (signs[i] if signs else 1.0)) for i, m in enumerate(members) if m in z]
+        if len(have) < 2:
+            return
+        idx = pd.concat([sg * z[m] for m, sg in have], axis=1).mean(axis=1, skipna=True)
+        idx = idx.where(pd.concat([z[m] for m, _ in have], axis=1).notna().sum(axis=1) >= 2)
+        feats[f'MACRO_{name}_Idx'] = idx
+        for w in (20, 60):
+            feats[f'MACRO_{name}_Chg{w}'] = idx.diff(w)
+
+    _composite('Growth', ['CU', 'RB', 'JM'])           # industrial-demand proxy
+    _composite('Inflation', ['SC', 'RB', 'JM'])        # cost-push proxy
+    _composite('RiskApp', ['IF', 'IC', 'AU'], [1.0, 1.0, -1.0])  # equities up / gold down
+    if 'CU' in lg and 'AU' in lg:
+        cg = lg['CU'] - lg['AU']                       # copper/gold: reflation vs safety
+        feats['MACRO_CuAu_Z252'] = _rolling_zscore(cg, 252)
+        feats['MACRO_CuAu_Chg60'] = cg.diff(60)
+    return feats
+
+
+def _macro_liquidity_features(macro: pd.DataFrame) -> Dict[str, pd.Series]:
+    """Interbank funding-spread features (rates in %, so spreads are in pct-pts)."""
+    feats: Dict[str, pd.Series] = {}
+    need = {'FR007', 'DR001', 'SHIBOR3M'}
+    if not need.issubset(macro.columns):
+        return feats
+    fr, dr, sh = (macro[c].ffill(limit=5) for c in ('FR007', 'DR001', 'SHIBOR3M'))
+    spreads = {'FR007mDR001': fr - dr, 'SHIBORmFR007': sh - fr}
+    for name, sp in spreads.items():
+        feats[f'MACRO_{name}'] = sp
+        feats[f'MACRO_{name}_Z60'] = _rolling_zscore(sp, 60)
+        feats[f'MACRO_{name}_Z252'] = _rolling_zscore(sp, 252)
+        feats[f'MACRO_{name}_Chg20'] = sp.diff(20)
+    for w in (20, 60):
+        feats[f'MACRO_FR007_Chg{w}'] = fr.diff(w)
+    feats['MACRO_FR007_Z252'] = _rolling_zscore(fr, 252)
+    return feats
+
+
 # ── Load raw curve data for a factor ────────────────────────────────────
 def _load_curve_data(factor_code: str, input_dir: str) -> Optional[pd.DataFrame]:
     """Load raw tenor yield data for the factor's underlying curve.
@@ -464,6 +607,11 @@ def build_features(
     include_macro: bool = True,
     include_cross: bool = True,
     feature_subset: Optional[List[str]] = None,
+    stretch_tail: bool = True,
+    stretch_tail_z: float = 1.5,
+    macro_growth: bool = True,
+    macro_liquidity: bool = True,
+    macro_composites: bool = True,
 ) -> pd.DataFrame:
     """Build predictive features for a single risk factor.
 
@@ -490,7 +638,8 @@ def build_features(
 
     # Self-based features (always cheap — always compute)
     feats.update(_momentum_features(level, factor_code))
-    feats.update(_value_features(level, factor_code))
+    use_tail = stretch_tail and factor_code.split('.')[0] not in _STRETCH_TAIL_EXCLUDE_PREFIXES
+    feats.update(_value_features(level, factor_code, use_tail, stretch_tail_z))
     feats.update(_volatility_features(level, factor_code))
 
     # Carry features from raw curve data
@@ -518,6 +667,16 @@ def build_features(
             macro_df = macro_df.loc[:, ~macro_df.columns.duplicated()]
             for col in macro_df.columns:
                 feats[f'MACRO_{col}'] = macro_df[col]
+            # Slow macro re-expressions (see FactorModelConfig.macro_*_features).
+            # Callers that train pass the cfg flags; the predict paths leave the
+            # defaults (True) so any saved model's feature_names can be rebuilt.
+            if macro_growth:
+                feats.update(_macro_growth_features(macro_df))
+            elif (macro_composites
+                  and factor_code.split('.')[0] in _MACRO_COMPOSITE_PREFIXES):
+                feats.update(_macro_growth_features(macro_df, composites_only=True))
+            if macro_liquidity:
+                feats.update(_macro_liquidity_features(macro_df))
 
     # Assemble and clean
     result = pd.DataFrame(feats)
@@ -1384,7 +1543,13 @@ def run_factor_model_backtest(
     # Fix 1: use a list of horizons; ensemble predictions across H=1, 5, 20.
     horizons = list(cfg.target_horizons) if cfg.target_horizons else [max(cfg.target_horizon, 1)]
     print(f"  [{factor_code}] Building features (horizons={horizons}d) ...")
-    all_features = build_features(factor_code, factor_levels, input_dir)
+    all_features = build_features(
+        factor_code, factor_levels, input_dir,
+        stretch_tail=cfg.stretch_tail_features, stretch_tail_z=cfg.stretch_tail_z,
+        macro_growth=cfg.macro_growth_features,
+        macro_liquidity=cfg.macro_liquidity_features,
+        macro_composites=cfg.macro_composite_features,
+    )
 
     # Daily returns; forward returns are computed PER horizon inside the loop.
     daily_returns = _compute_target_returns(factor_code, factor_levels)
