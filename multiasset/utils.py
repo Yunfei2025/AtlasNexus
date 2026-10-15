@@ -10,6 +10,7 @@ import pickle
 
 # Use the shared safe pickle loader from curves utils to handle incompatible/corrupted pickles
 from curves.utils.file import _safe_read_pickle
+from multiasset.pickle_repair import load_pickle_with_blockmanager_repair
 
 tenorlist = ["1Y","2Y","5Y","10Y", "30Y"]
 countrylist = ["US","JP","DE","UK"]
@@ -87,8 +88,16 @@ def updatePKL(dictn,file_path,rewrite=False):
         return dictn
     else:
         if os.path.exists(file_path):
-            # Load existing object using safe loading
-            dict_ = _safe_read_pickle(file_path)
+            # Load existing object. Try the BlockManager-repair loader first: a
+            # frame with aliased blocks fails plain unpickling under pandas 3,
+            # and _safe_read_pickle then sets the file aside and reports None —
+            # at which point this merge would write ONLY the new rows and
+            # silently drop all history (fxcurve_ts.pkl lost 2015-2026 this way:
+            # IRDL/IRSL/IRCV.US had 3 data points until it was rebuilt).
+            try:
+                dict_ = load_pickle_with_blockmanager_repair(file_path)
+            except Exception:
+                dict_ = _safe_read_pickle(file_path)
             if dict_ is None:
                 print(f"Starting with empty dictionary for {file_path}")
                 dict_ = {}
