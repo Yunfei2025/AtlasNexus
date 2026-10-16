@@ -103,6 +103,30 @@ Per project notes: do not tune parameters of one factor to fit its history (see 
   rebuilds `futures-analytics.pkl` from the stale `futures-db.pkl` and drops rows (it dropped 84
   per contract once). Back up first, or change it to abort.
 
+### 3.5 Foreign rate factors: discrete sizing (done 2026-10-16)
+
+After the data repair (3.1 item 2) the 12 foreign rate factors (IRDL/IRSL/IRCV x US/DE/JP/UK) were weak
+under 'continuous' sizing. Tested the older 'discrete' mode (same data, 2016-09..2026-10, full family,
+no per-factor tuning):
+
+| | continuous | discrete | windows (wins, median delta) |
+|---|---|---|---|
+| 12-factor equal-risk book | 0.55 (ann 2.0%) | **0.90 (ann 3.4%)** | 16/26, +0.61 |
+| DE+JP+UK (9) | 0.44 | 0.90 | 17/26, +0.67 |
+| US (3) | 0.38 | 0.33 | 13/26, +0.05 (no gain) |
+| Level factors IRDL x4 | -0.56 | -0.03 | 17/26, +0.44 (still no edge) |
+| CN rates + foreign 50/50 | 1.66 | 1.83 (maxDD -5.2% -> -4.2%) | |
+
+Gain is concentrated in IRSL.UK (0.58 -> 1.37) and IRSL.DE (0.32 -> 0.67); IRCV.UK collapses
+(1.08 -> 0.11) and IRSL.US is ~0 either way. Implemented as `_FOREIGN_RATE_DISCRETE` in
+`_FACTOR_SIZING_OVERRIDES`; `run_factor_model_backtest` now applies overrides unless the caller picked a
+non-default mode (the Train action always passes the default explicitly, which previously bypassed
+overrides and would have made the backtest disagree with the saved-artifact predict path).
+Limitation: explicitly choosing the default mode for an overridden factor is indistinguishable from
+unset. Open: the four foreign level factors have ~no edge in either mode - decide whether they should
+carry any weight in the beta book. The 50/50 line lowers annual return vs CN alone (7.5% vs 11.1%) at
+equal per-leg risk; it improves Sharpe and drawdown, so it only helps if the book is sized by risk.
+
 ## 4. Candidate new factors for the pool (all untested)
 
 Current pool: CN/US rates (level, slope, curve), CDB/LGB credit, CDB spread, four FX pairs,

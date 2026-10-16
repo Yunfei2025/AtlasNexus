@@ -1502,7 +1502,23 @@ def _is_long_only(factor_code: str) -> bool:
 # tracks the underlying, which itself returns -0.17%/-0.53 over that window.
 # A default whose sign depends on the start year is not a default. 'tilt'
 # remains selectable in the UI as an explicit duration-policy choice.
-_FACTOR_SIZING_OVERRIDES: Dict[str, Dict] = {}
+#
+# Foreign rate factors (US/DE/JP/UK x IRDL/IRSL/IRCV): 'discrete' sizing.
+# fxcurve_ts.pkl history was rebuilt 2026-10-14 (see docs/plans/factor_model_
+# improvement.md), after which these factors train on ~2,700 days. Same-data
+# A/B, 2016-09..2026-10, equal-risk 12-factor book: continuous Sharpe 0.55 ->
+# discrete 0.90 (ann 2.0% -> 3.4%), 16/26 six-month windows, median +0.61;
+# DE+JP+UK 9-factor book 0.44 -> 0.90 (17/26, +0.67). Applied to the WHOLE
+# family, not just the winners (IRCV.UK 1.08 -> 0.11 and IRSL.US lose) — a
+# family rule, not a per-factor tune. It agrees with the earlier note that
+# discrete's hard deadzone suits choppy foreign curves. Caveats: the level
+# factors (IRDL.US/DE/JP/UK) have ~no edge either way (4-factor book -0.56 ->
+# -0.03), and the gain is concentrated in IRSL.UK / IRSL.DE.
+_FOREIGN_RATE_DISCRETE: Dict[str, Dict] = {
+    f'{t}.{c}': {'sizing_mode': 'discrete'}
+    for c in ('US', 'DE', 'JP', 'UK') for t in ('IRDL', 'IRSL', 'IRCV')
+}
+_FACTOR_SIZING_OVERRIDES: Dict[str, Dict] = dict(_FOREIGN_RATE_DISCRETE)
 
 
 def factor_sizing_override(factor_code: str) -> Dict:
@@ -1573,6 +1589,19 @@ def run_factor_model_backtest(
             print(f"  [{factor_code}] sizing override: {override}")
     else:
         cfg = config
+        # Callers (the Factor-tab Train action, run_factor_backtest) always pass
+        # an explicit config whose sizing_mode is just the class default, which
+        # would silently bypass the override and size the backtest differently
+        # from the saved-artifact predict path (which applies it). So apply the
+        # override unless the caller chose a NON-default mode. Limitation: an
+        # explicit pick of the default mode itself is indistinguishable from
+        # "unset" and is overridden for these factors.
+        if cfg.sizing_mode == FactorModelConfig().sizing_mode:
+            override = factor_sizing_override(factor_code)
+            if override:
+                import dataclasses as _dc
+                cfg = _dc.replace(cfg, **override)
+                print(f"  [{factor_code}] sizing override: {override}")
 
     # Ensure DatetimeIndex
     if not isinstance(factor_levels.index, pd.DatetimeIndex):
