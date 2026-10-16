@@ -28,6 +28,10 @@ echo.
 REM -- 2. Dash server (separate window, auto-closes on exit) ------
 echo [2/3] Starting Dash server on port 8080...
 set FI_SHOW_LOG_WINDOW=0
+REM Runtime toggles (explicitly opt in to Wind/data background tasks)
+set FI_DISABLE_WIND=0
+set FI_AUTO_INITIALISE=1
+set FI_AUTO_REFRESH=1
 cd /d "%~dp0"
 start "AtlasNexus Server" cmd /k "python main.py daily-web"
 echo       Started in background window.

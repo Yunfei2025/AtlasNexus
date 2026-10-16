@@ -126,6 +126,15 @@ _status_lock = threading.Lock()
 DIRECT_CALLS_AVAILABLE = REFRESHERS_AVAILABLE
 
 
+def _wind_refresh_paused() -> bool:
+    """Return True while the Wind cooldown is active and background refresh should be skipped."""
+    try:
+        from data.providers.retrieve import _wind_backoff_active
+        return bool(_wind_backoff_active())
+    except Exception:
+        return False
+
+
 def _set_status(key: str, value: Any) -> None:
     with _status_lock:
         _status_state[key] = value
@@ -201,6 +210,21 @@ def run_initialise() -> str:
             return "Error: Direct API calls not available. Please check imports."
 
         t = datetime.datetime.today()
+        in_init_window = (
+            (t.hour >= TradingHoursConfig.START_HOUR)
+            and (t.hour <= TradingHoursConfig.INIT_END_HOUR)
+            and (t.weekday() <= 4)
+        )
+
+        if not in_init_window:
+            logger.info(
+                "Startup initialisation skipped: current time %02d:00 is outside trading window %02d:00-%02d:59.",
+                t.hour,
+                TradingHoursConfig.START_HOUR,
+                TradingHoursConfig.INIT_END_HOUR,
+            )
+            return "Initialisation deferred until trading window."
+
         try:
             from engine.context import build_run_config
             from engine.data_update import ensure_daily_required_updates
@@ -214,26 +238,11 @@ def run_initialise() -> str:
 
         try:
             from curves.utils.retrieve import updateInstrumentDef
-            # on_demand=True: this runs from the web app's init/startup path,
-            # which fires whenever the dashboard boots -- including outside
-            # trading hours. Without on_demand, ALLOW_NONTRADING_RETRIEVAL
-            # stays False, _ensure_wind() refuses the connection, every _wss
-            # call returns an empty frame, and updateInstrumentDef now raises
-            # ("no YIELD_CNBD column ... check Wind connection/quota") since
-            # that's indistinguishable from a genuine quota/session failure.
-            # Every other call site (main.py, engine/cli.py) already passes
-            # on_demand=True; this one was the odd one out.
             updateInstrumentDef(asof=None, on_demand=True)
         except Exception:
-            # Previously silenced entirely -- a failure here (Wind quota,
-            # session drop, etc.) left *-InstrumentInfo.pkl stale with no
-            # trace, which fed frozen closing yields into ytm_act for
-            # whichever bonds' fetch kept failing. Surface it like the
-            # sibling refresh above so repeated failures are at least
-            # visible in logs instead of disappearing silently.
             logger.exception("WARNING: updateInstrumentDef failed")
 
-        if (t.hour >= TradingHoursConfig.START_HOUR) and (t.hour <= TradingHoursConfig.INIT_END_HOUR) and (t.weekday() <= 4):
+        if in_init_window:
             print("Updating database and running generators...")
             try:
                 from curves import initialise as curves_initialise
@@ -270,6 +279,11 @@ def _autoruns1_tick() -> None:
         logger.info("Intraday refresh skipped: the previous refresh is still running.")
         return
     try:
+        if _wind_refresh_paused():
+            logger.warning("Intraday refresh skipped: Wind is in cooldown after repeated failures.")
+            _set_status("autoruns1", "Wind refresh paused: retrying after cooldown")
+            return
+
         if not DIRECT_CALLS_AVAILABLE:
             _set_status("autoruns1", "Error: Direct API calls not available")
             return
@@ -385,6 +399,11 @@ def start_periodic_refresh(interval_seconds: float | None = None) -> None:
         last_long_tick = 0.0
         while True:
             try:
+                if _wind_refresh_paused():
+                    logger.warning("Periodic refresh paused: Wind is in cooldown after repeated failures.")
+                    _set_status("autoruns1", "Wind refresh paused: retrying after cooldown")
+                    time.sleep(max(5.0, interval_seconds))
+                    continue
                 _autoruns1_tick()
                 now = time.monotonic()
                 if now - last_long_tick >= long_interval_seconds:

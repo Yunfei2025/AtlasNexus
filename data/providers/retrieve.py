@@ -6,11 +6,16 @@ Created on Mon Sep 18 22:47:31 2023
 
 @author: CMBC
 """
+import os
+import sys
 import pandas as pd
 import pickle
 import threading
+import subprocess
 import datetime as dt
 import logging
+import time
+from pathlib import Path
 import numpy as np
 from typing import Optional
 from settings.general import TradingHoursConfig
@@ -27,9 +32,56 @@ logger = logging.getLogger(__name__)
 WIND_CONNECT_TIMEOUT: float = 20.0
 WSQ_CALL_TIMEOUT: float = 10.0
 WSQ_CHUNK_SIZE: int = 200
+WIND_FAILURE_RESET_SECONDS: float = 120.0
+WIND_FAILURE_BACKOFF_SECONDS: float = 60.0
+WIND_FAILURE_THRESHOLD: int = 3
+
+_WIND_FAILURE_COUNT = 0
+_WIND_BACKOFF_UNTIL = 0.0
+_WIND_LAST_FAILURE_TS = 0.0
+
+
+def _wind_disabled() -> bool:
+    """Global kill switch for Wind calls in unstable environments."""
+    return os.environ.get("FI_DISABLE_WIND", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _mark_wind_failed() -> None:
+    """Track consecutive Wind failures and temporarily suppress retries."""
+    global _WIND_FAILURE_COUNT, _WIND_BACKOFF_UNTIL, _WIND_LAST_FAILURE_TS
+    now = time.monotonic()
+
+    # Failures separated by a long gap should not accumulate forever.
+    if _WIND_LAST_FAILURE_TS and (now - _WIND_LAST_FAILURE_TS > WIND_FAILURE_RESET_SECONDS):
+        _WIND_FAILURE_COUNT = 0
+
+    _WIND_FAILURE_COUNT += 1
+    _WIND_LAST_FAILURE_TS = now
+
+    if _WIND_FAILURE_COUNT >= WIND_FAILURE_THRESHOLD:
+        _WIND_BACKOFF_UNTIL = now + WIND_FAILURE_BACKOFF_SECONDS
+        logger.warning(
+            "[Wind] %d consecutive failures; backing off for %ss before retrying.",
+            _WIND_FAILURE_COUNT,
+            WIND_FAILURE_BACKOFF_SECONDS,
+        )
+
+
+def _wind_backoff_active() -> bool:
+    """Return True when the app should skip Wind retries for a short cooldown."""
+    return time.monotonic() < _WIND_BACKOFF_UNTIL
+
+
+def _reset_wind_failures() -> None:
+    global _WIND_FAILURE_COUNT, _WIND_BACKOFF_UNTIL, _WIND_LAST_FAILURE_TS
+    _WIND_FAILURE_COUNT = 0
+    _WIND_BACKOFF_UNTIL = 0.0
+    _WIND_LAST_FAILURE_TS = 0.0
 
 
 def _is_trading_hours(now: Optional[dt.datetime] = None) -> bool:
+    if _wind_disabled():
+        return False
     now = now or dt.datetime.now()
     if TradingHoursConfig.WEEKDAYS_ONLY and now.weekday() >= 5:
         return False
@@ -81,37 +133,96 @@ def _normalize_wind_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
+def _call_wind_via_subprocess(func_name: str, *args):
+    """Run a Wind call in a child Python process to isolate native crashes."""
+    if _wind_backoff_active():
+        logger.warning("[Wind] skipping %s call during cooldown to protect app stability.", func_name)
+        return pd.DataFrame()
+
+    project_root = str(Path(__file__).resolve().parents[2])
+    script = (
+        "import pickle, sys\n"
+        f"sys.path.insert(0, {project_root!r})\n"
+        "try:\n"
+        "    from WindPy import w\n"
+        "    if not w.isconnected():\n"
+        "        w.start()\n"
+        f"    value = getattr(w, {func_name!r})(*{args!r}, usedf=True)[1]\n"
+        "    sys.stdout.buffer.write(b'OK\\n')\n"
+        "    sys.stdout.buffer.write(pickle.dumps(value))\n"
+        "except Exception as ex:\n"
+        "    sys.stdout.buffer.write(b'ERR\\n')\n"
+        "    sys.stdout.buffer.write(repr(ex).encode('utf-8', 'replace'))\n"
+        "    raise\n"
+    )
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=project_root,
+    )
+
+    try:
+        stdout, stderr = proc.communicate(timeout=WSQ_CALL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        _mark_wind_failed()
+        logger.warning("[Wind] %s timeout after %ss; returning empty frame.", func_name, f"{WSQ_CALL_TIMEOUT:.0f}")
+        return pd.DataFrame()
+
+    if proc.returncode != 0:
+        _mark_wind_failed()
+        err_text = stderr.decode("utf-8", "replace")
+        logger.warning("[Wind] %s child process failed: %s", func_name, err_text or "unknown error")
+        return pd.DataFrame()
+
+    if not stdout:
+        logger.warning("[Wind] %s returned no data from child process.", func_name)
+        return pd.DataFrame()
+
+    if stdout.startswith(b"ERR\n"):
+        _mark_wind_failed()
+        logger.warning("[Wind] %s child process error: %s", func_name, stdout[4:].decode("utf-8", "replace"))
+        return pd.DataFrame()
+
+    if not stdout.startswith(b"OK\n"):
+        logger.warning("[Wind] %s child process returned unexpected payload.", func_name)
+        return pd.DataFrame()
+
+    try:
+        value = pickle.loads(stdout[3:])
+    except Exception as ex:
+        _mark_wind_failed()
+        logger.warning("[Wind] %s pickle decode error: %s", func_name, ex)
+        return pd.DataFrame()
+
+    _reset_wind_failures()
+    return value
+
+
+def _wind_call_sync(func_name: str, *args) -> pd.DataFrame:
+    if not _ensure_wind():
+        return pd.DataFrame()
+    result = _call_wind_via_subprocess(func_name, *args)
+    if not isinstance(result, pd.DataFrame):
+        return pd.DataFrame()
+    return _normalize_wind_frame(result)
+
+
 def _wsq_single_call(codes, fields) -> pd.DataFrame:
     template = _empty_wsq_frame(codes, fields)
-    result_holder = [template]
-    exc_holder: list[Optional[Exception]] = [None]
-
-    def _do_wsq():
-        try:
-            from WindPy import w
-            result_holder[0] = w.wsq(codes, fields, usedf=True)[1]
-        except Exception as ex:
-            exc_holder[0] = ex
-
-    t = threading.Thread(target=_do_wsq, daemon=True)
-    t.start()
-    t.join(timeout=WSQ_CALL_TIMEOUT)
-
-    if t.is_alive():
-        logger.warning(
-            "[Wind] wsq timeout after %ss for %d codes; returning NaN frame.",
-            f"{WSQ_CALL_TIMEOUT:.0f}",
-            len(template.index),
-        )
+    if _wind_backoff_active():
+        logger.warning("[Wind] skipping wsq call during cooldown to protect app stability.")
         return template
 
-    if exc_holder[0] is not None:
-        logger.warning("Wind wsq error: %s", exc_holder[0])
-        return template
-
-    result = result_holder[0]
+    result = _call_wind_via_subprocess("wsq", codes, fields)
     if not isinstance(result, pd.DataFrame):
+        _mark_wind_failed()
         return template
+
+    _reset_wind_failures()
     result = result.reindex(index=template.index)
     return _normalize_wind_frame(result)
 
@@ -119,6 +230,10 @@ def _wsq_single_call(codes, fields) -> pd.DataFrame:
 def _wind_start(log_msg: str = "Failed to start") -> bool:
     """Start or restart Wind connection. Returns True on success, False on failure."""
     global _WIND_AVAILABLE
+    if _wind_disabled():
+        _WIND_AVAILABLE = False
+        logger.warning("[Wind] disabled by FI_DISABLE_WIND; running in offline mode.")
+        return False
     if not _is_trading_hours() and not ALLOW_NONTRADING_RETRIEVAL:
         _WIND_AVAILABLE = False
         logger.warning("[Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.")
@@ -137,15 +252,26 @@ def _wind_start(log_msg: str = "Failed to start") -> bool:
 
 def _ensure_wind() -> bool:
     """Ensure Wind connection is available. Returns True on success."""
+    if _wind_disabled():
+        return False
+    if _wind_backoff_active():
+        logger.warning("[Wind] skipping connection retry during cooldown to avoid repeated native crashes.")
+        return False
     try:
         from WindPy import w
         if w.isconnected():
             global _WIND_AVAILABLE
             _WIND_AVAILABLE = True
+            _reset_wind_failures()
             return True
     except Exception:
         pass
-    return _wind_start("Failed to start")
+    ok = _wind_start("Failed to start")
+    if not ok:
+        _mark_wind_failed()
+    else:
+        _reset_wind_failures()
+    return ok
 
 
 def reset_wind_connection():
@@ -168,62 +294,40 @@ def set_allow_nontrading_retrieval(flag: bool):
 # ---------------------------------------------------------------------------
 # WindPy safe wrappers
 # ---------------------------------------------------------------------------
-def _wind_call(func_name: str, *args) -> pd.DataFrame:
-    """Generic Wind API call: ensures connection, calls func, normalizes result."""
-    if not _ensure_wind():
-        return pd.DataFrame()
+def _wind_call(func_name: str, *args, allow_nontrading: bool = False) -> pd.DataFrame:
+    """Generic Wind API call that runs in a child process to contain crashes."""
+    global ALLOW_NONTRADING_RETRIEVAL
+    old_val = ALLOW_NONTRADING_RETRIEVAL
+    ALLOW_NONTRADING_RETRIEVAL = bool(allow_nontrading) or ALLOW_NONTRADING_RETRIEVAL
     try:
-        from WindPy import w
-        result = getattr(w, func_name)(*args, usedf=True)[1]
-        return _normalize_wind_frame(result)
-    except Exception as ex:
-        logger.warning("Wind %s error: %s", func_name, ex)
+        result = _call_wind_via_subprocess(func_name, *args)
+    finally:
+        ALLOW_NONTRADING_RETRIEVAL = old_val
+
+    if not isinstance(result, pd.DataFrame):
         return pd.DataFrame()
+    return result
 
 
 def _wset(api, options, on_demand: bool = False):
     if on_demand:
-        global ALLOW_NONTRADING_RETRIEVAL
-        old_val = ALLOW_NONTRADING_RETRIEVAL
-        ALLOW_NONTRADING_RETRIEVAL = True
-        try:
-            return _wind_call("wset", api, options)
-        finally:
-            ALLOW_NONTRADING_RETRIEVAL = old_val
+        return _wind_call("wset", api, options, allow_nontrading=True)
     return _wind_call("wset", api, options)
 
 def _wss(codes, fields, options="", on_demand: bool = False):
     if on_demand:
-        global ALLOW_NONTRADING_RETRIEVAL
-        old_val = ALLOW_NONTRADING_RETRIEVAL
-        ALLOW_NONTRADING_RETRIEVAL = True
-        try:
-            return _wind_call("wss", codes, fields, options)
-        finally:
-            ALLOW_NONTRADING_RETRIEVAL = old_val
+        return _wind_call("wss", codes, fields, options, allow_nontrading=True)
     return _wind_call("wss", codes, fields, options)
 
 def _wsd(codes, fields, start, end, options="", on_demand: bool = False):
     if on_demand:
-        global ALLOW_NONTRADING_RETRIEVAL
-        old_val = ALLOW_NONTRADING_RETRIEVAL
-        ALLOW_NONTRADING_RETRIEVAL = True
-        try:
-            return _wind_call("wsd", codes, fields, start, end, options)
-        finally:
-            ALLOW_NONTRADING_RETRIEVAL = old_val
+        return _wind_call("wsd", codes, fields, start, end, options, allow_nontrading=True)
     return _wind_call("wsd", codes, fields, start, end, options)
 
 def _wsi(codes, fields, start, end, options="", options2=None, on_demand: bool = False):
     extra = (options2,) if options2 is not None else ()
     if on_demand:
-        global ALLOW_NONTRADING_RETRIEVAL
-        old_val = ALLOW_NONTRADING_RETRIEVAL
-        ALLOW_NONTRADING_RETRIEVAL = True
-        try:
-            return _wind_call("wsi", codes, fields, start, end, options, *extra)
-        finally:
-            ALLOW_NONTRADING_RETRIEVAL = old_val
+        return _wind_call("wsi", codes, fields, start, end, options, *extra, allow_nontrading=True)
     return _wind_call("wsi", codes, fields, start, end, options, *extra)
 
 def _wst(codes, fields, ds):

@@ -229,6 +229,12 @@ def run_atlasnexus_daily_app():
     """Run AtlasNexus Daily Console (new app, port 8080)."""
     logger.info("Initializing AtlasNexus Daily Console...")
     try:
+        # Native Wind SDK crashes are process-fatal on Windows. Keep web mode
+        # in offline-safe mode unless explicitly overridden.
+        if "FI_DISABLE_WIND" not in os.environ:
+            os.environ["FI_DISABLE_WIND"] = "1"
+            logger.warning("FI_DISABLE_WIND=1 (default web safe mode). Set FI_DISABLE_WIND=0 only if Wind is stable.")
+
         from web.apps import atlasnexus_daily
         from web.core.scripts import run_initialise, start_periodic_refresh
         import webbrowser
@@ -239,10 +245,9 @@ def run_atlasnexus_daily_app():
 
         _launch_startup_eod(project_root)
 
-        # Run the daily generation process in the background so the dashboard
-        # stays responsive while curves and derived artifacts are rebuilt.
-        # Set FI_AUTO_INITIALISE=0 to suppress it for a dashboard-only session.
-        if os.environ.get("FI_AUTO_INITIALISE", "").strip().lower() not in {"0", "false", "no", "off"}:
+        # Run the daily generation process in the background only when
+        # explicitly enabled. Default is OFF for web stability.
+        if os.environ.get("FI_AUTO_INITIALISE", "").strip().lower() in {"1", "true", "yes", "on"}:
             import threading
 
             def _bg_init():
@@ -254,21 +259,36 @@ def run_atlasnexus_daily_app():
 
             threading.Thread(target=_bg_init, daemon=True).start()
         else:
-            logger.info("Skipping automatic initialisation; FI_AUTO_INITIALISE disables it.")
+            logger.info("Skipping automatic initialisation by default. Set FI_AUTO_INITIALISE=1 to enable.")
 
-        # Keep intraday market data and derived curves current while the daily
-        # dashboard is running. Set FI_AUTO_REFRESH=0 to disable this loop.
-        if os.environ.get("FI_AUTO_REFRESH", "").strip().lower() not in {"0", "false", "no", "off"}:
-            start_periodic_refresh()
+        # Keep intraday market data and derived curves current only when
+        # explicitly enabled. Default is OFF for web stability.
+        if os.environ.get("FI_AUTO_REFRESH", "").strip().lower() in {"1", "true", "yes", "on"}:
+            from settings.general import TradingHoursConfig
+            now = datetime.now()
+            in_window = (
+                TradingHoursConfig.START_HOUR <= now.hour <= TradingHoursConfig.END_HOUR
+                and now.weekday() <= 4
+            )
+            if in_window:
+                start_periodic_refresh()
+            else:
+                logger.info(
+                    "Skipping automatic periodic refresh at startup: outside trading window %02d:00-%02d:59.",
+                    TradingHoursConfig.START_HOUR,
+                    TradingHoursConfig.END_HOUR,
+                )
         else:
-            logger.info("Skipping automatic periodic refresh; FI_AUTO_REFRESH disables it.")
+            logger.info("Skipping automatic periodic refresh by default. Set FI_AUTO_REFRESH=1 to enable.")
 
         browser_url = _browser_url(8080)
         logger.info(f"Opening AtlasNexus Daily Console in browser: {browser_url}")
         Timer(1.5, lambda: webbrowser.open_new(browser_url)).start()
 
         try:
-            atlasnexus_daily.app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False, threaded=True)
+            # Single-threaded serving is slower but significantly more stable
+            # when callbacks touch native extensions or non-thread-safe libs.
+            atlasnexus_daily.app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False, threaded=False)
         except KeyboardInterrupt:
             logger.info("AtlasNexus Daily Console stopped by user")
         except Exception:
