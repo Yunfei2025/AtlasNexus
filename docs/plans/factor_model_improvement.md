@@ -328,3 +328,34 @@ pair, concentration); the choice between A..F is a return-vs-smoothness decision
 budgets (replace `pool_sleeve_budgets`' capital-share rule), keep gross <= 95% / no leverage, validate with the
 window sweep and the frozen holdout (P5), then re-test the credit and foreign slope/curve pools under it (P3).
 
+### 6.4 Update 2026-10-17 (later): Pure Risk Parity mode vs factor-scaling vs design C
+
+Comparison missed in 6.3. Same pool, 2017-2026, price + carry, unlevered, gross <= 95%
+(`alloc_mode='risk_parity'` = monthly long-only RP across assets; `'factor_scaling'` = signed sleeves):
+
+| Book | Sharpe | Ann. | Vol | Max DD | Worst yr | Avg gross | Risk share R/F/C |
+|---|---|---|---|---|---|---|---|
+| **Pure Risk Parity mode** | **2.04** | 2.63% | 1.3% | -2.7% | +0.2% | 95% (rates 90%) | 61/3/36 |
+| Factor-scaling current (A) | 1.01 | 5.80% | 5.7% | -9.2% | -0.1% | 91% | 1/5/94 |
+| Design C (fixed 2/1/0.5) | 1.37 | 4.13% | 3.0% | -3.3% | +1.4% | 84% | ~8/20/72 avg |
+
+Neither C nor A dominates the RP mode: RP has the higher Sharpe and smaller drawdown but less return.
+Basis caveat: RP's reported price-only Sharpe is 0.87 (no carry); its 2.04 includes bond carry and the
+2017-2026 CN bond rally. Rising-yield regimes would hurt a 90%-duration book.
+
+**Combination (RP-mode rates book + slices of the factor-mode FX and commodity sleeves, gross <= 95%):**
+this beats both RP and C. Multipliers: RP rates book x R, factor-mode FX sleeve x F, commodity sleeve x C.
+
+| Combo (R,F,C) | Sharpe | Ann. | Max DD | Windows vs RP (wins, median dSharpe) |
+|---|---|---|---|---|
+| RP mode | 2.04 | 2.63% | -2.7% | - |
+| (1, 0.5, 0.1) | 2.35 | 2.83% | -2.3% | 16/25, +0.08 |
+| (1, 1, 0.2) | 2.10 | 3.25% | -2.4% | 16/25, +0.38 |
+| (1, 2, 0.3) | 1.85 | 3.63% | -2.5% | 15/25, +0.21 |
+| (0.9, 2, 0.5) | 1.62 | 4.03% | -2.8% | 13/25, +0.14 |
+| (0.8, 2, 0.75) | 1.41 | 4.51% | -3.9% | 13/25, +0.11 |
+
+(0.9, 2, 0.5) has similar return to design C with higher Sharpe (1.62 vs 1.37) and smaller drawdown. Gains over
+RP are modest in window terms (median +0.1 to +0.4). Combos were selected on the same 10 years: confirm on the
+frozen holdout (P5). **Design C is superseded** by "RP core + small FX/commodity signal sleeves".
+
