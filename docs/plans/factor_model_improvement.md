@@ -402,3 +402,27 @@ budgets) vs M1 (pure RP), 2017-2026, unlevered, price + carry:
   -1.67%, worst year +1.17%, 16/25 windows vs M1 (median +0.39). Return is not improved, risk is lower.
 - "M2 as coded" (Sharpe 1.01) is a different sizing rule, not a test of the signals.
 
+### 6.6 CORRECTION (2026-10-17): the 6.3-6.5 comparisons used the wrong Sharpe basis
+
+Sections 6.3-6.5 ranked books on **price + carry, risk-free 0, no funding charge**. That basis credits a long-bond
+book (Pure Risk Parity: ~90% CN bonds, ~2% carry) with carry but never charges the cost of financing it, so it
+flatters Pure RP (Sharpe 2.04). The app's headline KPI is **Sharpe (post-funding)** (`_figures.py`), which subtracts
+the book's actual repo funding cost. Same pool/dates (2017-01-02..2026-10-13), the app's own metrics:
+
+| Book | Sharpe post-funding | Sharpe price-only | Sharpe total (rf 2%) | CAGR | Funding | Max DD |
+|---|---|---|---|---|---|---|
+| Pure Risk Parity | 0.84 | 0.87 | 0.32 | 2.4% | 1.4%/yr | -2.5% |
+| Factor scaling as coded | 1.01 | 0.93 | 0.64 | 4.75% | 0.4%/yr | -6.2% |
+| Factor scaling on RP budgets | **1.25** | **1.13** | 0.42 | 2.5% | 1.0%/yr | -1.9% |
+
+- The factor model is NOT worse than Pure RP and its signals are not useless: on every funding-aware measure and
+  on price-only Sharpe, both factor-scaling variants rank at or above Pure RP; signed sleeves also avoid paying
+  funding on idle bond notional (0.4-1.0%/yr vs 1.4%). Net of funding, CAGR is roughly RP 1.0%, factor scaling as
+  coded 4.35%, factor scaling on RP budgets 1.5%.
+- Superseded / to be redone on the post-funding basis: the "Pure RP is best (2.04)" claim, design C being
+  "superseded", the RP-core + satellite combination table (6.4), and the 50/50 mix result (6.5). The earlier finding
+  that the current factor-scaling sleeve rule makes a gold/aluminium-dominated risk profile (94% of P&L variance)
+  stands - it is a risk-composition fact, independent of the Sharpe basis.
+- Every Sharpe in this plan must name its basis (post-funding is the app headline; price-only is the Factor-tab
+  basis). Do not use price + carry at rf = 0 to rank books with different bond exposure.
+
