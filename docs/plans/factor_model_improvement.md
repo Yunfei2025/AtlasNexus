@@ -606,3 +606,19 @@ new in-sample-discovered strategy and is not recommended without fresh data.
 **Status of signal work:** six generic or asset-specific feature tests plus the window ensemble are null. The model's
 edge is thin (IC ~0.07) and is not improved by more inputs of this kind.
 
+### 6.15 Rolling-edge gating - skipped on evidence (2026-10-17)
+
+Question: does a factor's recent edge predict its next edge? (If not, budget gating by recent edge cannot add value.)
+17 factors, 12m model, month-ends 2017-07..2026-04; trailing 12m vs next 6m (no look-ahead: trailing IC only uses
+forward returns realised before the decision date).
+
+- Rank IC: pooled corr(trailing, next) = -0.06; cross-sectional (non-overlapping 6-monthly dates, n=18) mean -0.11,
+  t = -1.94, positive in 7/18 - if anything mild reversal. Next-6m IC is HIGHER when trailing IC <= 0 (0.143, n=61) than
+  when > 0 (0.118, n=233). Per-factor time-series correlations are mostly negative (13 of 17).
+- Strategy Sharpe: pooled +0.04; cross-sectional mean +0.08, t = +1.27, positive in 12/18; next-6m Sharpe -0.04 after a
+  negative trailing year vs +0.03 after a positive one - a tiny, insignificant tilt.
+
+No usable persistence: gating by recent IC would cut factors just before they recover, and gating by recent Sharpe has
+no reliable edge. Not built. This matches the within-factor ICIR gate already in `build_position_series` being the most
+that recent-skill information can do.
+
