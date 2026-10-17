@@ -359,3 +359,35 @@ this beats both RP and C. Multipliers: RP rates book x R, factor-mode FX sleeve 
 RP are modest in window terms (median +0.1 to +0.4). Combos were selected on the same 10 years: confirm on the
 frozen holdout (P5). **Design C is superseded** by "RP core + small FX/commodity signal sleeves".
 
+### 6.5 Audit of the two methods (2026-10-17)
+
+Method 1 = Pure Risk Parity (`alloc_mode='risk_parity'`: Stage-1 factor ERC + Stage-2 tenor shape, monthly,
+then 3M-momentum veto on FX/commodity + class caps). Method 2 = factor model on top of risk parity
+(`'factor_scaling'`). Default 6-factor pool, 2017-2026, price + carry, unlevered:
+
+| Book | Sharpe | Ann. | Vol | Max DD | Worst yr | Gross R/F/C | Risk share R/F/C |
+|---|---|---|---|---|---|---|---|
+| M1 Stage-1/2 weights, before veto/caps | 1.95 | 2.55% | 1.3% | -2.6% | +0.2% | 85/5/5 | 53/4/43 |
+| **M1 live (veto + caps)** | **2.04** | **2.63%** | 1.3% | -2.7% | +0.2% | 90/2/4 | 61/3/36 |
+| M2 as coded (signed sleeves, IR capital ∝ sqrt(vol), others equal) | 1.01 | 5.80% | 5.7% | -9.2% | -0.1% | 30/20/41 | 1/5/94 |
+| **M2 on the RP budgets** (Stage-1 ERC budget renormalised over the pool, signed by factor signal) | 1.95 | 2.54% | 1.3% | **-1.9%** | **+1.0%** | 72/5/3 | 53/12/35 |
+
+Findings:
+- M1 works as designed at the capital level (rates ~85-90% of gross because rate sleeves have tiny vol), but
+  realised ex-post risk is not equal across factors (rates ~53-61%, commodities 36-43%, FX 3-4%). The veto and
+  class caps are NOT the cause (Sharpe 1.95 -> 2.04 with them).
+- Stage-1 ERC solves over ~48 global factors (`reference_factor_budget`); a pool's own factors receive small,
+  arbitrary absolute budgets (e.g. IRDL.CN 0.001, USDCNY 0.01, AU 0.001 in 2021-12). Relative budgets inside the
+  pool are workable for IR but tiny for FX/commodities. A direct 6-factor equal-risk re-solve was attempted but my
+  solver was unreliable, so no quantitative claim is made about the size of this distortion.
+- **M2 as coded is not "risk parity adjusted by the factor model".** `factor_scaling` ignores Stage-1 budgets
+  (docstring: global ERC gives pool factors near-zero shares) and uses `pool_sleeve_budgets`; it produces a
+  commodity-risk book. The older RP-budget x signal design (`scalar_to_coeff`, `rebuild_asset_weights`) still
+  exists in code but was replaced by signed sleeves (2026-09-26).
+- **M2 on RP budgets ~ M1 on Sharpe and return (1.95 vs 2.04, 2.54% vs 2.63%) but smoother**: drawdown -1.9% vs
+  -2.7%, worst year +1.0% vs +0.2%. The factor model adds drawdown protection, not return/Sharpe, because RP gives
+  FX/commodities (where the models earn) only ~5-8% of capital.
+- Unlevered return is bounded by the carry of what the book holds (~2.5%). More return needs either more
+  commodity/FX risk (Sharpe falls; see 6.4 combos) or higher-yielding assets (credit) - untested under RP budgets
+  (P3).
+
