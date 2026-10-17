@@ -555,3 +555,29 @@ true holdout; the ERC rule itself has no fitted parameters.
 - Caveat: ERC's own edge has thinned - 2023-2026 Sharpe 0.6-0.85 and ~1% a year - so the book's signal quality, not its
   sizing, is now the binding constraint (plan P4).
 
+### 6.13 Signal quality (P4): diagnostics and the ensemble test (2026-10-17)
+
+"Signal" = the factor model's predicted return and the position derived from it (what scales each sleeve).
+
+**Diagnostic (17 factors, saved factor-backtest.pkl, 5-day rank IC of predicted return vs outcome):** skill is thin but
+stable - median IC 0.084 (2017-20), 0.074 (2021-26), 0.074 (2023-26); daily direction hit rate ~50-51%. The median
+per-factor Sharpe fell 0.50 -> 0.09 (2021-26) -> 0.18 (2023-26), but it is a rotation, not a uniform decay: skill
+fell in AU (IC 0.11 -> -0.03), JM (0.23 -> -0.03), RB (0.14 -> -0.06), IC index; it rose in USDCNY (Sharpe -0.08 -> 0.94),
+IRSL.CN (0.42 -> 0.91), AG, AL. The ERC book leans on rates/FX, whose signals held up.
+
+**Ensemble over training windows (9/12/18 months), averaged predictions through the model's own position logic - NOT
+supported.** Predictions from different windows are only weakly correlated (median 0.43 between 9m and 18m), yet:
+
+| | Median factor Sharpe | Mean factor Sharpe | Equal-risk 17-factor book (Sharpe / ann / maxDD) | Book 2021-26 |
+|---|---|---|---|---|
+| 12m model (current) | 0.24 | 0.31 | **1.31** / 4.06% / -5.1% | 0.88 |
+| Ensemble 9/12/18 | 0.21 | 0.24 | 1.11 / 3.53% / -5.4% | 0.66 |
+| 9m | 0.13 | 0.21 | 1.04 / 3.13% / -7.0% | 0.92 |
+| 18m | 0.21 | 0.24 | 1.11 / 3.52% / -4.4% | 0.56 |
+
+Ensemble beats the 12m model in 8/17 factors (mean dSharpe -0.07) and 193/405 = 48% of factor-windows; IC is unchanged
+(0.062 -> 0.069). Caveat: 12 months was the historical default and may be favoured by earlier tuning on this same
+history, so this is not proof that a 12m window is optimal - only that averaging windows does not improve it.
+Window-averaging is dropped. Remaining ideas (untested): asset-specific information for the sleeves that lost skill
+(e.g. gold: US real yields / USD), and sleeve inclusion by rolling edge.
+
