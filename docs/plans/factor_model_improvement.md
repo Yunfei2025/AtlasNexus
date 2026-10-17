@@ -391,3 +391,14 @@ Findings:
   commodity/FX risk (Sharpe falls; see 6.4 combos) or higher-yielding assets (credit) - untested under RP budgets
   (P3).
 
+**Is the factor model worse than pure risk parity? No - not distinguishable (tested 2026-10-17).** M2 (signals on RP
+budgets) vs M1 (pure RP), 2017-2026, unlevered, price + carry:
+- Daily return difference -0.09%/yr, t-stat -0.21 (indistinguishable from zero). 6-month windows (n=25): M2 beats M1
+  on Sharpe in 13, on return in 12; median dSharpe +0.16, median dReturn -0.14pt.
+- By year M2 wins 2017 (+2.6pt), 2020 (+1.5), 2022 (+0.25) and loses 2021 (-1.75), 2023 (-1.9), 2024 (-1.3); the
+  pattern is consistent with the signals sometimes standing aside in strong bond-rally years (cost of carry), not
+  verified.
+- Daily P&L correlation 0.43 -> a plain 50/50 mix of the two is better than either: Sharpe 2.36, ann 2.58%, maxDD
+  -1.67%, worst year +1.17%, 16/25 windows vs M1 (median +0.39). Return is not improved, risk is lower.
+- "M2 as coded" (Sharpe 1.01) is a different sizing rule, not a test of the signals.
+
