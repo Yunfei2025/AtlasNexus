@@ -478,3 +478,27 @@ expected to work once the pool is broader (more commodities, equity indices, mor
 default pool (lowers return; 6.8). Revisit: when the pool is broadened, re-run the as-coded vs RP-budget comparison
 (6.7) on the app's post-funding Sharpe before switching. Near-term lever for return is signal quality on AU/AL/FX.
 
+### 6.10 Broader pool: as coded vs RP budgets (2017-01-02..2026-10-13, app metrics, factor_scaling, unlevered)
+
+Nested pools on top of the 3 CN rates + USDCNY + AU + AL base. Added: P09 +AG,CU,ZN; P11 +RB,JM; P14 +IF,IC,IH;
+P17 +EURCNY,JPYCNY,GBPCNY. Excluded (data too short): SC 2018-03, SA 2019-12, IM 2022, LC/EC 2023. Standalone
+Sharpe (2018+) of the additions is weak: AG 0.15, CU 0.12, ZN 0.11, RB 0.20, JM -0.14, IF 0.42, IC 0.05, IH -0.07,
+EURCNY 0.21, JPYCNY 0.03, GBPCNY 0.47 (base: AU 0.43, AL 0.08, USDCNY 0.78). "RP" = Stage-1 budgets renormalised over the pool.
+
+| Pool | As coded: Sharpe post-fund / net return / maxDD | RP budgets: Sharpe post-fund / net return / maxDD | Realised risk share (RP): rates/comm/eq/FX |
+|---|---|---|---|
+| P06 | 1.01 / 4.33% / -6.2% | **1.25** / 1.48% / -1.9% | 53 / 35 / - / 12 |
+| P09 | 0.47 / 2.91% / -10.9% | **0.97** / 1.65% / -1.9% | 23 / 71 / - / 6 |
+| P11 | 0.40 / 3.13% / -13.0% | **1.09** / 1.89% / -1.7% | 22 / 73 / - / 5 |
+| P14 | 0.56 / 3.99% / -15.6% | **0.96** / 2.55% / -3.2% | 12 / 25 / 62 / 2 |
+| P17 | 0.62 / 3.59% / -8.9% | **0.86** / 2.25% / -3.2% | 11 / 22 / 63 / 5 |
+
+- Broadening with these (mostly weak) assets lowers the as-coded design's Sharpe (1.01 -> 0.40-0.62) and deepens drawdowns
+  (-6% -> -9% to -16%): equal capital goes to sleeves with little edge, and risk concentrates in commodities/equities.
+- RP budgets keep a higher Sharpe at every breadth and smaller drawdowns; their net return rises with breadth
+  (1.48 -> 2.55%) while as-coded stays higher in return (the gap narrows from 2.9pt to ~1.3pt).
+- **The RP-budget rule is not real risk parity**: realised P&L risk is 71-73% commodities (P09/P11) and 62-63%
+  equities (P14/P17, three highly correlated index sleeves), not balanced. The budgets come from the global 48-factor
+  Stage-1 ERC renormalised over the pool, not a pool-level ERC. Next: a pool-level ERC (EWMA covariance incl.
+  correlations, IRSL/IRCV tied to level by sqrt(vol)) and check realised risk balance before comparing again.
+
