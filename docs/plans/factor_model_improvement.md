@@ -219,3 +219,68 @@ bond-futures open interest history (`futures-px.pkl` has ~5 months), monthly mac
   only for first-day contracts).
 - Data: `../input/futures-analytics.pkl` now covers T/TF from 2015-03, TS from 2018-08, TL from
   2023-04 (implied repo / implied yield from 2016-01).
+
+---
+
+## 6. Plan: improving the whole multi-asset portfolio's Sharpe (2026-10-17)
+
+### 6.1 What the diagnostics say
+
+The same 6 factors (default pool) give price-only Sharpe **1.84 as an equal-risk factor book** but only
+**0.93 inside the portfolio** (2017-2026, `factor_scaling`). The gap is portfolio construction, not signal
+quality. One-at-a-time levers on the portfolio (price-only Sharpe / max DD / reported ann. return):
+
+| Variant | Sharpe | Max DD | Ann. return (reported) |
+|---|---|---|---|
+| Current (IR sleeves ~ vol^0.5 capital, others equal) | 0.93 | -6.2% | 4.75% |
+| Equal capital per sleeve | 0.94 | -6.2% | 4.85% |
+| **Inverse-vol sleeve capital (risk-parity sleeves)** | **1.31** | **-1.2%** | 2.50% |
+| No short-end long-only floor | 1.01 | -4.8% | 4.55% |
+| Inverse-vol + no floor | 1.31 | -1.3% | 1.46% |
+| Inverse-vol + 1.9x gross + DV01 target 20 | 1.20 | -3.0% | 4.10% |
+| Inverse-vol + no floor + 1.9x gross + DV01 20 | 1.28 | -2.9% | 1.55% |
+
+- Transaction costs are not the problem: ~3.1M over ~10 years on 1bn (annual turnover ~32x notional).
+- Risk-parity sleeve budgets are the largest measured lever (+0.38 Sharpe). They also shrink risk, so
+  reported return falls; leverage in the engine is not free (Sharpe 1.31 -> 1.20-1.28 at 1.9x).
+- The reported `annualized_return` mixes price, carry, cash/financing and costs and is not linear in size
+  (price + carry exceeded it by ~1pt; doubled DV01 left it flat in one variant). It cannot yet be used to
+  tune "annual PnL" - see P0.
+
+### 6.2 Ordered plan
+
+**P0 - Return attribution (prerequisite, small).** Decompose reported annual return into price, carry,
+cash/financing, tx cost and funding, per sleeve and per day, and expose it in the backtest output. Until
+then, return-targeted tuning is guesswork.
+
+**P1 - Sleeve sizing / risk target (biggest lever).** Replace capital-share budgets with risk-based
+sleeve budgets (start with inverse-vol of the sleeve's own P&L, EWMA; then covariance-aware ERC), and size
+the book to a target volatility instead of "gross = 95%". Validate with the 26-window sweep (not the
+full-sample number). Decide the target vol and whether leverage/futures-swaps implementation is allowed
+(user decision). Acceptance: price-only Sharpe up AND window median delta > 0 AND a defined return at the
+chosen risk target.
+
+**P2 - Short-end floor.** `SHORT_END_LONG_ONLY_TENORS` removal: Sharpe +0.08, DD -6.2% -> -4.8%, return
+-0.2pt on the current budgets, none under inverse-vol. Re-test under P1 sizing and decide with the
+swap-hedge intent (floor protects carry; user plans to hedge via 1-5Y swaps).
+
+**P3 - Pool composition (re-run after P1, because the pool results depend on the budget rule).**
+- Credit factors are absent from the default pool but strong standalone in the retrained cache
+  (CRCV.LGB 1.36, CRSL.LGB 1.28, CRDL.LGB 1.06, CRDL.MTN 0.80; price-only, 2016-09+). Test them in the
+  portfolio.
+- Foreign slope/curve (8) at risk-based budgets (they were crowded out under capital budgets); exclude the
+  four foreign IRDL.
+- Decide the foreign-FX treatment (hedge cost not charged, no cross-currency basis) before any live use.
+
+**P4 - Signal robustness.** Walk-forward noise floor is ~+-0.1-0.15 Sharpe per book with no code change.
+Reduce variance by ensembling model runs (train windows 9/12/18 months, or bagged windows) before adding
+features; feature additions on CN rates are exhausted (5 null tests). Structural options: regime-conditional
+weights, IC-weight shrinkage, horizon blend.
+
+**P5 - Validation discipline.** Many tests have been run on the same 2016-2026 history. Freeze the last
+12-18 months as a holdout that is only touched for final confirmation of whichever P1-P4 changes are
+adopted; keep the window sweep as the release gate.
+
+**P6 - Cross-book.** Beta/Alpha combination (`web/tabs/risk/books/combination.py`) was not examined in
+this work; re-run the margin-share Sharpe frontier after P1 changes the beta book's return series.
+
