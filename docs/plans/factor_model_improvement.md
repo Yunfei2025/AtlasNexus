@@ -153,6 +153,40 @@ Price-only rf=0 Sharpe is the Factor-tab-comparable number.
   fresh recompute gave identical numbers here, but clear it after editing the map.
 - Not yet checked: FX exposure and hedging of the foreign bonds, and carry-minus-funding by country.
 
+### 3.7 Foreign factors: FX / hedge / capital findings (2026-10-17)
+
+- **FX:** `calculate_daily_returns_series` treats every foreign bond as fully CNY-hedged (`fx` recorded but
+  excluded from `total`), so the book has no spot FX P&L or exposure by construction. A real implementation
+  needs forward hedges on the net notional: IRDL.US/DE/JP/UK average +34% of capital net long (US 11.9,
+  UK 9.7, DE 8.5, JP 4.2); the 8 slope/curve sleeves are near-neutral (net +0.5/0.0/1.7/0.4% of capital, gross
+  10-26% per country).
+- **Hedge cost is not charged.** The code comment cites an interest-rate-parity cost but `total = carry +
+  capital` credits the full foreign yield. Estimated omission (foreign overnight rate minus DR001, x signed
+  notional): +IRDL4 0.11%/yr of capital (US 0.03, UK 0.09, DE 0.01, JP -0.03), +SC8 0.03%/yr. Immaterial, but
+  an under-estimate: overnight-rate series only start 2018 (US), 2020 (JP), 2021 (DE) so earlier years cost 0,
+  and the cross-currency basis (large for JPY/EUR) is not modelled.
+- **The book is gross-capped, not risk-sized.** `scale_sleeve_to_dv01_target` + `weights_to_notional`
+  (default `max_utilisation` bound at import = 0.95) hold gross notional at ~91-95% of capital on almost every
+  day. Long/short slope-curve sleeves use a lot of gross for little risk, so under the cap they are
+  capital-inefficient. Price-only decomposition, 2017-2026, % of capital:
+
+| Book | gross | price ann | carry | price vol | price maxDD | Sharpe |
+|---|---|---|---|---|---|---|
+| Default @0.95 | 91% | 5.36 | 0.44 | 5.72 | -9.4 | 0.94 |
+| Default + SC8 @0.95 | 95% | 3.12 | 0.23 | 2.92 | -4.3 | 1.07 |
+| Default @1.9 | 178% | 10.55 | 0.85 | 11.27 | -17.4 | 0.94 |
+| Default + SC8 @1.9 | 188% | 6.18 | 0.46 | 5.81 | -8.7 | 1.06 |
+
+  At matched risk (SC8 @1.9 vs default @0.95): price return 6.2% vs 5.4%, max DD -8.7% vs -9.4%. The
+  smoother book keeps its return only with ~1.9x gross (futures/swaps or a margin-based capital definition).
+  Reported `annualized_return` is net of items not decomposed here (price+carry exceeds it by ~1pt).
+- **Optimal SC8 share disagrees by level.** Factor-level equal-risk sweep peaks at ~25-35% risk share
+  (Sharpe 1.87 -> 2.1, 20-21/26 windows); in the portfolio engine, scaling the SC8 capital share to 15/25/35%
+  gave price-only Sharpe 0.80/0.87/0.92 vs 1.07 at the default (~half) share. Treat the gain as roughly
+  +0.1-0.2 Sharpe, not precise.
+- To test a modified cap: patch `orch.weights_to_notional` (the `RiskModelConfig.CAPITAL_UTILISATION_MAX`
+  default is bound at import, patching the config alone only changes the DV01 scaling step).
+
 ## 4. Candidate new factors for the pool (all untested)
 
 Current pool: CN/US rates (level, slope, curve), CDB/LGB credit, CDB spread, four FX pairs,
