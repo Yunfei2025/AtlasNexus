@@ -530,3 +530,28 @@ App metrics, 2017-2026, factor_scaling, unlevered. Sharpe = post-funding; net = 
   Unlevered return remains bounded by the book's carry plus the risk its sleeves can take.
 - One 9.8-year window, no window sweep and no frozen holdout yet (P5). Pools exclude SC, SA, IM, LC, EC (short data).
 
+### 6.12 Stability check of the ERC sleeve rule vs legacy (2026-10-17)
+
+Daily post-funding streams (price + carry + cash - funding), 2017-01-02..2026-10-13, nested pools P06/P11/P14/P17. No
+untouched data remains (the full history has been inspected many times), so stability is shown by sub-period, not a
+true holdout; the ERC rule itself has no fitted parameters.
+
+- Six-month windows (25): ERC beats legacy on Sharpe in 15/25 (P06), 18/25 (P11), 16/25 (P14), 17/25 (P17); median
+  dSharpe +0.8 to +1.3. ERC is higher in both halves of the sample in every pool; it wins 6-8 of 10 calendar years;
+  worst calendar year -1.5% or better vs legacy -3.7% to -9.3% (P06: +0.55% vs -0.44%).
+- Return: legacy has the higher full-sample return (3.7-5.4% vs 1.9-2.3% a year) but the daily return difference is
+  not significant (|t| <= 1.1; P06 t = -1.98).
+- **Legacy's return advantage is a 2017-2020 effect.** Post-funding annual return / max drawdown, ERC vs legacy:
+
+| Pool | 2017-2020 | 2021-2026 | 2023-2026 |
+|---|---|---|---|
+| P06 | 2.98% / -1.5% vs 7.97% / -5.9% | 1.76% / -1.4% vs 3.67% / -9.3% | 1.23% vs 3.52% |
+| P11 | 3.10% / -1.9% vs 11.36% / -10.9% | 1.66% / -2.5% vs **-1.70%** / -19.8% | 1.19% vs 0.17% |
+| P14 | 3.43% / -2.0% vs 16.07% / -8.8% | 1.58% / -2.5% vs **-3.02%** / -27.0% | 0.95% vs -0.66% |
+| P17 | 2.30% / -1.9% vs 11.01% / -6.2% | 1.68% / -2.4% vs **-0.46%** / -13.1% | 0.86% vs -0.34% |
+
+  In the broader pools legacy lost money after 2020 (drawdown -13% to -27%) while ERC kept earning ~1.6-1.7% a year with
+  drawdown <= 2.5%. Only the 6-factor pool still earned more under legacy in 2021-2026 (3.67% vs 1.76%, at a -9.3% drawdown).
+- Caveat: ERC's own edge has thinned - 2023-2026 Sharpe 0.6-0.85 and ~1% a year - so the book's signal quality, not its
+  sizing, is now the binding constraint (plan P4).
+
