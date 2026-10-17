@@ -581,3 +581,28 @@ history, so this is not proof that a 12m window is optimal - only that averaging
 Window-averaging is dropped. Remaining ideas (untested): asset-specific information for the sleeves that lost skill
 (e.g. gold: US real yields / USD), and sleeve inclusion by rolling edge.
 
+### 6.14 Gold-specific drivers (2026-10-17) - no meaningful improvement
+
+Diagnostic (rank IC vs gold forward return, 2017-20 / 2021-26): US10Y 252d z-score -0.10/-0.10 (5d), -0.18/-0.15 (20d);
+US2Y 20d change -0.11/-0.06; SOFR-FR007 20d change -0.03/-0.09; US 2s10s 20d change +0.03/+0.11; gold/silver ratio z
++0.11/+0.04 (fading). No inflation-linked yields available, so "real yields" are proxied by nominal US yields. 13
+candidates were screened, so some of this is luck.
+
+Walk-forward A/B with a US-rates block (US10Y z252, US2Y chg20, SOFR-FR007 chg20, US 2s10s chg20) added to the features
+(12m model, same config as the saved backtest), gold + silver, with aluminium/copper as controls:
+
+| Factor | Sharpe 2017-26 base -> +US rates | 2021-26 | 2023-26 | IC5 2021-26 | Windows vs base |
+|---|---|---|---|---|---|
+| AU | 0.62 -> 0.65 | 0.10 -> 0.24 | 0.01 -> 0.22 | 0.006 -> 0.019 | 13/24, median +0.00 |
+| AG | 0.05 -> 0.02 | 0.24 -> 0.21 | 0.24 -> 0.19 | 0.104 -> 0.111 | 12/23, +0.00 |
+| AL (control) | 0.23 -> 0.28 | 0.08 -> 0.15 | 0.28 -> 0.36 | 0.069 -> 0.073 | 11/24, -0.00 |
+| CU (control) | 0.20 -> 0.20 | -0.03 -> 0.01 | 0.26 -> 0.33 | 0.074 -> 0.078 | 17/25, +0.00 |
+
+Median window deltas of zero mean the positions are mostly unchanged: the IC-based feature selection rarely picks the
+new features within a 12-month window. Gold's recent Sharpe rises a little but its IC stays ~0, and the controls move
+by similar amounts. Not adopted. Forcing the features in, or trading the yield signal as its own sleeve, would be a
+new in-sample-discovered strategy and is not recommended without fresh data.
+
+**Status of signal work:** six generic or asset-specific feature tests plus the window ensemble are null. The model's
+edge is thin (IC ~0.07) and is not improved by more inputs of this kind.
+
