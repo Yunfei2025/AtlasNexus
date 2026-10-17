@@ -740,6 +740,17 @@ def run_historical_allocation(
             'ann_turnover': ann_turnover,
             'total_tx_cost_m': total_tx_cost_m,
         }
+        # P0 of docs/plans/factor_model_improvement.md §6: price/carry/cash/cost split,
+        # the CAGR-vs-simple gap, and per-asset-class P&L risk share. Display-only.
+        try:
+            from multiasset.book.attribution import attribute_book_return
+            metrics['attribution'] = attribute_book_return(
+                book_pnl, alloc_daily, cash_daily_cny,
+                tx_cost_m.reindex(daily_idx).fillna(0.0) * 1_000_000,
+                total_capital_cny, annualized_return, get_asset_type,
+            )
+        except Exception as _attr_exc:   # never let a diagnostic break the backtest
+            print(f"  attribution unavailable: {_attr_exc}")
 
     # --- Build Monthly Holdings rows ---
     asset_holdings_rows = []

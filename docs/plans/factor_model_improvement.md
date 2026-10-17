@@ -284,3 +284,47 @@ adopted; keep the window sweep as the release gate.
 **P6 - Cross-book.** Beta/Alpha combination (`web/tabs/risk/books/combination.py`) was not examined in
 this work; re-run the margin-share Sharpe frontier after P1 changes the beta book's return series.
 
+### 6.3 Update 2026-10-17: P0 done; the portfolio is a commodity-risk book; unlevered frontier
+
+User constraints (recorded): **no leverage in the beta book** (futures/swaps only to hedge; leverage lives in
+the alpha book). Sleeve sizing is therefore a choice of a point on an unlevered return/Sharpe frontier.
+
+**P0 (done):** `multiasset/book/attribution.py` + `metrics['attribution']` in the backtest orchestrator
+(display-only, wrapped in try/except), `tests/test_book_attribution.py`. Default pool, 2017-2026:
+price 5.36 + carry 0.44 + cash 0.06 = **5.86% simple annual** (% of initial capital); tx cost -0.03;
+reported `annualized_return` 4.75% is the geometric CAGR of NAV -> **compounding drag -1.11pt** (not a missing
+cost).
+
+**Current sleeve rule is NOT risk parity.** `pool_sleeve_budgets` gives IR sleeves capital ∝ sqrt(vol)
+("higher budget to higher-vol factors") and every other sleeve equal capital. Realised P&L risk by class
+(default pool, 2017-2026):
+
+| Class | Avg gross | Price vol | Risk share | Price ann. |
+|---|---|---|---|---|
+| Commodities (AU, AL) | 41% | 5.57% | **94.0%** | 3.72% |
+| FX (USDCNY) | 20% | 1.42% | 5.4% | 1.24% |
+| Rates (CN IRDL/IRSL/IRCV) | 30% | 0.45% | **0.6%** | 0.39% (+0.44 carry) |
+
+The 0.93-1.0 portfolio Sharpe is essentially the gold/aluminium Sharpe; the CN rates sleeves (factor-level
+Sharpe 0.6-1.0) carry almost no risk because DV01-scaled bond sleeves have tiny vol per unit of capital.
+
+**Unlevered frontier** (class-level sleeve multipliers on the current run, daily gross capped at 95%, price +
+carry, % of capital; multipliers are Rates/FX/Commodities):
+
+| Design | Sharpe | Ann. | Vol | Max DD | Worst yr | Windows vs A (wins, median dSharpe) |
+|---|---|---|---|---|---|---|
+| A current (1,1,1) | 1.01 | 5.80% | 5.7% | -9.2% | -0.1% | - |
+| E (2,3,1) | 1.18 | 5.02% | 4.3% | -5.5% | +1.1% | 16/25, +0.15 |
+| C (2,1,0.5) | 1.37 | 4.13% | 3.0% | -3.3% | +1.4% | 21/25, +0.38 |
+| D (3,2,0.35) | 1.63 | 3.94% | 2.4% | -2.1% | +0.3% | 19/25, +0.63 |
+| F (3.3,0.5,0.1) | 2.22 | 2.77% | 1.2% | -1.2% | +0.3% | 21/25, +1.09 |
+
+C, D, F beat A in both halves of the sample (e.g. D: 2.03 vs 1.56 first half, 1.31 vs 0.53 second half).
+Caveats: class-level scaling assumes the within-class mix is unchanged; a ~280-cell grid on one 10-year history
+overstates the peak (use designs, not the max cell); E leans on 3x the single-pair USDCNY sleeve (policy-managed
+pair, concentration); the choice between A..F is a return-vs-smoothness decision for the user.
+
+**Next (P1 implementation, after the user picks a design):** express the chosen class risk shares as sleeve
+budgets (replace `pool_sleeve_budgets`' capital-share rule), keep gross <= 95% / no leverage, validate with the
+window sweep and the frozen holdout (P5), then re-test the credit and foreign slope/curve pools under it (P3).
+
