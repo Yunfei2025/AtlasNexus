@@ -93,7 +93,7 @@ def apply_factor_scaling(summary, signal_snapshot, factor_names_in_pool, total_c
     from multiasset.book.sizing import (
         factor_mimicking_weights, pool_sleeve_budgets, signed_sleeve_weights_snapshot,
     )
-    from web.tabs.beta.data import compute_factor_vol_map
+    from web.tabs.beta.data import compute_factor_vol_map, compute_factor_cov
 
     _snap_by_rf = ({rec['risk_factor']: rec for rec in signal_snapshot
                     if rec.get('risk_factor')} if signal_snapshot else {})
@@ -131,7 +131,9 @@ def apply_factor_scaling(summary, signal_snapshot, factor_names_in_pool, total_c
 
     if replicable_factors and total_capital_cny > 0:
         vol_map = compute_factor_vol_map(replicable_factors)
-        budget = pool_sleeve_budgets(replicable_factors, vol_map)  # fractions summing to 1
+        # Same rule as the backtest (RiskModelConfig.SLEEVE_BUDGET_RULE); cov enables 'erc'.
+        budget = pool_sleeve_budgets(replicable_factors, vol_map,
+                                     cov=compute_factor_cov(replicable_factors))  # fractions summing to 1
         # market_data is only needed for yield (IR) sleeve legs' /modD
         # duration lookup; load it lazily so a pure-FX/commodity pool never
         # pays load_raw_market_data()'s cost.

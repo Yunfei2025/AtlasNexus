@@ -502,3 +502,31 @@ EURCNY 0.21, JPYCNY 0.03, GBPCNY 0.47 (base: AU 0.43, AL 0.08, USDCNY 0.78). "RP
   Stage-1 ERC renormalised over the pool, not a pool-level ERC. Next: a pool-level ERC (EWMA covariance incl.
   correlations, IRSL/IRCV tied to level by sqrt(vol)) and check realised risk balance before comparing again.
 
+### 6.11 Pool-level equal-risk-contribution sleeve budgets - implemented (2026-10-17)
+
+User decision: switch to real risk parity. `multiasset/book/sizing.py::erc_sleeve_budgets` (damped-Newton ERC on the
+pool's own EWMA covariance, correlations included; IRSL/IRCV tied to IRDL, and CRSL/CRCV to CRDL, by sqrt(vol) so an
+IR/credit group is ONE risk unit). `pool_sleeve_budgets(factors, vol_map, cov=None)` uses it when
+`RiskModelConfig.SLEEVE_BUDGET_RULE == 'erc'` (new default) and a usable covariance is passed; otherwise the legacy
+rule ('sqrt_vol_equal') applies. Wired into the backtest orchestrator and the live Portfolio tab
+(`compute_factor_cov` in `web/tabs/beta/data.py`) so both use the same rule. The factor model (training, signals,
+positions) is unchanged; only each sleeve's capital share changes. Tests in `tests/test_signed_sleeves.py`.
+
+App metrics, 2017-2026, factor_scaling, unlevered. Sharpe = post-funding; net = CAGR - funding:
+
+| Pool | As coded (legacy) | Stage-1 RP budgets | **Pool-level ERC** | Realised risk share R/C/E/FX (ERC) |
+|---|---|---|---|---|
+| P06 (6) | 1.01 / 4.33% / -6.2% | 1.25 / 1.48% / -1.9% | **1.42** / 1.88% / -1.2% | 33 / 42 / - / 25 |
+| P11 (11) | 0.40 / 3.13% / -13.0% | 1.09 / 1.89% / -1.7% | **1.30** / 1.89% / -1.8% | 29 / 49 / - / 22 |
+| P14 (14) | 0.56 / 3.99% / -15.6% | 0.96 / 2.55% / -3.2% | **1.35** / 1.96% / -1.8% | 30 / 38 / 16 / 17 |
+| P17 (17) | 0.62 / 3.59% / -8.9% | 0.86 / 2.25% / -3.2% | **1.19** / 1.66% / -1.8% | 25 / 32 / 15 / 28 |
+
+- Realised risk is now spread across classes (equities 63% -> 15-16%, commodities 73% -> 32-49%), and Sharpe stays
+  at 1.2-1.4 as the pool broadens, where the legacy rule collapsed to 0.4-0.6.
+- Realised class shares are not exactly the ex-ante equal split (e.g. P14: rates 30% vs ~8% ex-ante for one unit of
+  12) because sleeve P&L also depends on each factor's average position size; the balance is far better than before
+  but not exact.
+- Cost: net return 1.7-2.0% vs 3.1-4.3% for the legacy rule: the Sharpe-vs-return dial (6.7) moved to the Sharpe end.
+  Unlevered return remains bounded by the book's carry plus the risk its sleeves can take.
+- One 9.8-year window, no window sweep and no frozen holdout yet (P5). Pools exclude SC, SA, IM, LC, EC (short data).
+

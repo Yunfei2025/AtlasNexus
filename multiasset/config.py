@@ -169,6 +169,15 @@ class RiskModelConfig:
     # actually get close to on an ordinary day.
     MAX_DV01_PER_CAPITAL: float = 5.0
 
+    # ── Sleeve capital budgets (factor_scaling mode only) ───────────────────
+    # 'erc'            : pool-level equal-risk-contribution over the pool's own factors
+    #                    (EWMA covariance incl. correlations; IRSL/IRCV tied to IRDL by
+    #                    sqrt(vol)) - multiasset.book.sizing.erc_sleeve_budgets.
+    # 'sqrt_vol_equal' : legacy - IR sleeves share an n_ir/n envelope by sqrt(vol), every
+    #                    other sleeve gets an equal 1/n of capital.
+    # 'erc' falls back to the legacy rule when no usable covariance is available.
+    SLEEVE_BUDGET_RULE: str = 'erc'
+
     # ── Short-end carry floor (factor_scaling mode only) ────────────────────
     # IRSL/IRCV's steepener/curvature trades short one end of the curve and
     # go long the other; a net short position on the SHORT end pays away

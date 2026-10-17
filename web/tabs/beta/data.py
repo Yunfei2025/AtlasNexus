@@ -27,7 +27,7 @@ from multiasset.main import run_risk_parity_allocation, create_custom_portfolio,
 from multiasset.storage import save_asset_pool
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
-from multiasset.factor_backtest import compute_ewma_factor_vols
+from multiasset.factor_backtest import compute_ewma_factor_vols, compute_ewma_factor_covariance
 from multiasset.config import RiskModelConfig
 from settings.paths import DIR_INPUT, DIR_MODELS
 
@@ -162,6 +162,33 @@ def compute_factor_vol_map(
         window = window.to_frame()
 
     return compute_ewma_factor_vols(window, ewma_lambda=ewma_lambda)
+
+def compute_factor_cov(
+    factor_names: list[str],
+    lookback_years: int = RISK_BUDGET_VOL_LOOKBACK_YEARS,
+    ewma_lambda: float = RISK_BUDGET_EWMA_LAMBDA,
+):
+    """Annualised EWMA factor covariance in price-return percent space (same window
+    and anchor as ``compute_factor_vol_map``); ``None`` when it cannot be built."""
+    if len(factor_names) < 2:
+        return None
+    loader = RiskFactorLoader(DIR_INPUT)
+    factor_levels = loader.load_risk_factors(use_cache=True)
+    if factor_levels is None or factor_levels.empty:
+        return None
+    if not isinstance(factor_levels.index, pd.DatetimeIndex):
+        factor_levels.index = pd.to_datetime(factor_levels.index)
+    factor_levels = factor_levels.sort_index()
+    available = [f for f in factor_names if f in factor_levels.columns]
+    if len(available) < 2:
+        return None
+    _today = pd.Timestamp.today().normalize()
+    end_date = min(_today.replace(day=1) - relativedelta(days=1), factor_levels.index.max())
+    start_date = end_date - relativedelta(years=lookback_years)
+    window = factor_levels.loc[(factor_levels.index >= start_date) & (factor_levels.index <= end_date), available]
+    cov = compute_ewma_factor_covariance(window, ewma_lambda=ewma_lambda)
+    return cov if cov is not None and not cov.empty else None
+
 
 # ============================================================================
 # Factor to Asset Mapping Table

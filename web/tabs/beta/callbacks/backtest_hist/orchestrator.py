@@ -402,7 +402,7 @@ def run_historical_allocation(
         # slope/curvature views. Stage 1's monthly reference budget (the
         # vol^0.5-constrained ERC) still sets each factor's capital share.
         from multiasset.book.sizing import signed_sleeve_weights_daily, pool_sleeve_budgets
-        from multiasset.factor_backtest import compute_ewma_factor_vols
+        from multiasset.factor_backtest import compute_ewma_factor_vols, compute_ewma_factor_covariance
 
         # Sleeve capital budgets over the pool's OWN screened factors each
         # month (vol^0.5 for IR, equal otherwise — same rule as the
@@ -414,7 +414,14 @@ def run_historical_allocation(
                 & (risk_factors.index <= rebalance_date), list(pool_factors)
             ]
             vol_map = compute_ewma_factor_vols(window, ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA)
-            budget_by_rebalance_date[rebalance_date] = pool_sleeve_budgets(pool_factors, vol_map)
+            # Covariance (not just vols) so the 'erc' rule can balance risk with correlations.
+            try:
+                cov_matrix = compute_ewma_factor_covariance(
+                    window, ewma_lambda=RiskModelConfig.FACTOR_VOL_EWMA_LAMBDA)
+            except Exception:
+                cov_matrix = None
+            budget_by_rebalance_date[rebalance_date] = pool_sleeve_budgets(
+                pool_factors, vol_map, cov=cov_matrix)
         weights_daily, mod_dur_daily, unreplicated_factors = signed_sleeve_weights_daily(
             budget_by_rebalance_date, factor_signal_series, daily_idx,
             FACTOR_TO_ASSET_MAP, market_data,

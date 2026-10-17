@@ -240,3 +240,61 @@ def test_snapshot_skips_unreplicable_factor_and_missing_position():
     assert 'CRDL.CDB' in skipped   # not replicable at all
     assert 'FXDL.USDCNY' not in skipped
     assert weights == {'USDCNY': 1.0}
+
+
+# ── pool-level equal-risk-contribution sleeve budgets ('erc' rule) ─────────────
+
+def _risk_contrib(cov, w):
+    w = np.asarray(w, float)
+    rc = w * (cov @ w)
+    return rc / rc.sum()
+
+
+def test_erc_budgets_independent_assets_are_inverse_vol():
+    from multiasset.book.sizing import erc_sleeve_budgets
+    names = ['FXDL.USDCNY', 'CMDL.AU', 'CMDL.AL']
+    vol = np.array([1.0, 2.0, 4.0])
+    cov = pd.DataFrame(np.diag(vol ** 2), index=names, columns=names)
+    b = erc_sleeve_budgets(names, cov)
+    assert sum(b.values()) == pytest.approx(1.0)
+    np.testing.assert_allclose([b[n] for n in names], np.array([4, 2, 1]) / 7.0, rtol=1e-6)
+
+
+def test_erc_budgets_equalise_risk_with_correlations():
+    from multiasset.book.sizing import erc_sleeve_budgets
+    rng = np.random.default_rng(3)
+    names = [f'CMDL.X{i}' for i in range(6)]
+    A = rng.normal(size=(6, 6))
+    cov_a = A @ A.T + 0.5 * np.eye(6)
+    cov = pd.DataFrame(cov_a, index=names, columns=names)
+    b = erc_sleeve_budgets(names, cov)
+    w = np.array([b[n] for n in names])
+    np.testing.assert_allclose(_risk_contrib(cov_a, w), np.full(6, 1 / 6), atol=1e-6)
+
+
+def test_erc_budgets_tie_slope_curve_to_level_by_sqrt_vol_and_group_is_one_unit():
+    from multiasset.book.sizing import erc_sleeve_budgets
+    names = ['IRDL.CN', 'IRSL.CN', 'IRCV.CN', 'FXDL.USDCNY']
+    vol = np.array([0.20, 0.05, 0.01, 4.0])
+    cov = pd.DataFrame(np.diag(vol ** 2), index=names, columns=names)
+    b = erc_sleeve_budgets(names, cov)
+    assert b['IRSL.CN'] / b['IRDL.CN'] == pytest.approx(np.sqrt(0.05 / 0.20))
+    assert b['IRCV.CN'] / b['IRDL.CN'] == pytest.approx(np.sqrt(0.01 / 0.20))
+    # the whole IR group is ONE risk unit: with zero correlation it carries the same risk as USDCNY
+    e = np.array([b[n] for n in names]); rc = e * (cov.to_numpy() @ e)
+    assert rc[:3].sum() == pytest.approx(rc[3], rel=1e-6)
+
+
+def test_pool_sleeve_budgets_uses_erc_when_cov_given_and_legacy_otherwise(monkeypatch):
+    from multiasset.config import RiskModelConfig
+    names = ['FXDL.USDCNY', 'CMDL.AU']
+    vol = {'FXDL.USDCNY': 1.0, 'CMDL.AU': 4.0}
+    cov = pd.DataFrame(np.diag([1.0, 16.0]), index=names, columns=names)
+    legacy = pool_sleeve_budgets(names, vol)
+    assert legacy == pytest.approx({'FXDL.USDCNY': 0.5, 'CMDL.AU': 0.5})          # equal capital
+    erc = pool_sleeve_budgets(names, vol, cov=cov)
+    assert erc['FXDL.USDCNY'] == pytest.approx(0.8) and erc['CMDL.AU'] == pytest.approx(0.2)
+    monkeypatch.setattr(RiskModelConfig, 'SLEEVE_BUDGET_RULE', 'sqrt_vol_equal')
+    assert pool_sleeve_budgets(names, vol, cov=cov) == pytest.approx(legacy)       # rule switch honoured
+    monkeypatch.setattr(RiskModelConfig, 'SLEEVE_BUDGET_RULE', 'erc')
+    assert pool_sleeve_budgets(names, vol, cov=cov.iloc[:1, :1]) == pytest.approx(legacy)  # unusable cov -> fallback

@@ -401,8 +401,94 @@ def signed_sleeve_weights_snapshot(
     return weights, skipped
 
 
-def pool_sleeve_budgets(factors: Sequence[str], vol_map: Dict[str, float]) -> Dict[str, float]:
+# Slope / curvature factor -> the level factor it is tied to inside an IR / credit group.
+_LEVEL_OF = {'IRSL': 'IRDL', 'IRCV': 'IRDL', 'CRSL': 'CRDL', 'CRCV': 'CRDL'}
+
+
+def _newton_erc(C: np.ndarray, iters: int = 200, tol: float = 1e-12) -> np.ndarray:
+    """Equal-risk-contribution weights x > 0 for covariance ``C``.
+
+    Solves the convex problem  min 0.5 x'Cx - (1/K) sum(log x)  by damped Newton;
+    its stationarity condition is x_k (Cx)_k = 1/K for every k, i.e. every
+    variable contributes the same share of portfolio variance. The solution is
+    unique for positive-definite ``C`` (Spinu 2013), so no starting-point luck.
+    """
+    K = C.shape[0]
+    b = np.full(K, 1.0 / K)
+    x = 1.0 / np.sqrt(np.maximum(np.diag(C), 1e-18))      # inverse-vol start
+    x = x / np.sqrt(x @ C @ x)
+    for _ in range(iters):
+        g = C @ x - b / x
+        if np.max(np.abs(x * (C @ x) - b)) < tol:
+            break
+        H = C + np.diag(b / x ** 2)
+        step = np.linalg.solve(H, g)
+        t = 1.0
+        while np.any(x - t * step <= 0):                  # stay strictly positive
+            t *= 0.5
+        x = x - t * step
+    return x
+
+
+def erc_sleeve_budgets(factors: Sequence[str], cov: pd.DataFrame) -> Optional[Dict[str, float]]:
+    """Pool-level equal-risk-contribution capital budgets (the "real" risk parity).
+
+    Risk units are every factor EXCEPT a slope / curvature factor whose level
+    factor (same country / issuer) is also in the pool: those are tied to their
+    level factor by sqrt(vol), ``e_slope / e_level = sqrt(vol_slope / vol_level)``
+    - the convention Stage 1 already uses - so an IR (or credit) group is ONE
+    risk unit that gets the same share of portfolio risk as, say, USDCNY or gold.
+    Correlations enter through ``cov`` (annualised, price-return space, as from
+    ``compute_ewma_factor_covariance``).
+
+    Returns fractions summing to 1, or ``None`` when the covariance cannot be
+    used (fewer than two factors, a factor missing, non-positive variances) so
+    the caller can fall back to the legacy rule.
+    """
+    factors = list(factors)
+    if len(factors) < 2 or cov is None or cov.empty:
+        return None
+    if any(f not in cov.index or f not in cov.columns for f in factors):
+        return None
+    S = cov.loc[factors, factors].to_numpy(dtype=float)
+    S = (S + S.T) / 2.0
+    var = np.diag(S).copy()
+    if not np.all(np.isfinite(S)) or np.any(var <= 0):
+        return None
+    w_, v_ = np.linalg.eigh(S)                            # repair tiny negative eigenvalues
+    S = (v_ * np.maximum(w_, 1e-10 * w_.max())) @ v_.T
+    sigma = np.sqrt(np.diag(S))
+    idx = {f: i for i, f in enumerate(factors)}
+
+    columns, tied = [], {}
+    for f in factors:
+        prefix, _, suffix = f.partition('.')
+        lvl = f'{_LEVEL_OF[prefix]}.{suffix}' if prefix in _LEVEL_OF else None
+        if lvl is not None and lvl in idx:
+            tied.setdefault(lvl, []).append(f)
+        else:
+            columns.append(f)
+    V = np.zeros((len(factors), len(columns)))
+    for k, f in enumerate(columns):
+        V[idx[f], k] = 1.0
+        for g in tied.get(f, []):
+            V[idx[g], k] = np.sqrt(sigma[idx[g]] / sigma[idx[f]])
+    x = _newton_erc(V.T @ S @ V)
+    e = V @ x
+    e = e / e.sum()
+    return {f: float(e[idx[f]]) for f in factors}
+
+
+def pool_sleeve_budgets(factors: Sequence[str], vol_map: Dict[str, float],
+                        cov: Optional[pd.DataFrame] = None) -> Dict[str, float]:
     """Capital budget per factor sleeve over the book's OWN factor pool —
+
+    ``RiskModelConfig.SLEEVE_BUDGET_RULE == 'erc'`` (default) with a usable ``cov``
+    gives the pool-level equal-risk-contribution budgets (``erc_sleeve_budgets``).
+    Otherwise (rule ``'sqrt_vol_equal'``, no covariance, or a covariance that
+    cannot be used) the legacy rule below applies.
+
+    Legacy rule:
     the same rule the Portfolio tab uses for RP Max (see
     web/tabs/beta/callbacks/portfolio_run/_run_analysis._fallback_rp_budgets):
     IR factors (IRDL/IRSL/IRCV) share an n_ir/n capital envelope in
@@ -418,6 +504,11 @@ def pool_sleeve_budgets(factors: Sequence[str], vol_map: Dict[str, float]) -> Di
     factors = list(factors)
     if not factors:
         return {}
+    from multiasset.config import RiskModelConfig
+    if cov is not None and getattr(RiskModelConfig, 'SLEEVE_BUDGET_RULE', 'erc') == 'erc':
+        erc = erc_sleeve_budgets(factors, cov)
+        if erc is not None:
+            return erc
     ir = [f for f in factors if f.split('.')[0] in _IR_BASIS]
     other = [f for f in factors if f not in ir]
     n = len(factors)
