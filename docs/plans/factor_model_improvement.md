@@ -127,6 +127,32 @@ unset. Open: the four foreign level factors have ~no edge in either mode - decid
 carry any weight in the beta book. The 50/50 line lowers annual return vs CN alone (7.5% vs 11.1%) at
 equal per-leg risk; it improves Sharpe and drawdown, so it only helps if the book is sized by risk.
 
+### 3.6 Foreign factors in the real portfolio (2026-10-17)
+
+Portfolio-level A/B via `run_historical_allocation(..., alloc_mode='factor_scaling')`, 2017-01-02..2026-10-13,
+default pool (IRDL/IRSL/IRCV.CN + FXDL.USDCNY + CMDL.AU + CMDL.AL) vs the same plus foreign rate factors.
+Price-only rf=0 Sharpe is the Factor-tab-comparable number.
+
+| Pool | Sharpe (price-only) | Total-return Sharpe | Post-funding Sharpe | Ann. return | Max DD |
+|---|---|---|---|---|---|
+| Default | **0.93** | 0.64 | 1.01 | **4.75%** | -6.2% |
+| + IRDL.US/DE/JP/UK | 0.60 | 0.28 | 0.64 | 3.05% | -6.4% |
+| + 8 slope/curve (IRSL/IRCV x 4) | **1.07** | 0.38 | 1.09 | 2.95% | **-3.2%** |
+| + all 12 | 0.82 | 0.20 | 0.84 | 2.51% | -5.2% |
+
+- Factor-level add-one (equal-risk legs, saved pkl) agrees: adding the 4 IRDL legs takes the 6-factor
+  book Sharpe 1.84 -> 1.39, ann 9.9% -> 5.8%, 7/26 windows (median -0.46). They are uncorrelated with the
+  book (|corr| ~0.0-0.03), so this is dilution by near-zero-edge legs, not a diversification failure.
+  IRDL.JP is the worst (standalone -0.82; adding it alone 1.84 -> 1.51).
+- Slope/curve sleeves improve Sharpe and halve the drawdown but lower annual return in this sizing.
+- **Bug found and fixed:** `FACTOR_TO_ASSET_MAP['IRDL.US']` had no `US1Y` asset although the US IR grid has a
+  1Y tenor, so `factor_mimicking_weights` returned None and ALL THREE US factors silently got no sleeve in
+  `factor_scaling` ("unreplicated"). Added `US1Y`. Anyone who previously ran US factors in the portfolio
+  was running without them.
+- Caveat: Stage-1 `beta_rp_cache.pkl` is keyed on pool/dates/params, not on `FACTOR_TO_ASSET_MAP`; a
+  fresh recompute gave identical numbers here, but clear it after editing the map.
+- Not yet checked: FX exposure and hedging of the foreign bonds, and carry-minus-funding by country.
+
 ## 4. Candidate new factors for the pool (all untested)
 
 Current pool: CN/US rates (level, slope, curve), CDB/LGB credit, CDB spread, four FX pairs,

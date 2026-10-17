@@ -206,6 +206,10 @@ FACTOR_TO_ASSET_MAP = {
 
     # US Government Bonds (Treasury)
     'IRDL.US': [
+        # 1Y is required: the deterministic US IR grid has a 1Y tenor, and
+        # factor_mimicking_weights returns None (factor unreplicable -> no
+        # sleeve in factor_scaling) when any grid tenor lacks a mapped asset.
+        {'name': 'US1Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '1Y'},
         {'name': 'US2Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '2Y'},
         {'name': 'US5Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '5Y'},
         {'name': 'US10Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '10Y'},
