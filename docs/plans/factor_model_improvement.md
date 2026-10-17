@@ -470,3 +470,11 @@ start 2020-01-02 (all sources agree), so pools with them are tested on 2020-01-0
   the budget rule only moves the book along the Sharpe-vs-return dial (6.7).
 - Single window, no window sweep; the 9-credit Sharpe is driven by credit being 49% of the risk of a very low-vol book.
 
+### 6.9 Decision (2026-10-17, user): keep the as-coded sleeve budgets for now
+
+Keep `pool_sleeve_budgets` (IR capital ∝ sqrt(vol), other sleeves equal capital). Rationale: the current commodity set is only
+AU and AL, so an equal-risk solve has too little to balance and starves them (~1%); true risk-parity budgets are
+expected to work once the pool is broader (more commodities, equity indices, more FX pairs). Credit stays out of the
+default pool (lowers return; 6.8). Revisit: when the pool is broadened, re-run the as-coded vs RP-budget comparison
+(6.7) on the app's post-funding Sharpe before switching. Near-term lever for return is signal quality on AU/AL/FX.
+
