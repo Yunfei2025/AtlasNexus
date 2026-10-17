@@ -447,3 +447,26 @@ No intermediate floor improves both Sharpe and return: gold/aluminium vol is ~10
 3% each takes commodity risk from 35% to 84% of the book. The family is a return-vs-Sharpe dial with the best Sharpe
 at f=0 and the best return at the as-coded end; small floors are dominated. One in-sample period, no window sweep.
 
+### 6.8 Credit factors in the portfolio (2026-10-17, app metrics, factor_scaling, unlevered)
+
+Hypothesis: credit sleeves (CDB/LGB/MTN) lift return of the RP-budget book. **Not supported.** LGB and MTN factor data
+start 2020-01-02 (all sources agree), so pools with them are tested on 2020-01-02..2026-10-13 (6.8y); CDB also on 2017+.
+"as coded" = pool_sleeve_budgets; "RP" = Stage-1 budgets renormalised over the pool. Net = CAGR - funding.
+
+| Pool (2020+) | as coded: Sharpe post-fund / CAGR / net / maxDD | RP budgets: Sharpe post-fund / CAGR / net / maxDD |
+|---|---|---|
+| Base 6 factors | 0.60 / 3.43% / 3.05% / -7.9% | **1.33** / 2.33% / 1.47% / -1.0% |
+| + CDB (3) | 0.52 / 2.10% / 1.90% / -4.3% | 0.50 / 0.77% / 0.37% / -1.3% |
+| + LGB (3) | 0.61 / 2.25% / 2.08% / -4.6% | 1.32 / 1.37% / 0.91% / -0.9% |
+| + MTN (3) | 0.42 / 1.66% / 1.48% / -5.2% | 1.23 / 1.15% / 0.73% / -0.7% |
+| + all 9 credit | 0.70 / 1.71% / 1.63% / -2.7% | **1.58** / 0.71% / 0.52% / -0.4% |
+| + CDB, 2017+ | 0.87 / 2.71% / 2.53% / -3.8% | 1.13 / 1.02% / 0.68% / -1.2% |
+
+- Credit lowers CAGR and net return in every case (dilution: credit sleeves take budget but earn little per unit of
+  capital), even though their standalone factor Sharpe is 1.0-1.4. It adds smoothness: with RP budgets all-9 credit
+  gives the best Sharpe (1.58) and drawdown (-0.4%) at the lowest return (0.5% net). CDB alone does not help.
+- So credit is a diversifier, not a return source. Unlevered return in this book comes from the gold/aluminium
+  (and FX) sleeves: 94% of P&L risk in the as-coded design. Improving those signals is the lever for return;
+  the budget rule only moves the book along the Sharpe-vs-return dial (6.7).
+- Single window, no window sweep; the 9-credit Sharpe is driven by credit being 49% of the risk of a very low-vol book.
+
