@@ -426,3 +426,24 @@ the book's actual repo funding cost. Same pool/dates (2017-01-02..2026-10-13), t
 - Every Sharpe in this plan must name its basis (post-funding is the app headline; price-only is the Factor-tab
   basis). Do not use price + carry at rf = 0 to rank books with different bond exposure.
 
+### 6.7 Sleeve-budget floors for non-IR factors (2026-10-17, app metrics, 2017-2026)
+
+`pool_sleeve_budgets` (as coded) has no explicit floor but gives every non-IR factor an equal 1/n share, which acts
+as a large implicit floor. Pure RP mode (Stage-2 `rebuild_asset_weights`) does have per-asset floors (commodity/FX
+>= max(2%, 20% of equal share); bonds >= max(1%, 30%)) and caps; removing the commodity/FX floors LOWERS pure RP
+(post-funding Sharpe 0.84 -> 0.71). Test: RP budgets for rates, minimum budget f for each of USDCNY/AU/AL
+(f=0 is the RP-budget version; as coded for reference):
+
+| Min budget f per non-IR sleeve | Sharpe post-funding | Sharpe price-only | CAGR | Funding | CAGR - funding | Max DD | Risk share R/F/C |
+|---|---|---|---|---|---|---|---|
+| 0% (RP budgets) | **1.25** | 1.13 | 2.50% | 1.02% | 1.48% | -1.9% | 53/12/35 |
+| 3% | 0.83 | 0.77 | 2.72% | 0.86% | 1.86% | -3.7% | 9/7/84 |
+| 6% | 0.84 | 0.78 | 3.22% | 0.72% | 2.51% | -4.8% | 4/6/90 |
+| 10% | 0.89 | 0.83 | 3.78% | 0.58% | 3.20% | -5.4% | 2/6/93 |
+| 16.7% | 0.96 | 0.88 | 4.49% | 0.40% | 4.09% | -6.3% | 1/5/94 |
+| as coded (IR by sqrt(vol), 16.7% others) | 1.01 | 0.93 | 4.75% | 0.40% | 4.35% | -6.2% | 1/5/94 |
+
+No intermediate floor improves both Sharpe and return: gold/aluminium vol is ~10-20x that of rate sleeves, so even
+3% each takes commodity risk from 35% to 84% of the book. The family is a return-vs-Sharpe dial with the best Sharpe
+at f=0 and the best return at the as-coded end; small floors are dominated. One in-sample period, no window sweep.
+
