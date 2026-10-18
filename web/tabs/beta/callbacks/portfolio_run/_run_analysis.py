@@ -15,6 +15,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 from dash import html, dash_table
+from dash.dash_table.Format import Format, Scheme
 
 from multiasset.data import get_asset_type
 from multiasset.layout import prepare_portfolio_table
@@ -300,6 +301,8 @@ def build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max
         long_cny, short_cny, dv01_long, dv01_short = long_short_totals(_rounded, _durations)
         total_rounded_capital = long_cny
         _display_df = portfolio_df.copy()
+        # Display only: 2 decimals. Sizing and DV01 above/below keep the full-precision durations.
+        _display_df['Duration'] = np.round(_durations, 2)
         _display_df['Capital (CNY)'] = [f"{v / 1_000_000:,.2f}" for v in _rounded]
         # Weight = FINAL (sized, rounded) capital as % of total capital, signed per asset.
         _display_df['Weight (%)'] = [f"{v / total_capital_cny * 100.0:.2f}%" if total_capital_cny > 0 else "0.00%"
@@ -348,7 +351,8 @@ def build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max
             {'name': 'Sector',                'id': 'Sector'},
             {'name': 'Asset Name',            'id': 'Asset Name'},
             {'name': 'Instrument',            'id': 'Instrument'},
-            {'name': 'Duration',              'id': 'Duration'},
+            {'name': 'Duration',              'id': 'Duration', 'type': 'numeric',
+             'format': Format(precision=2, scheme=Scheme.fixed)},
             {'name': 'Capital (Million CNY)', 'id': 'Capital (CNY)'},
             {'name': 'DV01 (MM CNY)',         'id': 'DV01 (MM CNY)'},
             {'name': 'Weight',                'id': 'Weight (%)'},

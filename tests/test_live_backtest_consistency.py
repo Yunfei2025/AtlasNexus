@@ -70,3 +70,8 @@ def test_live_tab_sizes_the_book_like_the_backtest(factors, tmp_path, monkeypatc
     assert live['total_dv01'] <= 5.0 * 1.001                       # gross DV01 within the 5 MM/bp cap
     for a in ('CN1Y', 'CN2Y', 'CN5Y', 'CN20Y'):
         assert live_cap.get(a, 0.0) >= 0.0                         # floor 1/2/5Y and no 20Y short (held as 30Y)
+    # the Duration column is shown with 2 decimals (sizing keeps full precision)
+    dur = live['portfolio_table_df'].loc[lambda d: d['Asset Type'] != 'TOTAL', 'Duration'].astype(float)
+    assert (dur == dur.round(2)).all() and (dur > 0).any()
+    col = next(c for c in live['positions_table'].columns if c['id'] == 'Duration')
+    assert col['format'].to_plotly_json()['specifier'] == '.2f'
