@@ -5,6 +5,14 @@ Status: **living record.** Covers the walk-forward factor model in `multiasset/f
 after a day of feature A/B tests; complements `docs/plans/beta_book_exposure_vs_capital.md`
 (sizing / capital usage) and `docs/plans/portfolio_construction_beta_alpha.md`.
 
+> **ACCOUNTING CHANGE 2026-10-17 (section 3.14, results in 3.15).** Carry, cash and funding are now accrued per CALENDAR
+> day (previously about 68% of each year's carry was booked), cash earns FR007 on every CNY not deployed (buffer included) and
+> on short-bond proceeds, and the headline "post-funding" Sharpe is now the excess over a cash benchmark ("Sharpe (vs cash)").
+> **(2026-10-18: factor_scaling no longer screens factors monthly; results for pools larger than P06 in 3.15-3.17 are on the screened basis, see 3.20.)**
+> **Every post-funding Sharpe, reported return, carry and capital-usage figure written before 2026-10-17 in sections 3.5-3.13 and
+> 6.x is on the OLD basis (and sections 3.15 and earlier on the old CAPITAL rule, shorts counted in full; see 3.16) and not comparable with the new one; use the 3.15 table.** Price-only Sharpe and factor-level
+> results are unaffected. Conclusions that survived the re-run are marked in 3.15.
+
 ---
 
 ## 1. Evaluation protocol (use this for every future change)
@@ -186,6 +194,517 @@ Price-only rf=0 Sharpe is the Factor-tab-comparable number.
   +0.1-0.2 Sharpe, not precise.
 - To test a modified cap: patch `orch.weights_to_notional` (the `RiskModelConfig.CAPITAL_UTILISATION_MAX`
   default is bound at import, patching the config alone only changes the DV01 scaling step).
+
+### 3.8 FX of foreign bonds: explicit overlay (2026-10-17, user decision)
+
+The base currency is CNY, so a foreign bond carries rates AND its currency (FXDL.<ccy>CNY = 1.0 x notional).
+Design (option A): the optimizer sees both factors (unchanged `get_default_sensitivities`), the currency leg is
+neutralised by a forward netted against the FX sleeve, and a currency view comes only from the FXDL sleeve.
+- `multiasset/book/fx.py`: per currency `bond` (embedded), `hedge` (= -bond), `sleeve` (FXDL view, crosses split
+  into two currencies), `net_forward` (= sleeve - bond, the one ticket) and `net_exposure` (= sleeve).
+- Backtest: `BookPnL.fx_embedded` / `fx_hedge` book the embedded spot move and the hedge's offset (cancel exactly,
+  so book totals are unchanged); `metrics['fx_overlay']` reports average notionals (% of capital) and the gross
+  FX P&L being hedged. Portfolio tab: "FX Hedge Ticket" panel under the IRDL hedge.
+- Hedge carry is already charged: the funding hurdle bills foreign notional at the foreign overnight rate (= CNY
+  funding + forward points). Fix: SOFR/TONAR/ESTR start 2018-04/2020-01/2021-01 and were charged 0 before that;
+  they are now backfilled with the 1Y government yield minus its first-year spread to the overnight rate.
+  Cross-currency basis is still not modelled (no forward-point data).
+- A/B, 2017-2026, post-funding Sharpe before -> after: P06 1.42 -> 1.42; +IRDL4 0.98 -> 1.00; +SC8 1.72 -> 1.72;
+  +all12 1.70 -> 1.70; risk_parity P06 0.74 -> 0.74 (others within 0.01). The change is accounting/visibility, not alpha.
+- Size of the hedged FX move (ann., % of capital): factor_scaling +IRDL4 0.03, +SC8 0.33, +all12 0.78;
+  risk_parity +IRDL4 -0.94, +SC8 -1.28, +all12 -1.09. Unhedged, this would be a material, unrewarded return source.
+  Average embedded notional per currency is 7-12% of capital (US 7-8, JP 11-12, UK 11, EU 9).
+
+### 3.9 Negative IRDL.CN (net short duration overlay) - portfolio test (2026-10-17)
+
+Question: does letting IRDL.CN go short (via TF/T/TS or pay-fixed swaps, no shorting cash bonds) lift portfolio Sharpe
+and return? Test: rebuild IRDL.CN positions from the SAVED walk-forward predictions (`build_position_series`,
+`long_only=False`; no retraining, so only the sizing step changes), feed them into `factor_scaling`, 2017-01-02..2026-10-13,
+unlevered, post-funding Sharpe. Shorts are booked as short cash bonds (pay yield, earn FR007 through the funding
+hurdle), which has the same economics as a pay-fixed swap without the swap-spread/futures basis. Scripts are session
+scratch only. "Tenor floor" = `SHORT_END_LONG_ONLY_TENORS`. "Bull floor" = the existing 0.40 minimum position when 60d and
+120d yield momentum are both negative.
+
+| Variant | P06 Sharpe / ann ret / maxDD | P11 Sharpe / ann ret / maxDD |
+|---|---|---|
+| A current (IRDL long-only + bull floor, tenor floor ON) | 1.42 / 2.85% / -1.2% | 1.31 / 2.70% / -1.6% |
+| B same, tenor floor OFF | 1.41 / 2.01% / -1.0% | 1.24 / 1.69% / -1.5% |
+| C IRDL long-short, no bull floor, tenor floor OFF | 1.26 / 1.68% / -2.1% | 1.09 / 1.59% / -3.0% |
+| D IRDL long-short + bull floor, tenor floor OFF | 1.48 / 2.02% / -1.0% | 1.32 / 1.70% / -1.5% |
+| E IRDL long-short + bull floor, tenor floor ON | 1.45 / 2.89% / -1.2% | 1.36 / 2.75% / -1.6% |
+
+- Negative IRDL is NOT a clear lever. Best case E vs A: +0.03 (P06) / +0.05 (P11) Sharpe, +0.04 / +0.05 pt return.
+  Six-month windows (19): E beats A in 12/19 and 11/19, median delta +0.002 / +0.0003; D vs B 8/19 and 7/19, median -0.001.
+  The means (+0.03 to +0.12) come from a few windows. This is inside the +-0.1-0.15 noise floor (section 3).
+- Removing the bull floor (C) hurts: Sharpe -0.14 / -0.21, drawdown doubles. Model-driven shorts that fight a rally cost
+  more than the shorts earn.
+- The short side earned +0.0023 in IRDL.CN factor units over 279 short days, and 87% of it is 2017 (yields +93bp);
+  2022 is the only other positive year; 2025 (yields +25bp, 60 short days) earned ~0. CN yields fell in most of the
+  sample, so this test has very little bear-market data to judge the short side on.
+- The tenor floor (A vs B) is the carry lever: ON adds ~0.9-1.0 pt of annual return at about the same Sharpe. Its
+  cost is the short-end shorts that pay carry. Under an overlay those shorts would be swap/futures legs, so the real
+  comparison is the plan's P2 (route the floored residual into TS/TF), not IRDL sign.
+- Capital usage is 82-90% in every variant, not 95%: the binding constraint on carry is not the IRDL sign.
+- Caveat: shorts here count toward gross capital (|notional|); an overlay would not, which would free capital for the
+  carry book. Not tested.
+
+#### 3.9b Foreign IRDL (US/DE/JP/UK) long-short (2026-10-17)
+
+US yields rose ~107bp in 2026 (IRDL.US 3.94 -> 5.01; US10Y 4.18% -> 5.19%). Long-only IRDL.US lost 0.13% (factor units) YTD
+at mean position 0.21; long-short turned short on only 50 days and made ~0. Same method as 3.9, tenor floor ON, post-funding:
+
+| Pool | Long-only (current) | LS + bull floor | LS, no bull floor |
+|---|---|---|---|
+| P06 (reference, no foreign) | 1.42 | | |
+| P06 + IRDL.US | 1.20 / 2.49% | 1.14 / 2.30% | **1.41** / 2.60% / DD -0.9% |
+| P06 + IRDL.US/DE/JP/UK | 1.00 / 1.87% | 0.91 / 1.43% | **1.40** / 1.90% / DD -0.9% |
+
+- Unlike CN, dropping the bull floor HELPS the foreign factors: six-month windows 13/19 (US, median +0.23) and 16/19
+  (all four, median +0.47); better in 8/10 and 7/10 calendar years. Factor-level IRDL.US price Sharpe 0.18 -> 0.33.
+- But it only repairs the dilution: foreign IRDL long-only took P06 from 1.42 to 1.00; long-short no-floor returns to ~1.40,
+  i.e. no better than leaving the foreign IRDL out (return 1.9-2.6% vs 2.85%).
+- 2026 YTD contribution is small: +0.10 pt (US) / +0.12 pt (all four) of capital vs long-only, because the sleeves are small and
+  the model was short on few days. Direction right, size modest.
+- Next check if pursued: an overlay leg with real swap/futures carry for the shorts, and the FX/hedge leg (section 3.8).
+
+#### 3.9c Decision: IRDL is long-short everywhere, with a symmetric trend floor (2026-10-17, user)
+
+User wants one universal rule (CN included, "we may face a similar environment"). All five IRDL factors replaced at once;
+tenor floor ON; post-funding Sharpe / ann. return / max DD, 2017-2026, factor_scaling:
+
+| Pool | Long-only (was) | LS no floor | LS bull floor | **LS symmetric floor** |
+|---|---|---|---|---|
+| P06 | 1.42 / 2.85% / -1.2% | 1.29 / 2.93% / -2.7% | 1.45 / 2.89% / -1.2% | **1.47** / 2.85% / -1.9% |
+| P11 | 1.31 / 2.70% / -1.6% | 1.20 / 2.98% / -3.7% | 1.36 / 2.75% / -1.6% | **1.41** / 2.77% / -1.7% |
+| P06 + IRDL US/DE/JP/UK | 1.00 / 1.87% / -1.0% | 1.01 / 1.54% / -1.6% | 0.96 / 1.49% / -1.2% | **1.47** / 1.18% / -0.7% |
+| P11 + IRDL US/DE/JP/UK | 1.02 / 1.96% / -1.3% | 1.10 / 1.65% / -1.2% | 1.15 / 1.65% / -1.0% | **1.56** / 1.24% / -0.7% |
+
+- Symmetric floor = best Sharpe in all four pools (+0.05, +0.10, +0.47, +0.54 vs long-only). No-floor long-short is worse on CN;
+  the bull-only floor did not help the foreign factors; only the mirrored floor works for both.
+- Robustness is weaker than the headline: six-month windows vs long-only 6/19 and 8/19 on CN-only pools (median -0.01), 12/19
+  and 14/19 with the foreign factors (median +0.21 / +0.51); calendar years better 3-6 of 10. CN-only gain is within noise.
+- Cost: with the foreign factors, annual return falls ~0.7 pt (1.87 -> 1.18%, 1.96 -> 1.24%) while drawdown halves. The floor
+  is active on 73-75% of days, so the book is largely trend-following with the ML model setting size beyond +-0.4. Factor-level
+  price Sharpe: IRDL.CN 0.96 -> 1.13, IRDL.US 0.18 -> 0.73.
+- 2026 YTD (post-funding, % of capital): P06 0.36 -> 0.28, P06+IRDL4 0.23 -> 0.31, P11+IRDL4 0.42 -> 0.26: no 2026 benefit
+  overall (CN yields fell ~17bp in 2026; the US sell-off was captured late).
+- Implementation: `_LONG_ONLY_PREFIXES` is now empty; `apply_trend_floor` (factor_model.py) is shared by
+  `run_factor_model_backtest` and the saved-model prediction path (`_rfbt_train_helpers.py`), which previously had NO floor
+  while the backtest did. `FactorModelConfig.trend_floor_symmetric=False` restores the bull-only floor. Tests:
+  `tests/test_irdl_long_short.py`.
+- NOT done: the saved `factor-backtest.pkl` / models still hold long-only IRDL positions until the Factor-tab backtest is rerun
+  (or the IRDL positions are rebuilt from the saved predictions). `scalar_to_coeff` still treats IRDL as long-only (legacy path,
+  only the Risk Budget panel display and tests use it); the live sleeves use the raw position. Shorts are modelled as short
+  cash bonds (pay yield, earn FR007 via the hurdle), i.e. swap-like without the basis.
+
+### 3.10 Overlay instruments: futures vs FR007 swaps (2026-10-17)
+
+How well each instrument tracks the CGB cash yield the beta book actually holds. Swap rate change (FR007 IRS, `database-px.pkl`
+IRS, from 2022-02) regressed on the same-tenor CGB yield change; futures return regressed on -modDur*dy of the cash CGB (annuity
+duration proxy, same method as `beta_book_short_end_futures_hedge.md` sec 6). 2022-03..2026-10, R2 / hedge ratio (beta):
+
+| Tenor | Futures, monthly | FR007 swap, monthly | swap daily / weekly R2 |
+|---|---|---|---|
+| 1Y | none | 0.62 / 0.61 | 0.33 / 0.47 |
+| 2Y | TS 0.71 / 0.84 (daily 0.49) | 0.64 / 0.82 | 0.48 / 0.55 |
+| 3Y | none | 0.73 / 0.86 | 0.40 / 0.57 |
+| 5Y | **TF 0.87 / 0.90** (daily 0.62, weekly 0.73) | 0.83 / 1.00 | 0.74 / 0.77 |
+| 7Y | none | 0.54 / 0.88 | 0.03 / 0.24 |
+| 10Y | **T 0.77 / 0.74** (daily 0.60) | 0.32 / 0.80 | 0.00 / 0.03 |
+| 30Y | TL (data from 2023-04, not measured) | none | |
+
+- TF and the 5Y swap are equivalent hedges of CGB 5Y (0.87 vs 0.83 is inside the noise of ~55 monthly points); TF is exchange-traded,
+  margin-only, no clearing/CSA, history from 2015. At 10Y the futures are clearly better (swap 7Y/10Y daily R2 ~0 looks like stale quotes).
+  Swaps only add 1Y and 3Y, which have no futures.
+- Futures reference the CGB CTD, the swap references FR007: a swap hedge of CGB cash carries the swap-spread basis.
+- Gaps: no margin-rate assumption (do not invent one), no CTD/conversion-factor data (duration is a proxy), the swap series is short.
+
+### 3.11 Overlay instrument registry and margin (2026-10-17, user decisions)
+
+- Done: the five IRDL.* position columns in `factor-backtest.pkl` were rebuilt from the saved predictions with the long-short
+  symmetric-floor rule (old rule first reproduced the saved positions exactly, max diff 0.0; the other 39 factors and all
+  predictions are byte-identical; backup kept in the session scratchpad). The Risk Budget panel now treats IRDL as directional
+  (`scalar_to_coeff`: coefficient = signed position; a flat saved signal shows 0 exposure).
+- Routing: China rates use futures/swaps; US/DE/JP/UK have no derivative data, so their shorts are short cash bonds
+  (`hedge_route`). Futures DV01 = annuity-formula duration proxy (no CTD data).
+- `multiasset/book/hedge_instruments.py` (definitions + sizing only): TS (2Y), TF (5Y), T (10Y), TL (30Y) futures, FR007 swaps
+  only for the 1Y and 3Y gaps (no 5Y swap). `split_dv01` spreads a DV01 over the neighbouring available instruments by tenor
+  (7Y -> 60% TF / 40% T), respecting data start dates (TS 2018-08, TL 2023-04, swaps 2022-02).
+  CFFEX face values TS 2,000,000 and TF/T/TL 1,000,000 (confirmed by the user 2026-10-17).
+- Margin 3% of |notional| counts as used capital: usage = cash gross + margin, capped at 95% (`capital_usage`, `cash_headroom`).
+  At the latest CGB yields (2Y 1.26%, 5Y 1.39%, 10Y 1.65%) and 10bn capital: offsetting 2.5 MM/bp of DV01 needs 12.9bn TS
+  (margin 3.9%), 5.3bn TF (1.6%), 2.8bn T (0.8%), or a 50/50 TF+T mix (4.0bn, margin 1.2%); at 5 MM/bp the TF+T mix costs 2.4%.
+  Margin per unit DV01 is highest at the short end (low duration per notional), so prefer TF/T and use TS sparingly.
+- The binding limit is variation margin, not initial margin: a 100bp rally costs a short hedge 2.5% (2.5 MM/bp) to 5% (5 MM/bp)
+  of capital in daily cash settlement while the bond gains are unrealised. With a 5% buffer, margin + a 50bp stress is about
+  1.0% of capital per MM/bp, i.e. a derivative DV01 cap of roughly 5 MM/bp per 10bn.
+- Not yet built: futures/swap P&L leg (roll/basis and fixed-vs-FR007 carry), margin inside `weights_to_notional`, the bucketed
+  DV01 solve, routing negative CN IRDL to the registry, and re-running the sweeps with these costs.
+
+### 3.12 Futures / swap overlay in the backtest and P&L (2026-10-17)
+
+Implemented: `multiasset/book/overlay.py::route_cn_shorts`, `RiskModelConfig.ROUTE_CN_SHORTS_TO_OVERLAY` (default True,
+factor_scaling only). Negative CN-bond notional is traded with TS/TF/T/TL (+1Y/3Y FR007 swaps), DV01-matched with the annuity
+duration proxy (yesterday's yield, like the cash sizing); foreign shorts stay short cash bonds. Differences from a short bond,
+all modelled: (1) P&L is the instrument's own series (futures: contracts x face x dF/100 on the back-adjusted continuous
+contract, so roll and basis are inside; swap: notional x [(rate - FR007)/365 - modDur x d rate], negative = pay fixed);
+(2) no bond carry and no repo credit, and the funding hurdle is not applied to overlay notional; (3) margin 3% of |notional|
+is used capital (earns nothing) inside the 95% cap, and the DV01 scaling (`scale_sleeve_to_dv01_target`) and
+`weights_to_notional` charge routed shorts at the margin rate only; (4) overlay legs have their own P&L columns, tx cost,
+class 'Overlay' in the attribution and `metrics['duration_overlay']` (basis vs a short bond, margin, worst 20-day P&L).
+
+A/B on the rebuilt long-short IRDL signals, 2017-2026, factor_scaling, post-funding Sharpe / ann. return / avg capital usage:
+
+| Pool | X0 short bonds, floor ON (previous) | X1 overlay, floor ON | X2 short bonds, floor OFF | X3 overlay, floor OFF |
+|---|---|---|---|---|
+| P06 | 1.47 / 2.85% / 0.85 | 1.36 / 3.05% / 0.80 | 1.45 / 1.79% / 0.91 | 1.38 / 2.88% / 0.74 |
+| P11 | 1.41 / 2.77% / 0.81 | 1.31 / 2.95% / 0.78 | 1.35 / 1.58% / 0.89 | 1.22 / 2.60% / 0.71 |
+| P06 + IRDL4 | 1.22 / 1.16% / 0.94 | 1.16 / 1.19% / 0.94 | 1.18 / 0.78% / 0.95 | 1.07 / 1.08% / 0.93 |
+| P11 + IRDL4 | 1.19 / 1.15% / 0.94 | 1.08 / 1.16% / 0.94 | 1.09 / 0.80% / 0.95 | 0.97 / 1.09% / 0.93 |
+
+- LESSON: a first run that charged routed shorts full notional in the DV01 scaling left capital idle (usage 0.62) and showed
+  X3 at Sharpe 1.69 / 1.61 / 1.42 / 1.31. That was an artifact of low deployment (less hurdle, less vol); with the freed
+  capital deployed X3 is below X0 in every pool. Always read Sharpe together with capital usage.
+- The overlay is a worse hedge than the bond it replaces: overlay P&L minus (short-bond P&L + repo credit) is -0.06 to -0.09
+  pt/yr, and the daily P&L R2 versus the short bond is only 0.42-0.56 (the hedge carries 45% gross notional, margin 1.4%).
+  Worst 20-day overlay P&L is -1.0% to -1.7% of capital (variation margin).
+- Routing adds ~+0.2 pt gross return with the floor ON (more long carry and cash income from freed capital) but costs ~0.05-0.11
+  Sharpe (basis noise, more deployed capital against the funding hurdle). Keep the short-end tenor floor ON even with the overlay.
+- Capital usage is not the lever: CGB yield minus FR007 averaged 2Y +0.1/+0.4 (2017-21) but -0.17/-0.29 in 2025-26 (5Y
+  -0.14/+0.02; 10Y +0.04/+0.29; only 30Y stays +0.3/+0.8). Deploying more into the short/mid curve earns ~nothing over funding now.
+- Not done: the live Portfolio tab still shows CN shorts as signed bond DV01 (no futures ticket); the 3x3 bucketed solve is a
+  simple tenor split; backtest allocation tables still show pre-routing signed CN notional.
+
+### 3.13 Revised CN short routing: short bonds for 5Y+, swaps for 1Y/2Y (2026-10-17, user)
+
+User: 5Y/10Y/30Y bonds are easy to short; use swaps for 1Y/2Y. Default is now `RiskModelConfig.CN_SHORT_ROUTING`
+(1Y -> SWAP1Y, 2Y -> SWAP2Y, 5Y/10Y/20Y/30Y -> short cash bond; ordered preference lists, so swap tenors fall back to the
+short bond before the swap history starts, 2022-02-28; futures can be selected per tenor). Only 1Y/2Y shorts cost margin in
+the cap; `SHORT_BOND_BORROW_COST_BP` (default 0, not yet specified by the user) charges a fee on short cash bonds, since the
+backtest otherwise credits a short bond with repo and no borrow cost, which flatters bond shorting (so 3.12's "overlay worse
+than a short bond" is conditional on that). Post-funding Sharpe / ann. return / usage, factor_scaling, long-short IRDL:
+
+| 2017-2026 | R0 bonds, floor 1/2/5Y | R1 bonds, no floor | R2 swaps 1-2Y, no floor | R3 swaps, floor 5Y only |
+|---|---|---|---|---|
+| P06 | **1.47** / **2.85%** / 0.85 | 1.45 / 1.79% / 0.91 | 1.38 / 1.94% / 0.86 | 1.33 / 1.99% / 0.86 |
+| P11 | **1.41** / **2.77%** / 0.81 | 1.35 / 1.58% / 0.89 | 1.28 / 1.74% / 0.84 | 1.24 / 1.78% / 0.84 |
+| P06 + IRDL4 | **1.22** / **1.16%** / 0.94 | 1.18 / 0.78% / 0.95 | 1.22 / 0.91% / 0.94 | 1.20 / 0.94% / 0.94 |
+| P11 + IRDL4 | **1.19** / **1.15%** / 0.94 | 1.09 / 0.80% / 0.95 | 1.12 / 0.92% / 0.94 | 1.09 / 0.93% / 0.94 |
+
+On the window where swaps exist throughout (2022-03 .. 2026-10), P06 / P06+IRDL4: R0 0.98 / 1.34 (ret 2.04% / 1.36%),
+R1 0.97 / 1.06 (1.37% / 0.87%), R2 0.91 / 1.19 (1.74% / 1.19%), R3 0.91 / 1.21 (1.83% / 1.24%).
+- The short-end floor is the dominant effect: dropping the 1Y/2Y/5Y short legs adds ~1.0 pt of return and keeps Sharpe highest,
+  whichever instrument would have carried those shorts. Swaps recover only 0.15 pt (full sample) to 0.3-0.4 pt (swap window)
+  of the ~1 pt the short legs cost, i.e. routing is useful only if the floor is removed. With the floor on (production), no
+  1Y/2Y/5Y shorts exist and the routing is inert.
+- A 1Y/2Y swap behaves like the short bond in expectation (overlay minus short-bond P&L 0.00 to +0.03 pt/yr in the swap
+  window; pay-fixed carry (swap - FR007) is ~0 because FR007 ~ the 1Y/2Y swap rate) but tracks it with daily R2 of only
+  0.50-0.55, which lowers price-only Sharpe in CN-only pools (0.96 -> 0.80) and helps once foreign IRDL shorts are in.
+- A 20bp borrow fee on short bonds lowers Sharpe 0.01-0.04 in CN-only pools and 0.07-0.11 with foreign IRDL (more short
+  bonds); it does not change the ranking.
+
+#### 3.13b Decision and borrow fee (2026-10-17, user)
+
+Decision: keep SHORT BONDS with the short-end floor ON (1Y/2Y/5Y), the highest Sharpe and return in every pool; the swap routing
+stays in the code but is inert while the floor is on. Borrow fee on short cash bonds (`SHORT_BOND_BORROW_COST_BP`, per market and
+tenor): CN 10Y 40bp, CN 30Y 100bp; unlisted tenors (CN 20Y, floored 1Y/2Y/5Y, all foreign markets) are 0. The fee is netted into
+the cash/financing P&L line (`funding.short_bond_borrow_cost_daily`; `metrics['borrow_cost']` reports it per asset).
+
+Production config (short bonds, floor on, long-short IRDL), 2017-2026, post-funding Sharpe / ann. return, no fee -> with fee:
+P06 1.470 / 2.85% -> 1.455 / 2.83%; P11 1.411 / 2.77% -> 1.398 / 2.76%; P06+IRDL4 1.219 / 1.16% -> 1.210 / 1.16%;
+P11+IRDL4 1.195 / 1.15% -> 1.185 / 1.14%. Fee cost 0.006-0.025 pt/yr: P06 averages 4.5% of capital short in CN10Y (0.012 pt/yr)
+and 1.9% in CN30Y (0.013 pt/yr); CN20Y averages 2.0% short and is unpriced (a 70bp midpoint would add ~0.014 pt/yr).
+
+#### 3.13c CN 20Y shorts are held as 30Y shorts (2026-10-17, user)
+
+CN 20Y is illiquid to short, so `RiskModelConfig.CN_SHORT_SUBSTITUTE = {20.0: 30.0}`: the NEGATIVE 20Y notional moves to CN30Y,
+scaled by modDur20 / modDur30 (about 0.7x the notional; yesterday's yields) so the DV01 is preserved, netting against any 30Y long
+(`overlay.substitute_shorts`, applied before routing and P&L; longs untouched; factor_scaling only). The moved short takes the 30Y
+borrow fee (100bp). Production config (short bonds, floor on, fee table), 2017-2026, post-funding Sharpe / ann. return,
+20Y short held (unpriced) -> substituted: P06 1.455 / 2.83% -> 1.471 / 2.86%; P11 1.398 / 2.76% -> 1.408 / 2.78%;
+P06+IRDL4 1.210 / 1.16% -> 1.218 / 1.17%; P11+IRDL4 1.185 / 1.14% -> 1.186 / 1.15%. No cost despite the fee: the 30Y short
+averages 3.3% of capital in P06 (was 1.9%) and the total fee rises from 0.025 to 0.035 pt/yr.
+
+### 3.14 DONE 2026-10-17 (results in 3.15): carry accrual and Sharpe basis ("P0b"; NOT the section 6.2 P0, which was return attribution and is done)
+
+Two accounting defects in the book metrics, both reproduced with the real functions on 2026-10-17. They bias every comparison in
+this document, so fixing them comes before further tuning of capital usage, floors or overlays.
+
+**Defect 1 - carry, cash and funding are accrued per trading-day row.** `calculate_daily_returns_series` books `yield/100/365` on
+each ROW of a business-day series, so a Monday row (3 calendar days) earns one day. Measured: CN10Y 2019/2021/2023 booked carry
+2.169/2.075/1.866% against average yields of 3.179/3.029/2.724% - ratio 0.682/0.685/0.685 = rows/365. About 31.5% of every year's carry
+never reaches the P&L. `cash_return_daily` and `book_funding_cost_daily` use the same /365-per-row convention, and `compute_metrics`
+then annualises the hurdle as `mean * 252`, so cash and funding are scaled by the same ~0.69 (a consistent error in the Sharpe, a
+level error in reported return and carry attribution).
+
+**Defect 2 - the post-funding Sharpe numerator is not an excess over cash.** P&L includes FR007 on UNDEPLOYED capital
+(`cash_return_daily`), while the hurdle charges FR007 only on DEPLOYED notional. Test with bond yield == FR007 == 2.0%, zero price
+risk (true excess = 0 at any deployment); numerator = Ann. Return - Ann. Funding Cost:
+
+| deployed | Ann. return | Ann. funding | numerator (should be 0) |
+|---|---|---|---|
+| 0% | 1.318% | 0.000% | 1.318% |
+| 50% | 1.319% | 0.689% | 0.630% |
+| 95% | 1.320% | 1.309% | 0.011% |
+
+An idle book is credited with the risk-free rate as "excess", and each deployed CNY pays FR007 twice (lost cash interest plus the
+hurdle). Under-deployment is therefore rewarded: this is the mechanism behind the 1.69 -> 1.38 "artifact" in 3.12 (capital usage 0.62),
+not just lower volatility. Shorts have the mirror problem (counted in abs gross, so they also lose cash interest, and their
+proceeds earn nothing in P&L while the hurdle credits repo).
+
+**Fix (proposed).**
+1. Accrue by calendar days: carry, cash, borrow fee and funding for a row = rate/100/365 x (calendar days since the previous row;
+   first row = 1). Apply in `calculate_daily_returns_series` (bond, credit, FX-rate carry), `cash_return_daily`,
+   `book_funding_cost_daily`, `short_bond_borrow_cost_daily`, the swap carry in the overlay. The hurdle annualisation in
+   `compute_metrics` (mean x 252) is correct once each row carries its calendar days, so it is unchanged. Factor-level (price-only)
+   code is untouched. Booked carry rises x 1.466 (365/249).
+2. Define the post-funding numerator as excess over a cash benchmark: P&L (including cash interest) minus FR007 x benchmark capital
+   (decision below) minus the foreign hedge carry (foreign notional x (foreign overnight rate - FR007), as now), so a book that earns
+   exactly FR007 on everything scores 0 at any deployment. Decide the short-proceeds treatment at the same time (credit repo on short
+   notional in P&L and charge only margin/haircut in capital, or keep abs-gross and drop the hurdle credit).
+3. Keep `Sharpe (gross)` and price-only Sharpe unchanged for comparability; add the new basis as the app KPI.
+
+**Decisions needed from the user:** (a) benchmark capital: total capital, or 95% x capital (the 5% buffer idle)? (b) short proceeds:
+earn FR007 in P&L with a margin-only capital charge, or stay abs-gross? (c) OK that all documented baselines are re-run and replaced.
+
+**Tests:** (1) a 252-row business-day series accrues yield x (calendar days)/365 per year for bond, cash and funding; (2) the
+y == FR007 synthetic above gives numerator 0 +- 1e-6 at 0/50/95% deployment, long and short; (3) golden check that price-only Sharpe,
+turnover and attribution price/class shares are unchanged; (4) foreign hedge carry unchanged in sign and scale.
+
+**Then re-run:** ERC vs legacy (6.11/6.12), IRDL long-short rule (3.9c), floor ON/OFF and swap routing (3.13), overlay A/B (3.12), FX
+overlay (3.8). Expect higher carry-driven returns, a larger cost for short-end shorts (their negative carry scales up 1.47x), and
+possibly different floor/overlay rankings.
+
+### 3.15 Baselines re-run under the corrected accounting (2026-10-17)
+
+Implemented per 3.14 (user decisions: benchmark = total capital, the buffer is cash and earns FR007; short-bond proceeds earn FR007
+in P&L while the cap still counts shorts at full notional; replace all baselines). `calendar_gap_days` (data.py) accrues bond, FX
+and FX-cross carry, `cash_return_daily` (cash incl. buffer, bond-short proceeds, derivative margin earns nothing),
+`benchmark_hurdle_daily` (FR007 x capital + foreign notional x (foreign rate - FR007)), borrow fee and swap carry. The hurdle is
+divided by PREVIOUS-DAY NAV (`hurdle_rate_on_nav`), the same base `compute_portfolio_metrics` uses for returns.
+Tests: `tests/test_book_funding.py` (a book earning exactly the cash rate scores 0 +- 0.05% excess at 0/50/95% deployment, long and
+short; foreign hedged excess = yield - foreign short rate; the same on a compounding NAV). KPI panel: "Sharpe (vs cash)",
+"Cash Benchmark". The dirty-price point (user): the 95% cap is untouched; the buffer needs only about the accrued interest (roughly
+half a coupon on average), so a cap of about 98% would suffice when no derivatives are used. Not changed.
+
+**LESSON (bug found the same day):** the first re-run divided the hurdle by INITIAL capital while returns are NAV.pct_change(). NAV
+compounds (~+12% over the sample) so the hurdle was too large by ~hurdle x NAV growth (~0.3 pt/yr at a 2.3% cash rate), which cut
+every Sharpe by ~0.2 and hit books with a bigger hurdle (foreign shorts) hardest. It made long-short IRDL look worse in the foreign
+pools (-0.04/-0.11) when it is better (+0.24/+0.17). The old hurdle was small enough to hide the mismatch. Staged diagnosis for
+P06+IRDL4 (long-short vs long-only Sharpe): old accounting +0.23; calendar accrual only +0.07 (1.18 vs 1.11 on the NAV base);
+full new accounting, correct base +0.24. Any future hurdle must be a rate on the same base as the returns it is subtracted from.
+
+Production = long-short IRDL with symmetric floor, short bonds, short-end floor 1/2/5Y, borrow fees, 20Y->30Y substitution, ERC
+budgets. Sharpe (vs cash) / ann. return % / max DD %, 2017-01-02..2026-10-13, factor_scaling, unlevered:
+
+| Config | P06 | P11 | P14 | P17 | P06+IRDL4 | P11+IRDL4 |
+|---|---|---|---|---|---|---|
+| **E1 production** | 1.17 / 3.55 / -1.6 | 1.08 / 3.45 / -1.5 | 1.08 / 3.49 / -1.4 | 0.66 / 2.95 / -1.6 | 1.04 / 2.99 / -0.6 | 1.00 / 2.93 / -0.6 |
+| E2 IRDL long-only (old rule) | 1.17 / 3.44 / -1.1 | 1.02 / 3.29 / -1.5 | 1.04 / 3.37 / -1.3 | 0.75 / 2.98 / -1.7 | 0.80 / 2.39 / -1.0 | 0.82 / 2.48 / -1.2 |
+| E3 floor OFF (swaps 1-2Y) | 1.09 / 3.11 / -0.9 | 0.94 / 2.94 / -1.4 | 0.94 / 2.95 / -1.1 | 0.60 / 2.62 / -1.2 | 1.01 / 2.85 / -0.6 | 0.89 / 2.81 / -0.6 |
+| E4 floor 5Y only (swaps) | 1.03 / 3.07 / -1.0 | 0.89 / 2.91 / -1.5 | 0.90 / 2.94 / -1.1 | 0.55 / 2.58 / -1.4 | 1.00 / 2.86 / -0.6 | 0.86 / 2.80 / -0.6 |
+| E5 legacy sleeve budgets | 0.79 / 5.17 / -5.9 | 0.13 / 2.79 / -20.6 | 0.24 / 3.45 / -18.7 | 0.32 / 3.71 / -10.4 | 0.82 / 4.18 / -3.0 | 0.40 / 3.94 / -7.7 |
+| E6 futures routing 10Y/30Y | 1.12 / 3.56 / -1.6 | 1.03 / 3.45 / -1.5 | 1.04 / 3.51 / -2.0 | 0.63 / 2.95 / -1.7 | 1.02 / 2.99 / -0.6 | 0.97 / 2.94 / -0.6 |
+
+E1 detail: price-only Sharpe 1.42 / 1.32 / 1.32 / 0.98 / 1.32 / 1.29; capital usage 0.84 / 0.81 / 0.81 / 0.79 / 0.94 / 0.94;
+cash benchmark 1.9% (2.3% with foreign shorts); P06 simple annual contributions: price 2.35, carry 1.10, cash 0.68, tx -0.03.
+
+What the re-run shows:
+- Levels. Reported return is higher (P06 2.85% -> 3.55%: carry is fully booked) and the headline Sharpe is lower (1.47 -> 1.17): it
+  is now an excess over cash and no longer rewards idle capital. Compare only within the new basis.
+- HOLDS: short-end floor ON is best in every pool (E1 > E3/E4 by 0.03-0.14); ERC beats the legacy budgets in 5 of 6 pools with a
+  far smaller drawdown (exception P06+IRDL4: legacy 0.82 vs 1.04 is lower too, but earns 4.18% at a -3.0% drawdown vs 2.99% at
+  -0.6%); short bonds beat futures routing by 0.01-0.05.
+- HOLDS: long-short IRDL is noise for CN-only pools (P06 0.00, P11 +0.06, P14 +0.04, P17 -0.09) and a clear improvement once the
+  foreign IRDL factors are in the pool (+0.24 and +0.17 Sharpe, +0.5-0.6 pt return, price-only Sharpe 1.32/1.29 vs 0.97/1.02): the
+  short side removes the drag of long-only foreign duration in a rising-rate sample.
+- Foreign IRDL legs: with long-only they dilute badly (P06 1.17 -> 0.80); with long-short they still do not add (1.04 vs 1.17 for
+  P06 alone), they only stop being a drag. Return is lower (2.99% vs 3.55%) at a smaller drawdown.
+- Absolute outcome: about 1.6 pt a year over cash at ~1.4% vol with a drawdown under 2%; most of reported return is the 1.9% cash rate.
+
+### 3.16 Shorts consume no capital (2026-10-17, user) and the singularity question
+
+Rule: `RiskModelConfig.SHORT_CAPITAL_RATE = 0`. The 95% cap limits LONG size only; a short uses no capital and longs and shorts are
+never netted against each other. Derivative shorts still tie up margin. Applies in `weights_to_notional`, `scale_sleeve_to_dv01_target`
+(the "negligible day" test now uses GROSS size, so a short-only day is still scaled to the DV01 target), the overlay cap
+enforcement, `cash_return_daily` (non-bond shorts no longer use cash) and the capital-usage KPI. Rate 1.0 restores the old counting.
+The binding limits become the 95% long cap and the GROSS DV01 cap (`MAX_DV01_PER_CAPITAL` = 5 MM/bp per 10bn); nothing else bounds
+the short book. Default pool: foreign rate factors stay OUT (the default pool is CN IR + USDCNY + AU/AL).
+
+Sharpe (vs cash) / ann. return % / max DD %  [avg long % / short % of capital, turnover], 2017-2026:
+
+| Config | P06 | P11 | P14 | P17 | P06+IRDL4 | P11+IRDL4 |
+|---|---|---|---|---|---|---|
+| C2 shorts counted in full (previous) | 1.17 / 3.55 / -1.6 | 1.08 / 3.45 / -1.5 | 1.08 / 3.49 / -1.4 | 0.66 / 2.95 / -1.6 | 1.04 / 2.99 / -0.6 | 1.00 / 2.93 / -0.6 |
+| **C1 shorts free (new default)** | 1.22 / 4.84 / -2.3 [73/30, 42x] | 1.04 / 4.94 / -2.0 [71/29, 42x] | 0.99 / 4.13 / -4.0 [72/27, 40x] | 0.79 / 4.10 / -4.0 [73/32, 51x] | 0.97 / 3.54 / -1.4 [68/81, 120x] | 0.84 / 3.48 / -1.6 [69/81, 124x] |
+| C3 shorts free, IRDL long-only | 1.05 / 4.08 / -3.0 | 0.99 / 3.95 / -2.6 | 0.39 / 5.20 / -9.6 [77/62, 229x] | 0.81 / 3.94 / -4.5 | 0.82 / 2.70 / -1.6 | -0.08 / 1.37 / -14.2 |
+| C4 shorts free, floor OFF | 1.34 / 3.94 / -1.5 [66/53] | 1.08 / 3.63 / -1.7 | 1.09 / 3.70 / -1.5 | 0.83 / 3.63 / -2.2 | 0.92 / 3.38 / -1.4 | 0.81 / 3.34 / -1.4 |
+
+- Freeing shorts mostly buys MORE RISK AND RETURN, not a better Sharpe: return +0.5 to +1.5 pt, Sharpe -0.16 to +0.13 (flat on
+  average), drawdown larger (-2.0% to -4.0% in CN-only pools). The long book averages only ~73% of capital: the DV01 cap, not the
+  95%, now binds on many days.
+- Long-only IRDL with free shorts is unstable (P14 drawdown -9.6%, turnover 229x; P11+IRDL4 -14.2%): the sleeves go net long and the
+  IRSL/IRCV short legs balloon. Long-short IRDL (C1) is what makes the free-short rule workable.
+- OPEN: with shorts free the short-end floor no longer wins everywhere (C4 vs C1: P06 +0.12 Sharpe but -0.9 pt return, P14 +0.10,
+  P11 +0.04, foreign pools -0.03 to -0.05). The floor decision (3.13b) was taken under the old capital rule and should be revisited.
+- The short book is bounded only by the gross DV01 cap: 81% of capital short in the foreign-IRDL pools. Consider an explicit
+  short-size cap if borrow capacity is finite.
+- NOT updated: the live Portfolio tab (`apply_factor_scaling`) still renormalises weights by gross |weight| (shorts consume
+  capital), so it disagrees with the backtest until changed.
+
+**Singularity.** The only optimisation in `factor_scaling` is the pool-level ERC on the covariance of FACTOR returns
+(`erc_sleeve_budgets`; it repairs tiny eigenvalues and falls back to the legacy rule if unusable). Position signs, long/short and
+the capital rule never enter it: sleeve capital = ERC budget x position. Measured at every monthly rebalance 2017-2026 (12M EWMA,
+lambda 0.94, effective sample ~32 observations): the ERC never fell back (0/118) in any pool. Correlation-matrix condition number
+(scale-free), median / max: P06 8 / 39; P11 32 / 100; P06+IRDL4 13 / 69; P14 and P17 304-352 / 3.7k-4.9k (driven by one pair, IF/IH: median EWMA correlation 0.95; IF/IC 0.86, IC/IH 0.72, see 3.20); P17 plus every foreign IR factor (29 factors) 757 / 10.9k. The raw covariance condition numbers (1e5-5e7) are
+unit differences between slope and commodity variances, not collinearity. What WOULD be singular: long and short legs of the same
+factor as separate assets (rank 6 of 12 for P06; condition ~1e302), or a sign-free asset-level risk parity. The code does neither;
+the asset-level SLSQP risk parity (risk_parity mode, RP base) stays long-only. Caveat: ERC is parity at |position| = 1; with small
+positions realised risk is not parity (a design property, not a numerical problem).
+
+### 3.17 Short-size cap, floor revisited, Portfolio tab aligned (2026-10-17, user)
+
+**Short-size cap.** `RiskModelConfig.SHORT_SIZE_MAX_RATIO = 1.0`: total |short| (every asset class, derivative notional included) may
+not exceed the same 95% ceiling as the long book; long and short are capped independently and never netted. Enforced in
+`weights_to_notional`, `scale_sleeve_to_dv01_target` and the overlay cap check. With the cap the uncapped shorts-free book of 3.16
+shrinks (P06: 1.22 / 4.84% -> 1.29 / 3.95%, drawdown -2.3% -> -1.6%).
+
+**Floor revisited under the new capital rule** (short bonds 5Y+, swaps 1Y/2Y when shorts are allowed, ERC, long-short IRDL, fees;
+Sharpe vs cash / ann. return % / max DD %; 6-month windows vs the current floor):
+
+| Variant | P06 | P11 | P14 | P17 | P06+IRDL4 |
+|---|---|---|---|---|---|
+| **F0 floor 1/2/5Y (current)** | 1.29 / 3.95 / -1.6 | 1.20 / 3.85 / -1.6 | 1.17 / 3.88 / -1.8 | 0.82 / 3.37 / -1.7 | 1.10 / 3.30 / -0.6 |
+| F1 no floor, swaps 1-2Y | 1.26 / 3.41 / -0.9 | 1.10 / 3.25 / -1.3 | 1.14 / 3.30 / -1.2 | 0.82 / 2.96 / -1.6 | 1.07 / 3.09 / -0.6 |
+| F2 floor 5Y only | 1.20 / 3.37 / -0.9 | 1.03 / 3.20 / -1.3 | 1.09 / 3.27 / -1.2 | 0.79 / 2.95 / -1.6 | 1.05 / 3.09 / -0.6 |
+| F3 floor 1/2Y only (5Y shorts allowed) | 1.39 / 3.93 / -1.6 | 1.32 / 3.88 / -1.5 | 1.21 / 3.81 / -1.2 | 0.84 / 3.31 / -1.8 | 1.14 / 3.29 / -0.6 |
+| F4 no floor, all short bonds | 1.28 / 3.43 / -0.9 | 1.11 / 3.26 / -1.3 | 1.16 / 3.32 / -1.2 | 0.85 / 2.99 / -1.6 | 1.08 / 3.10 / -0.6 |
+
+- Dropping the floor (F1/F2/F4) does not beat F0: Sharpe equal or lower, return ~0.5 pt lower; windows 8-12 of 19 with negative means
+  (P11 F1: 10/19, median +0.13 but mean -0.18). The "floor OFF is better" signal of 3.16 came from the uncapped book and does not survive.
+- F3 (floor only 1Y/2Y, allow 5Y shorts) is higher in all five pools (+0.02 to +0.12 Sharpe at equal return) but its windows are a
+  coin flip (8-9 of 19, medians ~0): unproven. DECISION: keep floor 1/2/5Y, short bonds for 10Y/30Y (20Y -> 30Y), swaps unused.
+
+**Portfolio tab (factor_scaling) now follows the backtest rules:** floor 1/2/5Y; 20Y shorts held as DV01-equivalent 30Y shorts
+(`signed_sleeve_weights_snapshot`); the signed shape is sized with `scale_sleeve_to_dv01_target` (DV01 target, 95% long ceiling,
+95% short ceiling, up or down); DV01 is GROSS (the old cap summed signed DV01, netting shorts against longs); lots round toward
+zero (`np.floor` made a short bigger); weights shown are the final sized capital; the TOTAL row is the LONG size and the status line
+reports Long % / Short % / gross, long and short DV01; the FX hedge ticket uses the final sized capital. Other allocation modes
+keep their weights (long-only) and are only scaled down to the DV01 limit. NOT changed: the Risk tab's beta tables still sum signed
+capital (`web/tabs/risk/books/beta_table.py`), and the harness-checked default pool excludes foreign rate factors.
+
+**Risk tab fixed (2026-10-17).** It assumed the beta book was always long. Now: the beta table shows a LONG total (capital used, with
+the volume and the additive MtM of all positions) and a separate SHORT total (size, no capital), never netted
+(`helpers.beta_long_short_totals`); trade tickets and the inventory use `beta_direction` (SELL for negative capital, was a hard-coded
+BUY); MtM flips sign for a short; the sector inventory shows long / short per sector instead of a net. Net position by instrument and
+the DV01 ladders stay NET by design (they are exposure views across books: a short 10Y does offset a long 10Y). Tests:
+`tests/test_risk_tab_long_short.py`.
+
+**MtM sign and gross view (2026-10-17, user).** Beta MtM is now `- direction x volume x duration x (close yield - open yield) / 10000`
+(`helpers.beta_mtm_mm`): rates up, a long loses and a short gains (it was positive for a long when yields rose). The SCALE was
+100x too small (volume in MM CNY, yields in percent: 1000 MM at duration 5 and a 10bp rise loses 1000 x 5 x 0.0001 x 10 = 5.0 MM,
+the formula gave 0.05 MM) and was fixed to /100 on 2026-10-17 at the user's request.
+Gross views added to the Risk subtab: a Net / Gross dropdown on "Position by Instrument" (long right, short left per instrument,
+hover shows gross and net) and on the DV01 ladder (long DV01 stacks up, short down, label shows gross and net per tenor), both
+respecting the Mixed / Beta / Alpha filter; the Total DV01 KPI reads "MM/bp net · gross X". The default stays Net.
+Example (P06, 10bn, last saved signals): long 54.0%, short 5.2%, gross DV01 4.97 (long 4.57 / short 0.40) vs limit 5.0.
+
+### 3.18 Consistency audit: backtest vs Portfolio tab vs the design (2026-10-17)
+
+Checked rule by rule. **Backtest** (P06, P11, P14, 2017-2026, daily): long size <= 95% and short size <= 95% every day; gross DV01 <=
+5.0 MM/bp (binding exactly on many days, zero violations); no shorts in CN1Y/2Y/5Y, none in CN20Y (held as 30Y); bond shorts only
+in CN10Y/CN30Y, other shorts only in FX/commodity/equity. **Signals**: the saved IRDL positions follow the symmetric trend floor on
+every date for all five markets (zero violations) and stay within [-1, 1]; the live snapshot scalars come from the same position
+function; the default pool has no foreign rate factor. **Accounting**: calendar accrual, cash incl. buffer and short proceeds,
+benchmark hurdle on previous-day NAV (tests in `tests/test_book_funding.py`).
+
+**Live vs backtest on identical inputs** (same signals, same date): found and fixed four divergences.
+1. **Duration basis.** The tab sized and reported DV01 with the default table durations (CN 30Y 17.0, 20Y 13.0, 10Y 8.5); the backtest
+   prices and sizes with the annuity duration at current yields (21.8, 15.9, 9.0). The tab understated 30Y/20Y DV01 by 22%/18% and
+   overstated US bonds by 17-24%, so its "5.0 MM/bp" cap was really ~6 on the backtest basis (P06: long 54.0% -> 43.7% once fixed).
+   `live_mod_durations` now uses the annuity basis.
+2. **Class caps.** `RiskModelConfig.CLASS_CAPS` (Rates 40% of the shape...) was applied in the live path only; the signed-sleeve
+   backtest dropped it, yet the config comment still said the backtest uses it. CN1Y (tiny duration, big weight) was clipped, so the
+   live book held 43.7% long where the backtest holds 82.8%. Caps now apply only to assets that keep a plain risk-parity weight.
+3. **Missing assets.** The live commodity universe lacked Rebar (CMDL.RB) and Coking_Coal (CMDL.JM), which the backtest trades in P11+;
+   their sleeves were silently dropped. Added. Soda_Ash, Live_Hog and European_Gas remain out (short history, excluded from every tested pool).
+4. **Netting / counting** (3.16-3.17, earlier today): gross DV01, toward-zero rounding, long and short reported separately.
+
+After the fixes the live book matches the backtest within lot rounding: P06 CN1Y 6,180 vs 6,192 MM, long 82.5% vs 82.8%, short
+3.9% vs 4.0%; P11 Rebar 215 vs 215, Coking_Coal -128 vs -129, long 87.9% vs 88.2%, short 5.1% vs 5.2%, gross DV01 4.97.
+Tools: `tests/test_live_backtest_consistency.py` (fast regression: live == backtest sizing, limits hold) and
+`scripts/audit_design_conformance.py [P06 P11 P14]` (full daily audit; writes nothing to the input folder).
+
+Known remaining differences (by design or out of scope; see 3.19 for the screen): the backtest budgets only a monthly screened subset of the pool
+(P11 averages 9.6 of 11 factors, P14 10.3 of 14), while the live tab uses the pool the user selected (which the Candidates tab's
+low-correlation screen normally produces); lot rounding; the backtest lags durations one day; in risk_parity / user_defined modes the
+backtest applies no DV01 scaling while the tab only scales down to the DV01 limit; the Risk tab's net-by-instrument views stay net.
+
+### 3.19 Should the live tab apply the backtest's monthly correlation screen? (2026-10-18) - no; drop it from the backtest instead
+
+What the screen is: every month the factor_scaling backtest keeps only the factors that appear in the `top_pairs` (UI default 10, range
+5-20) lowest-|correlation| pairs of factor changes (Pearson, 1Y window), and ONLY those get a sleeve. The live tab has no such step; its
+pool is whatever the user selected, and the Factor tab's "add diversified assets to pool" button is a one-off, different screen (it first
+forces one cheapest pair per asset class, then fills by lowest correlation). On current data the two screens agree almost completely
+(P11 identical; P14 differ only on USDCNY).
+
+A/B, 2017-2026, factor_scaling, Sharpe vs cash / ann. return / max DD (in-memory RP cache, nothing written to the shared cache):
+
+| Pool | top_pairs 5 | top_pairs 10 (current) | top_pairs 20 | no screen (all pool factors) |
+|---|---|---|---|---|
+| P11 | | 1.20 / 3.85% / -1.6 | | **1.25** / 3.98% / -1.7 |
+| P14 | 0.51 / 2.75% / -1.9 | 1.17 / 3.88% / -1.8 | 1.33 / 4.12% / -1.6 | **1.35** / 4.19% / -1.6 |
+
+- Monotone: the stricter the screen, the worse. top_pairs=5 keeps ~6.9 of 14 factors and halves the Sharpe (0.51); top_pairs=20 keeps
+  13; no screen is best. Six-month windows vs the current screen: no screen 11/19 (P11, median +0.13) and 11/19 (P14, median +0.06), better
+  in 6/10 and 5/10 calendar years - not a significant win, but never worse; top_pairs=5 loses 15 of 19 windows (median -0.78).
+- The screen is unstable: the screened set changes in 77% (P11) to 93% (P14) of months (Jaccard churn 0.12-0.22 at top_pairs=10, 0.42
+  at 5); factors such as CU, ZN and the IF/IC/IH index futures are in only ~52-67% of months, and the core IRDL.CN is dropped in ~12% of
+  months in P11.
+- It is NOT a passive filter: it decides capital allocation. The monthly step (month-start rebalance dates, built up front and independent of
+  the screen) recomputes the sleeve budgets, and the screen picks the factors that enter that ERC; a screened-out factor gets a ZERO budget
+  that month and its share moves to the others. Measured on P14 (12M EWMA, monthly 2017-2026), screened vs ERC over all 14 pool factors:
+  the screen re-assigns on average 16% of capital between sleeves each month (p90 45%); the budget turnover is 18.4% a month with the
+  screen vs 5.0% without; and the core duration sleeve IRDL.CN has a zero budget in 25% of months (IRSL.CN 6%, IRCV.CN 8%, USDCNY 14%,
+  the IF/IC/IH index futures ~43%, Cu 48%). Mean budgets: IRDL.CN 0.31 screened vs 0.39 unscreened, IRCV.CN 0.30 vs 0.24.
+- Why the full-pool ERC is enough: it already handles correlated factors by letting them share one risk budget, so the diversification
+  the screen is meant to buy comes from the covariance, without switching sleeves on and off.
+RECOMMENDATION (implemented in 3.20): do not port the screen to the live tab; make factor_scaling use every factor of the pool in both places (the backtest
+then equals the live tab by construction, and results stop depending on an arbitrary `top_pairs`). Practical bonus: with no screen the
+factor_scaling backtest no longer needs the Stage-1 SLSQP solve (several minutes per new pool/date range) except for the rebalance-date
+list and holdings display. The pure risk-parity mode keeps its screen (asset selection). Not implemented: needs your decision.
+Side finding: `beta_rp_cache.pkl` keeps only the 5 most recent entries in TOTAL (`_prune_lru(max_versions=5)` over one family), so any
+backtest run with new parameters can evict cached entries of other pools/dates (cost: recompute time).
+
+### 3.20 Implemented: month-begin pool risk parity over ALL instruments, daily factor scaling (2026-10-18, user)
+
+User statement of the design: for the selected portfolio the backtest includes every instrument of the pool, runs risk parity at month
+start, and the factor model scales daily on top of it. The earlier code kept the original "correlation-based" strategy's monthly screen
+(an inheritance from the old risk-parity-mode design; the comment even said "the pool's OWN screened factors"), so it deviated from this
+and from the live tab. Done: `RiskModelConfig.FACTOR_SCALING_CORR_SCREEN = False` (default). In factor_scaling the orchestrator now builds
+the month-begin pool directly from all pool factors, the sleeve ERC budgets (unchanged `pool_sleeve_budgets`, 12M EWMA window ending at
+each month start) cover all of them, and the factor model scales the sleeves daily. Months with < 20 rows in the window are skipped as
+before. There is no correlation screen and no Stage-1 solve (a full backtest drops from several minutes to 8-17 s), and the shared
+`beta_rp_cache.pkl` is neither read nor written. `True` restores the legacy screen; the pure risk_parity mode always screens.
+Tests: `tests/test_month_begin_pool_risk_parity.py` (all 11 factors budgeted every month; a guard raises if the RP cache is touched).
+
+Production numbers under the new default (Sharpe vs cash / ann. return / max DD, 2017-2026; previous screened value in brackets):
+P06 1.29 / 3.95% / -1.6 (unchanged); P11 1.25 / 3.98% / -1.7 (1.20 / 3.85%); P14 1.35 / 4.19% / -1.6 (1.17 / 3.88%);
+P17 1.44 / 4.38% / -1.5 (0.82 / 3.37%); P06+IRDL4 1.21 / 3.35% / -0.6 (1.10 / 3.30%). The design audit
+(`scripts/audit_design_conformance.py P06 P11 P14`) still passes. The tables in 3.15-3.17 for pools larger than P06 are on the
+SCREENED basis and are superseded by these; P17 was hurt most by the screen. Side effect: factor_scaling runs no longer evict
+entries of the 5-entry RP cache.
+
+#### 3.20b Near-duplicate factor warning (diagnostic only)
+
+Nothing is filtered: every pool factor gets a sleeve and the risk parity makes correlated factors share one risk budget. A warning is
+raised when two pool factors have |correlation| >= `RiskModelConfig.COLLINEAR_WARN_CORR` (0.90) on the same annualised EWMA covariance the
+allocation uses (`sizing.collinear_factor_pairs`). Backtest: a banner above the holdings table and `result['collinear_pairs']` list the pairs
+flagged in at least half of the months (with the % of months and the last correlation). Live Portfolio tab: an info note in the status
+line for the current window. Calibration on the 21 candidate factors, monthly 2017-2026 (12M EWMA, price-return space): only
+EQDL.IF/EQDL.IH is a near-duplicate (median 0.95; >= 0.90 in 86% of months, >= 0.95 in 47%); EQDL.IF/EQDL.IC 0.86 (>= 0.90 in 25%);
+CMDL.AU/CMDL.AG 0.76; EQDL.IC/EQDL.IH 0.72; every other pair is below 0.65. A 0.95 threshold would almost never fire, 0.90 flags IF/IH
+and nothing spurious. Tests: `tests/test_collinear_pairs.py`.
 
 ## 4. Candidate new factors for the pool (all untested)
 
