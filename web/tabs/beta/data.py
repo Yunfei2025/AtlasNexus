@@ -118,7 +118,7 @@ DIVERSIFICATION_RECOMMENDATIONS = {
 SELECTED_FACTOR_POOL = {
     'ir_factors': ['IRDL.CN', 'IRSL.CN', 'IRCV.CN'],  # Default: CN Level/Slope/Curvature
     'sp_factors': [],
-    'cr_factors': [],  # Credit: CRDL/CRSL/CRCV x CDB/LGB/MTN/NCD
+    'cr_factors': ['CRDL.CDB', 'CRDL.LGB', 'CRDL.MTN', 'CRDL.NCD'],  # Credit level only; CRSL/CRCV left unselected (holdout Sharpe negative)
     'fx_factors': ['FXDL.USDCNY'],
     'cmd_factors': ['CMDL.AU', 'CMDL.AL'],  # Gold + Aluminium
     'eq_factors': [],
