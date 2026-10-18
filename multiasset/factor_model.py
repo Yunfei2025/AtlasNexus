@@ -190,8 +190,12 @@ class FactorModelConfig:
     # exposure anywhere near the new cap. Validated together on IRDL.CN
     # (2016-2026, cached predictions): Sharpe 1.00 (old 1.5 cap) -> 1.06
     # (new cap + rescale + this floor).
-    long_floor: float = 0.40                      # min position during confirmed trend
+    long_floor: float = 0.40                      # min |position| during a confirmed trend (apply_trend_floor)
     long_floor_confirm_window: int = 120          # medium-term momentum window (days)
+    # IRDL is long-short in every market (2026-10-17). The floor is symmetric: in a confirmed
+    # rally (60d and 120d yield change both < 0) position >= +long_floor, in a confirmed
+    # sell-off (both > 0) position <= -long_floor. False restores the old bull-only floor.
+    trend_floor_symmetric: bool = True
     # ── Stretch-tail (overbought/oversold) features ─────────────────────────
     # The linear IC model gives each feature ONE signed weight, so a z-score
     # can only act as "fade" if it is anti-predictive over the whole window.
@@ -1132,7 +1136,7 @@ def discrete_target_level(
         1.1 < |z| ≤ 1.3  → ±0.8
         |z| > 1.3         → ±1.0
 
-    Long-only clips negatives to 0 (e.g. IRDL).
+    Long-only clips negatives to 0 (no factor family by default; see _LONG_ONLY_PREFIXES).
 
     Shared by the engine's ``discrete`` sizing mode, the predict-from-saved
     path and the live signal snapshot so the level is identical everywhere.
@@ -1159,7 +1163,7 @@ def bucket_position(
 ) -> Union[int, float, pd.Series]:
     """Bucket continuous position into discrete levels to avoid overfitting.
 
-    Pass ``long_only=True`` for factors that are restricted to [0, 1] (e.g. IRDL).
+    Pass ``long_only=True`` for factors that are restricted to [0, 1] (none by default; see _LONG_ONLY_PREFIXES).
     The regime is determined by the *caller* — never inferred from the sign of the
     value — so a small positive position on a long-short factor is not misclassified.
 
@@ -1466,12 +1470,54 @@ def build_position_series(
 
 # Factor metadata: factors whose prefix appears here are long-only.
 # Extend this dict (not the code) when new long-only factor families are added.
-_LONG_ONLY_PREFIXES: frozenset = frozenset({'IRDL'})
+# IRDL was long-only until 2026-10-17. Net short duration is now allowed as a
+# futures / pay-fixed-swap overlay (never a short cash bond), and a portfolio A/B
+# (docs/plans/factor_model_improvement.md 3.9) showed long-short IRDL with the
+# symmetric trend floor below was the best single rule across CN and the foreign
+# markets (P06 1.42 -> 1.47, P06+IRDL4 1.00 -> 1.47, P11+IRDL4 1.02 -> 1.56).
+_LONG_ONLY_PREFIXES: frozenset = frozenset()
+
+# Families that get the confirmed-trend floor (apply_trend_floor).
+_TREND_FLOOR_PREFIXES: frozenset = frozenset({'IRDL'})
 
 
 def _is_long_only(factor_code: str) -> bool:
     """Return True if this factor family only allows long (non-negative) positions."""
     return factor_code.split('.')[0] in _LONG_ONLY_PREFIXES
+
+
+def _has_trend_floor(factor_code: str) -> bool:
+    return factor_code.split('.')[0] in _TREND_FLOOR_PREFIXES
+
+
+def apply_trend_floor(
+    position: pd.Series,
+    level: pd.Series,
+    cfg: FactorModelConfig,
+) -> Tuple[pd.Series, pd.Series]:
+    """Confirmed-trend floor for yield-LEVEL factors; returns ``(position, eligible)``.
+
+    Prevents a full exit, or a counter-trend position, while both the 60d and the
+    ``cfg.long_floor_confirm_window``-day change in the factor level agree: yields
+    falling on both -> position >= +long_floor; (``trend_floor_symmetric``) yields
+    rising on both -> position <= -long_floor. ``level`` is the full factor level
+    series (differences are taken on it, then aligned to ``position``).
+    Shared by the walk-forward backtest and the saved-model prediction path so the
+    live signal is sized exactly like the backtest it was validated against.
+    """
+    pos = position.copy()
+    if cfg.long_floor <= 0:
+        return pos, pd.Series(False, index=pos.index)
+    short = level.diff(60).reindex(pos.index)
+    medium = level.diff(cfg.long_floor_confirm_window).reindex(pos.index)
+    bull = (short < 0) & (medium < 0)
+    pos.loc[bull] = pos.loc[bull].clip(lower=cfg.long_floor)
+    eligible = bull
+    if cfg.trend_floor_symmetric:
+        bear = (short > 0) & (medium > 0)
+        pos.loc[bear] = pos.loc[bear].clip(upper=-cfg.long_floor)
+        eligible = bull | bear
+    return pos, eligible.fillna(False)
 
 
 # Per-factor sizing overrides, applied when the caller has not explicitly
@@ -1866,26 +1912,12 @@ def run_factor_model_backtest(
                                 long_only=_long_only,
                                 effective_horizon=result['effective_horizon'])
 
-    # Fix 4: Position floor during confirmed bond-bull trend (long-only factors only).
-    # When both short-term (60d) and medium-term (cfg.long_floor_confirm_window)
-    # yield momentum are negative — i.e. yields are falling on both horizons —
-    # the model must hold at least cfg.long_floor units of duration exposure.
-    # This prevents a full exit during a running bull market caused by noisy
-    # daily predictions or residual mean-reversion signal.
-    if _long_only and cfg.long_floor > 0:
-        lvl_chg_short  = factor_levels[factor_code].diff(60).reindex(result.index)
-        lvl_chg_medium = factor_levels[factor_code].diff(
-            cfg.long_floor_confirm_window
-        ).reindex(result.index)
-        # For yield factors: falling level = bond rally → enforce the floor
-        floor_mask = (lvl_chg_short < 0) & (lvl_chg_medium < 0)
-        pos.loc[floor_mask, 'position'] = (
-            pos.loc[floor_mask, 'position'].clip(lower=cfg.long_floor)
-        )
-        # Track floor-eligible days for downstream P&L attribution — makes
-        # explicit how much of the strategy return is a policy floor vs.
-        # the IC-weighted model's own signal (see doc §5.2 floor review).
-        result['floor_eligible'] = floor_mask.reindex(result.index).fillna(False)
+    # Confirmed-trend floor (IRDL): bull floor, and its mirror in a confirmed
+    # sell-off, so the model cannot sit flat or counter-trend while yields have
+    # moved the same way on both the 60d and 120d horizons. See apply_trend_floor.
+    if _has_trend_floor(factor_code) and cfg.long_floor > 0:
+        pos['position'], _eligible = apply_trend_floor(pos['position'], factor_levels[factor_code], cfg)
+        result['floor_eligible'] = _eligible.reindex(result.index).fillna(False)
     else:
         result['floor_eligible'] = False
 

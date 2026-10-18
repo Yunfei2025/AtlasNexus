@@ -22,13 +22,16 @@ from web.tabs.beta.callbacks._common import (
 )
 from .charts import (
     build_net_position_fig,
+    build_gross_position_fig,
     build_dv01_ladder_fig,
+    build_dv01_ladder_gross_fig,
     build_factor_risk_fig,
     build_kpi_cards,
     build_kpi_strip,
     build_inventory_summary,
 )
 from .helpers import (
+    beta_direction,
     _load_leg_data,
     _resolve_legs,
     _parse_repo_spread_legs,
@@ -71,15 +74,19 @@ def register_risk_dashboard_callbacks(app):
          Input('allocation-results-store', 'data'),
          Input('risk-netpos-book-filter', 'value'),
          Input('risk-dv01-book-filter', 'value'),
-         Input('risk-inventory-expanded', 'data')],
+         Input('risk-inventory-expanded', 'data'),
+         Input('risk-netpos-view', 'value'),
+         Input('risk-dv01-view', 'value')],
         prevent_initial_call=False,
     )
-    def update_risk_tables(tab_value, _n_clicks, allocation_results_data, netpos_filter, dv01_filter, inventory_expanded):
+    def update_risk_tables(tab_value, _n_clicks, allocation_results_data, netpos_filter, dv01_filter, inventory_expanded,
+                           netpos_view='net', dv01_view='net'):
         if tab_value != 'risk':
             raise dash.exceptions.PreventUpdate
 
         _triggered = dash.ctx.triggered_id
-        _chart_only_trigger = _triggered in {'risk-netpos-book-filter', 'risk-dv01-book-filter'}
+        _chart_only_trigger = _triggered in {'risk-netpos-book-filter', 'risk-dv01-book-filter',
+                                             'risk-netpos-view', 'risk-dv01-view'}
 
         def _no_data_div(msg):
             return html.Div(msg, style={'color': THEME['text_sub'], 'fontStyle': 'italic',
@@ -128,9 +135,13 @@ def register_risk_dashboard_callbacks(app):
         _KT_COLS = ['Bonds', 'Swaps', 'Futures', 'Other']
 
         # ── Net position by instrument: signed capital (MM CNY) per code ──────
-        # Beta Book positions are always long. Alpha Book legs are long/short
-        # per the BUY/SELL direction of the spread (BUY → +leg1 / -leg2).
+        # Beta Book positions are long-short (negative capital = short); Alpha Book legs are
+        # long/short per the BUY/SELL direction of the spread (BUY → +leg1 / -leg2).
         net_pos: dict = {}
+        # GROSS view: the same positions with long and short kept apart (never netted).
+        # gross_pos[code][f'{source}Long'|f'{source}Short'] = capital (short is negative);
+        # gross_pos[code][f'{source}DV01Long'|f'{source}DV01Short'] = DV01 likewise.
+        gross_pos: dict = {}
 
         def _add_net(code: str, cap_mm: float, source: str, dv01_mm: float = 0.0):
             if not code or abs(cap_mm) < 1e-9:
@@ -144,12 +155,24 @@ def register_risk_dashboard_callbacks(app):
                 e['BetaDV01'] = round(e['BetaDV01'] + dv01_mm, 4)
             else:
                 e['AlphaDV01'] = round(e['AlphaDV01'] + dv01_mm, 4)
+            g = gross_pos.setdefault(code, {f'{b}{k}': 0.0 for b in ('Beta', 'Alpha')
+                                            for k in ('Long', 'Short', 'DV01Long', 'DV01Short')})
+            g[f"{source}{'Long' if cap_mm > 0 else 'Short'}"] += cap_mm
+            if dv01_mm:
+                g[f"{source}DV01{'Long' if dv01_mm > 0 else 'Short'}"] += dv01_mm
 
         # ── Load Beta positions (live store first, parquet fallback) ──────────
         beta_rows, kt_grid = [], {t: {c: 0.0 for c in _KT_COLS} for t in _TENOR_ORDER}
         # Separate book-specific risk ladders for dropdown filtering.
         kt_grid_beta = {t: {c: 0.0 for c in _KT_COLS} for t in _TENOR_ORDER}
         kt_grid_alpha = {t: {c: 0.0 for c in _KT_COLS} for t in _TENOR_ORDER}
+        # long / short DV01 kept apart for the GROSS ladder: kt_split[book][side][tenor][col]
+        kt_split = {b: {sd: {t: {c: 0.0 for c in _KT_COLS} for t in _TENOR_ORDER}
+                        for sd in ('long', 'short')} for b in ('beta', 'alpha')}
+
+        def _kt_gross(book: str, tenor: str, col: str, val: float):
+            side = kt_split[book]['long' if val > 0 else 'short'][tenor]
+            side[col] = round(side[col] + val, 4)
         _beta_records = []
         if allocation_results_data and isinstance(allocation_results_data, dict):
             _beta_records = allocation_results_data.get('beta_snapshot_display', []) or []
@@ -193,13 +216,13 @@ def register_risk_dashboard_callbacks(app):
                     'Leg1': instrument,  # For Beta, Leg1 is the instrument itself
                     'Leg2': '',
                     'Capital (MM)': cap_str, 'DV01 (MM/bp)': f"{dv01_mm:.4f}",
-                    'Direction': 'BUY',  # Beta positions are always BUY
+                    'Direction': beta_direction(cap_str),   # SELL for a short (negative capital)
                 })
                 try:
                     cap_mm = float(cap_str.replace(',', '')) if cap_str else 0.0
                 except (ValueError, TypeError):
                     cap_mm = 0.0
-                _add_net(instrument, cap_mm, 'Beta', dv01_mm)  # Beta Book positions are always long
+                _add_net(instrument, cap_mm, 'Beta', dv01_mm)  # signed: a short reduces the net position
 
                 # Key Term: rate-tenor Beta positions are bond duration; non-rate sectors → Other
                 tenor = _SECTOR_TO_TENOR.get(sector)
@@ -207,6 +230,7 @@ def register_risk_dashboard_callbacks(app):
                     col = 'Bonds' if sector in _SECTOR_TO_TENOR else 'Other'
                     kt_grid[tenor][col] = round(kt_grid[tenor][col] + dv01_mm, 4)
                     kt_grid_beta[tenor][col] = round(kt_grid_beta[tenor][col] + dv01_mm, 4)
+                    _kt_gross('beta', tenor, col, dv01_mm)
         except Exception:
             pass
 
@@ -313,6 +337,7 @@ def register_risk_dashboard_callbacks(app):
                         for tenor, contrib, col in leg_entries:
                             kt_grid[tenor][col] = round(kt_grid[tenor][col] + contrib, 4)
                             kt_grid_alpha[tenor][col] = round(kt_grid_alpha[tenor][col] + contrib, 4)
+                            _kt_gross('alpha', tenor, col, contrib)
             except Exception:
                 pass
 
@@ -395,7 +420,22 @@ def register_risk_dashboard_callbacks(app):
                 for code, vals in net_pos.items()
             }
 
-        netpos_fig = build_net_position_fig(net_pos_view)
+        if (netpos_view or 'net').lower() == 'gross':
+            # GROSS: long and short kept apart per instrument (beta / alpha / mixed per the book filter)
+            def _g(vals, key):
+                if _netpos_mode == 'beta':
+                    return vals.get(f'Beta{key}', 0.0)
+                if _netpos_mode == 'alpha':
+                    return vals.get(f'Alpha{key}', 0.0)
+                return vals.get(f'Beta{key}', 0.0) + vals.get(f'Alpha{key}', 0.0)
+            gross_view = {
+                code: {'Long': _g(v, 'Long'), 'Short': _g(v, 'Short'),
+                       'DV01Long': _g(v, 'DV01Long'), 'DV01Short': _g(v, 'DV01Short')}
+                for code, v in gross_pos.items()
+            }
+            netpos_fig = build_gross_position_fig(gross_view)
+        else:
+            netpos_fig = build_net_position_fig(net_pos_view)
         netpos_graph = dcc.Graph(figure=netpos_fig, config={'displayModeBar': False})
 
         # ── Factor Risk (Beta only, no SPDL/SPSL) — feeds the Factor Risk chart ─
@@ -424,7 +464,13 @@ def register_risk_dashboard_callbacks(app):
         else:
             kt_grid_view = kt_grid
 
-        dv01_fig = build_dv01_ladder_fig(kt_grid_view, _TENOR_ORDER)
+        if (dv01_view or 'net').lower() == 'gross':
+            def _kt_side(side):
+                books = ['beta'] if _dv01_mode == 'beta' else ['alpha'] if _dv01_mode == 'alpha' else ['beta', 'alpha']
+                return {t: {c: sum(kt_split[b][side][t][c] for b in books) for c in _KT_COLS} for t in _TENOR_ORDER}
+            dv01_fig = build_dv01_ladder_gross_fig(_kt_side('long'), _kt_side('short'), _TENOR_ORDER)
+        else:
+            dv01_fig = build_dv01_ladder_fig(kt_grid_view, _TENOR_ORDER)
         dv01_graph = dcc.Graph(figure=dv01_fig, config={'displayModeBar': False})
 
         # ── Factor Risk Attribution chart (sqrt-scale, from factor_risk_df) ────
@@ -432,7 +478,7 @@ def register_risk_dashboard_callbacks(app):
         factor_graph = dcc.Graph(figure=factor_fig, config={'displayModeBar': False})
 
         # ── KPI strip ───────────────────────────────────────────────────────────
-        kpis = build_kpi_cards(net_pos, kt_grid, _TENOR_ORDER)
+        kpis = build_kpi_cards(net_pos, kt_grid, _TENOR_ORDER, kt_split)
         kpi_strip = build_kpi_strip(kpis)
 
         n_beta  = len(beta_rows)

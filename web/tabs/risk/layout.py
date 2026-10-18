@@ -368,19 +368,32 @@ def build_risk_layout():
             html.Div([
                 html.Div([
                     html.Div([
-                        html.Div("Net Position by Instrument", className='risk-panel-header'),
-                        dcc.Dropdown(
-                            id='risk-netpos-book-filter',
-                            options=[
-                                {'label': 'Mixed', 'value': 'mixed'},
-                                {'label': 'Beta', 'value': 'beta'},
-                                {'label': 'Alpha', 'value': 'alpha'},
-                            ],
-                            value='mixed',
-                            clearable=False,
-                            searchable=False,
-                            style={'minWidth': '120px', 'fontSize': '11px'},
-                        ),
+                        html.Div("Position by Instrument (net / gross)", className='risk-panel-header'),
+                        html.Div([
+                            dcc.Dropdown(
+                                id='risk-netpos-view',
+                                options=[
+                                    {'label': 'Net', 'value': 'net'},
+                                    {'label': 'Gross (long / short)', 'value': 'gross'},
+                                ],
+                                value='net',
+                                clearable=False,
+                                searchable=False,
+                                style={'minWidth': '150px', 'fontSize': '11px'},
+                            ),
+                            dcc.Dropdown(
+                                id='risk-netpos-book-filter',
+                                options=[
+                                    {'label': 'Mixed', 'value': 'mixed'},
+                                    {'label': 'Beta', 'value': 'beta'},
+                                    {'label': 'Alpha', 'value': 'alpha'},
+                                ],
+                                value='mixed',
+                                clearable=False,
+                                searchable=False,
+                                style={'minWidth': '120px', 'fontSize': '11px'},
+                            ),
+                        ], style={'display': 'flex', 'gap': '8px'}),
                     ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center', 'gap': '10px'}),
                     html.Div([
                         html.Div([
@@ -401,18 +414,31 @@ def build_risk_layout():
                     html.Div([
                         html.Div([
                             html.Div("DV01 Duration Ladder (MM/bp)", className='risk-panel-header'),
-                            dcc.Dropdown(
-                                id='risk-dv01-book-filter',
-                                options=[
-                                    {'label': 'Mixed', 'value': 'mixed'},
-                                    {'label': 'Beta', 'value': 'beta'},
-                                    {'label': 'Alpha', 'value': 'alpha'},
-                                ],
-                                value='mixed',
-                                clearable=False,
-                                searchable=False,
-                                style={'minWidth': '120px', 'fontSize': '11px'},
-                            ),
+                            html.Div([
+                                dcc.Dropdown(
+                                    id='risk-dv01-view',
+                                    options=[
+                                        {'label': 'Net', 'value': 'net'},
+                                        {'label': 'Gross', 'value': 'gross'},
+                                    ],
+                                    value='net',
+                                    clearable=False,
+                                    searchable=False,
+                                    style={'minWidth': '90px', 'fontSize': '11px'},
+                                ),
+                                dcc.Dropdown(
+                                    id='risk-dv01-book-filter',
+                                    options=[
+                                        {'label': 'Mixed', 'value': 'mixed'},
+                                        {'label': 'Beta', 'value': 'beta'},
+                                        {'label': 'Alpha', 'value': 'alpha'},
+                                    ],
+                                    value='mixed',
+                                    clearable=False,
+                                    searchable=False,
+                                    style={'minWidth': '120px', 'fontSize': '11px'},
+                                ),
+                            ], style={'display': 'flex', 'gap': '8px'}),
                         ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center', 'gap': '10px'}),
                         html.Div(id='risk-dv01-container',
                                  children=[html.Div("Click Refresh to load positions.",

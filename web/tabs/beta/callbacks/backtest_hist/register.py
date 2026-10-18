@@ -13,6 +13,7 @@ import pandas as pd
 from dash import html
 from dash.dependencies import Input, Output, State
 
+from multiasset.config import RiskModelConfig
 from ...data import THEME
 from ._ui_callbacks import register_ui_callbacks
 from .orchestrator import run_historical_allocation, NoSignalsAvailable, BacktestInputError
@@ -89,8 +90,13 @@ def register_backtest_hist_callbacks(app):
             result['df_history'], result['all_assets_ever'],
             result['display_start'], result['display_end'],
         )
+        # Futures / swap overlay legs have their own P&L columns; chart them too,
+        # but keep them out of all_assets_ever (that list becomes the saved asset pool).
+        _ov = result.get('duration_overlay')
+        _pnl_assets = (list(result['all_assets_ever']) + list(_ov.deriv_pnl.columns)
+                       if _ov is not None else result['all_assets_ever'])
         fig_pnl = build_pnl_figure(
-            result['df_pnl'], result['all_assets_ever'],
+            result['df_pnl'], _pnl_assets,
             result['display_start'], result['display_end'],
             nav_series=result['nav_series'], nav_net_series=result['nav_net_series'],
         )
@@ -111,6 +117,19 @@ def register_backtest_hist_callbacks(app):
                        'border': f"1px solid {THEME['warning']}", 'borderRadius': '4px'},
             )
             asset_changes_table = html.Div([warning_banner, asset_changes_table])
+
+        # Near-duplicate factors: informational only - nothing is filtered; the risk parity makes them
+        # share one risk budget, so they add a sleeve and turnover but little diversification.
+        collinear = result.get('collinear_pairs') or []
+        if collinear:
+            info_banner = html.Div(
+                f"ℹ️ Near-duplicate factors in this pool (|correlation| ≥ {RiskModelConfig.COLLINEAR_WARN_CORR:.2f} in at least half the months): "
+                + ", ".join(f"{d['a']} / {d['b']} ({d['pct_months']:.0f}% of months)" for d in collinear)
+                + ". They share one risk budget in the risk parity; consider dropping one if you want fewer sleeves.",
+                style={'color': THEME['text_sub'], 'padding': '10px', 'marginBottom': '10px',
+                       'border': f"1px solid {THEME['text_sub']}", 'borderRadius': '4px'},
+            )
+            asset_changes_table = html.Div([info_banner, asset_changes_table])
 
         return fig_alloc, fig_pnl, metrics_table, asset_changes_table, result['results_payload']
 

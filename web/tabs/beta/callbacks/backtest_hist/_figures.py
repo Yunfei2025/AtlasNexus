@@ -171,7 +171,10 @@ def build_metrics_kpis(metrics: dict) -> html.Div:
     avg_book_dv01_mm = metrics.get('avg_book_dv01_mm')
     avg_capital_usage = metrics.get('avg_capital_usage')
 
-    # Post-funding Sharpe is THE headline number — full carry, full funding
+    # The headline Sharpe is the EXCESS over a cash benchmark (what total capital earns at
+    # FR007, plus the FX-hedge carry of foreign notional): multiasset.book.funding.
+    # benchmark_hurdle_daily, docs/plans/factor_model_improvement.md 3.14. The metrics key
+    # is still 'sharpe_post_funding'. Original note: post-funding Sharpe is THE headline number — full carry, full funding
     # cost, real hurdle rate (RiskModelConfig.RISK_FREE_RATE), same
     # convention fixed-income desks actually report. Sharpe (gross)/(net tx)/
     # (factor basis) were diagnostic — cost attribution and a sanity check
@@ -181,7 +184,7 @@ def build_metrics_kpis(metrics: dict) -> html.Div:
     kpi_cells = [
         ("Ann. Return", f"{annualized_return:.2%}",
          'var(--positive)' if annualized_return >= 0 else 'var(--negative)'),
-        ("Sharpe (post-funding)", f"{sharpe_post_funding:.2f}",
+        ("Sharpe (vs cash)", f"{sharpe_post_funding:.2f}",
          'var(--positive)' if sharpe_post_funding >= 1 else ('var(--accent-amber)' if sharpe_post_funding >= 0 else 'var(--negative)')),
     ]
     if avg_book_dv01_mm is not None:
@@ -204,7 +207,7 @@ def build_metrics_kpis(metrics: dict) -> html.Div:
     # `metrics` (it's folded into Ann. Return/Sharpe already), just not
     # surfaced as its own KPI cell here.
     kpi_cells += [
-        ("Ann. Funding Cost", f"{ann_funding_cost:.2%}", 'var(--text-secondary)'),
+        ("Cash Benchmark", f"{ann_funding_cost:.2%}", 'var(--text-secondary)'),
         ("Max Drawdown", f"{max_drawdown:.2%}", 'var(--negative)'),
         ("Total Tx Cost (MM)", f"{metrics['total_tx_cost_m']:.2f}", 'var(--text-secondary)'),
     ]

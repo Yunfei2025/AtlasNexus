@@ -65,6 +65,11 @@ def get_default_sensitivities(tenor: str) -> dict:
     #   2Y, 10Y wings: gain → NEGATIVE beta
     #
     # IRDL: ALL bonds lose when yields rise → positive beta for all tenors (no change)
+    #
+    # FXDL: a foreign bond bought with CNY carries its currency (FXDL.<ccy>CNY,
+    # 1.0 = full notional) as well as its rates exposure, so the optimizer sees
+    # both. The currency leg is neutralised at BOOK level by a forward netted
+    # against the FX sleeve (multiasset.book.fx), not by dropping it here.
     defaults = {
         '3M':  {'IRDL': 0.25,  'IRSL':  0.50, 'IRCV':  0.0,  'FXDL': 1.0},
         '6M':  {'IRDL': 0.49,  'IRSL':  0.50, 'IRCV':  0.0,  'FXDL': 1.0},

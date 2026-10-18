@@ -28,6 +28,10 @@ def weights_to_notional(
     max_utilisation: float = RiskModelConfig.CAPITAL_UTILISATION_MAX,
     asset_class_of: dict | None = None,
     signed_classes: Sequence[str] = ('fx',),
+    overlay_assets: Sequence[str] = (),
+    overlay_margin_rate: float = 0.0,
+    short_capital_rate: float | None = None,
+    short_max: float | None = None,
 ) -> pd.Series:
     """Long-only (except `signed_classes`) notional sizing under a capital
     utilisation ceiling.
@@ -40,15 +44,17 @@ def weights_to_notional(
        case convention as Stage2Context.asset_class_of ('comm', 'fx',
        'credit', 'bond' — see factor_optimizer.py's _stage1_context);
        assets not in `asset_class_of` are treated as long-only by default.
-    2. gross = weights.abs().sum()
+    2. capital usage = long weights + SHORT_CAPITAL_RATE x short weights (0: shorts are free,
+       never netted; see RiskModelConfig.SHORT_CAPITAL_RATE)
     3. SCALE-PRESERVING: if gross <= max_utilisation, notional = weights *
        total_capital (unchanged scale — this is the case that lets the book
        de-risk: a lightly-positioned day stays lightly deployed, it is NOT
        scaled back up to full investment).
        Otherwise, notional = weights * total_capital * (max_utilisation / gross)
        (scaled down proportionally so the ceiling holds exactly).
-    4. Invariant: notional.abs().sum() <= max_utilisation * total_capital + eps,
-       enforced on THIS call alone — for a full daily backtest, call this
+    4. Invariants (enforced on THIS call alone): long size (+ margin on routed shorts) <=
+       max_utilisation * total_capital AND total short size <= SHORT_SIZE_MAX_RATIO *
+       max_utilisation * total_capital - two independent ceilings, never netted — for a full daily backtest, call this
        once per day (see docs/plans/beta_book_exposure_vs_capital.md Step 4's
        daily_weights_from_context output, one row per day), not once per
        month, so a single day where several factors' daily coefficients
@@ -74,11 +80,30 @@ def weights_to_notional(
     else:
         w = w.clip(lower=0.0)
 
-    gross = float(w.abs().sum())
-    if gross <= max_utilisation or gross <= 1e-12:
-        scale = 1.0
-    else:
+    # Capital usage = LONG size (never netted against shorts) + ``short_capital_rate`` of the
+    # short size (default RiskModelConfig.SHORT_CAPITAL_RATE = 0: a short consumes no
+    # capital). ``overlay_assets``: assets whose NEGATIVE weight will be routed to a futures /
+    # swap overlay (multiasset.book.overlay); that short ties up margin, so it counts at
+    # ``overlay_margin_rate`` of its size (about right: the overlay notional is DV01-matched to
+    # the bond). The returned notional keeps the negative sign; the router moves it.
+    if short_capital_rate is None:
+        short_capital_rate = RiskModelConfig.SHORT_CAPITAL_RATE
+    short_abs = w.clip(upper=0.0).abs()
+    ov = [a for a in overlay_assets if a in w.index]
+    gross = float(w.clip(lower=0.0).sum()
+                  + short_capital_rate * short_abs.drop(ov).sum()
+                  + overlay_margin_rate * short_abs[ov].sum())
+    # Short SIZE cap: total |short| may not exceed ``short_max`` (default: the same ceiling as
+    # the long book, RiskModelConfig.SHORT_SIZE_MAX_RATIO x ``max_utilisation``). Long and
+    # short are capped independently; whichever binds scales the whole book (shape kept).
+    if short_max is None:
+        short_max = RiskModelConfig.SHORT_SIZE_MAX_RATIO * max_utilisation
+    short_size = float(short_abs.sum())
+    scale = 1.0
+    if gross > max_utilisation and gross > 1e-12:
         scale = max_utilisation / gross
+    if short_size > short_max and short_size > 1e-12:
+        scale = min(scale, short_max / short_size)
 
     return w * total_capital * scale
 

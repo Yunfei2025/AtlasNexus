@@ -270,6 +270,11 @@ def create_commodity_universe() -> List[CommodityAsset]:
         CommodityAsset(name='Copper', factor='CMDL.CU'),
         CommodityAsset(name='Zinc', factor='CMDL.ZN'),
         CommodityAsset(name='Crude_Oil', factor='CMDL.SC'),
+        # Full-history assets of the factor map that the backtest trades (pools P11+): without them the
+        # live tab silently dropped these sleeves. Soda_Ash (CMDL.SA), Live_Hog (CMDL.LC) and
+        # European_Gas (CMDL.EC) stay out: short history, excluded from every tested pool.
+        CommodityAsset(name='Rebar', factor='CMDL.RB'),
+        CommodityAsset(name='Coking_Coal', factor='CMDL.JM'),
     ]
 
     return commodities

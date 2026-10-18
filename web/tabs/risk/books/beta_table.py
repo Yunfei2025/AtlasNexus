@@ -22,7 +22,7 @@ from web.tabs.beta.callbacks._common import (
     _sortable_header,
     _apply_sort,
 )
-from ..helpers import _row_key, _load_beta_user_overrides
+from ..helpers import _row_key, _load_beta_user_overrides, beta_direction, beta_long_short_totals, beta_mtm_mm
 
 
 def register_beta_book_table_callbacks(app):
@@ -274,8 +274,8 @@ def register_beta_book_table_callbacks(app):
                     try:
                         _vol  = float(volume_str) if volume_str else None
                         _open = float(open_price_str) if open_price_str else None
-                        if _dur and _vol and _open and close_yld is not None:
-                            mtm = round(_vol * _dur * (close_yld - _open) / 10000.0, 4)
+                        mtm = beta_mtm_mm(_vol, _dur, _open, close_yld, cap_mm_str)
+                        if mtm is not None:
                             mtm_str = f"{mtm:+.4f}"
                     except (ValueError, TypeError):
                         pass
@@ -311,29 +311,13 @@ def register_beta_book_table_callbacks(app):
             if not display_rows:
                 return _no_data("Beta snapshot is empty.")
     
-            def _sum_num(col):
-                t, any_ = 0.0, False
-                for r in display_rows:
-                    v = str(r.get(col, '')).replace(',', '').replace('%', '').replace('+', '').strip()
-                    if v:
-                        try:
-                            t += float(v); any_ = True
-                        except (ValueError, TypeError):
-                            pass
-                return t if any_ else None
-    
-            total_row = {c: '' for c in display_rows[0].keys()}
-            total_row['Asset Type'] = 'TOTAL'
-            _s_cap = _sum_num('Capital (MM CNY)')
-            _s_vol = _sum_num('Volume (MM)')
-            _s_mtm = _sum_num('MtM (MM CNY)')
-            if _s_cap is not None:
-                total_row['Capital (MM CNY)'] = f"{_s_cap:,.2f}"
-            if _s_vol is not None:
-                total_row['Volume (MM)'] = f"{_s_vol:,.1f}"
-            if _s_mtm is not None:
-                total_row['MtM (MM CNY)'] = f"{_s_mtm:+.4f}"
-            display_rows.append(total_row)
+            # LONG and SHORT totals are reported separately and never netted: capital used is
+            # the long size; a short uses no capital (see helpers.beta_long_short_totals).
+            for _cells in beta_long_short_totals(display_rows):
+                total_row = {c: '' for c in display_rows[0].keys()}
+                total_row['Asset Type'] = 'TOTAL'
+                total_row.update(_cells)
+                display_rows.append(total_row)
     
             _visible_cols = []
             if col_vis.get('open_date'):

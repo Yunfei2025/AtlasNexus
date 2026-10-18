@@ -181,6 +181,8 @@ def test_daily_weights_mid_window_signal_jump_moves_weights_on_jump_date():
     jump_date = idx[5]
 
     def jumping_signal(f, d):
+        if f == 'IRDL.CN':
+            return 1.0   # IRDL is directional: position 1.0 -> coeff 1.0 (reference budget, unscaled)
         if f != 'IRSL.CN':
             return 0.0
         return -1.0 if d < jump_date else 1.0  # slope signal flips sign at jump_date

@@ -169,7 +169,7 @@ def build_risk_budget_rows(asset_pool, rp_budgets, snapshot_data, allocation_mod
     def get_coeff(factor, raw_scalar):
         # Mirror run_analysis's factor_scaling tilt exactly: raw scalar →
         # scalar_to_coeff() (long-only factors clip to [0,2] around 1+scalar;
-        # directional factors clip to [-1.5,1.5] as-is).
+        # directional factors -- IRDL/IRSL/IRCV/FXDL -- clip to [-1.5,1.5] as-is).
         return scalar_to_coeff(raw_scalar, factor)
 
     # ── Factor vol lookup (live 1Y EWMA) ─────────────────────────────────
@@ -216,7 +216,9 @@ def build_risk_budget_rows(asset_pool, rp_budgets, snapshot_data, allocation_mod
         coeff = get_coeff(factor, raw_scalar)
         # In factor_scaling mode, exposure = RP Max × signal coefficient
         # In risk_parity & user_defined modes, exposure = RP Max (coeff is display-only)
-        if allocation_mode == 'factor_scaling' and coeff != 0:
+        # A directional factor with a saved signal and a flat position shows 0
+        # exposure (not RP Max); without a saved signal the default is RP Max.
+        if allocation_mode == 'factor_scaling' and (coeff != 0 or factor in snapshot_by_rf):
             suggested = rp_max * coeff
         else:
             suggested = rp_max

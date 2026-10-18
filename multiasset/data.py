@@ -12,6 +12,18 @@ from settings.paths import DIR_INPUT
 from multiasset.pickle_repair import load_pickle_with_blockmanager_repair
 
 
+def calendar_gap_days(index) -> pd.Series:
+    """Calendar days since the previous row of ``index`` (first row = 1).
+
+    Carry, cash and funding accrue per CALENDAR day: a Monday row stands for the
+    weekend too. Accruing ``rate/365`` once per business-day row booked only
+    rows/365 (about 68%) of each year's carry (docs/plans/factor_model_improvement.md 3.14).
+    """
+    idx = pd.DatetimeIndex(pd.to_datetime(index))
+    gap = pd.Series(idx, index=idx).diff().dt.days.fillna(1).astype(float)
+    return gap.clip(lower=1.0)
+
+
 def _load_fx_curve_artifact():
     file_path = os.path.join(DIR_INPUT, "fxcurve_ts.pkl")
     if not os.path.exists(file_path):
@@ -85,6 +97,7 @@ _COMMODITY_ASSETS = {
     'Rebar', 'Live_Hog', 'Soda_Ash', 'Coking_Coal', 'Containerized_Freight'
 }
 _EQUITY_ASSETS = {'IF', 'IC', 'IH', 'IM'}
+_OVERLAY_ASSETS = {'TS', 'TF', 'T', 'TL', 'SWAP1Y', 'SWAP3Y'}   # == multiasset.book.hedge_instruments.REGISTRY
 # Synthetic CNY-neutral FX crosses: long the non-USD leg vs CNY, short USDCNY,
 # netting out the common CNY-appreciation/depreciation beta that a long-only
 # outright FX book cannot avoid (e.g. EURUSD_SYN = long EURCNY / short USDCNY
@@ -111,6 +124,10 @@ def get_asset_type(asset_name):
     """Categorize asset by type."""
     if asset_name.startswith('HEDGE_'):
         return 'Hedge'
+    # Futures / swap overlay legs (multiasset.book.overlay). Checked first: 'SWAP1Y'
+    # and friends must not fall through to the substring rules below.
+    if asset_name in _OVERLAY_ASSETS:
+        return 'Overlay'
     if asset_name in _COMMODITY_ASSETS:
         return 'Commodities'
     if asset_name in _EQUITY_ASSETS:
@@ -430,7 +447,7 @@ def _calculate_fx_cross_returns_series(asset_name, market_data, start_date, end_
         # DR001 (CNY funding) cancels between the two legs' carry, leaving the
         # foreign-foreign rate differential (e.g. ESTR - SOFR).
         daily_carry = (cur_slice[non_usd_rate_col] - cur_slice['SOFR.IR']) / 100.0 / 365
-        result['carry'] = daily_carry.reindex(common_idx).fillna(0)
+        result['carry'] = daily_carry.reindex(common_idx).fillna(0) * calendar_gap_days(common_idx).to_numpy()
     else:
         result['carry'] = 0.0
 
@@ -448,7 +465,7 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
     Returns DataFrame with columns: ['Date', 'carry', 'capital', 'fx', 'total']
 
     For bonds:
-    - Carry = daily yield / 365 (actual daily accrual)
+    - Carry = yield / 365 x calendar days since the previous row (actual accrual)
     - Capital = -Duration * daily yield change
     - FX = daily FX return (for foreign bonds)
 
@@ -491,7 +508,7 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
         # (No roll-down: we track key tenor yields, not aging bonds)
 
         # Carry: daily coupon accrual on the full yield.
-        result['carry'] = series / 100.0 / 365
+        result['carry'] = series / 100.0 / 365 * calendar_gap_days(series.index).to_numpy()
 
         # Capital gain: -ModifiedDuration * Δyield
         n = duration
@@ -545,7 +562,7 @@ def calculate_daily_returns_series(asset_name, market_data, start_date, end_date
             # gross foreign rate with no funding charge, overstating carry by
             # the CNY-foreign rate differential (~2-3%/yr recently).
             daily_carry = (cur_slice[foreign_rate_col] - cur_slice['DR001.IB']) / 100.0 / 365
-            result['carry'] = daily_carry.reindex(result.index).fillna(0)
+            result['carry'] = daily_carry.reindex(result.index).fillna(0) * calendar_gap_days(result.index).to_numpy()
         else:
             result['carry'] = 0.0
         result['capital'] = 0.0

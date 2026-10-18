@@ -257,7 +257,30 @@ def run_historical_allocation(
     )
     rp_h = None
     last_corr_matrix = None
-    cached_rp = load_rp(input_dir, rp_params)
+    if alloc_mode == 'factor_scaling' and not RiskModelConfig.FACTOR_SCALING_CORR_SCREEN:
+        # Month-begin risk parity over ALL instruments of the selected pool; the factor model then
+        # scales the sleeves daily. No correlation screen and no Stage-1 solve (its asset weights no
+        # longer set positions in this mode), so nothing is read from or written to the RP cache.
+        # Months whose lookback window has < 20 rows are skipped, as the screen loop did.
+        _avail_cols = [f for f in available_factors if f in risk_factors.columns]
+        _pool_assets = get_assets_from_factors(_avail_cols)
+        _w_by_date, _pools_by_date, _screened_by_date, _last_corr = {}, {}, {}, None
+        for _rd in rebalance_dates:
+            _win = risk_factors.loc[_rd - corr_lookback_delta:_rd, _avail_cols]
+            if _win.empty or len(_win) < 20:
+                continue
+            _chg = _win.diff().dropna()
+            if _chg.empty:
+                continue
+            _last_corr = _chg.corr()
+            _w_by_date[_rd] = {}                       # asset weights come from the sleeves, not Stage 1
+            _pools_by_date[_rd] = _pool_assets
+            _screened_by_date[_rd] = list(_avail_cols)
+        cached_rp = {'weights_by_date': _w_by_date, 'asset_pools_by_date': _pools_by_date,
+                     'screened_factors_by_date': _screened_by_date, 'last_corr_matrix': _last_corr,
+                     'stage2_ctx_by_date': {}}
+    else:
+        cached_rp = load_rp(input_dir, rp_params)
     if cached_rp is not None:
         rp_weights_by_date = cached_rp['weights_by_date']
         asset_pools_by_date = cached_rp['asset_pools_by_date']
@@ -265,7 +288,9 @@ def run_historical_allocation(
         last_corr_matrix = cached_rp.get('last_corr_matrix')
         stage2_ctx_by_date = cached_rp.get('stage2_ctx_by_date', {})
         rp_h = rp_hash(rp_params)
-        print(f"  RP base: cache hit ({rp_h})")
+        print("  Month-begin pool risk parity over ALL pool factors (no correlation screen)"
+              if alloc_mode == 'factor_scaling' and not RiskModelConfig.FACTOR_SCALING_CORR_SCREEN
+              else f"  RP base: cache hit ({rp_h})")
     else:
         rp_weights_by_date = {}  # rebalance_date -> {asset_name: weight}
         asset_pools_by_date = {}
@@ -394,6 +419,14 @@ def run_historical_allocation(
     daily_idx = pd.DatetimeIndex(all_dates)
 
     unreplicated_factors: list = []
+    collinear_pairs: list = []
+    # China-rates duration overlay (multiasset.book.overlay): CN-bond shorts are traded
+    # with futures / swaps, so in the capital cap and the DV01 scaling they cost margin,
+    # not notional. factor_scaling only.
+    from multiasset.book import hedge_instruments as _hi
+    from multiasset.book.overlay import overlay_routed_assets, route_cn_shorts
+    use_overlay = bool(RiskModelConfig.ROUTE_CN_SHORTS_TO_OVERLAY) and alloc_mode == 'factor_scaling'
+    overlay_assets: list = []
     if alloc_mode == 'factor_scaling':
         # Signed factor sleeves: each factor holds budget_f x position_f x its
         # own mimicking portfolio (see multiasset.book.sizing), so the book
@@ -401,10 +434,11 @@ def run_historical_allocation(
         # of a long-only bond book that can't express short/flat or
         # slope/curvature views. Stage 1's monthly reference budget (the
         # vol^0.5-constrained ERC) still sets each factor's capital share.
-        from multiasset.book.sizing import signed_sleeve_weights_daily, pool_sleeve_budgets
+        from multiasset.book.sizing import signed_sleeve_weights_daily, pool_sleeve_budgets, collinear_factor_pairs
         from multiasset.factor_backtest import compute_ewma_factor_vols, compute_ewma_factor_covariance
+        _collinear_months: dict = {}          # (a, b) -> [months flagged, last correlation]
 
-        # Sleeve capital budgets over the pool's OWN screened factors each
+        # Sleeve capital budgets over the pool's factors each
         # month (vol^0.5 for IR, equal otherwise — same rule as the
         # Portfolio tab), from EWMA vol on data up to the rebalance date.
         budget_by_rebalance_date = {}
@@ -422,6 +456,19 @@ def run_historical_allocation(
                 cov_matrix = None
             budget_by_rebalance_date[rebalance_date] = pool_sleeve_budgets(
                 pool_factors, vol_map, cov=cov_matrix)
+            for _a, _b, _c in collinear_factor_pairs(cov_matrix):          # diagnostic only, nothing is filtered
+                _e = _collinear_months.setdefault((_a, _b), [0, 0.0])
+                _e[0] += 1
+                _e[1] = _c
+        _n_months = max(len(budget_by_rebalance_date), 1)
+        collinear_pairs = sorted(
+            ({'a': a, 'b': b, 'pct_months': 100.0 * n / _n_months, 'last_corr': c}
+             for (a, b), (n, c) in _collinear_months.items() if n / _n_months >= 0.5),
+            key=lambda d: -d['pct_months'])
+        if collinear_pairs:
+            print("  near-duplicate factors in the pool (|corr| >= %.2f in >= 50%% of months; they share one risk budget): %s" % (
+                RiskModelConfig.COLLINEAR_WARN_CORR,
+                ', '.join(f"{d['a']}/{d['b']} ({d['pct_months']:.0f}%)" for d in collinear_pairs)))
         weights_daily, mod_dur_daily, unreplicated_factors = signed_sleeve_weights_daily(
             budget_by_rebalance_date, factor_signal_series, daily_idx,
             FACTOR_TO_ASSET_MAP, market_data,
@@ -434,6 +481,8 @@ def run_historical_allocation(
                 "No valid rebalance periods found", "No valid periods", themed=False,
             )
         all_assets_ever.update(weights_daily.columns)
+        if use_overlay:
+            overlay_assets = overlay_routed_assets(weights_daily.columns, market_data)
 
         # Scale the sleeve book up toward a DV01 target — signed_sleeve_
         # weights_daily's weights are DV01-equalised PER FACTOR UNIT, not
@@ -444,6 +493,7 @@ def run_historical_allocation(
         weights_daily = scale_sleeve_to_dv01_target(
             weights_daily, mod_dur_daily, total_capital_cny,
             RiskModelConfig.MAX_DV01_PER_CAPITAL, RiskModelConfig.CAPITAL_UTILISATION_MAX,
+            overlay_assets=overlay_assets, overlay_margin_rate=_hi.DERIVATIVE_MARGIN_RATE,
         )
         # Kept for the 'book_dv01_mm' KPI below — the DV01 actually achieved
         # after scaling, in MM CNY/bp, same units as the Portfolio tab's
@@ -524,7 +574,9 @@ def run_historical_allocation(
     signed_classes = ('fx', 'bond', 'comm', 'credit') if alloc_mode == 'factor_scaling' else ('fx',)
     notional_rows = {
         d: weights_to_notional(weights_daily.loc[d], total_capital_cny,
-                               asset_class_of=asset_class_of_capital, signed_classes=signed_classes)
+                               asset_class_of=asset_class_of_capital, signed_classes=signed_classes,
+                               overlay_assets=overlay_assets,
+                               overlay_margin_rate=_hi.DERIVATIVE_MARGIN_RATE)
         for d in weights_daily.index
     }
     allocations_daily = pd.DataFrame(notional_rows).T.reindex(columns=weights_daily.columns).fillna(0.0)
@@ -594,33 +646,64 @@ def run_historical_allocation(
         .reindex(columns=sorted(all_assets_ever))
         .fillna(0.0)
     )
+    # Illiquid CN tenors (20Y) cannot be shorted: hold those shorts as DV01-equivalent
+    # shorts in the target tenor (30Y). RiskModelConfig.CN_SHORT_SUBSTITUTE.
+    if alloc_mode == 'factor_scaling' and RiskModelConfig.CN_SHORT_SUBSTITUTE:
+        from multiasset.book.overlay import substitute_shorts
+        alloc_daily = substitute_shorts(alloc_daily, market_data)
+    overlay = None
+    if use_overlay and overlay_assets:
+        overlay = route_cn_shorts(
+            alloc_daily, market_data, total_capital=total_capital_cny,
+            max_utilisation=RiskModelConfig.CAPITAL_UTILISATION_MAX,
+            allow_swaps=RiskModelConfig.OVERLAY_ALLOW_SWAPS,
+        )
+        alloc_daily = overlay.cash_notional   # CN shorts removed; they now live in the overlay
     book_pnl = compute_book_pnl(alloc_daily, market_data, start_date, end_date)
+    if overlay is not None:
+        book_pnl = overlay.add_to(book_pnl)
     daily_pnl_m = book_pnl.total / 1_000_000
 
-    # ── Step 6: funding hurdle (Sharpe only, never in P&L) + cash return
-    #    on undeployed capital (decision #7 — real earned return, IS added
-    #    to P&L). See docs/plans/beta_book_exposure_vs_capital.md Step 6 /
-    #    multiasset/book/funding.py.
-    from multiasset.book.funding import build_domicile_of, book_funding_cost_daily, cash_return_daily
+    # ── Step 6 (revised, docs/plans/factor_model_improvement.md 3.14): cash income is
+    #    real P&L; the Sharpe numerator is the EXCESS over a cash benchmark.
+    #    * cash_return_daily: FR007 on every CNY of capital not deployed in a long, a
+    #      funded non-bond short or derivative margin, PLUS FR007 on short-bond notional
+    #      (reverse-repo proceeds). The 5% utilisation buffer earns FR007 too.
+    #    * benchmark_hurdle_daily: what total capital earns in cash (+ the FX-hedge carry of
+    #      foreign notional). A book earning exactly the cash rate scores zero excess at
+    #      any deployment. Passed as funding_hurdle: Sharpe numerator only, never in P&L,
+    #      Ann. Return or Ann. Vol.
+    #    All accruals are per calendar day (multiasset.data.calendar_gap_days).
+    from multiasset.book.funding import build_domicile_of, benchmark_hurdle_daily, cash_return_daily
     domicile_of = build_domicile_of(alloc_daily.columns, market_data)
-    funding_cost_cny = book_funding_cost_daily(alloc_daily, domicile_of)
-    # Decimal RATE series (not CNY) for compute_portfolio_metrics's
-    # funding_hurdle param — that function annualises and subtracts it from
-    # the Sharpe numerator only, never from Ann. Return/Vol (see its
-    # docstring for why: funding must never enter the vol denominator).
+    funding_cost_cny = benchmark_hurdle_daily(alloc_daily, domicile_of, total_capital_cny)
+    # Decimal RATE series (not CNY) for compute_portfolio_metrics's funding_hurdle param.
     funding_hurdle_rate = (funding_cost_cny / total_capital_cny).reindex(daily_idx).fillna(0.0)
-    # cash_return_daily needs Step 7's max_utilisation to know how much
-    # capital is "undeployed" — Step 7 hasn't landed yet, so this call uses
-    # the default (0.95) as a placeholder; it will start reflecting actual
-    # de-risking once weights_to_notional enforces that ceiling upstream.
-    cash_daily_cny = cash_return_daily(alloc_daily, total_capital_cny)
+    cash_daily_cny = cash_return_daily(
+        alloc_daily, total_capital_cny, margin=(overlay.margin if overlay is not None else None))
+    # Borrow fee on short cash bonds (RiskModelConfig.SHORT_BOND_BORROW_COST_BP, per market
+    # and tenor; unlisted = 0). A real cash cost, so it goes into the cash/financing line.
+    from multiasset.book.funding import short_bond_borrow_cost_daily
+    borrow_total, borrow_by_asset, borrow_bp = short_bond_borrow_cost_daily(alloc_daily, market_data)
+    if borrow_bp:
+        cash_daily_cny = cash_daily_cny - borrow_total.reindex(cash_daily_cny.index).fillna(0.0)
     cash_daily_m = cash_daily_cny.reindex(daily_idx).fillna(0.0) / 1_000_000
+
+    # FX overlay (multiasset.book.fx): a foreign bond bought with CNY carries
+    # its currency; the book hedges it with a forward netted against the FX
+    # sleeve. Embedded spot P&L and the hedge's offset are booked separately
+    # (they cancel, so the totals above are unchanged).
+    from multiasset.book.fx import fx_overlay
+    fx_ov = fx_overlay(alloc_daily, domicile_of)
 
     # Average capital usage / cash income — for the KPI panel, so a modest
     # DV01 target (or a signal that's often flat) is visible as "most of the
     # book sits in cash, earning FR007" rather than a mysteriously low
     # post-funding Sharpe with no explanation.
-    avg_capital_usage = float((alloc_daily.abs().sum(axis=1) / total_capital_cny).mean())
+    # Capital usage = LONG size + SHORT_CAPITAL_RATE x short size (0 by default) + derivative margin.
+    avg_capital_usage = float(((alloc_daily.clip(lower=0.0).sum(axis=1)
+                                + RiskModelConfig.SHORT_CAPITAL_RATE * alloc_daily.clip(upper=0.0).abs().sum(axis=1)
+                                + (overlay.margin if overlay is not None else 0.0)) / total_capital_cny).mean())
     avg_cash_income_pct = float(cash_daily_cny.sum() / total_capital_cny
                                 / max((end_date - start_date).days / 365.25, 1e-3))
 
@@ -629,7 +712,8 @@ def run_historical_allocation(
     # weight deltas — positions can move every day since Step 4, so a cost
     # model that only charges at rebalance dates silently missed every
     # day's actual trading.
-    turnover_daily, tx_cost_m, total_tx_cost_m = compute_turnover_and_tx_cost(alloc_daily)
+    turnover_daily, tx_cost_m, total_tx_cost_m = compute_turnover_and_tx_cost(
+        pd.concat([alloc_daily, overlay.deriv_notional], axis=1) if overlay is not None else alloc_daily)
     n_years = max((end_date - start_date).days / 365.25, 1e-3)
     # turnover_daily is raw CNY notional traded; ann_turnover is reported as
     # a MULTIPLE of total capital (e.g. "487%" via the KPI grid's `.0%`
@@ -685,8 +769,13 @@ def run_historical_allocation(
         # (funding_hurdle_rate and daily_pnl_m/df_pnl are already built off
         # the same daily_idx, so position i in one corresponds to position i
         # in the other).
-        funding_hurdle_for_metrics = pd.Series(
-            funding_hurdle_rate.to_numpy(), index=portfolio_values.index,
+        # Cash benchmark as a rate on the SAME base compute_portfolio_metrics uses for returns
+        # (previous-day NAV, which compounds), not initial capital: see
+        # multiasset.book.funding.hurdle_rate_on_nav.
+        from multiasset.book.funding import hurdle_rate_on_nav
+        funding_hurdle_for_metrics = hurdle_rate_on_nav(
+            pd.Series(funding_cost_cny.reindex(daily_idx).fillna(0.0).to_numpy(), index=portfolio_values.index),
+            portfolio_values * 1_000_000,
         )
         # risk_free_rate=0.0 here, NOT RiskModelConfig.RISK_FREE_RATE: FR007
         # (funding_hurdle, the book's actual position-weighted repo cost) and
@@ -739,6 +828,9 @@ def run_historical_allocation(
             'sharpe_price_only': sharpe_price_only,
             'avg_book_dv01_mm': avg_book_dv01_mm,
             'avg_capital_usage': avg_capital_usage,
+            # long vs short size, never netted (capital counts the long size only)
+            'avg_long_pct': float(alloc_daily.clip(lower=0.0).sum(axis=1).mean() / total_capital_cny * 100.0),
+            'avg_short_pct': float(alloc_daily.clip(upper=0.0).abs().sum(axis=1).mean() / total_capital_cny * 100.0),
             'avg_cash_income_pct': avg_cash_income_pct,
             'unreplicated_factors': unreplicated_factors,
             'ann_funding_cost': ann_funding_cost,
@@ -747,12 +839,38 @@ def run_historical_allocation(
             'ann_turnover': ann_turnover,
             'total_tx_cost_m': total_tx_cost_m,
         }
+        if borrow_bp:
+            _yrs = max(len(daily_idx) / 252.0, 1e-9)
+            metrics['borrow_cost'] = {
+                'total_ann_pct': float(borrow_total.sum() / total_capital_cny / _yrs * 100.0),
+                'by_asset': {a: {'bp': borrow_bp[a],
+                                 'avg_short_pct': float(alloc_daily[a].clip(upper=0).abs().mean() / total_capital_cny * 100.0),
+                                 'ann_cost_pct': float(borrow_by_asset[a].sum() / total_capital_cny / _yrs * 100.0)}
+                             for a in borrow_bp},
+            }
+        if overlay is not None:
+            try:
+                metrics['duration_overlay'] = overlay.summary(total_capital_cny)
+            except Exception as _ov_exc:   # display-only
+                print(f"  duration overlay summary unavailable: {_ov_exc}")
+        try:
+            metrics['fx_overlay'] = {
+                'avg_pct_of_capital': fx_ov.summary(total_capital_cny).to_dict('index'),
+                'embedded_spot_pnl_ann_pct': float(
+                    book_pnl.fx_embedded.sum(axis=1).sum() / total_capital_cny / n_years * 100.0),
+                'hedge_pnl_ann_pct': float(
+                    book_pnl.fx_hedge.sum(axis=1).sum() / total_capital_cny / n_years * 100.0),
+            }
+        except Exception as _fx_exc:   # display-only
+            print(f"  fx overlay summary unavailable: {_fx_exc}")
         # P0 of docs/plans/factor_model_improvement.md §6: price/carry/cash/cost split,
         # the CAGR-vs-simple gap, and per-asset-class P&L risk share. Display-only.
         try:
             from multiasset.book.attribution import attribute_book_return
             metrics['attribution'] = attribute_book_return(
-                book_pnl, alloc_daily, cash_daily_cny,
+                book_pnl,
+                pd.concat([alloc_daily, overlay.deriv_notional], axis=1) if overlay is not None else alloc_daily,
+                cash_daily_cny,
                 tx_cost_m.reindex(daily_idx).fillna(0.0) * 1_000_000,
                 total_capital_cny, annualized_return, get_asset_type,
             )
@@ -811,6 +929,9 @@ def run_historical_allocation(
         'nav_series': nav_series,
         'nav_net_series': nav_net_series,
         'metrics': metrics,
+        'fx_overlay': fx_ov,
+        'duration_overlay': overlay,
+        'collinear_pairs': collinear_pairs,
         'asset_holdings_rows': asset_holdings_rows,
         'results_payload': results_payload,
         'all_assets_ever': all_assets_ever,

@@ -19,6 +19,7 @@ from dash.dependencies import Input, Output
 import pandas as pd
 
 from web.tabs.beta.data import THEME
+from .helpers import beta_direction
 from web.tabs.beta.callbacks._common import (
     _BETA_BOOK_POSITIONS_PARQUET,
     _BETA_BOOK_USER_PARQUET,
@@ -74,7 +75,7 @@ def _build_tickets() -> list[dict]:
                     'date': open_date_str or '—',
                     'book': 'Beta',
                     'spread': instrument or asset_name,
-                    'action': 'BUY',
+                    'action': beta_direction(row.get('Capital (CNY)')),   # SELL for a short beta position
                     'qty': qty,
                     'price': price,
                     'status': status,

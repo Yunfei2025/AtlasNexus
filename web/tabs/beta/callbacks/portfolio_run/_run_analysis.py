@@ -154,13 +154,14 @@ def apply_factor_scaling(summary, signal_snapshot, factor_names_in_pool, total_c
     if _total_scaled > 1e-9:
         _weights = {k: v / _total_scaled for k, v in _scaled.items()}
         for _ in range(3):
+            # Per-asset class caps (RiskModelConfig.CLASS_CAPS) apply ONLY to assets that kept their
+            # plain risk-parity weight. Sleeve-replicated assets are sized exactly like the backtest
+            # (no class cap; the book is limited by the 95% long ceiling, the 95% short ceiling and
+            # the gross DV01 cap), otherwise e.g. CN1Y (tiny duration, big weight) was clipped to
+            # 40% of the shape and the live book held 44% long where the backtest holds 83%.
             _capped = {
-                k: (max(0, min(v, _CLASS_CAPS.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT)))
-                    if k not in _replicable_assets or v >= 0
-                    # Signed sleeve legs may be genuinely negative (a short) —
-                    # only clamp the UPPER bound for those, never floor a
-                    # short at 0 the way a pure-RP asset's weight is.
-                    else max(-_CLASS_CAPS.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT), v))
+                k: (v if k in _replicable_assets
+                    else max(0, min(v, _CLASS_CAPS.get(get_asset_type(k), RiskModelConfig.CLASS_CAP_DEFAULT))))
                 for k, v in _weights.items()
             }
             _cap_tot = sum(abs(v) for v in _capped.values())
@@ -177,18 +178,77 @@ def apply_factor_scaling(summary, signal_snapshot, factor_names_in_pool, total_c
     return summary
 
 
-def build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max_duration):
-    """Build the display-ready portfolio table (rounded, DV01-capped) plus
+def live_mod_durations(asset_names, asset_types, default_durations, market_data=None):
+    """Modified duration per asset on the SAME basis the backtest prices and sizes with: the
+    annuity formula at the asset's latest yield (``multiasset.data.calculate_daily_returns_series``).
+
+    The shared table uses ``get_default_sensitivities`` durations (CN 30Y = 17.0, 20Y = 13.0), which
+    at today's yields understate the true duration by ~20% (annuity: 21.8 / 15.9) and overstate US
+    bonds by ~20%, so DV01 sizing and the DV01 cap in the tab disagreed with the backtest.
+    Only 'Rates' and 'Credit' assets with a yield series are overridden; everything else keeps
+    its default (FX/commodity 0, swap spreads untouched)."""
+    from multiasset.book.hedge_instruments import mod_duration
+    from multiasset.data import get_asset_yield_series, load_raw_market_data
+    out = [float(d) for d in default_durations]
+    for i, (name, typ) in enumerate(zip(asset_names, asset_types)):
+        if typ not in ('Rates', 'Credit'):
+            continue
+        try:
+            if market_data is None:
+                market_data = load_raw_market_data()
+            series, n, _country, is_bond = get_asset_yield_series(name, market_data)
+            if series is None or not is_bond or not n:
+                continue
+            y = float(pd.Series(series, dtype=float).dropna().iloc[-1])
+            if y > 0:
+                out[i] = float(mod_duration(y, float(n)))
+        except Exception:
+            continue
+    return np.asarray(out, dtype=float)
+
+
+def long_short_totals(capital, durations):
+    """(long CNY, short CNY, long DV01 MM, short DV01 MM) of signed positions - never netted.
+    DV01 in MM CNY per bp (capital x duration / 1e10); shorts are returned as positive sizes."""
+    cap = np.asarray(capital, dtype=float)
+    dv01 = cap * np.asarray(durations, dtype=float) / 1e10
+    return (float(np.clip(cap, 0.0, None).sum()), float(np.abs(np.clip(cap, None, 0.0)).sum()),
+            float(np.clip(dv01, 0.0, None).sum()), float(np.abs(np.clip(dv01, None, 0.0)).sum()))
+
+
+def build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max_duration,
+                          allocation_mode='risk_parity'):
+    """Build the display-ready portfolio table (sized, rounded, DV01-capped) plus
     the raw arrays needed for the totals row and DV01 display.
 
+    Long and short are handled SEPARATELY and never netted (user, 2026-10-17):
+    * Capital usage is the LONG size only; shorts consume no capital. The 95% ceiling
+      applies to the long book and, independently, to the short book
+      (RiskModelConfig.CAPITAL_UTILISATION_MAX x SHORT_SIZE_MAX_RATIO).
+    * DV01 is GROSS (|long| + |short|), the same convention as the backtest; long, short and
+      gross DV01 are reported.
+    * factor_scaling is sized like the backtest (`scale_sleeve_to_dv01_target`): the signed
+      shape is scaled to the DV01 target, subject to the two ceilings (up or down). The other
+      modes keep their weights and are only scaled DOWN to the DV01 limit.
+    * Lot rounding is toward zero, so a short is never rounded to a bigger short.
+    * The TOTAL row carries the LONG size (what consumes capital), not a net sum.
+
     Returns a dict with: portfolio_df, portfolio_table_df, positions_table
-    (dash_table.DataTable), total_dv01, dv01_cap_msg.
+    (dash_table.DataTable), total_dv01 (gross), dv01_cap_msg, plus long_cny, short_cny,
+    dv01_long, dv01_short and final_capital ({asset: signed rounded CNY}).
     """
     portfolio_df = prepare_portfolio_table(summary, factor_exp, portfolio)
     portfolio_df = merge_with_existing_positions(portfolio_df)
+    if not portfolio_df.empty:
+        # Same duration basis as the backtest (annuity at the latest yield), not the default table.
+        portfolio_df['Duration'] = live_mod_durations(
+            portfolio_df['Asset Name'], portfolio_df['Asset Type'], portfolio_df['Duration'])
+        portfolio_df['DV01 (MM CNY)'] = (portfolio_df['Capital (CNY)'] * portfolio_df['Duration'] / 1e10).round(4)
 
     portfolio_enhanced = []
     total_rounded_capital = 0.0
+    long_cny = short_cny = dv01_long = dv01_short = 0.0
+    final_capital = {}
     dv01_cap_msg = ""
     total_dv01 = 0.0           # safe default — overwritten below when table is non-empty
     _durations = np.array([])  # safe default
@@ -200,15 +260,28 @@ def build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max
             10_000_000.0,
             1_000_000.0,
         )
-        _rounded = np.floor(portfolio_df['Capital (CNY)'].values / _units) * _units
-
-        # ── DV01 cap: scale down if portfolio DV01 exceeds max_duration limit ──
-        # Only duration-bearing assets (bonds/spreads) carry DV01, so the
-        # scale-down must apply to THOSE assets only.  Zero-duration assets
-        # (commodities, FX) contribute nothing to DV01 and must keep their
-        # allocation untouched — otherwise they get wrongly zeroed out.
         _durations = portfolio_df['Duration'].values
-        _raw_dv01_mm = float(sum(v * d / 1e10 for v, d in zip(_rounded, _durations)))
+        _raw_cap = portfolio_df['Capital (CNY)'].values.astype(float)
+        _size_msg = ""
+        if allocation_mode == 'factor_scaling' and total_capital_cny > 0:
+            # Same sizing as the backtest: shape -> DV01 target, long and short ceilings.
+            from multiasset.book.sizing import scale_sleeve_to_dv01_target
+            _names = list(portfolio_df['Asset Name'])
+            _w = pd.DataFrame([_raw_cap / total_capital_cny], columns=_names)
+            _d = pd.DataFrame([_durations], columns=_names)
+            _sized = scale_sleeve_to_dv01_target(
+                _w, _d, total_capital_cny, float(max_duration or 5),
+                RiskModelConfig.CAPITAL_UTILISATION_MAX,
+            ).iloc[0]
+            _raw_cap = _sized.to_numpy() * total_capital_cny
+        # toward-zero lot rounding: a short must not round into a bigger short
+        _rounded = np.trunc(_raw_cap / _units) * _units
+
+        # ── DV01 cap: GROSS DV01 (|long| + |short|, never netted) must stay within the limit;
+        # scale down if it does not. Only duration-bearing assets (bonds/spreads) carry DV01, so
+        # the scale-down applies to THOSE assets only; zero-duration assets (commodities, FX)
+        # keep their allocation.
+        _raw_dv01_mm = float(np.abs(_rounded * _durations).sum() / 1e10)
         _max_dur = float(max_duration or 5)
         _max_dv01_mm = total_capital_cny * _max_dur / 1e10
         if _raw_dv01_mm > _max_dv01_mm and _raw_dv01_mm > 0:
@@ -216,16 +289,21 @@ def build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max
             _dv01_bearing = _durations > 0
             _rounded = np.where(
                 _dv01_bearing,
-                np.floor(_rounded * _scale / _units) * _units,
+                np.trunc(_rounded * _scale / _units) * _units,
                 _rounded,
             )
             dv01_cap_msg = (f"  ·  DV01 capped: {_raw_dv01_mm:.2f}→{_max_dv01_mm:.2f} MM "
                             f"(scale {_scale:.2%})")
 
-        total_rounded_capital = float(_rounded.sum())
+        # Long and short separately - never netted. Capital used = LONG size; the TOTAL row below
+        # shows it (a net sum would understate the capital the longs need).
+        long_cny, short_cny, dv01_long, dv01_short = long_short_totals(_rounded, _durations)
+        total_rounded_capital = long_cny
         _display_df = portfolio_df.copy()
         _display_df['Capital (CNY)'] = [f"{v / 1_000_000:,.2f}" for v in _rounded]
-        _display_df['Weight (%)'] = portfolio_df['Weight (%)'].map(lambda v: f"{v:.2f}%")
+        # Weight = FINAL (sized, rounded) capital as % of total capital, signed per asset.
+        _display_df['Weight (%)'] = [f"{v / total_capital_cny * 100.0:.2f}%" if total_capital_cny > 0 else "0.00%"
+                                     for v in _rounded]
         # Recompute DV01 on (possibly capped) rounded capital
         _display_df['DV01 (MM CNY)'] = [
             round(v * d / 1e10, 4)
@@ -237,15 +315,15 @@ def build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max
 
     # Add totals row
     if not portfolio_table_df.empty:
-        total_dv01 = round(
-            sum(v * d / 1e10 for v, d in zip(_rounded, _durations)), 4
-        )
+        total_dv01 = round(dv01_long + dv01_short, 4)          # GROSS DV01, not a net sum
+        final_capital = dict(zip(portfolio_df['Asset Name'], map(float, _rounded)))
         totals = {
             'Asset Type': 'TOTAL', 'Universe': '', 'Sector': '', 'Asset Name': '',
-            'Instrument': '', 'Duration': None,   # None → NaN, avoids mixed-type parquet issue
-            'Capital (CNY)': f"{total_rounded_capital / 1_000_000:,.2f}",
+            'Instrument': 'LONG size · shorts excluded · not netted',
+            'Duration': None,   # None → NaN, avoids mixed-type parquet issue
+            'Capital (CNY)': f"{long_cny / 1_000_000:,.2f}",
             'DV01 (MM CNY)': total_dv01,
-            'Weight (%)': f"{summary['Weight (%)'].sum():.2f}%"
+            'Weight (%)': f"{(long_cny / total_capital_cny * 100.0) if total_capital_cny > 0 else 0.0:.2f}%"
         }
         portfolio_table_df = pd.concat([portfolio_table_df, pd.DataFrame([totals])], ignore_index=True)
 
@@ -316,6 +394,9 @@ def build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max
         'positions_table': positions_table,
         'total_dv01': total_dv01,
         'dv01_cap_msg': dv01_cap_msg,
+        'long_cny': long_cny, 'short_cny': short_cny,
+        'dv01_long': dv01_long, 'dv01_short': dv01_short,
+        'final_capital': final_capital,
     }
 
 

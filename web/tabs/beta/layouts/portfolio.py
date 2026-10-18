@@ -422,6 +422,30 @@ def build_multiasset_portfolio_layout():
         ], style={'padding': '14px 16px', 'borderTop': '1px solid var(--border-strong)'}),
     ], style=_CARD_WRAP)
 
+    # ── FX Hedge Ticket (collapsible) ─────────────────────────────────────
+    fx_hedge_card = html.Details([
+        html.Summary([
+            html.Span("💱", style={'marginRight': '8px'}),
+            html.Span("FX Hedge Ticket", style={'color': 'var(--text-primary)', 'fontWeight': '600',
+                                                 'fontSize': '12px'}),
+            html.Span("  ·  forward on foreign bonds' embedded currency, netted against the FX sleeve",
+                      style={'color': 'var(--text-muted)', 'fontStyle': 'italic', 'fontSize': '10px'}),
+        ], style={
+            'padding': '10px 16px', 'cursor': 'pointer',
+            'listStyleType': 'none', 'WebkitAppearance': 'none', 'MozAppearance': 'none',
+            'background': 'var(--surface-panel)', 'userSelect': 'none', 'display': 'flex', 'alignItems': 'center',
+        }),
+        html.Div([
+            html.Div(id='fx-hedge-ticket-container', style={'minHeight': '40px'}),
+            html.Div(
+                "Advisory only. Bonds are bought with CNY, so each foreign bond carries its currency; "
+                "net forward = FX sleeve - bond FX (negative = sell the currency forward). "
+                "Cross-currency basis is not modelled.",
+                style={'color': 'var(--text-muted)', 'fontSize': '10px', 'marginTop': '8px', 'fontStyle': 'italic'},
+            ),
+        ], style={'padding': '14px 16px', 'borderTop': '1px solid var(--border-strong)'}),
+    ], style=_CARD_WRAP)
+
     return html.Div([
         dcc.Store(id='portfolio-data-store'),
         dcc.Store(id='asset-pool-store', data=initial_pool),
@@ -439,5 +463,6 @@ def build_multiasset_portfolio_layout():
         configuration_card,
         results_card,
         hedge_overlay,
+        fx_hedge_card,
 
     ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px', 'padding': '16px', 'margin': '10px'})

@@ -118,3 +118,23 @@ def test_zero_weights_returns_zero_notional_not_error():
 def test_empty_weights_returns_empty():
     notional = weights_to_notional(pd.Series(dtype=float), 10_000_000.0)
     assert notional.empty
+
+
+def test_short_size_has_its_own_ceiling_equal_to_the_long_ceiling():
+    """Shorts consume no capital but total short size may not exceed the same 95% as the longs;
+    the two ceilings are independent (never netted)."""
+    import pandas as pd
+    import pytest
+    from multiasset.book.capital import weights_to_notional
+
+    cls = {'CN5Y': 'bond', 'CN10Y': 'bond', 'CN30Y': 'bond'}
+    kw = dict(asset_class_of=cls, signed_classes=('bond',))
+    ok = weights_to_notional(pd.Series({'CN5Y': 0.90, 'CN10Y': -0.60, 'CN30Y': -0.30}), 1000.0, **kw)
+    assert ok['CN10Y'] == pytest.approx(-600.0) and ok['CN30Y'] == pytest.approx(-300.0)      # 90% short: inside the cap
+    big = weights_to_notional(pd.Series({'CN5Y': 0.50, 'CN10Y': -1.20, 'CN30Y': -0.30}), 1000.0, **kw)
+    # short size 1.50 > 0.95: the whole book scales by 0.95 / 1.50 (shape kept), the small long shrinks too
+    assert -(big['CN10Y'] + big['CN30Y']) == pytest.approx(950.0)
+    assert big['CN5Y'] == pytest.approx(500.0 * 0.95 / 1.50)
+    # a big long does not allow a bigger short and vice versa: both ceilings are 95%
+    both = weights_to_notional(pd.Series({'CN5Y': 1.50, 'CN10Y': -1.50}), 1000.0, **kw)
+    assert both['CN5Y'] == pytest.approx(950.0) and both['CN10Y'] == pytest.approx(-950.0)

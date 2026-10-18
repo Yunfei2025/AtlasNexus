@@ -190,6 +190,17 @@ def compute_factor_cov(
     return cov if cov is not None and not cov.empty else None
 
 
+def compute_collinear_pairs(factor_names: list[str], threshold: float | None = None) -> list:
+    """Near-duplicate factor pairs ``(a, b, corr)`` in the pool, on the same EWMA covariance (and window) the
+    sleeve risk parity uses. Diagnostic only; [] when the covariance cannot be built."""
+    from multiasset.book.sizing import collinear_factor_pairs
+    try:
+        cov = compute_factor_cov(list(factor_names))
+    except Exception:
+        return []
+    return collinear_factor_pairs(cov, threshold) if cov is not None else []
+
+
 # ============================================================================
 # Factor to Asset Mapping Table
 # ============================================================================

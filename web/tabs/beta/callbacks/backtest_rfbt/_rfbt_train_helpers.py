@@ -287,7 +287,7 @@ def _build_results_from_saved_artifact(
     from multiasset.factor_model import (
         build_features, _compute_target_returns, _predict_ic_model,
         build_position_series, FactorModelConfig,
-        factor_sizing_override,
+        factor_sizing_override, _is_long_only, _has_trend_floor, apply_trend_floor,
     )
 
     base_size_cfg = FactorModelConfig(
@@ -347,11 +347,14 @@ def _build_results_from_saved_artifact(
                 if _ov:
                     size_cfg = _dc.replace(base_size_cfg, **_ov)
 
-            _long_only = factor.split('.')[0] == 'IRDL'
             pos = build_position_series(
                 result['predicted_return'], result['returns'], size_cfg,
-                long_only=_long_only,
+                long_only=_is_long_only(factor),
             )
+            # Same confirmed-trend floor as run_factor_model_backtest, so the
+            # live signal is sized like the backtest it was validated against.
+            if _has_trend_floor(factor) and size_cfg.long_floor > 0:
+                pos['position'], _ = apply_trend_floor(pos['position'], factor_levels[factor], size_cfg)
             result['signal'] = pos['signal']
             result['position'] = pos['position']
             result['turnover'] = pos['turnover']
