@@ -706,6 +706,43 @@ EQDL.IF/EQDL.IH is a near-duplicate (median 0.95; >= 0.90 in 86% of months, >= 0
 CMDL.AU/CMDL.AG 0.76; EQDL.IC/EQDL.IH 0.72; every other pair is below 0.65. A 0.95 threshold would almost never fire, 0.90 flags IF/IH
 and nothing spurious. Tests: `tests/test_collinear_pairs.py`.
 
+### 3.21 P5 holdout check of the design decisions (2026-10-18)
+
+Tool: `scripts/holdout_validation.py [--holdout-start 2025-04-01] [--since DATE] [--pools ...]`. For each decision it runs the full
+2017-2026 backtest with the production rule and with the alternative, splits the daily excess-return stream (over the cash benchmark,
+previous-NAV base) at the holdout start, and reports DEV (2017-01-02..2025-03-31) and HOLD (2025-04-01..2026-10-13, 18 months) Sharpe.
+LIMIT: the holdout was visible when the decisions were taken (a SOFT holdout), and 18 months is short: the standard error of an
+18-month Sharpe is ~0.8-1.1, so gaps of a few tenths cannot be told apart from noise.
+
+Production, Sharpe vs cash: P06 DEV 1.39 -> HOLD 0.40 (excess 0.59%/yr, maxDD -1.1%); P11 1.36 -> 0.39 (0.60%/yr); P14 1.47 -> 0.16 (0.19%/yr);
+P06+IRDL4 1.05 -> 1.78 (1.43%/yr, maxDD -0.2%). The CN-only books earned little over cash in the last 18 months; the book that includes the
+foreign IRDL factors (long-short, rising US/EUR/JP/UK yields) had its best period. Production minus alternative, DEV / HOLD:
+
+| Decision (production vs alternative) | P06 | P11 | P14 | P06+IRDL4 | Verdict |
+|---|---|---|---|---|---|
+| shorts free of capital vs counted in full | +0.11 / +0.25 | +0.13 / +0.27 | +0.14 / +0.36 | +0.03 / +0.17 | holds everywhere |
+| ERC budgets vs legacy | +0.35 / -0.14 | +0.99 / +0.40 | +0.87 / +0.83 | +0.24 / +1.03 | holds in 3 of 4 (P06 HOLD slightly favours legacy) |
+| short bonds vs futures for 10Y/30Y | -0.00 / +0.07 | +0.00 / +0.06 | +0.00 / +0.07 | -0.00 / +0.07 | tiny, same sign in HOLD |
+| long-short vs long-only IRDL | +0.01 / -0.13 | +0.13 / -0.22 | +0.07 / -0.25 | +0.14 / +1.44 | CN-only: HOLD slightly against; with foreign IRDL: strongly for |
+| floor 1/2/5Y vs none | +0.01 / -0.12 | +0.00 / -0.04 | +0.03 / -0.05 | +0.02 / +0.01 | no difference |
+| floor 1/2/5Y vs 1/2Y only | -0.13 / +0.00 | -0.13 / -0.00 | -0.08 / -0.01 | -0.02 / +0.02 | no difference |
+| no correlation screen vs screen (P11 only) | | +0.11 / -0.34 | | | not robust: HOLD favoured the screen |
+
+Sign agreement between DEV and HOLD: 13 of 25 comparisons, i.e. coin-flip for the small decisions (floor variants, screen, futures, IRDL
+long-only in CN pools: gaps <= ~0.25, inside the noise). Only the large effects carry information: shorts-free (all four pools, both periods),
+ERC over legacy (3 of 4), and long-short IRDL once foreign factors are in the pool.
+
+Reading: (1) the full-sample CN-only Sharpe of ~1.3 is mostly 2017-2024; the recent edge is thin (consistent with 6.12's "edge has thinned").
+(2) Keep the robust decisions. (3) The floor, the screen and IRDL long-short in CN-only pools are UNPROVEN either way; none should be
+re-litigated on this evidence. (4) The earlier choice to keep foreign IRDL OUT of the default pool rests on the full-sample result
+(P06 1.29 vs P06+IRDL4 1.21); the holdout (0.40 vs 1.78) points the other way but is one 18-month rising-rate regime, so it is a
+reason to re-test with a clean forward period, not to switch now.
+
+Forward test: the production configuration is frozen at the commit that adds `scripts/holdout_validation.py` (branch
+`beta-longshort-overlay-accounting`). The first clean out-of-sample day is 2026-10-14. After at least 6 months of new data run
+`python scripts/holdout_validation.py --holdout-start 2026-10-14` (the HOLD columns are then genuinely fresh) before touching any rule above.
+No decision may be justified by the 2025-04..2026-10 window alone.
+
 ## 4. Candidate new factors for the pool (all untested)
 
 Current pool: CN/US rates (level, slope, curve), CDB/LGB credit, CDB spread, four FX pairs,
