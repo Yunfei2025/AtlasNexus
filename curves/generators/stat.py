@@ -338,8 +338,11 @@ class StatGenerator:
         cvpx_stat = st.statAnalysis_IRS(df_act_irs, df_quo_irs)
 
         cpr = irs_px.get('carry3m', pd.DataFrame()) + irs_px.get('roll3m', pd.DataFrame())
-        from curves.calibration.irscurves import irsSpreads
-        spds_cpr = irsSpreads(cpr)
+        from curves.calibration.irscurves import irsSpreads, irsSpreadComposite
+        # Same DV01-neutral weights as the live snapshot (irsSpreadComposite),
+        # so the close history and the realtime carry+roll are comparable.
+        # irsSpreads() on cpr would weight every leg 1:-1 instead.
+        spds_cpr = irsSpreadComposite(list(irsSpreads(cpr).columns), cpr)
 
         cvpx_stat['CarryRoll3m'] = spds_cpr
         updatePKL(cvpx_stat, os.path.join(DIR_INPUT, f'{btype}-pxspds.pkl'), rewrite=full_history)

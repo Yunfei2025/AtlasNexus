@@ -42,13 +42,13 @@ def test_credit_mimicking_weights_match_get_credit_weights():
     w_lvl, is_yield = factor_mimicking_weights('CRDL.CDB', FACTOR_TO_ASSET_MAP)
     assert is_yield
     tenor_years = [t for _, _, t in CREDIT_CONFIG['CDB'][2]]
-    expected_lvl = dict(zip(['CDB1Y', 'CDB2Y', 'CDB5Y', 'CDB10Y', 'CDB30Y'],
+    expected_lvl = dict(zip(['CDB1Y', 'CDB2Y', 'CDB5Y', 'CDB10Y'],
                             get_credit_weights(tenor_years)['Level']))
     assert w_lvl == pytest.approx(expected_lvl)
     assert sum(w_lvl.values()) == pytest.approx(1.0)
 
     w_slp, _ = factor_mimicking_weights('CRSL.CDB', FACTOR_TO_ASSET_MAP)
-    assert w_slp['CDB1Y'] < 0 < w_slp['CDB30Y']          # slope legs are signed (+ve position = flattener)
+    assert w_slp['CDB1Y'] < 0 < w_slp['CDB10Y']          # slope legs are signed (+ve position = flattener)
     assert sum(w_slp.values()) == pytest.approx(0.0)
 
     w_crv, _ = factor_mimicking_weights('CRCV.CDB', FACTOR_TO_ASSET_MAP)
@@ -298,3 +298,15 @@ def test_pool_sleeve_budgets_uses_erc_when_cov_given_and_legacy_otherwise(monkey
     assert pool_sleeve_budgets(names, vol, cov=cov) == pytest.approx(legacy)       # rule switch honoured
     monkeypatch.setattr(RiskModelConfig, 'SLEEVE_BUDGET_RULE', 'erc')
     assert pool_sleeve_budgets(names, vol, cov=cov.iloc[:1, :1]) == pytest.approx(legacy)  # unusable cov -> fallback
+
+
+def test_credit_assets_are_floored_at_zero_by_default():
+    from multiasset.book.sizing import _with_credit_floor
+    from multiasset.config import RiskModelConfig as R
+    out = _with_credit_floor(('CN1Y',), ['CN1Y', 'CN10Y', 'CDB10Y', 'NCD1Y'])
+    assert 'CDB10Y' in out and 'NCD1Y' in out and 'CN10Y' not in out
+    R.CREDIT_LONG_ONLY = False
+    try:
+        assert _with_credit_floor(None, ['CDB10Y']) == []
+    finally:
+        R.CREDIT_LONG_ONLY = True

@@ -343,14 +343,34 @@ def build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max
     except Exception as _se:
         print(f"Warning: Could not save Beta book positions: {_se}")
 
+    # Display-only copy: the saved parquet (read by the Risk tab) is left untouched.
+    _display_rows = []
+    for _r in portfolio_table_df.to_dict('records'):
+        _is_total = _r.get('Asset Type') == 'TOTAL'
+        try:
+            _cap = float(str(_r.get('Capital (CNY)', '0')).replace(',', ''))
+        except ValueError:
+            _cap = 0.0
+        _r['Side'] = '' if _is_total else ('SHORT' if _cap < 0 else ('LONG' if _cap > 0 else ''))
+        _display_rows.append(_r)
+    if short_cny > 0:
+        _display_rows.append({
+            'Asset Type': 'TOTAL', 'Universe': '', 'Sector': '', 'Asset Name': '',
+            'Instrument': 'SHORT size · not netted', 'Side': 'SHORT', 'Duration': None,
+            'Capital (CNY)': f"-{short_cny / 1_000_000:,.2f}",
+            'DV01 (MM CNY)': round(-dv01_short, 4),
+            'Weight (%)': f"-{(short_cny / total_capital_cny * 100.0) if total_capital_cny > 0 else 0.0:.2f}%",
+        })
+
     positions_table = dash_table.DataTable(
-        data=portfolio_table_df.to_dict('records'),
+        data=_display_rows,
         columns=[
             {'name': 'Asset Type',           'id': 'Asset Type'},
             {'name': 'Universe',              'id': 'Universe'},
             {'name': 'Sector',                'id': 'Sector'},
             {'name': 'Asset Name',            'id': 'Asset Name'},
             {'name': 'Instrument',            'id': 'Instrument'},
+            {'name': 'Side',                  'id': 'Side'},
             {'name': 'Duration',              'id': 'Duration', 'type': 'numeric',
              'format': Format(precision=2, scheme=Scheme.fixed)},
             {'name': 'Capital (Million CNY)', 'id': 'Capital (CNY)'},
@@ -368,7 +388,7 @@ def build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max
         },
         style_cell_conditional=[
             {'if': {'column_id': c}, 'textAlign': 'left'}
-            for c in ('Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument')
+            for c in ('Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument', 'Side')
         ],
         style_header={
             'backgroundColor': '#0e1d3a',
@@ -382,12 +402,14 @@ def build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max
         },
         style_header_conditional=[
             {'if': {'column_id': c}, 'textAlign': 'left'}
-            for c in ('Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument')
+            for c in ('Asset Type', 'Universe', 'Sector', 'Asset Name', 'Instrument', 'Side')
         ],
         style_data_conditional=[
             {'if': {'filter_query': '{Asset Type} = "TOTAL"'},
              'backgroundColor': 'rgba(255,255,255,0.03)', 'color': '#e9eef8', 'fontWeight': '700'},
             {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgba(255,255,255,0.015)'},
+            {'if': {'filter_query': '{Side} = "SHORT"'}, 'color': '#ff6b6b'},
+            {'if': {'filter_query': '{Side} = "SHORT"', 'column_id': 'Side'}, 'fontWeight': '700'},
         ],
         style_table={'overflowX': 'auto'}
     )

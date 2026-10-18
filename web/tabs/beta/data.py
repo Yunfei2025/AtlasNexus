@@ -234,12 +234,14 @@ FACTOR_TO_ASSET_MAP = {
         {'name': 'CN2Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '2Y'},
         {'name': 'CN10Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '10Y'},
         {'name': 'CN20Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '20Y'},
+        {'name': 'CN30Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '30Y'},
     ],
     'IRCV.CN': [
         {'name': 'CN2Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '2Y'},
         {'name': 'CN5Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '5Y'},
         {'name': 'CN10Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '10Y'},
         {'name': 'CN20Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '20Y'},
+        {'name': 'CN30Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '30Y'},
     ],
 
     # US Government Bonds (Treasury)
@@ -324,30 +326,24 @@ FACTOR_TO_ASSET_MAP = {
     # (IRS spread) entries were removed along with the SPDL/SPSL
     # data-generation pipeline (risk_loader._load_sp_factors) — CRDL/CRSL/
     # CRCV cover the same and a broader credit universe (LGB, MTN added).
-    # 30Y included so factor_mimicking_weights (multiasset/book/sizing.py)
-    # can build a full 5-tenor sleeve matching CREDIT_CONFIG['CDB'] exactly
-    # — a missing tenor here would otherwise leave the credit sleeve's
-    # weights unrenormalized against CREDIT_CONFIG's actual weight vector.
+    # No CDB30Y: the asset is not available (removed 2026-10-18).
     'CRDL.CDB': [
         {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
         {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
         {'name': 'CDB5Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '5Y'},
         {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
-        {'name': 'CDB30Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '30Y'},
     ],
     'CRSL.CDB': [
         {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
         {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
         {'name': 'CDB5Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '5Y'},
         {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
-        {'name': 'CDB30Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '30Y'},
     ],
     'CRCV.CDB': [
         {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
         {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
         {'name': 'CDB5Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '5Y'},
         {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
-        {'name': 'CDB30Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '30Y'},
     ],
 
     # Local Government Bond

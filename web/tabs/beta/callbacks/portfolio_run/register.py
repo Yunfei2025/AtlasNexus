@@ -322,8 +322,6 @@ def register_portfolio_run_callbacks(app):
         [
             Input('portfolio-data-store', 'data'),
             Input('irdl-hedge-ratio', 'value'),
-            Input('irdl-hedge-instrument', 'value'),
-            Input('irdl-hedge-irs-maturity', 'value'),
             Input({'type': 'irdl-dv01-override', 'index': ALL}, 'value'),
         ],
         [
@@ -334,12 +332,12 @@ def register_portfolio_run_callbacks(app):
         prevent_initial_call=True,
     )
     def update_irdl_hedge_ticket(
-        store_data, hedge_ratio_pct, instrument, irs_maturity,
+        store_data, hedge_ratio_pct,
         dv01_values, dv01_ids, capital_value, capital_unit,
     ):
         _fr_records = (store_data or {}).get('factor_risk', [])
         factor_risk = pd.DataFrame(_fr_records) if _fr_records else pd.DataFrame()
         return build_irdl_hedge_ticket(
-            factor_risk, hedge_ratio_pct, instrument, irs_maturity,
+            factor_risk, hedge_ratio_pct,
             dv01_values, dv01_ids, capital_value, capital_unit,
         )

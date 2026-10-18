@@ -217,6 +217,11 @@ class RiskModelConfig:
     # cash bond). CN10Y/CN20Y/CN30Y stay fully signed.
     SHORT_END_LONG_ONLY_TENORS: tuple = ('CN1Y', 'CN2Y', 'CN5Y')
 
+    # Credit bonds (CDB / LGB / MTN / NCD) are hard to short: their NET summed weight is
+    # floored at 0 in signed_sleeve_weights_daily / _snapshot (user, 2026-10-18). Only
+    # CGB 10Y and 30Y are shorted (see CN_SHORT_ROUTING / CN_SHORT_SUBSTITUTE).
+    CREDIT_LONG_ONLY: bool = True
+
     # ── Transaction cost (docs/plans/beta_book_exposure_vs_capital.md
     #    Step 8) ─────────────────────────────────────────────────────────
     # Basis points per unit ONE-WAY turnover (round-trip = 2x), charged on
@@ -315,7 +320,6 @@ CREDIT_CONFIG: Dict[str, Tuple[str, str, List[Tuple[str, str, float]]]] = {
             ('中债国开债到期收益率:2年', '中债国债到期收益率:2年', 2.0),
             ('中债国开债到期收益率:5年', '中债国债到期收益率:5年', 5.0),
             ('中债国开债到期收益率:10年', '中债国债到期收益率:10年', 10.0),
-            ('中债国开债到期收益率:30年', '中债国债到期收益率:30年', 30.0),
         ],
     ),
     'LGB': (

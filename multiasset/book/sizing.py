@@ -229,6 +229,17 @@ def factor_mimicking_weights(factor_code: str,
     return None
 
 
+def _with_credit_floor(long_only_assets, assets) -> list:
+    """``long_only_assets`` plus every credit asset (CDB/LGB/MTN/NCD) in ``assets`` when
+    ``RiskModelConfig.CREDIT_LONG_ONLY`` - credit bonds cannot be shorted in practice."""
+    from multiasset.config import RiskModelConfig
+    from multiasset.data import get_asset_type
+    out = list(long_only_assets or [])
+    if RiskModelConfig.CREDIT_LONG_ONLY:
+        out += [a for a in assets if a not in out and get_asset_type(a) == 'Credit']
+    return out
+
+
 def signed_sleeve_weights_daily(
     budget_by_rebalance_date: Dict[pd.Timestamp, Dict[str, float]],
     factor_signal_series: Dict[str, pd.Series],
@@ -323,6 +334,7 @@ def signed_sleeve_weights_daily(
                 weights[a] += scale * w_i * inv_dur[a].fillna(0.0)
             else:
                 weights[a] += scale * w_i
+    long_only_assets = _with_credit_floor(long_only_assets, weights.columns)
     if long_only_assets:
         floor_cols = [a for a in long_only_assets if a in weights.columns]
         if floor_cols:
@@ -396,6 +408,7 @@ def signed_sleeve_weights_snapshot(
             else:
                 weights[a] = weights.get(a, 0.0) + scale * w_i
 
+    long_only_assets = _with_credit_floor(long_only_assets, weights)
     if long_only_assets:
         for a in long_only_assets:
             if a in weights and weights[a] < 0.0:
