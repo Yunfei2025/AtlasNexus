@@ -342,7 +342,11 @@ class StatGenerator:
         # Same DV01-neutral weights as the live snapshot (irsSpreadComposite),
         # so the close history and the realtime carry+roll are comparable.
         # irsSpreads() on cpr would weight every leg 1:-1 instead.
-        spds_cpr = irsSpreadComposite(list(irsSpreads(cpr).columns), cpr)
+        # carry3m/roll3m are pay-fixed (pay long leg / receive short leg), which is
+        # this platform's SELL convention; negate to BUY-side exactly as
+        # alpha_snapshot does for the live SwapSpread rows, so history and
+        # live carry+roll share sign as well as weights.
+        spds_cpr = -irsSpreadComposite(list(irsSpreads(cpr).columns), cpr)
 
         cvpx_stat['CarryRoll3m'] = spds_cpr
         updatePKL(cvpx_stat, os.path.join(DIR_INPUT, f'{btype}-pxspds.pkl'), rewrite=full_history)
@@ -1034,10 +1038,9 @@ class StatGenerator:
         # Kept under their native Repo7d-/Shi3M-/Basis- names (not renamed to
         # this category's "NsMs" convention) for consistency with SwapSpread.
         # CarryRoll3m is taken directly from IRS-pxspds.pkl rather than run
-        # through the generic sign-flip regex below: irsSpreads() already
-        # signs these correctly (Repo7d-1y5y/Shi3M-1y5y are curve slopes,
-        # negated like XsYs; Basis-1y/-5y and Repo7d-3m1y are not slopes and
-        # keep the raw spread sign), and 'Repo7d-3m1y' in particular would
+        # through the generic sign-flip regex below: compute_irs_spreads()
+        # already stores it BUY-side with DV01-neutral weights (same as the
+        # live SwapSpread rows), and 'Repo7d-3m1y' in particular would
         # wrongly escape the r'\d+s\d+' slope-detection regex below (its
         # tenor tokens are 3m/1y, with only one 'y' and no second 's').
         _irs_extra_cols = ['Repo7d-1y5y', 'Shi3M-1y5y', 'Repo7d-3m1y', 'Basis-1y', 'Basis-5y']
