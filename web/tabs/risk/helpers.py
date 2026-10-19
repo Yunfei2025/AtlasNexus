@@ -41,6 +41,78 @@ def _coerce_float(value) -> float | None:
         return None
 
 
+def beta_direction(capital) -> str:
+    """'SELL' for a short beta position (negative capital), else 'BUY'.
+
+    The beta book is long-short since 2026-10-17 (IRDL long-short, shorts in 10Y/30Y bonds,
+    short commodity/FX sleeves); the Risk tab used to assume every beta row was a BUY."""
+    v = _coerce_float(capital)
+    return 'SELL' if (v is not None and v < 0) else 'BUY'
+
+
+def beta_mtm_mm(volume_mm, duration, open_yield_pct, close_yield_pct, capital) -> float | None:
+    """Mark-to-market of a beta rates position, MM CNY: P&L falls when yields rise for a long.
+
+        MtM = - direction x volume x duration x (close yield - open yield) / 100
+
+    direction is +1 for a long and -1 for a short (negative capital), so rates up -> long loses,
+    short gains. Volume is in MM CNY and the yields are in PERCENT: DV01 = volume x duration x 0.0001
+    per bp and a yield difference of d percent is 100 d bp, so MtM = DV01 x 100 d = volume x
+    duration x d / 100 (the original /10000 understated it 100x, fixed 2026-10-17).
+    Returns None when an input is missing."""
+    vol, dur = _coerce_float(volume_mm), _coerce_float(duration)
+    op, cl = _coerce_float(open_yield_pct), _coerce_float(close_yield_pct)
+    if not vol or not dur or op is None or cl is None or op == 0:
+        return None
+    direction = -1.0 if beta_direction(capital) == 'SELL' else 1.0
+    return round(-direction * vol * dur * (cl - op) / 100.0, 4)
+
+
+def beta_long_short_totals(rows: list[dict], cap_key: str = 'Capital (MM CNY)',
+                           vol_key: str = 'Volume (MM)', mtm_key: str = 'MtM (MM CNY)') -> list[dict]:
+    """Total rows for the beta table: LONG and SHORT reported separately, never netted.
+
+    * Capital used is the LONG size; the short size is shown on its own row (a short uses no capital).
+    * Volume is split the same way (by the sign of the position's capital).
+    * MtM is P&L, which is additive, so the long row carries the sum over ALL positions.
+    Returns one or two dicts holding only the cells to fill (the caller merges them into a blank row)."""
+    def num(row, key):
+        return _coerce_float(row.get(key))
+
+    long_rows, short_rows = [], []
+    for r in rows:
+        cap = num(r, cap_key)
+        (short_rows if (cap is not None and cap < 0) else long_rows).append(r)
+
+    def total(group, key, absolute=False):
+        vals = [num(r, key) for r in group]
+        vals = [v for v in vals if v is not None]
+        if not vals:
+            return None
+        t = sum(vals)
+        return abs(t) if absolute else t
+
+    out = []
+    cap_l, vol_l, mtm_all = total(long_rows, cap_key), total(long_rows, vol_key), total(rows, mtm_key)
+    row_l = {'Asset Name': 'LONG · capital used'}
+    if cap_l is not None:
+        row_l[cap_key] = f"{cap_l:,.2f}"
+    if vol_l is not None:
+        row_l[vol_key] = f"{vol_l:,.1f}"
+    if mtm_all is not None:
+        row_l[mtm_key] = f"{mtm_all:+.4f}"
+    out.append(row_l)
+    if short_rows:
+        cap_s, vol_s = total(short_rows, cap_key, absolute=True), total(short_rows, vol_key, absolute=True)
+        row_s = {'Asset Name': 'SHORT · no capital used'}
+        if cap_s is not None:
+            row_s[cap_key] = f"{cap_s:,.2f}"
+        if vol_s is not None:
+            row_s[vol_key] = f"{vol_s:,.1f}"
+        out.append(row_s)
+    return out
+
+
 def _alpha_spread_pnl_bp(
     spread_type: str,
     direction: str,

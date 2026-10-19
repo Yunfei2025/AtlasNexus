@@ -335,7 +335,7 @@ def build_multiasset_portfolio_layout():
                                       'fontWeight': '700', 'fontSize': '12px'}),
             html.Span(" Hedge", style={'color': 'var(--accent-amber)', 'fontWeight': '700', 'fontSize': '12px'}),
             html.Span(" Overlay", style={'color': 'var(--text-primary)', 'fontWeight': '600', 'fontSize': '12px'}),
-            html.Span("  ·  optional post-optimisation duration hedge via bond futures or pay-fixed IRS",
+            html.Span("  ·  optional post-optimisation duration hedge via bond futures",
                       style={'color': 'var(--text-muted)', 'fontStyle': 'italic', 'fontSize': '10px'}),
         ], style={
             'padding': '10px 16px', 'cursor': 'pointer',
@@ -355,34 +355,6 @@ def build_multiasset_portfolio_layout():
                         tooltip={'placement': 'bottom', 'always_visible': True},
                     ),
                 ], style={'flex': '2', 'minWidth': '220px'}),
-                html.Div([
-                    html.Label("Instrument", style={
-                        'color': 'var(--text-muted)', 'fontSize': '10px', 'marginBottom': '4px', 'display': 'block',
-                    }),
-                    dcc.Dropdown(
-                        id='irdl-hedge-instrument',
-                        options=[
-                            {'label': 'Bond Futures (Short)', 'value': 'futures'},
-                            {'label': 'Pay-fixed IRS', 'value': 'irs'},
-                        ],
-                        value='futures', clearable=False, style={'fontSize': '11px'},
-                    ),
-                ], style={'flex': '1', 'minWidth': '180px'}),
-                html.Div([
-                    html.Label("IRS Tenor", style={
-                        'color': 'var(--text-muted)', 'fontSize': '10px', 'marginBottom': '4px', 'display': 'block',
-                    }),
-                    dcc.Dropdown(
-                        id='irdl-hedge-irs-maturity',
-                        options=[
-                            {'label': '2Y IRS', 'value': '2Y'},
-                            {'label': '5Y IRS', 'value': '5Y'},
-                            {'label': '10Y IRS', 'value': '10Y'},
-                            {'label': '30Y IRS', 'value': '30Y'},
-                        ],
-                        value='10Y', clearable=False, style={'fontSize': '11px'},
-                    ),
-                ], style={'flex': '0 0 130px'}),
             ], style={'display': 'flex', 'gap': '20px', 'alignItems': 'flex-end',
                       'flexWrap': 'wrap', 'marginBottom': '16px'}),
 
@@ -416,7 +388,31 @@ def build_multiasset_portfolio_layout():
             ),
             html.Div(
                 "Hedge overlay is advisory only — it does not change portfolio weights. "
-                "Negative contracts = short futures; PAY FIXED = pay fixed rate in IRS.",
+                "Negative contracts = short futures.",
+                style={'color': 'var(--text-muted)', 'fontSize': '10px', 'marginTop': '8px', 'fontStyle': 'italic'},
+            ),
+        ], style={'padding': '14px 16px', 'borderTop': '1px solid var(--border-strong)'}),
+    ], style=_CARD_WRAP)
+
+    # ── FX Hedge Ticket (collapsible) ─────────────────────────────────────
+    fx_hedge_card = html.Details([
+        html.Summary([
+            html.Span("💱", style={'marginRight': '8px'}),
+            html.Span("FX Hedge Ticket", style={'color': 'var(--text-primary)', 'fontWeight': '600',
+                                                 'fontSize': '12px'}),
+            html.Span("  ·  forward on foreign bonds' embedded currency, netted against the FX sleeve",
+                      style={'color': 'var(--text-muted)', 'fontStyle': 'italic', 'fontSize': '10px'}),
+        ], style={
+            'padding': '10px 16px', 'cursor': 'pointer',
+            'listStyleType': 'none', 'WebkitAppearance': 'none', 'MozAppearance': 'none',
+            'background': 'var(--surface-panel)', 'userSelect': 'none', 'display': 'flex', 'alignItems': 'center',
+        }),
+        html.Div([
+            html.Div(id='fx-hedge-ticket-container', style={'minHeight': '40px'}),
+            html.Div(
+                "Advisory only. Bonds are bought with CNY, so each foreign bond carries its currency; "
+                "net forward = FX sleeve - bond FX (negative = sell the currency forward). "
+                "Cross-currency basis is not modelled.",
                 style={'color': 'var(--text-muted)', 'fontSize': '10px', 'marginTop': '8px', 'fontStyle': 'italic'},
             ),
         ], style={'padding': '14px 16px', 'borderTop': '1px solid var(--border-strong)'}),
@@ -439,5 +435,6 @@ def build_multiasset_portfolio_layout():
         configuration_card,
         results_card,
         hedge_overlay,
+        fx_hedge_card,
 
     ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px', 'padding': '16px', 'margin': '10px'})

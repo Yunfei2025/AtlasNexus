@@ -17,6 +17,7 @@ from dash import html, ALL
 from dash.dependencies import Input, Output, State
 from dateutil.relativedelta import relativedelta
 
+from multiasset.config import RiskModelConfig
 from settings.paths import DIR_INPUT
 
 from ...data import THEME, ALLOCATION_RESULTS
@@ -27,6 +28,7 @@ from ._run_analysis import (
     build_portfolio_table, build_rp_budgets_out, build_allocation_results,
 )
 from ._irdl_hedge import build_irdl_hedge_ticket
+from ._fx_hedge import build_fx_hedge_ticket
 
 
 def register_portfolio_run_callbacks(app):
@@ -193,19 +195,40 @@ def register_portfolio_run_callbacks(app):
                 'timestamp': _run_timestamp,
             })
 
-            table_result = build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max_duration)
+            table_result = build_portfolio_table(summary, factor_exp, portfolio, total_capital_cny, max_duration,
+                                                 allocation_mode=allocation_mode)
             portfolio_df = table_result['portfolio_df']
             portfolio_table_df = table_result['portfolio_table_df']
             total_dv01 = table_result['total_dv01']
             dv01_cap_msg = table_result['dv01_cap_msg']
             portfolio_table = html.Div([table_result['positions_table']])
 
-            _dv01_info = f"  ·  DV01 {total_dv01:.2f} MM / max {total_capital_cny * float(max_duration or 5) / 1e10:.2f} MM{dv01_cap_msg}"
+            # Long and short are reported SEPARATELY and never netted: capital used is the LONG size,
+            # each side has its own 95% ceiling, DV01 is GROSS.
+            _cap_max = RiskModelConfig.CAPITAL_UTILISATION_MAX
+            _short_max = _cap_max * RiskModelConfig.SHORT_SIZE_MAX_RATIO
+            _long_pct = table_result['long_cny'] / total_capital_cny * 100.0
+            _short_pct = table_result['short_cny'] / total_capital_cny * 100.0
+            _dv01_info = (f"  ·  Long {_long_pct:.1f}% (max {_cap_max:.0%}) · Short {_short_pct:.1f}% (max {_short_max:.0%})"
+                          f"  ·  DV01 gross {total_dv01:.2f} MM (long {table_result['dv01_long']:.2f} / short {table_result['dv01_short']:.2f})"
+                          f" / max {total_capital_cny * float(max_duration or 5) / 1e10:.2f} MM{dv01_cap_msg}")
             _status_children = [html.Span(f"✓ Analysis completed!{_dv01_info}", style={'color': '#34d399', 'fontWeight': '700'})]
             for _ow in _opt_warnings:
                 _status_children.append(html.Span(
                     f"  ⚠ Optimizer: {_ow[:120]}",
                     style={'color': '#f87171', 'fontSize': '10px', 'marginLeft': '12px'},
+                ))
+            # Near-duplicate factors in the pool: informational only (the risk parity makes them share one budget)
+            try:
+                from ...data import compute_collinear_pairs
+                _dups = compute_collinear_pairs(factor_names_in_pool)
+            except Exception:
+                _dups = []
+            if _dups:
+                _status_children.append(html.Span(
+                    "  ℹ near-duplicate factors: " + ", ".join(f"{a}/{b} ({c:+.2f})" for a, b, c in _dups[:3])
+                    + " — they share one risk budget",
+                    style={'color': THEME['text_sub'], 'fontSize': '10px', 'marginLeft': '12px'},
                 ))
             status_msg = html.Div(_status_children, style={'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '4px'})
             timestamp_msg = f"Last updated: {_run_timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
@@ -220,8 +243,19 @@ def register_portfolio_run_callbacks(app):
                 allocation_mode, total_capital_cny, max_duration,
                 _run_timestamp,
             )
+            # Netted FX ticket for foreign bonds (multiasset.book.fx); advisory.
+            try:
+                from multiasset.book.fx import fx_hedge_ticket
+                # FINAL sized/rounded capital (not the pre-sizing table values)
+                _fx_ticket = fx_hedge_ticket(
+                    table_result['final_capital'] or dict(zip(portfolio_df['Asset Name'], portfolio_df['Capital (CNY)'])),
+                    dict(zip(portfolio_df['Asset Name'], portfolio_df['Universe'])),
+                )
+            except Exception as _fx_exc:
+                print(f"  FX hedge ticket unavailable: {_fx_exc}")
+                _fx_ticket = []
             return (portfolio_table, status_msg, timestamp_msg,
-                    {'status': 'success', 'factor_risk': _store_factor_risk},
+                    {'status': 'success', 'factor_risk': _store_factor_risk, 'fx_ticket': _fx_ticket},
                     rp_budgets_out,
                     _allocation_results)
 
@@ -273,14 +307,21 @@ def register_portfolio_run_callbacks(app):
             traceback.print_exc()
             return html.Span(f"✗ Error adding to portfolio: {e}", style={'color': THEME['danger'], 'fontWeight': 'bold'})
 
+    # ── FX Hedge Ticket callback ──────────────────────────────────────────────
+    @app.callback(
+        Output('fx-hedge-ticket-container', 'children'),
+        Input('portfolio-data-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def update_fx_hedge_ticket(store_data):
+        return build_fx_hedge_ticket((store_data or {}).get('fx_ticket'))
+
     # ── IRDL Hedge Overlay callback ───────────────────────────────────────────
     @app.callback(
         Output('irdl-hedge-ticket-container', 'children'),
         [
             Input('portfolio-data-store', 'data'),
             Input('irdl-hedge-ratio', 'value'),
-            Input('irdl-hedge-instrument', 'value'),
-            Input('irdl-hedge-irs-maturity', 'value'),
             Input({'type': 'irdl-dv01-override', 'index': ALL}, 'value'),
         ],
         [
@@ -291,12 +332,12 @@ def register_portfolio_run_callbacks(app):
         prevent_initial_call=True,
     )
     def update_irdl_hedge_ticket(
-        store_data, hedge_ratio_pct, instrument, irs_maturity,
+        store_data, hedge_ratio_pct,
         dv01_values, dv01_ids, capital_value, capital_unit,
     ):
         _fr_records = (store_data or {}).get('factor_risk', [])
         factor_risk = pd.DataFrame(_fr_records) if _fr_records else pd.DataFrame()
         return build_irdl_hedge_ticket(
-            factor_risk, hedge_ratio_pct, instrument, irs_maturity,
+            factor_risk, hedge_ratio_pct,
             dv01_values, dv01_ids, capital_value, capital_unit,
         )

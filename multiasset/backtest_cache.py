@@ -91,10 +91,15 @@ def scalar_to_coeff(scalar: float, factor_name: str) -> float:
     """
     Convert a factor signal scalar into an asset allocation coefficient.
 
-    Long-only factors (IRDL, CMDL, EQDL, SPDL, SPSL):
+    Long-only factors (CMDL, EQDL, SPDL, SPSL):
       coeff = max(0, min(2.0, 1 + scalar))
-    Directional factors (IRSL, IRCV, FXDL):
+    Directional factors (IRDL, IRSL, IRCV, FXDL):
       coeff = max(-1.5, min(1.5, scalar))
+
+    IRDL is directional since 2026-10-17 (long-short in every market, net short
+    duration via a futures / swap overlay or short foreign bonds): a bearish
+    scalar must read as a NEGATIVE multiplier, matching factor_scaling's signed
+    sleeves (budget x position).
 
     FXDL is directional (not long-only) because a currency view is inherently
     two-sided: a bearish FactorModel signal on USDCNY should be expressible as
@@ -108,7 +113,7 @@ def scalar_to_coeff(scalar: float, factor_name: str) -> float:
     simply takes effect on the next run.
     """
     factor_prefix = factor_name.split('.')[0] if '.' in factor_name else factor_name
-    if factor_prefix in ('IRSL', 'IRCV', 'FXDL'):
+    if factor_prefix in ('IRDL', 'IRSL', 'IRCV', 'FXDL'):
         return max(-1.5, min(1.5, scalar))
     return max(0.0, min(2.0, 1.0 + scalar))
 

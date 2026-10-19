@@ -50,7 +50,13 @@ def get_swap_quote_frame(swap_rt, tickers=None, threshold_bp=10, fallback_quotes
     if fallback_quotes is not None:
         fallback_series = pd.Series(fallback_quotes).reindex(mid_quotes.index)
         unreasonable_mid = mid_quotes.isna() | ~np.isfinite(mid_quotes) | (mid_quotes < 0) | (mid_quotes > 10)
-        use_fallback_mask = fallback_series.notna() & traded_yield.isna() & (unreasonable_mid | (quote_spread_bp > threshold_bp))
+        wide_market = quote_spread_bp > threshold_bp
+        use_fallback_mask = fallback_series.notna() & traded_yield.isna() & (unreasonable_mid | wide_market)
+        # A placeholder market (e.g. bid 1.30 / ofr 2.50) can carry a matching
+        # stale trade print (1.90), so the mid==traded check above passes it.
+        # In a wide market, trust the print only if it agrees with the fallback.
+        trade_agrees = traded_yield.notna() & ((traded_yield - fallback_series).abs() * 100 <= threshold_bp)
+        use_fallback_mask |= fallback_series.notna() & traded_yield.notna() & wide_market & ~trade_agrees
         mid_quotes.loc[use_fallback_mask] = fallback_series.loc[use_fallback_mask]
 
     invalid_bid = bid_quotes.isna() | ~np.isfinite(bid_quotes) | (bid_quotes < 0) | (bid_quotes > 10)

@@ -27,7 +27,7 @@ from multiasset.main import run_risk_parity_allocation, create_custom_portfolio,
 from multiasset.storage import save_asset_pool
 from multiasset.risk_loader import RiskFactorLoader
 from multiasset.factor_optimizer import FactorRiskParityOptimizer
-from multiasset.factor_backtest import compute_ewma_factor_vols
+from multiasset.factor_backtest import compute_ewma_factor_vols, compute_ewma_factor_covariance
 from multiasset.config import RiskModelConfig
 from settings.paths import DIR_INPUT, DIR_MODELS
 
@@ -118,7 +118,7 @@ DIVERSIFICATION_RECOMMENDATIONS = {
 SELECTED_FACTOR_POOL = {
     'ir_factors': ['IRDL.CN', 'IRSL.CN', 'IRCV.CN'],  # Default: CN Level/Slope/Curvature
     'sp_factors': [],
-    'cr_factors': [],  # Credit: CRDL/CRSL/CRCV x CDB/LGB/MTN/NCD
+    'cr_factors': ['CRDL.CDB', 'CRDL.LGB', 'CRDL.MTN', 'CRDL.NCD'],  # Credit level only; CRSL/CRCV left unselected (holdout Sharpe negative)
     'fx_factors': ['FXDL.USDCNY'],
     'cmd_factors': ['CMDL.AU', 'CMDL.AL'],  # Gold + Aluminium
     'eq_factors': [],
@@ -163,6 +163,44 @@ def compute_factor_vol_map(
 
     return compute_ewma_factor_vols(window, ewma_lambda=ewma_lambda)
 
+def compute_factor_cov(
+    factor_names: list[str],
+    lookback_years: int = RISK_BUDGET_VOL_LOOKBACK_YEARS,
+    ewma_lambda: float = RISK_BUDGET_EWMA_LAMBDA,
+):
+    """Annualised EWMA factor covariance in price-return percent space (same window
+    and anchor as ``compute_factor_vol_map``); ``None`` when it cannot be built."""
+    if len(factor_names) < 2:
+        return None
+    loader = RiskFactorLoader(DIR_INPUT)
+    factor_levels = loader.load_risk_factors(use_cache=True)
+    if factor_levels is None or factor_levels.empty:
+        return None
+    if not isinstance(factor_levels.index, pd.DatetimeIndex):
+        factor_levels.index = pd.to_datetime(factor_levels.index)
+    factor_levels = factor_levels.sort_index()
+    available = [f for f in factor_names if f in factor_levels.columns]
+    if len(available) < 2:
+        return None
+    _today = pd.Timestamp.today().normalize()
+    end_date = min(_today.replace(day=1) - relativedelta(days=1), factor_levels.index.max())
+    start_date = end_date - relativedelta(years=lookback_years)
+    window = factor_levels.loc[(factor_levels.index >= start_date) & (factor_levels.index <= end_date), available]
+    cov = compute_ewma_factor_covariance(window, ewma_lambda=ewma_lambda)
+    return cov if cov is not None and not cov.empty else None
+
+
+def compute_collinear_pairs(factor_names: list[str], threshold: float | None = None) -> list:
+    """Near-duplicate factor pairs ``(a, b, corr)`` in the pool, on the same EWMA covariance (and window) the
+    sleeve risk parity uses. Diagnostic only; [] when the covariance cannot be built."""
+    from multiasset.book.sizing import collinear_factor_pairs
+    try:
+        cov = compute_factor_cov(list(factor_names))
+    except Exception:
+        return []
+    return collinear_factor_pairs(cov, threshold) if cov is not None else []
+
+
 # ============================================================================
 # Factor to Asset Mapping Table
 # ============================================================================
@@ -196,16 +234,22 @@ FACTOR_TO_ASSET_MAP = {
         {'name': 'CN2Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '2Y'},
         {'name': 'CN10Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '10Y'},
         {'name': 'CN20Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '20Y'},
+        {'name': 'CN30Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '30Y'},
     ],
     'IRCV.CN': [
         {'name': 'CN2Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '2Y'},
         {'name': 'CN5Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '5Y'},
         {'name': 'CN10Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '10Y'},
         {'name': 'CN20Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '20Y'},
+        {'name': 'CN30Y', 'type': 'Rates', 'universe': 'China Gov Bond', 'sector': '30Y'},
     ],
 
     # US Government Bonds (Treasury)
     'IRDL.US': [
+        # 1Y is required: the deterministic US IR grid has a 1Y tenor, and
+        # factor_mimicking_weights returns None (factor unreplicable -> no
+        # sleeve in factor_scaling) when any grid tenor lacks a mapped asset.
+        {'name': 'US1Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '1Y'},
         {'name': 'US2Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '2Y'},
         {'name': 'US5Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '5Y'},
         {'name': 'US10Y', 'type': 'Rates', 'universe': 'US Gov Bond', 'sector': '10Y'},
@@ -282,30 +326,24 @@ FACTOR_TO_ASSET_MAP = {
     # (IRS spread) entries were removed along with the SPDL/SPSL
     # data-generation pipeline (risk_loader._load_sp_factors) — CRDL/CRSL/
     # CRCV cover the same and a broader credit universe (LGB, MTN added).
-    # 30Y included so factor_mimicking_weights (multiasset/book/sizing.py)
-    # can build a full 5-tenor sleeve matching CREDIT_CONFIG['CDB'] exactly
-    # — a missing tenor here would otherwise leave the credit sleeve's
-    # weights unrenormalized against CREDIT_CONFIG's actual weight vector.
+    # No CDB30Y: the asset is not available (removed 2026-10-18).
     'CRDL.CDB': [
         {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
         {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
         {'name': 'CDB5Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '5Y'},
         {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
-        {'name': 'CDB30Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '30Y'},
     ],
     'CRSL.CDB': [
         {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
         {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
         {'name': 'CDB5Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '5Y'},
         {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
-        {'name': 'CDB30Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '30Y'},
     ],
     'CRCV.CDB': [
         {'name': 'CDB1Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '1Y'},
         {'name': 'CDB2Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '2Y'},
         {'name': 'CDB5Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '5Y'},
         {'name': 'CDB10Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '10Y'},
-        {'name': 'CDB30Y', 'type': 'Credit', 'universe': 'China Development Bond', 'sector': '30Y'},
     ],
 
     # Local Government Bond

@@ -229,6 +229,17 @@ def factor_mimicking_weights(factor_code: str,
     return None
 
 
+def _with_credit_floor(long_only_assets, assets) -> list:
+    """``long_only_assets`` plus every credit asset (CDB/LGB/MTN/NCD) in ``assets`` when
+    ``RiskModelConfig.CREDIT_LONG_ONLY`` - credit bonds cannot be shorted in practice."""
+    from multiasset.config import RiskModelConfig
+    from multiasset.data import get_asset_type
+    out = list(long_only_assets or [])
+    if RiskModelConfig.CREDIT_LONG_ONLY:
+        out += [a for a in assets if a not in out and get_asset_type(a) == 'Credit']
+    return out
+
+
 def signed_sleeve_weights_daily(
     budget_by_rebalance_date: Dict[pd.Timestamp, Dict[str, float]],
     factor_signal_series: Dict[str, pd.Series],
@@ -323,6 +334,7 @@ def signed_sleeve_weights_daily(
                 weights[a] += scale * w_i * inv_dur[a].fillna(0.0)
             else:
                 weights[a] += scale * w_i
+    long_only_assets = _with_credit_floor(long_only_assets, weights.columns)
     if long_only_assets:
         floor_cols = [a for a in long_only_assets if a in weights.columns]
         if floor_cols:
@@ -369,19 +381,22 @@ def signed_sleeve_weights_snapshot(
         return weights, skipped
 
     inv_dur: Dict[str, float] = {}
+    cn_by_tenor: Dict[float, str] = {}                 # CN government-bond asset by tenor (years)
     for f, (w, is_yield) in replicable.items():
         if not is_yield:
             continue
         for a in w:
             if a in inv_dur:
                 continue
-            series, n, _, is_bond = get_asset_yield_series(a, market_data)
+            series, n, country, is_bond = get_asset_yield_series(a, market_data)
             if series is None or not is_bond or not n:
                 continue
             y = float(pd.Series(series, dtype=float).dropna().iloc[-1]) / 100.0
             mod_d = (1 - (1 + y) ** (-n)) / (y * (1 + y)) if y > 0 else 0.0
             if mod_d > 0:
                 inv_dur[a] = 1.0 / mod_d
+                if country == 'CN':
+                    cn_by_tenor[float(n)] = a
 
     for f, (w, is_yield) in replicable.items():
         scale = budget[f] * position_by_factor[f]
@@ -393,16 +408,139 @@ def signed_sleeve_weights_snapshot(
             else:
                 weights[a] = weights.get(a, 0.0) + scale * w_i
 
+    long_only_assets = _with_credit_floor(long_only_assets, weights)
     if long_only_assets:
         for a in long_only_assets:
             if a in weights and weights[a] < 0.0:
                 weights[a] = 0.0
 
+    # Illiquid CN tenors cannot be shorted (RiskModelConfig.CN_SHORT_SUBSTITUTE, 20Y -> 30Y):
+    # the short moves to the target tenor DV01-equivalently (weight x modDur_from / modDur_to),
+    # netting against any long already there - same rule as multiasset.book.overlay.substitute_shorts.
+    from multiasset.config import RiskModelConfig
+    for t_from, t_to in RiskModelConfig.CN_SHORT_SUBSTITUTE.items():
+        a, b = cn_by_tenor.get(float(t_from)), cn_by_tenor.get(float(t_to))
+        if a is None or b is None or weights.get(a, 0.0) >= 0.0:
+            continue
+        moved = weights[a] * (inv_dur[b] / inv_dur[a])            # modDur_a / modDur_b = inv_dur[b] / inv_dur[a]
+        weights[b] = weights.get(b, 0.0) + moved
+        weights[a] = 0.0
+
     return weights, skipped
 
 
-def pool_sleeve_budgets(factors: Sequence[str], vol_map: Dict[str, float]) -> Dict[str, float]:
+def collinear_factor_pairs(cov: pd.DataFrame, threshold: Optional[float] = None) -> list:
+    """Factor pairs whose |correlation| is at least ``threshold`` (default
+    ``RiskModelConfig.COLLINEAR_WARN_CORR``), strongest first, as ``(a, b, corr)``.
+
+    Takes the same annualised EWMA covariance the sleeve risk parity uses, so the warning matches the
+    allocation. It is a diagnostic only: nothing is filtered (the risk parity makes near-duplicates
+    share one risk budget). Returns [] for an empty / unusable covariance."""
+    if cov is None or cov.empty or cov.shape[0] < 2:
+        return []
+    if threshold is None:
+        from multiasset.config import RiskModelConfig
+        threshold = RiskModelConfig.COLLINEAR_WARN_CORR
+    sd = np.sqrt(np.clip(np.diag(cov.values), 0.0, None))
+    with np.errstate(divide='ignore', invalid='ignore'):
+        corr = cov.values / np.outer(sd, sd)
+    names, out = list(cov.index), []
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            c = corr[i, j]
+            if np.isfinite(c) and abs(c) >= threshold:
+                out.append((names[i], names[j], float(c)))
+    return sorted(out, key=lambda t: -abs(t[2]))
+
+
+# Slope / curvature factor -> the level factor it is tied to inside an IR / credit group.
+_LEVEL_OF = {'IRSL': 'IRDL', 'IRCV': 'IRDL', 'CRSL': 'CRDL', 'CRCV': 'CRDL'}
+
+
+def _newton_erc(C: np.ndarray, iters: int = 200, tol: float = 1e-12) -> np.ndarray:
+    """Equal-risk-contribution weights x > 0 for covariance ``C``.
+
+    Solves the convex problem  min 0.5 x'Cx - (1/K) sum(log x)  by damped Newton;
+    its stationarity condition is x_k (Cx)_k = 1/K for every k, i.e. every
+    variable contributes the same share of portfolio variance. The solution is
+    unique for positive-definite ``C`` (Spinu 2013), so no starting-point luck.
+    """
+    K = C.shape[0]
+    b = np.full(K, 1.0 / K)
+    x = 1.0 / np.sqrt(np.maximum(np.diag(C), 1e-18))      # inverse-vol start
+    x = x / np.sqrt(x @ C @ x)
+    for _ in range(iters):
+        g = C @ x - b / x
+        if np.max(np.abs(x * (C @ x) - b)) < tol:
+            break
+        H = C + np.diag(b / x ** 2)
+        step = np.linalg.solve(H, g)
+        t = 1.0
+        while np.any(x - t * step <= 0):                  # stay strictly positive
+            t *= 0.5
+        x = x - t * step
+    return x
+
+
+def erc_sleeve_budgets(factors: Sequence[str], cov: pd.DataFrame) -> Optional[Dict[str, float]]:
+    """Pool-level equal-risk-contribution capital budgets (the "real" risk parity).
+
+    Risk units are every factor EXCEPT a slope / curvature factor whose level
+    factor (same country / issuer) is also in the pool: those are tied to their
+    level factor by sqrt(vol), ``e_slope / e_level = sqrt(vol_slope / vol_level)``
+    - the convention Stage 1 already uses - so an IR (or credit) group is ONE
+    risk unit that gets the same share of portfolio risk as, say, USDCNY or gold.
+    Correlations enter through ``cov`` (annualised, price-return space, as from
+    ``compute_ewma_factor_covariance``).
+
+    Returns fractions summing to 1, or ``None`` when the covariance cannot be
+    used (fewer than two factors, a factor missing, non-positive variances) so
+    the caller can fall back to the legacy rule.
+    """
+    factors = list(factors)
+    if len(factors) < 2 or cov is None or cov.empty:
+        return None
+    if any(f not in cov.index or f not in cov.columns for f in factors):
+        return None
+    S = cov.loc[factors, factors].to_numpy(dtype=float)
+    S = (S + S.T) / 2.0
+    var = np.diag(S).copy()
+    if not np.all(np.isfinite(S)) or np.any(var <= 0):
+        return None
+    w_, v_ = np.linalg.eigh(S)                            # repair tiny negative eigenvalues
+    S = (v_ * np.maximum(w_, 1e-10 * w_.max())) @ v_.T
+    sigma = np.sqrt(np.diag(S))
+    idx = {f: i for i, f in enumerate(factors)}
+
+    columns, tied = [], {}
+    for f in factors:
+        prefix, _, suffix = f.partition('.')
+        lvl = f'{_LEVEL_OF[prefix]}.{suffix}' if prefix in _LEVEL_OF else None
+        if lvl is not None and lvl in idx:
+            tied.setdefault(lvl, []).append(f)
+        else:
+            columns.append(f)
+    V = np.zeros((len(factors), len(columns)))
+    for k, f in enumerate(columns):
+        V[idx[f], k] = 1.0
+        for g in tied.get(f, []):
+            V[idx[g], k] = np.sqrt(sigma[idx[g]] / sigma[idx[f]])
+    x = _newton_erc(V.T @ S @ V)
+    e = V @ x
+    e = e / e.sum()
+    return {f: float(e[idx[f]]) for f in factors}
+
+
+def pool_sleeve_budgets(factors: Sequence[str], vol_map: Dict[str, float],
+                        cov: Optional[pd.DataFrame] = None) -> Dict[str, float]:
     """Capital budget per factor sleeve over the book's OWN factor pool —
+
+    ``RiskModelConfig.SLEEVE_BUDGET_RULE == 'erc'`` (default) with a usable ``cov``
+    gives the pool-level equal-risk-contribution budgets (``erc_sleeve_budgets``).
+    Otherwise (rule ``'sqrt_vol_equal'``, no covariance, or a covariance that
+    cannot be used) the legacy rule below applies.
+
+    Legacy rule:
     the same rule the Portfolio tab uses for RP Max (see
     web/tabs/beta/callbacks/portfolio_run/_run_analysis._fallback_rp_budgets):
     IR factors (IRDL/IRSL/IRCV) share an n_ir/n capital envelope in
@@ -418,6 +556,11 @@ def pool_sleeve_budgets(factors: Sequence[str], vol_map: Dict[str, float]) -> Di
     factors = list(factors)
     if not factors:
         return {}
+    from multiasset.config import RiskModelConfig
+    if cov is not None and getattr(RiskModelConfig, 'SLEEVE_BUDGET_RULE', 'erc') == 'erc':
+        erc = erc_sleeve_budgets(factors, cov)
+        if erc is not None:
+            return erc
     ir = [f for f in factors if f.split('.')[0] in _IR_BASIS]
     other = [f for f in factors if f not in ir]
     n = len(factors)
@@ -435,6 +578,10 @@ def scale_sleeve_to_dv01_target(
     total_capital_cny: float,
     max_dv01_per_capital: float,
     max_utilisation: float,
+    overlay_assets: Sequence[str] = (),
+    overlay_margin_rate: float = 0.0,
+    short_capital_rate: Optional[float] = None,
+    short_max: Optional[float] = None,
 ) -> pd.DataFrame:
     """Scale each day's signed sleeve weights (``signed_sleeve_weights_daily``'s
     output) by a single per-day scalar so the book's DV01 reaches
@@ -464,17 +611,33 @@ def scale_sleeve_to_dv01_target(
     """
     target_dv01_mm = max_dv01_per_capital * (total_capital_cny / 1e10)
     raw_dv01_mm = (weights_daily * mod_dur_daily).abs().sum(axis=1) * (total_capital_cny / 1e10)
-    raw_gross = weights_daily.abs().sum(axis=1)
+    # Capital usage: LONG size plus ``short_capital_rate`` (default RiskModelConfig.
+    # SHORT_CAPITAL_RATE = 0) of the short size; longs and shorts are never netted. Shorts in
+    # ``overlay_assets`` will be traded with futures / swaps (multiasset.book.overlay): they tie
+    # up margin, so they count at ``overlay_margin_rate``. DV01 below stays GROSS (long + short).
+    if short_capital_rate is None:
+        from multiasset.config import RiskModelConfig
+        short_capital_rate = RiskModelConfig.SHORT_CAPITAL_RATE
+    ov = [a for a in overlay_assets if a in weights_daily.columns]
+    rest = [c for c in weights_daily.columns if c not in ov]
+    shorts = weights_daily.clip(upper=0.0).abs()
+    raw_gross = (weights_daily.clip(lower=0.0).sum(axis=1)
+                 + short_capital_rate * shorts[rest].sum(axis=1)
+                 + overlay_margin_rate * shorts[ov].sum(axis=1))
 
     # A day whose raw gross is negligible relative to the book's typical day
     # carries no meaningful signal to scale up — treat it as flat rather
     # than dividing by a near-zero raw_gross/raw_dv01 below. Threshold is
     # relative (5% of the trailing/whole-window median), so it adapts to
     # whatever scale the caller's weights are in.
-    median_gross = raw_gross[raw_gross > 0].median()
+    # "Negligible" is judged on the GROSS size (long + short), NOT on the capital-usage
+    # ``raw_gross`` above: with shorts free, a day of large shorts and almost no longs has a
+    # tiny usage but a perfectly real book, and must still be scaled to the DV01 target.
+    abs_gross = weights_daily.abs().sum(axis=1)
+    median_gross = abs_gross[abs_gross > 0].median()
     negligible = pd.Series(False, index=weights_daily.index)
     if pd.notna(median_gross) and median_gross > 0:
-        negligible = raw_gross < 0.05 * median_gross
+        negligible = abs_gross < 0.05 * median_gross
 
     dv01_scale = pd.Series(1.0, index=weights_daily.index)
     has_dv01 = (raw_dv01_mm > 1e-9) & ~negligible
@@ -488,6 +651,14 @@ def scale_sleeve_to_dv01_target(
     has_gross = (raw_gross > 1e-9) & ~negligible
     max_scale_for_gross = pd.Series(np.inf, index=weights_daily.index)
     max_scale_for_gross[has_gross] = max_utilisation / raw_gross[has_gross]
-    dv01_scale = dv01_scale.clip(upper=max_scale_for_gross)
+    # ... nor push the SHORT book past its own ceiling (same as the long book by default).
+    from multiasset.config import RiskModelConfig as _R
+    if short_max is None:
+        short_max = _R.SHORT_SIZE_MAX_RATIO * max_utilisation
+    short_size = shorts.sum(axis=1)
+    has_short = (short_size > 1e-9) & ~negligible
+    max_scale_for_short = pd.Series(np.inf, index=weights_daily.index)
+    max_scale_for_short[has_short] = short_max / short_size[has_short]
+    dv01_scale = dv01_scale.clip(upper=np.minimum(max_scale_for_gross, max_scale_for_short))
 
     return weights_daily.mul(dv01_scale, axis=0)

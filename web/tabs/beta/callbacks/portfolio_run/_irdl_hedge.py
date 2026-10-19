@@ -11,7 +11,7 @@ from multiasset.main import compute_irdl_hedge
 from ...data import THEME
 
 
-def build_irdl_hedge_ticket(factor_risk, hedge_ratio_pct, instrument, irs_maturity,
+def build_irdl_hedge_ticket(factor_risk, hedge_ratio_pct,
                              dv01_values, dv01_ids, capital_value, capital_unit):
     """Build the IRDL hedge ticket panel. Returns an html.Div."""
     if factor_risk.empty:
@@ -46,9 +46,8 @@ def build_irdl_hedge_ticket(factor_risk, hedge_ratio_pct, instrument, irs_maturi
             factor_risk_records=factor_risk.to_dict('records'),
             total_capital=total_capital,
             hedge_ratio=hedge_ratio,
-            instrument=instrument or 'futures',
+            instrument='futures',
             dv01_overrides=dv01_overrides if dv01_overrides else None,
-            irs_maturity=irs_maturity or '10Y',
         )
 
         if not tickets:
@@ -66,8 +65,7 @@ def build_irdl_hedge_ticket(factor_risk, hedge_ratio_pct, instrument, irs_maturi
 
         return html.Div([
             html.Div(
-                f"Hedge ratio: {hedge_ratio_pct}%  ·  Instrument: "
-                f"{'Bond Futures' if instrument == 'futures' else 'Pay-fixed IRS'}  ·  "
+                f"Hedge ratio: {hedge_ratio_pct}%  ·  Instrument: Bond Futures  ·  "
                 f"Capital: {float(capital_value or 10):,.0f} {capital_unit}",
                 style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '8px'},
             ),

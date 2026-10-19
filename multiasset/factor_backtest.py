@@ -182,12 +182,46 @@ def _load_funding_rate(country: str) -> Optional[pd.Series]:
         # Same index-type defect fixed in factors.generator.macro._load_macro:
         # the source pickle's index is plain datetime.date, not Timestamp.
         rate.index = pd.to_datetime(rate.index)
+        if country != 'CN':
+            rate = _backfill_with_1y_govt_proxy(rate, country)
         _funding_rate_cache[country] = rate
     except Exception as e:
         print(f"Warning: could not load funding rate for {country} ({macro_col}): {e}")
         _funding_rate_cache[country] = None
 
     return _funding_rate_cache[country]
+
+
+def _backfill_with_1y_govt_proxy(rate: pd.Series, country: str) -> pd.Series:
+    """Extend a foreign overnight-rate series back before its first print
+    (SOFR 2018-04, TONAR 2020-01, ESTR 2021-01) with the country's 1Y
+    government yield from fxcurve_ts.pkl, shifted by the mean (1Y - overnight)
+    spread over the first year of overlap.
+
+    Without this, book_funding_cost_daily charges foreign notional NOTHING
+    before the series starts (rate NaN -> 0), while CN notional pays FR007:
+    US bonds look ~1%/yr too cheap in 2017-Q1 2018, and negative-rate DE/JP
+    bonds miss the credit a negative funding rate pays. The foreign rate is
+    also what makes the FX hedge cost explicit: a CNY investor holding a
+    hedged foreign bond earns (foreign yield - foreign short rate), so
+    charging the foreign rate == CNY funding + hedge carry (cross-currency
+    basis not modelled). Returns ``rate`` unchanged if the curve is missing.
+    """
+    try:
+        from multiasset.data import _load_fx_curve_artifact
+        curve = _load_fx_curve_artifact().get(country)
+        y1 = curve[f'{country}1Y'].dropna()
+    except Exception:
+        return rate
+    y1.index = pd.to_datetime(y1.index)
+    start = rate.index.min()
+    overlap = pd.concat([y1, rate], axis=1, sort=True).ffill().dropna()
+    overlap = overlap[overlap.index < start + pd.DateOffset(years=1)]
+    if overlap.empty:
+        return rate
+    spread = float((overlap.iloc[:, 0] - overlap.iloc[:, 1]).mean())
+    proxy = y1[y1.index < start] - spread
+    return pd.concat([proxy, rate]).sort_index()
 
 
 def load_funding_rate(country: str) -> Optional[pd.Series]:

@@ -125,8 +125,10 @@ class RiskModelConfig:
     # Risk-free rate used in backtest Sharpe calculation (annualised, decimal)
     RISK_FREE_RATE: float = 0.02
 
-    # ── Per-asset-class weight caps used in factor-scaling backtest ───────────
-    # Live path uses the optimizer bounds; backtest caps must match.
+    # ── Per-asset-class weight caps ───────────────────────────────────────────
+    # Used by the live Portfolio tab for assets that keep their plain risk-parity weight. The
+    # signed-sleeve factor_scaling book (backtest AND live) does NOT apply them: it is limited by
+    # CAPITAL_UTILISATION_MAX (long), SHORT_SIZE_MAX_RATIO (short) and MAX_DV01_PER_CAPITAL.
     CLASS_CAPS: dict = {
         'Commodities': 0.15,
         'FX':          0.20,
@@ -148,6 +150,29 @@ class RiskModelConfig:
     # this is what lets a bearish day genuinely de-risk instead of only
     # rotating exposure between assets.
     CAPITAL_UTILISATION_MAX: float = 0.95
+    # Share of a SHORT position's notional that counts toward CAPITAL_UTILISATION_MAX (and
+    # uses cash). 0 (user, 2026-10-17): the cap limits LONG size only - a short consumes no
+    # capital - and longs and shorts are never netted against each other (a 95% long book
+    # may carry any short book). Derivative shorts still tie up margin
+    # (hedge_instruments.DERIVATIVE_MARGIN_RATE). 1 restores the old |notional| counting.
+    # DV01 (MAX_DV01_PER_CAPITAL, gross) then becomes the binding limit.
+    SHORT_CAPITAL_RATE: float = 0.0
+    # Short SIZE is capped separately from capital: total |short notional| (all asset classes,
+    # derivative notional included) may not exceed SHORT_SIZE_MAX_RATIO x CAPITAL_UTILISATION_MAX
+    # x capital, i.e. the same 95% ceiling as the long book (user, 2026-10-17). Longs and shorts
+    # are capped independently and never netted.
+    SHORT_SIZE_MAX_RATIO: float = 1.0
+
+    # factor_scaling backtest: at each month start the sleeve risk parity (ERC) runs over ALL factors
+    # of the selected pool, and the factor model scales the sleeves daily (user, 2026-10-18; the same
+    # as the live Portfolio tab). True restores the legacy monthly correlation screen (only the factors
+    # in the `top_pairs` lowest-correlation pairs get a sleeve): it re-assigned ~16% of capital a month,
+    # zeroed IRDL.CN in 25% of months and scored lower (docs 3.19). Pure risk_parity mode always screens.
+    FACTOR_SCALING_CORR_SCREEN: bool = False
+    # Warn (never act) when two factors of the pool are this correlated (|corr| of the EWMA covariance
+    # the risk parity uses). They share ONE risk budget there, so a near-duplicate adds a sleeve and
+    # turnover but little diversification.
+    COLLINEAR_WARN_CORR: float = 0.90
 
     # ── Sleeve DV01 target (factor_scaling mode only) ───────────────────────
     # Same convention as the Portfolio tab's "max_duration" input
@@ -169,6 +194,15 @@ class RiskModelConfig:
     # actually get close to on an ordinary day.
     MAX_DV01_PER_CAPITAL: float = 5.0
 
+    # ── Sleeve capital budgets (factor_scaling mode only) ───────────────────
+    # 'erc'            : pool-level equal-risk-contribution over the pool's own factors
+    #                    (EWMA covariance incl. correlations; IRSL/IRCV tied to IRDL by
+    #                    sqrt(vol)) - multiasset.book.sizing.erc_sleeve_budgets.
+    # 'sqrt_vol_equal' : legacy - IR sleeves share an n_ir/n envelope by sqrt(vol), every
+    #                    other sleeve gets an equal 1/n of capital.
+    # 'erc' falls back to the legacy rule when no usable covariance is available.
+    SLEEVE_BUDGET_RULE: str = 'erc'
+
     # ── Short-end carry floor (factor_scaling mode only) ────────────────────
     # IRSL/IRCV's steepener/curvature trades short one end of the curve and
     # go long the other; a net short position on the SHORT end pays away
@@ -183,6 +217,11 @@ class RiskModelConfig:
     # cash bond). CN10Y/CN20Y/CN30Y stay fully signed.
     SHORT_END_LONG_ONLY_TENORS: tuple = ('CN1Y', 'CN2Y', 'CN5Y')
 
+    # Credit bonds (CDB / LGB / MTN / NCD) are hard to short: their NET summed weight is
+    # floored at 0 in signed_sleeve_weights_daily / _snapshot (user, 2026-10-18). Only
+    # CGB 10Y and 30Y are shorted (see CN_SHORT_ROUTING / CN_SHORT_SUBSTITUTE).
+    CREDIT_LONG_ONLY: bool = True
+
     # ── Transaction cost (docs/plans/beta_book_exposure_vs_capital.md
     #    Step 8) ─────────────────────────────────────────────────────────
     # Basis points per unit ONE-WAY turnover (round-trip = 2x), charged on
@@ -192,6 +231,31 @@ class RiskModelConfig:
     # small increments pays materially less per adjustment than a monthly
     # rebalance moving the whole book at once.
     TX_COST_BP: float = 0.1
+
+    # ── China-rates short routing (multiasset.book.overlay) ─────────────────
+    # factor_scaling only. A negative CN-bond notional is either held as a short
+    # CASH BOND ('bond') or traded with a derivative. Per tenor (years), an ordered
+    # preference list: the first instrument with data on that day wins, 'bond'
+    # means short the cash bond. 5Y and longer are easy to short as bonds; 1Y/2Y use
+    # FR007 swaps (data from 2022-02-28, earlier days fall back to the short bond).
+    # Futures (TS/TF/T/TL) stay in the registry: put e.g. ['TF', 'bond'] under 5.0
+    # to use them. Foreign shorts are always short bonds.
+    ROUTE_CN_SHORTS_TO_OVERLAY: bool = True
+    CN_SHORT_ROUTING: Dict[float, List[str]] = {
+        1.0: ['SWAP1Y', 'bond'], 2.0: ['SWAP2Y', 'bond'],
+        5.0: ['bond'], 10.0: ['bond'], 20.0: ['bond'], 30.0: ['bond'],
+    }
+    OVERLAY_ALLOW_SWAPS: bool = True
+    # Illiquid tenors that cannot be shorted: {from_tenor_years: to_tenor_years}. A short
+    # in the key tenor is held as a DV01-equivalent short in the target tenor instead
+    # (user, 2026-10-17: CN 20Y is illiquid -> short CN 30Y). Longs are untouched.
+    CN_SHORT_SUBSTITUTE: Dict[float, float] = {20.0: 30.0}
+    # Borrow cost of a short cash bond, bp per year on |short notional| (reverse-repo
+    # special / lending fee): {market: {tenor_years: bp}}. Set by the user 2026-10-17:
+    # CN 10Y 40bp, CN 30Y 100bp. Anything not listed (CN 1Y/2Y/5Y/20Y, every foreign
+    # market) is 0, i.e. NOT modelled. Without a fee a short bond gets the full repo
+    # credit and no borrow cost, which flatters bond shorting.
+    SHORT_BOND_BORROW_COST_BP: Dict[str, Dict[float, float]] = {'CN': {10.0: 40.0, 30.0: 100.0}}
 
     # ── Portfolio construction ────────────────────────────────────────────────
     # Standard lot size for bond positions (CNY)
@@ -256,7 +320,6 @@ CREDIT_CONFIG: Dict[str, Tuple[str, str, List[Tuple[str, str, float]]]] = {
             ('中债国开债到期收益率:2年', '中债国债到期收益率:2年', 2.0),
             ('中债国开债到期收益率:5年', '中债国债到期收益率:5年', 5.0),
             ('中债国开债到期收益率:10年', '中债国债到期收益率:10年', 10.0),
-            ('中债国开债到期收益率:30年', '中债国债到期收益率:30年', 30.0),
         ],
     ),
     'LGB': (

@@ -103,6 +103,87 @@ def build_net_position_fig(net_pos: dict, top_n: int | None = None) -> go.Figure
     return fig
 
 
+def build_gross_position_fig(gross: dict) -> go.Figure:
+    """GROSS view of the position by instrument: long and short capital kept apart, never netted.
+
+    `gross` is {code: {'Long': mm >= 0, 'Short': mm <= 0, 'DV01Long': mm/bp, 'DV01Short': mm/bp}}.
+    Long extends right, short extends left; the hover gives gross (long + |short|) and net."""
+    rows = []
+    for code, e in gross.items():
+        lo, sh = float(e.get("Long", 0.0)), float(e.get("Short", 0.0))
+        if abs(lo) < 1e-6 and abs(sh) < 1e-6:
+            continue
+        dv01_g = abs(float(e.get("DV01Long", 0.0))) + abs(float(e.get("DV01Short", 0.0)))
+        rows.append({"inst": code, "long": lo, "short": sh, "gross": lo + abs(sh), "net": lo + sh, "dv01_g": dv01_g})
+    rows.sort(key=lambda r: str(r["inst"]).upper())
+
+    fig = go.Figure()
+    if not rows:
+        fig.update_layout(**_base_layout(height=320))
+        fig.add_annotation(text="No positions found.", showarrow=False, font={"color": TOKENS["muted"]})
+        return fig
+
+    insts = [r["inst"] for r in rows]
+    hover = [[r["gross"], r["net"], r["dv01_g"]] for r in rows]
+    tmpl = "%{y}: %{x:+,.1f} MM | gross %{customdata[0]:,.1f} · net %{customdata[1]:+,.1f} | gross DV01 %{customdata[2]:.3f} MM/bp<extra></extra>"
+    fig.add_trace(go.Bar(
+        name="Long", x=[r["long"] for r in rows], y=insts, orientation="h", marker_color=TOKENS["green"], opacity=0.88,
+        text=[f"{r['long']:+,.0f}" if abs(r["long"]) > 1e-6 else "" for r in rows], textposition="outside",
+        textfont={"color": TOKENS["text"], "size": 10}, customdata=hover, hovertemplate=tmpl,
+    ))
+    fig.add_trace(go.Bar(
+        name="Short", x=[r["short"] for r in rows], y=insts, orientation="h", marker_color=TOKENS["amber"], opacity=0.88,
+        text=[f"{r['short']:+,.0f}" if abs(r["short"]) > 1e-6 else "" for r in rows], textposition="outside",
+        textfont={"color": TOKENS["text"], "size": 10}, customdata=hover, hovertemplate=tmpl,
+    ))
+    fig.update_layout(**_base_layout(
+        height=max(320, len(rows) * 26 + 60), bargap=0.35, barmode="relative", showlegend=True,
+        legend={**PLOTLY_LAYOUT_DEFAULTS["legend"], "orientation": "h", "y": 1.04, "x": 0.5, "xanchor": "center"},
+        margin={"t": 30, "b": 30, "l": 90, "r": 40},
+    ))
+    fig.update_xaxes(zeroline=True, zerolinewidth=1.5, title_text="MM CNY (long right, short left)")
+    fig.update_yaxes(automargin=True)
+    return fig
+
+
+def build_dv01_ladder_gross_fig(kt_long: dict, kt_short: dict, tenor_order: list[str]) -> go.Figure:
+    """GROSS DV01 ladder: long DV01 stacks up, short DV01 stacks down, per tenor and bucket.
+    The label above each tenor shows gross (long + |short|) and net."""
+    tenors = [t for t in tenor_order if t in kt_long or t in kt_short]
+    fig = go.Figure()
+
+    def side(grid, t, col):
+        return float(grid.get(t, {}).get(col, 0.0))
+
+    has_any = any(abs(side(g, t, c)) > 1e-8 for t in tenors for g in (kt_long, kt_short)
+                  for c in ("Bonds", "Swaps", "Futures", "Other"))
+    if not tenors or not has_any:
+        fig.update_layout(**_base_layout(height=290))
+        fig.add_annotation(text="No rate positions found.", showarrow=False, font={"color": TOKENS["muted"]})
+        return fig
+
+    colors = {"Bonds": _DV01_BONDS, "Swaps": _DV01_SWAPS, "Futures": _DV01_FUTURES}
+    for col, color in colors.items():
+        fig.add_trace(go.Bar(name=f"{col} long", legendgroup=col, x=tenors, y=[side(kt_long, t, col) for t in tenors],
+                             marker_color=color, opacity=0.9))
+        fig.add_trace(go.Bar(name=f"{col} short", legendgroup=col, x=tenors, y=[side(kt_short, t, col) for t in tenors],
+                             marker_color=color, opacity=0.5, marker_pattern_shape="/"))
+    fig.update_layout(**_base_layout(
+        height=290, barmode="relative", bargap=0.36,
+        legend={**PLOTLY_LAYOUT_DEFAULTS["legend"], "orientation": "h", "y": -0.22, "x": 0.5, "xanchor": "center"},
+        margin={"t": 30, "b": 40, "l": 44, "r": 16},
+    ))
+    fig.update_yaxes(title_text="MM/bp (long up, short down)")
+    for t in tenors:
+        lo = sum(max(side(kt_long, t, c), 0.0) for c in ("Bonds", "Swaps", "Futures", "Other"))
+        sh = sum(min(side(kt_short, t, c), 0.0) for c in ("Bonds", "Swaps", "Futures", "Other"))
+        if abs(lo) + abs(sh) < 1e-8:
+            continue
+        fig.add_annotation(x=t, y=lo, text=f"gross {lo + abs(sh):.3f}<br>net {lo + sh:+.3f}", showarrow=False,
+                           yshift=14, font={"size": 9, "color": TOKENS["muted"]})
+    return fig
+
+
 def build_dv01_ladder_fig(kt_grid: dict, tenor_order: list[str]) -> go.Figure:
     """Stacked vertical bar chart: DV01 (MM/bp) by tenor, split Bonds/Swaps/Futures."""
     tenors = [t for t in tenor_order if t in kt_grid]
@@ -222,8 +303,9 @@ def build_factor_risk_fig(factor_risk_df, skip_prefixes=("SPDL", "SPSL")) -> go.
     return fig
 
 
-def build_kpi_cards(net_pos: dict, kt_grid: dict, tenor_order: list[str]) -> dict:
-    """Compute the 4 KPI values (Total Long / Total Short / Net Exposure / Total DV01)."""
+def build_kpi_cards(net_pos: dict, kt_grid: dict, tenor_order: list[str], kt_split: dict | None = None) -> dict:
+    """Compute the 4 KPI values (Total Long / Total Short / Net Exposure / Total DV01).
+    `kt_split` ({book: {'long'|'short': {tenor: {col: dv01}}}}) adds the GROSS DV01 (long + |short|)."""
     total_long = 0.0
     total_short = 0.0
     for e in net_pos.values():
@@ -236,12 +318,16 @@ def build_kpi_cards(net_pos: dict, kt_grid: dict, tenor_order: list[str]) -> dic
     total_dv01 = sum(
         sum(kt_grid[t].values()) for t in tenor_order
     )
-    return {
+    out = {
         "long": total_long,
         "short": total_short,
         "net": net_exposure,
         "dv01": total_dv01,
     }
+    if kt_split:
+        out["gross_dv01"] = sum(abs(v) for book in kt_split.values() for sd in book.values()
+                                for t in tenor_order for v in sd.get(t, {}).values())
+    return out
 
 
 def build_kpi_strip(kpis: dict) -> html.Div:
@@ -249,7 +335,8 @@ def build_kpi_strip(kpis: dict) -> html.Div:
         ("Total Long", f"+{kpis['long'] / 1000:.1f}k", TOKENS["green"], "MM notional, net long legs"),
         ("Total Short", f"-{kpis['short'] / 1000:.1f}k", TOKENS["amber"], "MM notional, net short legs"),
         ("Net Exposure", f"{'+' if kpis['net'] >= 0 else ''}{kpis['net'] / 1000:.1f}k", TOKENS["cyan"], "Beta + Alpha combined"),
-        ("Total DV01", f"{kpis['dv01']:.2f}", TOKENS["blue"], "MM/bp aggregate sensitivity"),
+        ("Total DV01", f"{kpis['dv01']:.2f}", TOKENS["blue"],
+         "MM/bp net" + (f" · gross {kpis['gross_dv01']:.2f}" if "gross_dv01" in kpis else " aggregate sensitivity")),
     ]
     return html.Div([
         html.Div([
@@ -262,7 +349,8 @@ def build_kpi_strip(kpis: dict) -> html.Div:
 
 
 def build_inventory_summary(beta_rows: list[dict], alpha_rows: list[dict]) -> html.Div:
-    """Collapsed 3-column inventory view: Beta positions | Alpha positions | Capital by Sector."""
+    """Collapsed 3-column inventory view: Beta positions | Alpha positions | Capital by Sector
+    (long / short per sector, never netted)."""
 
     def _row(label: str, value: str, dim: bool = False) -> html.Div:
         return html.Div([
@@ -279,11 +367,15 @@ def build_inventory_summary(beta_rows: list[dict], alpha_rows: list[dict]) -> ht
         except (TypeError, ValueError):
             return 0.0
 
-    sector_totals: dict[str, float] = {}
+    # Long and short per sector are kept apart - never netted: a short 10Y must not shrink the
+    # capital shown for the Rates sector (only longs use capital).
+    sector_totals: dict[str, list[float]] = {}
     for row in beta_rows + alpha_rows:
         sector = row.get("Sector") or row.get("Leg1") or row.get("Name", "")
-        sector_totals[sector] = sector_totals.get(sector, 0.0) + _cap_mm(row)
-    sorted_sectors = sorted(sector_totals.items(), key=lambda kv: -abs(kv[1]))
+        long_short = sector_totals.setdefault(sector, [0.0, 0.0])
+        cap = _cap_mm(row)
+        long_short[0 if cap >= 0 else 1] += cap
+    sorted_sectors = sorted(sector_totals.items(), key=lambda kv: -(kv[1][0] + abs(kv[1][1])))
 
     return html.Div([
         html.Div([
@@ -305,6 +397,6 @@ def build_inventory_summary(beta_rows: list[dict], alpha_rows: list[dict]) -> ht
                 "fontSize": "11px", "letterSpacing": "0.06em", "textTransform": "uppercase",
                 "color": TOKENS["muted"], "marginBottom": "8px",
             }),
-            *[_row(sec, f"{tot:+,.0f}") for sec, tot in sorted_sectors],
+            *[_row(sec, f"{ls[0]:+,.0f}" + (f" / {ls[1]:+,.0f}" if ls[1] else "")) for sec, ls in sorted_sectors],
         ]),
     ], className="risk-inventory-summary-grid")

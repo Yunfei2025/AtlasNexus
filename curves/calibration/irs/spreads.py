@@ -112,22 +112,29 @@ def irsQuoteComposite(spread_list, cost, *, quote_side, opposite_cost):
 
 
 def irsSpreadComposite(spread_list, cost):
-    """Calculate composite spread costs."""
+    """Calculate composite spread costs (DV01-neutral weights, see irsSpreadsRatio).
+
+    ``cost`` is a Series indexed by instrument (one date) or a DataFrame with
+    instruments as columns (time series); the result is a Series or a
+    DataFrame of spreads respectively.
+    """
     f, s, t = 'FR007S', 'SHI3MS', '.IR'
     irs_ratio = irsSpreadsRatio(spread_list)
-    spread_cost = pd.Series(index=spread_list)
+    out = {}
     for sp in spread_list:
         stype, note = sp.split('-')
         tokens = [tok.upper() for tok in re.findall(r'\d+[my]', note.lower())]
         if stype == 'Basis':
             if len(tokens) == 1:
-                spread_cost[sp] = cost[s + tokens[0] + t] - irs_ratio[sp] * cost[f + tokens[0] + t]
+                out[sp] = cost[s + tokens[0] + t] - irs_ratio[sp] * cost[f + tokens[0] + t]
             else:
-                spread_cost[sp] = spread_cost[f'{stype}-{tokens[1].lower()}'] - spread_cost[f'{stype}-{tokens[0].lower()}']
+                out[sp] = out[f'{stype}-{tokens[1].lower()}'] - out[f'{stype}-{tokens[0].lower()}']
         elif stype in ['Repo7d', 'Shi3M']:
             prefix = f if stype == 'Repo7d' else s
             if len(tokens) == 2:
-                spread_cost[sp] = cost[prefix + tokens[1] + t] - irs_ratio[sp] * cost[prefix + tokens[0] + t]
+                out[sp] = cost[prefix + tokens[1] + t] - irs_ratio[sp] * cost[prefix + tokens[0] + t]
             else:
-                spread_cost[sp] = (cost[prefix + tokens[1] + t] - irs_ratio[sp][0] * cost[prefix + tokens[0] + t] - irs_ratio[sp][1] * cost[prefix + tokens[2] + t])
-    return spread_cost
+                out[sp] = (cost[prefix + tokens[1] + t] - irs_ratio[sp][0] * cost[prefix + tokens[0] + t] - irs_ratio[sp][1] * cost[prefix + tokens[2] + t])
+    if isinstance(cost, pd.DataFrame):
+        return pd.DataFrame(out, index=cost.index)
+    return pd.Series(out, index=spread_list, dtype=float)

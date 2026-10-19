@@ -21,7 +21,7 @@ P&L goes entirely into BookPnL.other, never into capital_gain/carry.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Optional
 
 import pandas as pd
 
@@ -83,6 +83,12 @@ class BookPnL:
     carry: pd.DataFrame
     other: pd.DataFrame
     cash: pd.Series
+    # Foreign bonds' embedded spot move (notional x FX return, per bond) and
+    # the forward hedge's offsetting P&L (multiasset.book.fx). They cancel
+    # exactly, so `total` excludes both; they exist to make the currency leg
+    # visible. None when not computed.
+    fx_embedded: Optional[pd.DataFrame] = None
+    fx_hedge: Optional[pd.DataFrame] = None
 
     @property
     def total(self) -> pd.DataFrame:
@@ -116,6 +122,7 @@ def compute_book_pnl(
     capital_series: Dict[str, pd.Series] = {}
     carry_series: Dict[str, pd.Series] = {}
     other_series: Dict[str, pd.Series] = {}
+    fx_series: Dict[str, pd.Series] = {}
 
     for name in assets:
         ret_df = calculate_daily_returns_series(name, market_data, start_date, end_date)
@@ -128,6 +135,8 @@ def compute_book_pnl(
         if returns_split_is_exact(name, market_data):
             capital_series[name] = ret_df['capital'].reindex(daily_idx)
             carry_series[name] = ret_df['carry'].reindex(daily_idx)
+            if 'fx' in ret_df.columns and (ret_df['fx'] != 0).any():
+                fx_series[name] = ret_df['fx'].reindex(daily_idx)
         else:
             other_series[name] = ret_df['total'].reindex(daily_idx)
 
@@ -137,11 +146,16 @@ def compute_book_pnl(
 
     notional_aligned = notional_daily.reindex(columns=assets).fillna(0.0)
 
+    fx_ret = pd.DataFrame(fx_series, index=daily_idx).reindex(columns=assets).fillna(0.0)
+    fx_embedded = notional_aligned * fx_ret
+
     return BookPnL(
         capital_gain=notional_aligned * capital_ret,
         carry=notional_aligned * carry_ret,
         other=notional_aligned * other_ret,
         cash=pd.Series(0.0, index=daily_idx),
+        fx_embedded=fx_embedded,
+        fx_hedge=-fx_embedded,
     )
 
 

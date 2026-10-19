@@ -86,7 +86,7 @@ def cohort_percentile_causal(
         if age_col not in ep_df.columns or spread_col not in ep_df.columns:
             continue
         age_diff = (pd.to_numeric(ep_df[age_col], errors='coerce') - target_age_days).abs()
-        if age_diff.empty:
+        if age_diff.empty or age_diff.isna().all():
             continue
         nearest_idx = age_diff.idxmin()
         if age_diff.loc[nearest_idx] > age_tolerance_days:
