@@ -27,7 +27,7 @@ def _normalize_legacy_repo_frame(swap_rt: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def get_swap_quote_frame(swap_rt, tickers=None, threshold_bp=10, fallback_quotes=None):
+def get_swap_quote_frame(swap_rt, tickers=None, threshold_bp=10, fallback_quotes=None, max_width_bp=20):
     """Return Bid/Ofr/Mid swap quotes with guarded realtime fallbacks."""
     swap_rt = _normalize_legacy_repo_frame(swap_rt)
     cols = ['买价收益率', '卖价收益率', '成交收益率']
@@ -47,6 +47,7 @@ def get_swap_quote_frame(swap_rt, tickers=None, threshold_bp=10, fallback_quotes
     use_trade_mask = traded_yield.notna() & (mid_quotes.isna() | (deviation_bp > threshold_bp))
     mid_quotes.loc[use_trade_mask] = traded_yield.loc[use_trade_mask]
 
+    replaced = pd.Series(False, index=mid_quotes.index)
     if fallback_quotes is not None:
         fallback_series = pd.Series(fallback_quotes).reindex(mid_quotes.index)
         unreasonable_mid = mid_quotes.isna() | ~np.isfinite(mid_quotes) | (mid_quotes < 0) | (mid_quotes > 10)
@@ -57,7 +58,11 @@ def get_swap_quote_frame(swap_rt, tickers=None, threshold_bp=10, fallback_quotes
         # In a wide market, trust the print only if it agrees with the fallback.
         trade_agrees = traded_yield.notna() & ((traded_yield - fallback_series).abs() * 100 <= threshold_bp)
         use_fallback_mask |= fallback_series.notna() & traded_yield.notna() & wide_market & ~trade_agrees
+        # A bid/ofr wider than max_width_bp is not a market: always use the most
+        # recent historical rate, whatever the trade print says.
+        use_fallback_mask |= fallback_series.notna() & (quote_spread_bp.round(6) > max_width_bp)
         mid_quotes.loc[use_fallback_mask] = fallback_series.loc[use_fallback_mask]
+        replaced = use_fallback_mask.fillna(False).astype(bool)
 
     invalid_bid = bid_quotes.isna() | ~np.isfinite(bid_quotes) | (bid_quotes < 0) | (bid_quotes > 10)
     invalid_ofr = ofr_quotes.isna() | ~np.isfinite(ofr_quotes) | (ofr_quotes < 0) | (ofr_quotes > 10)
@@ -68,6 +73,7 @@ def get_swap_quote_frame(swap_rt, tickers=None, threshold_bp=10, fallback_quotes
         'Bid': bid_quotes,
         'Ofr': ofr_quotes,
         'Mid': mid_quotes,
+        'Fallback': replaced,
     })
 
 

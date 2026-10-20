@@ -637,7 +637,7 @@ def extractTTM(b: str, stype: str, df_stat: pd.DataFrame) -> str:
                 ttm = IRSConfig.TERM_MAP[bl[2:4]]/4
             else:
                 ttm = ''
-            ttm = '%.2fY' % ttm
+            ttm = '%.2fY' % ttm if ttm != '' else ''
         else:
             ttm = b.split('.')[0][-2:]
     elif stype == 'TenorSpread':

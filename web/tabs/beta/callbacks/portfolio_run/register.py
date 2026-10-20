@@ -289,8 +289,10 @@ def register_portfolio_run_callbacks(app):
 
             _snap = pd.DataFrame(records)
             pathlib.Path(_SUMMARY_BETA_PARQUET).parent.mkdir(parents=True, exist_ok=True)
-            _id_cols = ['Asset Name'] if 'Asset Name' in _snap.columns else []
-            merged = _upsert_snapshot(_snap, _SUMMARY_BETA_PARQUET, _id_cols)
+            # The Beta book is exactly the latest refreshed table: replace the
+            # snapshot outright so trades from earlier runs are dropped, not merged.
+            merged = _snap
+            merged.to_parquet(_SUMMARY_BETA_PARQUET, index=False)
             print(f"✓ Beta snapshot saved → {_SUMMARY_BETA_PARQUET} ({len(merged)} rows)")
             # The Books tab reads the render-ready display cache BEFORE the
             # canonical snapshot, so a stale cache keeps showing the previous

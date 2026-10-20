@@ -309,7 +309,7 @@ class StatRefresher:
             cvpx = (ytm_quote['Bid'] + ytm_quote['Ofr']) / 2
 
             # IRS RT mid and interpolation terms
-            px_irs_rt = irs.get_swap_mid_quotes(env['SwapRT'], self.filtered_irs)
+            px_irs_rt = irs.get_swap_mid_quotes(env['SwapRT'], self.filtered_irs, fallback_quotes=ld.loadCNBDTS()['SwapTS'].dropna(how='all').iloc[-1])
 
             self.px_irs_rt = px_irs_rt
             _dates = DateConfig.get_date_mappings()

@@ -262,6 +262,17 @@ class IRSRefresher:
 		self.qt_irs = pd.DataFrame([self.quote_rate.values], index=[0], columns=self.quote_rate.index)
 		self.cv_spreads = irs.irsSpreads(self.cv_irs)
 		self.qt_spreads = irs.irsSpreads(self.qt_irs)
+		# A spread with any leg whose live quote was replaced by the last historical
+		# rate (market too wide) is valued entirely from last-close rates, so it is not
+		# a mix of live and stale legs.
+		if 'Fallback' in self.quote_frame.columns and self.quote_frame['Fallback'].any() and len(fallback_quotes) > 0:
+			fb_irs = pd.DataFrame([pd.to_numeric(fallback_quotes.reindex(self.qt_irs.columns), errors='coerce').values], index=[0], columns=self.qt_irs.columns)
+			fb_spreads = irs.irsSpreads(fb_irs)
+			replaced_legs = set(self.quote_frame.index[self.quote_frame['Fallback']])
+			for sp in self.qt_spreads.columns:
+				if replaced_legs & set(irs._irs_quote_spread_weights(sp)) and pd.notna(fb_spreads.at[0, sp]):
+					self.qt_spreads.at[0, sp] = fb_spreads.at[0, sp]
+					logger.info(f"{sp}: wide leg quote, using last-close spread {fb_spreads.at[0, sp]:.4f}")
 		self.spreads_list = self.cv_spreads.columns
 		logger.info(f"Calculated spreads for {len(self.spreads_list)} spread instruments")
 

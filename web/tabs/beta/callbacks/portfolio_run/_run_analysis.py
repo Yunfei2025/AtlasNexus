@@ -504,6 +504,10 @@ def build_allocation_results(summary, factor_exp, factor_risk, portfolio,
         '_max_duration':    float(max_duration or 5),
     }
     _snap_source = portfolio_table_df if not portfolio_table_df.empty else portfolio_df
+    # Decide this BEFORE the TOTAL-row filter below: filtering returns a new object,
+    # so an identity check afterwards is always False and the display-string fixes
+    # (MM->CNY, '%' strip) would be skipped, saving NaN weights/capitals.
+    _from_table = _snap_source is portfolio_table_df
     _snap_source = _snap_source[_snap_source.get('Asset Type', pd.Series(dtype=object)) != 'TOTAL'] \
         if 'Asset Type' in _snap_source.columns else _snap_source
     _keep_cols = [c for c in [
@@ -515,14 +519,14 @@ def build_allocation_results(summary, factor_exp, factor_risk, portfolio,
     # in MM CNY (see build_portfolio_table's _display_df above) — convert
     # back to raw CNY so downstream readers (which expect raw CNY / 1e6)
     # stay correct.
-    if _snap_source is portfolio_table_df and 'Capital (CNY)' in _snap.columns:
+    if _from_table and 'Capital (CNY)' in _snap.columns:
         _snap['Capital (CNY)'] = pd.to_numeric(
             _snap['Capital (CNY)'].astype(str).str.replace(',', ''), errors='coerce',
         ) * 1_000_000.0
     # portfolio_table_df's 'Weight (%)' is likewise a display string
     # ("12.34%") — strip the '%' before the blind pd.to_numeric below, or
     # it silently coerces to NaN (see _upsert_snapshot's numeric-cols pass).
-    if _snap_source is portfolio_table_df and 'Weight (%)' in _snap.columns:
+    if _from_table and 'Weight (%)' in _snap.columns:
         _snap['Weight (%)'] = _snap['Weight (%)'].astype(str).str.replace('%', '')
     for _mk, _mv in _run_meta.items():
         _snap[_mk] = _mv
