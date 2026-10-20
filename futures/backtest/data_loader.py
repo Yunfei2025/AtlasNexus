@@ -10,41 +10,40 @@ from datetime import datetime
 import functools
 from settings.paths import DIR_DATA, DIR_INPUT
 
-from data.providers.retrieve import _is_trading_hours
+from data.providers.retrieve import _is_trading_hours, _wind_call
 
 def init_wind():
     """Initialize Wind API connection"""
-    if not _is_trading_hours():
-        return False
-    try:
-        from WindPy import w
-    except ImportError:
-        return False
-    if not w.isconnected():
-        w.start()
-    return True
+    # WindPy itself is only ever loaded in a child process (see _wind_call).
+    return _is_trading_hours()
 
 
-@functools.lru_cache(maxsize=32)
+_WIND_DATA_CACHE = {}
+
+
 def load_wind_data(symbol, start_date, end_date):
-    """Load minute data from Wind API"""
+    """Load minute data from Wind API (results cached; failures are not)."""
+    key = (symbol, start_date, end_date)
+    if key in _WIND_DATA_CACHE:
+        return _WIND_DATA_CACHE[key]
+    df, err = _load_wind_data_uncached(symbol, start_date, end_date)
+    if err is None:
+        if len(_WIND_DATA_CACHE) >= 32:
+            _WIND_DATA_CACHE.pop(next(iter(_WIND_DATA_CACHE)))
+        _WIND_DATA_CACHE[key] = (df, err)
+    return df, err
+
+
+def _load_wind_data_uncached(symbol, start_date, end_date):
     if not init_wind():
         return None, "Wind API connection failed"
-        
+
     try:
-        from WindPy import w
-        # w.wsi returns a WindData object
-        wind_data = w.wsi(symbol, "open,high,low,close,volume", start_date, end_date, "")
-        
-        if wind_data.ErrorCode != 0:
-            return None, f"Wind data fetch failed, error code: {wind_data.ErrorCode}, message: {wind_data.Data}"
-            
-        if not wind_data.Data:
+        df = _wind_call("wsi", symbol, "open,high,low,close,volume", start_date, end_date, "")
+        if df is None or df.empty:
             return None, f"No data retrieved for {symbol}"
-            
-        # Convert WindData to DataFrame
-        df = pd.DataFrame(wind_data.Data, index=wind_data.Fields, columns=wind_data.Times).T
-        
+        df = df.copy()
+
         # Rename columns
         df.columns = [c.lower() for c in df.columns]
         df.index.name = 'datetime'

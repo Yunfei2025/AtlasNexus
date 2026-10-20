@@ -20,7 +20,7 @@ if str(project_root) not in sys.path:
 if 'data' in sys.modules:
     del sys.modules['data']
 
-from data.providers.retrieve import _is_trading_hours
+from data.providers.retrieve import _is_trading_hours, _edb
 
 
 CURVE_ARTIFACT_NAME = "fxcurve_ts.pkl"
@@ -44,8 +44,6 @@ def retrieveFXIRCurves():
         from settings.general import DateConfig
         from multiasset.config import ticker_dict, tenorlist
         from multiasset.utils import updatePKL
-        from WindPy import w
-        w.start()
         _dates = DateConfig.get_date_mappings()
         _date_strs = DateConfig.get_date_strings()
         dps = pd.Timestamp(_dates['d7d']).strftime('%Y%m%d')
@@ -53,7 +51,10 @@ def retrieveFXIRCurves():
         curves_ts = {}
         for country, codes in ticker_dict.items():
             a = ",".join(codes)
-            data = w.edb(a, dps, ds, "Fill=Previous", usedf=True)[1]
+            data = _edb(a, dps, ds)
+            if data.empty:
+                print(f"WARN: Wind returned no curve data for {country}; keeping cache.")
+                return
             df = pd.DataFrame(data, columns=codes)
             parsed = pd.to_datetime(pd.Index(df.index, dtype=object), errors='coerce', utc=False)
             if parsed.notna().all():

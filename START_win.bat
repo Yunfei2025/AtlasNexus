@@ -33,7 +33,7 @@ set FI_DISABLE_WIND=0
 set FI_AUTO_INITIALISE=1
 set FI_AUTO_REFRESH=1
 cd /d "%~dp0"
-start "AtlasNexus Server" cmd /k "python main.py daily-web"
+start "AtlasNexus Server" cmd /k "call run_daily_server.bat"
 echo       Started in background window.
 echo.
 

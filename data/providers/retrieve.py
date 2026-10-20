@@ -36,6 +36,7 @@ WIND_FAILURE_RESET_SECONDS: float = 120.0
 WIND_FAILURE_BACKOFF_SECONDS: float = 60.0
 WIND_FAILURE_THRESHOLD: int = 3
 
+_WIND_CALL_LOCK = threading.Lock()
 _WIND_FAILURE_COUNT = 0
 _WIND_BACKOFF_UNTIL = 0.0
 _WIND_LAST_FAILURE_TS = 0.0
@@ -134,7 +135,18 @@ def _normalize_wind_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _call_wind_via_subprocess(func_name: str, *args):
-    """Run a Wind call in a child Python process to isolate native crashes."""
+    """Run a Wind call in a child Python process to isolate native crashes.
+
+    Calls are serialised: only one Wind child process exists at a time, so a
+    slow Wind cannot pile up concurrent native sessions.
+    """
+    if _wind_disabled():
+        return pd.DataFrame()
+    with _WIND_CALL_LOCK:
+        return _call_wind_via_subprocess_locked(func_name, *args)
+
+
+def _call_wind_via_subprocess_locked(func_name: str, *args):
     if _wind_backoff_active():
         logger.warning("[Wind] skipping %s call during cooldown to protect app stability.", func_name)
         return pd.DataFrame()
@@ -238,16 +250,11 @@ def _wind_start(log_msg: str = "Failed to start") -> bool:
         _WIND_AVAILABLE = False
         logger.warning("[Wind] Outside trading hours and ALLOW_NONTRADING_RETRIEVAL=False. Enable with set_allow_nontrading_retrieval(True) for historical data.")
         return False
-    try:
-        from WindPy import w
-        if not w.isconnected():
-            w.start()
-        _WIND_AVAILABLE = True
-        return True
-    except Exception as e:
-        _WIND_AVAILABLE = False
-        logger.warning("[Wind] %s: %s — running in offline mode.", log_msg, e)
-        return False
+    # WindPy is never imported in this process: a native fault in the Wind
+    # DLL would kill the web server. Every call starts its own session in a
+    # child process (_call_wind_via_subprocess).
+    _WIND_AVAILABLE = True
+    return True
 
 
 def _ensure_wind() -> bool:
@@ -257,21 +264,7 @@ def _ensure_wind() -> bool:
     if _wind_backoff_active():
         logger.warning("[Wind] skipping connection retry during cooldown to avoid repeated native crashes.")
         return False
-    try:
-        from WindPy import w
-        if w.isconnected():
-            global _WIND_AVAILABLE
-            _WIND_AVAILABLE = True
-            _reset_wind_failures()
-            return True
-    except Exception:
-        pass
-    ok = _wind_start("Failed to start")
-    if not ok:
-        _mark_wind_failed()
-    else:
-        _reset_wind_failures()
-    return ok
+    return _wind_start("Failed to start")
 
 
 def reset_wind_connection():

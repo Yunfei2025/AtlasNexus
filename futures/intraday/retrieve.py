@@ -15,7 +15,7 @@ if str(project_root) not in sys.path:
 from settings.futures import FuturesConfig
 from settings.paths import DIR_DATA, DIR_INPUT
 from curves.utils.file import updatePKL
-from data.providers.retrieve import _wst, _wss, _wsd, _is_trading_hours
+from data.providers.retrieve import _wst, _wss, _wsd, _wind_call, _edb, _is_trading_hours
 from settings.general import DateConfig, GeneralConfig
 
 # Localized new-config convenience variables
@@ -61,17 +61,9 @@ def _tick_dict_has_date(tick_dict, target_date) -> bool:
 def retrieveTick(date, futures):
     if not _is_trading_hours():
         return pd.DataFrame()
-    from WindPy import w
-    if not w.isconnected():
-        w.start()
-    tick = w.wst(
-        futures,
-        "last,ask,bid,volume",
-        date + " 09:00:00",
-        date + " 15:15:00",
-        "",
-        usedf=True,
-    )[1]
+    tick = _wind_call("wst", futures, "last,ask,bid,volume", date + " 09:00:00", date + " 15:15:00", "")
+    if tick.empty:
+        return pd.DataFrame()
     tick = tick.drop(tick.index[0])
     tick = tick.set_index(pd.DatetimeIndex(pd.to_datetime(tick.index)))
     tick['volume'] = tick['volume'].diff(1)

@@ -283,6 +283,10 @@ def setup_logging(show_window: bool = True, level: Optional[int] = None):
         import faulthandler
         _fh = open(os.path.join(logs_dir, 'crash.log'), 'a', encoding='utf-8')
         faulthandler.enable(file=_fh, all_threads=True)
+        _fh.write("\n=== session start %s pid=%s FI_DISABLE_WIND=%s FI_AUTO_INITIALISE=%s FI_AUTO_REFRESH=%s ===\n" % (
+            __import__('datetime').datetime.now().isoformat(timespec='seconds'), os.getpid(),
+            os.environ.get('FI_DISABLE_WIND'), os.environ.get('FI_AUTO_INITIALISE'), os.environ.get('FI_AUTO_REFRESH')))
+        _fh.flush()
     except Exception as e:
         logger.warning(f"Could not enable faulthandler: {e}")
 

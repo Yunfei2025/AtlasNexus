@@ -11,7 +11,7 @@ import os
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 
-from data.providers.retrieve import _is_trading_hours
+from data.providers.retrieve import _is_trading_hours, _edb
 from utils.file import updatePKL, get_mtime_date
 from settings.paths import DIR_INPUT
 
@@ -124,8 +124,6 @@ def retrieveSurface(force: bool = False):
             print("INFO: Outside trading hours — skipping Wind refresh for surface data.")
             return surface_dict or {}
         print("INFO: Updating time series...")
-        from WindPy import w
-        w.start()
 
         if gap_backfill_start is not None:
             start_date = gap_backfill_start
@@ -140,15 +138,16 @@ def retrieveSurface(force: bool = False):
         ds = expected_asof.strftime("%Y%m%d")
         
         from surface.config import cn_id_list, cn_id_name, us_id_list, us_id_name
-        df0 = w.edb(cn_id_list, dps, ds, "Fill=Previous", usedf=True)[1]
-        df0.columns = cn_id_name
-        surface_dict["CN"] = df0
-        
-        df1 = w.edb(us_id_list, dps, ds, "Fill=Previous", usedf=True)[1]
-        df1.columns = us_id_name
-        surface_dict["US"] = df1
-        
-        surface_dict = updatePKL(surface_dict, file_path)
+        df0 = _edb(cn_id_list, dps, ds)
+        df1 = _edb(us_id_list, dps, ds)
+        if df0.empty or df1.empty:
+            print("WARN: Wind returned no surface data - keeping cached surface.")
+        else:
+            df0.columns = cn_id_name
+            surface_dict["CN"] = df0
+            df1.columns = us_id_name
+            surface_dict["US"] = df1
+            surface_dict = updatePKL(surface_dict, file_path)
 
     if surface_dict is None and os.path.exists(file_path):
         surface_dict = pd.read_pickle(file_path)
