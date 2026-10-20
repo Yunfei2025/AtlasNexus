@@ -11,6 +11,9 @@ import sys
 import pandas as pd
 import pickle
 import threading
+import queue
+import atexit
+import itertools
 import subprocess
 import datetime as dt
 import logging
@@ -29,7 +32,8 @@ logger = logging.getLogger(__name__)
 # How long (seconds) to wait for w.start() before declaring Wind unavailable.
 # Override this at module level before the first Wind call if needed:
 #   import data.providers.retrieve as r; r.WIND_CONNECT_TIMEOUT = 60
-WIND_CONNECT_TIMEOUT: float = 20.0
+WIND_CONNECT_TIMEOUT: float = 60.0  # w.start() takes ~15s cold
+WIND_CALL_TIMEOUT: float = 60.0  # wss/wsd/wset/wsi/edb once connected
 WSQ_CALL_TIMEOUT: float = 10.0
 WSQ_CHUNK_SIZE: int = 200
 WIND_FAILURE_RESET_SECONDS: float = 120.0
@@ -37,6 +41,7 @@ WIND_FAILURE_BACKOFF_SECONDS: float = 60.0
 WIND_FAILURE_THRESHOLD: int = 3
 
 _WIND_CALL_LOCK = threading.Lock()
+_WIND_REQ_IDS = itertools.count(1)
 _WIND_FAILURE_COUNT = 0
 _WIND_BACKOFF_UNTIL = 0.0
 _WIND_LAST_FAILURE_TS = 0.0
@@ -135,83 +140,123 @@ def _normalize_wind_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _call_wind_via_subprocess(func_name: str, *args):
-    """Run a Wind call in a child Python process to isolate native crashes.
+    """Run a Wind call in the long-lived Wind worker process.
 
-    Calls are serialised: only one Wind child process exists at a time, so a
-    slow Wind cannot pile up concurrent native sessions.
+    WindPy is only ever loaded in the worker, so a native crash cannot kill the
+    web server; the worker is restarted on the next call. Calls are serialised
+    (one request in flight) and the worker connects once instead of paying
+    w.start() (~15s) per call.
     """
-    if _wind_disabled():
+    # FI_DISABLE_WIND blocks automatic/background use; an explicit on-demand
+    # retrieval (ALLOW_NONTRADING_RETRIEVAL, e.g. `update-data`) may still run
+    # because the call is isolated in a child process.
+    if _wind_disabled() and not ALLOW_NONTRADING_RETRIEVAL:
         return pd.DataFrame()
     with _WIND_CALL_LOCK:
-        return _call_wind_via_subprocess_locked(func_name, *args)
+        return _call_wind_worker(func_name, *args)
 
 
-def _call_wind_via_subprocess_locked(func_name: str, *args):
+_WIND_WORKER = None  # (Popen, queue.Queue) of the live worker
+
+
+def _stop_wind_worker() -> None:
+    global _WIND_WORKER
+    worker, _WIND_WORKER = _WIND_WORKER, None
+    if worker is None:
+        return
+    proc = worker[0]
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+
+
+atexit.register(_stop_wind_worker)
+
+
+def _start_wind_worker():
+    """Spawn the worker and wait for it to connect. Returns (proc, queue) or None."""
+    global _WIND_WORKER
+    worker_path = str(Path(__file__).resolve().with_name("wind_worker.py"))
+    proc = subprocess.Popen(
+        [sys.executable, "-I", "-u", worker_path],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        cwd=str(Path(__file__).resolve().parents[2]),
+    )
+    q: "queue.Queue" = queue.Queue()
+
+    def _reader():
+        try:
+            while True:
+                q.put(pickle.load(proc.stdout))
+        except Exception:
+            q.put(None)  # EOF / worker died
+
+    threading.Thread(target=_reader, daemon=True, name="wind-worker-reader").start()
+    _WIND_WORKER = (proc, q)
+    try:
+        msg = q.get(timeout=WIND_CONNECT_TIMEOUT)
+    except queue.Empty:
+        logger.warning("[Wind] worker did not connect within %ss.", f"{WIND_CONNECT_TIMEOUT:.0f}")
+        _stop_wind_worker()
+        return None
+    if not msg or msg[0] != "READY":
+        logger.warning("[Wind] worker failed to start: %s", msg[1] if msg and len(msg) > 1 else "worker exited")
+        _stop_wind_worker()
+        return None
+    return _WIND_WORKER
+
+
+def _call_wind_worker(func_name: str, *args):
     if _wind_backoff_active():
         logger.warning("[Wind] skipping %s call during cooldown to protect app stability.", func_name)
         return pd.DataFrame()
 
-    project_root = str(Path(__file__).resolve().parents[2])
-    script = (
-        "import pickle, sys\n"
-        f"sys.path.insert(0, {project_root!r})\n"
-        "try:\n"
-        "    from WindPy import w\n"
-        "    if not w.isconnected():\n"
-        "        w.start()\n"
-        f"    value = getattr(w, {func_name!r})(*{args!r}, usedf=True)[1]\n"
-        "    sys.stdout.buffer.write(b'OK\\n')\n"
-        "    sys.stdout.buffer.write(pickle.dumps(value))\n"
-        "except Exception as ex:\n"
-        "    sys.stdout.buffer.write(b'ERR\\n')\n"
-        "    sys.stdout.buffer.write(repr(ex).encode('utf-8', 'replace'))\n"
-        "    raise\n"
-    )
+    worker = _WIND_WORKER
+    if worker is None or worker[0].poll() is not None:
+        _stop_wind_worker()
+        worker = _start_wind_worker()
+        if worker is None:
+            _mark_wind_failed()
+            return pd.DataFrame()
+    proc, q = worker
 
-    proc = subprocess.Popen(
-        [sys.executable, "-c", script],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        cwd=project_root,
-    )
-
+    timeout = WSQ_CALL_TIMEOUT if func_name == "wsq" else WIND_CALL_TIMEOUT
+    req_id = next(_WIND_REQ_IDS)
     try:
-        stdout, stderr = proc.communicate(timeout=WSQ_CALL_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.communicate()
+        pickle.dump((req_id, func_name, args), proc.stdin, protocol=pickle.HIGHEST_PROTOCOL)
+        proc.stdin.flush()
+        msg = q.get(timeout=timeout)
+    except queue.Empty:
+        _stop_wind_worker()  # a late reply must not be mistaken for the next request's
         _mark_wind_failed()
-        logger.warning("[Wind] %s timeout after %ss; returning empty frame.", func_name, f"{WSQ_CALL_TIMEOUT:.0f}")
+        logger.warning("[Wind] %s timeout after %ss; worker restarted, returning empty frame.", func_name, f"{timeout:.0f}")
         return pd.DataFrame()
-
-    if proc.returncode != 0:
-        _mark_wind_failed()
-        err_text = stderr.decode("utf-8", "replace")
-        logger.warning("[Wind] %s child process failed: %s", func_name, err_text or "unknown error")
-        return pd.DataFrame()
-
-    if not stdout:
-        logger.warning("[Wind] %s returned no data from child process.", func_name)
-        return pd.DataFrame()
-
-    if stdout.startswith(b"ERR\n"):
-        _mark_wind_failed()
-        logger.warning("[Wind] %s child process error: %s", func_name, stdout[4:].decode("utf-8", "replace"))
-        return pd.DataFrame()
-
-    if not stdout.startswith(b"OK\n"):
-        logger.warning("[Wind] %s child process returned unexpected payload.", func_name)
-        return pd.DataFrame()
-
-    try:
-        value = pickle.loads(stdout[3:])
     except Exception as ex:
+        _stop_wind_worker()
         _mark_wind_failed()
-        logger.warning("[Wind] %s pickle decode error: %s", func_name, ex)
+        logger.warning("[Wind] %s worker pipe error: %s", func_name, ex)
+        return pd.DataFrame()
+
+    if msg is None:
+        _stop_wind_worker()
+        _mark_wind_failed()
+        logger.warning("[Wind] %s worker died (native crash?); will restart on next call.", func_name)
+        return pd.DataFrame()
+    if len(msg) != 3 or msg[0] != req_id:
+        _stop_wind_worker()
+        logger.warning("[Wind] %s unexpected worker reply; worker restarted.", func_name)
+        return pd.DataFrame()
+    if msg[1] != "OK":
+        _mark_wind_failed()
+        logger.warning("[Wind] %s worker error: %s", func_name, msg[2])
         return pd.DataFrame()
 
     _reset_wind_failures()
-    return value
+    return msg[2]
 
 
 def _wind_call_sync(func_name: str, *args) -> pd.DataFrame:

@@ -1,11 +1,11 @@
-"""Guard: WindPy must only be imported inside the child-process script in
-data/providers/retrieve.py. A native fault in the Wind DLL kills the host
+"""Guard: WindPy must only be imported by the Wind worker process
+(data/providers/wind_worker.py). A native fault in the Wind DLL kills the host
 process, so the web server must never load it."""
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ALLOWED = {ROOT / "data" / "providers" / "retrieve.py"}
+ALLOWED = {ROOT / "data" / "providers" / "wind_worker.py"}
 SKIP_DIRS = {"tests", "runs", "docs", ".git", "__pycache__"}
 PATTERN = re.compile(r"^\s*(from\s+WindPy\s+import|import\s+WindPy)", re.M)
 

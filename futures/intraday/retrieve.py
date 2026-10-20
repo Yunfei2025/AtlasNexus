@@ -15,6 +15,7 @@ if str(project_root) not in sys.path:
 from settings.futures import FuturesConfig
 from settings.paths import DIR_DATA, DIR_INPUT
 from curves.utils.file import updatePKL
+from curves.utils.cn_calendar import is_cn_workday
 from data.providers.retrieve import _wst, _wss, _wsd, _wind_call, _edb, _is_trading_hours
 from settings.general import DateConfig, GeneralConfig
 
@@ -72,7 +73,10 @@ def retrieveTick(date, futures):
 
 def retrieveFuturesTick(cfg=None):
     day_list = pd.bdate_range(_date_strs['d1m'], _date_strs['dp'])
-    day_list = [ d.date() for d in day_list ]
+    # bdate_range knows weekends only; drop CN exchange holidays (e.g. Mid-Autumn,
+    # National Day) -- Wind returns no ticks for them, so they never get saved and
+    # would otherwise be re-requested on every run.
+    day_list = [ d.date() for d in day_list if is_cn_workday(d.date()) ]
     # for f in FuturesConfig.get_ticker_list():
     clist = get_contract_no()
     for f in clist:

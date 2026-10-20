@@ -173,10 +173,12 @@ def run_data_update(
 
         logger.info("Running data retriever: %s", name)
         try:
-            # Try calling with cfg first; if it fails, fall back to no-arg.
-            try:
+            # Pass cfg only if the retriever accepts an argument. (Catching
+            # TypeError instead would mask real TypeErrors and chain a bogus
+            # "takes 0 positional arguments" traceback onto later errors.)
+            if inspect.signature(fn).parameters:
                 fn(effective_cfg)
-            except TypeError:
+            else:
                 fn()
             status[name] = "ok"
         except Exception as e:

@@ -8,6 +8,7 @@ import os
 import sys
 import pickle
 import time
+import threading
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -731,7 +732,43 @@ def _normalize_swaprt_frame(swap_rt) -> pd.DataFrame:
     return normalized
 
 
+# Several refreshers (rates, credit, irs, stat, otr/ofr) call retrieveEnvRT for the
+# same bond type -- and for IRS -- within one refresh cycle. wsq is a one-shot
+# snapshot, so serve repeats from a short-lived in-memory copy instead of
+# asking Wind again. Failures/empty results are never cached.
+WINDRT_TTL_SECONDS = 25.0
+_WINDRT_MEM: dict = {}
+_WINDRT_MEM_LOCK = threading.Lock()
+
+
+def _copy_rt(obj):
+    if isinstance(obj, dict):
+        return {k: v.copy() for k, v in obj.items()}
+    return obj.copy()
+
+
+def _rt_nonempty(obj) -> bool:
+    if isinstance(obj, dict):
+        return bool(obj) and all(isinstance(v, pd.DataFrame) and not v.empty for v in obj.values())
+    return isinstance(obj, pd.DataFrame) and not obj.empty
+
+
 def retrieveWindRT(btype):
+    """Real-time Wind snapshot for btype, reused for WINDRT_TTL_SECONDS."""
+    with _WINDRT_MEM_LOCK:
+        hit = _WINDRT_MEM.get(btype)
+        if hit is not None and time.monotonic() - hit[0] < WINDRT_TTL_SECONDS:
+            logger.info("Wind real-time data for %s: reusing snapshot from %.0fs ago.", btype, time.monotonic() - hit[0])
+            return _copy_rt(hit[1])
+        result = _retrieveWindRT_uncached(btype)
+        if _rt_nonempty(result):
+            _WINDRT_MEM[btype] = (time.monotonic(), _copy_rt(result))
+        else:
+            _WINDRT_MEM.pop(btype, None)
+        return result
+
+
+def _retrieveWindRT_uncached(btype):
     logger.info("Fetching Wind real-time data for %s...", btype)
     with open(os.path.join(DIR_INPUT,btype+'-InstrumentInfo.pkl'), 'rb') as file:
         bond_info = pickle.load(file)
