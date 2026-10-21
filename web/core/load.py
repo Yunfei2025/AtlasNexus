@@ -377,7 +377,14 @@ def _build_spread_ts() -> dict:
                             fb[col] = -fb[col]
             except Exception:
                 pass
-        if fb is not None and not fb.empty:
+
+        # fb may be either the full tenor payload dict
+        # {'Spread','CarryRoll3m','StatInfo'} or a DataFrame fallback.
+        if isinstance(fb, dict) and fb:
+            spread_df = fb.get("Spread")
+            if isinstance(spread_df, pd.DataFrame) and not spread_df.empty:
+                out["TenorSpread"] = fb
+        elif isinstance(fb, pd.DataFrame) and not fb.empty:
             if "TenorSpread" in out and isinstance(out["TenorSpread"], pd.DataFrame):
                 current = out["TenorSpread"]
                 out["TenorSpread"] = current.reindex(columns=current.columns.union(fb.columns)).combine_first(fb)
