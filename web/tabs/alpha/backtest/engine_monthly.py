@@ -557,7 +557,10 @@ def run_monthly_style_backtest(
                     elif mr_stop_lock_dir == -1 and cz < entry_z:
                         mr_stop_lock_dir = 0
 
-                    if cz >= entry_z and mr_stop_lock_dir != -1:
+                    # allow_short gates the MR short entry too (it previously
+                    # only gated trend entries, so BUY-only names -- LGB/MTN/NCD,
+                    # whose credit bond can't be shorted -- still went SHORT).
+                    if cz >= entry_z and mr_stop_lock_dir != -1 and allow_short:
                         position = -1
                     elif cz <= -entry_z and mr_stop_lock_dir != 1:
                         position = 1

@@ -178,6 +178,10 @@ def register_risk_dashboard_callbacks(app):
             _beta_records = allocation_results_data.get('beta_snapshot_display', []) or []
 
         try:
+            # Unit of the 'Capital (CNY)' column by source: the live store and the
+            # legacy positions file hold MM CNY strings ("4,930.00"), but
+            # summary_beta_portfolio.parquet holds raw CNY (4930000000).
+            _cap_div = 1.0
             if _beta_records:
                 bdf = pd.DataFrame(_beta_records)
             elif _os.path.exists(_SUMMARY_BETA_PARQUET):
@@ -192,6 +196,7 @@ def register_risk_dashboard_callbacks(app):
                 # is skipped: it uses a different schema (Capital (MM CNY),
                 # no Sector/DV01 columns) this loop doesn't read.
                 bdf = pd.read_parquet(_SUMMARY_BETA_PARQUET)
+                _cap_div = 1_000_000.0
             elif _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
                 bdf = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
             else:
@@ -204,6 +209,11 @@ def register_risk_dashboard_callbacks(app):
                 name = str(r.get('Asset Name', ''))
                 sector = str(r.get('Sector', ''))
                 cap_str = str(r.get('Capital (CNY)', ''))
+                if _cap_div != 1.0:
+                    try:
+                        cap_str = f"{float(cap_str.replace(',', '')) / _cap_div:,.2f}"
+                    except (ValueError, TypeError):
+                        cap_str = ''
                 dv01_val = r.get('DV01 (MM CNY)', 0)
                 try:
                     dv01_mm = float(str(dv01_val).replace(',', '')) if dv01_val else 0.0

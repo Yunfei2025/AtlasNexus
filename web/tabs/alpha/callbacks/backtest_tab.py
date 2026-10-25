@@ -25,6 +25,7 @@ from ..data import (
     has_saved_state, save_portfolio_backtest_result, estimate_margin_mm,
 )
 from .portfolio import _SUMMARY_ALPHA_PARQUET
+from .backtest_state import backtest_borrow_cost_bp, carry_needs_negate, latest_position, run_instrument_backtest, short_allowed
 from ..layouts import build_individual_backtest_panel, build_portfolio_backtest_panel
 from ..backtest import (
     run_spread_backtest, run_trend_backtest_dc,
@@ -655,60 +656,14 @@ def register_backtest_callbacks(app) -> None:
 
         try:
             duration_mult = _get_duration_mult(instrument, spread_type)
-            bc_long, bc_short = _get_borrow_cost_annual_bp(spread_type, instrument)
+            bc_long, bc_short = backtest_borrow_cost_bp(spread_type, instrument)
 
-            # For TenorSpread, adjust carry_roll_ts to include financing and borrow costs
+            # Carry is raw carry+roll only: no financing (deducted at portfolio
+            # level) and no borrow cost (partly netted against the Beta book) --
+            # see BACKTEST_INCLUDE_BORROW_COST in backtest_state.py. So there is
+            # no direction-specific SELL carry series either.
             _cr_sell_for_chart = None    # negated carry_roll for SELL chart display
             _cr_sell_for_backtest = None  # unnegated carry_roll for SELL _carry_accrual
-            if spread_type == 'TenorSpread' and carry_roll_ts_instrument is not None:
-                try:
-                    from ..data import _get_tenor_yields_for_spread, _get_current_fr007_bp
-                    y_short, y_long = _get_tenor_yields_for_spread(instrument)
-                    fr007_bp = _get_current_fr007_bp() or 137.0
-                    tenor_ratio = 0.5  # 2:1 DV01-hedged ratio
-
-                    if y_short is not None and y_long is not None:
-                        y_short_pct = y_short
-                        y_long_pct = y_long
-                        fr007_pct = fr007_bp / 100.0
-
-                        fin_adj_annual_pct = (1.0 - tenor_ratio) * (y_long_pct - fr007_pct)
-                        fin_adj_3m_pct = fin_adj_annual_pct * (90.0 / 360.0)
-
-                        bc_long_3m_pct = (bc_long * tenor_ratio) * (90.0 / 360.0) / 100.0
-                        bc_short_3m_pct = (bc_short) * (90.0 / 360.0) / 100.0
-
-                        # BUY (position=+1): cr_buy passed directly → carry = sum(cr_buy)/90
-                        # SELL (position=-1): +bc_short here so (-1)*(+bc_short) = -bc_short (cost)
-                        cr_buy = carry_roll_ts_instrument + fin_adj_3m_pct - bc_long_3m_pct
-                        cr_sell = carry_roll_ts_instrument + fin_adj_3m_pct + bc_short_3m_pct
-                        _cr_sell_for_chart = -cr_sell
-                        _cr_sell_for_backtest = cr_sell
-
-                        carry_roll_ts_instrument = cr_buy
-                except Exception:
-                    pass
-
-            # For BondCurve and BondSwap, adjust for direction-dependent borrow costs
-            if spread_type in ['TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'] and carry_roll_ts_instrument is not None:
-                try:
-                    if spread_type in ['TBondCurve', 'CBondCurve']:
-                        bc_long_3m_pct = bc_long * (90.0 / 360.0) / 100.0
-                        carry_roll_ts_instrument = carry_roll_ts_instrument - bc_long_3m_pct
-
-                    # BondSwap: direction-asymmetric carry+roll.
-                    # BUY (long bond, pay fixed swap): no borrow cost
-                    # SELL (short bond, receive fixed swap): deduct borrow cost
-                    if spread_type in ['TBondSwap', 'CBondSwap']:
-                        bc_short_3m_pct = bc_short * (90.0 / 360.0) / 100.0
-                        cr_buy = carry_roll_ts_instrument
-                        cr_sell = carry_roll_ts_instrument + bc_short_3m_pct
-
-                        carry_roll_ts_instrument = cr_buy
-                        _cr_sell_for_backtest = cr_sell
-                        _cr_sell_for_chart = -cr_sell
-                except Exception:
-                    pass
 
             _negate_ts = is_yield_based
 
@@ -727,7 +682,7 @@ def register_backtest_callbacks(app) -> None:
                 duration_mult=duration_mult,
                 borrow_cost_long_bp=bc_long,
                 borrow_cost_short_bp=bc_short,
-                allow_short=_allow_short_enabled(allow_short),
+                allow_short=_allow_short_enabled(allow_short) and short_allowed(instrument),
                 carry_roll_sell_ts=_cr_sell_for_backtest,
                 mom_window=int(mom_window) if mom_window is not None else 20,
                 ou_mean=ou_mean,
@@ -1126,15 +1081,18 @@ def register_backtest_callbacks(app) -> None:
 
                 # YTM-based spreads: flip stored carry to match the price-series
                 # inversion above (LONG = expecting the spread to fall/narrow).
-                if is_yield_based:
+                # Carry is flipped only where stored flipped (XsYs); flies and
+                # cross-curve TenorSpread names are already BUY = engine LONG.
+                # ou_mean follows the series inversion, not the carry rule.
+                if carry_needs_negate(spread_type, asset):
                     if _cr_ts is not None:
                         _cr_ts = -_cr_ts
                     _cr_bp = -_cr_bp
-                    if _ou_mean is not None:
-                        _ou_mean = -_ou_mean
+                if is_yield_based and _ou_mean is not None:
+                    _ou_mean = -_ou_mean
 
                 dur = _get_duration_mult(asset, spread_type)
-                _bc_long, _bc_short = _get_borrow_cost_annual_bp(spread_type, asset)
+                _bc_long, _bc_short = backtest_borrow_cost_bp(spread_type, asset)
 
                 # Reviewed instruments (Save Parameters on the individual panel)
                 # get their own tuned params and month-by-month MR/trend regime
@@ -1142,33 +1100,14 @@ def register_backtest_callbacks(app) -> None:
                 # style tag for the whole history. Unreviewed instruments fall
                 # through to the existing behaviour below unchanged.
                 _saved_params = load_instrument_params(spread_type, asset)
-                _saved_regime = load_monthly_regime(spread_type, asset)
-                if _saved_params is not None and _saved_regime is not None:
-                    try:
-                        res = _run_monthly_style_switch_backtest(
-                            ts=ts_bt,
-                            spread_type=spread_type,
-                            entry_z=_saved_params.get('entry_z', 2.0),
-                            exit_z=_saved_params.get('exit_z', 0.5),
-                            stop_z=_saved_params.get('stop_z', 3.0),
-                            min_hold=_saved_params.get('min_hold', 7),
-                            theta=_saved_params.get('theta', 1.25),
-                            vol_window=_saved_params.get('vol_window', 60),
-                            trailing_mult=_saved_params.get('trailing_mult', 3.0),
-                            carry_roll_ts=_cr_ts,
-                            carry_roll_bp=_cr_bp,
-                            duration_mult=dur,
-                            borrow_cost_long_bp=_bc_long,
-                            borrow_cost_short_bp=_bc_short,
-                            allow_short=_saved_params.get('allow_short', True),
-                            carry_roll_sell_ts=None,
-                            mom_window=_saved_params.get('mom_window', 20),
-                            ou_mean=_ou_mean,
-                            carry_z_weight=_saved_params.get('carry_z_weight', 0.0),
-                            month_to_style_override=_saved_regime.get('month_to_style'),
-                            mr_lookback=_saved_params.get('mr_lookback', 120),
-                        )
-                    except Exception:
+                if _saved_params is not None:
+                    # Same builder as the Candidates reconcile / Individual run
+                    # (saved params, preset for gaps, regime recomputed -- not the
+                    # frozen saved month_to_style), so a Core name holds the same
+                    # position in every view. Window follows this run's lookback.
+                    _inst_id = asset.split('|', 1)[1] if '|' in asset else asset
+                    res = run_instrument_backtest(spread_type, _inst_id, period=lookback_days)
+                    if res is None:
                         res = {'error': 'saved-state backtest failed'}
                     if 'error' not in res and isinstance(res.get('equity_ts'), pd.Series):
                         eq = res['equity_ts'].copy()
@@ -1176,7 +1115,8 @@ def register_backtest_callbacks(app) -> None:
                         weighted_equity[asset] = eq * weight
                         trade_summaries.append({
                             'Asset': asset,
-                            'Direction': _item.get('direction', 'N/A'),
+                            'Direction': latest_position(res),
+                            'Input Dir': _item.get('direction', 'N/A'),
                             'Style': f"{_item.get('style', 'N/A')} (reviewed)",
                             'Weight': f"{weight * 100:.1f}%",
                             '# Trades': res.get('n_trades', 0),
@@ -1243,7 +1183,8 @@ def register_backtest_callbacks(app) -> None:
 
                 trade_summaries.append({
                     'Asset': asset,
-                    'Direction': _item.get('direction', 'N/A'),
+                    'Direction': latest_position(res),
+                    'Input Dir': _item.get('direction', 'N/A'),
                     'Style': f"{_item.get('style', 'N/A')} (trend-routed)" if run_trend else _item.get('style', 'N/A'),
                     'Weight': f"{weight * 100:.1f}%",
                     '# Trades': res.get('n_trades', 0),
@@ -1365,7 +1306,7 @@ def register_backtest_callbacks(app) -> None:
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '14px'})
 
             contrib_table = dash_table.DataTable(
-                columns=[{'name': c, 'id': c} for c in ['Asset', 'Direction', 'Style', 'Weight', '# Trades', 'Win Rate', 'Wtd PnL (bp)']],
+                columns=[{'name': c, 'id': c} for c in ['Asset', 'Direction', 'Input Dir', 'Style', 'Weight', '# Trades', 'Win Rate', 'Wtd PnL (bp)']],
                 data=sorted(trade_summaries, key=lambda x: -x['Wtd PnL (bp)']),
                 page_size=15,
                 style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'], 'fontWeight': 'bold'},

@@ -31,15 +31,63 @@ _DEFAULT_PRESET = dict(entry_z=2.0, exit_z=0.5, stop_z=3.0, min_hold=7, theta=1.
                        carry_z_weight=0.5, mr_lookback=120)
 
 
-def backtest_open_direction(spread_type: str, instrument: str) -> Optional[str]:
-    """Return 'BUY'/'SELL' if the backtest is in a position on the latest date,
-    'FLAT' if it is not, or None if the backtest could not be run."""
+# Backtests carry raw carry+roll only. Financing is deducted at portfolio level
+# and borrow cost is partly netted against the Beta book, so neither is charged
+# per-instrument here (decided 2026-10-25). Flip to True to charge borrow cost.
+BACKTEST_INCLUDE_BORROW_COST = False
+
+
+def backtest_borrow_cost_bp(spread_type: str, instrument: str) -> tuple[float, float]:
+    if not BACKTEST_INCLUDE_BORROW_COST:
+        return 0.0, 0.0
+    return _get_borrow_cost_annual_bp(spread_type, instrument)
+
+
+# Spreads with a credit-bond leg that cannot be borrowed/shorted (LGB, MTN, NCD):
+# the SELL side would short that bond, so these are BUY-only everywhere --
+# backtests, the Core card and the candidate pool (user 2026-10-25).
+NO_SHORT_PREFIXES = ('LGB', 'MTN', 'NCD')
+
+
+def short_allowed(instrument: str) -> bool:
+    return not str(instrument or '').strip().upper().startswith(NO_SHORT_PREFIXES)
+
+
+def carry_needs_negate(spread_type: str, instrument: str) -> bool:
+    """Whether stored carry must be flipped to the engine's LONG orientation.
+
+    Yield-based spreads are backtested on the inverted series, so their stored
+    carry is flipped -- except TenorSpread flies (NsMsLs) and cross-curve names
+    (CDBCGB-*, *Repo7d-*), which are already stored as BUY = engine LONG.
+    """
+    if spread_type != 'TenorSpread':
+        return spread_type in YIELD_BASED_SPREAD_TYPES
+    if len(re.findall(r'\d+s', instrument, re.IGNORECASE)) >= 3:
+        return False  # fly
+    return bool(re.search(r'\d+s\d+', instrument, re.IGNORECASE))  # XsYs; cross-curve -> False
+
+
+def latest_position(results) -> str:
+    """'BUY'/'SELL'/'FLAT' for a backtest result dict's open trade on the last date."""
+    open_trade = results.get('open_trade') if isinstance(results, dict) else None
+    if not open_trade:
+        return 'FLAT'
+    # Engines see the sign-normalised series: LONG = BUY, SHORT = SELL.
+    return 'BUY' if str(open_trade.get('direction', '')).upper() == 'LONG' else 'SELL'
+
+
+def run_instrument_backtest(spread_type: str, instrument: str, period: int = _PERIOD) -> Optional[dict]:
+    """Run the Backtest tab's individual monthly-style backtest for one instrument
+    with its saved params (preset fills gaps). Single source of truth shared by
+    the Candidates reconcile and the Portfolio backtest, so both hold the same
+    position for the same name. Returns the engine result dict, or None if it
+    could not be run."""
     from .backtest_tab import _run_monthly_style_switch_backtest, _allow_trend_style_for
     try:
         spread_ts = load_spread_timeseries(spread_type)
         if spread_ts is None or instrument not in spread_ts.columns:
             return None
-        ts = spread_ts[instrument].tail(_PERIOD)
+        ts = spread_ts[instrument].tail(period)
         if len(ts.dropna()) < 60:
             return None
 
@@ -49,6 +97,7 @@ def backtest_open_direction(spread_type: str, instrument: str) -> Optional[str]:
             if saved.get(k) is not None:
                 params[k] = saved[k]
         allow_short = bool(saved['allow_short']) if saved.get('allow_short') is not None else True
+        allow_short = allow_short and short_allowed(instrument)
 
         is_yield_based = spread_type in YIELD_BASED_SPREAD_TYPES
         carry_ts: Optional[pd.Series] = None
@@ -70,21 +119,14 @@ def backtest_open_direction(spread_type: str, instrument: str) -> Optional[str]:
                     ou_mean = float(m)
 
         # Carry sign convention (see backtest_tab): XsYs names are stored flipped.
-        negate_carry = is_yield_based
-        if spread_type == 'TenorSpread':
-            if len(re.findall(r'\d+s', instrument, re.IGNORECASE)) >= 3:
-                negate_carry = False
-            elif re.search(r'\d+s\d+', instrument, re.IGNORECASE):
-                negate_carry = True
-            else:
-                negate_carry = False
+        negate_carry = carry_needs_negate(spread_type, instrument)
         if negate_carry:
             carry_ts = -carry_ts if carry_ts is not None else None
             carry_bp = -carry_bp
         if ou_mean is not None and is_yield_based:
             ou_mean = -ou_mean
 
-        bc_long, bc_short = _get_borrow_cost_annual_bp(spread_type, instrument)
+        bc_long, bc_short = backtest_borrow_cost_bp(spread_type, instrument)
         results = _run_monthly_style_switch_backtest(
             ts=-ts if is_yield_based else ts,
             spread_type=spread_type,
@@ -100,10 +142,13 @@ def backtest_open_direction(spread_type: str, instrument: str) -> Optional[str]:
             mr_lookback=int(params['mr_lookback']),
             allow_trend_style=_allow_trend_style_for(spread_type, instrument),
         )
-        open_trade = results.get('open_trade') if isinstance(results, dict) else None
-        if not open_trade:
-            return 'FLAT'
-        # Engines see the sign-normalised series: LONG = BUY, SHORT = SELL.
-        return 'BUY' if str(open_trade.get('direction', '')).upper() == 'LONG' else 'SELL'
+        return results if isinstance(results, dict) and 'error' not in results else None
     except Exception:
         return None
+
+
+def backtest_open_direction(spread_type: str, instrument: str) -> Optional[str]:
+    """Return 'BUY'/'SELL' if the backtest is in a position on the latest date,
+    'FLAT' if it is not, or None if the backtest could not be run."""
+    results = run_instrument_backtest(spread_type, instrument)
+    return None if results is None else latest_position(results)

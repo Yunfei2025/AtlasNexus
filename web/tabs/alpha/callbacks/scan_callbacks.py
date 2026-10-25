@@ -14,9 +14,9 @@ from dash import dcc, html, callback_context
 from dash.dependencies import Input, Output, State, ALL
 from dash.exceptions import PreventUpdate
 
-from ..data import THEME, ZSCORE_ENTRY_THRESHOLD, TREND_ROUTED_INSTRUMENTS, _get_input_dir, load_spread_data, display_key, get_realtime_spread_bp, _get_ttm_display
+from ..data import THEME, ZSCORE_ENTRY_THRESHOLD, TREND_ROUTED_INSTRUMENTS, _get_input_dir, load_spread_data, load_core_seed, display_key, get_realtime_spread_bp, _get_ttm_display
 from ..scoring import compute_scan_score
-from .backtest_state import backtest_open_direction
+from .backtest_state import backtest_open_direction, short_allowed
 from .helpers import (
     _ALPHA_CORR_COLORSCALE,
     _apply_seasonal_quality_gate,
@@ -43,8 +43,34 @@ def register_scan_callbacks(app) -> None:
     _carry_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'carry_sigma', 'breakeven_3m', 'seasonal_edge_bps', 'seasonal_label', 'score', 'stop_loss', 'profit_target']
     _event_display_cols = ['ID', 'spread_type', 'ttm_display', 'direction', 'regime', 'Zscore', 'spread', 'mean', 'vol', 'carry_roll', 'breakeven_3m', 'seasonal_edge_bps', 'seasonal_label', 'score', 'event_age_days', 'stop_loss', 'profit_target']
 
+    def _without_core(df: pd.DataFrame) -> pd.DataFrame:
+        """Drop Core-book (TenorSpread seed) rows from scan candidates.
+
+        The Core book follows the backtest with its saved per-instrument params
+        (Open Positions (Core) card), not the scan's MR/Carry gates -- the two
+        disagreed on 12 of 14 names, e.g. Carry says BUY where the backtest is
+        SELL. Satellite and non-seed TenorSpread rows are unaffected.
+        """
+        if df is None or df.empty or 'ID' not in df.columns or 'spread_type' not in df.columns:
+            return df
+        try:
+            seed = {str(x.get('ID', '')) for x in load_core_seed()}
+        except Exception:
+            return df
+        is_core = df['spread_type'].astype(str).eq('TenorSpread') & df['ID'].astype(str).isin(seed)
+        return df[~is_core].copy() if is_core.any() else df
+
+    def _without_unshortable(df: pd.DataFrame) -> pd.DataFrame:
+        """Drop SELL candidates on LGB/MTN/NCD spreads (credit bond leg can't be shorted)."""
+        if df is None or df.empty or 'ID' not in df.columns or 'direction' not in df.columns:
+            return df
+        bad = (df['direction'].astype(str).str.strip().str.upper().eq('SELL')
+               & ~df['ID'].astype(str).map(short_allowed))
+        return df[~bad].copy() if bad.any() else df
+
     def _render_candidates_from_df(df_input: pd.DataFrame):
-        if df_input is None or df_input.empty:
+        df_input = _without_unshortable(_without_core(df_input))
+        if df_input is None:
             return html.Div("No candidates found.", style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '6px 8px', 'fontStyle': 'italic'}), [], {}
 
         _all_display_cols = list(dict.fromkeys(_mr_display_cols + _trend_display_cols + _carry_display_cols + _event_display_cols + ['style']))
@@ -417,15 +443,40 @@ def register_scan_callbacks(app) -> None:
         # direction); a backtest that cannot run leaves the saved row as-is.
         open_core_rows = []
         n_core_flat = 0
+        # The Core book is the full seed membership (load_core_seed, ~24 names),
+        # not just the few instruments in the saved positions file: the
+        # backtest can be holding names that were never saved there, and those
+        # were silently never shown. Saved rows win when both exist.
+        _core_rows_by_id = {}
         for p in _load_alpha_book_positions():
-            if str(p.get('spread_type', '') or '') != 'TenorSpread':
+            if str(p.get('spread_type', '') or '') == 'TenorSpread':
+                _core_rows_by_id[str(p.get('instrument', '') or '')] = p
+        try:
+            _core_snap = load_spread_data('TenorSpread')
+        except Exception:
+            _core_snap = None
+        for _c in load_core_seed():
+            _cid = str(_c.get('ID', '') or '')
+            if not _cid or _cid in _core_rows_by_id:
                 continue
-            state = backtest_open_direction('TenorSpread', str(p.get('instrument', '') or ''))
+            _z = np.nan
+            if isinstance(_core_snap, pd.DataFrame) and _cid in _core_snap.index and 'Zscore' in _core_snap.columns:
+                _z = pd.to_numeric(_core_snap.loc[_cid, 'Zscore'], errors='coerce')
+            _core_rows_by_id[_cid] = {
+                'ID': _cid, 'instrument': _cid, 'spread_type': 'TenorSpread',
+                'Zscore': None if pd.isna(_z) else float(_z), 'direction': '',
+            }
+        for inst_id, p in _core_rows_by_id.items():
+            state = backtest_open_direction('TenorSpread', inst_id)
             if state == 'FLAT':
                 n_core_flat += 1
                 continue
             if state in ('BUY', 'SELL'):
                 p = {**p, 'direction': state}
+            elif not p.get('direction'):
+                continue  # backtest could not run and nothing saved to show
+            if str(p.get('direction', '')).upper() == 'SELL' and not short_allowed(inst_id):
+                continue  # credit-bond leg cannot be shorted
             open_core_rows.append(p)
         open_core_cards = _signal_cards(open_core_rows) if open_core_rows else []
 
@@ -434,14 +485,14 @@ def register_scan_callbacks(app) -> None:
             sections.append(html.Div([
                 _section_header('Open Positions (Core)', len(open_core_rows), THEME['accent']),
                 html.P(
-                    "Currently held -- not a fresh scan signal, may not clear today's entry gate.",
+                    "Core book names the backtest holds today (incl. names not in the saved positions file) -- not a fresh scan signal, may not clear today's entry gate.",
                     style={'color': THEME['text_sub'], 'fontSize': '9px', 'fontStyle': 'italic', 'marginTop': '-4px', 'marginBottom': '8px'},
                 ),
                 _three_col_grid(open_core_cards),
             ], style={'marginBottom': '18px'}))
         elif n_core_flat:
             sections.append(html.Div(
-                f"Open Positions (Core): all {n_core_flat} held Core position(s) are FLAT in the backtest -- none shown.",
+                f"Open Positions (Core): all {n_core_flat} Core name(s) are FLAT in the backtest -- none shown.",
                 style={'color': THEME['text_sub'], 'fontSize': '10px', 'fontStyle': 'italic',
                        'marginBottom': '14px'},
             ))
@@ -815,6 +866,7 @@ def register_scan_callbacks(app) -> None:
                     df_all = df_all[~_fails_carry_gate].copy()
 
         table_out, candidate_data, regime_store = _render_candidates_from_df(df_all)
+        df_all = _without_unshortable(_without_core(df_all))
         style_counts = (
             df_all.get('style', pd.Series(dtype=str))
             .astype(str).str.strip().str.lower().value_counts()
@@ -824,7 +876,7 @@ def register_scan_callbacks(app) -> None:
         carry_count = int(style_counts.get('carry', 0))
         event_count = int(style_counts.get('eventdriven', 0))
         status = (
-            f"Found {len(df_all)} candidates at {scanned_time} "
+            f"Found {len(df_all)} candidates at {scanned_time} (Core book follows backtest) "
             f"[MR={mr_count}, Momentum={trend_count}, Carry={carry_count}, Event-Driven={event_count}]"
         )
 
