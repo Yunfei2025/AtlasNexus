@@ -416,11 +416,13 @@ def register_scan_callbacks(app) -> None:
         # a saved position the backtest is flat on (and takes the backtest's
         # direction); a backtest that cannot run leaves the saved row as-is.
         open_core_rows = []
+        n_core_flat = 0
         for p in _load_alpha_book_positions():
             if str(p.get('spread_type', '') or '') != 'TenorSpread':
                 continue
             state = backtest_open_direction('TenorSpread', str(p.get('instrument', '') or ''))
             if state == 'FLAT':
+                n_core_flat += 1
                 continue
             if state in ('BUY', 'SELL'):
                 p = {**p, 'direction': state}
@@ -437,6 +439,12 @@ def register_scan_callbacks(app) -> None:
                 ),
                 _three_col_grid(open_core_cards),
             ], style={'marginBottom': '18px'}))
+        elif n_core_flat:
+            sections.append(html.Div(
+                f"Open Positions (Core): all {n_core_flat} held Core position(s) are FLAT in the backtest -- none shown.",
+                style={'color': THEME['text_sub'], 'fontSize': '10px', 'fontStyle': 'italic',
+                       'marginBottom': '14px'},
+            ))
 
         if mr_cards:
             sections.append(html.Div([
