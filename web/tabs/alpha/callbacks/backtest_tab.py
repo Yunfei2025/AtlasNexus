@@ -456,8 +456,32 @@ def register_backtest_callbacks(app) -> None:
                     f"  (score: {score:+.2f}, source: {regime_source})",
                     style={'color': THEME['text_sub'], 'fontSize': '11px'},
                 )
+            # What the backtest actually trades: the monthly router's assigned
+            # style (updates at review dates; sticky through 'uncertain'
+            # months). The classifier above is recomputed on today's data and
+            # can differ from it, so show both rather than let them look
+            # contradictory.
+            routed_extra = None
+            if spread_type == 'TenorSpread' and not str(instrument).startswith(MACRO_PREFIX):
+                try:
+                    _res = run_instrument_backtest(spread_type, instrument)
+                    _sched = _res.get('monthly_style_schedule') if isinstance(_res, dict) else None
+                    if isinstance(_sched, pd.DataFrame) and not _sched.empty:
+                        _last = _sched.iloc[-1]
+                        _assigned = str(_last.get('assigned_style', '') or '').upper()
+                        _mreg = str(_last.get('regime', '') or '')
+                        _label = {'MR': 'MEAN-REVERTING', 'TREND': 'MOMENTUM'}.get(_assigned, _assigned)
+                        routed_extra = html.Div([
+                            html.Span("Monthly router (traded): ", style={'color': THEME['text_sub'], 'fontSize': '12px'}),
+                            html.Span(_label, style={'color': THEME['accent'], 'fontWeight': 'bold', 'fontSize': '13px'}),
+                            html.Span(f"  (last review: {_mreg})", style={'color': THEME['text_sub'], 'fontSize': '11px'}),
+                        ])
+                except Exception:
+                    routed_extra = None
             badge = html.Div([
-                html.Span("Current month: ", style={'color': THEME['text_sub'], 'fontSize': '12px'}),
+                *([routed_extra] if routed_extra is not None else []),
+                html.Span("Current month (60d classifier): " if routed_extra is not None else "Current month: ",
+                          style={'color': THEME['text_sub'], 'fontSize': '12px'}),
                 html.Span(regime.upper().replace('_', '-'), style={'color': regime_color, 'fontWeight': 'bold', 'fontSize': '13px'}),
                 badge_extra,
             ])

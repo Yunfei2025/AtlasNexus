@@ -591,8 +591,10 @@ def _load_leg_data() -> dict:
         'fs_irs': {'TS': 'FR007S2Y.IR', 'TF': 'FR007S5Y.IR',
                    'T': 'FR007S10Y.IR', 'TL': 'FR007S10Y.IR'},
     }
+    # 1Y floor is 0.5, not 0.9: a fresh 1Y issue ages below 0.9y within ~5 weeks
+    # and the 1Y leg would go blank (CDB 260206.IB, issued 2026-08, has 0.78y left).
     _OTR_BANDS = {
-        '1Y': (0.9, 1.2), '2Y': (1.6, 2.5), '5Y': (4.0, 6.0),
+        '1Y': (0.5, 1.2), '2Y': (1.6, 2.5), '5Y': (4.0, 6.0),
         '10Y': (8.5, 10.0), '20Y': (15.0, 25.0), '30Y': (25.0, 30.0),
     }
 
