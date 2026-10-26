@@ -6,6 +6,7 @@ from __future__ import annotations
 from dash import dcc, html
 
 from multiasset.storage import load_last_asset_pool
+from settings.general import DEFAULT_BETA_CAPITAL_BN
 
 from ...ui.components import asset_pool_item
 
@@ -50,7 +51,7 @@ def build_multiasset_portfolio_layout():
 
     initial_pool = []
     initial_n_clicks = 0
-    initial_capital = 10
+    initial_capital = DEFAULT_BETA_CAPITAL_BN  # 90% of the 20BN total (see settings.general)
     initial_unit = 'billion'
 
     if last_run_data:

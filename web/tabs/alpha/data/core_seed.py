@@ -31,6 +31,7 @@ Schema (single pickle, ``DIR_INPUT / 'alpha_core_seed.pkl'``):
 from __future__ import annotations
 
 import pickle
+import re
 from typing import Optional
 
 import pandas as pd
@@ -45,6 +46,16 @@ _CORE_SPREAD_TYPE = 'TenorSpread'
 # a much longer one risks the seed drifting from a universe that has actually
 # changed (new long-history instrument, one dropped out).
 CORE_SEED_MAX_AGE_DAYS = 90
+
+
+# The 7y point is not traded, so no Core instrument may contain a 7s leg
+# (e.g. CGB-5s7s10s, CDB-5s7s10s). Matches a standalone '7s' tenor token.
+_SEVEN_YEAR_LEG = re.compile(r'(?<![0-9])7s(?![a-z])', re.IGNORECASE)
+
+
+def has_7y_leg(instrument_id) -> bool:
+    """True if the instrument ID has a 7y leg (excluded from the Core book)."""
+    return bool(_SEVEN_YEAR_LEG.search(str(instrument_id or '')))
 
 
 def _seed_path():
@@ -67,7 +78,7 @@ def _build_core_seed(spread_type: str = _CORE_SPREAD_TYPE) -> list[dict]:
     return [
         {'spread_type': str(r.get('spread_type', spread_type)), 'ID': str(r.get('ID', ''))}
         for r in records
-        if r.get('ID')
+        if r.get('ID') and not has_7y_leg(r.get('ID'))
     ]
 
 
@@ -88,7 +99,8 @@ def load_core_seed(
         if isinstance(built_at, pd.Timestamp):
             age_days = (pd.Timestamp.now() - built_at).days
             if age_days < max_age_days:
-                return list(cached.get('instruments') or [])
+                return [x for x in (cached.get('instruments') or [])
+                        if not has_7y_leg(x.get('ID'))]
 
     instruments = _build_core_seed(spread_type)
     payload = {

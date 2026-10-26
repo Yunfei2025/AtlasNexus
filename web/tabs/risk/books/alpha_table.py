@@ -493,6 +493,22 @@ def register_alpha_book_table_callbacks(app):
                     elif _tp is not None and _pnl_dir >= abs(_tp):
                         _alert_rows.append((_tid, f"Target reached (Δ={_pnl_dir:+.1f} bp, target=+{abs(_tp):.1f} bp)", 'target'))
                         _alert_ids['target'].add(_tid)
+                # Signal-based exit for Core names with saved params: the backtest
+                # (same params the signal uses) has closed a trade opened on/after
+                # this position's open date -> the signal says close.
+                if (str(r.get('Spread Type', '')) == 'TenorSpread' and _od_s
+                        and _tid not in _alert_ids['stop'] and _tid not in _alert_ids['target']):
+                    try:
+                        from web.tabs.alpha.data import has_saved_state as _has_saved
+                        from web.tabs.alpha.callbacks.core_positions import backtest_exit_signal as _bt_exit
+                        _sig = _bt_exit(_tid, _od_s) if _has_saved('TenorSpread', _tid) else None
+                    except Exception:
+                        _sig = None
+                    if _sig is not None:
+                        _why, _bdir, _bex = _sig
+                        _sev = 'stop' if _why == 'stop_loss' else 'target' if _why == 'target' else 'hold'
+                        _alert_rows.append((_tid, f"Signal says CLOSE: backtest exited on {_bex:%Y-%m-%d} ({_why or 'exit'})", _sev))
+                        _alert_ids[_sev].add(_tid)
                 if _days is not None and _days >= 21 and _tid not in _alert_ids['stop'] and _tid not in _alert_ids['target']:
                     _alert_rows.append((_tid, f"Long hold: {_days}d — review if signal or carry has changed", 'hold'))
                     _alert_ids['hold'].add(_tid)

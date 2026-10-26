@@ -85,6 +85,7 @@ from .saved_portfolio_backtest import (
 )
 from .core_seed import (
     load_core_seed,
+    has_7y_leg,
     core_seed_age_days,
     CORE_SEED_MAX_AGE_DAYS,
 )
@@ -126,6 +127,7 @@ __all__ = [
     'save_portfolio_backtest_result',
     'load_portfolio_backtest_result',
     'load_core_seed',
+    'has_7y_leg',
     'core_seed_age_days',
     'CORE_SEED_MAX_AGE_DAYS',
 ]

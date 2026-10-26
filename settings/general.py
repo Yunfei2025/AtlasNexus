@@ -106,3 +106,12 @@ class DateConfig:
         return {k: v.strftime("%Y%m%d") for k, v in dates.items()}
 
 
+
+
+# ── Default capital split (Summary > Books > Portfolio Combination, Beta and
+# Alpha portfolio tabs). One source so the three default inputs stay consistent:
+# beta = total * (1 - share) notional, alpha = total * share margin.
+DEFAULT_TOTAL_CAPITAL_BN = 20.0
+DEFAULT_ALPHA_MARGIN_SHARE = 0.10
+DEFAULT_BETA_CAPITAL_BN = DEFAULT_TOTAL_CAPITAL_BN * (1.0 - DEFAULT_ALPHA_MARGIN_SHARE)   # 18 BN
+DEFAULT_ALPHA_CAPITAL_MM = DEFAULT_TOTAL_CAPITAL_BN * DEFAULT_ALPHA_MARGIN_SHARE * 1000.0  # 2,000 MM

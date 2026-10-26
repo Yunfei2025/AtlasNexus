@@ -7,6 +7,7 @@ from typing import Dict, List
 
 from dash import dcc, html, dash_table
 
+from settings.general import DEFAULT_ALPHA_CAPITAL_MM
 from .data import THEME, SPREAD_CATEGORIES
 from ..ui.components import button as an_button
 
@@ -548,7 +549,7 @@ def build_portfolio_layout() -> html.Div:
                     html.Label("Total Capital", style=_label_style),
                     html.Div([
                         dcc.Input(
-                            id='alpha-total-capital', type='text', value='1000', inputMode='numeric',
+                            id='alpha-total-capital', type='text', value=f'{DEFAULT_ALPHA_CAPITAL_MM:.0f}', inputMode='numeric',
                             style={'width': '70px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',
                                    'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',

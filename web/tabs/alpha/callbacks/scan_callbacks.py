@@ -17,6 +17,7 @@ from dash.exceptions import PreventUpdate
 from ..data import THEME, ZSCORE_ENTRY_THRESHOLD, TREND_ROUTED_INSTRUMENTS, _get_input_dir, load_spread_data, load_core_seed, display_key, get_realtime_spread_bp, _get_ttm_display
 from ..scoring import compute_scan_score
 from .backtest_state import backtest_open_direction, short_allowed
+from .core_positions import get_open_core_positions
 from .helpers import (
     _ALPHA_CORR_COLORSCALE,
     _apply_seasonal_quality_gate,
@@ -441,43 +442,7 @@ def register_scan_callbacks(app) -> None:
         # Reconciled against the Backtest tab's engine so the card never shows
         # a saved position the backtest is flat on (and takes the backtest's
         # direction); a backtest that cannot run leaves the saved row as-is.
-        open_core_rows = []
-        n_core_flat = 0
-        # The Core book is the full seed membership (load_core_seed, ~24 names),
-        # not just the few instruments in the saved positions file: the
-        # backtest can be holding names that were never saved there, and those
-        # were silently never shown. Saved rows win when both exist.
-        _core_rows_by_id = {}
-        for p in _load_alpha_book_positions():
-            if str(p.get('spread_type', '') or '') == 'TenorSpread':
-                _core_rows_by_id[str(p.get('instrument', '') or '')] = p
-        try:
-            _core_snap = load_spread_data('TenorSpread')
-        except Exception:
-            _core_snap = None
-        for _c in load_core_seed():
-            _cid = str(_c.get('ID', '') or '')
-            if not _cid or _cid in _core_rows_by_id:
-                continue
-            _z = np.nan
-            if isinstance(_core_snap, pd.DataFrame) and _cid in _core_snap.index and 'Zscore' in _core_snap.columns:
-                _z = pd.to_numeric(_core_snap.loc[_cid, 'Zscore'], errors='coerce')
-            _core_rows_by_id[_cid] = {
-                'ID': _cid, 'instrument': _cid, 'spread_type': 'TenorSpread',
-                'Zscore': None if pd.isna(_z) else float(_z), 'direction': '',
-            }
-        for inst_id, p in _core_rows_by_id.items():
-            state = backtest_open_direction('TenorSpread', inst_id)
-            if state == 'FLAT':
-                n_core_flat += 1
-                continue
-            if state in ('BUY', 'SELL'):
-                p = {**p, 'direction': state}
-            elif not p.get('direction'):
-                continue  # backtest could not run and nothing saved to show
-            if str(p.get('direction', '')).upper() == 'SELL' and not short_allowed(inst_id):
-                continue  # credit-bond leg cannot be shorted
-            open_core_rows.append(p)
+        open_core_rows, n_core_flat = get_open_core_positions()
         open_core_cards = _signal_cards(open_core_rows) if open_core_rows else []
 
         sections = []

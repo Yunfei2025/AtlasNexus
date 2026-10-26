@@ -7,6 +7,7 @@ from dash import dcc, html, dash_table
 import plotly.graph_objects as go
 
 from web.tabs.beta.data import THEME, ALLOCATION_RESULTS
+from settings.general import DEFAULT_TOTAL_CAPITAL_BN, DEFAULT_ALPHA_MARGIN_SHARE
 
 
 def build_risk_layout():
@@ -195,7 +196,7 @@ def build_risk_layout():
                         # (see _render_combination) -- nothing downstream of
                         # that conversion point needs to know the UI's unit.
                         dcc.Input(id='summary-combo-total-capital', type='number',
-                                  value=20, min=0.001, step=1, debounce=True,
+                                  value=DEFAULT_TOTAL_CAPITAL_BN, min=0.001, step=1, debounce=True,
                                   style={'width': '140px', 'backgroundColor': THEME['bg_input'],
                                          'border': f'1px solid {THEME["table_header"]}',
                                          'borderRadius': '4px', 'padding': '7px 9px',
@@ -223,7 +224,7 @@ def build_risk_layout():
                         # window only changes the *performance measured at
                         # this split*, not the split itself.
                         dcc.Input(id='summary-combo-alpha-margin-share', type='number',
-                                  value=10, min=0, max=100, step=5, debounce=True,
+                                  value=DEFAULT_ALPHA_MARGIN_SHARE * 100, min=0, max=100, step=5, debounce=True,
                                   style={'width': '90px', 'backgroundColor': THEME['bg_input'],
                                          'border': f'1px solid {THEME["table_header"]}',
                                          'borderRadius': '4px', 'padding': '7px 9px',

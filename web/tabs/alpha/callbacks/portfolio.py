@@ -16,15 +16,17 @@ from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
 
 from settings.paths import DIR_INPUT as _DIR_INPUT
+from settings.general import DEFAULT_ALPHA_CAPITAL_MM
 from ...risk.helpers import _leg_volume_ratio
 
 from ..data import (
     THEME, SPREAD_CATEGORIES, ZSCORE_ENTRY_THRESHOLD,
     load_spread_data, load_spread_timeseries, display_key,
-    _get_duration_mult, resolve_legs, resolve_legs3, fly_leg_dv01_ratios, _load_leg_data,
+    _get_duration_mult, has_saved_state, resolve_legs, resolve_legs3, fly_leg_dv01_ratios, _load_leg_data,
 )
 from ..data.duration import _tenor_to_duration
 from ..scoring import _compute_risk_parity_weights
+from .core_positions import mr_stop_target_bp
 
 
 _SUMMARY_ALPHA_PARQUET = str(_DIR_INPUT / 'summary_alpha_portfolio.parquet')
@@ -285,7 +287,7 @@ def register_portfolio_callbacks(app) -> None:
             # comma/space-tolerant typing), so a cleared or non-numeric value
             # must fall back to the default rather than raising and blanking
             # the whole results panel.
-            total_capital = _as_positive_float(total_capital) or 1000.0
+            total_capital = _as_positive_float(total_capital) or DEFAULT_ALPHA_CAPITAL_MM
             total_capital_mm = total_capital
             total_dv01_budget = _as_positive_float(total_dv01_budget) or 10.0
             # Book is financed entirely via TRS: bond legs are charged a flat
@@ -862,6 +864,22 @@ def register_portfolio_callbacks(app) -> None:
                     ),
                 ], style={'flexBasis': '100%'}))
 
+            # Core (TenorSpread) names with saved params: derive Stop/Target from
+            # those params (stop_z / exit_z) instead of the generic scan formula.
+            # Mean-reverting names only; others keep the generic values.
+            if 'stop_loss' in df_scored.columns and 'profit_target' in df_scored.columns:
+                for _i in df_scored.index[df_scored['spread_type'].astype(str).eq('TenorSpread')]:
+                    _cid = str(df_scored.at[_i, 'ID'])
+                    if not has_saved_state('TenorSpread', _cid):
+                        continue
+                    try:
+                        _st = mr_stop_target_bp(_cid)
+                    except Exception:
+                        _st = None
+                    if _st is not None:
+                        df_scored.at[_i, 'stop_loss'] = round(_st[0], 4)
+                        df_scored.at[_i, 'profit_target'] = round(_st[1], 4)
+
             # Build downstream payload after leg + ratio enrichment so later
             # stages (Summary/Backtest/etc.) receive the ratio field.
             df_nonzero = df_scored[df_scored['weight'] > 0.0001].copy()
@@ -871,7 +889,7 @@ def register_portfolio_callbacks(app) -> None:
                 'ID', 'Leg1', 'Leg2', 'Leg3', 'ratio_v2_v1', 'ratio_v3_v1', 'style', 'direction',
                 'Zscore', 'spread', 'mean', 'vol',
                 'carry_roll', 'breakeven_3m', 'stop_loss', 'profit_target',
-                'seasonal_edge_bps', 'score',
+                'seasonal_edge_bps',
                 'weight', 'risk_contribution', 'notional_mm', 'margin_mm', 'DV01_k',
             ]
             available_cols = [c for c in display_cols if c in df_scored.columns]
@@ -917,20 +935,22 @@ def register_portfolio_callbacks(app) -> None:
                 df_display['style'] = df_display['style'].map(_style_to_regime_label)
 
             for col in df_display.columns:
-                if col == 'risk_contribution':
-                    df_display[col] = df_display[col].round(2)
-                elif df_display[col].dtype in ['float64', 'float32']:
+                # Display precision: 1 decimal everywhere except weight, a
+                # 0-1 fraction that would collapse to 0.0/0.1 at 1 decimal.
+                if col == 'weight':
                     df_display[col] = df_display[col].round(4)
+                elif df_display[col].dtype in ['float64', 'float32']:
+                    df_display[col] = df_display[col].round(1)
 
             # Display notional as absolute size; trade direction is already in DIR.
             if 'notional_mm' in df_display.columns:
-                df_display['notional_mm'] = pd.to_numeric(df_display['notional_mm'], errors='coerce').abs().round(4)
+                df_display['notional_mm'] = pd.to_numeric(df_display['notional_mm'], errors='coerce').abs().round(1)
 
             if 'carry_roll' in df_display.columns and 'direction' in df_display.columns:
                 _sell = df_display['direction'].astype(str).str.strip().str.upper().eq('SELL')
                 df_display.loc[_sell, 'carry_roll'] = (
                     pd.to_numeric(df_display.loc[_sell, 'carry_roll'], errors='coerce')
-                    .multiply(-1).round(4)
+                    .multiply(-1).round(1)
                 )
 
             # Mark held rows (a saved position being resized, not a brand-new
@@ -945,7 +965,7 @@ def register_portfolio_callbacks(app) -> None:
 
             summary_row: dict = {c: "" for c in df_display.columns}
             summary_row['ID'] = 'TOTAL'
-            for col, decimals in [('weight', 4), ('risk_contribution', 2), ('notional_mm', 0), ('margin_mm', 2)]:
+            for col, decimals in [('weight', 4), ('risk_contribution', 1), ('notional_mm', 0), ('margin_mm', 1)]:
                 if col in df_display.columns:
                     total = df_display[col].sum()
                     summary_row[col] = round(total, decimals)

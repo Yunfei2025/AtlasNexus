@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 
 from ..data import THEME, SPREAD_CATEGORIES, _get_input_dir, _load_pickle_safe, load_spread_data, load_spread_timeseries, display_key, _get_duration_mult
 from ..scoring import compute_spread_correlation, rank_low_correlation_pairs, select_diverse_instruments
+from .core_positions import get_open_core_positions
 from .helpers import _ALPHA_CORR_COLORSCALE, _get_upstream_regime, _load_alpha_book_positions, _merge_curated_entries, _normalize_corr_labels, _build_heatmap, _style_to_regime
 
 
@@ -55,10 +56,15 @@ def register_correlation_callbacks(app) -> None:
         # 2026-09-25 per user: the full core seed made an ordinary 5-candidate
         # check render a 24+-instrument matrix, most of it names with no
         # position on today.
-        core_seed = [
-            p for p in _load_alpha_book_positions()
-            if str(p.get('spread_type', '') or '') == 'TenorSpread'
-        ]
+        # Same list as the Candidates tab's Open Positions (Core) card
+        # (backtest-held names, incl. ones missing from the saved file).
+        try:
+            core_seed = [
+                {**p, 'ID': str(p.get('ID') or p.get('instrument') or ''), 'spread_type': 'TenorSpread'}
+                for p in get_open_core_positions()[0]
+            ]
+        except Exception:
+            core_seed = []
 
         if all_candidates and len(all_candidates) > 0:
             df_candidates = pd.DataFrame(all_candidates)
@@ -161,8 +167,10 @@ def register_correlation_callbacks(app) -> None:
         # than I asked for" (see prior 24-name core-seed version of this note).
         core_seed_note = html.Div()
         if core_seed:
-            n_dropped = len(core_seed) - len(locked_in_matrix)
-            dropped_txt = f', {n_dropped} without price history for this lookback' if n_dropped > 0 else ''
+            _dropped = [c['ID'] for c in core_seed
+                        if display_key(c['spread_type'], c['ID']) not in corr_matrix.columns]
+            dropped_txt = (f", {len(_dropped)} without price history for this lookback "
+                           f"({', '.join(_dropped)})") if _dropped else ''
             core_seed_note = html.Div(
                 f"ℹ️ Showing {len(diverse_keys)} candidate(s) + {len(locked_in_matrix)} open core "
                 f"(TenorSpread) position(s) as a fixed diversification backdrop{dropped_txt} -- "
@@ -188,11 +196,12 @@ def register_correlation_callbacks(app) -> None:
         else:
             heatmap_div = html.Div("Not enough assets passed the correlation filter.", style={'color': THEME['text_sub']})
 
-        warning_div = html.Div()
+        _warns: list = []
         if len(high_corr) > 0:
-            warning_div = html.Div([
+            _warns.append(html.Div([
                 html.P(f"⚠️ {len(high_corr)} pairs exceed max correlation threshold ({max_corr}). Consider removing correlated candidates before sizing.", style={'color': THEME['warning'], 'fontSize': '12px', 'marginTop': '10px'})
-            ])
+            ]))
+        warning_div = html.Div(_warns)
 
         col_key_to_stype: dict = {}
         col_key_to_id: dict = {}
@@ -233,10 +242,25 @@ def register_correlation_callbacks(app) -> None:
                 row_meta['regime'] = _get_upstream_regime(stype, inst) or 'uncertain'
             curated_instruments.append(row_meta)
 
-        curated_instruments = _merge_curated_entries(curated_instruments)
+        # Open Core names are always curated regardless of correlation (they
+        # are the standing book, not picks subject to the max-|corr| filter);
+        # the Portfolio tab shows those already saved under Saved Positions.
+        core_entries = []
+        for c in core_seed:
+            _cz = c.get('Zscore')
+            core_entries.append({
+                'spread_type': 'TenorSpread',
+                'instrument': c['ID'],
+                'manual': False,
+                # Actual regime of the trade the backtest holds (no re-selection needed).
+                'regime': c.get('regime') or _get_upstream_regime('TenorSpread', c['ID']) or 'uncertain',
+                'direction': str(c.get('direction', '') or ''),
+                **({'Zscore': float(_cz)} if _cz is not None else {}),
+            })
+        curated_instruments = _merge_curated_entries(core_entries, curated_instruments)
 
-        if diverse_keys:
-            valid_keys = [k for k in diverse_keys if k in corr_matrix.columns]
+        if diverse_keys or locked_in_matrix:
+            valid_keys = list(dict.fromkeys(k for k in (locked_in_matrix + diverse_keys) if k in corr_matrix.columns))
             corr_matrix_store = corr_matrix.loc[valid_keys, valid_keys]
         else:
             corr_matrix_store = corr_matrix

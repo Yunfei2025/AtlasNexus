@@ -361,6 +361,18 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     duration_s = pd.Series(duration_by_trade).reindex(returns.columns).fillna(1.0)
     price_returns = returns.mul(duration_s, axis='columns')
 
+    # Sign each column by the position direction (BUY = +1, SELL = -1 on the
+    # stored spread series) so the covariance -- and hence RC and the weights --
+    # reflect actual position P&L risk. Without this, a SELL trade positively
+    # correlated with a BUY trade showed positive RC although it hedges it.
+    # Missing/unknown direction is treated as BUY. vol_computed above is
+    # unsigned on purpose (it is a displayed spread volatility).
+    if 'direction' in df_candidates.columns:
+        _dir = (df_candidates.drop_duplicates('ID').set_index('ID')['direction']
+                .astype(str).str.strip().str.upper())
+        _sign = _dir.map({'BUY': 1.0, 'SELL': -1.0}).reindex(returns.columns).fillna(1.0)
+        price_returns = price_returns.mul(_sign, axis='columns')
+
     # Keep the table's Vol(BP) field as raw annualized spread volatility.  The
     # duration-adjusted price_returns below are used only for the risk-parity
     # covariance; reporting them as spread volatility would inflate long-tenor
@@ -943,7 +955,7 @@ def build_default_category_portfolio(
     score}`` records in the same shape ``alpha-optimized-weights`` stores, so
     it can be fed directly into the portfolio backtest.
     """
-    from .data import load_spread_data
+    from .data import load_spread_data, has_7y_leg
 
     snap = load_spread_data(spread_type)
     if snap is None or snap.empty:
@@ -957,7 +969,8 @@ def build_default_category_portfolio(
         c for c in ts.columns
         if pd.to_numeric(ts[c], errors='coerce').dropna().shape[0] >= min_history_days
     }
-    universe = [i for i in snap.index if i in long_hist]
+    # 7y is not traded: drop any spread with a 7s leg (CGB-5s7s10s, ...).
+    universe = [i for i in snap.index if i in long_hist and not has_7y_leg(i)]
     if not universe:
         return []
 
