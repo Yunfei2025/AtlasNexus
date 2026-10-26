@@ -4,6 +4,7 @@
 bucket removed from TERM_BUCKETS (e.g. 7Y) would otherwise linger forever
 in RefSpot/RefTerm, displayed in the Market Monitor as if it were live.
 """
+import datetime as dt
 import os
 import pickle
 import tempfile
@@ -100,3 +101,50 @@ def test_trim_stale_columns_preserves_other_pickle_keys():
     assert 'Factors' in reloaded
     assert 'ImpliedVol' in reloaded
     assert list(reloaded['RefBond'].columns) == ['Term near 0.3Y', 'Term near 10Y']
+
+
+def test_updatepkl_handles_duplicate_date_labels_after_alignment():
+    """A single calendar day may appear as both datetime.date and Timestamp after
+    the index normalization step. The merge must collapse duplicates and keep the
+    newest value instead of tripping pandas' duplicate-label reindex path."""
+    tmpdir = tempfile.mkdtemp()
+    file_path = os.path.join(tmpdir, 'series-date-dup.pkl')
+
+    existing = {
+        'Spread': pd.Series(
+            [1.0],
+            index=pd.Index([pd.Timestamp('2026-01-01')], dtype=object),
+        )
+    }
+    with open(file_path, 'wb') as f:
+        pickle.dump(existing, f)
+
+    incoming = {
+        'Spread': pd.Series(
+            [2.0, 3.0],
+            index=pd.Index([
+                pd.Timestamp('2026-01-01'),
+                dt.date(2026, 1, 1),
+            ], dtype=object),
+        )
+    }
+
+    merged = updatePKL(incoming, file_path)
+    assert merged['Spread'].index.is_unique
+    assert merged['Spread'].loc[pd.Timestamp('2026-01-01')] == 3.0
+
+
+def test_manual_factor_refresh_marker_suppresses_stale_warning(monkeypatch, tmp_path):
+    """A successful manual factor-series rebuild should clear stale warnings until
+    the next refresh window expires, even if the underlying series still ends on
+    an older historical date."""
+    from web.tabs.beta.callbacks.backtest_rfbt import _train_predict
+
+    monkeypatch.setattr(_train_predict, 'DIR_INPUT', str(tmp_path))
+    stale_df = pd.DataFrame({'f1': [1.0]}, index=pd.DatetimeIndex([pd.Timestamp('2026-10-01')]))
+    with open(tmp_path / 'factor-rates.pkl', 'wb') as fh:
+        pickle.dump(stale_df, fh)
+
+    _train_predict.touch_factor_series_refresh_marker()
+
+    assert _train_predict.build_stale_data_warning() is None

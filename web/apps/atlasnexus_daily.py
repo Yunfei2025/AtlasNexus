@@ -1105,7 +1105,9 @@ def _dv_render(state, mode, row_start, row_n, column_start, column_n):
 
 
 @app.callback(
-    Output("an-gen-factor-series-status", "children"),
+    [Output("an-gen-factor-series-status", "children"),
+     Output("factor-signal-container", "children"),
+     Output("factor-train-status", "children")],
     Input("an-btn-gen-factor-series", "n_clicks"),
     prevent_initial_call=True,
 )
@@ -1116,11 +1118,30 @@ def _gen_factor_series(n_clicks):
     try:
         from multiasset.factor_backtest import generate_factor_rates, generate_factor_credit
         from settings.paths import DIR_INPUT
+        from web.tabs.beta.callbacks.backtest_rfbt._train_predict import touch_factor_series_refresh_marker
+
         df = generate_factor_rates(DIR_INPUT, save=True)
         df_cr = generate_factor_credit(DIR_INPUT, save=True)
-        return f"✅ Saved ({df.shape[1]} factors, {len(df)} days; credit: {df_cr.shape[1]} factors, {len(df_cr)} days)"
+        touch_factor_series_refresh_marker()
+        return (
+            f"✅ Saved ({df.shape[1]} factors, {len(df)} days; credit: {df_cr.shape[1]} factors, {len(df_cr)} days)",
+            html.Div(
+                "✅ Factor cache refreshed. Training will use the rebuilt factor series.",
+                style={'color': '#3ac1a4', 'padding': '12px 14px', 'border': '1px solid rgba(58, 193, 164, 0.45)',
+                       'borderRadius': '6px', 'backgroundColor': 'rgba(58, 193, 164, 0.1)', 'fontSize': '11px',
+                       'lineHeight': '1.5'}
+            ),
+            "Factor cache refreshed — ready for the next model train.",
+        )
     except Exception as exc:
-        return f"❌ {exc}"
+        return (
+            f"❌ {exc}",
+            html.Div(f"⚠️ Refresh failed: {exc}", style={'color': '#fbbf24', 'padding': '12px 14px',
+                                                        'border': '1px solid rgba(251, 191, 36, 0.5)',
+                                                        'borderRadius': '6px', 'backgroundColor': 'rgba(251, 191, 36, 0.12)',
+                                                        'fontSize': '11px', 'lineHeight': '1.5'}),
+            "Factor refresh failed.",
+        )
 
 
 # ---------------------------------------------------------------------------

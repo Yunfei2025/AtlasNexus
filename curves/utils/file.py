@@ -302,11 +302,25 @@ def updatePKL(dictn, file_path, rewrite=False):
                     if target_ser is None or not isinstance(target_ser, pd.Series):
                         target_ser = pd.Series(dtype=float)
                     target_ser, new_ser = _align_date_indexes(target_ser.copy(), new_ser.copy())
+
+                    # Mixed date-like labels can normalize to the same timestamp while
+                    # leaving duplicate labels in one side (e.g. Timestamp('2026-01-01')
+                    # and date(2026, 1, 1) both become the same datetime). Pandas' own
+                    # reindex path inside combine_first rejects that with a duplicate-label
+                    # ValueError, so collapse duplicates before the merge and keep the most
+                    # recent observation from the incoming update.
                     if not target_ser.index.is_unique:
                         target_ser = target_ser[~target_ser.index.duplicated(keep='last')]
                     if not new_ser.index.is_unique:
                         new_ser = new_ser[~new_ser.index.duplicated(keep='last')]
-                    combined = new_ser.combine_first(target_ser)
+
+                    try:
+                        combined = new_ser.combine_first(target_ser)
+                    except (TypeError, ValueError, pd.errors.InvalidIndexError):
+                        combined = pd.concat([target_ser, new_ser], axis=0)
+                        combined = combined[~combined.index.duplicated(keep='last')]
+                        combined = combined.sort_index()
+
                     if not combined.index.is_unique:
                         combined = combined[~combined.index.duplicated(keep='last')]
                     # Normalize mixed index types to DatetimeIndex when possible

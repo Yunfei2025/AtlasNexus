@@ -10,7 +10,7 @@ into Dash outputs."""
 from __future__ import annotations
 
 import os
-from datetime import date as _date
+from datetime import date as _date, datetime, timedelta
 
 from dash import html
 
@@ -72,6 +72,40 @@ def maybe_refresh_factor_data():
         print(f"Warning: factor-credit incremental update failed: {_ufc_exc}")
 
 
+def factor_series_refresh_marker_path():
+    """Return the cache marker written after a manual factor-series refresh."""
+    return os.path.join(str(DIR_INPUT), '.factor-series-refreshed-at.txt')
+
+
+def touch_factor_series_refresh_marker():
+    """Create a fresh marker to suppress stale warnings after a manual update."""
+    marker_path = factor_series_refresh_marker_path()
+    with open(marker_path, 'w', encoding='utf-8') as fh:
+        fh.write(datetime.utcnow().isoformat(timespec='seconds'))
+    return marker_path
+
+
+def _manual_factor_refresh_is_recent(max_age_hours: int = 24) -> bool:
+    """Manual generation should clear stale alerts for a short window.
+
+    This keeps the warning from lingering after the user has explicitly rebuilt
+    the factor cache, while still warning again if the cache ages out without a
+    fresh refresh.
+    """
+    marker_path = factor_series_refresh_marker_path()
+    if not os.path.exists(marker_path):
+        return False
+    try:
+        with open(marker_path, 'r', encoding='utf-8') as fh:
+            ts_text = (fh.read() or '').strip()
+        if not ts_text:
+            return False
+        refreshed_at = datetime.fromisoformat(ts_text)
+        return datetime.utcnow() - refreshed_at < timedelta(hours=max_age_hours)
+    except Exception:
+        return False
+
+
 def build_stale_data_warning():
     """Train/Predict only refresh factor-rates.pkl / factor-credit.pkl when
     FI_REFRESH_FACTOR_DATA is set — otherwise they train on whatever's
@@ -80,6 +114,8 @@ def build_stale_data_warning():
     warning, or None if the cache isn't stale (or its staleness can't be
     determined)."""
     try:
+        if _manual_factor_refresh_is_recent():
+            return None
         import pandas as _pd
         _rates_path = os.path.join(str(DIR_INPUT), 'factor-rates.pkl')
         if not os.path.exists(_rates_path):
