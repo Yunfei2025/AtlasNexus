@@ -41,6 +41,19 @@ def _coerce_float(value) -> float | None:
         return None
 
 
+def normalize_risk_ticker(value: str) -> str:
+    """Normalize instrument labels used by Summary/Risk cross-book aggregation.
+
+    Current rule: `NCD-<tenor>` and `NCD<tenor>` represent the same ticker,
+    so we collapse to `NCD<tenor>` (e.g. NCD-1Y -> NCD1Y).
+    """
+    text = str(value or "").strip()
+    match = re.match(r"^NCD-(\d+[MY])$", text.upper())
+    if match:
+        return f"NCD{match.group(1)}"
+    return text
+
+
 def beta_direction(capital) -> str:
     """'SELL' for a short beta position (negative capital), else 'BUY'.
 

@@ -14,7 +14,7 @@ from settings.paths import DIR_INPUT
 from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
 from web.tabs.beta.data import THEME
 from web.tabs.beta.callbacks._common import _SUMMARY_ALPHA_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET, _ALPHA_POSITIONS_PARQUET, _load_cr_ts, _price_progress_bar, _dir_badge, _style_badge, _signed_value_style, _zscore_cell_style, _sortable_header, _apply_sort
-from ..helpers import _alpha_progress_direction, _alpha_spread_pnl_bp, _coerce_float, _load_leg_data, _resolve_legs, _leg_volume_ratio, _row_key
+from ..helpers import _alpha_progress_direction, _alpha_spread_pnl_bp, _coerce_float, _load_leg_data, _resolve_legs, _leg_volume_ratio, _row_key, normalize_risk_ticker
 
 
 def register_alpha_book_table_callbacks(app):
@@ -273,6 +273,8 @@ def register_alpha_book_table_callbacks(app):
                         leg1, leg2 = str(saved_leg1), str(saved_leg2)
                     else:
                         leg1, leg2 = _resolve_bondcurve_legs(spread_type, trade_id, duration)
+                    leg1_display = normalize_risk_ticker(leg1)
+                    leg2_display = normalize_risk_ticker(leg2)
                     # Leg 3 only exists for 3-leg flies; blank for every other spread.
                     saved_leg3 = row.get('Leg3', None)
                     leg3 = '' if saved_leg3 in (None, '') or pd.isna(saved_leg3) else str(saved_leg3)
@@ -345,8 +347,8 @@ def register_alpha_book_table_callbacks(app):
                     display_rows.append({
                         '__row_key':              str(_row_idx),
                         'ID':                     trade_id,
-                        'Leg 1':                  leg1,
-                        'Leg 2':                  leg2,
+                        'Leg 1':                  leg1_display,
+                        'Leg 2':                  leg2_display,
                         'Leg 3':                  leg3,
                         'Ratio (V2/V1)':          leg_ratio,
                         'Target Volume Leg2 (MM CNY)': f"{leg2_target_volume:,.1f}" if leg2_target_volume is not None else '',

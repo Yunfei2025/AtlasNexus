@@ -32,6 +32,7 @@ from .charts import (
 )
 from .helpers import (
     beta_direction,
+    normalize_risk_ticker,
     _load_leg_data,
     _resolve_legs,
     _parse_repo_spread_legs,
@@ -221,6 +222,7 @@ def register_risk_dashboard_callbacks(app):
                     dv01_mm = 0.0
 
                 instrument = str(r.get('Instrument', ''))
+                instrument = normalize_risk_ticker(instrument)
                 beta_rows.append({
                     'Book': 'Beta', 'Name': name,
                     'Leg1': instrument,  # For Beta, Leg1 is the instrument itself
@@ -295,6 +297,9 @@ def register_risk_dashboard_callbacks(app):
                         leg1, leg2 = str(_sl1), str(_sl2)
                     else:
                         leg1, leg2 = _resolve_legs(stype, tid, duration, _ld)
+
+                    leg1 = normalize_risk_ticker(leg1)
+                    leg2 = normalize_risk_ticker(leg2)
 
                     # Accurate leg volumes: leg1 carries the full target
                     # notional; leg2 is duration-matched via Ratio (V2/V1) =
