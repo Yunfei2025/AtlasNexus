@@ -16,7 +16,7 @@ from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
 
 from settings.paths import DIR_INPUT as _DIR_INPUT
-from settings.general import DEFAULT_ALPHA_CAPITAL_MM
+from settings.general import DEFAULT_ALPHA_CAPITAL_MM, DEFAULT_ALPHA_BOND_MARGIN_RATE, DEFAULT_ALPHA_SWAP_MARGIN_RATE
 from ...risk.helpers import _leg_volume_ratio
 
 from ..data import (
@@ -154,6 +154,97 @@ def _scale_notionals_to_capital(
         scale = total_capital_mm / abs(raw_signed)
         out[mask] = np.floor(notional[mask] * scale / lot_mm) * lot_mm
     return out
+
+
+def netted_trs_margin_by_leg(
+    trades: Any, bond_margin_rate: float, swap_margin_rate: float,
+) -> dict:
+    """Book-level (netted) TRS / derivative margin, attributed to each leg code.
+
+    ``trades`` is one list per Alpha trade of ``(leg_code, signed_notional_mm)`` pairs
+    (an empty code marks a leg that does not exist). Bond legs (``.IB``) net by raw
+    notional across trades; IRS-type legs net by signed DV01 and are converted back to
+    margin with the tenor-stress / minimum-rate buckets; unrecognised codes are never
+    netted and take the flat swap rate; a trade with no resolved leg is charged on its
+    leg-1 notional (conservative floor).
+
+    Returns ``{leg_key: {'kind', 'exposure', 'margin'}}`` where ``exposure`` is the signed
+    net notional (its sign says long/short) and ``margin`` is that leg's share of the
+    book's netted margin in MM. Sum of ``margin`` is what Total Capital is checked against.
+    """
+    bond_exposure: dict[str, float] = {}
+    dv01_k: dict[str, float] = {}
+    swap_notional: dict[str, float] = {}
+    max_tenor: dict[str, float] = {}
+    unresolved_abs: dict[str, float] = {}
+    unresolved_signed: dict[str, float] = {}
+
+    for legs in trades:
+        resolved = False
+        first_notional = None
+        for leg, notional in legs:
+            if first_notional is None:
+                first_notional = float(notional)
+            if not leg:
+                continue
+            resolved = True
+            notional = float(notional)
+            if leg.endswith('.IB'):
+                bond_exposure[leg] = bond_exposure.get(leg, 0.0) + notional
+                continue
+            tenor_dur = _swap_leg_tenor_duration(leg)
+            if tenor_dur is None:
+                unresolved_abs[leg] = unresolved_abs.get(leg, 0.0) + abs(notional)
+                unresolved_signed[leg] = unresolved_signed.get(leg, 0.0) + notional
+                continue
+            tenor_years, duration = tenor_dur
+            dv01_k[leg] = dv01_k.get(leg, 0.0) + notional * duration / 10.0
+            swap_notional[leg] = swap_notional.get(leg, 0.0) + notional
+            max_tenor[leg] = max(max_tenor.get(leg, 0.0), tenor_years)
+        if not resolved and first_notional is not None:
+            key = '(unresolved trade)'
+            unresolved_abs[key] = unresolved_abs.get(key, 0.0) + abs(first_notional)
+            unresolved_signed[key] = unresolved_signed.get(key, 0.0) + first_notional
+
+    out: dict = {}
+    for leg, exposure in bond_exposure.items():
+        out[leg] = {'kind': 'bond', 'exposure': exposure, 'margin': abs(exposure) * bond_margin_rate}
+    for leg, k in dv01_k.items():
+        tenor = max_tenor[leg]
+        stress_bp = next(stress for t, stress in _SWAP_MARGIN_TENOR_STRESS_BP if tenor <= t)
+        min_rate = next(rate for t, rate in _SWAP_MARGIN_MIN_RATE_BY_TENOR if tenor <= t)
+        out[leg] = {
+            'kind': 'swap', 'exposure': swap_notional[leg],
+            'margin': max(abs(k) * stress_bp / 1000.0, abs(swap_notional[leg]) * min_rate),
+        }
+    for leg, abs_notional in unresolved_abs.items():
+        out[leg] = {'kind': 'unresolved', 'exposure': unresolved_signed[leg], 'margin': abs_notional * swap_margin_rate}
+    return out
+
+
+def _fit_notionals_to_margin(
+    notional: pd.Series, financing_fn: Any, cap_mm: float, lot_mm: float, max_iter: int = 25,
+) -> pd.Series:
+    """Scale signed notionals down until ``financing_fn(notional) <= cap_mm``.
+
+    Sizes round DOWN to the lot in magnitude (toward zero for SELLs too -- np.floor on
+    a signed value rounds negative notionals away from zero, which grew every SELL by up
+    to one lot and left the netted margin above the cap). Because the margin nets legs
+    across trades, shrinking every trade is not guaranteed to shrink the netted figure,
+    so the scale is tightened and re-checked until the cap holds.
+    """
+    margin = float(financing_fn(notional))
+    if margin <= cap_mm or margin <= 1e-6:
+        return notional
+    scale = cap_mm / margin
+    scaled = notional
+    for _ in range(max_iter):
+        scaled = np.sign(notional) * np.floor(notional.abs() * scale / lot_mm) * lot_mm
+        margin = float(financing_fn(scaled))
+        if margin <= cap_mm + 1e-9:
+            break
+        scale *= cap_mm / margin * 0.999
+    return scaled
 
 
 def register_portfolio_callbacks(app) -> None:
@@ -314,8 +405,8 @@ def register_portfolio_callbacks(app) -> None:
             # physical-repo leverage ratio -- see Step G/H below.
             # repo_leverage/repo_margin_rate are accepted but currently
             # unused, kept only in case a physical-repo mode returns.
-            bond_margin_rate = (_as_positive_float(bond_margin_rate) or 5.0) / 100.0
-            swap_margin_rate = (_as_positive_float(swap_margin_rate) or 3.0) / 100.0
+            bond_margin_rate = (_as_positive_float(bond_margin_rate) or DEFAULT_ALPHA_BOND_MARGIN_RATE * 100) / 100.0
+            swap_margin_rate = (_as_positive_float(swap_margin_rate) or DEFAULT_ALPHA_SWAP_MARGIN_RATE * 100) / 100.0
             repo_leverage = max(1.0, _as_positive_float(repo_leverage) or 15.0)
             repo_margin_rate = 1.0 / repo_leverage  # noqa: unused (see comment above)
 
@@ -729,6 +820,9 @@ def register_portfolio_callbacks(app) -> None:
                 return net_notional, margin
 
             df_scored['net_notional_mm'], df_scored['margin_mm'] = _compute_net_and_margin(df_scored['notional_mm'])
+            # rates this book was sized with: saved so Summary > Risk prices Alpha margin identically
+            df_scored['_bond_margin_rate'] = bond_margin_rate
+            df_scored['_swap_margin_rate'] = swap_margin_rate
 
             # Step H: net all matching leg exposures across the whole Alpha
             # book -- not per-trade -- before applying TRS funding or
@@ -757,14 +851,8 @@ def register_portfolio_callbacks(app) -> None:
             def _portfolio_financing(notional_mm: pd.Series) -> tuple[float, float, float]:
                 _ratio = pd.to_numeric(df_scored['ratio_v2_v1'], errors='coerce').fillna(1.0)
                 _ratio3 = pd.to_numeric(df_scored.get('ratio_v3_v1'), errors='coerce').fillna(0.0)
-                _bond_leg_exposure: dict[str, float] = {}
-                _deriv_leg_dv01_k: dict[str, float] = {}
-                _deriv_leg_notional: dict[str, float] = {}
-                _deriv_leg_max_tenor: dict[str, float] = {}
-                _unresolved_notional_mm = 0.0
-
-                for row_idx, leg1, leg2, leg3, ratio, ratio3, leg1_notional in zip(
-                    df_scored.index,
+                _trades = []
+                for leg1, leg2, leg3, ratio, ratio3, leg1_notional in zip(
                     df_scored['Leg1'].astype(str),
                     df_scored['Leg2'].astype(str),
                     df_scored.get('Leg3', pd.Series('', index=df_scored.index)).astype(str),
@@ -773,55 +861,23 @@ def register_portfolio_callbacks(app) -> None:
                     notional_mm,
                 ):
                     leg1_notional = float(leg1_notional)
-                    leg2_notional = -leg1_notional * float(ratio)
-                    leg3_notional = -leg1_notional * float(ratio3)
-                    legs = ((leg1, leg1_notional), (leg2, leg2_notional), (leg3, leg3_notional))
-                    resolved_leg = False
-                    for leg, leg_notional in legs:
-                        if not leg:
-                            continue
-                        resolved_leg = True
-                        if leg.endswith('.IB'):
-                            _bond_leg_exposure[leg] = _bond_leg_exposure.get(leg, 0.0) + leg_notional
-                            continue
-                        _tenor_dur = _swap_leg_tenor_duration(leg)
-                        if _tenor_dur is None:
-                            # Unknown leg code: can't net by DV01, so fall
-                            # back to a conservative per-leg notional charge
-                            # (never netted against other trades).
-                            _unresolved_notional_mm += abs(leg_notional)
-                            continue
-                        _tenor_years, _leg_duration = _tenor_dur
-                        _deriv_leg_dv01_k[leg] = _deriv_leg_dv01_k.get(leg, 0.0) + leg_notional * _leg_duration / 10.0
-                        _deriv_leg_notional[leg] = _deriv_leg_notional.get(leg, 0.0) + leg_notional
-                        _deriv_leg_max_tenor[leg] = max(_deriv_leg_max_tenor.get(leg, 0.0), _tenor_years)
-                    if not resolved_leg:
-                        _unresolved_notional_mm += abs(leg1_notional)
-
-                net_bond_mm = sum(abs(exposure) for exposure in _bond_leg_exposure.values())
-
-                # Convert each leg's netted DV01 back to margin with the same
-                # tenor-stress bucket used per-trade, floored by a small
-                # netted-notional-based minimum (mirrors _swap_derivative_margin_mm,
-                # but applied once per netted leg instead of once per trade).
-                net_derivative_margin_mm = 0.0
-                for leg, dv01_k in _deriv_leg_dv01_k.items():
-                    max_tenor = _deriv_leg_max_tenor[leg]
-                    stress_bp = next(stress for tenor, stress in _SWAP_MARGIN_TENOR_STRESS_BP if max_tenor <= tenor)
-                    min_rate = next(rate for tenor, rate in _SWAP_MARGIN_MIN_RATE_BY_TENOR if max_tenor <= tenor)
-                    dv01_margin_mm = abs(dv01_k) * stress_bp / 1000.0
-                    notional_floor_mm = abs(_deriv_leg_notional[leg]) * min_rate
-                    net_derivative_margin_mm += max(dv01_margin_mm, notional_floor_mm)
-                net_derivative_margin_mm += _unresolved_notional_mm * swap_margin_rate
-
+                    _trades.append((
+                        (leg1, leg1_notional),
+                        (leg2, -leg1_notional * float(ratio)),
+                        (leg3, -leg1_notional * float(ratio3)),
+                    ))
+                _by_leg = netted_trs_margin_by_leg(_trades, bond_margin_rate, swap_margin_rate)
+                net_bond_mm = sum(abs(v['exposure']) for v in _by_leg.values() if v['kind'] == 'bond')
+                net_derivative_margin_mm = sum(v['margin'] for v in _by_leg.values() if v['kind'] != 'bond')
                 capital_without_repo = net_bond_mm + net_derivative_margin_mm
                 capital_with_repo = net_bond_mm * bond_margin_rate + net_derivative_margin_mm
                 return net_bond_mm, capital_without_repo, capital_with_repo
 
-            _, _, _capital_with_repo_mm = _portfolio_financing(df_scored['notional_mm'])
-            if _capital_with_repo_mm > total_capital_mm and _capital_with_repo_mm > 1e-6:
-                _margin_scale = total_capital_mm / _capital_with_repo_mm
-                df_scored['notional_mm'] = np.floor(df_scored['notional_mm'] * _margin_scale / _lot_mm) * _lot_mm
+            _fitted_notional = _fit_notionals_to_margin(
+                df_scored['notional_mm'], lambda n: _portfolio_financing(n)[2], total_capital_mm, _lot_mm,
+            )
+            if not _fitted_notional.equals(df_scored['notional_mm']):
+                df_scored['notional_mm'] = _fitted_notional
                 df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)
                 df_scored['net_notional_mm'], df_scored['margin_mm'] = _compute_net_and_margin(df_scored['notional_mm'])
 
@@ -999,7 +1055,14 @@ def register_portfolio_callbacks(app) -> None:
                 _ss_buy  = pd.to_numeric(df_display.loc[_dir_s.eq('BUY'),  'DV01_k'], errors='coerce').sum()
                 _ss_sell = pd.to_numeric(df_display.loc[_dir_s.eq('SELL'), 'DV01_k'], errors='coerce').sum()
                 summary_row['DV01_k'] = round(max(_ss_buy, _ss_sell), 1)
-            df_display = pd.concat([df_display, pd.DataFrame([summary_row])], ignore_index=True)
+            # Margin TOTAL above is the sum of each trade's standalone margin. The
+            # Total Capital limit is checked against the NETTED TRS margin (Step H:
+            # legs on the same bond offset across trades), so show that as its own row.
+            netted_row: dict = {c: "" for c in df_display.columns}
+            netted_row['ID'] = f"NETTED (limit {total_capital_mm:,.0f})"
+            if 'margin_mm' in df_display.columns:
+                netted_row['margin_mm'] = round(float(_capital_with_repo_mm), 1)
+            df_display = pd.concat([df_display, pd.DataFrame([summary_row, netted_row])], ignore_index=True)
 
             # Colors mirror guide/AlphaPortfolio.jsx STEP3_ROWS table:
             # translucent pill badges for regime/direction, sign-colored data cells.
@@ -1026,10 +1089,12 @@ def register_portfolio_callbacks(app) -> None:
                 {'if': {'column_id': 'score'}, 'color': THEME['accent'], 'fontWeight': '600'},
             ]
 
-            last_row_idx = len(df_display) - 1
+            total_row_idx = len(df_display) - 2      # TOTAL, then the NETTED margin row
+            netted_row_idx = len(df_display) - 1
             conditional_style += [
                 {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgba(255,255,255,0.015)'},
-                {'if': {'row_index': last_row_idx}, 'fontWeight': 'bold', 'borderTop': f'1px solid {THEME["accent"]}'},
+                {'if': {'row_index': total_row_idx}, 'fontWeight': 'bold', 'borderTop': f'1px solid {THEME["accent"]}'},
+                {'if': {'row_index': netted_row_idx}, 'fontWeight': 'bold', 'color': THEME['accent']},
                 {'if': {'column_id': 'ID'}, 'whiteSpace': 'pre-line', 'lineHeight': '1.35', 'minWidth': '170px'},
             ]
             # Held rows are full participants in this run's risk-parity solve
@@ -1103,7 +1168,8 @@ def register_portfolio_callbacks(app) -> None:
                 html.Div([
                     html.Strong("By Regime: ", style={'color': THEME['text_sub']}),
                     html.Span(
-                        " | ".join([f"{style}: {count}" for style, count in df_display['style'].value_counts(dropna=False).items()])
+                        " | ".join([f"{style}: {count}" for style, count in
+                                    df_display.loc[df_display['style'].astype(str).ne(''), 'style'].value_counts(dropna=False).items()])
                         if 'style' in df_display.columns else "",
                         style={'color': THEME['text_main'], 'fontSize': '12px'},
                     ),
@@ -1176,6 +1242,7 @@ def register_portfolio_callbacks(app) -> None:
                     'Zscore', 'spread', 'carry_roll', 'breakeven_3m', 'vol', 'halflife',
                     'stop_loss', 'profit_target',
                     'notional_mm', 'margin_mm', '_duration', 'DV01_k', 'weight', 'risk_contribution',
+                    '_bond_margin_rate', '_swap_margin_rate',
                 ] if c in df_scored.columns
             ]
             _snap = df_scored[_save_cols].copy()

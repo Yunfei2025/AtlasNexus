@@ -381,17 +381,32 @@ def build_factor_risk_fig(factor_risk_df, skip_prefixes=("SPDL", "SPSL")) -> go.
     return fig
 
 
-def build_kpi_cards(net_pos: dict, kt_grid: dict, tenor_order: list[str], kt_split: dict | None = None) -> dict:
+def build_kpi_cards(net_pos: dict, kt_grid: dict, tenor_order: list[str], kt_split: dict | None = None,
+                    alpha_margin: dict | None = None) -> dict:
     """Compute the 4 KPI values (Total Long / Total Short / Net Exposure / Total DV01).
-    `kt_split` ({book: {'long'|'short': {tenor: {col: dv01}}}}) adds the GROSS DV01 (long + |short|)."""
+    `kt_split` ({book: {'long'|'short': {tenor: {col: dv01}}}}) adds the GROSS DV01 (long + |short|).
+
+    `alpha_margin` ({leg: {'exposure': signed net notional, 'margin': MM}}, from
+    netted_trs_margin_by_leg) puts Long / Short on the mixed book's CAPITAL basis: Beta is
+    unlevered (its capital is its notional) while Alpha is funded by margin, so Alpha adds
+    the netted TRS margin of its net-long / net-short legs, not their notional. Without it
+    every position counts at notional, netted per instrument across both books."""
     total_long = 0.0
     total_short = 0.0
-    for e in net_pos.values():
-        net = round(e.get("Beta", 0.0) + e.get("Alpha", 0.0), 4)
-        if net > 0:
-            total_long += net
-        elif net < 0:
-            total_short += abs(net)
+    capital_basis = alpha_margin is not None
+    if capital_basis:
+        beta_long = sum(e.get("Beta", 0.0) for e in net_pos.values() if e.get("Beta", 0.0) > 0)
+        beta_short = sum(-e.get("Beta", 0.0) for e in net_pos.values() if e.get("Beta", 0.0) < 0)
+        alpha_long = sum(v["margin"] for v in alpha_margin.values() if v["exposure"] > 0)
+        alpha_short = sum(v["margin"] for v in alpha_margin.values() if v["exposure"] < 0)
+        total_long, total_short = beta_long + alpha_long, beta_short + alpha_short
+    else:
+        for e in net_pos.values():
+            net = round(e.get("Beta", 0.0) + e.get("Alpha", 0.0), 4)
+            if net > 0:
+                total_long += net
+            elif net < 0:
+                total_short += abs(net)
     net_exposure = total_long - total_short
     total_dv01 = sum(
         sum(kt_grid[t].values()) for t in tenor_order
@@ -402,6 +417,8 @@ def build_kpi_cards(net_pos: dict, kt_grid: dict, tenor_order: list[str], kt_spl
         "net": net_exposure,
         "dv01": total_dv01,
     }
+    if capital_basis:
+        out.update(beta_long=beta_long, beta_short=beta_short, alpha_long=alpha_long, alpha_short=alpha_short)
     if kt_split:
         out["gross_dv01"] = sum(abs(v) for book in kt_split.values() for sd in book.values()
                                 for t in tenor_order for v in sd.get(t, {}).values())
@@ -409,10 +426,16 @@ def build_kpi_cards(net_pos: dict, kt_grid: dict, tenor_order: list[str], kt_spl
 
 
 def build_kpi_strip(kpis: dict) -> html.Div:
+    if "alpha_long" in kpis:      # capital basis: Beta capital + Alpha margin (see build_kpi_cards)
+        long_sub = f"MM capital: Beta {kpis['beta_long'] / 1000:.1f}k + Alpha margin {kpis['alpha_long'] / 1000:.2f}k"
+        short_sub = f"MM capital: Beta {kpis['beta_short'] / 1000:.1f}k + Alpha margin {kpis['alpha_short'] / 1000:.2f}k"
+        net_sub = "capital basis · long − short"
+    else:
+        long_sub, short_sub, net_sub = "MM notional, net long legs", "MM notional, net short legs", "Beta + Alpha combined"
     cards = [
-        ("Total Long", f"+{kpis['long'] / 1000:.1f}k", TOKENS["green"], "MM notional, net long legs"),
-        ("Total Short", f"-{kpis['short'] / 1000:.1f}k", TOKENS["amber"], "MM notional, net short legs"),
-        ("Net Exposure", f"{'+' if kpis['net'] >= 0 else ''}{kpis['net'] / 1000:.1f}k", TOKENS["cyan"], "Beta + Alpha combined"),
+        ("Total Long", f"+{kpis['long'] / 1000:.1f}k", TOKENS["green"], long_sub),
+        ("Total Short", f"-{kpis['short'] / 1000:.1f}k", TOKENS["amber"], short_sub),
+        ("Net Exposure", f"{'+' if kpis['net'] >= 0 else ''}{kpis['net'] / 1000:.1f}k", TOKENS["cyan"], net_sub),
         ("Total DV01", f"{kpis['dv01']:.2f}", TOKENS["blue"],
          "MM/bp net" + (f" · gross {kpis['gross_dv01']:.2f}" if "gross_dv01" in kpis else " aggregate sensitivity")),
     ]

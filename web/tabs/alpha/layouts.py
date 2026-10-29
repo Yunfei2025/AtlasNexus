@@ -7,7 +7,7 @@ from typing import Dict, List
 
 from dash import dcc, html, dash_table
 
-from settings.general import DEFAULT_ALPHA_CAPITAL_MM
+from settings.general import DEFAULT_ALPHA_CAPITAL_MM, DEFAULT_ALPHA_BOND_MARGIN_RATE, DEFAULT_ALPHA_SWAP_MARGIN_RATE
 from .data import THEME, SPREAD_CATEGORIES
 from ..ui.components import button as an_button
 
@@ -438,7 +438,7 @@ def build_portfolio_layout() -> html.Div:
             dcc.Input(id='alpha-mom-window', type='number', value=20, style={'display': 'none'}),
             dcc.Input(id='alpha-alloc-method', type='text', value='risk_parity', style={'display': 'none'}),
             dcc.Checklist(id='alpha-enforce-corr', options=[], value=[], style={'display': 'none'}),
-            dcc.Input(id='alpha-swap-margin-rate', type='number', value=3.0, style={'display': 'none'}),
+            dcc.Input(id='alpha-swap-margin-rate', type='number', value=DEFAULT_ALPHA_SWAP_MARGIN_RATE * 100, style={'display': 'none'}),
             # Book is financed entirely via TRS (no physical bond repo), so
             # repo_leverage no longer drives bond-leg margin -- see
             # alpha-bond-margin-rate below, which is now the live input.
@@ -580,7 +580,7 @@ def build_portfolio_layout() -> html.Div:
                     html.Label("Bond TRS Rate", style=_label_style),
                     html.Div([
                         dcc.Input(
-                            id='alpha-bond-margin-rate', type='number', value=5.0, min=0.1, step=0.1,
+                            id='alpha-bond-margin-rate', type='number', value=DEFAULT_ALPHA_BOND_MARGIN_RATE * 100, min=0.1, step=0.1,
                             style={'width': '64px', 'padding': '6px 8px', 'background': 'var(--surface-input)',
                                    'border': '1px solid var(--border-default)', 'borderRadius': '4px',
                                    'color': 'var(--text-primary)', 'fontSize': '12px', 'fontWeight': '600',

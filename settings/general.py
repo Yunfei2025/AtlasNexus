@@ -115,3 +115,9 @@ DEFAULT_TOTAL_CAPITAL_BN = 20.0
 DEFAULT_ALPHA_MARGIN_SHARE = 0.10
 DEFAULT_BETA_CAPITAL_BN = DEFAULT_TOTAL_CAPITAL_BN * (1.0 - DEFAULT_ALPHA_MARGIN_SHARE)   # 18 BN
 DEFAULT_ALPHA_CAPITAL_MM = DEFAULT_TOTAL_CAPITAL_BN * DEFAULT_ALPHA_MARGIN_SHARE * 1000.0  # 2,000 MM
+
+# Alpha book funding (TRS): haircut on bond-leg notional, flat rate on unrecognised swap/derivative legs.
+# These are the Alpha Portfolio input defaults; the rates actually used are saved with the book, and the
+# Summary > Risk tab prices Alpha margin with those (falling back to these).
+DEFAULT_ALPHA_BOND_MARGIN_RATE = 0.05
+DEFAULT_ALPHA_SWAP_MARGIN_RATE = 0.03

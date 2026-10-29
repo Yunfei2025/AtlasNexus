@@ -34,6 +34,7 @@ from .charts import (
 )
 from .short_substitution import build_short_substitutions
 from .beta_factor_risk import stored_beta_factor_risk
+from settings.general import DEFAULT_ALPHA_BOND_MARGIN_RATE, DEFAULT_ALPHA_SWAP_MARGIN_RATE
 from .helpers import (
     beta_direction,
     normalize_risk_ticker,
@@ -196,8 +197,12 @@ def build_risk_positions() -> dict:
 
             # Key Term: rate-tenor Beta positions are bond duration; non-rate sectors → Other
             tenor = _SECTOR_TO_TENOR.get(sector)
+            if tenor is None and re.fullmatch(r'\d+(\.\d+)?[MYmy]', sector or ''):
+                # numeric tenor with no explicit bucket (e.g. LGB3Y's '3Y', or '7Y'): bucket it
+                # by duration (~0.92 x tenor) so its DV01 is not dropped from the ladder / KPI
+                tenor = _dur_to_tenor(_tenor_str_to_years(sector.upper()) * 0.92)
             if tenor and dv01_mm != 0.0:
-                col = 'Bonds' if sector in _SECTOR_TO_TENOR else 'Other'
+                col = 'Bonds'
                 kt_grid[tenor][col] = round(kt_grid[tenor][col] + dv01_mm, 4)
                 kt_grid_beta[tenor][col] = round(kt_grid_beta[tenor][col] + dv01_mm, 4)
                 _kt_gross('beta', tenor, col, dv01_mm)
@@ -212,6 +217,8 @@ def build_risk_positions() -> dict:
         return 'Swaps' if _irs_tenor_from_leg(leg_code) else _ALPHA_COL.get(spread_type, 'Other')
 
     alpha_rows = []
+    alpha_trade_legs: list = []        # per trade: [(leg code, signed notional)], for Alpha margin
+    alpha_rates = (DEFAULT_ALPHA_BOND_MARGIN_RATE, DEFAULT_ALPHA_SWAP_MARGIN_RATE)
     if _os.path.exists(_SUMMARY_ALPHA_PARQUET):
         try:
             adf = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
@@ -225,6 +232,13 @@ def build_risk_positions() -> dict:
                 if _ts.notna().any():
                     _latest_ts = _ts[_ts.notna()].max()
                     adf = adf.loc[_ts.eq(_latest_ts)].copy()
+            # margin rates this book was sized with (saved by Run Optimization); older
+            # snapshots do not carry them, so the defaults apply
+            for _i, _col in enumerate(('_bond_margin_rate', '_swap_margin_rate')):
+                if _col in adf.columns:
+                    _rate = pd.to_numeric(adf[_col], errors='coerce').dropna()
+                    if not _rate.empty and _rate.iloc[-1] > 0:
+                        alpha_rates = (_rate.iloc[-1], alpha_rates[1]) if _i == 0 else (alpha_rates[0], _rate.iloc[-1])
 
             for _, r in adf.iterrows():
                 tid = str(r.get('ID', ''))
@@ -310,6 +324,7 @@ def build_risk_positions() -> dict:
 
                 _add_net(leg1, leg1_signed, 'Alpha', leg1_dv01)
                 _add_net(leg2, leg2_signed, 'Alpha', leg2_dv01)
+                alpha_trade_legs.append([(leg1, leg1_signed), (leg2, leg2_signed), (leg3, leg3_signed)])
                 if leg3:
                     _add_net(leg3, leg3_signed, 'Alpha', leg3_dv01)
 
@@ -348,8 +363,17 @@ def build_risk_positions() -> dict:
         except Exception:
             pass
 
+    # Alpha is funded by margin, not notional: book-level netted TRS margin per leg, the
+    # same calculation Run Optimization checks Total Capital against (long/short by the
+    # sign of each leg's netted exposure). Lazy import: the alpha callbacks import risk.helpers.
+    try:
+        from web.tabs.alpha.callbacks.portfolio import netted_trs_margin_by_leg
+        alpha_margin = netted_trs_margin_by_leg(alpha_trade_legs, alpha_rates[0], alpha_rates[1])
+    except Exception:
+        alpha_margin = {}
+
     return {
-        'beta_rows': beta_rows, 'alpha_rows': alpha_rows,
+        'beta_rows': beta_rows, 'alpha_rows': alpha_rows, 'alpha_margin': alpha_margin,
         'net_pos': net_pos, 'gross_pos': gross_pos,
         'kt_grid': kt_grid, 'kt_grid_beta': kt_grid_beta, 'kt_grid_alpha': kt_grid_alpha,
         'kt_split': kt_split, 'tenor_order': _TENOR_ORDER, 'kt_cols': _KT_COLS,
@@ -558,7 +582,7 @@ def register_risk_dashboard_callbacks(app):
         factor_graph = dcc.Graph(figure=factor_fig, config={'displayModeBar': False})
 
         # ── KPI strip ───────────────────────────────────────────────────────────
-        kpis = build_kpi_cards(net_pos, kt_grid, _TENOR_ORDER, kt_split)
+        kpis = build_kpi_cards(net_pos, kt_grid, _TENOR_ORDER, kt_split, alpha_margin=_pos['alpha_margin'])
         kpi_strip = build_kpi_strip(kpis)
 
         n_beta  = len(beta_rows)
