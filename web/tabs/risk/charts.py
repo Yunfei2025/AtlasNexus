@@ -25,6 +25,7 @@ _NET_MIXED_SHORT = TOKENS["red"]
 _DV01_BONDS = TOKENS["blue"]
 _DV01_SWAPS = TOKENS["cyan"]
 _DV01_FUTURES = TOKENS["amber"]
+_DV01_LADDER_HOVER = "%{x} %{fullData.name}: %{y:+,.2f} MM/bp<extra></extra>"
 
 _FACTOR_AMBER = TOKENS["amber"]
 _FACTOR_GOLD = "#c8a060"
@@ -89,7 +90,7 @@ def build_net_position_fig(net_pos: dict, top_n: int | None = None) -> go.Figure
         customdata=[[r["dv01"]] for r in rows],
         text=text, textposition="outside",
         textfont={"color": TOKENS["text"], "size": 10},
-        hovertemplate="%{y}: %{x:+,.1f} MM | DV01 %{customdata[0]:+,.3f} MM/bp<extra></extra>",
+        hovertemplate="%{y}: %{x:+,.1f} MM | DV01 %{customdata[0]:+,.2f} MM/bp<extra></extra>",
     ))
 
     fig.update_layout(**_base_layout(
@@ -97,6 +98,79 @@ def build_net_position_fig(net_pos: dict, top_n: int | None = None) -> go.Figure
         bargap=0.35,
         showlegend=False,
         margin={"t": 20, "b": 30, "l": 90, "r": 40},
+    ))
+    fig.update_xaxes(zeroline=True, zerolinewidth=1.5, title_text="MM CNY")
+    fig.update_yaxes(automargin=True)
+    return fig
+
+
+def build_substituted_position_fig(net_pos: dict, subs: list[dict]) -> go.Figure:
+    """Combined net position after short-constraint substitution.
+
+    Each disallowed net short (``subs`` from build_short_substitutions) is
+    moved to its DV01-matched substitutes; credit shorts with no substitute
+    stay. Instruments the substitution changes show the strategy net as a
+    faint ghost bar behind the executable bar (cyan).
+    """
+    strat = {str(c): (e.get("Beta", 0.0) + e.get("Alpha", 0.0),
+                      e.get("BetaDV01", 0.0) + e.get("AlphaDV01", 0.0))
+             for c, e in net_pos.items()}
+    exe = {c: list(v) for c, v in strat.items()}
+    changed: set[str] = set()
+    for r in subs:
+        if not r["substitutes"]:
+            continue
+        exe[r["code"]] = [0.0, 0.0]
+        changed.add(r["code"])
+        for s in r["substitutes"]:
+            e = exe.setdefault(s["code"], [0.0, 0.0])
+            e[0] += s["notional_mm"]
+            e[1] += s["dv01"]
+            changed.add(s["code"])
+
+    rows = []
+    for code, (net, dv01) in exe.items():
+        s_net = strat.get(code, (0.0, 0.0))[0]
+        if abs(net) < 1e-6 and abs(s_net) < 1e-6:
+            continue
+        beta = net_pos.get(code, {}).get("Beta", 0.0)
+        rows.append({"inst": code, "net": net, "dv01": dv01, "strat": s_net,
+                     "changed": code in changed,
+                     "color": TOKENS["cyan"] if code in changed
+                     else _net_pos_bar_color(beta, net - beta, net)})
+    rows.sort(key=lambda r: str(r["inst"]).upper())
+
+    fig = go.Figure()
+    if not rows:
+        fig.update_layout(**_base_layout(height=320))
+        fig.add_annotation(text="No netted positions found.", showarrow=False,
+                           font={"color": TOKENS["muted"]})
+        return fig
+
+    insts = [r["inst"] for r in rows]
+    ghost = [r for r in rows if r["changed"]]
+    fig.add_trace(go.Bar(
+        x=[r["strat"] for r in ghost], y=[r["inst"] for r in ghost], orientation="h",
+        name="Strategy (before substitution)",
+        marker={"color": "rgba(164,182,210,0.18)", "line": {"color": TOKENS["muted"], "width": 1}},
+        hovertemplate="%{y} strategy: %{x:+,.1f} MM<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        x=[r["net"] for r in rows], y=insts, orientation="h",
+        name="Executable", marker_color=[r["color"] for r in rows], opacity=0.88,
+        customdata=[[r["dv01"], r["strat"]] for r in rows],
+        text=[f"{'+' if r['net'] > 0 else ''}{r['net']:,.0f}" if abs(r["net"]) > 1e-6 else "moved"
+              for r in rows],
+        textposition="outside", textfont={"color": TOKENS["text"], "size": 10},
+        hovertemplate=("%{y}: %{x:+,.1f} MM executable | strategy %{customdata[1]:+,.1f}"
+                       " | DV01 %{customdata[0]:+,.2f} MM/bp<extra></extra>"),
+    ))
+    fig.update_layout(**_base_layout(
+        height=max(320, len(rows) * 26 + 80),
+        barmode="overlay", bargap=0.35,
+        showlegend=True,
+        legend={"orientation": "h", "y": 1.02, "yanchor": "bottom", "x": 0, "font": {"size": 10}},
+        margin={"t": 30, "b": 30, "l": 90, "r": 40},
     ))
     fig.update_xaxes(zeroline=True, zerolinewidth=1.5, title_text="MM CNY")
     fig.update_yaxes(automargin=True)
@@ -125,7 +199,7 @@ def build_gross_position_fig(gross: dict) -> go.Figure:
 
     insts = [r["inst"] for r in rows]
     hover = [[r["gross"], r["net"], r["dv01_g"]] for r in rows]
-    tmpl = "%{y}: %{x:+,.1f} MM | gross %{customdata[0]:,.1f} · net %{customdata[1]:+,.1f} | gross DV01 %{customdata[2]:.3f} MM/bp<extra></extra>"
+    tmpl = "%{y}: %{x:+,.1f} MM | gross %{customdata[0]:,.1f} · net %{customdata[1]:+,.1f} | gross DV01 %{customdata[2]:.2f} MM/bp<extra></extra>"
     fig.add_trace(go.Bar(
         name="Long", x=[r["long"] for r in rows], y=insts, orientation="h", marker_color=TOKENS["green"], opacity=0.88,
         text=[f"{r['long']:+,.0f}" if abs(r["long"]) > 1e-6 else "" for r in rows], textposition="outside",
@@ -165,9 +239,10 @@ def build_dv01_ladder_gross_fig(kt_long: dict, kt_short: dict, tenor_order: list
     colors = {"Bonds": _DV01_BONDS, "Swaps": _DV01_SWAPS, "Futures": _DV01_FUTURES}
     for col, color in colors.items():
         fig.add_trace(go.Bar(name=f"{col} long", legendgroup=col, x=tenors, y=[side(kt_long, t, col) for t in tenors],
-                             marker_color=color, opacity=0.9))
+                             marker_color=color, opacity=0.9, hovertemplate=_DV01_LADDER_HOVER))
         fig.add_trace(go.Bar(name=f"{col} short", legendgroup=col, x=tenors, y=[side(kt_short, t, col) for t in tenors],
-                             marker_color=color, opacity=0.5, marker_pattern_shape="/"))
+                             marker_color=color, opacity=0.5, marker_pattern_shape="/",
+                             hovertemplate=_DV01_LADDER_HOVER))
     fig.update_layout(**_base_layout(
         height=290, barmode="relative", bargap=0.36,
         legend={**PLOTLY_LAYOUT_DEFAULTS["legend"], "orientation": "h", "y": -0.22, "x": 0.5, "xanchor": "center"},
@@ -179,7 +254,7 @@ def build_dv01_ladder_gross_fig(kt_long: dict, kt_short: dict, tenor_order: list
         sh = sum(min(side(kt_short, t, c), 0.0) for c in ("Bonds", "Swaps", "Futures", "Other"))
         if abs(lo) + abs(sh) < 1e-8:
             continue
-        fig.add_annotation(x=t, y=lo, text=f"gross {lo + abs(sh):.3f}<br>net {lo + sh:+.3f}", showarrow=False,
+        fig.add_annotation(x=t, y=lo, text=f"gross {lo + abs(sh):.2f}<br>net {lo + sh:+.2f}", showarrow=False,
                            yshift=14, font={"size": 9, "color": TOKENS["muted"]})
     return fig
 
@@ -205,9 +280,12 @@ def build_dv01_ladder_fig(kt_grid: dict, tenor_order: list[str]) -> go.Figure:
     totals = [round(kt_grid[t]["Bonds"] + kt_grid[t]["Swaps"] + kt_grid[t]["Futures"]
                      + kt_grid[t]["Other"], 4) for t in tenors]
 
-    fig.add_trace(go.Bar(name="Bonds", x=tenors, y=bonds, marker_color=_DV01_BONDS, opacity=0.9))
-    fig.add_trace(go.Bar(name="Swaps", x=tenors, y=swaps, marker_color=_DV01_SWAPS, opacity=0.9))
-    fig.add_trace(go.Bar(name="Futures", x=tenors, y=futures, marker_color=_DV01_FUTURES, opacity=0.9))
+    fig.add_trace(go.Bar(name="Bonds", x=tenors, y=bonds, marker_color=_DV01_BONDS, opacity=0.9,
+                         hovertemplate=_DV01_LADDER_HOVER))
+    fig.add_trace(go.Bar(name="Swaps", x=tenors, y=swaps, marker_color=_DV01_SWAPS, opacity=0.9,
+                         hovertemplate=_DV01_LADDER_HOVER))
+    fig.add_trace(go.Bar(name="Futures", x=tenors, y=futures, marker_color=_DV01_FUTURES, opacity=0.9,
+                         hovertemplate=_DV01_LADDER_HOVER))
 
     fig.update_layout(**_base_layout(
         height=290,
@@ -220,7 +298,7 @@ def build_dv01_ladder_fig(kt_grid: dict, tenor_order: list[str]) -> go.Figure:
     fig.update_yaxes(title_text="MM/bp")
 
     for t, total in zip(tenors, totals):
-        fig.add_annotation(x=t, y=total, text=f"{total:.4f}", showarrow=False,
+        fig.add_annotation(x=t, y=total, text=f"{total:.2f}", showarrow=False,
                             yshift=12, font={"size": 10, "color": TOKENS["muted"]})
     return fig
 
@@ -240,7 +318,7 @@ def build_factor_risk_fig(factor_risk_df, skip_prefixes=("SPDL", "SPSL")) -> go.
     fig = go.Figure()
     if factor_risk_df is None or factor_risk_df.empty:
         fig.update_layout(**_base_layout(height=240))
-        fig.add_annotation(text="Beta factor risk not yet computed.", showarrow=False,
+        fig.add_annotation(text="No stored Beta book — Add to Portfolio on the Beta tab first.", showarrow=False,
                             font={"color": TOKENS["muted"]})
         return fig
 
@@ -400,3 +478,62 @@ def build_inventory_summary(beta_rows: list[dict], alpha_rows: list[dict]) -> ht
             *[_row(sec, f"{ls[0]:+,.0f}" + (f" / {ls[1]:+,.0f}" if ls[1] else "")) for sec, ls in sorted_sectors],
         ]),
     ], className="risk-inventory-summary-grid")
+
+
+def build_short_substitution_panel(rows: list[dict]) -> html.Div:
+    """Note + table under Position by Instrument: disallowed net shorts in the
+    combined book and the DV01-matched substitutes they are executed with
+    (see web/tabs/risk/short_substitution.py)."""
+    mono = {"fontFamily": "var(--font-mono)", "fontSize": "12px"}
+    cell = {**mono, "padding": "4px 8px", "borderBottom": f"1px solid {TOKENS['navy_800']}"}
+    head = {"fontSize": "11px", "letterSpacing": "0.06em", "textTransform": "uppercase",
+            "color": TOKENS["muted"], "padding": "4px 8px", "textAlign": "left"}
+
+    note = html.Div([
+        html.Span("Short constraint · ", style={"color": TOKENS["amber"], "fontWeight": "bold"}),
+        html.Span("cash bonds are shorted only in CGB 5Y / 10Y / 30Y. Positions above are the strategy "
+                  "as backtested; any other bond the combined book holds net short is executed as a "
+                  "DV01-matched substitute (5Y+ → CGB 5/10/30, 1–3Y → pay FR007). Only the netted "
+                  "residual is substituted. Backtest: alpha Sharpe 3.20 → 2.85 (2022-03 onward), "
+                  "max drawdown unchanged."),
+    ], style={"fontSize": "11px", "color": TOKENS["muted"], "lineHeight": "1.5", "marginBottom": "8px"})
+
+    if not rows:
+        return html.Div([note, html.Div("No disallowed net shorts — nothing to substitute.",
+                                        style={"fontSize": "12px", "color": TOKENS["green"]})],
+                        style={"marginTop": "12px"})
+
+    body = []
+    orders: dict[str, list[float]] = {}
+    for r in rows:
+        subs = r["substitutes"]
+        sub_txt = " + ".join(f"{s['code']} {s['notional_mm']:+,.0f}" for s in subs) if subs else "—"
+        for s in subs:
+            o = orders.setdefault(s["code"], [0.0, 0.0])
+            o[0] += s["notional_mm"]
+            o[1] += s["dv01"]
+        flag = TOKENS["red"] if not subs else TOKENS["text"]
+        body.append(html.Tr([
+            html.Td(r["code"], style={**cell, "color": flag}),
+            html.Td(r["bond"], style={**cell, "color": TOKENS["muted"]}),
+            html.Td(f"{r['net_mm']:+,.0f}", style={**cell, "textAlign": "right", "color": TOKENS["red"]}),
+            html.Td(f"{r['dv01']:+.3f}", style={**cell, "textAlign": "right"}),
+            html.Td(sub_txt, style={**cell, "color": TOKENS["cyan"] if subs else TOKENS["red"]}),
+            html.Td(r["note"], style={**cell, "color": TOKENS["muted"]}),
+        ]))
+
+    table = html.Table([
+        html.Thead(html.Tr([html.Th(h, style={**head, "textAlign": "right" if h in ("Net (MM)", "DV01") else "left"})
+                            for h in ("Instrument", "Bond", "Net (MM)", "DV01", "Execute as (MM)", "")])),
+        html.Tbody(body),
+    ], style={"width": "100%", "borderCollapse": "collapse"})
+
+    order_line = html.Div(
+        "Substitute orders: " + " · ".join(f"{code} {n:+,.0f}MM ({d:+.3f}/bp)"
+                                           for code, (n, d) in sorted(orders.items())),
+        style={**mono, "color": TOKENS["cyan"], "marginTop": "8px"},
+    ) if orders else None
+
+    return html.Div([note, html.Div(table, style={"overflowX": "auto"}), order_line],
+                    style={"marginTop": "12px", "paddingTop": "10px",
+                           "borderTop": f"1px solid {TOKENS['navy_700']}"})

@@ -376,11 +376,12 @@ def build_risk_layout():
                                 options=[
                                     {'label': 'Net', 'value': 'net'},
                                     {'label': 'Gross (long / short)', 'value': 'gross'},
+                                    {'label': 'Substitute (executable)', 'value': 'substitute'},
                                 ],
                                 value='net',
                                 clearable=False,
                                 searchable=False,
-                                style={'minWidth': '150px', 'fontSize': '11px'},
+                                style={'minWidth': '190px', 'fontSize': '11px'},
                             ),
                             dcc.Dropdown(
                                 id='risk-netpos-book-filter',
@@ -447,7 +448,7 @@ def build_risk_layout():
                                                            'padding': '20px', 'textAlign': 'center'})]),
                     ], className='risk-panel'),
                     html.Div([
-                        html.Div("Factor Risk Attribution", className='risk-panel-header'),
+                        html.Div("Factor Risk Attribution · stored Beta book", className='risk-panel-header'),
                         html.Div(id='risk-factor-container',
                                  children=[html.Div("Click Refresh to load exposures.",
                                                     style={'color': THEME['text_sub'], 'fontStyle': 'italic',

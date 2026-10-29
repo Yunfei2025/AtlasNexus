@@ -29,6 +29,7 @@ from web.tabs.beta.callbacks._common import (
 _TICKET_STATUS_STYLE = {
     'FILLED':  {'bg': 'rgba(52,211,153,0.12)', 'color': '#34d399'},
     'PENDING': {'bg': 'rgba(224,162,60,0.15)', 'color': THEME['warning']},
+    'SUBSTITUTE': {'bg': 'rgba(69,182,230,0.12)', 'color': '#45b6e6'},
 }
 
 
@@ -135,8 +136,40 @@ def _tickets_filter_pills(active: str) -> list:
         return style
     return [
         html.Button(label, id=f'tickets-filter-{label}', n_clicks=0, style=_pill_style(active == label))
-        for label in ('All', 'FILLED', 'PENDING')
+        for label in ('All', 'FILLED', 'PENDING', 'SUBSTITUTE')
     ]
+
+
+def _build_substitute_tickets() -> list[dict]:
+    """Short-constraint substitute tickets, one per substitute instrument.
+
+    Computed only after the combined book is netted (Beta + Alpha per bond,
+    the same netting as Summary > Risk): a disallowed net short is executed
+    as a DV01-matched CGB 5/10/30 short or FR007 payer instead of shorting
+    that bond (see web/tabs/risk/short_substitution.py). The Alpha spread
+    tickets above stay as booked; their disallowed short legs net into these.
+    """
+    from .dashboard import build_risk_positions
+    from .short_substitution import build_short_substitutions
+
+    pos = build_risk_positions()
+    orders: dict[str, dict] = {}
+    for r in build_short_substitutions(pos['net_pos'], pos['otr_cgb']):
+        for s in r['substitutes']:
+            o = orders.setdefault(s['code'], {'qty': 0.0, 'dv01': 0.0, 'for': []})
+            o['qty'] += s['notional_mm']
+            o['dv01'] += s['dv01']
+            o['for'].append(f"{r['bond']} {r['code']}")
+    return [{
+        'id': f"SUB-{code}",
+        'date': '—',
+        'book': 'Combined',
+        'spread': f"{code} · for {', '.join(o['for'])}",
+        'action': 'PAY' if code.upper().endswith('.IR') else 'SELL',
+        'qty': abs(o['qty']),
+        'price': None,
+        'status': 'SUBSTITUTE',
+    } for code, o in sorted(orders.items(), key=lambda kv: kv[1]['dv01'])]
 
 
 def register_risk_tickets_callbacks(app):
@@ -153,15 +186,17 @@ def register_risk_tickets_callbacks(app):
         Output('tickets-filter', 'data'),
         [Input('tickets-filter-All', 'n_clicks'),
          Input('tickets-filter-FILLED', 'n_clicks'),
-         Input('tickets-filter-PENDING', 'n_clicks')],
+         Input('tickets-filter-PENDING', 'n_clicks'),
+         Input('tickets-filter-SUBSTITUTE', 'n_clicks')],
         prevent_initial_call=True,
     )
-    def _set_tickets_filter(_n_all, _n_filled, _n_pending):
+    def _set_tickets_filter(_n_all, _n_filled, _n_pending, _n_sub):
         triggered = dash.ctx.triggered_id
         return {
             'tickets-filter-All': 'All',
             'tickets-filter-FILLED': 'FILLED',
             'tickets-filter-PENDING': 'PENDING',
+            'tickets-filter-SUBSTITUTE': 'SUBSTITUTE',
         }.get(triggered, 'All')
 
     @app.callback(
@@ -180,8 +215,14 @@ def register_risk_tickets_callbacks(app):
         all_tickets = _build_tickets()
         filled = [t for t in all_tickets if t['status'] == 'FILLED']
         pending = [t for t in all_tickets if t['status'] == 'PENDING']
+        try:
+            substitutes = _build_substitute_tickets()
+        except Exception:
+            substitutes = []
 
-        subtitle = f"{len(all_tickets)} opening tickets · derived from Beta + Alpha book positions"
+        subtitle = (f"{len(all_tickets)} opening tickets · derived from Beta + Alpha book positions"
+                    + (f" · {len(substitutes)} short-constraint substitutes (after combined netting)"
+                       if substitutes else ""))
 
         kpis = [
             ("Total Tickets", str(len(all_tickets)), THEME['text_main']),
@@ -198,7 +239,8 @@ def register_risk_tickets_callbacks(app):
         ], className='risk-kpi-strip')
 
         ticket_filter = ticket_filter or 'All'
-        rows = all_tickets if ticket_filter == 'All' else [t for t in all_tickets if t['status'] == ticket_filter]
+        shown = all_tickets + substitutes
+        rows = shown if ticket_filter == 'All' else [t for t in shown if t['status'] == ticket_filter]
 
         if not rows:
             table = html.Div(
@@ -215,10 +257,12 @@ def register_risk_tickets_callbacks(app):
         book_styles = [
             {'if': {'filter_query': '{Book} = "Beta"', 'column_id': 'Book'}, 'color': THEME['accent'], 'fontWeight': 'bold'},
             {'if': {'filter_query': '{Book} = "Alpha"', 'column_id': 'Book'}, 'color': THEME['warning'], 'fontWeight': 'bold'},
+            {'if': {'filter_query': '{Book} = "Combined"', 'column_id': 'Book'}, 'color': '#45b6e6', 'fontWeight': 'bold'},
         ]
         action_styles = [
             {'if': {'filter_query': '{Action} = "BUY"', 'column_id': 'Action'}, 'color': THEME['success']},
             {'if': {'filter_query': '{Action} = "SELL"', 'column_id': 'Action'}, 'color': THEME['danger']},
+            {'if': {'filter_query': '{Action} = "PAY"', 'column_id': 'Action'}, 'color': THEME['danger']},
         ]
 
         table_data = [{
