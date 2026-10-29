@@ -83,7 +83,7 @@ def test_gross_dv01_ladder_and_kpi():
     short_g = {'10Y': {'Bonds': -0.4, 'Swaps': 0.0, 'Futures': -0.1, 'Other': 0.0}}
     fig = build_dv01_ladder_gross_fig(long_g, short_g, ['5Y', '10Y'])
     labels = [a.text for a in fig.layout.annotations]
-    assert 'gross 0.700<br>net -0.300' in labels                                  # 10Y: 0.2 long vs 0.5 short
+    assert 'gross 0.70<br>net -0.30' in labels                                   # 10Y: 0.2 long vs 0.5 short
     kpis = build_kpi_cards({'X': {'Beta': 100.0, 'Alpha': 0.0}}, {'5Y': {'Bonds': 0.27}, '10Y': {'Bonds': -0.4}},
                            ['5Y', '10Y'], {'beta': {'long': long_g, 'short': short_g}})
     assert kpis['dv01'] == pytest.approx(-0.13) and kpis['gross_dv01'] == pytest.approx(0.97)

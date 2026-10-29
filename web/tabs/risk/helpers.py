@@ -20,6 +20,7 @@ import pandas as pd
 from settings.paths import DIR_INPUT
 from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
 from web.tabs.alpha.data.duration import _tenor_to_duration
+from web.tabs.alpha.data.legs import actual_leg_duration
 from web.tabs.beta.callbacks._common import (
     _SUMMARY_BETA_PARQUET,
     _SUMMARY_ALPHA_PARQUET,
@@ -445,6 +446,12 @@ def _leg_duration_years(
         return round(float(curve_label_match.group(1)) * 0.92, 4)
 
     if leg_str.endswith('.IB'):
+        # The bond's own modified duration (InstrumentInfo) when known. The
+        # snapshot-ttm x 0.92 proxy below is only a fallback: it is off by -4..-7%
+        # on short bonds and +14% / +25% on the 20Y / 30Y CGBs.
+        _actual = actual_leg_duration(leg_str)
+        if _actual:
+            return round(_actual, 4)
         snap_types = []
         if spread_type in {'TBondCurve', 'TBondSwap'}:
             snap_types.append('TBondCurve')

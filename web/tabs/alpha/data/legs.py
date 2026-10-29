@@ -490,36 +490,98 @@ def fly_leg_tenor_years(stype: str, tid: str) -> Optional[tuple[float, float, fl
     return None
 
 
-def fly_leg_dv01_ratios(stype: str, tid: str) -> Optional[tuple[float, float]]:
+_BOND_INFO_TYPES = ('TBond', 'CBond', 'LBond', 'MNote')
+_BOND_DUR_CACHE: dict = {}          # file path -> (mtime, {code: modified duration})
+
+
+def _bond_modified_durations() -> dict:
+    """{bond code: modified duration (years)} from the {TBond,CBond,LBond,MNote}-InstrumentInfo
+    files, re-read only when a file changes."""
+    from settings.paths import DIR_INPUT
+    out: dict = {}
+    for btype in _BOND_INFO_TYPES:
+        path = Path(DIR_INPUT) / f'{btype}-InstrumentInfo.pkl'
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        hit = _BOND_DUR_CACHE.get(str(path))
+        if hit is None or hit[0] != mtime:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter('ignore')
+                    info = pd.read_pickle(path)
+                col = pd.to_numeric(info['修正久期'], errors='coerce')
+                hit = (mtime, {str(k): float(v) for k, v in col.items() if pd.notna(v) and v > 0})
+            except Exception:
+                hit = (mtime, {})
+            _BOND_DUR_CACHE[str(path)] = hit
+        out.update(hit[1])
+    return out
+
+
+def actual_leg_duration(code: str) -> Optional[float]:
+    """DV01 duration (years) of a resolved trade leg, from the instrument itself:
+    a bond's modified duration, or a FR007 swap's annuity duration. None when the
+    leg is neither (curve labels, blanks) or the bond is not in InstrumentInfo.
+
+    The old `0.92 x years` proxy is off by -4% to -7% on short bonds and by +14% /
+    +25% on the 20Y / 30Y CGBs, which is what made fly and slope hedge ratios (and
+    so the leg volumes) miss DV01 neutrality.
+    """
+    c = str(code or '').strip().upper()
+    m = re.match(r'^(?:FR007S|SHI3MS)(\d+[MY])\.IR$', c)
+    if m:
+        from .duration import _tenor_to_duration
+        return float(_tenor_to_duration(m.group(1).lower()))
+    if c.endswith('.IB'):
+        return _bond_modified_durations().get(c)
+    return None
+
+
+def fly_leg_durations(
+    stype: str, tid: str, legs: Optional[tuple] = None,
+) -> Optional[tuple[float, float, float]]:
+    """(belly, short wing, long wing) DV01 durations in years for a 3-leg fly, or
+    None when ``tid`` is not a fly.
+
+    With ``legs`` = the resolved (belly, short, long) codes, uses each instrument's
+    actual duration (see actual_leg_duration). If any leg's actual duration is
+    unavailable -- or no legs are given -- the whole triple falls back to the
+    nominal tenor proxy (bonds: tenor x 0.92; swaps: annuity), never a mix of
+    bases.
+    """
+    tenors = fly_leg_tenor_years(stype, tid)
+    if tenors is None:
+        return None
+    if legs is not None and len(legs) == 3:
+        actual = [actual_leg_duration(x) for x in legs]
+        if all(d is not None and d > 0 for d in actual):
+            return (float(actual[0]), float(actual[1]), float(actual[2]))
+    if stype == 'SwapSpread':
+        from .duration import _tenor_to_duration
+        return tuple(float(_tenor_to_duration(f'{y}y')) for y in tenors)
+    return tuple(y * 0.92 for y in tenors)
+
+
+def fly_leg_dv01_ratios(
+    stype: str, tid: str, legs: Optional[tuple] = None,
+) -> Optional[tuple[float, float]]:
     """DV01-neutral wing/belly notional ratios for a 3-leg fly:
     (short_wing_ratio, long_wing_ratio), where each wing's notional =
     belly_notional * ratio, split so DV01(short_wing) + DV01(long_wing) ==
     DV01(belly), equally between the two wings (standard duration-neutral
     butterfly construction).
 
-    Duration proxy matches how the rest of the codebase treats each family:
-    bond legs (TenorSpread CGB-/CDB-) use ttm * 0.92, the same proxy
-    _get_duration_mult / _leg_duration_years apply to '.IB' legs; IRS legs
-    (SwapSpread Repo7d-/Shi3M-) use the swap-annuity formula
-    _tenor_to_duration, matching _get_duration_mult's SwapSpread branch.
+    Pass ``legs`` (belly, short, long) to size off the actual instruments'
+    durations; without it the nominal tenor proxy is used (see fly_leg_durations).
     Returns None if tid is not a fly resolve_legs3 supports, or if any leg's
     duration comes out non-positive (degenerate tenor).
     """
-    tenors = fly_leg_tenor_years(stype, tid)
-    if tenors is None:
+    durs = fly_leg_durations(stype, tid, legs)
+    if durs is None:
         return None
-    belly_y, short_y, long_y = tenors
-
-    if stype == 'SwapSpread':
-        from .duration import _tenor_to_duration
-        dur_belly = _tenor_to_duration(f'{belly_y}y')
-        dur_short = _tenor_to_duration(f'{short_y}y')
-        dur_long = _tenor_to_duration(f'{long_y}y')
-    else:
-        dur_belly = belly_y * 0.92
-        dur_short = short_y * 0.92
-        dur_long = long_y * 0.92
-
+    dur_belly, dur_short, dur_long = durs
     if dur_belly <= 0 or dur_short <= 0 or dur_long <= 0:
         return None
     # Each wing absorbs half the belly's DV01: notional_wing * dur_wing = 0.5 * (notional_belly * dur_belly)

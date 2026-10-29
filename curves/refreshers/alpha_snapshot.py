@@ -243,6 +243,20 @@ def _append_snapshot_spread_to_series(
 from web.tabs.alpha.data.constants import _build_tenor_spread_timeseries
 
 
+def _with_swap_ts_alias(cnbd_data: object) -> object:
+	"""Give a raw database-px.pkl dict the 'SwapTS' key the tenor-spread builder reads.
+
+	database-px.pkl keys the swap curves 'IRS'; _build_tenor_spread_timeseries
+	(like loadCNBDTS, which renames the key) looks for 'SwapTS'. Without the
+	alias every swap-based spread (CGBRepo7d-*, NCDRepo7d-*) was missing from the
+	snapshot's calibration, so it never got OU stats / Zscore and only re-entered
+	the table through the loader's latest-level fallback with NaN stats.
+	"""
+	if isinstance(cnbd_data, dict) and 'SwapTS' not in cnbd_data and 'IRS' in cnbd_data:
+		return {**cnbd_data, 'SwapTS': cnbd_data['IRS']}
+	return cnbd_data
+
+
 def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str, pd.DataFrame]:
 	"""Build normalized snapshot tables keyed by spread type.
 
@@ -263,7 +277,7 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 
 	tenor_spd: dict[str, pd.Series] = {}
 	try:
-		tenor_spd = _build_tenor_spread_timeseries(cnbd_data)
+		tenor_spd = _build_tenor_spread_timeseries(_with_swap_ts_alias(cnbd_data))
 	except Exception:
 		tenor_spd = {}
 

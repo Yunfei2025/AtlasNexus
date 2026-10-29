@@ -44,8 +44,7 @@ from .helpers import (
     _leg_duration_years,
     _leg_volume_ratio,
 )
-from web.tabs.alpha.data.legs import fly_leg_dv01_ratios, fly_leg_tenor_years, resolve_legs3
-from web.tabs.alpha.data.duration import _tenor_to_duration
+from web.tabs.alpha.data.legs import fly_leg_dv01_ratios, fly_leg_durations, fly_leg_tenor_years, resolve_legs3
 
 
 def build_risk_positions() -> dict:
@@ -231,7 +230,7 @@ def build_risk_positions() -> dict:
                 tid = str(r.get('ID', ''))
                 if tid in ('', 'TOTAL'):
                     continue
-                notional  = float(r.get('notional_mm', 0) or 0)
+                notional  = abs(float(r.get('notional_mm', 0) or 0))   # magnitude; sign comes from direction
                 dv01_k    = float(r.get('DV01_k', 0) or 0)
                 dv01_mm   = dv01_k / 1000.0          # k CNY → MM CNY
                 dur_raw   = r.get('_duration', None)
@@ -243,7 +242,7 @@ def build_risk_positions() -> dict:
                     duration = 0.0
                 direction = str(r.get('direction', 'BUY'))
                 stype     = str(r.get('spread_type', ''))
-                dir_sign  = -1.0 if direction in ('SELL', 'SHORT') else 1.0
+                dir_sign  = -1.0 if direction.strip().upper() in ('SELL', 'SHORT') else 1.0
 
                 # Prefer the legs Alpha Portfolio's Run Optimization actually
                 # saved (same rule as the Alpha snapshot table); the local
@@ -283,16 +282,15 @@ def build_risk_positions() -> dict:
                 # wings each take half the belly DV01 (fly_leg_dv01_ratios,
                 # the same ratios the optimizer sizes and margins with).
                 _abs_notional = abs(notional)
-                _fly_ratios = fly_leg_dv01_ratios(stype, tid) if _fly_years is not None else None
+                _fly_legs = (leg1, leg2, leg3)
+                _fly_ratios = fly_leg_dv01_ratios(stype, tid, legs=_fly_legs) if _fly_years is not None else None
                 leg3_volume_mag = 0.0
                 if _fly_ratios is not None:
                     leg2_volume_mag = round(_abs_notional * _fly_ratios[0] / 10.0) * 10.0
                     leg3_volume_mag = round(_abs_notional * _fly_ratios[1] / 10.0) * 10.0
-                    _fly_dur = (
-                        (lambda y: float(_tenor_to_duration(f'{y}y'))) if stype == 'SwapSpread'
-                        else (lambda y: y * 0.92)
-                    )
-                    leg1_duration, leg2_duration, leg3_duration = (_fly_dur(y) for y in _fly_years)
+                    # same durations the ratios were built from (actual bond / swap
+                    # durations; one nominal triple if any leg's is unavailable)
+                    leg1_duration, leg2_duration, leg3_duration = fly_leg_durations(stype, tid, _fly_legs)
                 else:
                     leg_ratio = _leg_volume_ratio(leg1, leg2, stype, tid, duration, _alpha_snap_cache)
                     leg2_volume_mag = (
@@ -318,7 +316,7 @@ def build_risk_positions() -> dict:
                 alpha_rows.append({
                     'Book': 'Alpha', 'Name': tid,
                     'Leg1': leg1, 'Leg2': leg2, 'Leg3': leg3,
-                    'Capital (MM)': f"{notional:.1f}",
+                    'Capital (MM)': f"{leg1_signed:.1f}",   # BUY +, SELL - (leg 1); legs 2/3 are opposite
                     'DV01 (MM/bp)': f"{(leg1_dv01 + leg2_dv01 + leg3_dv01):.4f}",
                     'Direction': direction,
                 })

@@ -8,9 +8,12 @@ from datetime import datetime
 import dash
 from dash import dcc, html
 from dash.dependencies import Input, Output, State
+import numpy as np
 import pandas as pd
 
 from settings.paths import DIR_INPUT
+from .swap_close import freshest_daily_closes, swap_spread_close_bp, zscore_from_close
+from web.tabs.alpha.data.legs import fly_leg_dv01_ratios
 from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
 from web.tabs.beta.data import THEME
 from web.tabs.beta.callbacks._common import _SUMMARY_ALPHA_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET, _ALPHA_POSITIONS_PARQUET, _load_cr_ts, _price_progress_bar, _dir_badge, _style_badge, _signed_value_style, _zscore_cell_style, _sortable_header, _apply_sort
@@ -93,6 +96,25 @@ def register_alpha_book_table_callbacks(app):
     
         _alpha_spread_cache: dict[str, pd.DataFrame | None] = {}
         _irs_close_yield_df: pd.DataFrame | None = None
+        _db_px: dict | None = None
+        _swap_close_date: dict[str, pd.Timestamp] = {}   # trade_id -> date of the daily close used
+
+        def _database_px() -> dict:
+            """database-px.pkl (the market data feed), read once per refresh."""
+            nonlocal _db_px
+            if _db_px is None:
+                try:
+                    _loaded = pd.read_pickle(str(DIR_INPUT / 'database-px.pkl'))
+                    _db_px = _loaded if isinstance(_loaded, dict) else {}
+                except Exception:
+                    _db_px = {}
+            return _db_px
+
+        def _realtime_irs_date() -> pd.Timestamp | None:
+            try:
+                return pd.Timestamp(_os.path.getmtime(str(DIR_INPUT / 'IRS-spdsrt.pkl')), unit='s').normalize()
+            except OSError:
+                return None
     
         def _resolve_alpha_metric(
             spread_type: str,
@@ -133,6 +155,7 @@ def register_alpha_book_table_callbacks(app):
             leg1: str,
             leg2: str,
             fallback: float | None,
+            leg3: str = '',
         ) -> float | None:
             nonlocal _irs_close_yield_df
     
@@ -152,23 +175,27 @@ def register_alpha_book_table_callbacks(app):
                     except (TypeError, ValueError, KeyError):
                         pass
     
-            # Repo swap spreads should use latest daily IRS leg close yields when available.
+            # Repo swap spreads: latest daily close across ALL legs (a fly is
+            # 2*belly - wings). Freshest source wins -- the data feed
+            # (database-px.pkl) is topped up with IRS-pxspds.pkl, which can lag it
+            # by days. The real-time quote (`fallback`) is used instead only when
+            # that file is newer than the latest daily close.
             if spread_type == 'SwapSpread' and leg1.endswith('.IR') and leg2.endswith('.IR'):
                 if _irs_close_yield_df is None:
                     try:
                         _irs_px = pd.read_pickle(str(DIR_INPUT / 'IRS-pxspds.pkl'))
                         _cy = _irs_px.get('CloseYield') if isinstance(_irs_px, dict) else None
-                        _irs_close_yield_df = _cy if isinstance(_cy, pd.DataFrame) else pd.DataFrame()
                     except Exception:
-                        _irs_close_yield_df = pd.DataFrame()
-                if not _irs_close_yield_df.empty and leg1 in _irs_close_yield_df.columns and leg2 in _irs_close_yield_df.columns:
-                    try:
-                        y1 = float(_irs_close_yield_df[leg1].dropna().iloc[-1])
-                        y2 = float(_irs_close_yield_df[leg2].dropna().iloc[-1])
-                        return round((y1 - y2) * 100.0, 4)
-                    except (TypeError, ValueError, IndexError):
-                        pass
-    
+                        _cy = None
+                    _irs_close_yield_df = freshest_daily_closes(_database_px().get('IRS'), _cy)
+                _pt = swap_spread_close_bp(_irs_close_yield_df, [leg1, leg2, leg3])
+                if _pt is not None:
+                    _rt = _realtime_irs_date()
+                    if _rt is not None and _rt > _pt[1] and fallback is not None:
+                        return fallback
+                    _swap_close_date[trade_id] = _pt[1]
+                    return _pt[0]
+
             return fallback
     
         def _compute_carry_mtm(spread_type: str, instrument_id: str,
@@ -250,7 +277,12 @@ def register_alpha_book_table_callbacks(app):
                     zscore_val = _resolve_alpha_metric(spread_type, trade_id, 'Zscore', fallback=_coerce_float(row.get('Zscore')))
                     carry_roll_val = _resolve_alpha_metric(spread_type, trade_id, 'carry_roll', fallback=_coerce_float(row.get('carry_roll')))
                     breakeven_val = _resolve_alpha_metric(spread_type, trade_id, 'breakeven_3m', fallback=_coerce_float(row.get('breakeven_3m')))
-                    notional   = float(row.get('notional_mm', 0) or 0)
+                    # Size is the magnitude; the sign comes from DIRECTION (BUY +,
+                    # SELL -), never from the stored notional_mm -- older snapshots
+                    # stored it flipped for the whole book. Leg 2 is the opposite
+                    # side of leg 1, so Target Volume Leg2 takes the opposite sign.
+                    notional   = abs(float(row.get('notional_mm', 0) or 0))
+                    _dir_sign  = -1.0 if str(row.get('direction', '')).strip().upper() in ('SELL', 'SHORT') else 1.0
                     margin_mm  = _coerce_float(row.get('margin_mm'))
                     dv01_k     = float(row.get('DV01_k', 0) or 0)
                     risk_contribution = _coerce_float(row.get('risk_contribution'))
@@ -279,9 +311,21 @@ def register_alpha_book_table_callbacks(app):
                     saved_leg3 = row.get('Leg3', None)
                     leg3 = '' if saved_leg3 in (None, '') or pd.isna(saved_leg3) else str(saved_leg3)
                     leg_ratio_val = _leg_volume_ratio(leg1, leg2, spread_type, trade_id, duration, _alpha_duration_snap_cache)
-                    leg_ratio = f"{leg_ratio_val:.2f}" if leg_ratio_val is not None else ''
+                    # 3-tenor fly: each wing takes half the belly's DV01 (the ratios the
+                    # optimizer sized with and Risk nets with). The 2-leg ratio above
+                    # hedged the belly's full DV01 with one wing -- 2x too big -- and was
+                    # blank when a wing's bond had not been resolved.
+                    _fly_ratios = fly_leg_dv01_ratios(spread_type, trade_id, legs=(leg1, leg2, leg3))
+                    if _fly_ratios is not None:
+                        leg_ratio_val = _fly_ratios[0]
+                    leg_ratio = f"{leg_ratio_val:.3f}" if leg_ratio_val is not None else ''
+                    leg_ratio3 = f"{_fly_ratios[1]:.3f}" if _fly_ratios is not None else ''
                     leg2_target_volume = (
-                        round(notional * leg_ratio_val / 10.0) * 10.0 if leg_ratio_val is not None else None
+                        -_dir_sign * round(notional * leg_ratio_val / 10.0) * 10.0 if leg_ratio_val is not None else None
+                    )
+                    # Long wing of a fly: the other half of the belly's DV01, same side as leg 2.
+                    leg3_target_volume = (
+                        -_dir_sign * round(notional * _fly_ratios[1] / 10.0) * 10.0 if _fly_ratios is not None else None
                     )
     
                     cp_fallback_bp = _resolve_alpha_metric(
@@ -295,7 +339,19 @@ def register_alpha_book_table_callbacks(app):
                         leg1,
                         leg2,
                         cp_fallback_bp,
+                        leg3,
                     )
+                    # Swap rows priced off a daily close: Z-Score from that same close
+                    # (snapshot mean / EWMA vol), not the older real-time quote's.
+                    if spread_type == 'SwapSpread' and trade_id in _swap_close_date and cp_bp is not None:
+                        _sdf = _alpha_spread_cache.get(spread_type)
+                        if isinstance(_sdf, pd.DataFrame) and trade_id in _sdf.index:
+                            _vol = _sdf.at[trade_id, 'ewm_vol'] if 'ewm_vol' in _sdf.columns else np.nan
+                            if pd.isna(_vol) and 'vol' in _sdf.columns:
+                                _vol = _sdf.at[trade_id, 'vol']
+                            _z = zscore_from_close(cp_bp, _sdf.at[trade_id, 'mean'] if 'mean' in _sdf.columns else None, _vol)
+                            if _z is not None:
+                                zscore_val = _z
     
                     # Carry+Roll is shown as a 3m value in the table.
                     # Use the live spread-based annual proxy when available and convert annual -> quarterly.
@@ -351,7 +407,9 @@ def register_alpha_book_table_callbacks(app):
                         'Leg 2':                  leg2_display,
                         'Leg 3':                  leg3,
                         'Ratio (V2/V1)':          leg_ratio,
+                        'Ratio (V3/V1)':          leg_ratio3,
                         'Target Volume Leg2 (MM CNY)': f"{leg2_target_volume:,.1f}" if leg2_target_volume is not None else '',
+                        'Target Volume Leg3 (MM CNY)': f"{leg3_target_volume:,.1f}" if leg3_target_volume is not None else '',
                         'Margin (MM)':            f"{margin_mm:,.2f}" if margin_mm is not None else '',
                         'Spread Type':            spread_type,
                         'Style':                  row.get('style', ''),
@@ -363,7 +421,7 @@ def register_alpha_book_table_callbacks(app):
                         'Z-Score':                f"{zscore_val:.2f}" if zscore_val is not None else '',
                         'Close Price (bp)':       f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
                         'Progress':               '',
-                        'Capital (MM CNY)':       f"{notional:,.1f}",
+                        'Capital (MM CNY)':       f"{_dir_sign * notional:,.1f}",
                         'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",
                         'Carry+Roll (3m,bp)':     _fmt1(-carry_roll_3m_val if str(row.get('direction', '')).strip().upper() == 'SELL' else carry_roll_3m_val),
                         'Breakeven (3m,bp)':      _fmt1(breakeven_val),
@@ -532,18 +590,20 @@ def register_alpha_book_table_callbacks(app):
             total_rows = [r for r in display_rows if r.get('ID') == 'TOTAL']
             _numeric_cols = {
                 'Duration', 'Open price (bp)', 'Volume (mm)', 'Z-Score', 'Close Price (bp)',
-                'Capital (MM CNY)', 'Target Volume Leg2 (MM CNY)', 'Margin (MM)', 'DV01 (k CNY/bp)', 'Carry+Roll (3m,bp)',
+                'Capital (MM CNY)', 'Target Volume Leg2 (MM CNY)', 'Target Volume Leg3 (MM CNY)', 'Margin (MM)',
+                'DV01 (k CNY/bp)', 'Carry+Roll (3m,bp)',
                 'Breakeven (3m,bp)', 'Stop (bp)', 'Target (bp)', 'MTM spd (bp)',
                 'MtM Carry (MM CNY)', 'MtM Value (MM CNY)', 'Target Weight (%)', 'RC (%)', 'Weight (%)',
             }
             body_rows = _apply_sort(body_rows, sort_state, _numeric_cols)
     
             _ALL_COLS = [
-                ('ID', 'left'), ('Leg 1', 'left'), ('Leg 2', 'left'), ('Leg 3', 'left'), ('Ratio (V2/V1)', 'right'),
+                ('ID', 'left'), ('Leg 1', 'left'), ('Leg 2', 'left'), ('Leg 3', 'left'), ('Ratio (V2/V1)', 'right'), ('Ratio (V3/V1)', 'right'),
                 ('Style', 'left'), ('Direction', 'center'), ('Duration', 'right'),
                 ('Open price (bp)', 'right'), ('Volume (mm)', 'right'), ('Open date', 'right'),
                 ('Z-Score', 'right'), ('Close Price (bp)', 'right'), ('Progress', 'left'),
-                ('Capital (MM CNY)', 'right'), ('Target Volume Leg2 (MM CNY)', 'right'), ('Margin (MM)', 'right'),
+                ('Capital (MM CNY)', 'right'), ('Target Volume Leg2 (MM CNY)', 'right'),
+                ('Target Volume Leg3 (MM CNY)', 'right'), ('Margin (MM)', 'right'),
                 ('DV01 (k CNY/bp)', 'right'),
                 ('Carry+Roll (3m,bp)', 'right'), ('Breakeven (3m,bp)', 'right'),
                 ('Stop (bp)', 'right'), ('Target (bp)', 'right'), ('MTM spd (bp)', 'right'),
@@ -730,6 +790,17 @@ def register_alpha_book_table_callbacks(app):
                 table,
             ], id='summary-alpha-table-wrapper')
             status = f"Alpha snapshot from {ts[:19]} ({source_label})"
+            try:
+                _cgb = _database_px().get('CGB')
+                _asof = pd.Timestamp(_cgb.index.max()).date() if isinstance(_cgb, pd.DataFrame) and len(_cgb) else None
+                if _asof is not None:
+                    status += f" · Z-Score / Close as of {_asof}"
+                _snap = DIR_INPUT / 'Alpha-spreadsrt.pkl'
+                if _snap.exists() and (DIR_INPUT / 'database-px.pkl').exists() \
+                        and _snap.stat().st_mtime < (DIR_INPUT / 'database-px.pkl').stat().st_mtime:
+                    status += " · WARNING: spread snapshot is older than market data (rebuild failed?)"
+            except Exception:
+                pass
             return content, status, display_rows
     
         except Exception as exc:

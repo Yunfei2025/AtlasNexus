@@ -137,6 +137,25 @@ def _upsert_snapshot(new_df: pd.DataFrame, parquet_path: str, id_cols: list[str]
     return merged
 
 
+def _scale_notionals_to_capital(
+    notional: pd.Series, direction_sign: pd.Series, mask: pd.Series,
+    total_capital_mm: float, lot_mm: float,
+) -> pd.Series:
+    """Step B: scale the masked (bond/swap/tenor) magnitudes so their net signed
+    notional (sum of magnitude x BUY/SELL sign) equals ``total_capital_mm``.
+
+    Returns the magnitudes only -- BUY +/SELL - is applied afterwards. The scale
+    divides by abs(net): when SELLs outweigh BUYs the net is negative, and a
+    signed divisor flipped the sign of every notional in the book.
+    """
+    out = notional.copy()
+    raw_signed = (notional[mask] * direction_sign[mask]).sum()
+    if mask.any() and abs(raw_signed) > 1e-6:
+        scale = total_capital_mm / abs(raw_signed)
+        out[mask] = np.floor(notional[mask] * scale / lot_mm) * lot_mm
+    return out
+
+
 def register_portfolio_callbacks(app) -> None:
     """Register all Portfolio subtab callbacks."""
 
@@ -525,13 +544,9 @@ def register_portfolio_callbacks(app) -> None:
                 if 'spread_type' in df_scored.columns
                 else pd.Series(False, index=df_scored.index)
             )
-            if _is_bond.any():
-                _raw_signed = (df_scored.loc[_is_bond, 'notional_mm'] * _direction_sign[_is_bond]).sum()
-                if abs(_raw_signed) > 1e-6:
-                    _cap_scale = total_capital_mm / _raw_signed
-                    df_scored.loc[_is_bond, 'notional_mm'] = (
-                        np.floor(df_scored.loc[_is_bond, 'notional_mm'] * _cap_scale / _lot_mm) * _lot_mm
-                    )
+            df_scored['notional_mm'] = _scale_notionals_to_capital(
+                df_scored['notional_mm'], _direction_sign, _is_bond, total_capital_mm, _lot_mm,
+            )
 
             # Step C: apply direction sign to all notionals
             df_scored['notional_mm'] = df_scored['notional_mm'] * _direction_sign
@@ -592,8 +607,9 @@ def register_portfolio_callbacks(app) -> None:
                     if l3:
                         # Fly (belly=leg1, short wing=leg2, long wing=leg3):
                         # both wings' notional/DV01 ratios vs the belly,
-                        # DV01-neutral split -- see fly_leg_dv01_ratios.
-                        dv01_ratios = fly_leg_dv01_ratios(stype, tid)
+                        # DV01-neutral split -- see fly_leg_dv01_ratios; sized off the
+                        # resolved bonds' actual durations, not the nominal tenors.
+                        dv01_ratios = fly_leg_dv01_ratios(stype, tid, legs=(l1, l2, l3))
                         r2, r3 = dv01_ratios if dv01_ratios is not None else (np.nan, np.nan)
                         ratio_list.append(round(float(r2), 4) if pd.notna(r2) else np.nan)
                         ratio3_list.append(round(float(r3), 4) if pd.notna(r3) else np.nan)
@@ -939,12 +955,20 @@ def register_portfolio_callbacks(app) -> None:
                 # 0-1 fraction that would collapse to 0.0/0.1 at 1 decimal.
                 if col == 'weight':
                     df_display[col] = df_display[col].round(4)
+                elif col in ('ratio_v2_v1', 'ratio_v3_v1'):
+                    # hedge ratios drive leg volumes: 1.459 / 0.245, not "1.5" / "0.2"
+                    df_display[col] = df_display[col].round(3)
                 elif df_display[col].dtype in ['float64', 'float32']:
                     df_display[col] = df_display[col].round(1)
 
-            # Display notional as absolute size; trade direction is already in DIR.
+            # Notional is signed by direction (BUY +, SELL -), the same convention as
+            # Summary > Books and the Risk tab; TOTAL below is therefore the net.
             if 'notional_mm' in df_display.columns:
-                df_display['notional_mm'] = pd.to_numeric(df_display['notional_mm'], errors='coerce').abs().round(1)
+                _n_sign = (
+                    df_display['direction'].astype(str).str.strip().str.upper().isin(['SELL', 'SHORT']).map({True: -1.0, False: 1.0})
+                    if 'direction' in df_display.columns else 1.0
+                )
+                df_display['notional_mm'] = (pd.to_numeric(df_display['notional_mm'], errors='coerce').abs() * _n_sign).round(1)
 
             if 'carry_roll' in df_display.columns and 'direction' in df_display.columns:
                 _sell = df_display['direction'].astype(str).str.strip().str.upper().eq('SELL')
