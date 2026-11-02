@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 from datetime import datetime
 
@@ -10,7 +11,7 @@ import dash
 from dash.dependencies import Input, Output, State, ALL
 import pandas as pd
 
-from web.tabs.beta.callbacks._common import _SUMMARY_BETA_DISPLAY_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET
+from web.tabs.beta.callbacks._common import _SUMMARY_BETA_DISPLAY_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET, _SUMMARY_BETA_PARQUET
 from ..helpers import (
     _row_key, _refresh_alpha_display_row, _persist_alpha_summary_rows,
     _beta_user_row_key, _load_beta_user_overrides, _persist_beta_user_rows,
@@ -379,11 +380,21 @@ def register_risk_book_interaction_callbacks(app):
             out_df.to_parquet(out_path, index=False)
             return True
     
+        # Beta > Add to Portfolio deletes the display cache so the next Books
+        # render rebuilds from the new canonical snapshot. `beta_rows` here is
+        # the PREVIOUS render (State), so writing it now would resurrect the old
+        # book as the cache -- Books and Risk (which reads the canonical file)
+        # then disagree, e.g. an old CGB-30Y bond code. Skip until a render has
+        # rebuilt from the canonical snapshot.
+        _beta_stale = (
+            os.path.exists(_SUMMARY_BETA_PARQUET)
+            and not os.path.exists(_SUMMARY_BETA_DISPLAY_PARQUET)
+        )
         saved = []
         try:
-            if beta_rows:
+            if beta_rows and not _beta_stale:
                 _persist_beta_user_rows(beta_rows)
-            if _write_rows(beta_rows, _SUMMARY_BETA_DISPLAY_PARQUET, 'Asset Type', 'TOTAL'):
+            if not _beta_stale and _write_rows(beta_rows, _SUMMARY_BETA_DISPLAY_PARQUET, 'Asset Type', 'TOTAL'):
                 saved.append('beta')
         except Exception as exc:
             print(f"Warning: Could not persist Beta display snapshot on refresh: {exc}")
