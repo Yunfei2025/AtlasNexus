@@ -216,6 +216,7 @@ def run_monthly_style_backtest(
     ou_mean: Optional[float] = None,
     carry_z_weight: float = 0.0,
     mr_lookback: int = MR_LOOKBACK,
+    start_date: Optional[pd.Timestamp] = None,
 ) -> Dict[str, Any]:
     """Run a continuous backtest whose entry style is routed by month.
 
@@ -270,6 +271,16 @@ def run_monthly_style_backtest(
     chasing a moving mean on those names. Exposed per-instrument via the
     Individual Spread backtest panel's "Lookback Window" dropdown rather than
     changed globally.
+
+    ``start_date``: first date the backtest may trade (starts flat). Signals
+    are still computed on the whole ``spread_ts`` so they are warmed up at the
+    window start; returned series and the equity curve cover only
+    ``>= start_date``. Callers should pass the FULL history plus this date
+    rather than ``ts.tail(period)``: truncating first starves the 120d anchor
+    and the regime router (``build_monthly_style_schedule`` returns
+    'insufficient_history' -> default MR for the first months), which on
+    CGB-10s30s at 2y routed 11/25 months to MR instead of trend and turned
+    +321bp into -2bp over the same 504 days.
     """
     s = _clean_series(spread_ts)
     if s is None or len(s) < 60:
@@ -390,6 +401,8 @@ def run_monthly_style_backtest(
     trend_start = max(int(vol_window), int(mom_window)) + 1
     start_i = min(int(mr_lookback), trend_start)
     start_i = max(start_i, 1)
+    if start_date is not None:
+        start_i = max(start_i, int(s.index.searchsorted(pd.Timestamp(start_date))))
     if start_i >= len(s):
         return {'error': 'Insufficient data'}
 
@@ -655,6 +668,13 @@ def run_monthly_style_backtest(
         'trend_max_flip_age': int(trend_max_flip_age),
         'open_trade': open_trade,
     }
+    if start_date is not None:
+        _t0 = idx_arr[start_i]
+        for _k in ('spread_ts', 'zscore_ts', 'composite_signal_ts', 'trend_state_ts',
+                   'norm_mom_ts', 'carry_roll_ts'):
+            _v = base.get(_k)
+            if isinstance(_v, pd.Series):
+                base[_k] = _v.loc[_v.index >= _t0]
 
     if not trades:
         base.update({

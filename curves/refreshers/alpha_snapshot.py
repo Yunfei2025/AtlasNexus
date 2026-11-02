@@ -525,6 +525,39 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 			except Exception:
 				continue
 
+		# Z-score anchor must match the Backtest tab (engine_monthly.blended_mr_mean):
+		# ADF-stationary names use the OU mean (set above), everything else uses the
+		# plain rolling(mr_lookback) mean of the full series (saved param, else the
+		# 120-day TenorSpread preset), with the engine's EWMA(60) vol. Without this
+		# a non-stationary name was z-scored against its 252d OU mean (e.g.
+		# MTNCGB-5y: z 0.25 here vs 1.08 in the backtest).
+		# Series come from the same loader the backtest uses (Tenor-spds.pkl first),
+		# not the cnbd rebuild above, so history/truncation match exactly.
+		try:
+			from web.tabs.alpha.data.loaders import load_spread_timeseries
+			_bt_ts = load_spread_timeseries("TenorSpread")
+		except Exception:
+			_bt_ts = None
+		if not isinstance(_bt_ts, pd.DataFrame):
+			_bt_ts = df_ts
+		for _inst in df_tenor.index:
+			try:
+				if _inst not in _bt_ts.columns:
+					continue
+				_full = pd.to_numeric(_bt_ts[_inst], errors="coerce").dropna()
+				if _full.empty:
+					continue
+				if str(df_tenor.at[_inst, "stationary"]).strip().upper() != "YES":
+					_saved = load_instrument_params("TenorSpread", _inst) or {}
+					_lb = int(_saved.get("mr_lookback") or 120)
+					if len(_full) >= _lb:
+						df_tenor.at[_inst, "mean"] = float(_full.rolling(_lb).mean().iloc[-1])
+				_ev = _full.ewm(span=60, min_periods=60).std().iloc[-1]
+				if np.isfinite(_ev) and _ev > 0:
+					df_tenor.at[_inst, "ewm_vol"] = float(_ev)
+			except Exception:
+				continue
+
 		df_tenor["spread"] = pd.to_numeric(df_tenor["spread"], errors="coerce")
 		df_tenor["mean"] = pd.to_numeric(df_tenor["mean"], errors="coerce")
 		df_tenor["vol"] = pd.to_numeric(df_tenor["vol"], errors="coerce")

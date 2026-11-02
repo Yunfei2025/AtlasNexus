@@ -25,7 +25,7 @@ from ..data import (
     has_saved_state, save_portfolio_backtest_result, estimate_margin_mm,
 )
 from .portfolio import _SUMMARY_ALPHA_PARQUET
-from .backtest_state import backtest_borrow_cost_bp, carry_needs_negate, latest_position, run_instrument_backtest, short_allowed
+from .backtest_state import backtest_borrow_cost_bp, carry_needs_negate, latest_position, run_instrument_backtest, short_allowed, window_start
 from ..layouts import build_individual_backtest_panel, build_portfolio_backtest_panel
 from ..backtest import (
     run_spread_backtest, run_trend_backtest_dc,
@@ -169,6 +169,7 @@ def _run_monthly_style_switch_backtest(
     month_to_style_override: Optional[dict] = None,
     mr_lookback: int = 120,
     allow_trend_style: bool = False,
+    start_date: Optional[pd.Timestamp] = None,
 ):
     """Run one continuous backtest whose entry style is routed by the monthly review.
 
@@ -202,6 +203,11 @@ def _run_monthly_style_switch_backtest(
     ``_allow_trend_style_for``); ignored when ``month_to_style_override`` is
     given, since a saved schedule already encodes whatever routing decision
     was in effect when it was reviewed and saved.
+
+    ``start_date``: pass the FULL ``ts`` and the window start here instead of
+    ``ts.tail(period)`` -- the schedule and signals then warm up on the whole
+    history and only trading is restricted to the window (see
+    ``run_monthly_style_backtest``'s ``start_date``).
     """
     if month_to_style_override is not None:
         month_to_style = month_to_style_override
@@ -240,9 +246,15 @@ def _run_monthly_style_switch_backtest(
         carry_z_weight=carry_z_weight,
         max_hold=max_hold,
         mr_lookback=mr_lookback,
+        start_date=start_date,
     )
 
     if isinstance(results, dict) and 'error' not in results:
+        if start_date is not None and not schedule.empty:
+            _p0 = pd.Timestamp(start_date).to_period('M')
+            schedule = schedule.loc[
+                pd.to_datetime(schedule['review_date']).dt.to_period('M') >= _p0
+            ].reset_index(drop=True)
         results['monthly_style_schedule'] = schedule
         style_ts = results.get('style_ts')
         if isinstance(style_ts, pd.Series) and not style_ts.empty:
@@ -580,19 +592,20 @@ def register_backtest_callbacks(app) -> None:
             macro_name = instrument[len(MACRO_PREFIX):]
             display_instrument = macro_name
             ts = load_macro_series(macro_name)
-            if ts is not None:
-                ts = ts.tail(period)
         else:
             spread_ts = load_spread_timeseries(spread_type)
             if spread_ts is None:
                 return html.Div(f"No time series data available for {spread_type}.", style={'color': THEME['warning']}), ""
             if instrument in spread_ts.columns:
-                ts = spread_ts[instrument].tail(period)
+                ts = spread_ts[instrument]
             else:
                 return html.Div(f"Instrument {instrument} not found in data.", style={'color': THEME['warning']}), ""
 
-        if ts is None or len(ts.dropna()) < 60:
+        if ts is None or len(ts.tail(period).dropna()) < 60:
             return html.Div("Insufficient data for backtest.", style={'color': THEME['warning']}), ""
+        # Full history goes to the engine (warm regime router / z anchor);
+        # only trading and display are limited to the selected period.
+        bt_start = window_start(ts, period)
 
         is_yield_based = spread_type in YIELD_BASED_SPREAD_TYPES
 
@@ -713,11 +726,12 @@ def register_backtest_callbacks(app) -> None:
                 carry_z_weight=float(carry_z_weight) if carry_z_weight is not None else 0.5,
                 mr_lookback=int(mr_lookback) if mr_lookback is not None else 120,
                 allow_trend_style=_allow_trend_style_for(spread_type, instrument),
+                start_date=bt_start,
             )
 
             # For YTM-based spreads: restore original display signs after internal inversion.
             if _negate_ts and isinstance(results, dict):
-                results['spread_ts'] = ts
+                results['spread_ts'] = ts if bt_start is None else ts.loc[ts.index >= bt_start]
                 for key in ('zscore_ts', 'composite_signal_ts', 'trend_state_ts', 'norm_mom_ts'):
                     series = results.get(key)
                     if isinstance(series, pd.Series):
@@ -815,7 +829,10 @@ def register_backtest_callbacks(app) -> None:
             spread_ts = load_spread_timeseries(spread_type)
             if spread_ts is None or instrument not in spread_ts.columns:
                 return f"No time series data available for {instrument}."
-            ts = spread_ts[instrument].tail(period or 504)
+            # Full history, not tail(period): a truncated series leaves the
+            # first months on 'insufficient_history' -> default MR, and that
+            # schedule would then be saved as the reviewed one.
+            ts = spread_ts[instrument]
 
             # Match run_individual_backtest's orientation exactly: the schedule
             # must be built on the same (sign-normalised) series the engine

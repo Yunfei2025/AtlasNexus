@@ -351,3 +351,50 @@ def test_engine_mr_stop_loss_does_not_churn():
     assert not trades.empty
     n_stops = int((trades['exit_reason'] == 'stop_loss').sum())
     assert n_stops <= 3, f'{n_stops} stop-loss records suggests re-entry churn'
+
+
+# --------------------------------------------------------------------------
+# Windowed backtests: full-history warm-up, trading only inside the window
+# --------------------------------------------------------------------------
+
+def test_start_date_trades_only_inside_window():
+    s = _oscillating(900, period=240)
+    month_to_style = {p: 'mr' for p in s.index.to_period('M').unique()}
+    start = s.index[-300]
+    res = run_monthly_style_backtest(s, month_to_style, entry_z=1.5, exit_z=0.5,
+                                     min_hold=5, start_date=start)
+
+    assert res['equity_ts'].index[0] == start
+    assert res['spread_ts'].index[0] == start
+    assert (res['trades_df']['entry_date'] >= start).all()
+    # Signals are warm at the window start (computed on the full history).
+    assert np.isfinite(res['zscore_ts'].iloc[0])
+
+
+def test_windowed_run_schedules_from_full_history():
+    """Regression: tail(period) left the window's first months on
+    'insufficient_history' -> default MR (CGB-10s30s 2y: 11/25 months MR
+    instead of trend, Sharpe +0.44 -> -0.04)."""
+    from web.tabs.alpha.callbacks.backtest_tab import _run_monthly_style_switch_backtest
+    from web.tabs.alpha.callbacks.backtest_state import window_start
+
+    s = _drifting(900)
+    kw = dict(spread_type='TenorSpread', entry_z=2.0, exit_z=0.5, stop_z=3.0, min_hold=7,
+              theta=1.25, vol_window=60, trailing_mult=3.0, carry_roll_ts=None,
+              carry_roll_bp=0.0, duration_mult=1.0, borrow_cost_long_bp=0.0,
+              borrow_cost_short_bp=0.0, allow_short=True, carry_roll_sell_ts=None)
+
+    truncated = _run_monthly_style_switch_backtest(ts=s.tail(300), **kw)
+    windowed = _run_monthly_style_switch_backtest(ts=s, start_date=window_start(s, 300), **kw)
+
+    assert truncated['monthly_style_schedule']['regime'].iloc[0] == 'insufficient_history'
+    assert (windowed['monthly_style_schedule']['regime'] != 'insufficient_history').all()
+
+
+def test_window_start_matches_tail_window():
+    from web.tabs.alpha.callbacks.backtest_state import window_start
+
+    s = _oscillating(900)
+    assert window_start(s, 504) == s.tail(504).index[0]
+    assert window_start(s, 2520) is None
+    assert window_start(s, None) is None

@@ -100,7 +100,18 @@ def get_cgb_otr_map() -> dict[str, str]:
 
 
 def get_cdb_otr_map() -> dict[str, str]:
-    """Return {tenor: on-the-run CDB bond ID} using the latest CBond cvref row."""
+    """Return {tenor: on-the-run CDB bond ID}.
+
+    Delegates to the Market Data tab's sticky selector so the Portfolio and Market
+    tabs agree; falls back to the latest CBond cvref row if that is unavailable.
+    """
+    try:
+        from web.tabs.market.data import _select_on_the_run_bonds
+        sticky = _select_on_the_run_bonds("CBond", list(_CGB_TENOR_BANDS))
+        if sticky:
+            return {k: v for k, v in sticky.items() if v and v != "—"}
+    except Exception:
+        pass
     try:
         from settings.paths import DIR_INPUT
         import numpy as np

@@ -76,6 +76,18 @@ def latest_position(results) -> str:
     return 'BUY' if str(open_trade.get('direction', '')).upper() == 'LONG' else 'SELL'
 
 
+def window_start(ts: pd.Series, period: Optional[int]) -> Optional[pd.Timestamp]:
+    """First date of the trailing ``period``-row window of ``ts`` (None = whole
+    series). Backtests take the full history plus this date rather than
+    ``ts.tail(period)``, so the regime router and z-score anchor are warmed up
+    at the window start -- truncating first left CGB-10s30s's 2y run on the
+    'insufficient_history' -> MR default for its first months (see
+    engine_monthly.run_monthly_style_backtest's ``start_date``)."""
+    if not period or len(ts) <= int(period):
+        return None
+    return pd.Timestamp(ts.index[-int(period)])
+
+
 def run_instrument_backtest(spread_type: str, instrument: str, period: int = _PERIOD) -> Optional[dict]:
     """Run the Backtest tab's individual monthly-style backtest for one instrument
     with its saved params (preset fills gaps). Single source of truth shared by
@@ -87,8 +99,8 @@ def run_instrument_backtest(spread_type: str, instrument: str, period: int = _PE
         spread_ts = load_spread_timeseries(spread_type)
         if spread_ts is None or instrument not in spread_ts.columns:
             return None
-        ts = spread_ts[instrument].tail(period)
-        if len(ts.dropna()) < 60:
+        ts = spread_ts[instrument]
+        if len(ts.tail(period).dropna()) < 60:
             return None
 
         params = dict(_TENOR_PRESET if spread_type == 'TenorSpread' else _DEFAULT_PRESET)
@@ -141,6 +153,7 @@ def run_instrument_backtest(spread_type: str, instrument: str, period: int = _PE
             carry_z_weight=float(params['carry_z_weight']),
             mr_lookback=int(params['mr_lookback']),
             allow_trend_style=_allow_trend_style_for(spread_type, instrument),
+            start_date=window_start(ts, period),
         )
         return results if isinstance(results, dict) and 'error' not in results else None
     except Exception:

@@ -225,7 +225,15 @@ def _refresh_alpha_display_row(row: dict) -> dict:
     return updated
 
 
-def _persist_alpha_summary_rows(rows: list[dict]) -> None:
+def _persist_alpha_summary_rows(rows: list[dict], prune: bool = True) -> None:
+    """Persist the Alpha table's editable fields.
+
+    ``prune=True`` (delete/edit callbacks): ``rows`` is the full intended book,
+    so snapshot trades not in it are dropped. ``prune=False`` (Refresh): ``rows``
+    is only what the table rendered *before* the click, and a trade added since
+    (Alpha > Add to Portfolio) is not in it -- pruning would silently delete
+    that trade, so only the shown rows are updated and everything else is kept.
+    """
     # Skip the synthetic TOTAL row — it is not a real position.
     records = [{
         'spread_type': str(r.get('Spread Type', '')),
@@ -236,9 +244,18 @@ def _persist_alpha_summary_rows(rows: list[dict]) -> None:
         'volume_mm': r.get('Volume (mm)', ''),
         'open_date': str(r.get('Open date', '')),
     } for r in rows if str(r.get('ID', '')) != 'TOTAL']
+    if not prune and os.path.exists(_ALPHA_POSITIONS_PARQUET):
+        try:
+            _old = pd.read_parquet(_ALPHA_POSITIONS_PARQUET)
+            _shown = {(r['spread_type'], r['ID']) for r in records}
+            _keep = [r for r in _old.to_dict('records')
+                     if (str(r.get('spread_type', '')), str(r.get('ID', ''))) not in _shown]
+            records = _keep + records
+        except Exception:
+            pass
     pd.DataFrame(records).to_parquet(_ALPHA_POSITIONS_PARQUET, index=False)
 
-    if not os.path.exists(_SUMMARY_ALPHA_PARQUET):
+    if not prune or not os.path.exists(_SUMMARY_ALPHA_PARQUET):
         return
 
     snapshot = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)

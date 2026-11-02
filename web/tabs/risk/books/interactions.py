@@ -390,7 +390,7 @@ def register_risk_book_interaction_callbacks(app):
     
         try:
             if alpha_rows:
-                _persist_alpha_summary_rows(alpha_rows)
+                _persist_alpha_summary_rows(alpha_rows, prune=False)
             if _write_rows(alpha_rows, _SUMMARY_ALPHA_DISPLAY_PARQUET, 'ID', 'TOTAL'):
                 saved.append('alpha')
         except Exception as exc:
