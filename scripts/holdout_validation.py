@@ -36,7 +36,8 @@ CM6 = ['CMDL.AU', 'CMDL.AL']
 CM11 = CM6 + ['CMDL.AG', 'CMDL.CU', 'CMDL.ZN', 'CMDL.RB', 'CMDL.JM']
 F4 = ['IRDL.US', 'IRDL.DE', 'IRDL.JP', 'IRDL.UK']
 POOLS = {'P06': (BASE['ir'], CM6), 'P11': (BASE['ir'], CM11), 'P14': (BASE['ir'], CM11, ['EQDL.IF', 'EQDL.IC', 'EQDL.IH']),
-         'P06+IRDL4': (BASE['ir'] + F4, CM6)}
+         'P06+IRDL4': (BASE['ir'] + F4, CM6),
+         'P06+CRDL4': (BASE['ir'], CM6, [], ['CRDL.CDB', 'CRDL.LGB', 'CRDL.MTN', 'CRDL.NCD'])}   # production default pool
 ALL_BOND = {1.0: ['bond'], 2.0: ['bond'], 5.0: ['bond'], 10.0: ['bond'], 20.0: ['bond'], 30.0: ['bond']}
 FUT_ROUTE = {**ALL_BOND, 10.0: ['T', 'bond'], 30.0: ['TL', 'bond']}
 
@@ -50,6 +51,7 @@ DECISIONS = [
     ('shorts counted in capital (old)', dict(SHORT_CAPITAL_RATE=1.0), False),
     ('futures for 10Y/30Y shorts', dict(CN_SHORT_ROUTING=FUT_ROUTE), False),
     ('monthly correlation screen', dict(FACTOR_SCALING_CORR_SCREEN=True), False),
+    ('no negative-carry gate', dict(CARRY_GATE_ENABLED=False), False),
 ]
 
 
@@ -89,14 +91,15 @@ def run_all(pools, holdout_start, since):
     orig_load = orch.load_factor_signal_series
     lo_sig = long_only_irdl_signals()
     defaults = {k: getattr(R, k) for k in ('SHORT_END_LONG_ONLY_TENORS', 'SLEEVE_BUDGET_RULE', 'SHORT_CAPITAL_RATE', 'CN_SHORT_ROUTING',
-                                           'FACTOR_SCALING_CORR_SCREEN')}
+                                           'FACTOR_SCALING_CORR_SCREEN', 'CARRY_GATE_ENABLED')}
     hs = pd.Timestamp(holdout_start)
     results = {}
     for pool in pools:
         spec = POOLS[pool]
         ir, cm = spec[0], spec[1]
         eq = spec[2] if len(spec) > 2 else []
-        beta_data.SELECTED_FACTOR_POOL.update({'ir_factors': ir, 'sp_factors': [], 'cr_factors': [], 'fx_factors': BASE['fx'],
+        cr = spec[3] if len(spec) > 3 else []
+        beta_data.SELECTED_FACTOR_POOL.update({'ir_factors': ir, 'sp_factors': [], 'cr_factors': cr, 'fx_factors': BASE['fx'],
                                                'cmd_factors': cm, 'eq_factors': eq, 'timestamp': None})
         for label, ov, old in DECISIONS:
             if label == 'monthly correlation screen' and pool not in ('P11',):
@@ -145,7 +148,7 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--holdout-start', default='2025-04-01')
     ap.add_argument('--since', default=None, help='clean forward-test start date (after the production config was frozen)')
-    ap.add_argument('--pools', nargs='+', default=['P06', 'P11', 'P14', 'P06+IRDL4'])
+    ap.add_argument('--pools', nargs='+', default=['P06', 'P11', 'P14', 'P06+IRDL4', 'P06+CRDL4'])
     a = ap.parse_args()
     res = run_all(a.pools, a.holdout_start, a.since)
     report(res, a.holdout_start, a.since)

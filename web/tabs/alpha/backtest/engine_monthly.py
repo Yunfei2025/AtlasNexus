@@ -217,6 +217,7 @@ def run_monthly_style_backtest(
     carry_z_weight: float = 0.0,
     mr_lookback: int = MR_LOOKBACK,
     start_date: Optional[pd.Timestamp] = None,
+    carry_gate: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Run a continuous backtest whose entry style is routed by month.
 
@@ -247,6 +248,11 @@ def run_monthly_style_backtest(
     inside the entry band. Before this, ``stop_z`` was a silent no-op: lowering
     it only split one losing trade into many 1-day 'stop_loss' records while
     total P&L stayed bit-identical.
+
+    ``carry_gate``: no new MR entry in a direction whose carry is negative (``position x carry < 0``,
+    carry in the engine-LONG orientation of ``carry_roll_ts``). ``None`` follows
+    ``settings.general.ALPHA_CARRY_GATE_ENABLED`` and applies to TenorSpread only, the one type whose
+    stored carry is funded. It gates entries only: open trades are never closed by it.
 
     ``carry_z_weight``: opt-in blend of carry into the MR entry/exit signal
     (0.0 = disabled, matches prior behaviour exactly). Carry is converted to
@@ -371,6 +377,11 @@ def run_monthly_style_backtest(
     # engine_hybrid prototype: carry is scaled to the ~30d entry-decision
     # horizon, expressed in the same units as ewm_std, clipped to ±1.5 so a
     # single instrument's carry can shift but not dominate the price signal.
+    # NOTE on units: carry is in % of reference notional, ewm_std is a spread level in % - they differ by
+    # the duration (P&L is dspread x duration_mult), so this over-weights carry by about that factor.
+    # Dividing by duration_mult is the dimensionally right form, but with the same weight it removes most of
+    # the tilt and cuts the saved default book's Sharpe 2.91 -> 2.61 (2.56 with no tilt at all): the weight
+    # and the +-1.5 clip are tuned against the current scale. Re-tune them together if this is ever changed.
     if carry_z_weight and cr_long is not None:
         carry_sigma = ((cr_long * 30.0 / 90.0) / ewm_std.replace(0, np.nan)).clip(-1.5, 1.5).fillna(0.0)
         composite_z = zscore - float(carry_z_weight) * carry_sigma
@@ -381,6 +392,17 @@ def run_monthly_style_backtest(
     idx_arr = s.index
     z_arr = zscore.to_numpy(dtype=float)
     cz_arr = composite_z.to_numpy(dtype=float)
+    if carry_gate is None:
+        from settings.general import ALPHA_CARRY_GATE_ENABLED
+        carry_gate = bool(ALPHA_CARRY_GATE_ENABLED) and spread_type == 'TenorSpread'
+    cr_gate_arr = cr_long.to_numpy(dtype=float) if (carry_gate and cr_long is not None) else None
+
+    def _carry_ok(i: int, direction: int) -> bool:
+        """False when ``direction`` (+1 long / -1 short) would be entered against negative carry."""
+        if cr_gate_arr is None or not np.isfinite(cr_gate_arr[i]):
+            return True
+        return direction * cr_gate_arr[i] >= 0.0
+
     st_arr = trend_state.to_numpy(dtype=float)
     vol_arr = trend_vol.to_numpy(dtype=float)
     periods = s.index.to_period('M')
@@ -573,9 +595,9 @@ def run_monthly_style_backtest(
                     # allow_short gates the MR short entry too (it previously
                     # only gated trend entries, so BUY-only names -- LGB/MTN/NCD,
                     # whose credit bond can't be shorted -- still went SHORT).
-                    if cz >= entry_z and mr_stop_lock_dir != -1 and allow_short:
+                    if cz >= entry_z and mr_stop_lock_dir != -1 and allow_short and _carry_ok(i, -1):
                         position = -1
-                    elif cz <= -entry_z and mr_stop_lock_dir != 1:
+                    elif cz <= -entry_z and mr_stop_lock_dir != 1 and _carry_ok(i, 1):
                         position = 1
                     if position != 0:
                         entry_date, entry_price, entry_zscore, entry_style = date, px, z, 'mr'

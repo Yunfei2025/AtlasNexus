@@ -145,8 +145,54 @@ def _beta_returns(beta_result: dict) -> Optional[pd.Series]:
     return daily_pnl / capital
 
 
-def _metrics(returns: pd.Series) -> dict[str, float]:
-    """Annualized Sharpe / vol / total return / max drawdown of a return series."""
+def _beta_cash_hurdle(beta_result: dict, index: pd.DatetimeIndex) -> tuple[pd.Series, str]:
+    """Daily cash benchmark of the beta book as a decimal return on its capital, aligned to
+    ``index``, plus where it came from.
+
+    The beta book's equity curve includes the FR007 it earns on idle capital, so its Sharpe must
+    be scored over what the same capital earns in cash - the "Sharpe (vs cash)" the beta backtest
+    reports. Without it the ~2%/yr of cash income counts as skill (Sharpe 4.0 instead of 1.8).
+
+    * ``'saved'``: the backtest's own ``cash_benchmark`` (million CNY/day on the initial capital;
+      includes the FX-hedge carry of foreign notional).
+    * ``'fr007'``: results saved before it existed - FR007 on the whole capital, accrued per
+      calendar day on the previous day's rate, i.e. the backtest's benchmark for a CN-only pool.
+    * ``'none'``: FR007 unavailable; the Sharpe is then NOT over cash.
+    """
+    capital = float(beta_result.get('total_capital') or 0.0)
+    rows = beta_result.get('cash_benchmark')
+    if rows and capital > 0:
+        try:
+            s = pd.Series([float(r['value']) for r in rows],
+                          index=pd.to_datetime([r['date'] for r in rows])).sort_index()
+            return (s / capital).reindex(index).fillna(0.0), 'saved'
+        except (KeyError, TypeError, ValueError):
+            pass
+    try:
+        from multiasset.data import calendar_gap_days
+        from multiasset.factor_backtest import load_funding_rate
+        fr = load_funding_rate('CN')
+        if fr is not None and len(fr):
+            fr = fr.copy()
+            fr.index = pd.to_datetime(fr.index)
+            fr = fr.sort_index()
+            full = pd.DatetimeIndex(fr.index.union(index))
+            gap = pd.Series(calendar_gap_days(index).to_numpy(), index=index)
+            rate = fr.reindex(full).ffill().shift(1).reindex(index) / 100.0 / 365.0
+            return (rate * gap).fillna(0.0), 'fr007'
+    except Exception:
+        pass
+    return pd.Series(0.0, index=index), 'none'
+
+
+def _metrics(returns: pd.Series, hurdle: Optional[pd.Series] = None) -> dict[str, float]:
+    """Annualized Sharpe / vol / total return / max drawdown of a return series.
+
+    Without ``hurdle`` the Sharpe is mean/std of the returns (the alpha book's convention: its
+    spread P&L is already an excess return). With ``hurdle`` (a daily decimal cash benchmark on
+    the same capital base) it is the beta backtest's definition: (annualised compound return -
+    annualised hurdle) / annualised vol. Vol, return and drawdown are never touched by it.
+    """
     if returns is None or returns.empty or returns.std() == 0:
         return {'sharpe': float('nan'), 'vol': float('nan'), 'total_return': float('nan'),
                 'ann_return': float('nan'), 'max_drawdown': float('nan')}
@@ -165,6 +211,9 @@ def _metrics(returns: pd.Series) -> dict[str, float]:
         ann_return = -1.0
     else:
         ann_return = float('nan')
+    if hurdle is not None:
+        ann_hurdle = float(hurdle.reindex(returns.index).fillna(0.0).mean() * TRADING_DAYS)
+        sharpe = float((ann_return - ann_hurdle) / vol)
     running_max = equity.cummax()
     max_dd = float(((equity - running_max) / running_max).min())
     return {'sharpe': sharpe, 'vol': vol, 'total_return': total_return,
@@ -272,6 +321,11 @@ def build_combination(
                           f'a common date range.')}
     r_beta = r_beta.reindex(common).astype(float)
     r_alpha = r_alpha.reindex(common).astype(float)
+    # Cash benchmark of the beta slice (see _beta_cash_hurdle), built on the full overlap so the
+    # window trim below cannot change a day's accrual. Alpha needs none: its P&L is a spread P&L
+    # on notional, already an excess return, and its margin collateral is assumed to earn the cash
+    # rate. So the blend is scored over (1 - alpha_margin_share) x the beta hurdle.
+    h_beta, beta_benchmark = _beta_cash_hurdle(beta_result, common)
 
     years = WINDOW_YEARS.get(window, None)
     if years is not None:
@@ -283,8 +337,9 @@ def build_combination(
         common = windowed
         r_beta = r_beta.reindex(common)
         r_alpha = r_alpha.reindex(common)
+        h_beta = h_beta.reindex(common)
 
-    m_beta = _metrics(r_beta)
+    m_beta = _metrics(r_beta, h_beta)
     m_alpha = _metrics(r_alpha)
 
     util = float(np.clip(max_margin_utilization, 0.0, 1.0)) or MAX_MARGIN_UTILIZATION
@@ -312,7 +367,7 @@ def build_combination(
     # -- the untouched (1 - util) slice is a standing buffer, not deployed.
     w = (ms * util) / margin_ratio  # alpha notional as a fraction of total capital -- not clipped, see docstring
     r_combined = (1.0 - ms) * r_beta + w * r_alpha
-    m_combined = _metrics(r_combined)
+    m_combined = _metrics(r_combined, (1.0 - ms) * h_beta)
 
     # Diversification ratio: weighted-average standalone vol over realised
     # combined vol. >1 means the combination genuinely cancels risk; ~1 means
@@ -330,7 +385,7 @@ def build_combination(
     sweep = []
     for gms in grid:
         gw = (gms * util) / margin_ratio
-        m = _metrics((1.0 - gms) * r_beta + gw * r_alpha)
+        m = _metrics((1.0 - gms) * r_beta + gw * r_alpha, (1.0 - gms) * h_beta)
         sweep.append({'alpha_margin_share': float(gms), 'alpha_weight': float(gw),
                       'sharpe': m['sharpe'], 'vol': m['vol'],
                       'total_return': m['total_return'], 'max_drawdown': m['max_drawdown']})
@@ -344,7 +399,7 @@ def build_combination(
     coarse_sharpes = []
     for gms in coarse_grid:
         gw = (gms * util) / margin_ratio
-        m = _metrics((1.0 - gms) * r_beta + gw * r_alpha)
+        m = _metrics((1.0 - gms) * r_beta + gw * r_alpha, (1.0 - gms) * h_beta)
         coarse_sharpes.append(m['sharpe'])
     coarse_sharpes = np.array(coarse_sharpes)
     best_coarse_idx = int(np.nanargmax(coarse_sharpes))
@@ -359,7 +414,7 @@ def build_combination(
     rp_w = _risk_parity_weight(r_beta, r_alpha)
     rp_ms_raw = float(np.clip(rp_w * margin_ratio / util, 0.0, 1.0))
     rp_ms = float(np.round(rp_ms_raw / SUGGESTED_SPLIT_TICK) * SUGGESTED_SPLIT_TICK)
-    rp_metrics = _metrics((1.0 - rp_ms) * r_beta + (rp_ms * util / margin_ratio) * r_alpha)
+    rp_metrics = _metrics((1.0 - rp_ms) * r_beta + (rp_ms * util / margin_ratio) * r_alpha, (1.0 - rp_ms) * h_beta)
 
     total_capital_mm = float(total_capital_mm or 0.0)
     beta_notional_mm = (1.0 - ms) * total_capital_mm
@@ -417,6 +472,7 @@ def build_combination(
         'pnl_alpha_mm': pnl_alpha_mm,
         'pnl_combined_mm': pnl_combined_mm,
         'window': window,
+        'beta_benchmark': beta_benchmark,
         'returns': {'beta': r_beta, 'alpha': r_alpha, 'combined': r_combined},
     }
 

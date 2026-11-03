@@ -9,9 +9,13 @@ import pytest
 C = 10e9
 P06 = ['IRDL.CN', 'IRSL.CN', 'IRCV.CN', 'FXDL.USDCNY', 'CMDL.AU', 'CMDL.AL']
 P11 = P06 + ['CMDL.AG', 'CMDL.CU', 'CMDL.ZN', 'CMDL.RB', 'CMDL.JM']
+CREDIT = P06 + ['CRDL.CDB', 'CRDL.LGB', 'CRDL.MTN', 'CRDL.NCD']
+# production default pool (web.tabs.beta.data.SELECTED_FACTOR_POOL, 2026-11-03)
+DEFAULT = ['IRDL.CN', 'IRSL.CN', 'IRCV.CN'] + [f'{k}.{u}' for u in ('CDB', 'LGB', 'MTN') for k in ('CRDL', 'CRSL', 'CRCV')] \
+    + ['CRDL.NCD', 'CRSL.NCD']
 
 
-def _live_and_backtest(factors, tmp_path, monkeypatch):
+def _live_and_backtest(factors, tmp_path, monkeypatch, snapshot_factors=None, extra_assets=()):
     try:
         from settings.paths import DIR_INPUT
         from multiasset.config import RiskModelConfig as R
@@ -24,16 +28,19 @@ def _live_and_backtest(factors, tmp_path, monkeypatch):
         from web.tabs.beta.callbacks.portfolio_run import _run_analysis as RA
         md = load_raw_market_data()
         fm = load_factor_backtest(DIR_INPUT)['FactorModel']
-        pos = {f: float(fm[f]['position'].dropna().iloc[-1]) for f in factors}
+        # a pool factor with no saved signal holds no sleeve on either side (backtest and live)
+        pos = {f: float(fm[f]['position'].dropna().iloc[-1]) for f in factors if f in fm}
         last_date = fm[factors[0]].index.max()
     except Exception as exc:                                    # data/artifacts unavailable
         pytest.skip(f'market data or saved signals unavailable: {exc}')
 
     monkeypatch.setattr(RA, '_BETA_BOOK_POSITIONS_PARQUET', str(tmp_path / 'positions.parquet'))
-    snap = [{'risk_factor': f, 'scalar': -p if f.startswith('IRSL.') else p} for f, p in pos.items()]
+    # snapshot_factors: the factors this session predicted; the rest must come from the saved signals
+    snap = [{'risk_factor': f, 'scalar': -p if f.startswith('IRSL.') else p} for f, p in pos.items()
+            if snapshot_factors is None or f in snapshot_factors]
 
     # live path = the Portfolio tab helpers
-    names = [a['name'] for a in get_assets_from_factors(factors)]
+    names = list(dict.fromkeys([a['name'] for a in get_assets_from_factors(factors)] + list(extra_assets)))
     rb, _ = RA.build_risk_budgets('factor_scaling', [], [])
     summary, _r, _v, fexp, _fr, port, _w = RA.run_optimization(C, names, rb)
     summary = RA.apply_factor_scaling(summary, snap, factors, C)
@@ -56,9 +63,22 @@ def _live_and_backtest(factors, tmp_path, monkeypatch):
     return live, live_cap, bt
 
 
-@pytest.mark.parametrize('factors', [P06, P11], ids=['P06', 'P11'])
-def test_live_tab_sizes_the_book_like_the_backtest(factors, tmp_path, monkeypatch):
-    live, live_cap, bt = _live_and_backtest(factors, tmp_path, monkeypatch)
+def test_default_pool_is_the_documented_one():
+    from web.tabs.beta.data import selected_factors
+    assert selected_factors() == DEFAULT
+
+
+@pytest.mark.parametrize('factors,snapshot_factors,extra_assets', [
+    (P06, None, ()), (P11, None, ()),
+    # credit pool, session snapshot holds only the CN rates factors (the 2026-11-03 live book), and
+    # an asset in the pool that no factor sleeve trades (a UK bond) - it must hold nothing
+    (CREDIT, ('IRDL.CN', 'IRSL.CN', 'IRCV.CN'), ('UK10Y',)),
+    (DEFAULT, None, ()), (DEFAULT, ('IRDL.CN', 'IRSL.CN', 'IRCV.CN'), ()),
+], ids=['P06', 'P11', 'CREDIT-partial-snapshot', 'DEFAULT', 'DEFAULT-partial-snapshot'])
+def test_live_tab_sizes_the_book_like_the_backtest(factors, snapshot_factors, extra_assets, tmp_path, monkeypatch):
+    live, live_cap, bt = _live_and_backtest(factors, tmp_path, monkeypatch, snapshot_factors, extra_assets)
+    for a in extra_assets:
+        assert live_cap.get(a, 0.0) == 0.0
     both = pd.DataFrame({'live': live_cap, 'bt': bt}).fillna(0.0)
     # lot rounding only (10m bonds / 1m others, plus the DV01 re-truncation): well under 0.3% of capital per asset
     assert (both['live'] - both['bt']).abs().max() <= 0.003 * C, both

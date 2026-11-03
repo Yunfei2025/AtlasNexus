@@ -9,6 +9,7 @@ from multiasset.storage import load_last_asset_pool
 from settings.general import DEFAULT_BETA_CAPITAL_BN
 
 from ...ui.components import asset_pool_item
+from ..data import get_assets_from_factors, selected_factors
 
 
 _CARD_WRAP = {
@@ -40,6 +41,18 @@ _BADGE = {
 }
 
 
+def pool_display_from_factors(factors):
+    """(asset pool, display children, count text) for the assets the given factors trade."""
+    pool = get_assets_from_factors(factors)
+    if not pool:
+        display = [html.Div("No assets: select factors in Candidates.",
+                            style={'color': 'var(--text-muted)', 'fontStyle': 'italic',
+                                   'fontSize': '11px', 'textAlign': 'center', 'padding': '15px'})]
+    else:
+        display = [asset_pool_item(asset['name']) for asset in pool]
+    return pool, display, f"({len(pool)})"
+
+
 def build_multiasset_portfolio_layout():
     """Build the layout for the Portfolio (Allocation) tab."""
 
@@ -49,37 +62,20 @@ def build_multiasset_portfolio_layout():
     except Exception:
         last_run_data = {}
 
-    initial_pool = []
     initial_n_clicks = 0
     initial_capital = DEFAULT_BETA_CAPITAL_BN  # 90% of the 20BN total (see settings.general)
     initial_unit = 'billion'
 
-    if last_run_data:
-        if 'asset_pool' in last_run_data:
-            initial_pool = last_run_data['asset_pool']
-            # Note: Do NOT auto-trigger run_analysis on page load
-            # User should click 'RUN ANALYSIS' manually to ensure Risk Budgets are loaded
-            # initial_n_clicks remains 0
+    # Capital settings of the last run. The asset pool itself is not restored: it is always
+    # the Candidates factor selection's assets (pool_display_from_factors).
+    if last_run_data and 'metadata' in last_run_data:
+        meta = last_run_data['metadata']
+        if 'capital' in meta:
+            initial_capital = meta['capital']
+        if 'unit' in meta:
+            initial_unit = meta['unit']
 
-        if 'metadata' in last_run_data:
-            meta = last_run_data['metadata']
-            if 'capital' in meta:
-                initial_capital = meta['capital']
-            if 'unit' in meta:
-                initial_unit = meta['unit']
-
-    # Generate initial pool display
-    if not initial_pool:
-        pool_display = [html.Div("No assets selected. Add assets above.",
-                           style={'color': 'var(--text-muted)', 'fontStyle': 'italic',
-                                  'fontSize': '11px', 'textAlign': 'center', 'padding': '15px'})]
-        pool_count_text = "(0)"
-    else:
-        pool_display = [
-            asset_pool_item(asset['name'])
-            for asset in initial_pool
-        ]
-        pool_count_text = f"({len(initial_pool)})"
+    initial_pool, pool_display, pool_count_text = pool_display_from_factors(selected_factors())
 
     # ── Configuration: inline inputs bar ───────────────────────────────────
     config_bar = html.Div([
@@ -137,97 +133,15 @@ def build_multiasset_portfolio_layout():
               'padding': '10px 16px', 'borderBottom': '1px solid var(--border-strong)',
               'background': 'rgba(255,255,255,0.02)'})
 
-    # ── LEFT: Asset Selection ───────────────────────────────────────────────
+    # ── LEFT: Asset Pool (read-only: the assets of the Candidates factor selection) ──
     asset_selection = html.Div([
-        html.Div("Asset Selection", style={**_CARD_TITLE, 'marginBottom': '12px'}),
         html.Div([
-            html.Span("Type:", style=_INLINE_LBL),
-            dcc.RadioItems(
-                id='asset-type-selector',
-                options=[
-                    {'label': ' Rates', 'value': 'Rates'},
-                    {'label': ' Credit', 'value': 'Credit'},
-                    {'label': ' Cmdty', 'value': 'Commodities'},
-                ],
-                value=None, inline=True,
-                labelStyle={'color': 'var(--text-primary)', 'fontSize': '11px', 'marginRight': '16px'},
-                inputStyle={'marginRight': '5px', 'marginLeft': '12px'},
-            ),
-        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '4px', 'marginBottom': '14px'}),
-
-        html.Div([
-            html.Label("Universe:", style={**_INLINE_LBL, 'width': '60px', 'flexShrink': '0'}),
-            dcc.Dropdown(
-                id='universe-selector', options=[], value=None,
-                placeholder="Select...", clearable=True,
-                style={'width': '100%', 'fontSize': '11px'},
-            ),
-        ], id='universe-selection-row', style={'display': 'none', 'marginBottom': '8px',
-                                                'alignItems': 'center'}),
-
-        html.Div([
-            html.Label("Sector:", style={**_INLINE_LBL, 'width': '60px', 'flexShrink': '0',
-                                          'alignSelf': 'flex-start', 'marginTop': '4px'}),
-            html.Div([
-                dcc.Checklist(
-                    id='sector-selector',
-                    options=[{'label': f' {s}', 'value': s} for s in ('1Y', '2Y', '5Y', '10Y', '20Y', '30Y')],
-                    value=[], inline=True,
-                    labelStyle={'color': 'var(--text-primary)', 'fontSize': '11px'},
-                    inputStyle={'marginRight': '4px', 'marginLeft': '8px'},
-                    style={'marginBottom': '8px'},
-                ),
-                html.Button('Add to Pool', id='add-to-pool-btn', n_clicks=0, style={
-                    'background': '#34d399', 'color': '#06281c', 'padding': '4px 12px',
-                    'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontSize': '11px',
-                    'fontWeight': '700',
-                }),
-            ], style={'flex': '1'}),
-        ], id='sector-selection-row', style={'display': 'none', 'marginBottom': '8px',
-                                              'alignItems': 'flex-start'}),
-
-        html.Div([
-            html.Label("Items:", style={**_INLINE_LBL, 'width': '60px', 'flexShrink': '0',
-                                         'alignSelf': 'flex-start', 'marginTop': '4px'}),
-            html.Div([
-                dcc.Checklist(
-                    id='commodities-selector',
-                    options=[
-                        {'label': ' Gold', 'value': 'Gold'},
-                        {'label': ' Silver', 'value': 'Silver'},
-                        {'label': ' Alum', 'value': 'Aluminium'},
-                        {'label': ' Copper', 'value': 'Copper'},
-                        {'label': ' Zinc', 'value': 'Zinc'},
-                        {'label': ' Oil', 'value': 'Crude_Oil'},
-                    ],
-                    value=[], inline=True,
-                    labelStyle={'color': 'var(--text-primary)', 'fontSize': '11px'},
-                    inputStyle={'marginRight': '4px', 'marginLeft': '8px'},
-                    style={'marginBottom': '8px'},
-                ),
-                html.Button('Add to Pool', id='add-commodities-btn', n_clicks=0, style={
-                    'background': 'var(--accent-amber)', 'color': '#06281c', 'padding': '4px 12px',
-                    'border': 'none', 'borderRadius': '4px', 'cursor': 'pointer', 'fontSize': '11px',
-                    'fontWeight': '700',
-                }),
-            ], style={'flex': '1'}),
-        ], id='commodities-confirm-row', style={'display': 'none', 'marginBottom': '8px',
-                                                 'alignItems': 'flex-start'}),
-
-        html.Div([
-            html.Div([
-                html.Span("Asset Pool ", style={'fontSize': '11px', 'fontWeight': '600',
-                                                 'color': 'var(--text-primary)'}),
-                html.Span(id='pool-count', children=pool_count_text,
-                          style={'fontSize': '10px', 'color': 'var(--text-muted)'}),
-            ]),
-            html.Button('Clear', id='clear-pool-btn', n_clicks=0, style={
-                'background': 'rgba(239,68,68,0.15)', 'color': '#f87171', 'padding': '3px 10px',
-                'border': '1px solid rgba(239,68,68,0.3)', 'borderRadius': '4px',
-                'cursor': 'pointer', 'fontSize': '10px',
-            }),
-        ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between',
-                  'marginBottom': '8px', 'marginTop': '4px'}),
+            html.Span("Asset Pool ", style={**_CARD_TITLE}),
+            html.Span(id='pool-count', children=pool_count_text,
+                      style={'fontSize': '10px', 'color': 'var(--text-muted)'}),
+        ], style={'marginBottom': '4px'}),
+        html.Div("From the factors selected in Candidates - the same pool the backtest trades.",
+                 style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '8px'}),
         html.Div(
             id='asset-pool-display', children=pool_display,
             className='asset-pool-list',

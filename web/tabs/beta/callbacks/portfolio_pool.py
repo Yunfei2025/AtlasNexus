@@ -1,245 +1,80 @@
 # -*- coding: utf-8 -*-
-"""Portfolio (Allocation) tab — asset pool management callbacks.
+"""Portfolio (Allocation) tab — asset pool callbacks.
+
+The asset pool is not edited in the Portfolio tab: it is always the assets of the factors
+selected in Candidates (SELECTED_FACTOR_POOL), the same pool the backtest trades.
 
 Contains:
-  1. UI Toggles for Asset Type Selection (Rates / Spread / Commodities)
-  2. Asset Pool Management (add / clear)
-  3. Add Diversified Assets to Pool (from correlation results)
+  1. Asset pool follows the Candidates factor selection
+  2. Use the correlation analysis' recommended factors as the Candidates selection
 """
 
 from __future__ import annotations
 
 import dash
-from dash import html
-from dash.dependencies import Input, Output, State
+from dash.dependencies import Input, Output
 
-from multiasset.storage import save_asset_pool
+from ..data import DIVERSIFICATION_RECOMMENDATIONS, selected_factors
+from ..layouts.portfolio import pool_display_from_factors
 
-from ..data import THEME, DIVERSIFICATION_RECOMMENDATIONS
-from ...ui.components import asset_pool_item
+# Candidates checklist id -> predicate on a factor code (see layouts/factor.py)
+_IR_DOMICILES = ('CN', 'US', 'EU', 'JP', 'UK')
+_CR_UNIVERSES = ('CDB', 'LGB', 'MTN', 'NCD')
+_FX_CROSS = ('FXDL.EURUSD', 'FXDL.GBPUSD', 'FXDL.JPYUSD')
+
+
+def _checklist_values(factors):
+    """Split a factor list into the values of each Candidates factor checklist, in the
+    order of the outputs registered below."""
+    fs = list(factors)
+    out = [[f for f in fs if f.split('.')[0] in ('IRDL', 'IRSL', 'IRCV') and f.endswith(f'.{d}')]
+           for d in _IR_DOMICILES]
+    out += [[f for f in fs if f.split('.')[0] in ('CRDL', 'CRSL', 'CRCV') and f.endswith(f'.{u}')]
+            for u in _CR_UNIVERSES]
+    out.append([f for f in fs if f.startswith('FXDL.') and f not in _FX_CROSS])
+    out.append([f for f in fs if f in _FX_CROSS])
+    out.append([f for f in fs if f.startswith('EQDL.')])
+    out.append([f for f in fs if f.startswith('CMDL.')])
+    return out
 
 
 def register_portfolio_pool_callbacks(app):
-    """Register asset-pool management callbacks for the Portfolio tab."""
+    """Register asset-pool callbacks for the Portfolio tab."""
 
-
-    # 1. UI Toggles for Asset Type Selection
-    @app.callback(
-        [Output('universe-selection-row', 'style'),
-         Output('sector-selection-row', 'style'),
-         Output('commodities-confirm-row', 'style'),
-         Output('universe-selector', 'options'),
-         Output('universe-selector', 'value'),
-         Output('sector-selector', 'value'),
-         Output('commodities-selector', 'value')],
-        [Input('asset-type-selector', 'value')]
-    )
-    def toggle_selection_rows(asset_type):
-        if asset_type == 'Rates':
-            universe_options = [
-                {'label': 'China Gov Bond', 'value': 'China Gov Bond'},
-                {'label': 'US Gov Bond', 'value': 'US Gov Bond'},
-                {'label': 'DE Gov Bond', 'value': 'DE Gov Bond'},
-                {'label': 'UK Gov Bond', 'value': 'UK Gov Bond'},
-                {'label': 'Japan Gov Bond', 'value': 'Japan Gov Bond'},
-            ]
-            return (
-                {'display': 'flex', 'alignItems': 'center', 'marginBottom': '12px'},
-                {'display': 'none'},
-                {'display': 'none'},
-                universe_options, None, [], []
-            )
-        elif asset_type == 'Spread':
-            universe_options = [
-                {'label': 'Interest Rate Swap', 'value': 'Interest Rate Swap'},
-            ]
-            return (
-                {'display': 'flex', 'alignItems': 'center', 'marginBottom': '12px'},
-                {'display': 'none'},
-                {'display': 'none'},
-                universe_options, None, [], []
-            )
-        elif asset_type == 'Credit':
-            universe_options = [
-                {'label': 'China Development Bond', 'value': 'China Development Bond'},
-                {'label': 'Local Government Bond', 'value': 'Local Government Bond'},
-                {'label': 'Medium Term Note', 'value': 'Medium Term Note'},
-                {'label': 'NCD (Interbank CD)', 'value': 'NCD (Interbank CD)'},
-            ]
-            return (
-                {'display': 'flex', 'alignItems': 'center', 'marginBottom': '12px'},
-                {'display': 'none'},
-                {'display': 'none'},
-                universe_options, None, [], []
-            )
-        elif asset_type == 'Commodities':
-            return (
-                {'display': 'none'},
-                {'display': 'none'},
-                {'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '12px'},
-                [], None, [], []
-            )
-        else:
-            return (
-                {'display': 'none'},
-                {'display': 'none'},
-                {'display': 'none'},
-                [], None, [], []
-            )
-
-    # Tenors available per credit universe — matches CREDIT_CONFIG in
-    # multiasset/config.py (the same grids CRDL/CRSL/CRCV are computed from).
-    _CREDIT_UNIVERSE_TENORS = {
-        'China Development Bond': ['1Y', '2Y', '5Y', '10Y'],
-        'Local Government Bond': ['1Y', '3Y', '5Y', '10Y', '30Y'],
-        'Medium Term Note': ['1Y', '2Y', '3Y', '4Y', '5Y'],
-        'NCD (Interbank CD)': ['3M', '6M', '9M', '1Y'],
-    }
-    _RATES_TENORS = ['1Y', '2Y', '5Y', '10Y', '20Y', '30Y']
-
-    @app.callback(
-        [Output('sector-selection-row', 'style', allow_duplicate=True),
-         Output('sector-selector', 'options')],
-        [Input('universe-selector', 'value')],
-        prevent_initial_call=True
-    )
-    def show_sector_selection(universe):
-        if not universe:
-            return {'display': 'none'}, []
-        tenors = _CREDIT_UNIVERSE_TENORS.get(universe, _RATES_TENORS)
-        options = [{'label': f' {s}', 'value': s} for s in tenors]
-        return {'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '12px'}, options
-
-    # 2. Asset Pool Management
+    # 1. The pool follows the Candidates selection. factor-selection-store is written by the
+    # Candidates pool counter right after it updates SELECTED_FACTOR_POOL, so read the pool
+    # from there (the session store can hold a stale selection on page load).
     @app.callback(
         [Output('asset-pool-store', 'data'),
          Output('asset-pool-display', 'children'),
          Output('pool-count', 'children')],
-        [Input('add-to-pool-btn', 'n_clicks'),
-         Input('add-commodities-btn', 'n_clicks'),
-         Input('clear-pool-btn', 'n_clicks')],
-        [State('asset-type-selector', 'value'),
-         State('universe-selector', 'value'),
-         State('sector-selector', 'value'),
-         State('commodities-selector', 'value'),
-         State('asset-pool-store', 'data')],
-        prevent_initial_call=True
+        Input('factor-selection-store', 'data'),
+        prevent_initial_call=True,
     )
-    def manage_asset_pool(add_rates_clicks, add_comm_clicks, clear_clicks, asset_type, universe, sectors, commodities, current_pool):
-        ctx = dash.callback_context
-        if not ctx.triggered:
-            return current_pool, dash.no_update, dash.no_update
-        
-        button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-        
-        if button_id == 'clear-pool-btn':
-            return [], [html.Div("No assets.", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'padding': '10px'})], "(0)"
-        
-        if current_pool is None:
-            current_pool = []
-        
-        if button_id == 'add-to-pool-btn' and asset_type in ['Rates', 'Spread', 'Credit']:
-            if not universe or not sectors:
-                return current_pool, dash.no_update, dash.no_update
+    def sync_asset_pool_with_factor_selection(_selection):
+        return pool_display_from_factors(selected_factors())
 
-            universe_code_map = {
-                'China Gov Bond': 'CN', 'US Gov Bond': 'US', 'DE Gov Bond': 'EU',
-                'UK Gov Bond': 'UK', 'Japan Gov Bond': 'JP',
-                'China Credit': 'CN-Credit', 'China Urban': 'CN-Urban',
-                'Interest Rate Swap': 'IRS',
-                'China Development Bond': 'CDB',
-                'Local Government Bond': 'LGB',
-                'Medium Term Note': 'MTN',
-                'NCD (Interbank CD)': 'NCD',
-            }
-            universe_code = universe_code_map.get(universe, 'XX')
-            
-            for sector in sectors:
-                asset_name = f"{universe_code}{sector}"
-                asset_info = {'name': asset_name, 'type': asset_type, 'universe': universe, 'sector': sector}
-                if not any(a['name'] == asset_name for a in current_pool):
-                    current_pool.append(asset_info)
-        
-        elif button_id == 'add-commodities-btn' and asset_type == 'Commodities':
-            if not commodities:
-                return current_pool, dash.no_update, dash.no_update
-            
-            for comm in commodities:
-                asset_info = {'name': comm, 'type': 'Commodities', 'universe': comm, 'sector': 'N/A'}
-                if not any(a['name'] == comm for a in current_pool):
-                    current_pool.append(asset_info)
-        
-        # Update display
-        if not current_pool:
-            display = [html.Div("No assets selected.", style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'padding': '10px'})]
-            count_text = "(0)"
-        else:
-            display = [
-                asset_pool_item(asset['name'], f"({asset.get('universe','')} — {asset.get('sector','')})")
-                for asset in current_pool
-            ]
-            count_text = f"({len(current_pool)})"
-        
-        # Save to persistent storage
-        try:
-            save_asset_pool(current_pool)
-        except Exception as e:
-            print(f"Error saving asset pool: {e}")
-
-        return current_pool, display, count_text
-
-
-    # 3.55 Add Diversified Assets to Pool Callback
-    # Uses global variable instead of dcc.Store because dcc.Store data doesn't persist across tab switches
+    # 2. Recommended factors from the correlation analysis -> Candidates selection (the pool
+    # then follows through callback 1). Uses the global set by the correlation callback since
+    # dcc.Store data doesn't persist across tab switches.
     @app.callback(
-        [Output('add-diversified-status', 'children'),
-         Output('asset-pool-store', 'data', allow_duplicate=True),
-         Output('asset-pool-display', 'children', allow_duplicate=True),
-         Output('pool-count', 'children', allow_duplicate=True)],
+        [Output('add-diversified-status', 'children')]
+        + [Output(f'factor-selection-ir-{d.lower()}', 'value') for d in _IR_DOMICILES]
+        + [Output(f'factor-selection-cr-{u.lower()}', 'value') for u in _CR_UNIVERSES]
+        + [Output('factor-selection-fx', 'value'),
+           Output('factor-selection-fx-cross', 'value'),
+           Output('factor-selection-eq', 'value'),
+           Output('factor-selection-cmd', 'value')],
         Input('add-diversified-assets-btn', 'n_clicks'),
-        prevent_initial_call=True
+        prevent_initial_call=True,
     )
-    def add_diversified_assets_to_pool(n_clicks):
-        """
-        Replace the asset pool with recommended diversified assets.
-        Updates asset-pool-store directly so the Portfolio tab sees the change
-        immediately without requiring a page reload.
-        """
-        no_change = (dash.no_update, dash.no_update, dash.no_update)
-        if not n_clicks or n_clicks == 0:
-            return ("",) + no_change
-
-        # Get assets from global variable (set by correlation analysis)
-        recommended_assets = DIVERSIFICATION_RECOMMENDATIONS.get('assets', [])
-
-        if not recommended_assets:
-            return ("⚠ No recommended assets available. Please run correlation analysis first.",) + no_change
-
-        # REPLACE the entire asset pool with recommended assets
-        new_pool = [asset.copy() for asset in recommended_assets]
-
-        # Save to persistent storage
-        try:
-            save_asset_pool(new_pool)
-        except Exception as e:
-            print(f"Error saving asset pool: {e}")
-            return (f"✗ Error saving: {str(e)}",) + no_change
-
-        # Build display items (same style as manage_asset_pool)
-        display = [
-            asset_pool_item(asset['name'], f"({asset.get('universe', '')} — {asset.get('sector', '')})")
-            for asset in new_pool
-        ]
-
-        count_text = f"({len(new_pool)})"
-
-        # Count assets by type for status message
-        type_counts: dict = {}
-        for asset in new_pool:
-            a_type = asset.get('type', 'Other')
-            type_counts[a_type] = type_counts.get(a_type, 0) + 1
-        type_summary = ", ".join([f"{count} {t}" for t, count in type_counts.items()])
-        status_msg = f"✓ {len(new_pool)} assets added to pool ({type_summary})."
-
-        return status_msg, new_pool, display, count_text
-
+    def use_recommended_factors(n_clicks):
+        n_outputs = len(_IR_DOMICILES) + len(_CR_UNIVERSES) + 4
+        if not n_clicks:
+            return ["", *([dash.no_update] * n_outputs)]
+        factors = DIVERSIFICATION_RECOMMENDATIONS.get('factors', [])
+        if not factors:
+            return ["⚠ No recommended factors available. Please run correlation analysis first.",
+                    *([dash.no_update] * n_outputs)]
+        values = _checklist_values(factors)
+        return [f"✓ {sum(len(v) for v in values)} factors selected; the Portfolio asset pool follows.", *values]

@@ -141,6 +141,14 @@ def register_combination_callbacks(app):
                 f"= {combined['total_return'] * 100:+.1f}%",
             ),
             html.Div(
+                ("Beta and Combined Sharpe are over cash (FR007 on the beta capital), as in the Beta "
+                 "backtest's 'Sharpe (vs cash)'; Alpha is a spread P&L, already an excess return."
+                 if result.get('beta_benchmark') != 'none' else
+                 "FR007 was unavailable: Beta and Combined Sharpe are NOT over cash and include the "
+                 "cash income of idle capital."),
+                style={'marginTop': '3px'},
+            ),
+            html.Div(
                 f"Alpha's return-blend weight ({w:.2f}) is its usable margin ÷ its margin ratio "
                 f"({result['margin_ratio'] * 100:.1f}%).",
                 style={'marginTop': '3px'},
@@ -161,7 +169,7 @@ def register_combination_callbacks(app):
 
         # --- Collapsed strip: the three headline answers ---
         strip = html.Div([
-            _stat(f"{combined['sharpe']:.2f}", 'Combined Sharpe', THEME['accent']),
+            _stat(f"{combined['sharpe']:.2f}", 'Combined Sharpe (vs cash)', THEME['accent']),
             _stat(f"{combined['ann_return'] * 100:+.2f}%", 'Ann. Return', THEME['text_main']),
             _stat(f"{(1 - ms) * 100:.0f}/{ms * 100:.0f}", 'Beta Notional / Alpha Margin', THEME['text_main']),
             _stat(f"{corr:+.2f}", 'Correlation',
@@ -239,7 +247,7 @@ def register_combination_callbacks(app):
         frontier = go.Figure()
         frontier.add_trace(go.Scatter(
             x=sweep['alpha_margin_share'] * 100, y=sweep['sharpe'],
-            mode='lines', name='Combined Sharpe',
+            mode='lines', name='Combined Sharpe (vs cash)',
             line={'color': THEME['accent'], 'width': 2},
         ))
         for wt, color, label in (
@@ -264,7 +272,7 @@ def register_combination_callbacks(app):
             title={'text': f'Diversification Frontier — {window_text} ({result["n_days"]}d)',
                    'font': {'size': 12, 'color': THEME['text_sub']}},
             xaxis={'title': 'Alpha margin share of capital (%)', 'gridcolor': THEME['bg_card']},
-            yaxis={'title': 'Combined Sharpe', 'gridcolor': THEME['bg_card']},
+            yaxis={'title': 'Combined Sharpe (vs cash)', 'gridcolor': THEME['bg_card']},
             template='plotly_dark', paper_bgcolor=THEME['bg_card'], plot_bgcolor=THEME['bg_card'],
             height=320, margin={'l': 55, 'r': 20, 't': 40, 'b': 45}, showlegend=False,
         )

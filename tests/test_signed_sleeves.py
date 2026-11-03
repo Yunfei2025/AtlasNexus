@@ -310,3 +310,51 @@ def test_credit_assets_are_floored_at_zero_by_default():
         assert _with_credit_floor(None, ['CDB10Y']) == []
     finally:
         R.CREDIT_LONG_ONLY = True
+
+
+def _real_market_data():
+    from multiasset.data import load_raw_market_data
+    from multiasset.factor_backtest import load_funding_rate
+    md = load_raw_market_data()
+    if md is None or load_funding_rate('CN') is None:
+        pytest.skip("market data or FR007 unavailable in this environment")
+    return md
+
+
+def test_negative_carry_gate_drops_short_end_longs_only_below_fr007(monkeypatch):
+    """IRDL.CN long holds every CN tenor long. In mid-2025 CN1Y/CN2Y yielded below FR007, in
+    2022 above: the gate must zero those longs only in 2025, keep the long end, and do
+    nothing when disabled."""
+    from multiasset.config import RiskModelConfig
+    from multiasset.book.sizing import negative_carry_mask_daily
+    md = _real_market_data()
+
+    def book(start):
+        idx = pd.bdate_range(start, periods=3)
+        w, _d, _s = signed_sleeve_weights_daily({idx[0]: {'IRDL.CN': 1.0}}, {'IRDL.CN': pd.Series(1.0, index=idx)},
+                                                idx, FACTOR_TO_ASSET_MAP, md)
+        return w.iloc[-1], negative_carry_mask_daily(w.columns, md, idx).iloc[-1]
+
+    w25, m25 = book('2025-06-02')
+    assert m25['CN1Y'] and m25['CN2Y'] and 'CN10Y' not in m25.index    # long end is never gated
+    assert w25['CN1Y'] == 0.0 and w25['CN2Y'] == 0.0 and w25['CN10Y'] > 0.0
+    w22, m22 = book('2022-06-01')
+    assert not m22['CN1Y'] and w22['CN1Y'] > 0.0
+    monkeypatch.setattr(RiskModelConfig, 'CARRY_GATE_ENABLED', False)
+    w_off, _ = book('2025-06-02')
+    assert w_off['CN1Y'] > 0.0
+
+
+def test_negative_carry_gate_leaves_shorts_and_snapshot_matches(monkeypatch):
+    from multiasset.book.sizing import negative_carry_assets_now
+    md = _real_market_data()
+    gated = negative_carry_assets_now(['CN1Y', 'CN2Y', 'CN10Y', 'US1Y', 'CDB1Y', 'USDCNY'], md)
+    assert 'CN10Y' not in gated and 'US1Y' not in gated and 'USDCNY' not in gated   # tenor / domicile / type
+    # a gated asset's SHORT is untouched: IRDL.CN short makes every tenor short (no floor passed here)
+    w, _s = signed_sleeve_weights_snapshot({'IRDL.CN': 1.0}, {'IRDL.CN': -1.0}, FACTOR_TO_ASSET_MAP, md)
+    for a in gated:
+        if a.startswith('CN'):
+            assert w[a] < 0.0
+    w_long, _s = signed_sleeve_weights_snapshot({'IRDL.CN': 1.0}, {'IRDL.CN': 1.0}, FACTOR_TO_ASSET_MAP, md)
+    for a in gated:
+        assert w_long.get(a, 0.0) == 0.0

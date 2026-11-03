@@ -654,7 +654,7 @@ def register_factor_callbacks(app):
                     }
                 ),
                 html.Button(
-                    f"Replace Asset Pool with {len(diversified_assets)} Recommended Assets",
+                    f"Use these {len(top_factors_list)} Factors as the Pool ({len(diversified_assets)} assets)",
                     id='add-diversified-assets-btn',
                     n_clicks=0,
                     disabled=len(diversified_assets) == 0,

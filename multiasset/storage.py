@@ -98,6 +98,7 @@ def save_backtest_result(
     total_capital: float,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    cash_benchmark: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Persist the historical-allocation backtest's combined equity curve and
     summary stats, so a later beta+alpha combination reads a fixed result
@@ -107,6 +108,11 @@ def save_backtest_result(
     ``equity_series``: list of {'date': iso-string, 'value': float} records
     (cumulative portfolio PnL, same units as multiasset/dashboard.py's
     df_pnl['Total'], i.e. million CNY) -- JSON-safe, no DataFrame/Series.
+
+    ``sharpe`` is the Sharpe over the cash benchmark ("Sharpe (vs cash)"). ``cash_benchmark``:
+    {'date', 'value'} records of the daily cash benchmark in million CNY on the initial capital
+    (what ``total_capital`` earns in cash), so a reader can score the curve over cash the same
+    way the backtest does; results saved before it existed lack it.
 
     Mirrors save_asset_pool's convention: writes both a timestamped history
     file and overwrites a fixed 'last' file for easy lookup.
@@ -125,6 +131,8 @@ def save_backtest_result(
         'end_date': end_date,
         'equity_series': equity_series,
     }
+    if cash_benchmark:
+        data['cash_benchmark'] = cash_benchmark
 
     history_path = BACKTEST_DIR / f"backtest_{timestamp}.json"
     try:

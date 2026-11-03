@@ -222,6 +222,20 @@ class RiskModelConfig:
     # CGB 10Y and 30Y are shorted (see CN_SHORT_ROUTING / CN_SHORT_SUBSTITUTE).
     CREDIT_LONG_ONLY: bool = True
 
+    # Negative-carry gate (user, 2026-11-03): a CN government bond or onshore credit bond of at
+    # most CARRY_GATE_MAX_TENOR years is not held LONG on a day its yield is below the trailing
+    # CARRY_GATE_FUNDING_WINDOW-day mean of FR007 - it would earn less than the cash it ties up.
+    # The DV01-equalised sleeves put most of the book's capital in these tenors, and the factor
+    # signals are price-only, so nothing else sees the negative carry. Shorts are untouched. The
+    # rest of the day's shape is still scaled to the DV01 target / 95% cap; capital the gate
+    # frees beyond that stays in cash at FR007 (available to the alpha book) - moving the gated
+    # DV01 to a longer positive-carry tenor or raising MAX_DV01_PER_CAPITAL tested worse.
+    # Backtest 2021-2026 (default pool): Sharpe vs cash 1.14 -> 1.48, holdout from 2025-04
+    # 0.26 -> 1.15. See multiasset.book.sizing.negative_carry_mask_daily.
+    CARRY_GATE_ENABLED: bool = True
+    CARRY_GATE_MAX_TENOR: float = 2.0
+    CARRY_GATE_FUNDING_WINDOW: int = 20
+
     # ── Transaction cost (docs/plans/beta_book_exposure_vs_capital.md
     #    Step 8) ─────────────────────────────────────────────────────────
     # Basis points per unit ONE-WAY turnover (round-trip = 2x), charged on

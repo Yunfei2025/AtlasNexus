@@ -240,6 +240,73 @@ def _with_credit_floor(long_only_assets, assets) -> list:
     return out
 
 
+def _carry_gate_yields(assets, market_data) -> Dict[str, pd.Series]:
+    """{asset: yield series in %} for the assets the negative-carry gate covers: CN government
+    bonds ('Rates', country CN) and onshore credit, tenor <= ``CARRY_GATE_MAX_TENOR`` years.
+    Empty when the gate is disabled or there is no market data."""
+    from multiasset.config import RiskModelConfig
+    from multiasset.data import get_asset_type, get_asset_yield_series
+    out: Dict[str, pd.Series] = {}
+    if not RiskModelConfig.CARRY_GATE_ENABLED or market_data is None:
+        return out
+    for a in assets:
+        typ = get_asset_type(a)
+        if typ not in ('Rates', 'Credit'):
+            continue
+        try:
+            series, n, country, is_bond = get_asset_yield_series(a, market_data)
+        except Exception:
+            continue
+        if series is None or not is_bond or n is None or float(n) > RiskModelConfig.CARRY_GATE_MAX_TENOR:
+            continue
+        if typ == 'Rates' and country != 'CN':
+            continue
+        y = pd.Series(series, dtype=float)
+        y.index = pd.to_datetime(y.index)
+        out[a] = y.sort_index()
+    return out
+
+
+def _funding_rate_mean() -> Optional[pd.Series]:
+    """Trailing ``CARRY_GATE_FUNDING_WINDOW``-day mean of FR007 (%), or None if unavailable."""
+    from multiasset.config import RiskModelConfig
+    from multiasset.factor_backtest import load_funding_rate
+    fr = load_funding_rate('CN')
+    if fr is None or len(fr) == 0:
+        return None
+    fr = fr.copy()
+    fr.index = pd.to_datetime(fr.index)
+    window = RiskModelConfig.CARRY_GATE_FUNDING_WINDOW
+    return fr.sort_index().rolling(window, min_periods=min(5, window)).mean()
+
+
+def negative_carry_mask_daily(assets, market_data, daily_index: pd.DatetimeIndex) -> pd.DataFrame:
+    """True where a gated asset's yield is below the FR007 mean, both as of the PREVIOUS
+    day (the same one-day lag the sleeve applies to positions and durations). Columns are
+    only the gated assets; empty when none apply or FR007 is unavailable."""
+    yields = _carry_gate_yields(assets, market_data)
+    funding = _funding_rate_mean() if yields else None
+    if not yields or funding is None:
+        return pd.DataFrame(index=daily_index)
+
+    def asof(s):
+        return s.reindex(s.index.union(daily_index)).ffill().reindex(daily_index).shift(1)
+
+    f = asof(funding)
+    return pd.DataFrame({a: (asof(y) < f).fillna(False) for a, y in yields.items()}, index=daily_index)
+
+
+def negative_carry_assets_now(assets, market_data) -> list:
+    """Live (one-shot) version of ``negative_carry_mask_daily``: the gated assets whose latest
+    yield is below the latest FR007 mean."""
+    yields = _carry_gate_yields(assets, market_data)
+    funding = _funding_rate_mean() if yields else None
+    if not yields or funding is None or funding.dropna().empty:
+        return []
+    f = float(funding.dropna().iloc[-1])
+    return [a for a, y in yields.items() if not y.dropna().empty and float(y.dropna().iloc[-1]) < f]
+
+
 def signed_sleeve_weights_daily(
     budget_by_rebalance_date: Dict[pd.Timestamp, Dict[str, float]],
     factor_signal_series: Dict[str, pd.Series],
@@ -274,6 +341,11 @@ def signed_sleeve_weights_daily(
     IRSL's long 10Y/30Y leg on a day CN2Y's floor bites) are untouched —
     only the floored asset's own weight changes, so the tilt is no longer
     exactly DV01-neutral across the trade on those days.
+
+    Negative-carry gate (``RiskModelConfig.CARRY_GATE_*``): a short-dated CN
+    bond's NET LONG weight is set to 0 on days its yield is below the FR007
+    mean (``negative_carry_mask_daily``); the other legs are untouched, as
+    with the floor above.
 
     Returns ``(weights, mod_dur, skipped)``. ``mod_dur`` (same index/columns
     as ``weights``, 0 for non-bond assets) is each bond's modified duration
@@ -339,6 +411,10 @@ def signed_sleeve_weights_daily(
         floor_cols = [a for a in long_only_assets if a in weights.columns]
         if floor_cols:
             weights[floor_cols] = weights[floor_cols].clip(lower=0.0)
+    gated = negative_carry_mask_daily(weights.columns, market_data, daily_index)
+    if not gated.empty and len(gated.columns):
+        cols = list(gated.columns)
+        weights[cols] = weights[cols].mask(gated & (weights[cols] > 0.0), 0.0)
     mod_dur_df = pd.DataFrame(mod_dur, index=daily_index).reindex(columns=assets).fillna(0.0)
     return weights, mod_dur_df, skipped
 
@@ -413,6 +489,9 @@ def signed_sleeve_weights_snapshot(
         for a in long_only_assets:
             if a in weights and weights[a] < 0.0:
                 weights[a] = 0.0
+    for a in negative_carry_assets_now(list(weights), market_data):
+        if weights[a] > 0.0:
+            weights[a] = 0.0
 
     # Illiquid CN tenors cannot be shorted (RiskModelConfig.CN_SHORT_SUBSTITUTE, 20Y -> 30Y):
     # the short moves to the target tenor DV01-equivalently (weight x modDur_from / modDur_to),

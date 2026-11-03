@@ -23,11 +23,18 @@ from multiasset.main import run_risk_parity_allocation
 from multiasset.budget import derive_vol_sqrt_budgets
 from multiasset.config import RiskModelConfig
 
-from ...data import THEME, ALLOCATION_RESULTS, SELECTED_FACTOR_POOL, FACTOR_TO_ASSET_MAP
+from ...data import THEME, ALLOCATION_RESULTS, SELECTED_FACTOR_POOL, FACTOR_TO_ASSET_MAP, selected_factors
 from .._common import _BETA_BOOK_POSITIONS_PARQUET
 from ._prepare_tables import merge_with_existing_positions
 
 _IR_PREFIXES = ('IRDL', 'IRSL', 'IRCV')
+
+
+def backtest_factor_pool() -> list:
+    """The factor pool the historical backtest trades (the Candidates selection).
+    factor_scaling sizes the live book from this pool, not from the factors implied
+    by the asset pool."""
+    return selected_factors()
 
 
 def build_risk_budgets(allocation_mode, budget_ids, budget_values):
@@ -88,8 +95,10 @@ def apply_factor_scaling(summary, signal_snapshot, factor_names_in_pool, total_c
     factor's own long/short mimicking portfolio x its position, summed
     across factors, short-end floored — same formula and same
     RiskModelConfig.SHORT_END_LONG_ONLY_TENORS floor as the backtest).
-    Assets untouched by any replicable factor in the pool (e.g. credit/
-    spread) keep their pure-RP weight, exactly as before this rewrite.
+    Assets untouched by any replicable factor in the pool hold nothing, as
+    in the backtest. A pool factor missing from the session snapshot uses its
+    last saved position (factor-backtest.pkl). With no replicable factor at
+    all the pure-RP weights are kept.
     """
     from multiasset.book.sizing import (
         factor_mimicking_weights, pool_sleeve_budgets, signed_sleeve_weights_snapshot,
@@ -113,6 +122,19 @@ def apply_factor_scaling(summary, signal_snapshot, factor_names_in_pool, total_c
         raw = float(rec.get('scalar', 0.0))
         position_by_factor[f] = -raw if f.startswith('IRSL.') else raw
 
+    # The snapshot store only holds the factors predicted in this session. Any pool factor it
+    # lacks takes its last saved position from factor-backtest.pkl - the series the backtest
+    # trades - instead of dropping out of the book.
+    missing = [f for f in factor_names_in_pool if f not in position_by_factor]
+    if missing:
+        from web.tabs.beta.callbacks.backtest_hist._signals import load_factor_signal_series
+        saved = load_factor_signal_series()
+        filled = [f for f in missing if f in saved and not saved[f].empty]
+        for f in filled:
+            position_by_factor[f] = float(saved[f].iloc[-1])
+        if filled:
+            print(f"📡 Signals not in this session's snapshot, using saved positions: {filled}")
+
     replicable_factors = [f for f in factor_names_in_pool
                           if factor_mimicking_weights(f, FACTOR_TO_ASSET_MAP) is not None
                           and f in position_by_factor]
@@ -131,10 +153,14 @@ def apply_factor_scaling(summary, signal_snapshot, factor_names_in_pool, total_c
     _scaled = {row['Asset']: float(row['Weight (%)']) / 100.0 for _, row in summary.iterrows()}
 
     if replicable_factors and total_capital_cny > 0:
-        vol_map = compute_factor_vol_map(replicable_factors)
+        # Budgets over EVERY pool factor with factor history, as the backtest does - a factor
+        # without a signal (e.g. one never trained) still takes its share and then holds no
+        # sleeve. Solving over the replicable factors only shifts the others' ERC budgets.
+        vol_map = compute_factor_vol_map(list(factor_names_in_pool))
+        budget_factors = [f for f in factor_names_in_pool if f in vol_map] or replicable_factors
         # Same rule as the backtest (RiskModelConfig.SLEEVE_BUDGET_RULE); cov enables 'erc'.
-        budget = pool_sleeve_budgets(replicable_factors, vol_map,
-                                     cov=compute_factor_cov(replicable_factors))  # fractions summing to 1
+        budget = pool_sleeve_budgets(budget_factors, vol_map,
+                                     cov=compute_factor_cov(budget_factors))  # fractions summing to 1
         # market_data is only needed for yield (IR) sleeve legs' /modD
         # duration lookup; load it lazily so a pure-FX/commodity pool never
         # pays load_raw_market_data()'s cost.
@@ -147,9 +173,10 @@ def apply_factor_scaling(summary, signal_snapshot, factor_names_in_pool, total_c
             budget, position_by_factor, FACTOR_TO_ASSET_MAP, market_data,
             long_only_assets=RiskModelConfig.SHORT_END_LONG_ONLY_TENORS,
         )
-        for name in _replicable_assets:
-            if name in _scaled:
-                _scaled[name] = sleeve_weights.get(name, 0.0)
+        # The backtest holds only factor sleeves: an asset outside every sleeve is not held.
+        # Keeping its min-vol RP weight would mix two scales in one shape (sleeve weights are
+        # a few % of capital, RP weights sum to 1) and let it swamp the book.
+        _scaled = {name: sleeve_weights.get(name, 0.0) for name in _scaled}
 
     _total_scaled = sum(abs(v) for v in _scaled.values())
     if _total_scaled > 1e-9:
@@ -488,13 +515,7 @@ def build_allocation_results(summary, factor_exp, factor_risk, portfolio,
     not the pre-rounding portfolio_df, so "Add to Portfolio" reflects what
     the user sees.
     """
-    _factor_pool_all = (
-        SELECTED_FACTOR_POOL.get('ir_factors', [])
-        + SELECTED_FACTOR_POOL.get('sp_factors', [])
-        + SELECTED_FACTOR_POOL.get('fx_factors', [])
-        + SELECTED_FACTOR_POOL.get('eq_factors', [])
-        + SELECTED_FACTOR_POOL.get('cmd_factors', [])
-    )
+    _factor_pool_all = backtest_factor_pool()
     _run_meta = {
         '_timestamp':       run_timestamp.isoformat(),
         '_run_mode':        allocation_mode,

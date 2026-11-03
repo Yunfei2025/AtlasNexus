@@ -20,11 +20,11 @@ from dateutil.relativedelta import relativedelta
 from multiasset.config import RiskModelConfig
 from settings.paths import DIR_INPUT
 
-from ...data import THEME, ALLOCATION_RESULTS
+from ...data import THEME, ALLOCATION_RESULTS, get_assets_from_factors
 from .._common import _SUMMARY_BETA_PARQUET, _SUMMARY_BETA_DISPLAY_PARQUET, _upsert_snapshot
 from ._risk_budget_panel import build_risk_budget_rows, build_risk_budget_header
 from ._run_analysis import (
-    build_risk_budgets, run_optimization, apply_factor_scaling,
+    backtest_factor_pool, build_risk_budgets, run_optimization, apply_factor_scaling,
     build_portfolio_table, build_rp_budgets_out, build_allocation_results,
 )
 from ._irdl_hedge import build_irdl_hedge_ticket
@@ -169,6 +169,13 @@ def register_portfolio_run_callbacks(app):
 
             # Build risk budgets based on allocation mode
             factor_names_in_pool = [id_dict['index'] for id_dict in (budget_ids or [])]
+            if allocation_mode == 'factor_scaling':
+                # Same factors and assets as the backtest: the Factor tab pool, plus every asset
+                # its sleeves trade (the asset pool alone can miss e.g. CN1Y).
+                factor_names_in_pool = backtest_factor_pool()
+                selected_asset_names = list(dict.fromkeys(
+                    selected_asset_names
+                    + [a['name'] for a in get_assets_from_factors(factor_names_in_pool)]))
             total_capital_m = total_capital_cny / 1e6
             risk_budgets, rp_budgets_out = build_risk_budgets(allocation_mode, budget_ids, budget_values)
 

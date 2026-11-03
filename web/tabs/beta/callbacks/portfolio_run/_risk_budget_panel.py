@@ -16,7 +16,7 @@ from multiasset.factor_backtest import get_factor_weighted_duration
 from multiasset.budget import derive_vol_sqrt_budgets
 from multiasset.backtest_cache import scalar_to_coeff
 
-from ...data import THEME, compute_factor_vol_map
+from ...data import THEME, compute_factor_vol_map, selected_factors
 
 _IR_LABEL_PREFIXES = ('IRDL', 'IRSL', 'IRCV', 'CRDL', 'CRSL', 'CRCV')
 _IR_PREFIXES = ('IRDL', 'IRSL', 'IRCV')
@@ -136,6 +136,10 @@ def build_risk_budget_rows(asset_pool, rp_budgets, snapshot_data, allocation_mod
                                  'fontSize': '11px', 'textAlign': 'center'})]
 
     active_factors = collect_active_factors(asset_pool)
+    if allocation_mode == 'factor_scaling':
+        # factor_scaling runs on the Candidates selection itself (same as the backtest), so show
+        # exactly those factors - the assets also imply e.g. CRCV.CDB when only CRDL.CDB is selected.
+        active_factors = set(selected_factors())
     if not active_factors:
         return [html.Div("No risk factors identified.",
                           style={'color': 'var(--text-muted)', 'fontSize': '11px'})]

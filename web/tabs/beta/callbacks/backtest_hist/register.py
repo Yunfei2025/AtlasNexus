@@ -159,6 +159,7 @@ def register_backtest_hist_callbacks(app):
                 total_capital=results_payload.get('total_capital', 0.0),
                 start_date=results_payload.get('start_date'),
                 end_date=results_payload.get('end_date'),
+                cash_benchmark=results_payload.get('cash_benchmark'),
             )
             return f"✅ Saved at {pd.Timestamp.now().strftime('%H:%M:%S')}"
         except Exception as e:

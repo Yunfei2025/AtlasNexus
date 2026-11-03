@@ -1086,6 +1086,32 @@ class StatGenerator:
             for col in _extra_cr3m.columns:
                 df_cr3m_full[col] = _extra_cr3m[col].reindex(df_cr3m_full.index)
 
+        # Funded, DV01-weighted carry for the CGB/CDB slopes and flies. The generic pass above is
+        # equal-notional and unfunded (spread x 0.25), but the book holds these as DV01-neutral TRS
+        # packages and the engines price them as dspread x D_ref. See curves.calibration.tenor_carry.
+        # Cross-curve names keep the stored carry (funding cancels leg against leg).
+        df_cr3m_sell_full = pd.DataFrame(index=df_cr3m_full.index)
+        try:
+            from curves.calibration.tenor_carry import funded_carry_frames, load_cn_funding
+            from settings.general import ALPHA_TRS_SPREAD_BP
+            _funding = load_cn_funding(swap_ts)
+            if _funding is not None:
+                _curve_y = {
+                    'CGB': {n: y for n, y in ((1, cgb1), (2, cgb2), (3, cgb3), (5, cgb5), (7, cgb7),
+                                              (10, cgb10), (20, cgb20), (30, cgb30)) if y is not None},
+                    'CDB': {n: y for n, y in ((1, cdb1), (2, cdb2), (5, cdb5), (7, cdb7), (10, cdb10))
+                            if y is not None},
+                }
+                _buy, _sell = funded_carry_frames(_curve_y, list(df_cr3m_full.columns),
+                                                  df_cr3m_full.index, _funding, ALPHA_TRS_SPREAD_BP)
+                for _col in _buy.columns:
+                    df_cr3m_full[_col] = _buy[_col]
+                df_cr3m_sell_full = _sell
+            else:
+                print('WARN tenor carry: no funding rate, CarryRoll3m left unfunded for CGB/CDB slopes/flies')
+        except Exception as exc:
+            print(f'WARN tenor carry: funded carry unavailable ({exc}); CarryRoll3m left unfunded')
+
         # OU statistics on spread levels (using rolling window only)
         try:
             stat_info = st.OU_calibrate(df_spread_stats.dropna(how='all'))
@@ -1097,6 +1123,9 @@ class StatGenerator:
             'TenorSpread': {
                 'Spread':      df_spread_full,     # full history for seasonal chart
                 'CarryRoll3m': df_cr3m_full,
+                # SELL-side carry of the funded names (= -BUY while the TRS spread is 0; differs once
+                # settings.general.ALPHA_TRS_SPREAD_BP > 0). Not read by the engines yet.
+                'CarryRoll3mSell': df_cr3m_sell_full,
                 'StatInfo':    stat_info,          # calibrated on rolling window
             }
         }

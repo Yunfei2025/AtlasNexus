@@ -23,6 +23,7 @@ from web.tabs.beta.callbacks._common import (
     _apply_sort,
 )
 from ..helpers import _row_key, _load_beta_user_overrides, beta_direction, beta_long_short_totals, beta_mtm_mm
+from .close_reminder import beta_rebalance_plan
 
 
 def register_beta_book_table_callbacks(app):
@@ -310,6 +311,16 @@ def register_beta_book_table_callbacks(app):
     
             if not display_rows:
                 return _no_data("Beta snapshot is empty.")
+
+            # Rebalance reminder: the held book vs the target, trades back to target (see close_reminder).
+            from settings.general import BETA_REBALANCE_DRIFT_TRIGGER
+            _plan = beta_rebalance_plan(display_rows, drift_trigger=BETA_REBALANCE_DRIFT_TRIGGER)
+            _trade_names = {t['name'] for t in _plan['trades']}
+            for _r in display_rows:
+                _nm = str(_r.get('Instrument') or _r.get('Asset Name') or '')
+                _d = _plan['deltas'].get(_nm)
+                _r['To Target (MM)'] = f"{_d:+,.1f}" if (_d is not None and _plan['status'] != 'not_booked') else ''
+                _r['_rebalance'] = _nm in _trade_names
     
             # LONG and SHORT totals are reported separately and never netted: capital used is
             # the long size; a short uses no capital (see helpers.beta_long_short_totals).
@@ -328,14 +339,14 @@ def register_beta_book_table_callbacks(app):
             body_rows  = [r for r in display_rows if r.get('Asset Type') != 'TOTAL']
             total_rows = [r for r in display_rows if r.get('Asset Type') == 'TOTAL']
             _numeric_cols = {'Duration', 'Capital (MM CNY)', 'Weight (%)', 'Allocation',
-                              'Open Price', 'Volume (MM)', 'Close Price', 'MtM (MM CNY)'}
+                              'Open Price', 'Volume (MM)', 'To Target (MM)', 'Close Price', 'MtM (MM CNY)'}
             body_rows = _apply_sort(body_rows, sort_state, _numeric_cols)
     
             _ALL_COLS = [
                 ('Asset Type', 'left'), ('Universe', 'left'), ('Instrument', 'left'),
                 ('Duration', 'right'), ('Capital (MM CNY)', 'right'), ('Weight (%)', 'right'),
                 ('Allocation', 'left'), ('Open Price', 'right'), ('Open Date', 'right'),
-                ('Volume (MM)', 'right'), ('Close Price', 'right'), ('MtM (MM CNY)', 'right'),
+                ('Volume (MM)', 'right'), ('To Target (MM)', 'right'), ('Close Price', 'right'), ('MtM (MM CNY)', 'right'),
             ]
             _cols = [(c, a) for c, a in _ALL_COLS
                      if c not in ('Open Date', 'Volume (MM)') or c in _visible_cols]
@@ -411,6 +422,9 @@ def register_beta_book_table_callbacks(app):
                     return _editable_cell(row_idx, col, val, 'text')
                 if col == 'Open Date':
                     return _editable_cell(row_idx, col, val, 'date')
+                if col == 'To Target (MM)':
+                    return html.Td(val, style={**base_style, 'fontWeight': '700' if row.get('_rebalance') else '400',
+                                               'color': THEME['warning'] if row.get('_rebalance') else THEME['text_sub']})
                 if col == 'MtM (MM CNY)':
                     try:
                         signed = float(str(val).replace(',', '').replace('+', '')) if val else None
@@ -431,6 +445,8 @@ def register_beta_book_table_callbacks(app):
                 row_idx = _row_key(row, i)
                 row_bg = THEME['bg_card'] if i % 2 == 1 else 'transparent'
                 row_style = {'background': row_bg, 'borderBottom': '1px solid rgba(255,255,255,0.04)'}
+                if row.get('_rebalance') and _plan['status'] == 'due':
+                    row_style['background'] = 'rgba(255,165,0,0.10)'
                 if row.get('_stale'):
                     # Reddish tint over the alternating stripe so a bad row is
                     # visible at a glance without hiding it — the user asked
@@ -471,6 +487,35 @@ def register_beta_book_table_callbacks(app):
                 _picker_disabled = True
                 _picker_label = 'Click an Open Date cell to edit with the calendar.'
     
+            _banner = None
+            if _plan['status'] == 'due':
+                _why = {'month': 'the month has turned since the last booking',
+                        'drift': f"held book is {(_plan['drift'] or 0) * 100:.0f}% (DV01-weighted) from target",
+                        'unbooked': 'some targets are not booked'}
+                _lines = [html.Div(
+                    "Rebalance due: " + '; '.join(_why[x] for x in _plan['reasons']) + '.',
+                    style={'fontSize': '12px', 'marginBottom': '4px'})]
+                if _plan['trades']:
+                    _lines.append(html.Div(
+                        ' · '.join(f"{t['name']} {t['held_mm']:+,.0f} → {t['target_mm']:+,.0f} ({t['delta_mm']:+,.0f})"
+                                   for t in _plan['trades']),
+                        style={'fontSize': '11px', 'color': THEME['text_sub']}))
+                else:
+                    _lines.append(html.Div('No instrument is off target by a full lot.',
+                                           style={'fontSize': '11px', 'color': THEME['text_sub']}))
+                _banner = html.Div([
+                    html.Div("Beta Rebalance", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '13px',
+                                                      'marginBottom': '6px', 'borderBottom': f"1px solid {THEME['table_header']}",
+                                                      'paddingBottom': '4px'}),
+                    *_lines,
+                ], style={'backgroundColor': 'rgba(255,165,0,0.08)', 'border': f"1px solid {THEME['warning']}",
+                          'borderRadius': '5px', 'padding': '10px 14px', 'marginBottom': '12px'})
+            elif _plan['status'] == 'ok':
+                _lb = _plan['last_booked']
+                _banner = html.Div(
+                    f"Beta book on schedule (booked {_lb:%Y-%m-%d}; {(_plan['drift'] or 0) * 100:.0f}% DV01 drift from target).",
+                    style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '10px'})
+
             content = html.Div([
                 html.Div([
                     html.Span('Open Date calendar:',
@@ -492,6 +537,7 @@ def register_beta_book_table_callbacks(app):
                 ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
                           'marginBottom': '10px', 'flexWrap': 'wrap',
                           'position': 'relative', 'zIndex': '1001'}),
+                *([_banner] if _banner is not None else []),
                 table,
             ])
             status = f"Beta snapshot from {ts[:19]} ({source_label})"

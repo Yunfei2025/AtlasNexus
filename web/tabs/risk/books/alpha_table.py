@@ -17,6 +17,7 @@ from web.tabs.alpha.data.legs import fly_leg_dv01_ratios
 from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
 from web.tabs.beta.data import THEME
 from web.tabs.beta.callbacks._common import _SUMMARY_ALPHA_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET, _ALPHA_POSITIONS_PARQUET, _load_cr_ts, _price_progress_bar, _dir_badge, _style_badge, _signed_value_style, _zscore_cell_style, _sortable_header, _apply_sort
+from .close_reminder import alpha_close_ticket, format_ticket
 from ..helpers import _alpha_progress_direction, _alpha_spread_pnl_bp, _coerce_float, _load_leg_data, _resolve_legs, _leg_volume_ratio, _row_key, normalize_risk_ticker
 
 
@@ -740,13 +741,24 @@ def register_alpha_book_table_callbacks(app):
                     'hold':   {'color': THEME['warning'], 'icon': '⏰'},
                 }
                 _items = []
+                _rows_by_id = {r.get('ID'): r for r in display_rows}
                 for _tid, _msg, _sev in _alert_rows:
                     _st = _sev_style[_sev]
-                    _items.append(html.Div([
+                    _children = [
                         html.Span(f"{_st['icon']} ", style={'fontSize': '13px'}),
                         html.Span(_tid, style={'fontWeight': 'bold', 'color': _st['color'], 'marginRight': '6px'}),
                         html.Span(_msg, style={'color': THEME['text_main']}),
-                    ], style={'marginBottom': '4px', 'fontSize': '12px'}))
+                    ]
+                    # A close alert (stop / target / signal) comes with the legs to trade. Long-hold is a
+                    # review prompt, not a close.
+                    if _sev in ('stop', 'target') or _msg.startswith('Signal says CLOSE'):
+                        _tk = alpha_close_ticket(_rows_by_id.get(_tid, {}))
+                        if _tk:
+                            _booked = all(t['booked'] for t in _tk)
+                            _children.append(html.Div(
+                                f"Close: {format_ticket(_tk)}" + ('' if _booked else '  (indicative: Volume not entered, using target size)'),
+                                style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginLeft': '22px', 'marginTop': '2px'}))
+                    _items.append(html.Div(_children, style={'marginBottom': '6px', 'fontSize': '12px'}))
                 _reminder_banner = html.Div([
                     html.Div("Exit Reminders", style={
                         'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '13px',

@@ -30,7 +30,7 @@ from multiasset.config import RiskModelConfig
 from multiasset.backtest_cache import RPCacheParams, load_rp, save_rp, rp_hash
 from settings.paths import DIR_INPUT
 
-from ...data import SELECTED_FACTOR_POOL, get_assets_from_factors, FACTOR_TO_ASSET_MAP
+from ...data import SELECTED_FACTOR_POOL, get_assets_from_factors, FACTOR_TO_ASSET_MAP, selected_factors
 from ._signals import (
     load_factor_signal_series, factor_signal_asof,
     build_trend_factor_by_asset, trend_sign_asof,
@@ -65,14 +65,7 @@ class BacktestInputError(Exception):
 
 
 def _all_selected_factors() -> list:
-    all_factors = []
-    all_factors.extend(SELECTED_FACTOR_POOL.get('ir_factors', []))
-    all_factors.extend(SELECTED_FACTOR_POOL.get('sp_factors', []))
-    all_factors.extend(SELECTED_FACTOR_POOL.get('cr_factors', []))
-    all_factors.extend(SELECTED_FACTOR_POOL.get('fx_factors', []))
-    all_factors.extend(SELECTED_FACTOR_POOL.get('cmd_factors', []))
-    all_factors.extend(SELECTED_FACTOR_POOL.get('eq_factors', []))
-    return all_factors
+    return selected_factors()
 
 
 def run_historical_allocation(
@@ -916,7 +909,17 @@ def run_historical_allocation(
                 {'date': d.strftime('%Y-%m-%d'), 'value': float(v)}
                 for d, v in zip(df_pnl_exact['Date'], df_pnl_exact['Total'])
             ] if not df_pnl.empty else [],
-            'sharpe': float(metrics['sharpe_ratio']) if metrics is not None else 0.0,
+            # Headline Sharpe = the "Sharpe (vs cash)" the backtest panel shows (excess over the
+            # cash benchmark below). 'sharpe_gross' is the old flat-risk-free-rate figure.
+            'sharpe': float(metrics['sharpe_post_funding']) if metrics is not None else 0.0,
+            'sharpe_gross': float(metrics['sharpe_ratio']) if metrics is not None else 0.0,
+            # Daily cash benchmark (million CNY on INITIAL capital, per calendar-day accrual): what
+            # total_capital earns in cash. The beta+alpha combination needs it to score the beta
+            # book over cash exactly like this backtest does.
+            'cash_benchmark': [
+                {'date': d.strftime('%Y-%m-%d'), 'value': float(v)}
+                for d, v in zip(df_pnl_exact['Date'], (funding_cost_cny.reindex(daily_idx).fillna(0.0) / 1_000_000))
+            ] if not df_pnl.empty else [],
             'annualized_return': float(metrics['annualized_return']) if metrics is not None else 0.0,
             'max_drawdown': float(metrics['max_drawdown']) if metrics is not None else 0.0,
             'asset_pool': sorted(all_assets_ever),

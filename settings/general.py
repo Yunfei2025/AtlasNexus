@@ -121,3 +121,21 @@ DEFAULT_ALPHA_CAPITAL_MM = DEFAULT_TOTAL_CAPITAL_BN * DEFAULT_ALPHA_MARGIN_SHARE
 # Summary > Risk tab prices Alpha margin with those (falling back to these).
 DEFAULT_ALPHA_BOND_MARGIN_RATE = 0.05
 DEFAULT_ALPHA_SWAP_MARGIN_RATE = 0.03
+
+# Alpha book carry. The book is financed by TRS, so every leg of a spread costs funding (FR007) on its
+# notional; the CGB/CDB slope and fly carry is computed net of it (curves.calibration.tenor_carry).
+# ALPHA_TRS_SPREAD_BP: the dealer's spread over FR007 on every TRS leg, in bp/yr. PLACEHOLDER = 0 until the
+# spread is known. Being a cost in both directions it needs the SELL-side carry series
+# (Tenor-spds.pkl 'CarryRoll3mSell'), which the backtest engines do not read yet - wire it before setting this.
+ALPHA_TRS_SPREAD_BP = 0.0
+# ALPHA_CARRY_GATE_ENABLED: no new TenorSpread mean-reversion entry in a direction whose funded carry is
+# negative. Off by default: on the saved default book it lifts Sharpe in 2024+ (2.38 -> 2.83) but gives up
+# ~16% of return per unit of notional and costs a little before 2024 (3.04 -> 2.98).
+ALPHA_CARRY_GATE_ENABLED = False
+
+# Beta book rebalance reminder (Summary > Books). Daily trading of the factor-scaling book is ~40x capital a year
+# of turnover, a monthly rebalance ~14x (vs-cash Sharpe 1.97 daily, 1.68 monthly; equal after ~1bp of one-way
+# cost, break-even ~0.85bp). The snapshot therefore asks for a rebalance when the calendar month has turned, or
+# off-cycle when the DV01-weighted distance of the held book from target exceeds this share of the target's gross
+# DV01. The trigger is a judgement, not a tuned value.
+BETA_REBALANCE_DRIFT_TRIGGER = 0.5

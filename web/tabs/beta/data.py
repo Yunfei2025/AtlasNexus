@@ -118,9 +118,13 @@ DIVERSIFICATION_RECOMMENDATIONS = {
 SELECTED_FACTOR_POOL = {
     'ir_factors': ['IRDL.CN', 'IRSL.CN', 'IRCV.CN'],  # Default: CN Level/Slope/Curvature
     'sp_factors': [],
-    'cr_factors': ['CRDL.CDB', 'CRDL.LGB', 'CRDL.MTN', 'CRDL.NCD'],  # Credit level only; CRSL/CRCV left unselected (holdout Sharpe negative)
-    'fx_factors': ['FXDL.USDCNY'],
-    'cmd_factors': ['CMDL.AU', 'CMDL.AL'],  # Gold + Aluminium
+    # Credit Level/Slope/Curvature for every universe (user, 2026-11-03). CRSL/CRCV are weak on
+    # their own but diversify the book: with the negative-carry gate, Sharpe vs cash 1.48 -> 1.78
+    # (holdout 1.15 -> 1.72) over CRDL alone. NCD has no curvature (CREDIT_NO_CURVATURE).
+    'cr_factors': ['CRDL.CDB', 'CRSL.CDB', 'CRCV.CDB', 'CRDL.LGB', 'CRSL.LGB', 'CRCV.LGB',
+                   'CRDL.MTN', 'CRSL.MTN', 'CRCV.MTN', 'CRDL.NCD', 'CRSL.NCD'],
+    'fx_factors': [],
+    'cmd_factors': [],
     'eq_factors': [],
     'timestamp': None
 }
@@ -485,6 +489,14 @@ FACTOR_TO_ASSET_MAP = {
         {'name': 'IM', 'type': 'Equities', 'universe': 'CSI 1000', 'sector': 'N/A'},
     ],
 }
+
+
+def selected_factors() -> list:
+    """Every factor in SELECTED_FACTOR_POOL (the Candidates selection), in one fixed order.
+    The single source for the factors the backtest trades, the live Portfolio run and the
+    Portfolio asset pool."""
+    keys = ('ir_factors', 'sp_factors', 'cr_factors', 'fx_factors', 'cmd_factors', 'eq_factors')
+    return list(dict.fromkeys(f for k in keys for f in SELECTED_FACTOR_POOL.get(k, [])))
 
 
 def get_assets_from_factors(factor_list: list) -> list:

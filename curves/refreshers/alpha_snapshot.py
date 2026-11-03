@@ -577,6 +577,20 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		# Spread is stored in yield %, so convert to annual bp.
 		# Use 30/360 scaling so a 1-month horizon is exactly annual_carry / 12.
 		df_tenor["carry_roll"] = df_tenor["spread"] * 100.0
+		# BUY-side carry must be the SAME series the backtests use (Tenor-spds.pkl CarryRoll3m: funded,
+		# DV01-weighted for CGB/CDB slopes and flies). The spread level above is only a proxy and has the
+		# wrong SIGN for slopes (CGB-5s10s shows +29bp/yr when BUY earns -29bp). Latest 3m % -> annual bp.
+		try:
+			from web.tabs.alpha.data.loaders import load_carry_roll_timeseries
+			_cr_hist = load_carry_roll_timeseries("TenorSpread")
+			if isinstance(_cr_hist, pd.DataFrame) and not _cr_hist.empty:
+				for _inst in df_tenor.index:
+					if _inst in _cr_hist.columns:
+						_cr_last = pd.to_numeric(_cr_hist[_inst], errors="coerce").dropna()
+						if not _cr_last.empty:
+							df_tenor.at[_inst, "carry_roll"] = float(_cr_last.iloc[-1]) * 400.0
+		except Exception:
+			pass
 		df_tenor["carry_basis_days"] = _ANNUAL_CARRY_BASIS_DAYS
 		df_tenor.index.name = "ID"
 		df_tenor["spread_type"] = "TenorSpread"
