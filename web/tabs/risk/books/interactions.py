@@ -19,6 +19,12 @@ from ..helpers import (
 )
 
 
+def _beta_display_cache_invalidated() -> bool:
+    """True when a new canonical Beta snapshot exists but the display cache was
+    deleted (Beta > Add to Portfolio), i.e. any rows Refresh holds are stale."""
+    return os.path.exists(_SUMMARY_BETA_PARQUET) and not os.path.exists(_SUMMARY_BETA_DISPLAY_PARQUET)
+
+
 def register_risk_book_interaction_callbacks(app):
     """Register the Summary > Books interaction and persistence callbacks."""
     @app.callback(
@@ -386,10 +392,7 @@ def register_risk_book_interaction_callbacks(app):
         # book as the cache -- Books and Risk (which reads the canonical file)
         # then disagree, e.g. an old CGB-30Y bond code. Skip until a render has
         # rebuilt from the canonical snapshot.
-        _beta_stale = (
-            os.path.exists(_SUMMARY_BETA_PARQUET)
-            and not os.path.exists(_SUMMARY_BETA_DISPLAY_PARQUET)
-        )
+        _beta_stale = _beta_display_cache_invalidated()
         saved = []
         try:
             if beta_rows and not _beta_stale:
