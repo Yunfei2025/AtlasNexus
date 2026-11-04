@@ -6,9 +6,12 @@ two books are netted for risk and margin, but each stays the source of truth for
 
 * Alpha - an exit is decided per TRADE (its own stop / target / signal, shown by the alpha table's alerts). This
   module turns an alert into the legs to trade, so the manual change is one concrete ticket.
-* Beta - a target book that moves every day with the factor signals. Trading it daily costs ~40x capital a year
-  of turnover; a calendar rebalance (monthly) costs ~14x. So the snapshot asks for a rebalance when the month
-  has turned or the held book has drifted far from target, and lists the trades back to target.
+* Beta - two cadences, as in the backtest. DAILY the factor models move the positions: the snapshot's targets
+  must be today's (re-run Run Analysis) and any instrument off target by more than a no-trade zone is listed
+  with its trade. MONTHLY the risk-parity budgets and factor models refresh (their EWMA vols and training are
+  anchored to the previous month-end): when the month turns the snapshot asks for a re-run. Trading every
+  instrument every day is ~2,500 tickets a year; a per-instrument zone of 1% of capital cuts that to ~1,000 with
+  no loss of Sharpe (see docs / memory books-close-reminder-design).
 
 Pure functions on the table's display rows (strings as rendered), no I/O.
 """
@@ -79,26 +82,36 @@ def format_ticket(ticket: Iterable[Dict[str, Any]]) -> str:
 
 # ── Beta ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
+def _last_business_day(today: pd.Timestamp) -> pd.Timestamp:
+    today = pd.Timestamp(today).normalize()
+    while today.weekday() >= 5:
+        today -= pd.Timedelta(days=1)
+    return today
+
+
 def beta_rebalance_plan(
     rows: Iterable[Dict[str, Any]],
     today: Optional[pd.Timestamp] = None,
-    drift_trigger: float = 0.5,
+    zone_pct: float = 0.01,
+    capital_mm: Optional[float] = None,
+    snapshot_ts: Any = None,
+    model_month: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Whether the held beta book is due a rebalance, why, and the trades back to target.
+    """What the beta book needs today: fresh targets, a monthly refresh, and trades back to target.
 
     ``rows`` are the beta table rows: ``Capital (MM CNY)`` is the signed TARGET, ``Volume (MM)`` the HELD size
     (a magnitude - the direction is the target's, as in ``beta_mtm_mm``), ``Open Date`` when it was booked.
 
-    Due when any of:
-      * ``month``  - the latest booking date is before the current calendar month (calendar rebalance);
-      * ``drift``  - DV01-weighted distance of the held book from target exceeds ``drift_trigger`` of the
-                     target's gross DV01 (an off-cycle rebalance; the trigger is a judgement, not tuned);
-      * ``unbooked`` - a target has no held size at all while others do.
-    With nothing booked the status is ``'not_booked'`` (nothing to rebalance against).
+    * ``targets_stale`` (daily, factor models): the snapshot was built before the last business day, so the
+      targets do not use today's signals - re-run Run Analysis.
+    * ``rp_due`` (monthly, risk parity): ``model_month`` ('YYYY-MM' of the run's budgets / factor models) is
+      before the current month.
+    * ``trades``: instruments whose held size is off target by at least the zone, ``max(one lot, zone_pct x
+      capital_mm)`` (``capital_mm`` unknown -> one lot), each with the delta back to target.
+    * ``status``: ``'not_booked'`` (nothing held), ``'due'`` (a trade is listed, or some targets are unbooked)
+      or ``'ok'``. The two flags are independent of it.
 
-    Returns ``{'status': 'due'|'ok'|'not_booked', 'reasons': [...], 'drift': float|None, 'last_booked':
-    Timestamp|None, 'trades': [{'name', 'target_mm', 'held_mm', 'delta_mm'}], 'deltas': {name: delta_mm}}``
-    with trades limited to deltas of at least one lot.
+    ``drift`` (DV01-weighted distance of the held book from target) is informational.
     """
     today = pd.Timestamp(today if today is not None else pd.Timestamp.today()).normalize()
     items, dates = [], []
@@ -119,35 +132,40 @@ def beta_rebalance_plan(
         if held_mag and pd.notna(d):
             dates.append(d.normalize())
 
-    plan: Dict[str, Any] = {'status': 'not_booked', 'reasons': [], 'drift': None, 'last_booked': None,
-                            'trades': [], 'deltas': {}}
+    snap = pd.to_datetime(str(snapshot_ts)[:19], errors='coerce') if snapshot_ts is not None else pd.NaT
+    plan: Dict[str, Any] = {
+        'status': 'not_booked', 'reasons': [], 'drift': None, 'last_booked': max(dates) if dates else None,
+        'trades': [], 'deltas': {},
+        'snapshot_date': snap.normalize() if pd.notna(snap) else None,
+        'targets_stale': bool(pd.notna(snap) and snap.normalize() < _last_business_day(today)),
+        'model_month': model_month,
+        'rp_due': bool(model_month and str(model_month)[:7] < today.strftime('%Y-%m')),
+        'zone_mm': None,
+    }
     if not any(i['held'] for i in items):
         return plan
 
     reasons = []
-    last = max(dates) if dates else None
-    plan['last_booked'] = last
-    if last is None or (last.year, last.month) < (today.year, today.month):
-        reasons.append('month')
     if any(i['held'] is None for i in items):
         reasons.append('unbooked')
 
     num = den = 0.0
+    trades = []
     for i in items:
         held = i['held'] or 0.0
-        plan['deltas'][i['name']] = round(i['target'] - held, 4)
+        delta = i['target'] - held
+        plan['deltas'][i['name']] = round(delta, 4)
         w = i['dur'] if i['dur'] > 0 else 0.0
-        num += abs(i['target'] - held) * w
+        num += abs(delta) * w
         den += abs(i['target']) * w
+        zone = max(i['lot'], float(zone_pct) * float(capital_mm)) if capital_mm else i['lot']
+        if abs(delta) >= zone:
+            trades.append({'name': i['name'], 'target_mm': i['target'], 'held_mm': held, 'delta_mm': round(delta, 1)})
     plan['drift'] = (num / den) if den > 0 else None
-    if plan['drift'] is not None and plan['drift'] > drift_trigger:
-        reasons.append('drift')
-
-    plan['trades'] = [
-        {'name': i['name'], 'target_mm': i['target'], 'held_mm': i['held'] or 0.0,
-         'delta_mm': round(i['target'] - (i['held'] or 0.0), 1)}
-        for i in items if abs(i['target'] - (i['held'] or 0.0)) >= i['lot']
-    ]
+    plan['zone_mm'] = max(BOND_LOT_MM, float(zone_pct) * float(capital_mm)) if capital_mm else BOND_LOT_MM
+    plan['trades'] = trades
+    if trades:
+        reasons.append('trade')
     plan['reasons'] = reasons
     plan['status'] = 'due' if reasons else 'ok'
     return plan

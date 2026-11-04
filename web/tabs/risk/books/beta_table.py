@@ -23,7 +23,7 @@ from web.tabs.beta.callbacks._common import (
     _apply_sort,
 )
 from ..helpers import _row_key, _load_beta_user_overrides, beta_direction, beta_long_short_totals, beta_mtm_mm
-from .close_reminder import beta_rebalance_plan
+from .close_reminder import _num as _num_or_none, beta_rebalance_plan
 
 
 def register_beta_book_table_callbacks(app):
@@ -312,16 +312,26 @@ def register_beta_book_table_callbacks(app):
             if not display_rows:
                 return _no_data("Beta snapshot is empty.")
 
-            # Rebalance reminder: the held book vs the target, trades back to target (see close_reminder).
-            from settings.general import BETA_REBALANCE_DRIFT_TRIGGER
-            _plan = beta_rebalance_plan(display_rows, drift_trigger=BETA_REBALANCE_DRIFT_TRIGGER)
+            # Rebalance reminder (see close_reminder): fresh targets (daily, factor models), monthly refresh
+            # (risk parity), and the trades back to target beyond the per-instrument zone.
+            from settings.general import BETA_REBALANCE_ZONE_PCT
+
+            def _last_col(name):
+                if name in df.columns and df[name].notna().any():
+                    return df[name].dropna().iloc[-1]
+                return None
+            _cap_cny = _num_or_none(_last_col('_capital_cny'))
+            _plan = beta_rebalance_plan(
+                display_rows, zone_pct=BETA_REBALANCE_ZONE_PCT,
+                capital_mm=(_cap_cny / 1e6 if _cap_cny else None),
+                snapshot_ts=ts, model_month=_last_col('_model_month_key'))
             _trade_names = {t['name'] for t in _plan['trades']}
             for _r in display_rows:
                 _nm = str(_r.get('Instrument') or _r.get('Asset Name') or '')
                 _d = _plan['deltas'].get(_nm)
                 _r['To Target (MM)'] = f"{_d:+,.1f}" if (_d is not None and _plan['status'] != 'not_booked') else ''
                 _r['_rebalance'] = _nm in _trade_names
-    
+
             # LONG and SHORT totals are reported separately and never netted: capital used is
             # the long size; a short uses no capital (see helpers.beta_long_short_totals).
             for _cells in beta_long_short_totals(display_rows):
@@ -488,32 +498,38 @@ def register_beta_book_table_callbacks(app):
                 _picker_label = 'Click an Open Date cell to edit with the calendar.'
     
             _banner = None
-            if _plan['status'] == 'due':
-                _why = {'month': 'the month has turned since the last booking',
-                        'drift': f"held book is {(_plan['drift'] or 0) * 100:.0f}% (DV01-weighted) from target",
-                        'unbooked': 'some targets are not booked'}
-                _lines = [html.Div(
-                    "Rebalance due: " + '; '.join(_why[x] for x in _plan['reasons']) + '.',
-                    style={'fontSize': '12px', 'marginBottom': '4px'})]
-                if _plan['trades']:
-                    _lines.append(html.Div(
-                        ' · '.join(f"{t['name']} {t['held_mm']:+,.0f} → {t['target_mm']:+,.0f} ({t['delta_mm']:+,.0f})"
-                                   for t in _plan['trades']),
-                        style={'fontSize': '11px', 'color': THEME['text_sub']}))
-                else:
-                    _lines.append(html.Div('No instrument is off target by a full lot.',
-                                           style={'fontSize': '11px', 'color': THEME['text_sub']}))
+            _msgs = []
+            if _plan['rp_due']:
+                _msgs.append(('Monthly (risk parity): ',
+                              f"budgets and factor models are from {_plan['model_month']}; the month has turned. Re-run Beta "
+                              "Portfolio > Run Analysis to refresh them, then rebalance to the new targets."))
+            if _plan['targets_stale']:
+                _msgs.append(('Daily (factor models): ',
+                              f"targets are from {_plan['snapshot_date']:%Y-%m-%d}. Re-run Run Analysis to use today's signals."))
+            if _plan['status'] == 'due' and 'unbooked' in _plan['reasons']:
+                _msgs.append(('Unbooked: ', 'some targets have no held size yet.'))
+            _trade_line = None
+            if _plan['trades']:
+                _trade_line = html.Div(
+                    ' · '.join(f"{t['name']} {t['held_mm']:+,.0f} → {t['target_mm']:+,.0f} ({t['delta_mm']:+,.0f})"
+                               for t in _plan['trades']),
+                    style={'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '4px'})
+            if _msgs or _trade_line is not None:
+                _head = 'Beta Rebalance' + (f" - trade to target (zone ≥ {_plan['zone_mm']:,.0f} MM per instrument)"
+                                            if _plan['trades'] else '')
                 _banner = html.Div([
-                    html.Div("Beta Rebalance", style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '13px',
-                                                      'marginBottom': '6px', 'borderBottom': f"1px solid {THEME['table_header']}",
-                                                      'paddingBottom': '4px'}),
-                    *_lines,
+                    html.Div(_head, style={'fontWeight': 'bold', 'color': THEME['text_main'], 'fontSize': '13px',
+                                           'marginBottom': '6px', 'borderBottom': f"1px solid {THEME['table_header']}",
+                                           'paddingBottom': '4px'}),
+                    *[html.Div([html.Span(k, style={'fontWeight': 'bold'}), html.Span(v)],
+                               style={'fontSize': '12px', 'marginBottom': '3px'}) for k, v in _msgs],
+                    *([_trade_line] if _trade_line is not None else []),
                 ], style={'backgroundColor': 'rgba(255,165,0,0.08)', 'border': f"1px solid {THEME['warning']}",
                           'borderRadius': '5px', 'padding': '10px 14px', 'marginBottom': '12px'})
             elif _plan['status'] == 'ok':
-                _lb = _plan['last_booked']
                 _banner = html.Div(
-                    f"Beta book on schedule (booked {_lb:%Y-%m-%d}; {(_plan['drift'] or 0) * 100:.0f}% DV01 drift from target).",
+                    f"Beta book on target (zone {_plan['zone_mm']:,.0f} MM; targets {_plan['snapshot_date']:%Y-%m-%d}, "
+                    f"{(_plan['drift'] or 0) * 100:.0f}% DV01 drift).",
                     style={'color': THEME['text_sub'], 'fontSize': '11px', 'marginBottom': '10px'})
 
             content = html.Div([

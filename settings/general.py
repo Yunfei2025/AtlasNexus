@@ -133,9 +133,9 @@ ALPHA_TRS_SPREAD_BP = 0.0
 # ~16% of return per unit of notional and costs a little before 2024 (3.04 -> 2.98).
 ALPHA_CARRY_GATE_ENABLED = False
 
-# Beta book rebalance reminder (Summary > Books). Daily trading of the factor-scaling book is ~40x capital a year
-# of turnover, a monthly rebalance ~14x (vs-cash Sharpe 1.97 daily, 1.68 monthly; equal after ~1bp of one-way
-# cost, break-even ~0.85bp). The snapshot therefore asks for a rebalance when the calendar month has turned, or
-# off-cycle when the DV01-weighted distance of the held book from target exceeds this share of the target's gross
-# DV01. The trigger is a judgement, not a tuned value.
-BETA_REBALANCE_DRIFT_TRIGGER = 0.5
+# Beta book rebalance reminder (Summary > Books). Two cadences, as in the backtest: the factor models move the
+# positions DAILY (targets must be today's), the risk-parity budgets / factor models refresh MONTHLY. Trading every
+# instrument every day is ~2,500 tickets a year (40x capital turnover); a per-instrument no-trade zone of 1% of
+# capital cuts that to ~1,000 with no loss of vs-cash Sharpe (2.00 vs 1.97; 2% zone: 673 tickets, 2.04). The zone is
+# a judgement that depends on the real one-way cost (break-even vs a monthly rebalance ~1.2bp of notional).
+BETA_REBALANCE_ZONE_PCT = 0.01
