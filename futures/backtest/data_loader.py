@@ -314,6 +314,9 @@ def resample_data(df, rule):
     if isinstance(rule, str) and 'T' in rule:
         # convert patterns like '1T', '5T' -> '1min', '5min'
         rule = re.sub(r'(?<=\d)T\b', 'min', rule)
+    if isinstance(rule, str):
+        # pandas >= 2.2 rejects upper-case 'H' ('1H' -> '1h')
+        rule = re.sub(r'(?<=\d)H\b', 'h', rule)
 
     df_resampled = df['close'].resample(rule).ohlc()
     df_resampled['volume'] = df['volume'].resample(rule).sum()

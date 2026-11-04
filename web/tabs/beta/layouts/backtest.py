@@ -925,6 +925,17 @@ def build_factor_backtest_layout():
             'color': '#04261a', 'border': 'none',
             'borderRadius': '4px', 'cursor': 'pointer',
         }),
+        html.Button("💾 Save Params & Best", id='bf-save-button', title=(
+            "Save the current parameters and the best strategy (highest Sharpe) of the last run "
+            "for this product; the chart then opens on that strategy."), style={
+            'width': '100%', 'padding': '6px',
+            'fontSize': '10px', 'fontWeight': '600',
+            'background': 'var(--surface-input)',
+            'color': 'var(--text-secondary)', 'border': '1px solid var(--border-default)',
+            'borderRadius': '4px', 'cursor': 'pointer',
+        }),
+        html.Div(id='bf-saved-note', style={'fontSize': '9px', 'color': 'var(--text-muted)', 'lineHeight': '1.4'}),
+        dcc.Store(id='bf-last-run'),
 
         ], style={'padding': '12px 14px', 'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
 

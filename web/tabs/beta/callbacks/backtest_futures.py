@@ -3,13 +3,18 @@
 
 from __future__ import annotations
 
-from dash import html, dcc
+import json
+import re
+from datetime import datetime
+
+from dash import html, dcc, ctx, no_update
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 
 from ..data import THEME, FUTURES_AVAILABLE
+from settings.paths import DIR_INPUT
 
 try:
     from futures.backtest.data_loader import (
@@ -20,14 +25,152 @@ try:
         run_intraday_momentum_strategy, run_atr_band_strategy, run_sar_strategy,
         run_demark_strategy,
     )
-    from futures.backtest.metrics import calculate_metrics
+    from futures.backtest.metrics import calculate_metrics, calculate_metrics_numeric
     from settings.futures import FuturesConfig
 except ImportError:
     pass
 
 
+# Saved params + best strategy per product, e.g. {"intraday:IC": {...}, "daily:TL.CFE": {...}}
+SAVED_PARAMS_PATH = DIR_INPUT / 'futures_backtest_best.json'
+
+# Param input ids, in the order bf_update_dashboard receives them
+PARAM_IDS = ['bf-ma-short', 'bf-ma-long', 'bf-boll-window', 'bf-boll-std', 'bf-boll-exit',
+             'bf-vwap-window', 'bf-mom-window', 'bf-atr-ema-window', 'bf-atr-window',
+             'bf-sar-af', 'bf-sar-max-af']
+
+
+def _product_key(mode, symbol):
+    """Intraday contracts are saved by product (IC2612 -> IC) so the setting survives rolls."""
+    if not symbol:
+        return None
+    if mode != 'daily':
+        m = re.match(r'[A-Za-z]+', symbol)
+        symbol = m.group().upper() if m else symbol
+    return f"{mode}:{symbol}"
+
+
+def _load_saved():
+    try:
+        return json.loads(SAVED_PARAMS_PATH.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+
+def _save_entry(key, entry):
+    data = _load_saved()
+    data[key] = entry
+    tmp = SAVED_PARAMS_PATH.with_suffix('.json.tmp')
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+    tmp.replace(SAVED_PARAMS_PATH)
+
+
+def _saved_start(entry, mode, symbol):
+    """Start date to backtest a saved entry from. Intraday entries are saved per product, so
+    another contract (e.g. TL2609 under a TL2612 save) starts from its own first trading day."""
+    if mode == 'daily' or symbol == entry.get('symbol'):
+        return entry.get('start')
+    try:
+        from futures.backtest.data_loader import load_raw_file
+        dates = list(load_raw_file(get_local_file_path(symbol, entry['timeframe'])) or [])
+        return str(pd.to_datetime(min(dates)).date()) if dates else None
+    except Exception:
+        return None
+
+
+def _sweep_table(entry, symbol):
+    """Saved strategy sweep for this contract (falls back to the contract it was run on)."""
+    tested = (entry or {}).get('tested')
+    if not tested or not tested.get('tables'):
+        return None
+    tables = tested['tables']
+    name = symbol if symbol in tables else next(iter(tables))
+    tab = tables[name]
+    th = {'padding': '5px 8px', 'textAlign': 'right', 'fontSize': '8px', 'color': 'var(--text-muted)',
+          'textTransform': 'uppercase', 'letterSpacing': '0.05em'}
+
+    def _td(v, first=False):
+        color = 'var(--text-secondary)'
+        if not first and isinstance(v, str) and v[:1] in '+-0123456789':
+            color = '#f87171' if v.startswith('-') else '#34d399'
+        return html.Td(v, style={'padding': '5px 8px', 'fontSize': '10px', 'color': color,
+                                 'textAlign': 'left' if first else 'right', 'whiteSpace': 'nowrap'})
+
+    others = [t for t in tables if t != name]
+    return html.Div([
+        html.Div(f"Saved sweep · {name}" + (f"  (also: {', '.join(others)})" if others else ""),
+                 style={'fontSize': '10px', 'fontWeight': '600', 'color': 'var(--text-primary)',
+                        'margin': '14px 0 2px'}),
+        html.Div(tested.get('note', ''), style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '4px'}),
+        html.Div(html.Table([
+            html.Thead(html.Tr([html.Th("STRATEGY", style={**th, 'textAlign': 'left'})] +
+                               [html.Th(c, style=th) for c in tab['columns']])),
+            html.Tbody([html.Tr([_td(('★ ' if s == entry.get('best') else '') + s, first=True)] +
+                                [_td(v) for v in vals],
+                                style={'borderBottom': '1px solid rgba(255,255,255,0.04)'})
+                        for s, vals in tab['rows'].items()]),
+        ], style={'width': '100%', 'borderCollapse': 'collapse'}), style={'overflowX': 'auto'}),
+    ])
+
+
+def _saved_note(key, entry):
+    if not entry:
+        return "No saved params for this product."
+    return (f"Saved {key.split(':', 1)[1]} · best {entry['best']} @ {entry['timeframe']} "
+            f"(Sharpe {entry['sharpe']:.2f}) · {entry['saved_at']}")
+
+
 def register_backtest_futures_callbacks(app):
     """Register Futures backtest callbacks."""
+
+    @app.callback(
+        [Output('bf-saved-note', 'children'),
+         Output('bf-timeframe', 'value'),
+         Output('bf-strategy-selector', 'value'),
+         Output('bf-date-range', 'start_date')] +
+        [Output(pid, 'value') for pid in PARAM_IDS],
+        [Input('bf-save-button', 'n_clicks'),
+         Input('bf-local-symbol', 'value'),
+         Input('bf-wind-code', 'value')],
+        [State('bf-data-source', 'value'),
+         State('bf-trading-mode', 'value'),
+         State('bf-last-run', 'data')],
+        prevent_initial_call=True,
+    )
+    def bf_save_or_restore_params(_n, local_symbol, wind_code, source, mode, last_run):
+        skip = [no_update] * (3 + len(PARAM_IDS))
+        if ctx.triggered_id == 'bf-save-button':
+            if not last_run or not last_run.get('sharpe'):
+                return ["Run a backtest first, then save."] + skip
+            best = max(last_run['sharpe'], key=last_run['sharpe'].get)
+            key = _product_key(last_run['mode'], last_run['symbol'])
+            entry = {
+                'best': best, 'sharpe': last_run['sharpe'][best],
+                'timeframe': last_run['timeframe'], 'strategies': last_run['strategies'],
+                'params': last_run['params'], 'symbol': last_run['symbol'],
+                'start': last_run['start'], 'end': last_run['end'],
+                'saved_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
+            }
+            old = _load_saved().get(key) or {}
+            if old.get('tested'):  # keep the saved sweep grid when re-saving params
+                entry['tested'] = old['tested']
+            try:
+                _save_entry(key, entry)
+            except Exception as e:
+                return [f"Save failed: {e}"] + skip
+            return [_saved_note(key, entry)] + skip
+
+        # Symbol changed: restore the saved params into the panel
+        symbol = wind_code if source == 'wind' else local_symbol
+        key = _product_key(mode, symbol)
+        entry = _load_saved().get(key) if key else None
+        if not entry:
+            return [_saved_note(key, None) if key else ""] + skip
+        tf = entry['timeframe'] if mode != 'daily' else no_update
+        # Restore the saved start date (the 30-day default is too short for daily bars)
+        return ([_saved_note(key, entry), tf, entry['strategies'],
+                 _saved_start(entry, mode, symbol) or no_update] +
+                [entry['params'].get(pid, no_update) for pid in PARAM_IDS])
 
     # 6. Futures Backtest Callbacks
     @app.callback(
@@ -79,6 +222,13 @@ def register_backtest_futures_callbacks(app):
                 def_val = 'TL.CFE' if 'TL.CFE' in FuturesConfig.SYMBOLS else FuturesConfig.SYMBOLS[0]
             else:
                 contract_list = FuturesConfig.get_contract_no()
+                if not contract_list:
+                    # Wind unavailable: list the contracts stored locally (e.g. TL2612.pkl)
+                    from settings.paths import DIR_DATA
+                    contract_list = sorted(
+                        p.stem for p in (DIR_DATA / 'futures').glob('*.pkl')
+                        if p.stem[:1].isalpha() and p.stem[-4:].isdigit() and '_' not in p.stem
+                    )
                 opts = [{'label': c, 'value': c} for c in contract_list]
                 def_val = contract_list[0] if contract_list else None
             return opts, def_val
@@ -87,7 +237,8 @@ def register_backtest_futures_callbacks(app):
 
     @app.callback(
         [Output('bf-results-container', 'children'),
-         Output('bf-perf-results-container', 'children')],
+         Output('bf-perf-results-container', 'children'),
+         Output('bf-last-run', 'data')],
         [Input('bf-run-button', 'n_clicks'),
          Input('bf-local-symbol', 'value')],
         [State('bf-data-source', 'value'),
@@ -96,27 +247,41 @@ def register_backtest_futures_callbacks(app):
          State('bf-date-range', 'start_date'),
          State('bf-date-range', 'end_date'),
          State('bf-timeframe', 'value'),
-         State('bf-strategy-selector', 'value'),
-         State('bf-ma-short', 'value'),
-         State('bf-ma-long', 'value'),
-         State('bf-boll-window', 'value'),
-         State('bf-boll-std', 'value'),
-         State('bf-boll-exit', 'value'),
-         State('bf-vwap-window', 'value'),
-         State('bf-mom-window', 'value'),
-         State('bf-atr-ema-window', 'value'),
-         State('bf-atr-window', 'value'),
-         State('bf-sar-af', 'value'),
-         State('bf-sar-max-af', 'value')]
+         State('bf-strategy-selector', 'value')] +
+        [State(pid, 'value') for pid in PARAM_IDS]
     )
     def bf_update_dashboard(n_clicks, local_symbol, source, trading_mode, wind_code, start_date, end_date, tf,
-                            selected_strategies,
-                            ma_s, ma_l, boll_w, boll_std, boll_exit, vwap_w, mom_w, atr_ema_w, atr_w,
-                            sar_af, sar_max_af):
-        is_default_load = not n_clicks
-        # On default load: show price chart only; on button click: run strategies
-        run_strategies = not is_default_load
-        
+                            selected_strategies, *param_values):
+        params = dict(zip(PARAM_IDS, param_values))
+        # Run button: run the selected strategies. Symbol load: run all saved strategies
+        # with their saved params (saved best marked ★) if there is one, else show price only.
+        run_strategies = ctx.triggered_id == 'bf-run-button'
+        symbol = wind_code if source == 'wind' else local_symbol
+        key = _product_key(trading_mode, symbol)
+        saved = _load_saved().get(key) if key else None
+        saved_best = None
+        if not run_strategies:
+            if saved:
+                run_strategies = True
+                selected_strategies = saved['strategies']
+                saved_best = saved['best']
+                params.update(saved['params'])
+                start_date = _saved_start(saved, trading_mode, symbol) or start_date
+                if trading_mode != 'daily':
+                    tf = saved['timeframe']
+        out = _bf_dashboard(source, trading_mode, local_symbol, wind_code, start_date, end_date, tf,
+                            selected_strategies, params, run_strategies, saved_best)
+        out = out if len(out) == 3 else (*out, no_update)
+        sweep = _sweep_table(saved, symbol)
+        if sweep is not None:
+            out = (out[0], html.Div([out[1], sweep]), out[2])
+        return out
+
+    def _bf_dashboard(source, trading_mode, local_symbol, wind_code, start_date, end_date, tf,
+                      selected_strategies, params, run_strategies, saved_best=None):
+        (ma_s, ma_l, boll_w, boll_std, boll_exit, vwap_w, mom_w, atr_ema_w, atr_w,
+         sar_af, sar_max_af) = (params[pid] for pid in PARAM_IDS)
+
         if not FUTURES_AVAILABLE:
             return html.Div("Modules not loaded.", style={'color': THEME['danger']}), None
 
@@ -175,8 +340,8 @@ def register_backtest_futures_callbacks(app):
                     results['Boll'] = run_bollinger_strategy(df_resampled, boll_w, boll_std, exit_at_ma)
                 if 'VWAP' in selected_strategies:
                     results['VWAP'] = run_vwap_strategy(df_resampled, vwap_w)
-                if 'Mom' in selected_strategies:
-                    results['Mom'] = run_intraday_momentum_strategy(df_resampled, mom_w)
+                if 'Momentum' in selected_strategies:
+                    results['Momentum'] = run_intraday_momentum_strategy(df_resampled, mom_w, vwap_w)
                 if 'ATR' in selected_strategies:
                     results['ATR'] = run_atr_band_strategy(df_resampled, atr_ema_w, atr_w)
                 if 'SAR' in selected_strategies:
@@ -189,9 +354,16 @@ def register_backtest_futures_callbacks(app):
             else:
                 fig = make_subplots(rows=1, cols=1)
 
+            # Intraday: plot on a category axis so lunch breaks, overnight,
+            # weekends and holidays collapse and trading-hour bars sit side by side.
+            intraday = effective_tf != '1D'
+
+            def _x(index):
+                return index.strftime('%Y-%m-%d %H:%M') if intraday else index
+
             # Candlestick
             fig.add_trace(go.Candlestick(
-                x=df_resampled.index,
+                x=_x(df_resampled.index),
                 open=df_resampled['open'], high=df_resampled['high'],
                 low=df_resampled['low'], close=df_resampled['close'],
                 name='Price'
@@ -206,7 +378,7 @@ def register_backtest_futures_callbacks(app):
                     series = df_demark[col].dropna()
                     if not series.empty:
                         fig.add_trace(go.Scatter(
-                            x=series.index,
+                            x=_x(series.index),
                             y=series.values,
                             mode='lines',
                             name=name,
@@ -222,19 +394,32 @@ def register_backtest_futures_callbacks(app):
                     mask = df_demark[flag_col].eq(1)
                     if mask.any():
                         fig.add_trace(go.Scatter(
-                            x=df_demark.index[mask],
+                            x=_x(df_demark.index[mask]),
                             y=df_demark.loc[mask, price_col],
                             mode='markers',
                             name=name,
                             marker=dict(symbol=symbol, color=color, size=10)
                         ), row=1, col=1)
             
+            # Best strategy = highest Sharpe (same figure as the Performance table)
+            strategy_metrics = {name: calculate_metrics(res) for name, res in results.items()}
+            sharpes = {}
+            for name, m in strategy_metrics.items():
+                try:
+                    sharpes[name] = float(m['Sharpe Ratio'])
+                except (KeyError, TypeError, ValueError):
+                    pass
+            best = max(sharpes, key=sharpes.get) if sharpes else None
+            if saved_best in results:  # on load, ★ marks the saved choice
+                best = saved_best
+
             # Strategy Equity Curves (only when strategies were run)
             for name, res in results.items():
                 fig.add_trace(go.Scatter(
-                    x=res.index,
+                    x=_x(res.index),
                     y=res['cumulative_returns'],
-                    mode='lines', name=f'{name} Equity'
+                    mode='lines', name=f'★ {name} Equity' if name == best else f'{name} Equity',
+                    line=dict(width=3 if name == best else 1.5),
                 ), row=2, col=1)
 
             fig.update_layout(
@@ -248,11 +433,19 @@ def register_backtest_futures_callbacks(app):
                 xaxis_rangeslider_visible=False
             )
             fig.update_xaxes(gridcolor='rgba(100,140,200,0.12)')
+            if intraday:
+                # One tick per trading day (thinned to ~12 labels) on the first bar of the day
+                labels = _x(df_resampled.index)
+                day_starts = labels[~df_resampled.index.normalize().duplicated()]
+                step = max(1, len(day_starts) // 12)
+                fig.update_xaxes(
+                    type='category', categoryorder='array', categoryarray=list(labels),
+                    tickmode='array', tickvals=list(day_starts[::step]),
+                    ticktext=[t[:10] for t in day_starts[::step]], tickangle=0,
+                )
             fig.update_yaxes(gridcolor='rgba(100,140,200,0.12)')
 
             # ── Strategy Performance table (matches BetaFutures.jsx METRIC rows) ──
-            strategy_metrics = {name: calculate_metrics(res) for name, res in results.items()}
-
             def _is_positive(v):
                 return not str(v).strip().startswith('-')
 
@@ -279,7 +472,9 @@ def register_backtest_futures_callbacks(app):
                     html.Table([
                         html.Thead(html.Tr(
                             [html.Th("METRIC", style={**_th_style, 'textAlign': 'left'})] +
-                            [html.Th(name.upper(), style=_th_style) for name in strategy_metrics]
+                            [html.Th(f"★ {name.upper()}" if name == best else name.upper(),
+                                     style={**_th_style, 'color': 'var(--accent-blue)'} if name == best else _th_style)
+                             for name in strategy_metrics]
                         , style={'background': 'var(--surface-panel)', 'borderBottom': '1px solid var(--border-strong)'})),
                         html.Tbody([
                             _metric_row("Return", "Total Return",
@@ -298,7 +493,12 @@ def register_backtest_futures_callbacks(app):
                     style={'color': 'var(--text-muted)', 'fontSize': '10px', 'padding': '4px 0'},
                 )
 
-            return dcc.Graph(figure=fig, config={'displayModeBar': False}), strategy_table
+            last_run = {
+                'symbol': wind_code if source == 'wind' else local_symbol, 'mode': trading_mode,
+                'timeframe': effective_tf, 'strategies': list(selected_strategies), 'params': params,
+                'sharpe': sharpes, 'start': str(start_date)[:10], 'end': str(end_date)[:10],
+            } if sharpes else no_update
+            return dcc.Graph(figure=fig, config={'displayModeBar': False}), strategy_table, last_run
 
         except Exception as e:
             import traceback

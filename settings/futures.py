@@ -104,30 +104,32 @@ class FuturesConfig:
         
         import pickle
         pkl_path = os.path.join(DIR_INPUT, "futures-code.pkl")
+
+        def _valid(df):
+            return df is not None and getattr(df, "shape", (0,))[0] > 1
+
+        def _fetch():
+            df = _wss(flist, "trade_hiscode,", "tradeDate=" + _date_strs["d"])
+            if _valid(df):  # never cache a failed/empty Wind response
+                with open(pkl_path, 'wb') as f:
+                    pickle.dump(df, f)
+                return df
+            return None
+
         clist = None
-        
-        # Check cache
         if os.path.exists(pkl_path):
             try:
-                mtime = datetime.datetime.fromtimestamp(os.path.getmtime(pkl_path))
-                if (datetime.datetime.now() - mtime).days > 7:
-                    clist = _wss(flist, "trade_hiscode,", "tradeDate="+_date_strs["d"])
-                    if clist.shape[0] > 1:
-                        with open(pkl_path, 'wb') as f:
-                            pickle.dump(clist, f)
                 with open(pkl_path, 'rb') as f:
                     clist = pickle.load(f)
+                mtime = datetime.datetime.fromtimestamp(os.path.getmtime(pkl_path))
+                if not _valid(clist) or (datetime.datetime.now() - mtime).days > 7:
+                    clist = _fetch() or (clist if _valid(clist) else None)
             except Exception:
-                pass
-
-        # Regenerate if needed
+                clist = None
         if clist is None:
-            print(flist)
-            # import pdb; pdb.set_trace()
-            clist = _wss(flist, "trade_hiscode,", "tradeDate=" + _date_strs["d"])
-            print(clist)
-            with open(pkl_path, 'wb') as f:
-                pickle.dump(clist, f)
+            clist = _fetch()
+        if clist is None:
+            return []
 
         # Handle both DataFrame and Series cases
         clist_ = clist.values.flatten().tolist()
