@@ -116,15 +116,18 @@ def test_gate_blocks_entries_against_negative_carry_and_only_those():
     assert _directions(_run(0.0, True)) == ungated                   # zero carry is not negative
 
 
-def test_gate_follows_the_setting_for_tenorspread_only(monkeypatch):
+def test_gate_follows_the_setting_for_tenorspread_and_is_always_on_for_swapspread(monkeypatch):
     import settings.general as G
     monkeypatch.setattr(G, 'ALPHA_CARRY_GATE_ENABLED', True)
     on = _directions(_run(-0.05, None, 'TenorSpread'))
-    other = _directions(_run(-0.05, None, 'SwapSpread'))              # carry of other types is not funded: ungated
+    swap = _directions(_run(-0.05, None, 'SwapSpread'))               # swap carry is net pay, funding inside: always gated
+    other = _directions(_run(-0.05, None, 'TenorSpread-other'))       # any other type: ungated
     assert 'LONG' not in on
+    assert 'LONG' not in swap
     assert 'LONG' in other
     monkeypatch.setattr(G, 'ALPHA_CARRY_GATE_ENABLED', False)
     assert 'LONG' in _directions(_run(-0.05, None, 'TenorSpread'))   # default off
+    assert 'LONG' not in _directions(_run(-0.05, None, 'SwapSpread'))
 
 
 def test_default_settings_ship_the_gate_off_and_the_trs_spread_at_zero():

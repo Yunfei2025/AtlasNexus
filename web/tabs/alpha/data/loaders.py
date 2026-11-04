@@ -721,6 +721,10 @@ def load_spread_data(spread_type: str) -> Optional[pd.DataFrame]:
     return None
 
 
+# Trailing window (rows) for the SwapSpread carry+roll series fed to the backtest engines.
+SWAP_CARRY_SMOOTH_DAYS = 20
+
+
 def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
     """Load daily 3m carry+roll time series for each instrument (in bp)."""
     dir_input = _get_input_dir()
@@ -759,7 +763,11 @@ def load_carry_roll_timeseries(spread_type: str) -> Optional[pd.DataFrame]:
                 # CarryRoll3m is already stored as 3m carry in % (carry3m + roll3m
                 # from generators/irs.py are in % after / 100 conversion).
                 # No further scaling needed.
-                return cr.apply(pd.to_numeric, errors='coerce')
+                # Daily swap carry+roll is noisy (Repo7d-1y5y flipped sign on a single
+                # day inside a +0.1..+0.6 run), which defeats the entry carry gate and
+                # jitters the carry z-score, so hand the engines a trailing mean.
+                cr = cr.apply(pd.to_numeric, errors='coerce')
+                return cr.rolling(SWAP_CARRY_SMOOTH_DAYS, min_periods=SWAP_CARRY_SMOOTH_DAYS // 3).mean()
         return None
 
     if spread_type == 'TenorSpread':

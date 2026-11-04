@@ -251,8 +251,8 @@ def run_monthly_style_backtest(
 
     ``carry_gate``: no new MR entry in a direction whose carry is negative (``position x carry < 0``,
     carry in the engine-LONG orientation of ``carry_roll_ts``). ``None`` follows
-    ``settings.general.ALPHA_CARRY_GATE_ENABLED`` and applies to TenorSpread only, the one type whose
-    stored carry is funded. It gates entries only: open trades are never closed by it.
+    ``settings.general.ALPHA_CARRY_GATE_ENABLED`` for TenorSpread (stored carry funded) and is always
+    on for SwapSpread (swap net pay, funding inside). It gates entries only: open trades are never closed by it.
 
     ``carry_z_weight``: opt-in blend of carry into the MR entry/exit signal
     (0.0 = disabled, matches prior behaviour exactly). Carry is converted to
@@ -394,7 +394,9 @@ def run_monthly_style_backtest(
     cz_arr = composite_z.to_numpy(dtype=float)
     if carry_gate is None:
         from settings.general import ALPHA_CARRY_GATE_ENABLED
-        carry_gate = bool(ALPHA_CARRY_GATE_ENABLED) and spread_type == 'TenorSpread'
+        # SwapSpread carry is a swap net-pay figure (floating vs fixed, funding already in it),
+        # so its gate is always on; TenorSpread's follows the settings switch.
+        carry_gate = (bool(ALPHA_CARRY_GATE_ENABLED) and spread_type == 'TenorSpread') or spread_type == 'SwapSpread'
     cr_gate_arr = cr_long.to_numpy(dtype=float) if (carry_gate and cr_long is not None) else None
 
     def _carry_ok(i: int, direction: int) -> bool:

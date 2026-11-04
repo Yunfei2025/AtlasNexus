@@ -23,7 +23,13 @@ class CurveGenerator:
 
     def generate_curves(self, env: pd.DataFrame, irs_ref: Dict, target_date: date) -> Dict[str, IRSCurve]:
         """Generate IRS curves for all curve types."""
-        curve_ts = {ct: env[irs_ref[ct]].dropna(how='all') for ct in IRSConfig.CURVE_TYPES}
+        # The curve backtest hands in a datetime.date target on a date-indexed env,
+        # the daily generator a Timestamp on a DatetimeIndex; pandas refuses to
+        # order-compare the two, so put both on Timestamps.
+        target_date = pd.Timestamp(target_date)
+        curve_ts ={ct: env[irs_ref[ct]].dropna(how='all') for ct in IRSConfig.CURVE_TYPES}
+        for ts in curve_ts.values():
+            ts.index = pd.DatetimeIndex(pd.to_datetime(ts.index))
         last_curve = curve_ts['r7d']
 
         if target_date in last_curve.index:

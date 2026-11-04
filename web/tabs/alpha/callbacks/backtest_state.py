@@ -29,6 +29,9 @@ _TENOR_PRESET = dict(entry_z=2.5, exit_z=0.25, stop_z=3.0, min_hold=10, theta=1.
 _DEFAULT_PRESET = dict(entry_z=2.0, exit_z=0.5, stop_z=3.0, min_hold=7, theta=1.25,
                        mom_window=20, vol_window=60, trailing_mult=1.5,
                        carry_z_weight=0.5, mr_lookback=120)
+# SwapSpread names lean harder on carry: with the swap carry gate and 20d-smoothed carry, weight 1.5
+# beat 0.5 on 44 of 65 slope/basis names (book Sharpe 2.10 -> 2.40, 2026-11-04).
+_SWAP_PRESET = {**_DEFAULT_PRESET, 'carry_z_weight': 1.5}
 
 
 # Backtests carry raw carry+roll only. Financing is deducted at portfolio level
@@ -58,8 +61,14 @@ def carry_needs_negate(spread_type: str, instrument: str) -> bool:
 
     Yield-based spreads are backtested on the inverted series, so their stored
     carry is flipped -- except TenorSpread flies (NsMsLs) and cross-curve names
-    (CDBCGB-*, *Repo7d-*), which are already stored as BUY = engine LONG.
+    (CDBCGB-*, *Repo7d-*), which are already stored as BUY = engine LONG. Also
+    SwapSpread: IRS-pxspds.pkl stores CarryRoll3m as the negated pay-fixed
+    carry, i.e. the receive-the-higher-yield-leg side, which profits when the
+    series falls = engine LONG (negating it gave the steepener Repo7d-1y5y's
+    flattener carry in 2024-25).
     """
+    if spread_type == 'SwapSpread':
+        return False
     if spread_type != 'TenorSpread':
         return spread_type in YIELD_BASED_SPREAD_TYPES
     if len(re.findall(r'\d+s', instrument, re.IGNORECASE)) >= 3:
@@ -103,7 +112,8 @@ def run_instrument_backtest(spread_type: str, instrument: str, period: int = _PE
         if len(ts.tail(period).dropna()) < 60:
             return None
 
-        params = dict(_TENOR_PRESET if spread_type == 'TenorSpread' else _DEFAULT_PRESET)
+        params = dict(_TENOR_PRESET if spread_type == 'TenorSpread'
+                      else _SWAP_PRESET if spread_type == 'SwapSpread' else _DEFAULT_PRESET)
         saved = load_instrument_params(spread_type, instrument) or {}
         for k in params:
             if saved.get(k) is not None:

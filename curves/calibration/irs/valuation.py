@@ -44,19 +44,26 @@ def evalueContract(di, quote_rt, fwddata, pshift):
         term = (end_date - start_date).days / 365
         curve_type = 'r7d' if 'FR00' in instrument else 's3m'
         frequency = 0 if term < 0.25 else 4
-        contract = IRSContract(start_date, end_date, quote_rt.loc[instrument], curve_type, frequency)
-        contract.valuation(notional, fwd_date, fixing_ts[curve_type], spot_ts[curve_type])
+        try:
+            contract = IRSContract(start_date, end_date, quote_rt.loc[instrument], curve_type, frequency)
+            contract.valuation(notional, fwd_date, fixing_ts[curve_type], spot_ts[curve_type])
+            cashflow = contract.cashflow
+            irs_val.loc[instrument, 'Quote'] = contract.quote
+            irs_val.loc[instrument, 'FixRate'] = contract.fixrate
+            irs_val.loc[instrument, 'Value(bp)'] = contract.Value
+            irs_val.loc[instrument, 'Duration'] = contract.duration
+            irs_val.loc[instrument, 'Convexity'] = contract.cov
+            irs_val.loc[instrument, 'Carry(3m,bp)'] = cashflow['CashFlow(NetPay)'].iloc[0]
+            irs_val.loc[instrument, 'Carry(6m,bp)'] = cashflow['CashFlow(NetPay)'].iloc[:2].sum()
+            irs_val.loc[instrument, 'Carry(1y,bp)'] = cashflow['CashFlow(NetPay)'].iloc[:4].sum()
+            _calculate_roll_returns(irs_val, instrument, term, interpolators[curve_type], term_map)
+        except ValueError:
+            # A tenor beyond the fitted curve (7Y/10Y before those quotes exist,
+            # early 2023) must not drop the tenors that can be valued. Its row
+            # stays NaN; callers needing it see NaN rather than a lost day.
+            irs_val.loc[instrument] = float('nan')
+            continue
         irs_contracts[instrument] = contract
-        cashflow = contract.cashflow
-        irs_val.loc[instrument, 'Quote'] = contract.quote
-        irs_val.loc[instrument, 'FixRate'] = contract.fixrate
-        irs_val.loc[instrument, 'Value(bp)'] = contract.Value
-        irs_val.loc[instrument, 'Duration'] = contract.duration
-        irs_val.loc[instrument, 'Convexity'] = contract.cov
-        irs_val.loc[instrument, 'Carry(3m,bp)'] = cashflow['CashFlow(NetPay)'].iloc[0]
-        irs_val.loc[instrument, 'Carry(6m,bp)'] = cashflow['CashFlow(NetPay)'].iloc[:2].sum()
-        irs_val.loc[instrument, 'Carry(1y,bp)'] = cashflow['CashFlow(NetPay)'].iloc[:4].sum()
-        _calculate_roll_returns(irs_val, instrument, term, interpolators[curve_type], term_map)
     for period in ['3m', '6m', '1y']:
         irs_val[f'CarryRoll({period},bp)'] = irs_val[f'Carry({period},bp)'] + irs_val[f'Roll({period},bp)']
     return {'value': irs_val.round(4), 'obj': irs_contracts}
