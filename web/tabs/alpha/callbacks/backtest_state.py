@@ -29,9 +29,10 @@ _TENOR_PRESET = dict(entry_z=2.5, exit_z=0.25, stop_z=3.0, min_hold=10, theta=1.
 _DEFAULT_PRESET = dict(entry_z=2.0, exit_z=0.5, stop_z=3.0, min_hold=7, theta=1.25,
                        mom_window=20, vol_window=60, trailing_mult=1.5,
                        carry_z_weight=0.5, mr_lookback=120)
-# SwapSpread names lean harder on carry: with the swap carry gate and 20d-smoothed carry, weight 1.5
-# beat 0.5 on 44 of 65 slope/basis names (book Sharpe 2.10 -> 2.40, 2026-11-04).
-_SWAP_PRESET = {**_DEFAULT_PRESET, 'carry_z_weight': 1.5}
+# SwapSpread names lean harder on carry: with the swap carry gate and 20d-smoothed carry, the 65
+# slope/basis-name book from 2023-03 scores Sharpe 4.06 / 4.35 / 4.19 / 3.82 at weight 1.5 / 2 / 3 / 5,
+# 2 beating 1.5 in every year (2026-11-04). The +-1.5 carry clip in the engine caps what more weight buys.
+_SWAP_PRESET = {**_DEFAULT_PRESET, 'carry_z_weight': 2.0}
 
 
 # Backtests carry raw carry+roll only. Financing is deducted at portfolio level

@@ -530,6 +530,13 @@ def register_backtest_callbacks(app) -> None:
         # function's docstring for the book-wide measurement backing it.
         if spread_type == 'TenorSpread':
             preset = (2.5, 0.25, 3.0, 10, 1.50, 30, 90, 2.0, 0.5, 120)
+        elif spread_type == 'SwapSpread':
+            # Same preset run_instrument_backtest uses (carry weight 2.0), so the
+            # panel and the portfolio backtest agree on unsaved SwapSpread names.
+            from .backtest_state import _SWAP_PRESET as _sp
+            preset = tuple(_sp[k] for k in ('entry_z', 'exit_z', 'stop_z', 'min_hold', 'theta',
+                                            'mom_window', 'vol_window', 'trailing_mult',
+                                            'carry_z_weight', 'mr_lookback'))
         else:
             preset = (2.0, 0.5, 3.0, 7, 1.25, 20, 60, 1.5, 0.5, 120)
 
@@ -661,20 +668,12 @@ def register_backtest_callbacks(app) -> None:
             # YTM-based spreads: stored carry/snapshot carry is computed on the raw
             # spread value. Flip so LONG = expecting the spread to fall/narrow
             # (economically long the higher-yielding leg's price).
-            # TenorSpread stores CarryRoll3m with a sub-type-dependent sign already
-            # (see curves/generators/stat.py): XsYs names (\d+s\d+, e.g. CGB-5s10s)
-            # need the flip below, but cross-curve (CDBCGB-*, LGBCGB-*, MTNCGB-*,
-            # *Repo7d-*) and fly (NsMsLs) names are already stored as BUY=engine LONG
-            # and must NOT be negated again here.
-            _needs_negate = is_yield_based
-            if spread_type == 'TenorSpread' and isinstance(instrument, str):
-                import re
-                if len(re.findall(r'\d+s', instrument, re.IGNORECASE)) >= 3:
-                    _needs_negate = False  # fly
-                elif re.search(r'\d+s\d+', instrument, re.IGNORECASE):
-                    _needs_negate = True  # XsYs
-                else:
-                    _needs_negate = False  # cross-curve
+            # Same rule as run_instrument_backtest (backtest_state.carry_needs_negate):
+            # XsYs TenorSpreads flip; flies, cross-curve TenorSpread names and
+            # SwapSpread are already stored as BUY = engine LONG and must NOT be
+            # negated again here. (This block used to carry its own copy of the rule,
+            # which kept flipping SwapSpread after the shared one was fixed.)
+            _needs_negate = carry_needs_negate(spread_type, instrument if isinstance(instrument, str) else '')
             if _needs_negate:
                 if carry_roll_ts_instrument is not None:
                     carry_roll_ts_instrument = -carry_roll_ts_instrument
