@@ -11,6 +11,7 @@ from dash import html, dcc, ctx, no_update
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import numpy as np
 import pandas as pd
 
 from ..data import THEME, FUTURES_AVAILABLE
@@ -120,11 +121,100 @@ def _saved_note(key, entry):
             f"(Sharpe {entry['sharpe']:.2f}) · {entry['saved_at']}")
 
 
+# ── Pool correlation (daily continuous contracts) ──────────────────────────────
+CORR_TOP_N = 5
+CORR_LOOKBACK_DAYS = {'6M': 126, '1Y': 252, '3Y': 756}
+_close_cache = {'mtime': None, 'panel': None}
+
+
+def _daily_close_panel():
+    """Close prices of the futures pool from futures-dailyK_con.pkl, cached on file mtime."""
+    path = DIR_INPUT / 'futures-dailyK_con.pkl'
+    mtime = path.stat().st_mtime
+    if _close_cache['mtime'] != mtime:
+        from futures.backtest.data_loader import load_raw_file
+        raw = load_raw_file(str(path)) or {}
+        pool = [s for s in FuturesConfig.SYMBOLS if s in raw]
+        panel = pd.DataFrame({s: pd.to_numeric(raw[s]['Close'], errors='coerce') for s in pool})
+        panel.index = pd.to_datetime(panel.index)
+        _close_cache.update(mtime=mtime, panel=panel.sort_index())
+    return _close_cache['panel']
+
+
+def _least_correlated(corr, n=CORR_TOP_N):
+    """The n symbols with the lowest mean |pairwise correlation| (exhaustive search)."""
+    from itertools import combinations
+    a = corr.abs().values
+    best, best_score = None, float('inf')
+    for combo in combinations(range(len(a)), n):
+        idx = np.array(combo)
+        score = a[np.ix_(idx, idx)].sum()  # diagonal is a constant n, so the sum ranks the same
+        if score < best_score:
+            best, best_score = combo, score
+    names = [corr.index[i] for i in best]
+    return names, (best_score - n) / (n * (n - 1))
+
+
+def _corr_heatmap(basis, lookback):
+    panel = _daily_close_panel()
+    window = panel.tail(CORR_LOOKBACK_DAYS.get(lookback, 252) + 1)
+    series = window.pct_change(fill_method=None).iloc[1:] if basis == 'returns' else window
+    # Drop symbols listed mid-window; tolerate data gaps (pairwise correlation over overlapping days)
+    series = series.dropna(axis=1, thresh=int(len(series) * 0.75))
+    corr = series.corr(min_periods=20).fillna(1.0)  # no overlap -> treat as correlated
+    if len(corr) < CORR_TOP_N:
+        raise ValueError(f"only {len(corr)} futures with enough history in {lookback}")
+    names, mean_abs = _least_correlated(corr)
+    sub = corr.loc[names, names].mask(pd.DataFrame(np.eye(len(names), dtype=bool), index=names, columns=names))
+    labels = [s.split('.')[0] for s in names]
+    # Diverging blue (-1) / gray (0) / red (+1)
+    fig = go.Figure(go.Heatmap(
+        z=sub.values, x=labels, y=labels, zmin=-1, zmax=1,
+        colorscale=[[0, '#3987e5'], [0.5, '#383835'], [1, '#e66767']],
+        text=sub.map(lambda v: '' if pd.isna(v) else f'{v:.2f}').values, texttemplate='%{text}', textfont={'size': 10, 'color': '#e9eef8'},
+        hovertemplate='%{y} / %{x}<br>ρ = %{z:.2f}<extra></extra>',
+        xgap=2, ygap=2, colorbar={'thickness': 8, 'len': 0.9, 'tickfont': {'size': 9}},
+    ))
+    fig.update_layout(
+        height=230, template=THEME['chart_template'],
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font={'color': '#e9eef8', 'size': 10}, margin=dict(l=36, r=6, t=6, b=24),
+        yaxis={'autorange': 'reversed'},
+    )
+    last = series.index.max()
+    note = (f"{len(series)} days to {last:%Y-%m-%d} · {'daily returns' if basis == 'returns' else 'price levels'}"
+            f" · mean |ρ| {mean_abs:.2f} · from {len(corr)} futures")
+    return fig, note
+
+
 def register_backtest_futures_callbacks(app):
     """Register Futures backtest callbacks."""
     if getattr(app, "_atlasnexus_backtest_futures_callbacks_registered", False):
         return
     app._atlasnexus_backtest_futures_callbacks_registered = True
+
+    @app.callback(
+        [Output('bf-corr-graph', 'figure'), Output('bf-corr-note', 'children')],
+        [Input('bf-corr-refresh', 'n_clicks'),
+         Input('bf-corr-basis', 'value'),
+         Input('bf-corr-lookback', 'value')],
+    )
+    def bf_update_correlation(_n, basis, lookback):
+        pulled = ''
+        if ctx.triggered_id == 'bf-corr-refresh':
+            # Pull the latest daily bars from Wind (merges into the pkl); fall back to the local file
+            try:
+                from types import SimpleNamespace
+                from futures.intraday.retrieve import futuresDailyK
+                futuresDailyK(SimpleNamespace(params={'force_update': True}))
+                pulled = 'Refreshed from Wind · '
+            except Exception as e:
+                pulled = f'Wind refresh failed ({e.__class__.__name__}), local file · '
+        try:
+            fig, note = _corr_heatmap(basis, lookback)
+        except Exception as e:
+            return go.Figure(), f"Correlation unavailable: {e}"
+        return fig, pulled + note
 
     @app.callback(
         [Output('bf-saved-note', 'children'),
