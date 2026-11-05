@@ -23,6 +23,9 @@ def register_portfolio_callbacks(app):
 
 def register_multiasset_callbacks(app):
     """Register every callback used by the Multi-Asset (Beta) Dashboard."""
+    if getattr(app, "_atlasnexus_multiasset_callbacks_registered", False):
+        return
+    app._atlasnexus_multiasset_callbacks_registered = True
     register_factor_callbacks(app)
     register_portfolio_pool_callbacks(app)
     register_portfolio_run_callbacks(app)

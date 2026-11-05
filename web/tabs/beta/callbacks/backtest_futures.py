@@ -122,6 +122,9 @@ def _saved_note(key, entry):
 
 def register_backtest_futures_callbacks(app):
     """Register Futures backtest callbacks."""
+    if getattr(app, "_atlasnexus_backtest_futures_callbacks_registered", False):
+        return
+    app._atlasnexus_backtest_futures_callbacks_registered = True
 
     @app.callback(
         [Output('bf-saved-note', 'children'),
