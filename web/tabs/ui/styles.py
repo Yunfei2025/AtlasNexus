@@ -32,6 +32,7 @@ BOOK_ACCENT: Dict[str, str] = {
     "market":     TOKENS["blue"],
     "beta":       TOKENS["blue"],
     "alpha":      TOKENS["amber"],
+    "futures":    TOKENS["amber"],
     "risk":       TOKENS["green"],
     "run-center": TOKENS["purple"],
 }

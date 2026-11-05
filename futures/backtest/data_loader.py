@@ -126,13 +126,17 @@ def discover_pkl_files():
         return []
 
 
-@functools.lru_cache(maxsize=32)
 def load_raw_file(file_path):
-    """Load raw file content (cached)"""
+    """Load raw file content (cached until the file changes on disk)"""
     try:
-        return pd.read_pickle(file_path)
+        return _load_raw_file_cached(file_path, os.path.getmtime(file_path))
     except Exception as e:
         return None
+
+
+@functools.lru_cache(maxsize=32)
+def _load_raw_file_cached(file_path, _mtime):
+    return pd.read_pickle(file_path)
 
 
 def get_file_structure(file_path):

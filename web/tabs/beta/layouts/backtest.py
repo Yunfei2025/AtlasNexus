@@ -14,6 +14,7 @@ from ...ui.components import button as an_button
 # Conditionally import futures discovery helper
 if FUTURES_AVAILABLE:
     from futures.backtest.data_loader import discover_pkl_files
+    from futures.backtest.walkforward import DEFAULT_PARAMS
 
 
 def build_factor_history_layout():
@@ -785,6 +786,42 @@ def build_factor_backtest_layout():
     _inp = {**DARK_INPUT_STYLE, 'fontSize': '10px', 'padding': '3px 5px', 'width': '100%',
             'MozAppearance': 'textfield'}
 
+    # Strategy parameters: one row per strategy, shown as the right column of the Controls card
+    def _param_row(name, fields, extra=None):
+        return html.Div([
+            html.Div(name, style={'fontSize': '10px', 'fontWeight': '600', 'color': 'var(--text-secondary)',
+                                  'marginBottom': '3px'}),
+            html.Div([html.Div([html.Label(lbl, style=_param_lbl), inp], style={'flex': 1, 'minWidth': '0'})
+                      for lbl, inp in fields], style={'display': 'flex', 'gap': '6px'}),
+            *([extra] if extra is not None else []),
+        ], style={'paddingBottom': '7px', 'borderBottom': '1px solid var(--border-default)'})
+
+    params_column = html.Div([
+        html.Div("Parameters", style={
+            'color': 'var(--accent-blue)', 'fontSize': '9px', 'fontWeight': '600',
+            'textTransform': 'uppercase', 'letterSpacing': '0.08em', 'marginBottom': '-1px',
+        }),
+        _param_row('MA', [
+            ("Short", dcc.Input(id='bf-ma-short', type='number', value=DEFAULT_PARAMS['bf-ma-short'], min=2, style=_inp)),
+            ("Long", dcc.Input(id='bf-ma-long', type='number', value=DEFAULT_PARAMS['bf-ma-long'], min=5, style=_inp))]),
+        _param_row('Bollinger', [
+            ("Period", dcc.Input(id='bf-boll-window', type='number', value=DEFAULT_PARAMS['bf-boll-window'], style=_inp)),
+            ("StdDev", dcc.Input(id='bf-boll-std', type='number', value=DEFAULT_PARAMS['bf-boll-std'], step=0.1, style=_inp))],
+            extra=dcc.Checklist(id='bf-boll-exit', options=[{'label': ' Exit@MA', 'value': 'exit'}],
+                                value=DEFAULT_PARAMS['bf-boll-exit'],
+                                labelStyle={'fontSize': '10px', 'color': 'var(--text-muted)'},
+                                style={'marginTop': '4px'})),
+        _param_row('VWAP', [("Window", dcc.Input(id='bf-vwap-window', type='number', value=DEFAULT_PARAMS['bf-vwap-window'], style=_inp))]),
+        _param_row('Momentum', [("Lookback", dcc.Input(id='bf-mom-window', type='number', value=DEFAULT_PARAMS['bf-mom-window'], style=_inp))]),
+        _param_row('ATR', [
+            ("EMA", dcc.Input(id='bf-atr-ema-window', type='number', value=DEFAULT_PARAMS['bf-atr-ema-window'], style=_inp)),
+            ("Win", dcc.Input(id='bf-atr-window', type='number', value=DEFAULT_PARAMS['bf-atr-window'], style=_inp)),
+            ("Mult", dcc.Input(id='bf-atr-mult', type='number', value=2.0, step=0.1, style=_inp))]),
+        _param_row('SAR', [
+            ("AF", dcc.Input(id='bf-sar-af', type='number', value=DEFAULT_PARAMS['bf-sar-af'], step=0.01, style=_inp)),
+            ("Max", dcc.Input(id='bf-sar-max-af', type='number', value=DEFAULT_PARAMS['bf-sar-max-af'], step=0.01, style=_inp))]),
+    ], id='bf-regime-container', style={'display': 'flex', 'flexDirection': 'column', 'gap': '7px', 'minWidth': '0'})
+
     sidebar = html.Div([
         html.Div([
             html.Span("Controls", style={
@@ -795,6 +832,7 @@ def build_factor_backtest_layout():
         ], style={'padding': '11px 16px', 'background': 'var(--surface-panel)',
                   'borderBottom': '1px solid var(--border-strong)'}),
 
+        html.Div([
         html.Div([
 
         # ── Data ──────────────────────────────────────────────────────
@@ -870,26 +908,6 @@ def build_factor_backtest_layout():
             ),
         ]),
 
-        # ── OOS / In-sample ───────────────────────────────────────────
-        html.Div([
-            html.Div([
-                html.Label("OOS Split", style=LABEL_STYLE),
-                dcc.DatePickerSingle(
-                    id='bf-oos-split-date', date=datetime.now().date(),
-                    display_format='YYYY-MM-DD',
-                    style={'fontSize': '9px', 'width': '100%'},
-                ),
-            ], style={'flex': 1, 'paddingRight': '4px', 'position': 'relative', 'zIndex': '1001'}),
-            html.Div([
-                html.Label("In-sample", style=LABEL_STYLE),
-                dcc.Dropdown(
-                    id='bf-insample-lookback',
-                    options=[{'label': '6 Mo','value': '6M'}, {'label': '1 Yr','value': '1Y'}, {'label': '2 Yr','value': '2Y'}],
-                    value='1Y', clearable=False, style={'fontSize': '10px'},
-                ),
-            ], style={'flex': 1, 'paddingLeft': '4px'}),
-        ], style={'display': 'flex'}),
-
         # ── Strategies ────────────────────────────────────────────────
         html.Div([
             html.Div("Strategies", style={
@@ -906,13 +924,34 @@ def build_factor_backtest_layout():
                     {'label': ' Momentum',     'value': 'Momentum'},
                     {'label': ' ATR',          'value': 'ATR'},
                     {'label': ' SAR',          'value': 'SAR'},
-                    {'label': ' Mkt Regime',   'value': 'MarketRegime'},
                 ],
-                value=['MA', 'Boll', 'SAR', 'MarketRegime'],
+                value=['MA', 'Boll', 'SAR'],
                 labelStyle={'fontSize': '10px', 'color': 'var(--text-muted)', 'cursor': 'pointer',
                             'display': 'flex', 'alignItems': 'center'},
                 inputStyle={"marginRight": "5px", "cursor": 'pointer', "flexShrink": "0"},
                 style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '5px 8px'},
+            ),
+        ]),
+
+        # ── Costs ─────────────────────────────────────────────────────
+        html.Div([
+            html.Div("Costs", style={
+                'color': 'var(--accent-blue)', 'fontSize': '9px', 'fontWeight': '600',
+                'textTransform': 'uppercase', 'letterSpacing': '0.08em', 'marginBottom': '6px',
+            }),
+            html.Div([
+                html.Label("bp / side", title=(
+                    "Half-spread + exchange fee per side, bp of notional. Blank = measured default "
+                    "for the product (AU 0.4, TL 0.5, IC 1.9, else 1.0)."),
+                    style={'fontSize': '10px', 'color': 'var(--text-muted)', 'fontWeight': '600',
+                           'marginRight': '10px', 'whiteSpace': 'nowrap', 'flexShrink': '0'}),
+                dcc.Input(id='bf-cost-bp', type='number', min=0, step=0.1, placeholder='auto', style=_inp),
+            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '5px'}),
+            dcc.Checklist(
+                id='bf-legacy',
+                options=[{'label': ' Legacy (no cost, held overnight)', 'value': 'legacy'}], value=[],
+                labelStyle={'fontSize': '10px', 'color': 'var(--text-muted)', 'cursor': 'pointer'},
+                inputStyle={"marginRight": "5px", "cursor": 'pointer'},
             ),
         ]),
 
@@ -937,134 +976,97 @@ def build_factor_backtest_layout():
         html.Div(id='bf-saved-note', style={'fontSize': '9px', 'color': 'var(--text-muted)', 'lineHeight': '1.4'}),
         dcc.Store(id='bf-last-run'),
 
-        ], style={'padding': '12px 14px', 'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}),
+        ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px', 'minWidth': '0'}),
+        params_column,
+        ], style={'padding': '12px 14px', 'display': 'grid',
+                  'gridTemplateColumns': 'minmax(0, 1fr) minmax(0, 1fr)', 'gap': '16px'}),
 
     ], style={
-        'width': '220px', 'flexShrink': '0',
+        'width': '440px', 'flexShrink': '0',
         'border': '1px solid var(--border-strong)',
         'borderRadius': '8px',
         'overflow': 'hidden',
     })
 
-    # Performance & Regime cards (right of sidebar)
-    performance_card = html.Div([
+    # Evidence: multi-contract walk-forward; click a candidate to chart it in Backtest Results
+    _btn = {'padding': '3px 10px', 'fontSize': '10px', 'fontWeight': '600',
+            'background': 'var(--surface-input)', 'color': 'var(--text-secondary)',
+            'border': '1px solid var(--border-default)', 'borderRadius': '4px', 'cursor': 'pointer'}
+    _badge = {'fontSize': '9px', 'color': 'var(--text-muted)', 'background': 'var(--surface-input)',
+              'padding': '2px 7px', 'borderRadius': '3px', 'border': '1px solid var(--border-default)'}
+    _head = {'display': 'flex', 'alignItems': 'center', 'gap': '10px', 'padding': '9px 12px 9px 16px',
+             'background': 'var(--surface-panel)', 'borderBottom': '1px solid var(--border-strong)',
+             'borderRadius': '8px 8px 0 0'}
+    _title = {'fontSize': '13px', 'fontWeight': '600', 'color': 'var(--text-primary)'}
+    wf_card = html.Div([
         html.Div([
-            html.Span("Strategy Performance", style={'fontSize': '13px', 'fontWeight': '600', 'color': 'var(--text-primary)'}),
-            html.Span(id='bf-symbol-mode-badge', style={'fontSize': '9px', 'color': 'var(--text-muted)',
-                     'background': 'var(--surface-input)', 'padding': '2px 7px', 'borderRadius': '3px',
-                     'border': '1px solid var(--border-default)', 'marginLeft': '10px'}),
-        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
-                  'padding': '11px 16px', 'background': 'var(--surface-panel)',
-                  'borderBottom': '1px solid var(--border-strong)'}),
+            html.Span("Walk-forward & Approval", style=_title),
+            html.Span("all contracts · default params · net of costs · flat at close", style=_badge),
+            html.Button("▶ Run walk-forward", id='bf-wf-run', n_clicks=0, title=(
+                "Evaluate 7 strategies x 3 bar sizes on every stored contract of this product (intraday mode)."),
+                style={**_btn, 'marginLeft': 'auto'}),
+        ], style=_head),
+        html.Div([
+            html.Div(id='bf-wf-approved-note', style={'fontSize': '10px', 'color': 'var(--text-secondary)', 'marginBottom': '8px'}),
+            dcc.Loading(type='circle', color='var(--accent-blue)', style={'minHeight': '60px'},
+                        children=html.Div(id='bf-wf-container')),
+            html.Div([
+                dcc.Dropdown(id='bf-wf-pick', placeholder="Candidate to approve (only those passing the gates)",
+                             clearable=False, style={'flex': 1, 'fontSize': '10px'}),
+                html.Button("✔ Approve", id='bf-wf-approve', n_clicks=0, style=_btn),
+            ], style={'display': 'flex', 'gap': '8px', 'alignItems': 'center', 'marginTop': '10px'}),
+            html.Div(id='bf-wf-approve-note', style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginTop': '4px'}),
+        ], style={'padding': '10px 16px 12px'}),
+    ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'minWidth': '0', 'height': '100%',
+              'boxSizing': 'border-box'})
+
+    # One results card for whatever ran: a custom run (Run Backtest) or a candidate clicked in the walk-forward
+    results_card = html.Div([
+        html.Div([
+            html.Span("Backtest Results", style=_title),
+            html.Span(id='bf-results-symbol', style={**_badge, 'marginLeft': 'auto'}),
+        ], style={**_head, 'padding': '11px 16px'}),
         dcc.Loading(
-            type='circle', color='var(--accent-blue)', style={'minHeight': '200px'},
-            children=html.Div(id='bf-perf-results-container', style={'padding': '14px 16px'})
-        ),
-    ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden'})
-
-    regime_card = html.Div([
-        html.Div(
-            html.Span("Regime & Parameters", style={'fontSize': '13px', 'fontWeight': '600', 'color': 'var(--text-primary)'}),
-            style={'padding': '11px 16px', 'background': 'var(--surface-panel)',
-                   'borderBottom': '1px solid var(--border-strong)'}),
-        html.Div([
-
-            # ── Regime Logic ─────────────────────────────────────────
-            html.Div([
-                html.Div("Regime Logic", style={
-                    'color': 'var(--accent-blue)', 'fontSize': '9px', 'fontWeight': '600',
-                    'textTransform': 'uppercase', 'letterSpacing': '0.08em', 'marginBottom': '8px',
-                }),
-                html.Div([
-                    html.Div([
-                        html.Label("Trending", style=LABEL_STYLE),
-                        dcc.Dropdown(
-                            id='bf-mr-trending-strategy',
-                            options=[{'label': 'MA','value': 'MA'}, {'label': 'SAR','value': 'SAR'}, {'label': 'ATR','value': 'ATR'}],
-                            value='SAR', style={'fontSize': '10px'},
-                        ),
-                    ], style={'flex': 1, 'paddingRight': '4px', 'minWidth': '0'}),
-                    html.Div([
-                        html.Label("Mean-Rev", style=LABEL_STYLE),
-                        dcc.Dropdown(
-                            id='bf-mr-meanrev-strategy',
-                            options=[{'label': 'Boll','value': 'Boll'}, {'label': 'VWAP','value': 'VWAP'}, {'label': 'ATR M-R','value': 'ATRMeanRev'}],
-                            value='Boll', style={'fontSize': '10px'},
-                        ),
-                    ], style={'flex': 1, 'paddingLeft': '4px', 'minWidth': '0'}),
-                ], style={'display': 'flex'}),
+            type='circle', color='var(--accent-blue)', style={'minHeight': '400px'},
+            children=html.Div([
+                html.Div(id='bf-perf-results-container', style={'padding': '12px 16px 0'}),
+                html.Div(id='bf-results-container', style={'padding': '12px 16px'}),
             ]),
+        ),
+        dcc.Store(id='bf-drill'),
+    ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'minWidth': '0'})
 
-            # ── Parameters (collapsible per-strategy) ────────────────
-            html.Div([
-                html.Div("Parameters", style={
-                    'color': 'var(--accent-blue)', 'fontSize': '9px', 'fontWeight': '600',
-                    'textTransform': 'uppercase', 'letterSpacing': '0.08em', 'marginBottom': '8px',
-                }),
+    return html.Div([
+        html.Div([
+            html.H1("Futures Strategy Backtest", style={'margin': '0 0 3px', 'fontSize': '20px',
+                                                       'fontWeight': '600', 'color': 'var(--text-primary)'}),
+            html.Div("Walk-forward evidence · click a candidate to chart it · custom runs in Controls",
+                    style={'fontSize': '11px', 'color': 'var(--text-muted)'}),
+        ], style={'marginBottom': '12px'}),
 
-                html.Div([
-                html.Details([
-                    html.Summary('MA'),
-                    html.Div([
-                        html.Div([html.Label("Short", style=_param_lbl), dcc.Input(id='bf-ma-short', type='number', value=5,   min=2, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
-                        html.Div([html.Label("Long",  style=_param_lbl), dcc.Input(id='bf-ma-long',  type='number', value=20, min=5, style=_inp)], style={'flex': 1, 'marginLeft':  '4px'}),
-                    ], style={'display': 'flex'}),
-                ], className='param-group', open=True),
+        # Top row: Controls (+ parameters) | walk-forward evidence (stretched to the Controls height)
+        html.Div([sidebar, wf_card],
+                 style={'display': 'grid', 'gridTemplateColumns': '440px minmax(0, 1fr)',
+                        'gap': '10px', 'alignItems': 'stretch'}),
 
-                html.Details([
-                    html.Summary('Bollinger'),
-                    html.Div([
-                        html.Div([html.Label("Period", style=_param_lbl), dcc.Input(id='bf-boll-window', type='number', value=20,  style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
-                        html.Div([html.Label("StdDev", style=_param_lbl), dcc.Input(id='bf-boll-std',    type='number', value=1.0, step=0.1, style=_inp)], style={'flex': 1, 'marginLeft': '4px'}),
-                    ], style={'display': 'flex', 'marginBottom': '4px'}),
-                    dcc.Checklist(id='bf-boll-exit', options=[{'label': ' Exit@MA', 'value': 'exit'}], value=[],
-                                  labelStyle={'fontSize': '10px', 'color': 'var(--text-muted)'}),
-                ], className='param-group', open=True),
+        # Full-width results: metrics + chart
+        results_card,
+    ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px', 'padding': '16px', 'margin': '10px'})
 
-                html.Details([
-                    html.Summary('VWAP'),
-                    html.Div([html.Label("Window", style=_param_lbl), dcc.Input(id='bf-vwap-window', type='number', value=20, style=_inp)]),
-                ], className='param-group', open=True),
 
-                html.Details([
-                    html.Summary('Momentum'),
-                    html.Div([html.Label("Lookback", style=_param_lbl), dcc.Input(id='bf-mom-window', type='number', value=14, style=_inp)]),
-                ], className='param-group', open=True),
-
-                html.Details([
-                    html.Summary('ATR'),
-                    html.Div([
-                        html.Div([html.Label("EMA", style=_param_lbl), dcc.Input(id='bf-atr-ema-window', type='number', value=11, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
-                        html.Div([html.Label("Win", style=_param_lbl), dcc.Input(id='bf-atr-window',     type='number', value=14, style=_inp)], style={'flex': 1, 'marginLeft': '4px', 'marginRight': '4px'}),
-                        html.Div([html.Label("Mult",style=_param_lbl), dcc.Input(id='bf-atr-mult',       type='number', value=2.0, step=0.1, style=_inp)], style={'flex': 1, 'marginLeft': '4px'}),
-                    ], style={'display': 'flex'}),
-                ], className='param-group', open=True),
-
-                html.Details([
-                    html.Summary('SAR'),
-                    html.Div([
-                        html.Div([html.Label("AF",  style=_param_lbl), dcc.Input(id='bf-sar-af',     type='number', value=0.02, step=0.01, style=_inp)], style={'flex': 1, 'marginRight': '4px'}),
-                        html.Div([html.Label("Max", style=_param_lbl), dcc.Input(id='bf-sar-max-af', type='number', value=0.2,  step=0.01, style=_inp)], style={'flex': 1, 'marginLeft':  '4px'}),
-                    ], style={'display': 'flex'}),
-                ], className='param-group', open=True),
-                ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(3, minmax(0, 1fr))', 'gap': '6px 12px'}),
-            ], style={'minWidth': '0'}),
-
-        ], id='bf-regime-container', style={'padding': '12px 14px', 'display': 'grid',
-                                            'gridTemplateColumns': '200px 1fr', 'gap': '18px'}),
-    ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden'})
-
+def build_pool_correlation_card():
+    """Heat map of the 5 least-correlated futures in the pool (daily continuous contracts)."""
+    _radio_input = {"marginRight": "4px", "cursor": 'pointer'}
     # Pool correlation: the 5 least-correlated futures (daily, continuous contracts)
     _seg_label = {'fontSize': '10px', 'color': 'var(--text-muted)', 'cursor': 'pointer', 'marginRight': '8px'}
     corr_card = html.Div([
         html.Div([
             html.Span("Pool Correlation", style={'fontSize': '13px', 'fontWeight': '600', 'color': 'var(--text-primary)'}),
-            html.Span("5 least correlated", style={'fontSize': '9px', 'color': 'var(--text-muted)',
+            html.Span("5 least correlated", id='bf-corr-badge', style={'fontSize': '9px', 'color': 'var(--text-muted)',
                      'background': 'var(--surface-input)', 'padding': '2px 7px', 'borderRadius': '3px',
                      'border': '1px solid var(--border-default)'}),
-            html.Button("↻ Refresh", id='bf-corr-refresh', title=(
-                "Pull the latest daily bars from Wind into futures-dailyK_con.pkl and recompute "
-                "(falls back to the local file if Wind is unavailable)."), style={
+            html.Button("↻ Reload", id='bf-corr-refresh', title=(
+                "Re-read the local daily data file and recompute (nothing is fetched)."), style={
                 'marginLeft': 'auto', 'padding': '3px 9px', 'fontSize': '10px', 'fontWeight': '600',
                 'background': 'var(--surface-input)', 'color': 'var(--text-secondary)',
                 'border': '1px solid var(--border-default)', 'borderRadius': '4px', 'cursor': 'pointer',
@@ -1076,7 +1078,9 @@ def build_factor_backtest_layout():
             html.Div([
                 dcc.RadioItems(
                     id='bf-corr-basis',
-                    options=[{'label': ' Returns', 'value': 'returns'}, {'label': ' Level', 'value': 'level'}],
+                    options=[{'label': ' Returns', 'value': 'returns'}, {'label': ' Level', 'value': 'level'},
+                             {'label': ' Strategy P&L', 'value': 'pnl'},
+                             {'label': " Today's book", 'value': 'book'}],
                     value='returns', labelStyle=_seg_label, inputStyle=_radio_input,
                     style={'display': 'flex'},
                 ),
@@ -1086,47 +1090,11 @@ def build_factor_backtest_layout():
                     value='1Y', labelStyle=_seg_label, inputStyle=_radio_input,
                     style={'display': 'flex', 'marginLeft': 'auto'},
                 ),
-            ], style={'display': 'flex', 'alignItems': 'center'}),
+            ], style={'display': 'flex', 'alignItems': 'center', 'flexWrap': 'wrap', 'gap': '4px 12px'}),
             dcc.Loading(type='circle', color='var(--accent-blue)', children=[
                 dcc.Graph(id='bf-corr-graph', config={'displayModeBar': False}, style={'height': '230px'}),
                 html.Div(id='bf-corr-note', style={'fontSize': '9px', 'color': 'var(--text-muted)', 'lineHeight': '1.4'}),
             ]),
         ], style={'padding': '8px 12px 10px'}),
     ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden'})
-
-    # Full-width backtest results chart
-    results_card = html.Div([
-        html.Div([
-            html.Span("Backtest Results", style={'fontSize': '13px', 'fontWeight': '600', 'color': 'var(--text-primary)'}),
-            html.Span(id='bf-results-symbol', style={'fontSize': '9px', 'color': 'var(--text-muted)',
-                     'background': 'var(--surface-input)', 'padding': '2px 7px', 'borderRadius': '3px',
-                     'border': '1px solid var(--border-default)', 'marginLeft': '10px'}),
-        ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px', 'justifyContent': 'space-between',
-                  'padding': '11px 16px', 'background': 'var(--surface-panel)',
-                  'borderBottom': '1px solid var(--border-strong)'}),
-        dcc.Loading(
-            type='circle', color='var(--accent-blue)', style={'minHeight': '400px'},
-            children=html.Div(id='bf-results-container', style={'padding': '12px 16px'})
-        ),
-    ], style={'border': '1px solid var(--border-strong)', 'borderRadius': '8px', 'overflow': 'hidden'})
-
-    return html.Div([
-        html.Div([
-            html.H1("Futures Strategy Backtest", style={'margin': '0 0 3px', 'fontSize': '20px',
-                                                       'fontWeight': '600', 'color': 'var(--text-primary)'}),
-            html.Div("Backtest configuration · strategy comparison · price & equity",
-                    style={'fontSize': '11px', 'color': 'var(--text-muted)'}),
-        ], style={'marginBottom': '12px'}),
-
-        # Top grid: Controls spans both rows | Performance + Correlation, then Regime & Parameters strip
-        html.Div([
-            html.Div(sidebar, style={'gridColumn': '1', 'gridRow': '1 / 3'}),
-            html.Div(performance_card, style={'gridColumn': '2', 'gridRow': '1', 'minWidth': '0'}),
-            html.Div(corr_card, style={'gridColumn': '3', 'gridRow': '1', 'minWidth': '0'}),
-            html.Div(regime_card, style={'gridColumn': '2 / 4', 'gridRow': '2', 'minWidth': '0'}),
-        ], style={'display': 'grid', 'gridTemplateColumns': '220px minmax(0, 1.4fr) minmax(0, 1fr)',
-                  'gap': '10px', 'alignItems': 'start'}),
-
-        # Full-width results chart
-        results_card,
-    ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px', 'padding': '16px', 'margin': '10px'})
+    return corr_card

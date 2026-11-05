@@ -63,12 +63,12 @@ from web.tabs.beta import (
     build_multiasset_bond_layout,
     build_multiasset_backtest_layout,
     build_risk_factor_backtest_layout,
-    build_factor_backtest_layout,
     build_beta_backtest_combined_layout,
     build_factor_history_layout,
     register_multiasset_callbacks,
 )
 from web.tabs.risk import build_risk_layout, register_risk_callbacks
+from web.tabs.futures_desk import build_futures_desk_layout, register_futures_desk_callbacks
 
 from web.tabs.volatility import (
     build_volatility_layout,
@@ -172,6 +172,7 @@ register_fi_callbacks(app)
 register_multiasset_callbacks(app)
 register_risk_callbacks(app)
 register_alpha_callbacks(app)
+register_futures_desk_callbacks(app)
 register_volatility_callbacks(app)
 register_trend_callbacks(app)
 register_market_data_callbacks(app)
@@ -518,7 +519,6 @@ def build_tabs_panel():
                     dcc.Tab(label="Backtest",   value="backtest",   className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
                     dcc.Tab(label="Factor",     value="factor",     className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
                     dcc.Tab(label="Bond",       value="bond",       className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
-                    dcc.Tab(label="Futures",    value="futures",    className="an-subtab", selected_className="an-subtab--selected an-subtab--blue"),
                 ],
                 style={**summary_subtabs_style, "marginTop": "8px"},
                 colors=summary_subtabs_colors,
@@ -529,12 +529,13 @@ def build_tabs_panel():
                 html.Div(id="beta-backtest-div",   children=build_beta_backtest_combined_layout(),  style={"display": "none"}),
                 html.Div(id="beta-factor-div",     children=build_factor_history_layout(),          style={"display": "none"}),
                 html.Div(id="beta-bond-div",       children=build_multiasset_bond_layout(),         style={"display": "none"}),
-                html.Div(id="beta-futures-div",    children=build_factor_backtest_layout(),         style={"display": "none"}),
             ], style={"position": "relative"}),
         ],
         className="an-tab-pane",
     )
     
+    futures_content = build_futures_desk_layout()
+
     alpha_content = html.Div(
         [
             dcc.Tabs(
@@ -634,6 +635,7 @@ def build_tabs_panel():
                             dcc.Tab(label="Market Monitor",     value="market",     className="an-tab", selected_className="an-tab--selected"),
                             dcc.Tab(label="Beta Portfolio",  value="beta",       className="an-tab", selected_className="an-tab--selected"),
                             dcc.Tab(label="Alpha Portfolio", value="alpha",      className="an-tab", selected_className="an-tab--selected"),
+                            dcc.Tab(label="Futures Desk",    value="futures",    className="an-tab", selected_className="an-tab--selected"),
                             dcc.Tab(label="Portfolio Summary",    value="risk",       className="an-tab", selected_className="an-tab--selected"),
                             dcc.Tab(label="Execution Center", value="run-center", className="an-tab", selected_className="an-tab--selected"),
                         ],
@@ -643,6 +645,7 @@ def build_tabs_panel():
                         html.Div(id="market-div",     children=market_content,     style={"position": "relative", "display": "block"}),
                         html.Div(id="beta-div",       children=beta_content,       style={"position": "relative", "display": "none"}),
                         html.Div(id="alpha-div",      children=alpha_content,      style={"position": "relative", "display": "none"}),
+                        html.Div(id="futures-div",    children=futures_content,    style={"position": "relative", "display": "none"}),
                         html.Div(id="risk-div",       children=risk_content,       style={"position": "relative", "display": "none"}),
                         html.Div(id="run-center-div", children=run_center_content, style={"position": "relative", "display": "none"}),
                     ], style={"width": "100%"}),
@@ -1149,15 +1152,20 @@ def _gen_factor_series(n_clicks):
 # ---------------------------------------------------------------------------
 _make_tab_switcher(
     "an-tabs",
-    ["market-div", "beta-div", "alpha-div", "risk-div", "run-center-div"],
-    ["market",     "beta",     "alpha",     "risk",     "run-center"],
+    ["market-div", "beta-div", "alpha-div", "futures-div", "risk-div", "run-center-div"],
+    ["market",     "beta",     "alpha",     "futures",     "risk",     "run-center"],
+)
+_make_tab_switcher(
+    "fd-subtabs",
+    ["fd-today-div", "fd-research-div", "fd-monitor-div"],
+    ["today",        "research",        "monitor"],
 )
 _make_tab_switcher(
     "an-beta-subtabs",
     ["beta-candidates-div", "beta-portfolio-div", "beta-backtest-div",
-     "beta-factor-div",     "beta-bond-div",      "beta-futures-div"],
+     "beta-factor-div",     "beta-bond-div"],
     ["candidates",          "portfolio",          "backtest",
-     "factor",              "bond",               "futures"],
+     "factor",              "bond"],
 )
 _make_tab_switcher(
     "beta-backtest-inner-tabs",

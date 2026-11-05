@@ -110,6 +110,7 @@ result = load_step_result("futures")  # reads runs/<latest-eod>/futures_result.j
 | `multiasset/` | Multi-asset universe, risk parity, factor optimizer |
 | `derivatives/` | Options pricing (bond + IRS) and vol analysis |
 | `portfolio/` | Portfolio optimizer (nlopt-based) |
+| `web/tabs/futures_desk/` | Futures Desk tab (after Alpha): Today / Research / Monitor for the daily intraday-futures workflow; walk-forward + approvals in `futures/backtest/walkforward.py`, stored in `../input/futures_desk/`. All desk calculations read 1-minute bars (`futures/backtest/minute_bars.py`), cached in `../input/futures_desk/bars/` (~0.1 MB/contract) so a computer without `../database/futures/` tick files gives the same results; `python -m futures.backtest.minute_bars` (or Today > Sync bar cache) refreshes the cache |
 | `surface/` | Yield surface calibration and visualization |
 | `settings/` | All configuration (paths, symbols, instrument definitions) |
 | `data/` | Data loaders and Wind/local file providers |

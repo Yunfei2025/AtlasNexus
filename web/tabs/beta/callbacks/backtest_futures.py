@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime
 
@@ -11,7 +12,6 @@ from dash import html, dcc, ctx, no_update
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import numpy as np
 import pandas as pd
 
 from ..data import THEME, FUTURES_AVAILABLE
@@ -27,6 +27,11 @@ try:
         run_demark_strategy,
     )
     from futures.backtest.metrics import calculate_metrics, calculate_metrics_numeric
+    from futures.backtest.costs import apply_costs, default_cost_bp, per_bar_volume, trade_stats
+    from futures.backtest.walkforward import DEFAULT_PARAMS
+    from futures.backtest.minute_bars import (
+        TICK_DIR, list_contracts, load_index, load_minute_bars, resample_minute_bars,
+    )
     from settings.futures import FuturesConfig
 except ImportError:
     pass
@@ -72,46 +77,10 @@ def _saved_start(entry, mode, symbol):
     if mode == 'daily' or symbol == entry.get('symbol'):
         return entry.get('start')
     try:
-        from futures.backtest.data_loader import load_raw_file
-        dates = list(load_raw_file(get_local_file_path(symbol, entry['timeframe'])) or [])
-        return str(pd.to_datetime(min(dates)).date()) if dates else None
+        bars = load_minute_bars(symbol)
+        return str(bars.index.min().date()) if bars is not None and len(bars) else None
     except Exception:
         return None
-
-
-def _sweep_table(entry, symbol):
-    """Saved strategy sweep for this contract (falls back to the contract it was run on)."""
-    tested = (entry or {}).get('tested')
-    if not tested or not tested.get('tables'):
-        return None
-    tables = tested['tables']
-    name = symbol if symbol in tables else next(iter(tables))
-    tab = tables[name]
-    th = {'padding': '5px 8px', 'textAlign': 'right', 'fontSize': '8px', 'color': 'var(--text-muted)',
-          'textTransform': 'uppercase', 'letterSpacing': '0.05em'}
-
-    def _td(v, first=False):
-        color = 'var(--text-secondary)'
-        if not first and isinstance(v, str) and v[:1] in '+-0123456789':
-            color = '#f87171' if v.startswith('-') else '#34d399'
-        return html.Td(v, style={'padding': '5px 8px', 'fontSize': '10px', 'color': color,
-                                 'textAlign': 'left' if first else 'right', 'whiteSpace': 'nowrap'})
-
-    others = [t for t in tables if t != name]
-    return html.Div([
-        html.Div(f"Saved sweep · {name}" + (f"  (also: {', '.join(others)})" if others else ""),
-                 style={'fontSize': '10px', 'fontWeight': '600', 'color': 'var(--text-primary)',
-                        'margin': '14px 0 2px'}),
-        html.Div(tested.get('note', ''), style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '4px'}),
-        html.Div(html.Table([
-            html.Thead(html.Tr([html.Th("STRATEGY", style={**th, 'textAlign': 'left'})] +
-                               [html.Th(c, style=th) for c in tab['columns']])),
-            html.Tbody([html.Tr([_td(('★ ' if s == entry.get('best') else '') + s, first=True)] +
-                                [_td(v) for v in vals],
-                                style={'borderBottom': '1px solid rgba(255,255,255,0.04)'})
-                        for s, vals in tab['rows'].items()]),
-        ], style={'width': '100%', 'borderCollapse': 'collapse'}), style={'overflowX': 'auto'}),
-    ])
 
 
 def _saved_note(key, entry):
@@ -121,100 +90,11 @@ def _saved_note(key, entry):
             f"(Sharpe {entry['sharpe']:.2f}) · {entry['saved_at']}")
 
 
-# ── Pool correlation (daily continuous contracts) ──────────────────────────────
-CORR_TOP_N = 5
-CORR_LOOKBACK_DAYS = {'6M': 126, '1Y': 252, '3Y': 756}
-_close_cache = {'mtime': None, 'panel': None}
-
-
-def _daily_close_panel():
-    """Close prices of the futures pool from futures-dailyK_con.pkl, cached on file mtime."""
-    path = DIR_INPUT / 'futures-dailyK_con.pkl'
-    mtime = path.stat().st_mtime
-    if _close_cache['mtime'] != mtime:
-        from futures.backtest.data_loader import load_raw_file
-        raw = load_raw_file(str(path)) or {}
-        pool = [s for s in FuturesConfig.SYMBOLS if s in raw]
-        panel = pd.DataFrame({s: pd.to_numeric(raw[s]['Close'], errors='coerce') for s in pool})
-        panel.index = pd.to_datetime(panel.index)
-        _close_cache.update(mtime=mtime, panel=panel.sort_index())
-    return _close_cache['panel']
-
-
-def _least_correlated(corr, n=CORR_TOP_N):
-    """The n symbols with the lowest mean |pairwise correlation| (exhaustive search)."""
-    from itertools import combinations
-    a = corr.abs().values
-    best, best_score = None, float('inf')
-    for combo in combinations(range(len(a)), n):
-        idx = np.array(combo)
-        score = a[np.ix_(idx, idx)].sum()  # diagonal is a constant n, so the sum ranks the same
-        if score < best_score:
-            best, best_score = combo, score
-    names = [corr.index[i] for i in best]
-    return names, (best_score - n) / (n * (n - 1))
-
-
-def _corr_heatmap(basis, lookback):
-    panel = _daily_close_panel()
-    window = panel.tail(CORR_LOOKBACK_DAYS.get(lookback, 252) + 1)
-    series = window.pct_change(fill_method=None).iloc[1:] if basis == 'returns' else window
-    # Drop symbols listed mid-window; tolerate data gaps (pairwise correlation over overlapping days)
-    series = series.dropna(axis=1, thresh=int(len(series) * 0.75))
-    corr = series.corr(min_periods=20).fillna(1.0)  # no overlap -> treat as correlated
-    if len(corr) < CORR_TOP_N:
-        raise ValueError(f"only {len(corr)} futures with enough history in {lookback}")
-    names, mean_abs = _least_correlated(corr)
-    sub = corr.loc[names, names].mask(pd.DataFrame(np.eye(len(names), dtype=bool), index=names, columns=names))
-    labels = [s.split('.')[0] for s in names]
-    # Diverging blue (-1) / gray (0) / red (+1)
-    fig = go.Figure(go.Heatmap(
-        z=sub.values, x=labels, y=labels, zmin=-1, zmax=1,
-        colorscale=[[0, '#3987e5'], [0.5, '#383835'], [1, '#e66767']],
-        text=sub.map(lambda v: '' if pd.isna(v) else f'{v:.2f}').values, texttemplate='%{text}', textfont={'size': 10, 'color': '#e9eef8'},
-        hovertemplate='%{y} / %{x}<br>ρ = %{z:.2f}<extra></extra>',
-        xgap=2, ygap=2, colorbar={'thickness': 8, 'len': 0.9, 'tickfont': {'size': 9}},
-    ))
-    fig.update_layout(
-        height=230, template=THEME['chart_template'],
-        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        font={'color': '#e9eef8', 'size': 10}, margin=dict(l=36, r=6, t=6, b=24),
-        yaxis={'autorange': 'reversed'},
-    )
-    last = series.index.max()
-    note = (f"{len(series)} days to {last:%Y-%m-%d} · {'daily returns' if basis == 'returns' else 'price levels'}"
-            f" · mean |ρ| {mean_abs:.2f} · from {len(corr)} futures")
-    return fig, note
-
-
 def register_backtest_futures_callbacks(app):
     """Register Futures backtest callbacks."""
     if getattr(app, "_atlasnexus_backtest_futures_callbacks_registered", False):
         return
     app._atlasnexus_backtest_futures_callbacks_registered = True
-
-    @app.callback(
-        [Output('bf-corr-graph', 'figure'), Output('bf-corr-note', 'children')],
-        [Input('bf-corr-refresh', 'n_clicks'),
-         Input('bf-corr-basis', 'value'),
-         Input('bf-corr-lookback', 'value')],
-    )
-    def bf_update_correlation(_n, basis, lookback):
-        pulled = ''
-        if ctx.triggered_id == 'bf-corr-refresh':
-            # Pull the latest daily bars from Wind (merges into the pkl); fall back to the local file
-            try:
-                from types import SimpleNamespace
-                from futures.intraday.retrieve import futuresDailyK
-                futuresDailyK(SimpleNamespace(params={'force_update': True}))
-                pulled = 'Refreshed from Wind · '
-            except Exception as e:
-                pulled = f'Wind refresh failed ({e.__class__.__name__}), local file · '
-        try:
-            fig, note = _corr_heatmap(basis, lookback)
-        except Exception as e:
-            return go.Figure(), f"Correlation unavailable: {e}"
-        return fig, pulled + note
 
     @app.callback(
         [Output('bf-saved-note', 'children'),
@@ -265,6 +145,15 @@ def register_backtest_futures_callbacks(app):
                  _saved_start(entry, mode, symbol) or no_update] +
                 [entry['params'].get(pid, no_update) for pid in PARAM_IDS])
 
+    @app.callback(
+        Output('bf-results-symbol', 'children'),
+        [Input('bf-local-symbol', 'value'), Input('bf-wind-code', 'value'),
+         Input('bf-data-source', 'value'), Input('bf-trading-mode', 'value')],
+    )
+    def bf_symbol_badges(local_symbol, wind_code, source, mode):
+        symbol = wind_code if source == 'wind' else local_symbol
+        return f"{symbol} · {mode}" if symbol else ""
+
     # 6. Futures Backtest Callbacks
     @app.callback(
         [Output('bf-wind-inputs', 'style'), Output('bf-local-inputs', 'style')],
@@ -314,16 +203,17 @@ def register_backtest_futures_callbacks(app):
                 opts = [{'label': s, 'value': s} for s in FuturesConfig.SYMBOLS]
                 def_val = 'TL.CFE' if 'TL.CFE' in FuturesConfig.SYMBOLS else FuturesConfig.SYMBOLS[0]
             else:
-                contract_list = FuturesConfig.get_contract_no()
-                if not contract_list:
-                    # Wind unavailable: list the contracts stored locally (e.g. TL2612.pkl)
-                    from settings.paths import DIR_DATA
-                    contract_list = sorted(
-                        p.stem for p in (DIR_DATA / 'futures').glob('*.pkl')
-                        if p.stem[:1].isalpha() and p.stem[-4:].isdigit() and '_' not in p.stem
-                    )
+                # Local source lists the tick files here plus the shared minute-bar cache (no Wind
+                # lookup); the Wind source keeps its own dropdown. Default = the most recent data.
+                contract_list = list_contracts()
+                idx = load_index()
+
+                def _recency(c):
+                    tick = TICK_DIR / f'{c}.pkl'
+                    return idx.get(c, {}).get('last') or '', tick.stat().st_mtime if tick.exists() else 0, c
+
                 opts = [{'label': c, 'value': c} for c in contract_list]
-                def_val = contract_list[0] if contract_list else None
+                def_val = max(contract_list, key=_recency) if contract_list else None
             return opts, def_val
         except Exception:
              return [], None
@@ -333,18 +223,28 @@ def register_backtest_futures_callbacks(app):
          Output('bf-perf-results-container', 'children'),
          Output('bf-last-run', 'data')],
         [Input('bf-run-button', 'n_clicks'),
-         Input('bf-local-symbol', 'value')],
+         Input('bf-local-symbol', 'value'),
+         Input('bf-drill', 'data')],
         [State('bf-data-source', 'value'),
          State('bf-trading-mode', 'value'),
          State('bf-wind-code', 'value'),
          State('bf-date-range', 'start_date'),
          State('bf-date-range', 'end_date'),
          State('bf-timeframe', 'value'),
-         State('bf-strategy-selector', 'value')] +
+         State('bf-strategy-selector', 'value'),
+         State('bf-cost-bp', 'value'),
+         State('bf-legacy', 'value')] +
         [State(pid, 'value') for pid in PARAM_IDS]
     )
-    def bf_update_dashboard(n_clicks, local_symbol, source, trading_mode, wind_code, start_date, end_date, tf,
-                            selected_strategies, *param_values):
+    def bf_update_dashboard(n_clicks, local_symbol, drill, source, trading_mode, wind_code, start_date, end_date, tf,
+                            selected_strategies, cost_bp, legacy, *param_values):
+        if ctx.triggered_id == 'bf-drill':
+            # A walk-forward candidate was clicked: that strategy at default parameters, on that contract's
+            # whole history, with the same cost and flat-at-close accounting the walk-forward used.
+            out = _bf_dashboard('local', 'intraday', drill['contract'], None, drill['start'], drill['end'],
+                                drill['timeframe'], [drill['strategy']], dict(DEFAULT_PARAMS), True, None,
+                                drill['cost_bp'], False)
+            return out if len(out) == 3 else (*out, no_update)
         params = dict(zip(PARAM_IDS, param_values))
         # Run button: run the selected strategies. Symbol load: run all saved strategies
         # with their saved params (saved best marked ★) if there is one, else show price only.
@@ -362,16 +262,16 @@ def register_backtest_futures_callbacks(app):
                 start_date = _saved_start(saved, trading_mode, symbol) or start_date
                 if trading_mode != 'daily':
                     tf = saved['timeframe']
+        # Blank cost = the product's measured default; legacy = the old gross, overnight-held accounting
+        legacy = bool(legacy)
+        cost_bp = 0.0 if legacy else (default_cost_bp(symbol) if cost_bp is None else float(cost_bp))
         out = _bf_dashboard(source, trading_mode, local_symbol, wind_code, start_date, end_date, tf,
-                            selected_strategies, params, run_strategies, saved_best)
+                            selected_strategies, params, run_strategies, saved_best, cost_bp, legacy)
         out = out if len(out) == 3 else (*out, no_update)
-        sweep = _sweep_table(saved, symbol)
-        if sweep is not None:
-            out = (out[0], html.Div([out[1], sweep]), out[2])
         return out
 
     def _bf_dashboard(source, trading_mode, local_symbol, wind_code, start_date, end_date, tf,
-                      selected_strategies, params, run_strategies, saved_best=None):
+                      selected_strategies, params, run_strategies, saved_best=None, cost_bp=0.0, legacy=True):
         (ma_s, ma_l, boll_w, boll_std, boll_exit, vwap_w, mom_w, atr_ema_w, atr_w,
          sar_af, sar_max_af) = (params[pid] for pid in PARAM_IDS)
 
@@ -384,6 +284,7 @@ def register_backtest_futures_callbacks(app):
         # Load Data
         df = None
         err_msg = None
+        from_minutes = False
 
         try:
             if source == 'wind':
@@ -397,8 +298,15 @@ def register_backtest_futures_callbacks(app):
                 if not file_path:
                     return html.Div("Unable to construct file path", style={'color': THEME['danger']}), None
 
-                contract_key = local_symbol if trading_mode == 'daily' else None
-                df, err_msg = load_local_data_processed(file_path, contract_key)
+                # Intraday: minute bars (tick file, or the shared cache when the ticks are on another
+                # computer). Legacy keeps the old tick path when the tick file is here.
+                from_minutes = trading_mode != 'daily' and not (legacy and os.path.exists(file_path))
+                if from_minutes:
+                    df = load_minute_bars(local_symbol)
+                    err_msg = None if df is not None else f"no tick file or cached minute bars for {local_symbol}"
+                else:
+                    contract_key = local_symbol if trading_mode == 'daily' else None
+                    df, err_msg = load_local_data_processed(file_path, contract_key)
                 if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
                     s_ts = pd.to_datetime(start_date)
                     e_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
@@ -415,7 +323,11 @@ def register_backtest_futures_callbacks(app):
                     df.index = pd.to_datetime(df.index, errors='coerce')
                 df_resampled = df.copy()
                 df_resampled = df_resampled[~df_resampled.index.duplicated(keep='last')]
+            elif source != 'wind' and from_minutes:
+                df_resampled = resample_minute_bars(df, effective_tf)
             else:
+                if not legacy:
+                    df = df.assign(volume=per_bar_volume(df))
                 df_resampled = resample_data(df, effective_tf)
                 
             if df_resampled.empty:
@@ -439,6 +351,10 @@ def register_backtest_futures_callbacks(app):
                     results['ATR'] = run_atr_band_strategy(df_resampled, atr_ema_w, atr_w)
                 if 'SAR' in selected_strategies:
                     results['SAR'] = run_sar_strategy(df_resampled, sar_af, sar_max_af)
+
+            if not legacy:
+                results = {name: apply_costs(res, cost_bp, flat_at_close=effective_tf != '1D')
+                           for name, res in results.items()}
 
             # Create Plotly Chart — 2 rows when strategies present, 1 row for default price view
             if results:
@@ -496,6 +412,14 @@ def register_backtest_futures_callbacks(app):
             
             # Best strategy = highest Sharpe (same figure as the Performance table)
             strategy_metrics = {name: calculate_metrics(res) for name, res in results.items()}
+            for name, res in results.items():
+                ts = trade_stats(res, cost_bp)
+                strategy_metrics[name].update({
+                    'Win Rate': '—' if ts['win'] != ts['win'] else f"{ts['win'] * 100:.0f}%",
+                    'Payoff': '—' if ts['payoff'] != ts['payoff'] else f"{ts['payoff']:.2f}",
+                    'Exp/Trade': '—' if ts['expectancy_bp'] != ts['expectancy_bp'] else f"{ts['expectancy_bp']:+.1f}bp",
+                    'Round Trips': ts['trades'],
+                })
             sharpes = {}
             for name, m in strategy_metrics.items():
                 try:
@@ -527,14 +451,14 @@ def register_backtest_futures_callbacks(app):
             )
             fig.update_xaxes(gridcolor='rgba(100,140,200,0.12)')
             if intraday:
-                # One tick per trading day (thinned to ~12 labels) on the first bar of the day
+                # One tick per trading day (thinned to ~8 labels) on the first bar of the day
                 labels = _x(df_resampled.index)
                 day_starts = labels[~df_resampled.index.normalize().duplicated()]
-                step = max(1, len(day_starts) // 12)
+                step = max(1, len(day_starts) // 8)
                 fig.update_xaxes(
                     type='category', categoryorder='array', categoryarray=list(labels),
                     tickmode='array', tickvals=list(day_starts[::step]),
-                    ticktext=[t[:10] for t in day_starts[::step]], tickangle=0,
+                    ticktext=[t[:10] for t in day_starts[::step]], tickangle=0, tickfont={'size': 10},
                 )
             fig.update_yaxes(gridcolor='rgba(100,140,200,0.12)')
 
@@ -561,7 +485,10 @@ def register_backtest_futures_callbacks(app):
                 return html.Tr(cells, style={'borderBottom': '1px solid rgba(255,255,255,0.04)'})
 
             if strategy_metrics:
+                acct = ("Legacy accounting: no costs, positions held overnight." if legacy else
+                        f"Net of {cost_bp:.2f}bp per side" + (", flat at each close." if intraday else "."))
                 strategy_table = html.Div(style={'overflowX': 'auto'}, children=[
+                    html.Div(acct, style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '4px'}),
                     html.Table([
                         html.Thead(html.Tr(
                             [html.Th("METRIC", style={**_th_style, 'textAlign': 'left'})] +
@@ -577,6 +504,11 @@ def register_backtest_futures_callbacks(app):
                             _metric_row("Sharpe", "Sharpe Ratio",
                                         color_fn=lambda v: '#34d399' if not str(v).strip().startswith('-') else '#f87171'),
                             _metric_row("Trades", "Trades"),
+                            _metric_row("Round trips", "Round Trips"),
+                            _metric_row("Win rate", "Win Rate"),
+                            _metric_row("Payoff", "Payoff"),
+                            _metric_row("Exp / trade", "Exp/Trade",
+                                        color_fn=lambda v: '#34d399' if str(v).startswith('+') else '#f87171'),
                         ]),
                     ], style={'width': '100%', 'borderCollapse': 'collapse'}),
                 ])

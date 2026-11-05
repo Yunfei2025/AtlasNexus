@@ -31,7 +31,6 @@ def register_multiasset_callbacks(app):
     register_portfolio_run_callbacks(app)
     register_bond_callbacks(app)
     register_backtest_hist_callbacks(app)
-    register_backtest_futures_callbacks(app)
     register_backtest_rfbt_callbacks(app)
     register_report_export_callbacks(app)
 
