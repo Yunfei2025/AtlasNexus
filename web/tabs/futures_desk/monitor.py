@@ -5,11 +5,14 @@ the walk-forward expected (pure logic, local files only)."""
 from __future__ import annotations
 
 import math
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 
 from futures.backtest.costs import apply_costs, trade_stats
+from futures.backtest.live_bars import live_meta_for, load_live, with_live
+from futures.backtest.minute_bars import load_minute_bars
 from futures.backtest.walkforward import (
     STRATEGIES, daily_pnl_of, load_walkforward, product_minute_bars, resample_bars,
 )
@@ -39,7 +42,7 @@ def forward_replay(product, rec):
     for c in main_of.unique():
         days = main_of.index[main_of == c]
         res = apply_costs(STRATEGIES[strategy](resample_bars(contract[c], timeframe)), rec['cost_bp'],
-                          flat_at_close=True)
+                          flat_at_close=True, exits=rec.get('exits'))
         parts.append(daily_pnl_of(res).reindex(days).fillna(0.0))
         stats.append(trade_stats(res[res.index.normalize().isin(days)], rec['cost_bp']))
     n_tr = sum(s['trades'] for s in stats)
@@ -120,3 +123,48 @@ def computed_to_applied(current, computed):
     if current == 'halted':
         return 'halted'
     return 'approved' if computed in ('ok', 'early') else computed
+
+
+def live_state(product, rec, now=None, live_dir=None):
+    """Where an approved strategy stands right now, from settled history plus today's live minute bars.
+
+    Same rules as the walk-forward (default parameters, its cost, flat at every close, its stop / target), with
+    today's last bar left open. None when no live bars have been fetched today."""
+    now = now or datetime.now()
+    contract, meta = live_meta_for(product, live_dir)
+    if contract is None or meta.get('date') != now.strftime('%Y-%m-%d'):
+        return None
+    live, _ = load_live(contract, live_dir)
+    bars = with_live(load_minute_bars(contract), live)
+    strategy, timeframe = rec['candidate'].split('@')
+    raw = STRATEGIES[strategy](resample_bars(bars, timeframe))
+    res = apply_costs(raw, rec['cost_bp'], flat_at_close=True, exits=rec.get('exits'), final_bar_is_close=False)
+    today = res[res.index.normalize() == pd.Timestamp(now.date())]
+    if today.empty:
+        return None
+    pos = float(res['signal'].iloc[-1])
+    sig = res['signal']
+    changed = today.index[(sig != sig.shift()).loc[today.index].to_numpy()]
+    entries = [t for t in changed if sig.loc[t] != 0]
+    entry_t = entries[-1] if pos != 0 and entries else None
+    entry_px = float(res.loc[entry_t, 'close']) if entry_t is not None else None
+    ex = rec.get('exits') or {}
+    levels = {'stop': None, 'target': None}
+    if entry_px is not None:
+        for k in ('stop', 'target'):
+            if ex.get(k):
+                dist = entry_px * ex[k] / 100 if ex['unit'] == 'pct' else ex[k]
+                levels[k] = entry_px - pos * dist if k == 'stop' else entry_px + pos * dist
+    exited = None   # the strategy still wants a position, but the stop / target took it out
+    if pos == 0 and raw['signal'].iloc[-1] != 0 and ex and 'fill' in res:
+        hit = today.index[(today['fill'] != today['close']).to_numpy()]
+        exited = hit[-1] if len(hit) else None
+    since = entry_t if entry_t is not None else (exited if exited is not None else (changed[-1] if len(changed) else None))
+    return {
+        'product': product, 'contract': contract, 'candidate': rec['candidate'],
+        'as_of': bars.index.max(), 'fetched_at': pd.Timestamp(meta['fetched_at']),
+        'position': int(pos), 'since': since,
+        'entry_px': entry_px, 'last_px': float(bars['close'].iloc[-1]),
+        'day_return': float(today['strategy_returns'].sum()), 'round_trips': trade_stats(today, rec['cost_bp'])['trades'],
+        'stop_px': levels['stop'], 'target_px': levels['target'], 'exited_at': exited,
+    }

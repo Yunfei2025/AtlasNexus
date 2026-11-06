@@ -935,7 +935,7 @@ def build_factor_backtest_layout():
 
         # ── Costs ─────────────────────────────────────────────────────
         html.Div([
-            html.Div("Costs", style={
+            html.Div("Costs & exits", style={
                 'color': 'var(--accent-blue)', 'fontSize': '9px', 'fontWeight': '600',
                 'textTransform': 'uppercase', 'letterSpacing': '0.08em', 'marginBottom': '6px',
             }),
@@ -947,6 +947,19 @@ def build_factor_backtest_layout():
                            'marginRight': '10px', 'whiteSpace': 'nowrap', 'flexShrink': '0'}),
                 dcc.Input(id='bf-cost-bp', type='number', min=0, step=0.1, placeholder='auto', style=_inp),
             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '5px'}),
+            html.Div([
+                html.Div([html.Label("Stop loss", style=_param_lbl),
+                          dcc.Input(id='bf-stop', type='number', min=0, step=0.1, placeholder='off', style=_inp)],
+                         style={'flex': 1, 'minWidth': '0'}),
+                html.Div([html.Label("Profit target", style=_param_lbl),
+                          dcc.Input(id='bf-target', type='number', min=0, step=0.1, placeholder='off', style=_inp)],
+                         style={'flex': 1, 'minWidth': '0'}),
+                dcc.RadioItems(id='bf-exit-unit', options=[{'label': ' %', 'value': 'pct'}, {'label': ' pts', 'value': 'pts'}],
+                               value='pct', labelStyle={**_radio_style, 'marginRight': '6px'}, inputStyle=_radio_input,
+                               style={'display': 'flex', 'alignSelf': 'flex-end', 'paddingBottom': '6px'}),
+            ], title=("Optional exits from the entry price: % of the entry price or price points. Applied to Run "
+                      "Backtest and to the walk-forward (stored with its result, the approval and the monitor)."),
+               style={'display': 'flex', 'gap': '6px', 'marginBottom': '5px'}),
             dcc.Checklist(
                 id='bf-legacy',
                 options=[{'label': ' Legacy (no cost, held overnight)', 'value': 'legacy'}], value=[],
@@ -1002,9 +1015,15 @@ def build_factor_backtest_layout():
         html.Div([
             html.Span("Walk-forward & Approval", style=_title),
             html.Span("all contracts · default params · net of costs · flat at close", style=_badge),
+            dcc.Checklist(id='bf-wf-search', options=[{'label': ' search stop / target', 'value': 'on'}],
+                          value=['on'], style={'marginLeft': 'auto'},
+                          labelStyle={'fontSize': '10px', 'color': 'var(--text-muted)', 'cursor': 'pointer'},
+                          inputStyle={'marginRight': '4px', 'cursor': 'pointer'}),
             html.Button("▶ Run walk-forward", id='bf-wf-run', n_clicks=0, title=(
-                "Evaluate 7 strategies x 3 bar sizes on every stored contract of this product (intraday mode)."),
-                style={**_btn, 'marginLeft': 'auto'}),
+                "Evaluate 7 strategies x 3 bar sizes on every stored contract of this product (intraday mode). "
+                "With 'search stop / target' each candidate also tries 12 stop / target settings (incl. none) and "
+                "keeps the best; otherwise the Controls' stop / target is used for all."),
+                style=_btn),
         ], style=_head),
         html.Div([
             html.Div(id='bf-wf-approved-note', style={'fontSize': '10px', 'color': 'var(--text-secondary)', 'marginBottom': '8px'}),

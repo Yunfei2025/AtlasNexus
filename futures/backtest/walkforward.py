@@ -15,7 +15,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from .costs import DEFAULT_FEE_BP, FEE_BP, apply_costs, trade_stats
+from .costs import DEFAULT_FEE_BP, FEE_BP, apply_costs, normalize_exits, trade_stats
 from .data_loader import load_raw_file
 from . import minute_bars
 from .minute_bars import MIN_ROWS, list_contracts, load_index, load_minute_bars, resample_minute_bars
@@ -46,6 +46,10 @@ TIMEFRAMES = ['15min', '30min', '1h']
 # Approval gates (shown in the UI next to the table)
 MIN_CONTRACT_DAYS = 15   # a contract with fewer main-contract days is too short to judge
 MIN_TRADES = 30
+# Stop / target levels tried per candidate when searching exits (% of the entry price; None = off)
+EXIT_STOPS = [None, 0.3, 0.5, 1.0]
+EXIT_TARGETS = [None, 0.5, 1.0]
+EXIT_GRID = [normalize_exits(st, tg, 'pct') for st in EXIT_STOPS for tg in EXIT_TARGETS]   # first = no exits
 ANN = math.sqrt(252)
 
 
@@ -112,8 +116,12 @@ def _sharpe_se(x):
     return float(ANN * math.sqrt((1 + 0.5 * (s / ANN) ** 2) / n)) if n > 4 and not math.isnan(s) else float('nan')
 
 
-def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress=None):
-    """Evaluate all candidates for `product` across every contract (tick files or the minute-bar cache)."""
+def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress=None, exits=None,
+                    search_exits=False):
+    """Evaluate all candidates for `product` across every contract (tick files or the minute-bar cache).
+    exits: one stop loss / profit target applied to every candidate (costs.normalize_exits).
+    search_exits: instead, try EXIT_GRID (incl. no exits) per candidate and keep the best pooled Sharpe;
+    each row then carries its chosen 'exits' and its no-exit Sharpe 'base_pooled'."""
     contract = product_minute_bars(product, tick_dir=tick_dir, bar_dir=bar_dir)
     if not contract:
         raise ValueError(f"no intraday data for {product} (no tick files and no cached minute bars)")
@@ -132,49 +140,63 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
     cost = half_spread + fee if cost_bp is None else float(cost_bp)
 
     spans = {c: main_of.index[main_of == c] for c in contract}
-    pnl, trades, rows = {}, {}, {}
+
+    def score(raw, ex):
+        """Row + daily P&L of one candidate (raw strategy output per contract) under exits `ex`."""
+        parts, stats = {}, []
+        for c, r in raw.items():
+            days = spans[c]
+            res = apply_costs(r, cost, flat_at_close=True, exits=ex)
+            parts[c] = daily_pnl_of(res).reindex(days).fillna(0.0)
+            stats.append(trade_stats(res[res.index.normalize().isin(days)], cost))
+        series = pd.concat(parts.values()).sort_index()
+        n_tr = sum(st['trades'] for st in stats)
+        wsum = n_tr or 1
+        per_c = {c: _sharpe(p) for c, p in parts.items() if len(p) >= MIN_CONTRACT_DAYS}
+        pos = sum(1 for v in per_c.values() if v > 0)
+        pooled = _sharpe(series)
+        row = {
+            'pooled': pooled, 'se': _sharpe_se(series), 'per_contract': per_c, 'exits': ex,
+            'trades': n_tr, 'trades_per_day': n_tr / max(len(series), 1),
+            'win': sum(st['win'] * st['trades'] for st in stats if not math.isnan(st['win'])) / wsum,
+            'payoff': float(np.nanmean([st['payoff'] for st in stats])) if stats else float('nan'),
+            'expectancy_bp': sum(st['expectancy_bp'] * st['trades'] for st in stats
+                                 if not math.isnan(st['expectancy_bp'])) / wsum,
+            'total_return': float(series.sum()),
+            'passes': bool(pooled > 0 and n_tr >= MIN_TRADES and len(per_c) >= 2
+                           and pos >= max(2, math.ceil(len(per_c) * 2 / 3))),
+        }
+        return row, series
+
+    grid = EXIT_GRID if search_exits else [exits]
+    pnl, rows = {}, {}
     for tf in TIMEFRAMES:
         bars = {c: resample_bars(b, tf) for c, b in contract.items()}
         for sname, fn in STRATEGIES.items():
             cand = f'{sname}@{tf}'
-            parts, stats = {}, []
+            raw = {}
             for c, b in bars.items():
-                days = spans[c]
-                if len(b) < 50 or len(days) == 0:
+                if len(b) < 50 or len(spans[c]) == 0:
                     continue
                 try:
-                    res = apply_costs(fn(b), cost, flat_at_close=True)
+                    raw[c] = fn(b)   # the strategy's signals do not depend on the exits: compute once
                 except Exception:
                     continue
-                parts[c] = daily_pnl_of(res).reindex(days).fillna(0.0)
-                st = trade_stats(res[res.index.normalize().isin(days)], cost)
-                stats.append((st, len(days)))
-            if not parts:
+            if not raw:
                 continue
-            series = pd.concat(parts.values()).sort_index()
-            n_tr = sum(s['trades'] for s, _ in stats)
-            wsum = sum(s['trades'] for s, _ in stats) or 1
-            per_c = {c: _sharpe(p) for c, p in parts.items() if len(p) >= MIN_CONTRACT_DAYS}
-            pos = sum(1 for v in per_c.values() if v > 0)
-            pooled = _sharpe(series)
-            pnl[cand] = series
-            rows[cand] = {
-                'pooled': pooled, 'se': _sharpe_se(series), 'per_contract': per_c,
-                'trades': n_tr, 'trades_per_day': n_tr / max(len(series), 1),
-                'win': sum(s['win'] * s['trades'] for s, _ in stats if not math.isnan(s['win'])) / wsum,
-                'payoff': float(np.nanmean([s['payoff'] for s, _ in stats])) if stats else float('nan'),
-                'expectancy_bp': sum(s['expectancy_bp'] * s['trades'] for s, _ in stats
-                                     if not math.isnan(s['expectancy_bp'])) / wsum,
-                'total_return': float(series.sum()),
-                'passes': bool(pooled > 0 and n_tr >= MIN_TRADES and len(per_c) >= 2
-                               and pos >= max(2, math.ceil(len(per_c) * 2 / 3))),
-            }
+            scored = [score(raw, ex) for ex in grid]
+            best = max(range(len(scored)), key=lambda k: (-math.inf if math.isnan(scored[k][0]['pooled'])
+                                                          else scored[k][0]['pooled']))
+            rows[cand], pnl[cand] = scored[best]
+            if search_exits:   # the no-exit result, to show how much the search added
+                rows[cand]['base_pooled'] = scored[0][0]['pooled']
         if progress:
             progress(f"finished {tf}")
 
     return {
         'product': product, 'run_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
         'cost_bp': cost, 'half_spread_bp': half_spread, 'fee_bp': fee,
+        'exits': 'search' if search_exits else exits, 'exit_grid': EXIT_GRID if search_exits else None,
         'days': int(len(main_of)), 'last_day': str(main_of.index.max().date()),
         'contracts': {c: {'days': int(len(spans[c])),
                           'start': str(spans[c].min().date()) if len(spans[c]) else None,

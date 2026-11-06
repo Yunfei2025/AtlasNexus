@@ -10,6 +10,7 @@ from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
 
+from futures.backtest.costs import describe_exits
 from web.tabs.beta.data import THEME
 
 from . import approvals
@@ -76,7 +77,9 @@ def monitor_view(rows, watch_sig, halt_sig):
         comp = _STATUS[a['status']]
         cur = _STATUS.get(r['current'], (r['current'], 'var(--text-muted)'))
         body.append(_row([
-            _td(prod, left=True, bold=True), _td(rec['candidate']), _td(f"{rec['wf_last_day']}"), _td(str(n)),
+            _td(prod, left=True, bold=True),
+            _td(rec['candidate'] + (f" · {describe_exits(rec['exits'])}" if rec.get('exits') else '')),
+            _td(f"{rec['wf_last_day']}"), _td(str(n)),
             _td(f"{ret:+.2f}%", _GREEN if ret > 0 else (_RED if ret < 0 else 'var(--text-secondary)')),
             _td(f"{exp:+.2f}%"), _td('—' if a['z'] is None else f"{a['z']:+.1f}"),
             _td(str(a['streak']), _AMBER if a['streak'] >= 3 else 'var(--text-secondary)'),

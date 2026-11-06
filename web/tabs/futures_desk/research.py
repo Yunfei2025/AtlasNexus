@@ -9,13 +9,13 @@ from dash import ALL, ctx, html, no_update
 from dash.exceptions import PreventUpdate
 from dash.dependencies import Input, Output, State
 
-from futures.backtest.costs import product_of
+from futures.backtest.costs import describe_exits, normalize_exits, product_of
 from futures.backtest.minute_bars import list_contracts, load_minute_bars
 from futures.backtest.walkforward import (
     PANEL_STRATEGY, load_walkforward, run_walkforward, save_walkforward,
 )
 
-from .approvals import DESK_DIR, approve, load_approved
+from .approvals import DESK_DIR, approve, candidate_exits, load_approved
 
 _TH = {'padding': '5px 8px', 'textAlign': 'right', 'fontSize': '8px', 'color': 'var(--text-muted)',
        'textTransform': 'uppercase', 'letterSpacing': '0.05em', 'whiteSpace': 'nowrap'}
@@ -49,14 +49,19 @@ def wf_table(wf, approved_candidate=None):
     rows = passing[:MAX_SHOWN]
     g = wf['gates']
     contracts = [c for c, v in wf['contracts'].items() if v['days'] >= g['min_contract_days']]  # judged contracts
-    head = [html.Th("Candidate", style={**_TH, 'textAlign': 'left'}), html.Th("Pooled", style=_TH),
-            html.Th("± SE", style=_TH)] + [html.Th(c, style=_TH) for c in contracts] + [
+    searched = wf.get('exits') == 'search'
+    head = [html.Th("Candidate", style={**_TH, 'textAlign': 'left'})] + (
+            [html.Th("Stop / target", style={**_TH, 'textAlign': 'left'}), html.Th("No exits", style=_TH)]
+            if searched else []) + [html.Th("Pooled", style=_TH), html.Th("± SE", style=_TH)] + [html.Th(c, style=_TH) for c in contracts] + [
             html.Th("Trades/d", style=_TH), html.Th("Win", style=_TH), html.Th("Payoff", style=_TH),
             html.Th("Exp bp", style=_TH), html.Th("Gate", style=_TH)]
     body = []
     for name, r in rows:
         label = ('✔ ' if name == approved_candidate else '') + name
-        tds = [_cell(label, left=True, bold=True, pick=(name, '')), _cell(*_num(r['pooled'], '+.2f')),
+        tds = [_cell(label, left=True, bold=True, pick=(name, ''))]
+        if searched:
+            tds += [_cell(describe_exits(r.get('exits')), left=True), _cell(*_num(r.get('base_pooled'), '+.2f'))]
+        tds += [_cell(*_num(r['pooled'], '+.2f')),
                _cell(*_num(r['se'], '.2f', color=False))]
         for c in contracts:
             tds.append(_cell(*_num(r['per_contract'].get(c), '+.1f'), pick=(name, c)))
@@ -69,13 +74,18 @@ def wf_table(wf, approved_candidate=None):
     n_pass = sum(r['passes'] for r in wf['rows'].values())
     cdesc = ', '.join(f"{c} {v['days']}d" for c, v in wf['contracts'].items())
     return html.Div([
-        html.Div(f"{wf['product']} · {wf['days']} days to {wf['last_day']} · cost {wf['cost_bp']:.2f}bp/side "
+        html.Div(f"{wf['product']} · {wf['days']} days to {wf['last_day']} · {describe_exits(wf.get('exits'))} · "
+                 f"cost {wf['cost_bp']:.2f}bp/side "
                  f"(half-spread {wf['half_spread_bp']:.2f} + fee {wf['fee_bp']:.2f}) · run {wf['run_at']}",
                  style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '2px'}),
         html.Div(f"{n_pass} of {len(wf['rows'])} candidates pass" + (f" (best {MAX_SHOWN} shown)" if n_pass > MAX_SHOWN else "") + f". Gate: pooled Sharpe > 0, ≥ {g['min_trades']} trades, "
                  f"net-positive on at least 2/3 of contracts with ≥ {g['min_contract_days']} days. "
                  f"Sharpe per contract; contracts: {cdesc}. Click a candidate (or one contract's Sharpe) to chart it below.",
                  style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '6px'}),
+        html.Div("Stop / target were searched per candidate (stop 0 / 0.3 / 0.5 / 1%, target 0 / 0.5 / 1%), keeping "
+                 "the best pooled Sharpe. Compare Pooled with No exits and with ± SE: a gain of about one SE or "
+                 "less is what searching 12 settings gives by chance.",
+                 style={'fontSize': '9px', 'color': _AMBER_TXT, 'marginBottom': '6px'}) if searched else None,
         html.Div(html.Table([html.Thead(html.Tr(head)), html.Tbody(body)],
                             style={'width': '100%', 'borderCollapse': 'collapse'}), style={'overflowX': 'auto'})
         if body else html.Div("No candidate passes the gates for this product. Use Controls > Run Backtest to "
@@ -93,7 +103,8 @@ def approved_note(product):
 
 def _pick_options(wf):
     passing = sorted(((k, r) for k, r in wf['rows'].items() if r['passes']), key=lambda kv: -kv[1]['pooled'])
-    return [{'label': f"{k} · pooled {r['pooled']:+.2f} ± {r['se']:.2f}", 'value': k} for k, r in passing]
+    return [{'label': f"{k}" + (f" · {describe_exits(r['exits'])}" if r.get('exits') else '') +
+                      f" · pooled {r['pooled']:+.2f} ± {r['se']:.2f}", 'value': k} for k, r in passing]
 
 
 def drill_payload(candidate, contract, selected, source, wind_code, wf_dir=None):
@@ -110,7 +121,7 @@ def drill_payload(candidate, contract, selected, source, wind_code, wf_dir=None)
         return None
     strategy, timeframe = candidate.split('@')
     return {'cand': candidate, 'strategy': PANEL_STRATEGY.get(strategy, strategy), 'timeframe': timeframe,
-            'contract': contract, 'cost_bp': wf['cost_bp'], 'start': str(bars.index.min().date()),
+            'contract': contract, 'cost_bp': wf['cost_bp'], 'exits': candidate_exits(wf, candidate), 'start': str(bars.index.min().date()),
             'end': str(bars.index.max().date())}
 
 
@@ -138,9 +149,11 @@ def register_research_callbacks(app):
         [Output('bf-wf-container', 'children'), Output('bf-wf-pick', 'options'),
          Output('bf-wf-pick', 'value'), Output('bf-wf-approved-note', 'children')],
         [Input('bf-wf-run', 'n_clicks'), Input('bf-local-symbol', 'value'), Input('bf-wind-code', 'value')],
-        [State('bf-data-source', 'value'), State('bf-trading-mode', 'value')],
+        [State('bf-data-source', 'value'), State('bf-trading-mode', 'value'),
+         State('bf-stop', 'value'), State('bf-target', 'value'), State('bf-exit-unit', 'value'),
+         State('bf-wf-search', 'value')],
     )
-    def bf_walkforward(_n, local_symbol, wind_code, source, mode):
+    def bf_walkforward(_n, local_symbol, wind_code, source, mode, stop, target, unit, search):
         product = product_of(wind_code if source == 'wind' else local_symbol)
         note = approved_note(product)
         hint = lambda t: html.Div(t, style={'fontSize': '10px', 'color': 'var(--text-muted)'})
@@ -151,7 +164,8 @@ def register_research_callbacks(app):
             return hint("Walk-forward needs intraday contracts: switch Mode to Intraday."), [], None, note
         if running:
             try:
-                wf = run_walkforward(product)
+                wf = run_walkforward(product, exits=normalize_exits(stop, target, unit),
+                                     search_exits=bool(search))
                 save_walkforward(wf, DESK_DIR)
             except Exception as e:
                 return hint(f"Walk-forward failed: {e}"), [], None, note

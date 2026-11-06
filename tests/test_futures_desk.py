@@ -84,7 +84,7 @@ def _fake_world(monkeypatch, approved, close, pnl):
     monkeypatch.setattr(pool.approvals, 'load_approved', lambda path=None: approved)
     monkeypatch.setattr(pool, 'daily_panels', lambda: (close, close))
     monkeypatch.setattr(pool, 'pnl_panel', lambda cands: pnl[list(cands)])
-    monkeypatch.setattr(pool, 'intraday_state', lambda prod, cand: {
+    monkeypatch.setattr(pool, 'intraday_state', lambda prod, cand, exits=None: {
         'contract': f'{prod}2612', 'last_price': 100.0, 'last_time': datetime(2026, 11, 4, 15, 30),
         'signal': 1.0, 'since': pd.Timestamp('2026-11-04 10:00')})
 
@@ -315,7 +315,7 @@ def test_drill_payload_uses_the_walkforward_cost_and_the_contract_range(tmp_path
     monkeypatch.setattr(research, 'list_contracts', lambda p: ['AU2610', 'AU2612'])
     p = research.drill_payload('Mom@1h', '', 'AU2612', 'local', None, wf_dir=tmp_path)
     assert p == {'cand': 'Mom@1h', 'strategy': 'Momentum', 'timeframe': '1h', 'contract': 'AU2612',
-                 'cost_bp': 0.42, 'start': '2026-10-05', 'end': '2026-10-07'}
+                 'cost_bp': 0.42, 'exits': None, 'start': '2026-10-05', 'end': '2026-10-07'}
     assert research.drill_payload('Nope@1h', 'AU2612', 'AU2612', 'local', None, wf_dir=tmp_path) is None
 
 
@@ -369,3 +369,249 @@ def test_book_correlation_needs_two_products(monkeypatch):
     monkeypatch.setattr(pool, 'pnl_panel', lambda cands: pd.DataFrame({'AU': np.arange(30.0)}))
     with pytest.raises(ValueError):
         pool_corr._corr_heatmap('book', '1Y')
+
+
+# ── Stop loss / profit target ─────────────────────────────────────────────────────────────────
+def _ohlc(rows, start='2026-01-05 10:00'):
+    idx = pd.date_range(start, periods=len(rows), freq='15min')
+    return pd.DataFrame(rows, columns=['open', 'high', 'low', 'close', 'signal'], index=idx)
+
+
+def test_normalize_exits():
+    assert costs.normalize_exits(None, '', 'pct') is None and costs.normalize_exits(0, -1) is None
+    assert costs.normalize_exits(0.5, None, 'pct') == {'stop': 0.5, 'target': None, 'unit': 'pct'}
+    assert costs.normalize_exits(None, 3, 'pts')['unit'] == 'pts'
+
+
+def test_stop_exits_at_the_level_and_locks_out_reentry():
+    df = _ohlc([[100, 100, 100, 100, 1],      # enter long at 100
+                [100, 100.2, 98.5, 99, 1],    # low 98.5 hits the 1% stop at 99
+                [99, 99.5, 98.0, 98.5, 1],    # same signal: stays flat (locked out)
+                [98.5, 99, 98, 98.8, -1],     # signal flips: short at 98.8
+                [98.8, 99, 98.5, 98.6, -1]])
+    out = costs.apply_costs(df, cost_bp=0, flat_at_close=False, exits=costs.normalize_exits(1.0, None, 'pct'))
+    assert list(out['signal']) == [1, 0, 0, -1, -1]
+    assert out['fill'].iloc[1] == pytest.approx(99.0)
+    assert out['strategy_returns'].iloc[1] == pytest.approx(99 / 100 - 1)       # loss capped at the stop
+    assert out['strategy_returns'].iloc[2] == 0
+
+
+def test_target_in_points_and_gap_fills_at_open():
+    df = _ohlc([[100, 100, 100, 100, 1],
+                [103, 104, 102.5, 103.5, 1],  # opens above the 2-pt target: filled at the open, 103
+                [103.5, 104, 103, 103.8, 1]])
+    out = costs.apply_costs(df, 0, False, exits=costs.normalize_exits(None, 2, 'pts'))
+    assert out['fill'].iloc[1] == pytest.approx(103.0) and list(out['signal']) == [1, 0, 0]
+
+
+def test_stop_wins_when_both_levels_are_touched_and_trade_stats_use_the_fill():
+    df = _ohlc([[100, 100, 100, 100, 1], [100, 103, 97, 101, 1], [101, 101, 101, 101, 0]])
+    out = costs.apply_costs(df, 0, False, exits=costs.normalize_exits(2, 2, 'pct'))
+    assert out['fill'].iloc[1] == pytest.approx(98.0)                            # conservative: stop first
+    st = costs.trade_stats(out, 0)
+    assert st['trades'] == 1 and st['expectancy_bp'] == pytest.approx(-200, rel=1e-6)
+
+
+def test_no_exits_leaves_results_unchanged():
+    df = _ohlc([[100, 101, 99, 100, 1], [100, 102, 98, 101, 1], [101, 101, 100, 100.5, -1]])
+    a = costs.apply_costs(df, 1.0, False)
+    b = costs.apply_costs(df, 1.0, False, exits=None)
+    pd.testing.assert_series_equal(a['strategy_returns'], b['strategy_returns'])
+    assert a['strategy_returns'].iloc[1] == pytest.approx(101 / 100 - 1)
+
+
+def test_book_sizes_with_the_approved_stop_when_set(monkeypatch):
+    close = _close(['AU.SHF'])
+    pnl = pd.DataFrame({'AU': np.zeros(30)}, index=pd.bdate_range('2026-08-01', periods=30))
+    exits = {'stop': 0.5, 'target': None, 'unit': 'pct'}
+    _fake_world(monkeypatch, {'AU': {'candidate': 'SAR@30min', 'exits': exits}}, close, pnl)
+    book = pool.build_book(10_000_000, 0.25, 0.5, 1.0, today=datetime(2026, 11, 5))
+    r = book['rows'][0]
+    assert r['stop_src'] == 'strategy' and r['stop_pts'] == pytest.approx(0.5)   # 0.5% of 100
+    assert r['lots'] == int(25_000 // (0.5 * pool.CONTRACT_MULTIPLIER['AU']))
+
+
+# ── Walk-forward stop / target search ─────────────────────────────────────────────────────────
+from futures.backtest import walkforward
+
+
+def _cache_contracts(bar_dir, product='AU', contracts=('AU2604', 'AU2606', 'AU2608'), days=25):
+    rng = np.random.default_rng(11)
+    index = {}
+    bar_dir.mkdir(parents=True, exist_ok=True)
+    start = pd.Timestamp('2026-01-05')
+    for n, c in enumerate(contracts):
+        frames = []
+        for d in pd.bdate_range(start + pd.Timedelta(days=35 * n), periods=days):
+            idx = pd.date_range(d + pd.Timedelta(hours=9, minutes=30), periods=240, freq='1min')
+            close = 500 * np.exp(np.cumsum(rng.normal(0, 0.0008, len(idx))))
+            frames.append(pd.DataFrame({'open': close, 'high': close * 1.0004, 'low': close * 0.9996, 'close': close,
+                                        'volume': 100.0, 'hs_bp': np.float32(0.3)}, index=idx))
+        bars = pd.concat(frames)
+        bars.to_parquet(bar_dir / f'{c}.parquet')
+        index[c] = {'rows': len(bars), 'first': str(bars.index.min()), 'last': str(bars.index.max())}
+    (bar_dir / 'index.json').write_text(json.dumps(index))
+
+
+import json
+
+
+def test_exit_search_keeps_the_best_setting_and_reports_the_no_exit_baseline(tmp_path):
+    ticks, bars = tmp_path / 'ticks', tmp_path / 'bars'
+    ticks.mkdir()
+    _cache_contracts(bars)
+    plain = walkforward.run_walkforward('AU', tick_dir=ticks, bar_dir=bars)
+    found = walkforward.run_walkforward('AU', tick_dir=ticks, bar_dir=bars, search_exits=True)
+    assert found['exits'] == 'search' and plain['exits'] is None
+    assert set(found['rows']) == set(plain['rows'])
+    for cand, r in found['rows'].items():
+        assert r['exits'] in walkforward.EXIT_GRID
+        assert r['base_pooled'] == pytest.approx(plain['rows'][cand]['pooled'], nan_ok=True)
+        if not np.isnan(r['pooled']):
+            assert r['pooled'] >= r['base_pooled'] - 1e-12   # searched >= no exits (no exits is in the grid)
+
+
+def test_approval_and_drill_carry_the_candidates_own_exits(tmp_path):
+    ex = {'stop': 0.5, 'target': 0.5, 'unit': 'pct'}
+    wf = dict(_wf(True), exits='search')
+    wf['rows']['SAR@30min'].update(exits=ex, base_pooled=0.8)
+    assert approvals.candidate_exits(wf, 'SAR@30min') == ex
+    rec = approvals.approve('AU', 'SAR@30min', wf, path=tmp_path / 'approved.json')
+    assert rec['exits'] == ex
+    old_style = dict(_wf(True), exits={'stop': 1.0, 'target': None, 'unit': 'pct'})   # pre-search runs
+    assert approvals.candidate_exits(old_style, 'SAR@30min') == old_style['exits']
+    assert costs.describe_exits('search') == 'stop / target searched per candidate'
+
+
+def test_book_shows_direction_as_a_coloured_badge_with_an_arrow():
+    from web.tabs.futures_desk import today
+    base = {'candidate': 'SAR@30min', 'contract': 'AU2612', 'last_price': 100.0, 'stop_pts': 0.5, 'lots': 2,
+            'risk_cny': 1000.0, 'notional': 200000.0, 'since': pd.Timestamp('2026-11-04 10:00'),
+            'last_time': pd.Timestamp('2026-11-04 15:00')}
+    rows = [dict(base, product='AU', signal=1, stop_price=99.5), dict(base, product='IC', signal=-1, stop_price=100.5),
+            dict(base, product='TL', signal=0, stop_price=None)]
+    book = {'rows': rows, 'notional': 6e5, 'leverage': 0.6, 'risk_cny': 3000.0, 'loss_limit_cny': 10000.0,
+            'excluded': [], 'warnings': [], 'halted': []}
+    found = []
+    _walk(today.book_view(book, 1_000_000, 0.25, 1.0), found)
+    badges = {c.children: c.style for c in found if getattr(c, 'className', None) == 'fd-signal'}
+    assert set(badges) == {'▲ LONG', '▼ SHORT', '■ FLAT'}
+    assert badges['▲ LONG']['color'] == today._GREEN and badges['▼ SHORT']['color'] == today._RED
+    assert 'rgba(52,211,153' in badges['▲ LONG']['background'] and 'rgba(248,113,113' in badges['▼ SHORT']['background']
+
+
+# ── Live minute bars (Monitor) ────────────────────────────────────────────────────────────────
+from futures.backtest import live_bars
+from web.tabs.futures_desk import live_ui
+
+
+def _wind_frame(day, start, end, base=100.0):
+    idx = pd.date_range(f'{day} {start}', f'{day} {end}', freq='1min')
+    c = base + np.arange(len(idx)) * 0.01
+    return pd.DataFrame({'OPEN': c, 'HIGH': c + 0.02, 'LOW': c - 0.02, 'CLOSE': c, 'VOLUME': 5.0}, index=idx)
+
+
+class _FakeWind:
+    def __init__(self, frame=None, boom=None):
+        self.calls, self.frame, self.boom = [], frame, boom
+
+    def __call__(self, code, fields, start, end, *a):
+        self.calls.append((code, start, end))
+        if self.boom:
+            raise RuntimeError(self.boom)
+        f = self.frame
+        if f.empty:
+            return f
+        return f[(f.index >= pd.Timestamp(start)) & (f.index <= pd.Timestamp(end))]
+
+
+CODES = ['AU2612.SHF', 'IC2612.CFE', 'TL2612.CFE']
+
+
+def test_live_fetch_only_asked_products_and_never_outside_trading_hours(tmp_path):
+    wind = _FakeWind(_wind_frame('2026-11-05', '09:00', '10:30'))
+    off = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 18, 0), wsi=wind, codes=CODES,
+                                    is_trading=lambda n: False, live_dir=tmp_path)
+    assert off['skipped'] and wind.calls == []
+    on = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 10, 30), wsi=wind, codes=CODES,
+                                   is_trading=lambda n: True, live_dir=tmp_path)
+    assert [c[0] for c in wind.calls] == ['AU2612.SHF']          # IC and TL were never requested
+    assert on['products']['AU']['rows'] == 91 and (tmp_path / 'AU2612.parquet').exists()
+    assert not (tmp_path / 'IC2612.parquet').exists()
+
+
+def test_live_fetch_is_incremental_and_resets_each_day(tmp_path):
+    frame = _wind_frame('2026-11-05', '09:00', '11:00')
+    wind = _FakeWind(frame)
+    go = lambda t: live_bars.fetch_live_bars(['AU'], now=t, wsi=wind, codes=CODES, is_trading=lambda n: True,
+                                             live_dir=tmp_path)
+    go(datetime(2026, 11, 5, 10, 0))
+    second = go(datetime(2026, 11, 5, 11, 0))
+    assert wind.calls[1][1] == '2026-11-05 09:58:00'                 # last stored bar 10:00 minus the 2 min overlap
+    assert second['products']['AU']['rows'] == 121 and second['products']['AU']['new'] < 70   # no re-download
+    bars, meta = live_bars.load_live('AU2612', tmp_path)
+    assert bars.index.is_unique and meta['date'] == '2026-11-05'
+    nextday = _FakeWind(_wind_frame('2026-11-06', '09:00', '09:30'))
+    live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 6, 9, 30), wsi=nextday, codes=CODES,
+                              is_trading=lambda n: True, live_dir=tmp_path)
+    assert nextday.calls[0][1] == '2026-11-06 08:55:00'              # a new day starts from the session open
+    bars, _ = live_bars.load_live('AU2612', tmp_path)
+    assert bars.index.min().date() == datetime(2026, 11, 6).date()
+
+
+def test_live_fetch_reports_errors_per_product(tmp_path):
+    r = live_bars.fetch_live_bars(['AU', 'XX'], now=datetime(2026, 11, 5, 10, 0), wsi=_FakeWind(boom='Wind down'),
+                                  codes=CODES, is_trading=lambda n: True, live_dir=tmp_path)
+    assert 'Wind down' in r['products']['AU']['error'] and 'no main contract' in r['products']['XX']['error']
+    empty = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 10, 0), wsi=_FakeWind(pd.DataFrame()),
+                                      codes=CODES, is_trading=lambda n: True, live_dir=tmp_path)
+    assert 'no bars' in empty['products']['AU']['error']
+
+
+def test_live_overlay_only_when_the_settled_bars_miss_today():
+    settled = _wind_frame('2026-11-04', '09:00', '09:10').rename(columns=str.lower)
+    live = live_bars._normalize(_wind_frame('2026-11-05', '09:00', '09:10'), '2026-11-05')
+    both = live_bars.with_live(settled.assign(hs_bp=np.float32('nan')), live)
+    assert both.index.normalize().nunique() == 2
+    covered = live_bars.with_live(both, live)                         # the end-of-day sync already has today
+    assert len(covered) == len(both)
+
+
+def test_start_state_validation():
+    assert live_ui.start_state([], 5)[0] is None and live_ui.start_state(['AU'], 7)[0] is None
+    assert live_ui.start_state(list('ABCDEF'), 5)[0] is None
+    st, msg = live_ui.start_state(['AU', 'TL'], 10)
+    assert st['running'] and st['products'] == ['AU', 'TL'] and st['minutes'] == 10 and msg == ''
+
+
+def test_live_state_position_stop_and_day_return(tmp_path, monkeypatch):
+    """A stub strategy goes long at 09:30 on the day; a 1% stop is breached inside the 10:30 bar."""
+    days = pd.bdate_range('2026-11-03', '2026-11-04')
+    hist = pd.concat([_wind_frame(d.strftime('%Y-%m-%d'), '09:00', '14:59') for d in days]).rename(columns=str.lower)
+    hist = hist.assign(hs_bp=np.float32('nan'))
+    live = _wind_frame('2026-11-05', '09:00', '10:59').rename(columns=str.lower)
+    live.loc[pd.Timestamp('2026-11-05 10:35'), 'low'] -= 3.0     # a dip inside the 10:30 bar: low ~3% under
+    live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 11, 0), codes=CODES, is_trading=lambda n: True,
+                              wsi=_FakeWind(live.rename(columns=str.upper)), live_dir=tmp_path)
+    monkeypatch.setattr(monitor, 'load_minute_bars', lambda c: hist)
+    monkeypatch.setattr(monitor, 'load_live', lambda c, d=None: live_bars.load_live(c, tmp_path))
+    monkeypatch.setattr(monitor, 'live_meta_for', lambda p, d=None: live_bars.live_meta_for(p, tmp_path))
+
+    def long_from_0930(df):
+        out = df.copy()
+        out['signal'] = np.where(out.index.time >= pd.Timestamp('09:30').time(), 1.0, 0.0)
+        return out
+    monkeypatch.setattr(monitor, 'STRATEGIES', {'SAR': long_from_0930})
+    rec = {'candidate': 'SAR@15min', 'cost_bp': 0.0, 'exits': {'stop': 1.0, 'target': None, 'unit': 'pct'}}
+    st = monitor.live_state('AU', rec, now=datetime(2026, 11, 5, 11, 0))
+    assert st['contract'] == 'AU2612' and st['position'] == 0 and st['exited_at'] is not None   # stopped out
+    assert st['exited_at'].hour == 10 and st['stop_px'] is None
+    assert st['day_return'] == pytest.approx(-0.01, abs=1e-3)                                  # filled at the stop level
+    held = monitor.live_state('AU', dict(rec, exits=None), now=datetime(2026, 11, 5, 10, 20))   # before the drop
+    assert held['position'] == 1 and held['entry_px'] is not None and held['exited_at'] is None
+    assert monitor.live_state('AU', rec, now=datetime(2026, 11, 6, 9, 5)) is None             # no live bars for that day
+    out = live_ui.live_view([st], {'skipped': None, 'products': {}}, {'running': True, 'minutes': 5},
+                            now=datetime(2026, 11, 5, 11, 1))
+    found = []
+    _walk(out, found)
+    assert any('stop / target hit at 10:' in str(getattr(c, 'children', '')) for c in found)

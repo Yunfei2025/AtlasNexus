@@ -22,9 +22,9 @@ def _td(txt, color='var(--text-secondary)', left=False, bold=False):
                                'textAlign': 'left' if left else 'right', 'fontWeight': '600' if bold else '400'})
 
 
-def _table(head, body):
+def _table(head, body, left=(0,)):
     return html.Div(html.Table(
-        [html.Thead(html.Tr([html.Th(h, style={**_TH, 'textAlign': 'left' if i == 0 else 'right'})
+        [html.Thead(html.Tr([html.Th(h, style={**_TH, 'textAlign': 'left' if i in left else 'right'})
                              for i, h in enumerate(head)])), html.Tbody(body)],
         style={'width': '100%', 'borderCollapse': 'collapse'}), style={'overflowX': 'auto'})
 
@@ -35,6 +35,23 @@ def _row(cells):
 
 def _note(txt, color='var(--text-muted)'):
     return html.Div(txt, style={'fontSize': '10px', 'color': color, 'lineHeight': '1.5', 'marginTop': '4px'})
+
+
+# Position badge: filled colour plus an arrow, so direction never relies on colour alone
+_BADGE = {1: ('▲ LONG', '52,211,153', _GREEN), -1: ('▼ SHORT', '248,113,113', _RED),
+          0: ('■ FLAT', '164,182,210', 'var(--text-muted)')}
+
+
+def signal_cell(direction, since):
+    label, rgb, color = _BADGE[int(direction)]
+    return html.Td([
+        html.Span(label, className='fd-signal', style={
+            'display': 'inline-block', 'minWidth': '64px', 'textAlign': 'center', 'padding': '3px 10px',
+            'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700', 'letterSpacing': '0.05em',
+            'color': color, 'background': f'rgba({rgb},0.18)', 'border': f'1px solid rgba({rgb},0.65)'}),
+        html.Span(f"since {since:%m-%d %H:%M}", style={'marginLeft': '8px', 'fontSize': '9px',
+                                                       'color': 'var(--text-muted)'}),
+    ], style={'padding': '5px 8px', 'textAlign': 'left', 'whiteSpace': 'nowrap'})
 
 
 def _cny(v):
@@ -55,20 +72,19 @@ def book_view(book, capital, risk_pct, loss_limit_pct):
                               html.Td(f"unavailable: {r['error']}", colSpan=8,
                                       style={'padding': '5px 8px', 'fontSize': '10px', 'color': _RED})]))
             continue
-        sig = {1: ('LONG', _GREEN), -1: ('SHORT', _RED), 0: ('FLAT', 'var(--text-muted)')}[r['signal']]
         body.append(_row([
             _td(r['product'], left=True, bold=True), _td(r['candidate']),
             _td(r['contract']), _td(f"{r['last_price']:,.2f}"),
-            _td(f"{sig[0]} · {r['since']:%m-%d %H:%M}", sig[1], bold=True),
-            _td(f"{r['stop_pts']:,.2f}"),
+            signal_cell(r['signal'], r['since']),
+            _td(f"{r['stop_pts']:,.2f}" + (" σ" if r.get('stop_src') == 'σ' else "")),
             _td('—' if r['stop_price'] is None else f"{r['stop_price']:,.2f}"),
             _td(str(r['lots']), _AMBER if r['lots'] == 0 else 'var(--text-primary)', bold=True),
             _td(_cny(r['risk_cny'])), _td(_cny(r['notional'])),
         ]))
-    head = ["Product", "Strategy", "Contract", "Last", "Signal since", "Stop dist", "Stop at", "Lots", "Risk CNY", "Notional"]
+    head = ["Product", "Strategy", "Contract", "Last", "Position", "Stop dist", "Stop at", "Lots", "Risk CNY", "Notional"]
     live = [r for r in book['rows'] if 'error' not in r]
     ts = max((r['last_time'] for r in live), default=None)
-    out = [_table(head, body),
+    out = [_table(head, body, left=(0, 4)),
            _note(f"Capital {_cny(capital)} · {risk_pct:g}% risk per product · gross notional {_cny(book['notional'])} "
                  f"({book['leverage']:.2f}x capital) · if every stop hits: {_cny(book['risk_cny'])} "
                  f"({book['risk_cny'] / capital * 100:.2f}% of capital) vs daily loss limit "
@@ -82,7 +98,8 @@ def book_view(book, capital, risk_pct, loss_limit_pct):
     for w in book['warnings']:
         out.append(_note(f"⚠ {w}", _AMBER))
     out.append(_note("Signal = the approved strategy at its default parameters on the latest bars; positions are "
-                     "closed before the close. Stop distance = stop multiple × 20-day daily σ. Lots = floor(risk "
+                     "closed before the close. Stop distance = the approved strategy's stop loss when it has one, "
+                     "else stop multiple × 20-day daily σ. Lots = floor(risk "
                      "budget / (stop distance × multiplier)). Multipliers are typed in from exchange specs: verify "
                      "before trading."))
     return html.Div(out)

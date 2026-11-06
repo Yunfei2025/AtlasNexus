@@ -12,7 +12,7 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 
-from futures.backtest.costs import default_cost_bp, product_of
+from futures.backtest.costs import apply_exits, default_cost_bp, product_of
 from futures.backtest.data_loader import load_raw_file
 from futures.backtest import minute_bars
 from futures.backtest.minute_bars import last_bar_time
@@ -100,9 +100,10 @@ def screen_rows(today=None):
     return rows
 
 
-def intraday_state(product, candidate):
+def intraday_state(product, candidate, exits=None):
     """Main contract (most traded on the latest day), its last price and the approved strategy's current
-    signal on the latest minute bars (tick files or the shared bar cache)."""
+    position on the latest minute bars (tick files or the shared bar cache): flat at every earlier close,
+    and after its stop / target if one is set (stays flat until the signal changes)."""
     contracts = product_minute_bars(product, latest=2)
     if not contracts:
         raise ValueError(f"no intraday data for {product}")
@@ -114,7 +115,12 @@ def intraday_state(product, candidate):
 
     name, bars = max(contracts.items(), key=recency)
     strategy, timeframe = candidate.split('@')
-    sig = STRATEGIES[strategy](resample_bars(bars, timeframe))['signal'].astype(float)
+    res = STRATEGIES[strategy](resample_bars(bars, timeframe))
+    sig = res['signal'].astype(float)
+    day = sig.index.normalize()
+    sig[np.r_[day[:-1] != day[1:], False]] = 0.0   # every close but the latest day's (still open)
+    if exits:
+        sig, _ = apply_exits(res, sig, exits)
     return {
         'contract': name, 'last_price': float(bars['close'].iloc[-1]), 'last_time': bars.index[-1],
         'signal': float(sig.iloc[-1]), 'since': sig.index[(sig != sig.shift()).to_numpy()][-1],
@@ -184,9 +190,14 @@ def build_book(capital, risk_pct, stop_mult, loss_limit_pct, today=None, max_n=M
         if a.get('status') == 'watch':
             book['warnings'].append(f"{prod} is on Watch: {a.get('status_reason', '')}")
         try:
-            st = intraday_state(prod, a['candidate'])
+            exits = a.get('exits') or {}
+            st = intraday_state(prod, a['candidate'], exits or None)
             sigma = float(close[sym_of[prod]].dropna().pct_change().tail(20).std())
-            stop_pts = stop_mult * sigma * st['last_price']
+            if exits.get('stop'):   # the approved strategy's own stop sizes the position
+                stop_pts = exits['stop'] * st['last_price'] / 100 if exits['unit'] == 'pct' else exits['stop']
+            else:
+                stop_pts = stop_mult * sigma * st['last_price']
+            row['stop_src'] = 'strategy' if exits.get('stop') else 'σ'
             mult = row['multiplier']
             if mult is None:
                 raise ValueError("no contract multiplier on file")

@@ -5,6 +5,7 @@ from .layout import build_futures_desk_layout
 from .pool_corr import register_pool_corr_callbacks
 from .research import register_research_callbacks
 from .today import register_today_callbacks
+from .live_ui import register_live_callbacks
 from .monitor_ui import register_monitor_callbacks
 
 
@@ -19,6 +20,7 @@ def register_futures_desk_callbacks(app):
     register_research_callbacks(app)
     register_today_callbacks(app)
     register_monitor_callbacks(app)
+    register_live_callbacks(app)
 
 
 __all__ = ["build_futures_desk_layout", "register_futures_desk_callbacks"]

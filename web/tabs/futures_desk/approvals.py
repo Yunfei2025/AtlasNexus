@@ -22,6 +22,14 @@ def load_approved(path=None):
         return {}
 
 
+def candidate_exits(wf, candidate):
+    """The stop / target a walk-forward candidate was scored with (its own when exits were searched)."""
+    row = (wf.get('rows') or {}).get(candidate) or {}
+    if 'exits' in row:
+        return row['exits']
+    return None if wf.get('exits') == 'search' else wf.get('exits')
+
+
 def approve(product, candidate, wf, path=None):
     """Record `candidate` (e.g. 'SAR@30min') as the product's approved strategy. Refuses a candidate
     that did not pass the gates in the walk-forward run `wf`."""
@@ -37,7 +45,7 @@ def approve(product, candidate, wf, path=None):
     data[product] = {
         'strategy': strategy, 'timeframe': timeframe, 'candidate': candidate,
         'approved_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
-        'cost_bp': wf['cost_bp'], 'wf_run_at': wf['run_at'], 'wf_last_day': wf['last_day'],
+        'cost_bp': wf['cost_bp'], 'exits': candidate_exits(wf, candidate), 'wf_run_at': wf['run_at'], 'wf_last_day': wf['last_day'],
         'pooled_sharpe': row['pooled'], 'sharpe_se': row['se'], 'per_contract': row['per_contract'],
         'trades': row['trades'], 'win': row['win'], 'payoff': row['payoff'],
         'expectancy_bp': row['expectancy_bp'], 'status': 'approved',
