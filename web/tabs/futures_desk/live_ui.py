@@ -5,10 +5,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from dash import ctx, html, no_update
+from dash import ctx, dcc, html, no_update
 from dash.dependencies import Input, Output, State
 
+import plotly.graph_objects as go
+
 from futures.backtest.live_bars import fetch_live_bars, fetch_lock
+from web.tabs.beta.data import THEME
 from . import approvals
 from .monitor import live_state
 from .pool import MAX_BOOK
@@ -28,6 +31,42 @@ def start_state(products, minutes):
         return None, "Refresh every 5, 10 or 15 minutes."
     return {'running': True, 'products': list(products), 'minutes': int(minutes),
             'started': datetime.now().strftime('%H:%M:%S')}, ''
+
+
+def live_chart(r):
+    """Today's bars of the strategy's bar size with each position's entry / exit and its stop and target."""
+    b = r['bars']
+    lab = lambda t: f"{t:%H:%M}"
+    fig = go.Figure(go.Candlestick(
+        x=[lab(t) for t in b.index], open=b['open'], high=b['high'], low=b['low'], close=b['close'],
+        increasing_line_color=_GREEN, decreasing_line_color=_RED, showlegend=False))
+    for t in r['trades']:
+        x0, x1 = lab(t['entry_t']), lab(t['exit_t'] if t['exit_t'] is not None else b.index[-1])
+        for key, color, name in (('stop', _RED, 'stop'), ('target', _GREEN, 'target')):
+            if t.get(key) is not None:
+                fig.add_trace(go.Scatter(x=[x0, x1], y=[t[key]] * 2, mode='lines', showlegend=False,
+                                         line={'color': color, 'width': 1.6, 'dash': 'dash'},
+                                         hovertemplate=f'{name} %{{y:,.2f}}<extra></extra>'))
+                fig.add_annotation(x=x1, y=t[key], text=f"{name} {t[key]:,.2f}", showarrow=False, xanchor='right',
+                                   yanchor='bottom' if key == 'target' else 'top', font={'size': 9, 'color': color})
+        fig.add_trace(go.Scatter(
+            x=[x0], y=[t['entry_px']], mode='markers', showlegend=False,
+            marker={'symbol': 'triangle-up' if t['direction'] > 0 else 'triangle-down', 'size': 12,
+                    'color': '#e9eef8', 'line': {'color': '#0b1328', 'width': 1}},
+            hovertemplate=f"{'long' if t['direction'] > 0 else 'short'} %{{y:,.2f}}<extra>entry</extra>"))
+        if t['exit_t'] is not None:
+            won = t['direction'] * (t['exit_px'] - t['entry_px']) > 0
+            fig.add_trace(go.Scatter(x=[lab(t['exit_t'])], y=[t['exit_px']], mode='markers', showlegend=False,
+                                     marker={'symbol': 'x', 'size': 10, 'color': _GREEN if won else _RED,
+                                             'line': {'width': 2}},
+                                     hovertemplate='%{y:,.2f}<extra>exit</extra>'))
+    fig.update_layout(
+        height=280, template=THEME['chart_template'], paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font={'color': '#e9eef8', 'size': 10}, margin=dict(l=52, r=12, t=26, b=30), xaxis_rangeslider_visible=False,
+        title={'text': f"{r['product']} · {r['candidate']} · {r['contract']}", 'font': {'size': 11}, 'x': 0.01, 'y': 0.96},
+        xaxis={'type': 'category', 'nticks': 8, 'gridcolor': 'rgba(100,140,200,0.12)', 'tickfont': {'size': 9}},
+        yaxis={'gridcolor': 'rgba(100,140,200,0.12)', 'tickformat': ',.2f'})
+    return fig
 
 
 def live_view(rows, fetch, state, now=None):
@@ -62,6 +101,10 @@ def live_view(rows, fetch, state, now=None):
             if r['exited_at'] is not None:
                 out.append(_note(f"{r['product']}: stop / target hit at {r['exited_at']:%H:%M}; flat until the "
                                  f"strategy's signal changes.", _AMBER))
+    if rows:
+        out.append(html.Div([dcc.Graph(figure=live_chart(r), config={'displayModeBar': False}) for r in rows],
+                            style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(380px, 1fr))',
+                                   'gap': '8px', 'marginTop': '8px'}))
     if fetch and fetch.get('skipped'):
         out.append(_note(f"Not fetched: {fetch['skipped']}.", _AMBER))
     for p, v in ((fetch or {}).get('products') or {}).items():

@@ -615,3 +615,24 @@ def test_live_state_position_stop_and_day_return(tmp_path, monkeypatch):
     found = []
     _walk(out, found)
     assert any('stop / target hit at 10:' in str(getattr(c, 'children', '')) for c in found)
+
+
+def test_day_trades_and_chart_show_entry_exit_stop_and_target():
+    idx = pd.date_range('2026-11-05 09:30', periods=6, freq='30min')
+    close = np.array([100.0, 100.5, 99.0, 99.0, 98.5, 98.0])
+    today = pd.DataFrame({'open': close, 'high': close + .3, 'low': close - .3, 'close': close,
+                          'signal': [1.0, 1.0, 0.0, -1.0, -1.0, -1.0],
+                          'fill': [100.0, 100.5, 99.0, 99.0, 98.5, 98.0]}, index=idx)
+    ex = {'stop': 1.0, 'target': 2.0, 'unit': 'pct'}
+    trades = monitor.day_trades(today, ex)
+    assert [(t['direction'], t['entry_px'], t['exit_px']) for t in trades] == [(1, 100.0, 99.0), (-1, 99.0, None)]
+    assert trades[0]['stop'] == pytest.approx(99.0) and trades[0]['target'] == pytest.approx(102.0)
+    assert trades[1]['stop'] == pytest.approx(99.99) and trades[1]['target'] == pytest.approx(97.02)   # short: inverted
+    assert monitor.exit_levels(100.0, 1, {'stop': 2, 'target': None, 'unit': 'pts'}) == {'stop': 98.0, 'target': None}
+    row = {'product': 'AU', 'candidate': 'SAR@30min', 'contract': 'AU2612', 'bars': today[['open', 'high', 'low', 'close']],
+           'trades': trades}
+    fig = live_ui.live_chart(row)
+    lines = [t for t in fig.data if getattr(t, 'mode', None) == 'lines']
+    assert sorted(set(round(y, 2) for t in lines for y in t.y)) == [97.02, 99.0, 99.99, 102.0]   # both trades, both levels
+    assert any(a.text.startswith('stop') for a in fig.layout.annotations)
+    assert len([t for t in fig.data if getattr(t, 'mode', None) == 'markers']) == 3                                  # 2 entries + 1 exit

@@ -125,6 +125,35 @@ def computed_to_applied(current, computed):
     return 'approved' if computed in ('ok', 'early') else computed
 
 
+def exit_levels(entry_px, direction, exits):
+    """Stop / target prices of a position entered at entry_px (None where that exit is off)."""
+    out = {'stop': None, 'target': None}
+    for k in ('stop', 'target'):
+        if entry_px is not None and direction and (exits or {}).get(k):
+            dist = entry_px * exits[k] / 100 if exits['unit'] == 'pct' else exits[k]
+            out[k] = entry_px - direction * dist if k == 'stop' else entry_px + direction * dist
+    return out
+
+
+def day_trades(today, exits):
+    """One dict per position taken today from a result frame (after apply_costs): direction, entry time / price
+    (bar close of the signal bar), its stop / target levels, and the exit time / price (the fill, so a stop or
+    target shows at its level; None while the position is still open)."""
+    sig, idx = today['signal'].to_numpy(), today.index
+    close, fill = today['close'].to_numpy(), today['fill'].to_numpy()
+    trades, cur = [], None
+    for k in range(len(today)):
+        if cur is not None and sig[k] != cur['direction']:
+            trades.append(dict(cur, exit_t=idx[k], exit_px=float(fill[k])))
+            cur = None
+        if cur is None and sig[k] != 0 and (k == 0 or sig[k - 1] != sig[k]):
+            cur = {'direction': int(sig[k]), 'entry_t': idx[k], 'entry_px': float(close[k])}
+            cur.update(exit_levels(cur['entry_px'], cur['direction'], exits))
+    if cur is not None:
+        trades.append(dict(cur, exit_t=None, exit_px=None))
+    return trades
+
+
 def live_state(product, rec, now=None, live_dir=None):
     """Where an approved strategy stands right now, from settled history plus today's live minute bars.
 
@@ -149,12 +178,7 @@ def live_state(product, rec, now=None, live_dir=None):
     entry_t = entries[-1] if pos != 0 and entries else None
     entry_px = float(res.loc[entry_t, 'close']) if entry_t is not None else None
     ex = rec.get('exits') or {}
-    levels = {'stop': None, 'target': None}
-    if entry_px is not None:
-        for k in ('stop', 'target'):
-            if ex.get(k):
-                dist = entry_px * ex[k] / 100 if ex['unit'] == 'pct' else ex[k]
-                levels[k] = entry_px - pos * dist if k == 'stop' else entry_px + pos * dist
+    levels = exit_levels(entry_px, pos, ex)
     exited = None   # the strategy still wants a position, but the stop / target took it out
     if pos == 0 and raw['signal'].iloc[-1] != 0 and ex and 'fill' in res:
         hit = today.index[(today['fill'] != today['close']).to_numpy()]
@@ -167,4 +191,5 @@ def live_state(product, rec, now=None, live_dir=None):
         'entry_px': entry_px, 'last_px': float(bars['close'].iloc[-1]),
         'day_return': float(today['strategy_returns'].sum()), 'round_trips': trade_stats(today, rec['cost_bp'])['trades'],
         'stop_px': levels['stop'], 'target_px': levels['target'], 'exited_at': exited,
+        'bars': today[['open', 'high', 'low', 'close']], 'trades': day_trades(today, ex),
     }
