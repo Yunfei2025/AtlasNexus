@@ -31,10 +31,11 @@ def register_correlation_callbacks(app) -> None:
          State('alpha-corr-lookback', 'value'),
          State('alpha-max-corr', 'value'),
          State('alpha-corr-candidate-count', 'value'),
-         State('alpha-selected-candidates', 'data')],
+         State('alpha-selected-candidates', 'data'),
+         State('alpha-dismissed-core-store', 'data')],
         prevent_initial_call=True,
     )
-    def check_correlation(n_clicks, core_categories, satellite_categories, lookback, max_corr, candidate_count, all_candidates):
+    def check_correlation(n_clicks, core_categories, satellite_categories, lookback, max_corr, candidate_count, all_candidates, dismissed_core):
         categories = list(core_categories or []) + list(satellite_categories or [])
         if not n_clicks or not categories:
             return html.Div("Select categories and click Check Correlation.", style={'color': THEME['text_sub']}), [], {}, []
@@ -65,6 +66,10 @@ def register_correlation_callbacks(app) -> None:
             ]
         except Exception:
             core_seed = []
+        # Core names the user removed with × stay out of the seed (and so out of
+        # the curated list and matrix) until the session ends.
+        _dismissed = {(str(d.get('spread_type', '')), str(d.get('instrument', ''))) for d in (dismissed_core or [])}
+        core_seed = [c for c in core_seed if ('TenorSpread', str(c.get('ID', ''))) not in _dismissed]
 
         if all_candidates and len(all_candidates) > 0:
             df_candidates = pd.DataFrame(all_candidates)
@@ -359,6 +364,26 @@ def register_correlation_callbacks(app) -> None:
             return [e for e in current if not (e.get('spread_type') == trig_stype and e.get('instrument') == trig_inst)]
 
         raise PreventUpdate
+
+    @app.callback(
+        Output('alpha-dismissed-core-store', 'data'),
+        Input({'type': 'curated-del', 'stype': ALL, 'inst': ALL}, 'n_clicks'),
+        State('alpha-dismissed-core-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def remember_dismissed(del_clicks, dismissed):
+        ctx = callback_context
+        if not ctx.triggered or not any(nc for nc in del_clicks if nc):
+            raise PreventUpdate
+        try:
+            trig = _json.loads(ctx.triggered[0]['prop_id'].rsplit('.', 1)[0])
+        except (ValueError, TypeError):
+            raise PreventUpdate
+        entry = {'spread_type': trig.get('stype', ''), 'instrument': trig.get('inst', '')}
+        dismissed = list(dismissed or [])
+        if entry in dismissed:
+            raise PreventUpdate
+        return dismissed + [entry]
 
     @app.callback(
         Output('alpha-curated-instruments-store', 'data', allow_duplicate=True),
