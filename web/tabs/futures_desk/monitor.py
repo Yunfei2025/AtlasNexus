@@ -158,20 +158,23 @@ def live_state(product, rec, now=None, live_dir=None):
     """Where an approved strategy stands right now, from settled history plus today's live minute bars.
 
     Same rules as the walk-forward (default parameters, its cost, flat at every close, its stop / target), with
-    today's last bar left open. None when no live bars have been fetched today."""
+    today's last bar left open. After the close it is the finished last session (file marked complete).
+    None when no live bars have been fetched for today (and no finished session is on file)."""
     now = now or datetime.now()
     contract, meta = live_meta_for(product, live_dir)
-    if contract is None or meta.get('date') != now.strftime('%Y-%m-%d'):
+    if contract is None or not (meta.get('complete') or meta.get('date') == now.strftime('%Y-%m-%d')):
         return None
+    day = pd.Timestamp(meta['date'])
+    closed = bool(meta.get('complete'))
     live, _ = load_live(contract, live_dir)
     bars = with_live(load_minute_bars(contract), live)
     strategy, timeframe = rec['candidate'].split('@')
     raw = STRATEGIES[strategy](resample_bars(bars, timeframe))
-    res = apply_costs(raw, rec['cost_bp'], flat_at_close=True, exits=rec.get('exits'), final_bar_is_close=False)
-    today = res[res.index.normalize() == pd.Timestamp(now.date())]
+    res = apply_costs(raw, rec['cost_bp'], flat_at_close=True, exits=rec.get('exits'), final_bar_is_close=closed)
+    today = res[res.index.normalize() == day]
     if today.empty:
         return None
-    pos = float(res['signal'].iloc[-1])
+    pos = float(today['signal'].iloc[-1])
     sig = res['signal']
     changed = today.index[(sig != sig.shift()).loc[today.index].to_numpy()]
     entries = [t for t in changed if sig.loc[t] != 0]
@@ -186,9 +189,9 @@ def live_state(product, rec, now=None, live_dir=None):
     since = entry_t if entry_t is not None else (exited if exited is not None else (changed[-1] if len(changed) else None))
     return {
         'product': product, 'contract': contract, 'candidate': rec['candidate'],
-        'as_of': bars.index.max(), 'fetched_at': pd.Timestamp(meta['fetched_at']),
-        'position': int(pos), 'since': since,
-        'entry_px': entry_px, 'last_px': float(bars['close'].iloc[-1]),
+        'as_of': today.index.max(), 'fetched_at': pd.Timestamp(meta['fetched_at']),
+        'position': int(pos), 'since': since, 'day': day, 'closed': closed,
+        'entry_px': entry_px, 'last_px': float(today['close'].iloc[-1]),
         'day_return': float(today['strategy_returns'].sum()), 'round_trips': trade_stats(today, rec['cost_bp'])['trades'],
         'stop_px': levels['stop'], 'target_px': levels['target'], 'exited_at': exited,
         'bars': today[['open', 'high', 'low', 'close']], 'trades': day_trades(today, ex),

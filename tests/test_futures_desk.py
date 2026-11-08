@@ -528,11 +528,33 @@ class _FakeWind:
 CODES = ['AU2612.SHF', 'IC2612.CFE', 'TL2612.CFE']
 
 
-def test_live_fetch_only_asked_products_and_never_outside_trading_hours(tmp_path):
-    wind = _FakeWind(_wind_frame('2026-11-05', '09:00', '10:30'))
+def test_live_fetch_after_close_is_once_and_only_when_wind_enabled(tmp_path, monkeypatch):
+    wind = _FakeWind(_wind_frame('2026-11-05', '09:00', '15:14'))
     off = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 18, 0), wsi=wind, codes=CODES,
-                                    is_trading=lambda n: False, live_dir=tmp_path)
+                                    is_trading=lambda n: False, live_dir=tmp_path, wind_off=lambda: True)
     assert off['skipped'] and wind.calls == []
+    kw = dict(wsi=wind, codes=CODES, is_trading=lambda n: False, live_dir=tmp_path, wind_off=lambda: False)
+    first = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 18, 0), **kw)
+    assert first['products']['AU']['rows'] > 300 and len(wind.calls) == 1
+    assert live_bars.load_index(tmp_path)['AU2612']['complete'] is True
+    again = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 19, 0), **kw)     # served from the file
+    sat = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 6, 8, 0), **kw)        # before the next open: still Thursday's file
+    assert len(wind.calls) == 1 and again['products']['AU']['new'] == 0 and sat['products']['AU']['new'] == 0
+    hist = _wind_frame('2026-11-03', '09:00', '14:59').rename(columns=str.lower).assign(hs_bp=np.float32('nan'))
+    monkeypatch.setattr(monitor, 'load_minute_bars', lambda c: hist)
+    monkeypatch.setattr(monitor, 'load_live', lambda c, d=None: live_bars.load_live(c, tmp_path))
+    monkeypatch.setattr(monitor, 'live_meta_for', lambda p, d=None: live_bars.live_meta_for(p, tmp_path))
+    monkeypatch.setattr(monitor, 'STRATEGIES', {'SAR': lambda df: df.assign(signal=1.0)})
+    st = monitor.live_state('AU', {'candidate': 'SAR@30min', 'cost_bp': 0.4, 'exits': None},
+                            now=datetime(2026, 11, 6, 8, 0))
+    assert st is not None and st['closed'] and st['position'] == 0 and st['day'] == pd.Timestamp('2026-11-05')
+    open_skip = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 6, 10, 0), closed_only=True,
+                                          wsi=wind, codes=CODES, is_trading=lambda n: True, live_dir=tmp_path)
+    assert open_skip['skipped'] and len(wind.calls) == 1
+
+
+def test_live_fetch_only_asked_products(tmp_path):
+    wind = _FakeWind(_wind_frame('2026-11-05', '09:00', '10:30'))
     on = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 10, 30), wsi=wind, codes=CODES,
                                    is_trading=lambda n: True, live_dir=tmp_path)
     assert [c[0] for c in wind.calls] == ['AU2612.SHF']          # IC and TL were never requested
@@ -629,10 +651,28 @@ def test_day_trades_and_chart_show_entry_exit_stop_and_target():
     assert trades[0]['stop'] == pytest.approx(99.0) and trades[0]['target'] == pytest.approx(102.0)
     assert trades[1]['stop'] == pytest.approx(99.99) and trades[1]['target'] == pytest.approx(97.02)   # short: inverted
     assert monitor.exit_levels(100.0, 1, {'stop': 2, 'target': None, 'unit': 'pts'}) == {'stop': 98.0, 'target': None}
-    row = {'product': 'AU', 'candidate': 'SAR@30min', 'contract': 'AU2612', 'bars': today[['open', 'high', 'low', 'close']],
+    row = {'product': 'AU', 'candidate': 'SAR@30min', 'contract': 'AU2612', 'day': pd.Timestamp('2026-11-05'), 'closed': False, 'bars': today[['open', 'high', 'low', 'close']],
            'trades': trades}
     fig = live_ui.live_chart(row)
     lines = [t for t in fig.data if getattr(t, 'mode', None) == 'lines']
     assert sorted(set(round(y, 2) for t in lines for y in t.y)) == [97.02, 99.0, 99.99, 102.0]   # both trades, both levels
     assert any(a.text.startswith('stop') for a in fig.layout.annotations)
     assert len([t for t in fig.data if getattr(t, 'mode', None) == 'markers']) == 3                                  # 2 entries + 1 exit
+
+
+def test_daily_candidates_on_the_continuous_series(tmp_path):
+    from futures.backtest import walkforward as wfm
+    from web.tabs.futures_desk import research
+    idx = pd.bdate_range('2022-01-03', periods=900)
+    c = pd.Series(100 + np.cumsum(np.sin(np.arange(900) / 15) * 0.8), index=idx)
+    df = pd.DataFrame({'Open': c, 'High': c + 1, 'Low': c - 1, 'Close': c, 'Volume': 100.0})
+    path = tmp_path / 'dailyK.pkl'
+    pickle.dump({'AU.SHF': df}, open(path, 'wb'))
+    d = wfm.run_daily('AU', 0.4, recent_from=idx[-120], path=path)
+    assert d['start'] == '2022-01-03' and set(d['rows']) <= {f'{s}@1D' for s in wfm.DAILY_STRATEGIES}
+    r = d['rows']['MA@1D']
+    assert r['days'] == 900 and r['recent_days'] == 120 and r['trades'] > 5 and r['years'] >= 2
+    assert wfm.run_daily('ZZ', 0.4, path=path) is None
+    wf = {'rows': {'SAR@30min': {'pooled': 0.9, 'se': 1.3}}, 'daily': d}
+    assert 'best intraday: SAR@30min +0.90' in research.daily_vs_intraday(wf) and 'same dates' in research.daily_vs_intraday(wf)
+    assert research.daily_table(wf) is not None and research.daily_table({'rows': {}}) is None

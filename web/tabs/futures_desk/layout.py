@@ -70,14 +70,14 @@ def build_futures_desk_layout():
     ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px', 'padding': '16px', 'margin': '10px'})
 
     live = html.Div([
-        html.Div("Live monitor (Wind minute bars, only the products you pick)", style=_head),
+        html.Div("Live monitor (Wind minute bars; after the close the finished day is fetched once and saved)", style=_head),
         html.Div([
             html.Div([html.Label("Products (max 5)", style=_lbl),
                       dcc.Dropdown(id='fd-live-products', multi=True, placeholder="Pick approved products",
                                    style={'minWidth': '280px', 'fontSize': '10px'})]),
             html.Div([html.Label("Refresh every", style=_lbl),
                       dcc.Dropdown(id='fd-live-minutes', options=[{'label': f'{m} min', 'value': m} for m in (5, 10, 15)],
-                                   value=5, clearable=False, style={'width': '100px', 'fontSize': '10px'})]),
+                                   value=15, clearable=False, style={'width': '100px', 'fontSize': '10px'})]),
             html.Button("▶ Start live", id='fd-live-start', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}),
             html.Button("■ Stop", id='fd-live-stop', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}),
             html.Div(id='fd-live-note', style={'fontSize': '10px', 'color': 'var(--text-muted)', 'alignSelf': 'flex-end'}),

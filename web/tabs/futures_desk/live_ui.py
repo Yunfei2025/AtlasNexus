@@ -7,6 +7,7 @@ from datetime import datetime
 
 from dash import ctx, dcc, html, no_update
 from dash.dependencies import Input, Output, State
+from dash.exceptions import PreventUpdate
 
 import plotly.graph_objects as go
 
@@ -14,7 +15,7 @@ from futures.backtest.live_bars import fetch_live_bars, fetch_lock
 from web.tabs.beta.data import THEME
 from . import approvals
 from .monitor import live_state
-from .pool import MAX_BOOK
+from .pool import MAX_BOOK, select_book
 from .today import _AMBER, _GREEN, _RED, _TH, _note, _row, _table, _td, signal_cell
 
 INTERVAL_CHOICES_MIN = (5, 10, 15)
@@ -63,7 +64,8 @@ def live_chart(r):
     fig.update_layout(
         height=280, template=THEME['chart_template'], paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
         font={'color': '#e9eef8', 'size': 10}, margin=dict(l=52, r=12, t=26, b=30), xaxis_rangeslider_visible=False,
-        title={'text': f"{r['product']} · {r['candidate']} · {r['contract']}", 'font': {'size': 11}, 'x': 0.01, 'y': 0.96},
+        title={'text': f"{r['product']} · {r['candidate']} · {r['contract']} · {r['day']:%m-%d}"
+                       + (" · closed" if r.get('closed') else ""), 'font': {'size': 11}, 'x': 0.01, 'y': 0.96},
         xaxis={'type': 'category', 'nticks': 8, 'gridcolor': 'rgba(100,140,200,0.12)', 'tickfont': {'size': 9}},
         yaxis={'gridcolor': 'rgba(100,140,200,0.12)', 'tickformat': ',.2f'})
     return fig
@@ -76,12 +78,13 @@ def live_view(rows, fetch, state, now=None):
     out = []
     if not rows:
         out.append(_note("No live bars fetched yet today for the chosen products." if running else
-                         "Choose products and click ▶ Start live."))
+                         "No saved session for the book's products yet. While the market is open, choose products "
+                         "and click ▶ Start live."))
     else:
         body = []
         for r in rows:
             age = (now - r['fetched_at']).total_seconds() / 60
-            late = running and age > 2 * state['minutes']
+            late = running and not r['closed'] and age > 2 * state['minutes']
             pnl = r['day_return'] * 100
             body.append(_row([
                 _td(r['product'], left=True, bold=True), _td(r['candidate']), _td(r['contract']),
@@ -92,7 +95,8 @@ def live_view(rows, fetch, state, now=None):
                 _td('—' if r['target_px'] is None else f"{r['target_px']:,.2f}"),
                 _td(f"{pnl:+.2f}%", _GREEN if pnl > 0 else (_RED if pnl < 0 else 'var(--text-secondary)'), bold=True),
                 _td(str(r['round_trips'])),
-                _td(f"{r['as_of']:%H:%M} · {age:.0f} min ago", _AMBER if late else 'var(--text-muted)'),
+                _td(f"{r['day']:%m-%d} closed · to {r['as_of']:%H:%M}" if r['closed'] else
+                    f"{r['as_of']:%H:%M} · {age:.0f} min ago", _AMBER if late else 'var(--text-muted)'),
             ]))
         head = ["Product", "Strategy", "Contract", "Last", "Position", "Entry", "Stop at", "Target at",
                 "Today (net)", "Round trips", "Bars to · fetched"]
@@ -105,15 +109,17 @@ def live_view(rows, fetch, state, now=None):
         out.append(html.Div([dcc.Graph(figure=live_chart(r), config={'displayModeBar': False}) for r in rows],
                             style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(380px, 1fr))',
                                    'gap': '8px', 'marginTop': '8px'}))
-    if fetch and fetch.get('skipped'):
+    if fetch and fetch.get('skipped') and running:
         out.append(_note(f"Not fetched: {fetch['skipped']}.", _AMBER))
     for p, v in ((fetch or {}).get('products') or {}).items():
         if 'error' in v:
             out.append(_note(f"{p}: {v['error']}", _RED))
     out.append(_note("Strategy replayed at default parameters on settled history plus today's live minute bars, "
-                     "net of its cost and with its stop / target; the latest bar is still forming. Paper P&L as a "
-                     "return on notional, not your fills. Wind is called only for the products listed, only while "
-                     "running and inside trading hours, and only for the minutes since the last fetch."))
+                     "net of its cost and with its stop / target; while the market is open the latest bar is still "
+                     "forming. Paper P&L as a return on notional, not your fills. Open market: Wind is called only "
+                     "for the products listed, only while running, and only for the minutes since the last fetch. "
+                     "After the close the finished session is fetched once and saved in input/futures_desk/live; "
+                     "later views read that file."))
     return html.Div(out)
 
 
@@ -144,25 +150,35 @@ def register_live_callbacks(app):
 
     @app.callback(
         Output('fd-live-container', 'children'),
-        [Input('fd-live-interval', 'n_intervals'), Input('fd-live-state', 'data')],
+        [Input('fd-live-interval', 'n_intervals'), Input('fd-live-state', 'data'), Input('fd-subtabs', 'value'),
+         Input('fd-data-stamp', 'data')],
     )
-    def fd_live_refresh(_n, state):
-        if not state or not state.get('products'):
+    def fd_live_refresh(_n, state, subtab, _stamp):
+        """Running: incremental fetch of the chosen products. Otherwise the book's products, from the saved
+        session; the finished day is fetched from Wind once when it is not on file yet."""
+        if subtab != 'monitor':
+            raise PreventUpdate
+        running = bool(state and state.get('running'))
+        if state and state.get('products'):
+            products = state['products']
+        else:
+            try:
+                products = select_book()['chosen']
+            except Exception:
+                products = []
+        if not products:
             return live_view([], None, state)
-        running = bool(state.get('running'))
-        fetch = None
-        if running:
-            if not fetch_lock.acquire(blocking=False):   # a previous fetch is still going: skip this tick
-                return no_update
-            fetch_lock.release()
-            fetch = fetch_live_bars(state['products'])
+        if not fetch_lock.acquire(blocking=False):   # a previous fetch is still going: skip this tick
+            return no_update
+        fetch_lock.release()
+        fetch = fetch_live_bars(products, closed_only=not running)
         approved = approvals.load_approved()
         rows = []
-        for p in state['products']:
+        for p in products:
             try:
                 r = live_state(p, approved[p]) if p in approved else None
             except Exception as e:
-                (fetch or {}).setdefault('products', {})[p] = {'error': f'live position failed: {e}'}
+                fetch.setdefault('products', {})[p] = {'error': f'live position failed: {e}'}
                 r = None
             if r:
                 rows.append(r)

@@ -5,6 +5,9 @@ result is merged into input/futures_desk/live/<contract>.parquet (today's bars o
 trading hours, or with FI_DISABLE_WIND set, nothing is requested. The desk reads these files as an overlay on
 top of the settled minute-bar cache; they never enter the cache, the walk-forward or the Monitor's forward
 statuses.
+
+After the close the last session is fetched once (marked 'complete' in index.json) and then served from the
+file, so the Monitor can show the finished day without calling Wind again.
 """
 
 import json
@@ -19,6 +22,7 @@ from settings.paths import DIR_INPUT
 
 LIVE_DIR = DIR_INPUT / 'futures_desk' / 'live'
 SESSION_START = '08:55:00'
+CLOSE_TIME = '15:15:00'   # after this a day session is over (CFFEX bond futures close 15:15)
 FIELDS = "open,high,low,close,volume"
 OVERLAP_MIN = 2   # re-request the last minutes: the newest bar is still forming when it was fetched
 fetch_lock = threading.Lock()
@@ -26,6 +30,20 @@ fetch_lock = threading.Lock()
 
 def _dir(live_dir):
     return live_dir or LIVE_DIR
+
+
+def session_days(now, n=5):
+    """Candidate session days, newest first: today once the session has started, else the previous weekday,
+    then earlier weekdays (n of them, so a holiday falls back to the last day that traded)."""
+    d = now.date()
+    if now.weekday() >= 5 or now.strftime('%H:%M:%S') < SESSION_START:
+        d -= timedelta(days=1)
+    out = []
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d.strftime('%Y-%m-%d'))
+        d -= timedelta(days=1)
+    return out
 
 
 def _product(code):
@@ -102,20 +120,31 @@ def _normalize(frame, day):
     return f[['open', 'high', 'low', 'close', 'volume', 'hs_bp']].astype({'hs_bp': 'float32'})
 
 
-def fetch_live_bars(products, now=None, wsi=None, codes=None, is_trading=None, live_dir=None):
-    """Fetch today's minute bars of each product's main contract and merge them into the live files.
+def fetch_live_bars(products, now=None, wsi=None, codes=None, is_trading=None, live_dir=None,
+                    closed_only=False, wind_off=None):
+    """Fetch the day's minute bars of each product's main contract and merge them into the live files.
 
-    Returns {'skipped': reason or None, 'products': {product: {'contract', 'rows', 'new', 'last'} or
-    {'error'}}}. `wsi`, `codes` and `is_trading` can be injected (tests)."""
+    Market open: today's bars, incrementally. Market closed: the last session once, then nothing (the file is
+    marked complete). closed_only=True never fetches while the market is open (the Monitor shows the finished
+    day without Start). Returns {'skipped': reason or None, 'products': {product: {'contract', 'rows', 'new',
+    'last'} or {'error'}}}. `wsi`, `codes`, `is_trading` and `wind_off` can be injected (tests)."""
     now = now or datetime.now()
     if is_trading is None:
         from data.providers.retrieve import _is_trading_hours as is_trading
-    if not is_trading(now):
-        return {'skipped': 'outside trading hours (or Wind disabled)', 'products': {}}
+    t = now.strftime('%H:%M:%S')
+    past_close = now.weekday() >= 5 or t >= CLOSE_TIME or t < SESSION_START
+    open_now = bool(is_trading(now)) and not past_close
+    if open_now and closed_only:
+        return {'skipped': 'market open: press Start live for intraday updates', 'products': {}}
+    if not open_now:
+        if wind_off is None:
+            from data.providers.retrieve import _wind_disabled as wind_off
+        if wind_off():
+            return {'skipped': 'Wind disabled', 'products': {}}
     if wsi is None:
         from data.providers.retrieve import _wsi as wsi
     out = {}
-    day = now.strftime('%Y-%m-%d')
+    today = now.strftime('%Y-%m-%d')
     with fetch_lock:
         try:
             code_of = main_contract_codes(codes)
@@ -129,28 +158,40 @@ def fetch_live_bars(products, now=None, wsi=None, codes=None, is_trading=None, l
                 continue
             contract = code.split('.')[0]
             try:
-                old, meta = load_live(contract, live_dir)
-                if old is not None and meta and meta.get('date') == day and not old.empty:
-                    start = (old.index.max() - timedelta(minutes=OVERLAP_MIN)).strftime('%Y-%m-%d %H:%M:%S')
-                else:
-                    old, start = None, f'{day} {SESSION_START}'
-                new = _normalize(wsi(code, FIELDS, start, now.strftime('%Y-%m-%d %H:%M:%S')), day)
-                if new.empty and old is None:
-                    out[prod] = {'error': 'Wind returned no bars (not connected, or the session has not started)'}
-                    continue
-                merged = new if old is None else pd.concat([old, new])
-                merged = merged[~merged.index.duplicated(keep='last')].sort_index()
-                d = str(_dir(live_dir))
-                os.makedirs(d, exist_ok=True)
-                tmp = os.path.join(d, f'{contract}.parquet.tmp')
-                merged.to_parquet(tmp, compression='zstd')
-                os.replace(tmp, os.path.join(d, f'{contract}.parquet'))
-                index = {c: m for c, m in index.items()
-                         if not (m.get('product') == prod and (c == contract or m.get('date') != day))}
-                index[contract] = {'product': prod, 'date': day, 'fetched_at': now.strftime('%Y-%m-%d %H:%M:%S'),
-                                   'last': str(merged.index.max()), 'rows': int(len(merged))}
-                out[prod] = {'contract': contract, 'rows': int(len(merged)), 'new': int(len(new)),
-                             'last': merged.index.max()}
+                for day in ([today] if open_now else session_days(now)):
+                    old, meta = load_live(contract, live_dir)
+                    same = old is not None and meta and meta.get('date') == day and not old.empty
+                    if same and meta.get('complete') and not open_now:
+                        out[prod] = {'contract': contract, 'rows': int(len(old)), 'new': 0, 'last': old.index.max()}
+                        break
+                    if same:
+                        start = (old.index.max() - timedelta(minutes=OVERLAP_MIN)).strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        old, start = None, f'{day} {SESSION_START}'
+                    end = now.strftime('%Y-%m-%d %H:%M:%S') if day == today and open_now else f'{day} 15:30:00'
+                    new = _normalize(wsi(code, FIELDS, start, end), day)
+                    if new.empty and old is None:
+                        if open_now:
+                            out[prod] = {'error': 'Wind returned no bars (not connected, or the session has not '
+                                                  'started)'}
+                            break
+                        out[prod] = {'error': f'Wind returned no bars for {day} (not connected, or a holiday)'}
+                        continue   # earlier day
+                    merged = new if old is None else pd.concat([old, new])
+                    merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+                    d = str(_dir(live_dir))
+                    os.makedirs(d, exist_ok=True)
+                    tmp = os.path.join(d, f'{contract}.parquet.tmp')
+                    merged.to_parquet(tmp, compression='zstd')
+                    os.replace(tmp, os.path.join(d, f'{contract}.parquet'))
+                    index = {c: m for c, m in index.items()
+                             if not (m.get('product') == prod and (c == contract or m.get('date') != day))}
+                    index[contract] = {'product': prod, 'date': day, 'fetched_at': now.strftime('%Y-%m-%d %H:%M:%S'),
+                                       'last': str(merged.index.max()), 'rows': int(len(merged)),
+                                       'complete': bool(not open_now and (day != today or past_close))}
+                    out[prod] = {'contract': contract, 'rows': int(len(merged)), 'new': int(len(new)),
+                                 'last': merged.index.max()}
+                    break
             except Exception as e:
                 out[prod] = {'error': str(e)}
         _save_index(index, live_dir)

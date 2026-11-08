@@ -1,7 +1,7 @@
 """Multi-contract intraday strategy evaluation for one futures product.
 
 Every (strategy, bar size) candidate runs at default parameters on each contract's own main-contract
-days, flat at every close, net of costs. The result is the evidence the Futures Desk uses to approve a
+days, flat at every close, net of costs. run_daily() adds daily-bar candidates (held overnight) for comparison. The result is the evidence the Futures Desk uses to approve a
 strategy: Sharpe per contract and pooled, its standard error, win rate, payoff and expectancy.
 No parameters are tuned (see the alpha no-param-tuning finding): a candidate either holds up across
 contracts or it does not.
@@ -15,7 +15,9 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from .costs import DEFAULT_FEE_BP, FEE_BP, apply_costs, normalize_exits, trade_stats
+from settings.paths import DIR_INPUT
+
+from .costs import DEFAULT_FEE_BP, FEE_BP, apply_costs, normalize_exits, product_of, trade_stats
 from .data_loader import load_raw_file
 from . import minute_bars
 from .minute_bars import MIN_ROWS, list_contracts, load_index, load_minute_bars, resample_minute_bars
@@ -43,6 +45,11 @@ STRATEGIES = {
 # Walk-forward strategy name -> the Research strategy selector's value
 PANEL_STRATEGY = {'Mom': 'Momentum'}
 TIMEFRAMES = ['15min', '30min', '1h']
+# Daily-bar candidates run on the long continuous daily series, held overnight. VWAP and Momentum reset every
+# day, so they have no daily version.
+DAILY_STRATEGIES = ['MA', 'Boll', 'ATR', 'SAR', 'DeMark']
+DAILY_FILE = DIR_INPUT / 'futures-dailyK_con.pkl'
+MIN_DAILY_TRADES = 30
 # Approval gates (shown in the UI next to the table)
 MIN_CONTRACT_DAYS = 15   # a contract with fewer main-contract days is too short to judge
 MIN_TRADES = 30
@@ -114,6 +121,48 @@ def _sharpe_se(x):
     n = len(pd.Series(x).dropna())
     s = _sharpe(x)
     return float(ANN * math.sqrt((1 + 0.5 * (s / ANN) ** 2) / n)) if n > 4 and not math.isnan(s) else float('nan')
+
+
+def run_daily(product, cost_bp, recent_from=None, exits=None, path=None):
+    """Daily-bar candidates for `product` on its continuous daily series (held overnight, net of cost_bp per
+    side). Each row has the full-history Sharpe and the Sharpe since `recent_from` (the intraday run's first
+    day), so the two can be compared over the same dates. None when the series is missing.
+    Roll gaps of the continuous series are not adjusted."""
+    try:
+        raw = load_raw_file(str(path or DAILY_FILE)) or {}
+    except Exception:
+        return None
+    key = next((k for k in raw if product_of(k) == product), None)
+    if key is None:
+        return None
+    df = raw[key].copy()
+    df.columns = [str(c).lower() for c in df.columns]
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+    for c in ('open', 'high', 'low', 'close', 'volume'):
+        df[c] = pd.to_numeric(df.get(c), errors='coerce')
+    df = df.dropna(subset=['close'])
+    df = df[df['close'] > 0]
+    rows = {}
+    for sname in DAILY_STRATEGIES:
+        try:
+            res = apply_costs(STRATEGIES[sname](df), cost_bp, flat_at_close=False, exits=exits)
+        except Exception:
+            continue
+        pnl = daily_pnl_of(res)
+        recent = pnl[pnl.index >= pd.Timestamp(recent_from)] if recent_from is not None else pnl
+        yearly = pnl.groupby(pnl.index.year).agg(['sum', 'size'])
+        yearly = yearly[yearly['size'] >= 100]
+        st = trade_stats(res, cost_bp)
+        rows[f'{sname}@1D'] = {
+            'pooled': _sharpe(pnl), 'se': _sharpe_se(pnl), 'days': int(len(pnl)),
+            'recent': _sharpe(recent), 'recent_se': _sharpe_se(recent), 'recent_days': int(len(recent)),
+            'trades': st['trades'], 'win': st['win'], 'payoff': st['payoff'], 'expectancy_bp': st['expectancy_bp'],
+            'years_positive': int((yearly['sum'] > 0).sum()), 'years': int(len(yearly)),
+            'total_return': float(pnl.sum()),
+        }
+    return {'start': str(df.index.min().date()), 'end': str(df.index.max().date()), 'exits': exits,
+            'min_trades': MIN_DAILY_TRADES, 'rows': rows}
 
 
 def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress=None, exits=None,
@@ -204,6 +253,7 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
                       for c in contract},
         'gates': {'min_contract_days': MIN_CONTRACT_DAYS, 'min_trades': MIN_TRADES},
         'rows': rows,
+        'daily': run_daily(product, cost, main_of.index.min(), exits if isinstance(exits, dict) else None),
         'daily_pnl': {k: {str(d.date()): float(v) for d, v in s.items()} for k, s in pnl.items()},
     }
 

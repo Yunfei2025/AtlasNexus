@@ -78,6 +78,8 @@ def wf_table(wf, approved_candidate=None):
                  f"cost {wf['cost_bp']:.2f}bp/side "
                  f"(half-spread {wf['half_spread_bp']:.2f} + fee {wf['fee_bp']:.2f}) · run {wf['run_at']}",
                  style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '2px'}),
+        html.Div(daily_vs_intraday(wf) + ".",
+                 style={'fontSize': '10px', 'color': 'var(--text-primary)', 'marginBottom': '4px'}),
         html.Div(f"{n_pass} of {len(wf['rows'])} candidates pass" + (f" (best {MAX_SHOWN} shown)" if n_pass > MAX_SHOWN else "") + f". Gate: pooled Sharpe > 0, ≥ {g['min_trades']} trades, "
                  f"net-positive on at least 2/3 of contracts with ≥ {g['min_contract_days']} days. "
                  f"Sharpe per contract; contracts: {cdesc}. Click a candidate (or one contract's Sharpe) to chart it below.",
@@ -90,6 +92,51 @@ def wf_table(wf, approved_candidate=None):
                             style={'width': '100%', 'borderCollapse': 'collapse'}), style={'overflowX': 'auto'})
         if body else html.Div("No candidate passes the gates for this product. Use Controls > Run Backtest to "
                               "look at a strategy anyway.", style={'fontSize': '10px', 'color': _AMBER_TXT}),
+        daily_table(wf),
+    ])
+
+
+def daily_vs_intraday(wf):
+    """One line: best intraday candidate vs best daily-bar candidate over the same dates (whether or not
+    they pass the gates)."""
+    ok = [(k, r) for k, r in wf['rows'].items() if not math.isnan(r['pooled'])]
+    bi = max(ok, key=lambda kv: kv[1]['pooled'], default=None)
+    d = (wf.get('daily') or {}).get('rows') or {}
+    bd = max(((k, r) for k, r in d.items() if not math.isnan(r['recent'])), key=lambda kv: kv[1]['recent'], default=None)
+    return ("best intraday: " + ("none" if bi is None else f"{bi[0]} {bi[1]['pooled']:+.2f} ± {bi[1]['se']:.2f}")
+            + " · best daily over the same dates: "
+            + ("none" if bd is None else f"{bd[0]} {bd[1]['recent']:+.2f} ± {bd[1]['recent_se']:.2f}"))
+
+
+def daily_table(wf):
+    """Daily-bar candidates (held overnight) on the continuous daily series, for comparison."""
+    dd = wf.get('daily')
+    if not dd or not dd.get('rows'):
+        return None
+    head = ["Candidate", "Same dates", "± SE", "Days", "Full history", "± SE", "Years", "Trades", "Win", "Payoff", "Exp bp"]
+    body = []
+    for name, r in sorted(dd['rows'].items(), key=lambda kv: -(kv[1]['recent'] if not math.isnan(kv[1]['recent']) else -9)):
+        body.append(html.Tr([
+            _cell(name, left=True, bold=True),
+            _cell(*_num(r['recent'], '+.2f')), _cell(*_num(r['recent_se'], '.2f', color=False)),
+            _cell(str(r['recent_days'])),
+            _cell(*_num(r['pooled'], '+.2f')), _cell(*_num(r['se'], '.2f', color=False)),
+            _cell(f"{r['years_positive']}/{r['years']} +"),
+            _cell(str(r['trades'])),
+            _cell('—' if r['win'] is None or math.isnan(r['win']) else f"{r['win'] * 100:.0f}%"),
+            _cell(*_num(r['payoff'], '.2f', color=False)), _cell(*_num(r['expectancy_bp'], '+.1f')),
+        ], style={'borderBottom': '1px solid rgba(255,255,255,0.04)'}))
+    return html.Div([
+        html.Div("Daily strategies (held overnight)", style={'fontSize': '10px', 'fontWeight': '600',
+                                                           'color': 'var(--text-primary)', 'margin': '10px 0 2px'}),
+        html.Div(f"Continuous daily series {dd['start']} to {dd['end']}, default parameters, same cost per side, no "
+                 f"stop / target. 'Same dates' = Sharpe over the days of the intraday run above (the fair comparison, "
+                 f"but a short sample: see ± SE); 'Full history' uses all years. Daily positions carry overnight gap "
+                 f"risk and are research-only (not approvable). Rolls of the continuous series are not adjusted.",
+                 style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '4px'}),
+        html.Div(html.Table([html.Thead(html.Tr([html.Th(h, style={**_TH, 'textAlign': 'left' if i == 0 else 'right'})
+                                                 for i, h in enumerate(head)])), html.Tbody(body)],
+                            style={'width': '100%', 'borderCollapse': 'collapse'}), style={'overflowX': 'auto'}),
     ])
 
 
