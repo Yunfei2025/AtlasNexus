@@ -25,17 +25,24 @@ def load_factor_signal_series(input_dir=DIR_INPUT) -> dict:
     saved walk-forward backtest.
 
     Returns {factor_code: pd.Series} sorted by date, DatetimeIndex. Empty
-    dict (not an exception) if factor-backtest.pkl is missing or has no
-    'FactorModel' strategy — callers decide how to handle "no signals".
+    dict (not an exception) if factor-backtest.pkl is missing, unreadable, or
+    has no 'FactorModel' strategy — callers decide how to handle "no signals".
     """
     factor_signal_series: dict[str, pd.Series] = {}
-    fm_results = load_factor_backtest(input_dir).get('FactorModel', {})
+    try:
+        fm_results = load_factor_backtest(input_dir).get('FactorModel', {})
+    except Exception:
+        return {}
     for f_code, f_df in fm_results.items():
-        if 'position' in f_df.columns:
+        try:
+            if not hasattr(f_df, 'columns') or 'position' not in f_df.columns:
+                continue
             s = f_df['position'].dropna()
             if not isinstance(s.index, pd.DatetimeIndex):
                 s.index = pd.to_datetime(s.index)
             factor_signal_series[f_code] = s.sort_index()
+        except Exception:
+            continue
     return factor_signal_series
 
 

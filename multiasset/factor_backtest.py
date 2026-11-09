@@ -983,10 +983,19 @@ def load_factor_backtest(
     Returns
     -------
     dict  {strategy_name: {factor_code: DataFrame}}
+
+    Older or partially-written pickles may be unreadable under the current
+    pandas build (for example, pandas' DatetimeArray deserialization can raise
+    ``NotImplementedError`` for a legacy-migrated index). Those artifacts are
+    treated as empty rather than crashing the UI or forcing a traceback in the
+    caller.
     """
     pkl_path = os.path.join(str(input_dir), 'factor-backtest.pkl')
     if os.path.exists(pkl_path):
-        return pd.read_pickle(pkl_path)
+        try:
+            return pd.read_pickle(pkl_path)
+        except Exception:
+            return {}
     return {}
 
 

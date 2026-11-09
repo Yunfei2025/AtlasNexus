@@ -92,15 +92,19 @@ def live_meta_for(product, live_dir=None):
 
 
 def with_live(bars, live):
-    """Settled minute bars plus today's live bars, only when the settled bars do not cover that day yet
-    (once the end-of-day sync includes today, the live file is ignored)."""
+    """Merge the live minute bars onto the settled cache, keeping the newest value at overlapping timestamps.
+
+    A same-day cache may already contain earlier intraday rows (for example from a partial sync or an older
+    local file), but the live session still needs to overlay the newest bars for today. We therefore merge
+    both sources and let the later live timestamps win, rather than discarding the live slice whenever the
+    dates overlap.
+    """
     if live is None or live.empty:
         return bars
     if bars is None or bars.empty:
         return live
-    if live.index.min().normalize() <= bars.index.max().normalize():
-        return bars
-    return pd.concat([bars, live[bars.columns]]).sort_index()
+    merged = pd.concat([bars, live[bars.columns]], sort=True)
+    return merged[~merged.index.duplicated(keep='last')].sort_index()
 
 
 def _normalize(frame, day):

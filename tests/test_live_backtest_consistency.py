@@ -63,6 +63,14 @@ def _live_and_backtest(factors, tmp_path, monkeypatch, snapshot_factors=None, ex
     return live, live_cap, bt
 
 
+def test_load_factor_signal_series_handles_incompatible_pickle(monkeypatch):
+    import web.tabs.beta.callbacks.backtest_hist._signals as signals
+    def boom(_input_dir=None):
+        raise NotImplementedError("(dtype('<M8[ns]'), array(['2026-01-01'], dtype='datetime64[ns]'))")
+    monkeypatch.setattr(signals, 'load_factor_backtest', boom)
+    assert signals.load_factor_signal_series() == {}
+
+
 def test_default_pool_is_the_documented_one():
     from web.tabs.beta.data import selected_factors
     assert selected_factors() == DEFAULT

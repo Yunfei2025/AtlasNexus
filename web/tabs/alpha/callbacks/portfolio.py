@@ -327,7 +327,7 @@ def register_portfolio_callbacks(app) -> None:
          State('alpha-curated-instruments-store', 'data'),
          State('alpha-book-positions-store', 'data'),
          State('alpha-dv01-budget', 'value'),
-         State('alpha-bond-margin-rate', 'value'),
+         State('alpha-bond-margin-rate', 'value', allow_optional=True),
          State('alpha-swap-margin-rate', 'value'),
          State('alpha-repo-leverage', 'value')],
         prevent_initial_call=True

@@ -599,6 +599,15 @@ def test_live_overlay_only_when_the_settled_bars_miss_today():
     assert len(covered) == len(both)
 
 
+def test_live_overlay_keeps_newer_same_day_updates():
+    settled = _wind_frame('2026-11-05', '09:00', '09:05').rename(columns=str.lower)
+    settled = settled.assign(hs_bp=np.float32('nan'))
+    live = live_bars._normalize(_wind_frame('2026-11-05', '09:06', '09:10'), '2026-11-05')
+    merged = live_bars.with_live(settled, live)
+    assert set(merged.index.strftime('%H:%M')).issuperset({'09:00', '09:05', '09:06', '09:10'})
+    assert len(merged) == len(settled) + len(live)
+
+
 def test_start_state_validation():
     assert live_ui.start_state([], 5)[0] is None and live_ui.start_state(['AU'], 7)[0] is None
     assert live_ui.start_state(list('ABCDEF'), 5)[0] is None
