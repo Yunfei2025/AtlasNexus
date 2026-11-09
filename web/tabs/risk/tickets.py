@@ -1,295 +1,250 @@
 # -*- coding: utf-8 -*-
-"""Summary > Tickets subtab callbacks.
+"""Summary > Tickets subtab.
 
-Derives opening tickets from the Beta/Alpha book positions files — there is
-no order/fill pipeline in this engine, so a "ticket" here is the opening
-trade implied by a position's Open Date/Price/Volume fields.
-  FILLED  = open_date + volume both set
-  PENDING = volume set but open_date missing (sized, not yet booked)
-  OPEN    = neither set (candidate in the book, no trade yet) — excluded
+One row per instrument of the executable (short-substitution) combined book:
+the user types the current holding (MM) and, optionally, an open price; the
+table shows the signed target, the trade needed to reach it, the latest close
+and the P&L since the open. "Generate Tickets" turns holding -> target into
+broker lines such as ``bid 2600006.IB 200MM @ 1.8300``.
+
+Yield-quoted instruments only (cash bonds, FR007 swaps, curve labels): P&L is
+holding x duration x (open yield - close yield), so a long gains when yield falls.
 """
 
 from __future__ import annotations
 
-import os
+import json
+import re
 
 import dash
-from dash import html, dash_table
-from dash.dependencies import Input, Output
+from dash import dash_table
+from dash.dash_table.Format import Format, Scheme, Sign
+from dash.dependencies import Input, Output, State
 import pandas as pd
 
+from settings.paths import DIR_INPUT
 from web.tabs.beta.data import THEME
-from .helpers import beta_direction
-from web.tabs.beta.callbacks._common import (
-    _BETA_BOOK_POSITIONS_PARQUET,
-    _BETA_BOOK_USER_PARQUET,
-    _ALPHA_POSITIONS_PARQUET,
-)
 
-_TICKET_STATUS_STYLE = {
-    'FILLED':  {'bg': 'rgba(52,211,153,0.12)', 'color': '#34d399'},
-    'PENDING': {'bg': 'rgba(224,162,60,0.15)', 'color': THEME['warning']},
-    'SUBSTITUTE': {'bg': 'rgba(69,182,230,0.12)', 'color': '#45b6e6'},
-}
+_STATE_FILE = DIR_INPUT / 'ticket_book.json'   # {code: {holding, open_px, ticket_px}}
+_HISTORY_FILE = DIR_INPUT / 'ticket_holdings_history.pkl'   # one snapshot per day, latest edit wins
+_TOTAL = 'TOTAL'
+_MIN_TRADE_MM = 0.05
 
 
-def _build_tickets() -> list[dict]:
-    import os as _os
-    tickets: list[dict] = []
-
-    # ── Beta book: positions + user-entered open price/date/volume ────────
-    if _os.path.exists(_BETA_BOOK_POSITIONS_PARQUET):
-        try:
-            bdf = pd.read_parquet(_BETA_BOOK_POSITIONS_PARQUET)
-            user_data: dict = {}
-            if os.path.exists(_BETA_BOOK_USER_PARQUET):
-                udf = pd.read_parquet(_BETA_BOOK_USER_PARQUET)
-                for _, r in udf.iterrows():
-                    key = (str(r.get('asset_name', '')), str(r.get('instrument', '')))
-                    user_data[key] = {
-                        'open_price': str(r.get('open_price', '')).strip(),
-                        'open_date':  str(r.get('open_date', '')).strip(),
-                        'volume':     str(r.get('volume', '')).strip(),
-                    }
-
-            for _, row in bdf.iterrows():
-                if str(row.get('Asset Type', '')) == 'TOTAL':
-                    continue
-                asset_name = str(row.get('Asset Name', ''))
-                instrument = str(row.get('Instrument', ''))
-                saved = user_data.get((asset_name, instrument), {})
-                volume_str = saved.get('volume', '')
-                open_date_str = saved.get('open_date', '')
-                if not volume_str:
-                    continue  # no sized trade — nothing to ticket yet
-                try:
-                    qty = float(volume_str)
-                except (TypeError, ValueError):
-                    continue
-                status = 'FILLED' if open_date_str else 'PENDING'
-                try:
-                    price = float(saved.get('open_price', '') or 0) or None
-                except (TypeError, ValueError):
-                    price = None
-                tickets.append({
-                    'id': f"BETA-{instrument}",
-                    'date': open_date_str or '—',
-                    'book': 'Beta',
-                    'spread': instrument or asset_name,
-                    'action': beta_direction(row.get('Capital (CNY)')),   # SELL for a short beta position
-                    'qty': qty,
-                    'price': price,
-                    'status': status,
-                })
-        except Exception:
-            pass
-
-    # ── Alpha book: positions + open price/volume/date ─────────────────────
-    if _os.path.exists(_ALPHA_POSITIONS_PARQUET):
-        try:
-            adf = pd.read_parquet(_ALPHA_POSITIONS_PARQUET)
-            for _, row in adf.iterrows():
-                trade_id = str(row.get('ID', ''))
-                if trade_id in ('', 'TOTAL'):
-                    continue
-                volume_str = str(row.get('volume_mm', '') or '').strip()
-                open_date_str = str(row.get('open_date', '') or '').strip()
-                if not volume_str:
-                    continue
-                try:
-                    qty = float(volume_str)
-                except (TypeError, ValueError):
-                    continue
-                status = 'FILLED' if open_date_str else 'PENDING'
-                try:
-                    price = float(row.get('open_price_bp', '') or 0) or None
-                except (TypeError, ValueError):
-                    price = None
-                tickets.append({
-                    'id': f"ALPHA-{trade_id}",
-                    'date': open_date_str or '—',
-                    'book': 'Alpha',
-                    'spread': trade_id,
-                    'action': str(row.get('direction', 'BUY')).upper() or 'BUY',
-                    'qty': qty,
-                    'price': price,
-                    'status': status,
-                })
-        except Exception:
-            pass
-
-    tickets.sort(key=lambda t: t['date'], reverse=True)
-    return tickets
+def _fmt(precision: int, signed: bool = False) -> Format:
+    f = Format(precision=precision, scheme=Scheme.fixed).group(True)
+    return f.sign(Sign.positive) if signed else f
 
 
-def _tickets_filter_pills(active: str) -> list:
-    def _pill_style(is_active: bool):
-        style = {
-            'padding': '5px 10px', 'fontSize': '10px', 'fontWeight': '600',
-            'border': 'none', 'borderRadius': '3px', 'cursor': 'pointer',
-            'fontFamily': 'var(--font-mono)', 'transition': 'all 100ms',
-        }
-        if is_active:
-            style.update({'backgroundColor': THEME['accent'], 'color': '#ffffff'})
-        else:
-            style.update({'backgroundColor': 'transparent', 'color': THEME['text_sub']})
-        return style
-    return [
-        html.Button(label, id=f'tickets-filter-{label}', n_clicks=0, style=_pill_style(active == label))
-        for label in ('All', 'FILLED', 'PENDING', 'SUBSTITUTE')
-    ]
+_COLUMNS = [
+    {'name': 'Instrument', 'id': 'Instrument'},
+    {'name': 'Holding (MM)', 'id': 'Holding', 'type': 'numeric', 'editable': True, 'format': _fmt(1, True)},
+    {'name': 'Target (MM)', 'id': 'Target', 'type': 'numeric', 'format': _fmt(1, True)},
+    {'name': 'To Trade (MM)', 'id': 'Trade', 'type': 'numeric', 'format': _fmt(1, True)},
+    {'name': 'Open Px (%)', 'id': 'OpenPx', 'type': 'numeric', 'editable': True, 'format': _fmt(4)},
+    {'name': 'Close Px (%)', 'id': 'Close', 'type': 'numeric', 'format': _fmt(4)},
+    {'name': 'PnL (MM)', 'id': 'Pnl', 'type': 'numeric', 'format': _fmt(4, True)},
+    {'name': 'Ticket Px (%)', 'id': 'TicketPx', 'type': 'numeric', 'editable': True, 'format': _fmt(4)},
+]
 
 
-def _build_substitute_tickets() -> list[dict]:
-    """Short-constraint substitute tickets, one per substitute instrument.
+def build_tickets_table() -> dash_table.DataTable:
+    """The (initially empty) table; filled by update_tickets."""
+    return dash_table.DataTable(
+        id='tickets-table', data=[], columns=_COLUMNS,
+        style_cell={'textAlign': 'right', 'padding': '6px 10px', 'fontSize': '12px',
+                    'backgroundColor': THEME['table_row_odd'], 'color': THEME['text_main'], 'border': 'none'},
+        style_cell_conditional=[{'if': {'column_id': 'Instrument'}, 'textAlign': 'left', 'fontWeight': '600'}],
+        style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'],
+                      'fontWeight': 'bold', 'border': 'none'},
+        style_data_conditional=[
+            {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
+            *[{'if': {'column_id': c}, 'backgroundColor': 'rgba(99,179,237,0.08)'}
+              for c in ('Holding', 'OpenPx', 'TicketPx')],
+            {'if': {'filter_query': '{Trade} > 0', 'column_id': 'Trade'}, 'color': THEME['success'], 'fontWeight': 'bold'},
+            {'if': {'filter_query': '{Trade} < 0', 'column_id': 'Trade'}, 'color': THEME['danger'], 'fontWeight': 'bold'},
+            {'if': {'filter_query': '{Pnl} > 0', 'column_id': 'Pnl'}, 'color': THEME['success']},
+            {'if': {'filter_query': '{Pnl} < 0', 'column_id': 'Pnl'}, 'color': THEME['danger']},
+            {'if': {'filter_query': f'{{Instrument}} = "{_TOTAL}"'}, 'backgroundColor': THEME['table_header'],
+             'fontWeight': 'bold', 'borderTop': f"1px solid {THEME['accent']}"},
+        ],
+        style_table={'overflowX': 'auto'},
+        page_size=100,
+    )
 
-    Computed only after the combined book is netted (Beta + Alpha per bond,
-    the same netting as Summary > Risk): a disallowed net short is executed
-    as a DV01-matched CGB 5/10/30 short or FR007 payer instead of shorting
-    that bond (see web/tabs/risk/short_substitution.py). The Alpha spread
-    tickets above stay as booked; their disallowed short legs net into these.
-    """
+
+def _load_state() -> dict:
+    try:
+        return json.loads(_STATE_FILE.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+
+def _save_state(state: dict) -> None:
+    _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _STATE_FILE.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding='utf-8')
+
+
+def _save_history(rows: list[dict]) -> None:
+    """Replace today's holdings snapshot in the history pickle (long format, one row per held instrument)."""
+    today = pd.Timestamp.today().normalize()
+    snap = pd.DataFrame([{
+        'date': today, 'instrument': r['Instrument'], 'holding_mm': _num(r.get('Holding')),
+        'target_mm': _num(r.get('Target')), 'open_px': _num(r.get('OpenPx')), 'close_px': _num(r.get('Close')),
+    } for r in rows if r.get('Instrument') != _TOTAL and _num(r.get('Holding')) is not None])
+    try:
+        hist = pd.read_pickle(_HISTORY_FILE)
+        hist = hist[hist['date'] != today]
+    except Exception:
+        hist = pd.DataFrame()
+    hist = pd.concat([hist, snap], ignore_index=True)
+    _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    hist.to_pickle(_HISTORY_FILE)
+
+
+def _num(v):
+    try:
+        f = float(v)
+        return f if pd.notna(f) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _derive(rows: list[dict]) -> list[dict]:
+    """Fill Trade / Pnl, default Ticket Px to the close, and append the TOTAL row."""
+    out, total = [], 0.0
+    for r in rows:
+        if r.get('Instrument') == _TOTAL:
+            continue
+        hold, tgt = _num(r.get('Holding')), _num(r.get('Target')) or 0.0
+        op, close, dur = _num(r.get('OpenPx')), _num(r.get('Close')), _num(r.get('_dur'))
+        r['Trade'] = round(tgt - (hold or 0.0), 4)
+        r['Pnl'] = (round(hold * dur * (op - close) / 100.0, 4)
+                    if None not in (hold, dur, op, close) else None)
+        if r['Pnl'] is not None:
+            total += r['Pnl']
+        if _num(r.get('TicketPx')) is None:
+            r['TicketPx'] = close
+        out.append(r)
+    out.append({'Instrument': _TOTAL, 'Pnl': round(total, 4)})
+    return out
+
+
+def _tradable_codes(net_pos: dict, otr_cgb: dict) -> dict:
+    """Re-key the Beta book's CGB-nY curve labels to the on-the-run bond for that tenor
+    (the sticky most-liquid pick Beta Portfolio uses), merging with any Alpha position
+    in the same bond. Labels with no bond (LGB3Y, ...) are left as they are."""
+    out: dict = {}
+    for code, e in net_pos.items():
+        m = re.fullmatch(r'CGB-(\d+Y)', str(code), re.IGNORECASE)
+        bond = otr_cgb.get(m.group(1).upper()) if m else None
+        t = out.setdefault(bond if bond and bond != '—' else code,
+                           {'Beta': 0.0, 'Alpha': 0.0, 'BetaDV01': 0.0, 'AlphaDV01': 0.0})
+        for k in t:
+            t[k] += e.get(k, 0.0)
+    return out
+
+
+def _build_rows() -> list[dict]:
     from .dashboard import build_risk_positions
-    from .short_substitution import build_short_substitutions
+    from .short_substitution import build_short_substitutions, executable_positions
+    from .ticket_prices import latest_marks
 
     pos = build_risk_positions()
-    orders: dict[str, dict] = {}
-    for r in build_short_substitutions(pos['net_pos'], pos['otr_cgb']):
-        for s in r['substitutes']:
-            o = orders.setdefault(s['code'], {'qty': 0.0, 'dv01': 0.0, 'for': []})
-            o['qty'] += s['notional_mm']
-            o['dv01'] += s['dv01']
-            o['for'].append(f"{r['bond']} {r['code']}")
-    return [{
-        'id': f"SUB-{code}",
-        'date': '—',
-        'book': 'Combined',
-        'spread': f"{code} · for {', '.join(o['for'])}",
-        'action': 'PAY' if code.upper().endswith('.IR') else 'SELL',
-        'qty': abs(o['qty']),
-        'price': None,
-        'status': 'SUBSTITUTE',
-    } for code, o in sorted(orders.items(), key=lambda kv: kv[1]['dv01'])]
+    net_pos = _tradable_codes(pos['net_pos'], pos['otr_cgb'])
+    exe = executable_positions(net_pos, build_short_substitutions(net_pos, pos['otr_cgb']))
+    state = _load_state()
+    # Held instruments stay listed even once their target is 0, so they can be closed out.
+    codes = [c for c, e in exe.items() if abs(e['net']) > 1e-6 or abs(e['strat']) > 1e-6
+             or _num(state.get(c, {}).get('holding'))]
+    marks = latest_marks({c: (abs(exe[c]['dv01']) / abs(exe[c]['net']) if c in exe and abs(exe[c]['net']) > 1e-6
+                              else None) for c in codes})
+    rows = []
+    for c in sorted(codes, key=str.upper):
+        st = state.get(c, {})
+        rows.append({
+            'Instrument': c,
+            'Holding': _num(st.get('holding')),
+            'Target': round(exe[c]['net'], 4) if c in exe else 0.0,
+            'OpenPx': _num(st.get('open_px')),
+            'Close': marks[c]['close'],
+            'TicketPx': _num(st.get('ticket_px')),
+            '_dur': marks[c]['dur'],
+        })
+    return _derive(rows)
+
+
+def _trade_lines(rows: list[dict]) -> list[str]:
+    lines = []
+    for r in rows:
+        code = r.get('Instrument')
+        trade = _num(r.get('Trade'))
+        if code == _TOTAL or trade is None or abs(trade) < _MIN_TRADE_MM:
+            continue
+        px = _num(r.get('TicketPx'))
+        if str(code).upper().endswith('.IR'):
+            verb = 'receive' if trade > 0 else 'pay'        # swap: buy = receive fixed
+        else:
+            verb = 'bid' if trade > 0 else 'offer'
+        lines.append(f"{verb} {code} {abs(trade):g}MM @ {f'{px:.4f}' if px is not None else 'N/A'}")
+    return lines
 
 
 def register_risk_tickets_callbacks(app):
     """Register Summary > Tickets subtab callbacks."""
 
     @app.callback(
-        Output('tickets-filter-row', 'children'),
-        Input('tickets-filter', 'data'),
-    )
-    def _render_tickets_filter_pills(active):
-        return _tickets_filter_pills(active or 'All')
-
-    @app.callback(
-        Output('tickets-filter', 'data'),
-        [Input('tickets-filter-All', 'n_clicks'),
-         Input('tickets-filter-FILLED', 'n_clicks'),
-         Input('tickets-filter-PENDING', 'n_clicks'),
-         Input('tickets-filter-SUBSTITUTE', 'n_clicks')],
-        prevent_initial_call=True,
-    )
-    def _set_tickets_filter(_n_all, _n_filled, _n_pending, _n_sub):
-        triggered = dash.ctx.triggered_id
-        return {
-            'tickets-filter-All': 'All',
-            'tickets-filter-FILLED': 'FILLED',
-            'tickets-filter-PENDING': 'PENDING',
-            'tickets-filter-SUBSTITUTE': 'SUBSTITUTE',
-        }.get(triggered, 'All')
-
-    @app.callback(
-        [Output('tickets-kpi-container', 'children'),
-         Output('tickets-table-container', 'children'),
+        [Output('tickets-table', 'data'),
          Output('tickets-subtitle', 'children')],
         [Input('an-summary-subtabs', 'value'),
-         Input('tickets-filter', 'data'),
          Input('summary-refresh-btn', 'n_clicks')],
         prevent_initial_call=False,
     )
-    def update_tickets(tab_value, ticket_filter, _n_refresh):
+    def update_tickets(tab_value, _n_refresh):
         if tab_value != 'tickets':
             raise dash.exceptions.PreventUpdate
+        rows = _build_rows()
+        n = len(rows) - 1
+        return rows, (f"{n} instruments · executable (substitute) mixed book · "
+                      "yields in %, P&L = holding x duration x (open - close)")
 
-        all_tickets = _build_tickets()
-        filled = [t for t in all_tickets if t['status'] == 'FILLED']
-        pending = [t for t in all_tickets if t['status'] == 'PENDING']
-        try:
-            substitutes = _build_substitute_tickets()
-        except Exception:
-            substitutes = []
-
-        subtitle = (f"{len(all_tickets)} opening tickets · derived from Beta + Alpha book positions"
-                    + (f" · {len(substitutes)} short-constraint substitutes (after combined netting)"
-                       if substitutes else ""))
-
-        kpis = [
-            ("Total Tickets", str(len(all_tickets)), THEME['text_main']),
-            ("Filled", str(len(filled)), THEME['success']),
-            ("Pending", str(len(pending)), THEME['warning']),
-            ("Fill Rate", f"{(len(filled) / len(all_tickets) * 100):.0f}%" if all_tickets else "—", THEME['accent']),
-        ]
-        kpi_strip = html.Div([
-            html.Div([
-                html.Div(label, className='risk-kpi-label'),
-                html.Div(value, className='risk-kpi-value', style={'color': color}),
-            ], className='risk-kpi-card')
-            for label, value, color in kpis
-        ], className='risk-kpi-strip')
-
-        ticket_filter = ticket_filter or 'All'
-        shown = all_tickets + substitutes
-        rows = shown if ticket_filter == 'All' else [t for t in shown if t['status'] == ticket_filter]
-
+    @app.callback(
+        Output('tickets-table', 'data', allow_duplicate=True),
+        Input('tickets-table', 'data_timestamp'),
+        State('tickets-table', 'data'),
+        prevent_initial_call=True,
+    )
+    def save_edits(_ts, rows):
         if not rows:
-            table = html.Div(
-                "No tickets yet — set Open Date and Volume on a Beta/Alpha position to create one.",
-                style={'color': THEME['text_sub'], 'fontStyle': 'italic', 'textAlign': 'center', 'padding': '30px'},
-            )
-            return kpi_strip, table, subtitle
+            raise dash.exceptions.PreventUpdate
+        state = _load_state()
+        for r in rows:
+            code = r.get('Instrument')
+            if code in (None, _TOTAL):
+                continue
+            close, tpx = _num(r.get('Close')), _num(r.get('TicketPx'))
+            entry = {'holding': _num(r.get('Holding')), 'open_px': _num(r.get('OpenPx')),
+                     # only a price the user changed is kept; otherwise it follows the latest close
+                     'ticket_px': tpx if tpx is not None and (close is None or abs(tpx - close) > 1e-9) else None}
+            if any(v is not None for v in entry.values()):
+                state[code] = entry
+            else:
+                state.pop(code, None)
+        _save_state(state)
+        _save_history(rows)
+        return _derive(rows)
 
-        status_styles = [
-            {'if': {'filter_query': f'{{Status}} = "{status}"', 'column_id': 'Status'},
-             'backgroundColor': style['bg'], 'color': style['color'], 'fontWeight': 'bold'}
-            for status, style in _TICKET_STATUS_STYLE.items()
-        ]
-        book_styles = [
-            {'if': {'filter_query': '{Book} = "Beta"', 'column_id': 'Book'}, 'color': THEME['accent'], 'fontWeight': 'bold'},
-            {'if': {'filter_query': '{Book} = "Alpha"', 'column_id': 'Book'}, 'color': THEME['warning'], 'fontWeight': 'bold'},
-            {'if': {'filter_query': '{Book} = "Combined"', 'column_id': 'Book'}, 'color': '#45b6e6', 'fontWeight': 'bold'},
-        ]
-        action_styles = [
-            {'if': {'filter_query': '{Action} = "BUY"', 'column_id': 'Action'}, 'color': THEME['success']},
-            {'if': {'filter_query': '{Action} = "SELL"', 'column_id': 'Action'}, 'color': THEME['danger']},
-            {'if': {'filter_query': '{Action} = "PAY"', 'column_id': 'Action'}, 'color': THEME['danger']},
-        ]
-
-        table_data = [{
-            'Ticket ID': t['id'],
-            'Open Date': t['date'],
-            'Book': t['book'],
-            'Spread / Instrument': t['spread'],
-            'Action': t['action'],
-            'Qty (MM)': f"{t['qty']:,.1f}",
-            'Price': f"{t['price']:,.4f}" if t['price'] is not None else '—',
-            'Status': t['status'],
-        } for t in rows]
-
-        table = dash_table.DataTable(
-            data=table_data,
-            columns=[{'name': c, 'id': c} for c in
-                     ['Ticket ID', 'Open Date', 'Book', 'Spread / Instrument', 'Action', 'Qty (MM)', 'Price', 'Status']],
-            style_cell={'textAlign': 'center', 'padding': '6px 10px', 'fontSize': '12px',
-                        'backgroundColor': THEME['table_row_odd'], 'color': THEME['text_main'], 'border': 'none'},
-            style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'],
-                          'fontWeight': 'bold', 'border': 'none'},
-            style_data_conditional=[
-                {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
-                *status_styles, *book_styles, *action_styles,
-            ],
-            style_table={'overflowX': 'auto'},
-            sort_action='native',
-            page_size=30,
-        )
-        return kpi_strip, table, subtitle
+    @app.callback(
+        [Output('tickets-output', 'value'),
+         Output('tickets-gen-status', 'children')],
+        Input('tickets-generate-btn', 'n_clicks'),
+        State('tickets-table', 'data'),
+        prevent_initial_call=True,
+    )
+    def generate_tickets(n_clicks, rows):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        lines = _trade_lines(rows or [])
+        if not lines:
+            return '', 'Nothing to trade: holdings already match targets.'
+        return '\n'.join(lines), f"{len(lines)} tickets"

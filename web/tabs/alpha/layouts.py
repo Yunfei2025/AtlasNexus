@@ -970,6 +970,11 @@ def build_portfolio_backtest_panel(saved_selection: dict | None = None) -> html.
                         "💾 Save Result", id='bt-save-portfolio-result-btn', n_clicks=0,
                         variant="secondary", style_overrides={'padding': '10px 14px', 'fontSize': '12px', 'width': '100%', 'marginTop': '8px'},
                     ),
+                    an_button(
+                        "⬇️ Download Data", id='bt-download-portfolio-data-btn', n_clicks=0,
+                        variant="secondary", style_overrides={'padding': '10px 14px', 'fontSize': '12px', 'width': '100%', 'marginTop': '8px'},
+                    ),
+                    dcc.Download(id='bt-portfolio-data-download'),
                     html.Span(id='bt-save-portfolio-result-status', style={'color': 'var(--text-muted)', 'fontSize': '11px', 'marginTop': '6px', 'display': 'block'}),
                 ], style=_card),
             ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '12px',

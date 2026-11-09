@@ -10,7 +10,8 @@ from __future__ import annotations
 import traceback
 
 import pandas as pd
-from dash import html
+import dash
+from dash import dcc, html
 from dash.dependencies import Input, Output, State
 
 from multiasset.config import RiskModelConfig
@@ -165,3 +166,26 @@ def register_backtest_hist_callbacks(app):
         except Exception as e:
             traceback.print_exc()
             return f"⚠️ Save failed: {e}"
+
+    # 7. Download Data — month-end cumulative P&L and position (million CNY), one sheet each,
+    # Total column first, then one column per asset.
+    @app.callback(
+        Output('history-data-download', 'data'),
+        Input('download-history-data-button', 'n_clicks'),
+        State('backtest-results-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def download_historical_backtest_data(n_clicks, results_payload):
+        export = (results_payload or {}).get('monthly_export')
+        if not n_clicks or not export:
+            return dash.no_update
+
+        def _write(buf):
+            with pd.ExcelWriter(buf, engine='openpyxl') as xw:
+                for sheet, d in export.items():
+                    df = pd.DataFrame(d['data'], index=pd.to_datetime(d['index']), columns=d['columns'])
+                    df.index.name = 'Month End'
+                    df.to_excel(xw, sheet_name=sheet)
+
+        stamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
+        return dcc.send_bytes(_write, f"beta_portfolio_backtest_{stamp}.xlsx")

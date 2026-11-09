@@ -18,7 +18,7 @@ from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
 from web.tabs.beta.data import THEME
 from web.tabs.beta.callbacks._common import _SUMMARY_ALPHA_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET, _ALPHA_POSITIONS_PARQUET, _load_cr_ts, _price_progress_bar, _dir_badge, _style_badge, _signed_value_style, _zscore_cell_style, _sortable_header, _apply_sort
 from .close_reminder import alpha_close_ticket, format_ticket
-from ..helpers import _alpha_progress_direction, _alpha_spread_pnl_bp, _coerce_float, _load_leg_data, _resolve_legs, _leg_volume_ratio, _row_key, normalize_risk_ticker
+from ..helpers import _persist_alpha_summary_rows, _alpha_progress_direction, _alpha_spread_pnl_bp, _coerce_float, _load_leg_data, _resolve_legs, _leg_volume_ratio, _row_key, normalize_risk_ticker
 
 
 def register_alpha_book_table_callbacks(app):
@@ -263,6 +263,7 @@ def register_alpha_book_table_callbacks(app):
     
             if not _saved_rows:
                 display_rows = []
+                _seeded = False
                 for _row_idx, (_, row) in enumerate(df.iterrows()):
                     trade_id = str(row.get('ID', ''))
                     if trade_id in ('TOTAL', ''):
@@ -362,6 +363,14 @@ def register_alpha_book_table_callbacks(app):
                     if base_annual_bp is not None:
                         carry_roll_3m_val = base_annual_bp / 4.0
     
+                    # No open price yet (newly added, or added before this existed): default it to
+                    # the latest close and today's date. Saved below, so it stays fixed; the user
+                    # can overwrite it.
+                    if not open_price_str.strip() and cp_bp is not None:
+                        open_price_str = f"{cp_bp:.4f}"
+                        open_date_str = open_date_str.strip() or pd.Timestamp.today().strftime('%Y-%m-%d')
+                        _seeded = True
+
                     mtm_price_mm = mtm_spd_bp = mtm_carry_mm = mtm_total_mm = None
                     open_price_bp = None
                     try:
@@ -389,15 +398,20 @@ def register_alpha_book_table_callbacks(app):
                     _stop_mag   = row.get('stop_loss')
                     _target_mag = row.get('profit_target')
                     stop_level = target_level = None
+                    # Open price is seeded with the spread when the trade was added to the
+                    # portfolio; older rows without one fall back to the current close.
+                    _entry_bp = open_price_bp if open_price_bp is not None else cp_bp
+                    if _entry_bp is None and spread_val is not None and pd.notna(spread_val):
+                        _entry_bp = float(spread_val)
                     try:
                         _sl_mag = float(_stop_mag) if _stop_mag not in (None, '') else None
                         _tp_mag = float(_target_mag) if _target_mag not in (None, '') else None
                         _progress_direction = _alpha_progress_direction(spread_type, _direction_u)
-                        if open_price_bp is not None:
+                        if _entry_bp is not None:
                             if _sl_mag is not None:
-                                stop_level = open_price_bp - _sl_mag if _progress_direction == 'BUY' else open_price_bp + _sl_mag
+                                stop_level = _entry_bp - _sl_mag if _progress_direction == 'BUY' else _entry_bp + _sl_mag
                             if _tp_mag is not None:
-                                target_level = open_price_bp + _tp_mag if _progress_direction == 'BUY' else open_price_bp - _tp_mag
+                                target_level = _entry_bp + _tp_mag if _progress_direction == 'BUY' else _entry_bp - _tp_mag
                     except (ValueError, TypeError):
                         pass
     
@@ -434,11 +448,17 @@ def register_alpha_book_table_callbacks(app):
                         'Target Weight (%)':      f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
                         'RC (%)':                 f"{risk_contribution * 100:.2f}%" if risk_contribution is not None else '',
                         'Weight (%)':             '',
-                        '_entry_level':           open_price_str,
+                        '_entry_level':           f"{_entry_bp:.4f}" if _entry_bp is not None else '',
                         '_current_level':         f"{cp_bp:.4f}" if cp_bp is not None else '',
                         '_stop_level':            f"{stop_level:.4f}" if stop_level is not None else '',
                         '_target_level':          f"{target_level:.4f}" if target_level is not None else '',
                     })
+
+                if _seeded:
+                    try:
+                        _persist_alpha_summary_rows(display_rows, prune=False)
+                    except Exception as _e:
+                        print(f"WARNING: could not save default open prices: {_e}")
     
             for r in display_rows:
                 if r.get('ID') == 'TOTAL':
@@ -512,8 +532,6 @@ def register_alpha_book_table_callbacks(app):
             display_rows.append(total_row)
     
             _visible_cols = []
-            if col_vis.get('open_date'):
-                _visible_cols.append('Open date')
             if col_vis.get('volume'):
                 _visible_cols.append('Volume (mm)')
     
@@ -601,18 +619,17 @@ def register_alpha_book_table_callbacks(app):
             _ALL_COLS = [
                 ('ID', 'left'), ('Leg 1', 'left'), ('Leg 2', 'left'), ('Leg 3', 'left'), ('Ratio (V2/V1)', 'right'), ('Ratio (V3/V1)', 'right'),
                 ('Style', 'left'), ('Direction', 'center'), ('Duration', 'right'),
-                ('Open price (bp)', 'right'), ('Volume (mm)', 'right'), ('Open date', 'right'),
-                ('Z-Score', 'right'), ('Close Price (bp)', 'right'), ('Progress', 'left'),
+                ('Volume (mm)', 'right'),
+                ('Z-Score', 'right'), ('Progress', 'left'),
                 ('Capital (MM CNY)', 'right'), ('Target Volume Leg2 (MM CNY)', 'right'),
                 ('Target Volume Leg3 (MM CNY)', 'right'), ('Margin (MM)', 'right'),
                 ('DV01 (k CNY/bp)', 'right'),
                 ('Carry+Roll (3m,bp)', 'right'), ('Breakeven (3m,bp)', 'right'),
-                ('Stop (bp)', 'right'), ('Target (bp)', 'right'), ('MTM spd (bp)', 'right'),
-                ('MtM Carry (MM CNY)', 'right'), ('MtM Value (MM CNY)', 'right'),
-                ('Target Weight (%)', 'right'), ('RC (%)', 'right'), ('Weight (%)', 'right'),
+                ('Stop (bp)', 'right'), ('Target (bp)', 'right'),
+                ('Target Weight (%)', 'right'), ('RC (%)', 'right'),
             ]
             _cols = [(c, a) for c, a in _ALL_COLS
-                     if c not in ('Open date', 'Volume (mm)') or c in _visible_cols]
+                     if c != 'Volume (mm)' or c in _visible_cols]
             _cols = [('__delete', 'center')] + _cols
     
             header_row = html.Tr([

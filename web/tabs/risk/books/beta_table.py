@@ -341,8 +341,6 @@ def register_beta_book_table_callbacks(app):
                 display_rows.append(total_row)
     
             _visible_cols = []
-            if col_vis.get('open_date'):
-                _visible_cols.append('Open Date')
             if col_vis.get('volume'):
                 _visible_cols.append('Volume (MM)')
     
@@ -355,11 +353,10 @@ def register_beta_book_table_callbacks(app):
             _ALL_COLS = [
                 ('Asset Type', 'left'), ('Universe', 'left'), ('Instrument', 'left'),
                 ('Duration', 'right'), ('Capital (MM CNY)', 'right'), ('Weight (%)', 'right'),
-                ('Allocation', 'left'), ('Open Price', 'right'), ('Open Date', 'right'),
-                ('Volume (MM)', 'right'), ('To Target (MM)', 'right'), ('Close Price', 'right'), ('MtM (MM CNY)', 'right'),
+                ('Allocation', 'left'), ('Volume (MM)', 'right'),
             ]
             _cols = [(c, a) for c, a in _ALL_COLS
-                     if c not in ('Open Date', 'Volume (MM)') or c in _visible_cols]
+                     if c != 'Volume (MM)' or c in _visible_cols]
             _cols = [('__delete', 'center')] + _cols
     
             header_row = html.Tr([

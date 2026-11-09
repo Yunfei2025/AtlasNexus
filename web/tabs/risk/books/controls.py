@@ -66,9 +66,9 @@ def register_risk_book_control_callbacks(app):
             'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.07em',
             'textTransform': 'uppercase', 'color': THEME['text_sub'], 'marginRight': '4px',
         })
-        names = {'open_date': 'Open Date', 'volume': 'Volume'}
+        names = {'volume': 'Volume'}
         pills = []
-        for k in ('open_date', 'volume'):
+        for k in ('volume',):
             style = _col_pill_style(bool(col_vis.get(k)))
             pills.append(html.Button(names[k], id=f'summary-col-pill-{k}', n_clicks=0, style=style))
         return [label, *pills]
@@ -107,16 +107,14 @@ def register_risk_book_control_callbacks(app):
     # ── Column-visibility pills ─────────────────────────────────────────────────
     @app.callback(
         Output('summary-col-visibility', 'data'),
-        [Input('summary-col-pill-open_date', 'n_clicks'),
-         Input('summary-col-pill-volume', 'n_clicks')],
+        [Input('summary-col-pill-volume', 'n_clicks')],
         State('summary-col-visibility', 'data'),
         prevent_initial_call=True,
     )
-    def _toggle_col_visibility(_od_clicks, _vol_clicks, col_vis):
+    def _toggle_col_visibility(_vol_clicks, col_vis):
         col_vis = dict(col_vis or {})
         triggered = dash.ctx.triggered_id
         key = {
-            'summary-col-pill-open_date': 'open_date',
             'summary-col-pill-volume': 'volume',
         }.get(triggered)
         if key is None:

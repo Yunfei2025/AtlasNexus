@@ -12,7 +12,7 @@ import io
 import numpy as np
 import pandas as pd
 
-from dash import dcc, html, dash_table
+from dash import dcc, html, dash_table, no_update
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 
@@ -267,6 +267,25 @@ def _run_monthly_style_switch_backtest(
         results['style_effective'] = 'auto_monthly'
         results['uncertain_policy'] = uncertain_policy
     return results
+
+
+def _signed_position(res: dict, index: pd.DatetimeIndex, weight: float) -> pd.Series:
+    """Daily signed book weight (+ = BUY/LONG, - = SELL/SHORT) of one instrument's backtest,
+    rebuilt from its closed trades plus any open trade. Held from entry_date up to (not
+    including) exit_date; flat otherwise."""
+    pos = pd.Series(0.0, index=index)
+    trades = list(res.get('trades') or [])
+    if res.get('open_trade'):
+        trades.append({**res['open_trade'], 'exit_date': None})
+    for t in trades:
+        entry = pd.Timestamp(t['entry_date'])
+        exit_ = pd.Timestamp(t['exit_date']) if t.get('exit_date') is not None else None
+        sign = 1.0 if str(t.get('direction', '')).upper() == 'LONG' else -1.0
+        mask = index >= entry
+        if exit_ is not None:
+            mask &= index < exit_
+        pos[mask] = sign * weight
+    return pos
 
 
 def register_backtest_callbacks(app) -> None:
@@ -1060,6 +1079,7 @@ def register_backtest_callbacks(app) -> None:
             ]
 
             weighted_equity: dict = {}
+            weighted_position: dict = {}
             trade_summaries: list = []
             # Weighted-average margin per unit of book notional (DV01-based
             # single-leg proxy, ~2.5x-calibrated for the cross-leg netting it
@@ -1153,6 +1173,7 @@ def register_backtest_callbacks(app) -> None:
                         eq = res['equity_ts'].copy()
                         eq.index = pd.to_datetime(eq.index)
                         weighted_equity[asset] = eq * weight
+                        weighted_position[asset] = _signed_position(res, eq.index, weight)
                         trade_summaries.append({
                             'Asset': asset,
                             'Direction': latest_position(res),
@@ -1220,6 +1241,7 @@ def register_backtest_callbacks(app) -> None:
                 eq = res['equity_ts'].copy()
                 eq.index = pd.to_datetime(eq.index)
                 weighted_equity[asset] = eq * weight
+                weighted_position[asset] = _signed_position(res, eq.index, weight)
 
                 trade_summaries.append({
                     'Asset': asset,
@@ -1380,6 +1402,17 @@ def register_backtest_callbacks(app) -> None:
                 }
                 for _a in valid_assets if _a in alloc_weights
             ]
+            _eq_m = df_equity.copy()
+            _eq_m.insert(0, 'Total', portfolio_equity)
+            _pos_m = pd.DataFrame(weighted_position).reindex(df_equity.index).fillna(0.0)
+            _pos_m.insert(0, 'Total', _pos_m.sum(axis=1))
+            monthly_export = {
+                name: {'index': [d.strftime('%Y-%m-%d') for d in df_m.index],
+                       'columns': list(df_m.columns),
+                       'data': df_m.round(6).values.tolist()}
+                for name, df_m in (('Cumulative PnL (bp)', _eq_m.resample('ME').last().dropna(how='all')),
+                                   ('Position (weight)', _pos_m.resample('ME').last().dropna(how='all')))
+            }
             store_data = {
                 'portfolio_source': source,
                 'equity_ts': portfolio_equity.to_json(orient='split', date_format='iso'),
@@ -1393,6 +1426,7 @@ def register_backtest_callbacks(app) -> None:
                 'margin_ratio_per_notional': margin_ratio_per_notional,
                 'instruments': _instruments_snapshot,
                 'lookback_days': lookback_days,
+                'monthly_export': monthly_export,
             }
 
             return results_content, status_msg, store_data
@@ -1440,3 +1474,27 @@ def register_backtest_callbacks(app) -> None:
             return f"Saved {len(store_data.get('instruments', []))} instruments at {datetime.now().strftime('%H:%M:%S')}"
         except Exception as exc:
             return f"Save failed: {exc}"
+
+    # -------------------------------------------------------------------------
+    # BACKTEST: Download month-end cumulative P&L and positions as Excel
+    # -------------------------------------------------------------------------
+    @app.callback(
+        Output('bt-portfolio-data-download', 'data'),
+        Input('bt-download-portfolio-data-btn', 'n_clicks'),
+        State('bt-portfolio-last-result-store', 'data'),
+        prevent_initial_call=True,
+    )
+    def download_portfolio_backtest_data(n_clicks, store_data):
+        export = (store_data or {}).get('monthly_export')
+        if not n_clicks or not export:
+            return no_update
+
+        def _write(buf):
+            with pd.ExcelWriter(buf, engine='openpyxl') as xw:
+                for sheet, d in export.items():
+                    df = pd.DataFrame(d['data'], index=pd.to_datetime(d['index']), columns=d['columns'])
+                    df.index.name = 'Month End'
+                    df.to_excel(xw, sheet_name=sheet)
+
+        stamp = datetime.now().strftime('%Y%m%d_%H%M')
+        return dcc.send_bytes(_write, f"alpha_portfolio_backtest_{stamp}.xlsx")

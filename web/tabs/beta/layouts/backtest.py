@@ -393,6 +393,10 @@ def build_multiasset_backtest_layout():
                     html.Span(id='save-history-backtest-status',
                               style={'color': 'var(--text-muted)', 'fontSize': '11px', 'display': 'block'}),
                     an_button(
+                        "⬇️ Download Data", id='download-history-data-button', n_clicks=0,
+                        variant="secondary", style_overrides={'padding': '10px 12px', 'fontSize': '11px', 'width': '100%'},
+                    ),
+                    an_button(
                         "📄 Generate Report", id='gen-report-button', n_clicks=0,
                         variant="secondary", style_overrides={'padding': '10px 12px', 'fontSize': '11px', 'width': '100%'},
                     ),
@@ -443,6 +447,7 @@ def build_multiasset_backtest_layout():
         dcc.Store(id='backtest-results-store'),
         dcc.Store(id='report-meta-store'),
         dcc.Download(id='report-download'),
+        dcc.Download(id='history-data-download'),
     ], style={'padding': '10px'})
 
 

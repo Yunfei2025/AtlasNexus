@@ -136,3 +136,28 @@ def build_short_substitutions(net_pos: dict, otr_cgb: dict) -> list[dict]:
                          note='pay FR007' if _SUBSTITUTE[tenor][0][0] == 'IRS' else 'short CGB'))
     rows.sort(key=lambda r: r['dv01'])
     return rows
+
+
+def executable_positions(net_pos: dict, subs: list[dict]) -> dict[str, dict]:
+    """Combined book after short-constraint substitution, per instrument.
+
+    Each disallowed net short in ``subs`` (build_short_substitutions) moves to its
+    DV01-matched substitutes; credit shorts with no substitute stay. Returns
+    {code: {'net': executable MM (signed), 'dv01': MM/bp, 'strat': strategy net MM
+    before substitution, 'changed': substitution touched this instrument}}.
+    """
+    exe = {}
+    for c, e in net_pos.items():
+        net = e.get('Beta', 0.0) + e.get('Alpha', 0.0)
+        exe[str(c)] = {'net': net, 'strat': net, 'changed': False,
+                       'dv01': e.get('BetaDV01', 0.0) + e.get('AlphaDV01', 0.0)}
+    for r in subs:
+        if not r['substitutes']:
+            continue
+        exe[r['code']].update(net=0.0, dv01=0.0, changed=True)
+        for s in r['substitutes']:
+            e = exe.setdefault(s['code'], {'net': 0.0, 'dv01': 0.0, 'strat': 0.0, 'changed': False})
+            e['net'] += s['notional_mm']
+            e['dv01'] += s['dv01']
+            e['changed'] = True
+    return exe

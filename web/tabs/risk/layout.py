@@ -7,6 +7,7 @@ from dash import dcc, html, dash_table
 import plotly.graph_objects as go
 
 from web.tabs.beta.data import THEME, ALLOCATION_RESULTS
+from .tickets import build_tickets_table
 from settings.general import DEFAULT_TOTAL_CAPITAL_BN, DEFAULT_ALPHA_MARGIN_SHARE
 
 
@@ -325,7 +326,6 @@ def build_risk_layout():
                     'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.07em',
                     'textTransform': 'uppercase', 'color': THEME['text_sub'], 'marginRight': '4px',
                 }),
-                html.Button("Open Date", id='summary-col-pill-open_date', n_clicks=0, style=col_pill_style(False)),
                 html.Button("Volume", id='summary-col-pill-volume', n_clicks=0, style=col_pill_style(False)),
             ], id='summary-col-pills-row', style={'display': 'flex', 'alignItems': 'center', 'gap': '6px', 'marginBottom': '10px', 'flexWrap': 'wrap'}),
 
@@ -491,20 +491,33 @@ def build_risk_layout():
                         'fontSize': '11px', 'color': THEME['text_sub'], 'marginTop': '3px',
                     }),
                 ]),
-                html.Div(id='tickets-filter-row', style={
-                    'display': 'flex', 'gap': '4px', 'backgroundColor': THEME['bg_input'],
-                    'padding': '3px', 'borderRadius': '5px', 'border': f'1px solid {THEME["table_header"]}',
-                }),
+                html.Div([
+                    html.Button("Generate Tickets", id='tickets-generate-btn', n_clicks=0, style={
+                        'fontSize': '12px', 'fontWeight': 'bold', 'padding': '7px 16px',
+                        'backgroundColor': THEME['accent'], 'color': THEME['bg_card'],
+                        'border': f'1px solid {THEME["accent"]}', 'borderRadius': '4px', 'cursor': 'pointer',
+                    }),
+                    html.Span(id='tickets-gen-status', style={
+                        'fontSize': '11px', 'color': THEME['text_sub'], 'fontStyle': 'italic'}),
+                ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px'}),
             ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between',
                       'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '14px'}),
 
-            dcc.Store(id='tickets-filter', data='All'),
+            # Holdings / targets / P&L table (Holding, Open Px and Ticket Px are editable)
+            html.Div(build_tickets_table(), className='risk-panel-flush-tbl'),
 
-            # Summary metrics strip
-            html.Div(id='tickets-kpi-container'),
-
-            # Tickets table
-            html.Div(id='tickets-table-container', className='risk-panel-flush-tbl'),
+            # Broker lines from target - holding
+            html.Div([
+                html.Div("Trade tickets", style={'color': THEME['text_main'], 'fontWeight': '600',
+                                                 'fontSize': '13px', 'marginBottom': '6px'}),
+                dcc.Textarea(id='tickets-output', value='', readOnly=True, spellCheck=False,
+                             placeholder='Click Generate Tickets to list the trades from holding to target.',
+                             style={'width': '100%', 'height': '160px', 'fontFamily': 'var(--font-mono)',
+                                    'fontSize': '12px', 'backgroundColor': THEME['bg_input'],
+                                    'color': THEME['text_main'],
+                                    'border': f'1px solid {THEME["table_header"]}', 'borderRadius': '4px',
+                                    'padding': '8px'}),
+            ], style={'marginTop': '14px'}),
 
         ]),
 

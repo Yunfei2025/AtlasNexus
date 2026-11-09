@@ -721,6 +721,22 @@ def run_historical_allocation(
     cumulative_m['Total'] = gross_daily.cumsum()
     cumulative_m['Total (net)'] = (gross_daily - tx_cost_m.values).cumsum()
 
+    # Month-end snapshots for the "Download Data" export (million CNY): cumulative P&L and
+    # net notional position, Total first then one column per asset / overlay leg.
+    _pos_daily = (pd.concat([alloc_daily, overlay.deriv_notional], axis=1)
+                  if overlay is not None else alloc_daily) / 1_000_000
+    _pos_daily.insert(0, 'Total', _pos_daily.sum(axis=1))
+    _pnl_daily = cumulative_m.set_index('Date')
+    _pnl_daily = _pnl_daily[['Total (net)', 'Total'] + [c for c in _pnl_daily.columns
+                                                         if c not in ('Total', 'Total (net)')]]
+    monthly_export = {
+        name: {'index': [d.strftime('%Y-%m-%d') for d in df_m.index],
+               'columns': list(df_m.columns),
+               'data': df_m.round(6).values.tolist()}
+        for name, df_m in (('Cumulative PnL', _pnl_daily.resample('ME').last().dropna(how='all')),
+                           ('Position', _pos_daily.resample('ME').last().dropna(how='all')))
+    }
+
     df_history = pd.DataFrame(history_data)
     df_pnl = cumulative_m.reset_index(drop=True)
     # Unrounded copy for NAV/Sharpe/drawdown — the rounding below is for
@@ -903,6 +919,7 @@ def run_historical_allocation(
             'end_date': end_date.strftime('%Y-%m-%d'),
             'alloc_mode': alloc_mode,
             'corr_matrix': corr_payload,
+            'monthly_export': monthly_export,
             # For the "Save Result" button -> multiasset.storage.save_backtest_result,
             # which the beta+alpha combination panel reads via load_last_backtest_result.
             'equity_series': [

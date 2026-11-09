@@ -112,31 +112,16 @@ def build_substituted_position_fig(net_pos: dict, subs: list[dict]) -> go.Figure
     stay. Instruments the substitution changes show the strategy net as a
     faint ghost bar behind the executable bar (cyan).
     """
-    strat = {str(c): (e.get("Beta", 0.0) + e.get("Alpha", 0.0),
-                      e.get("BetaDV01", 0.0) + e.get("AlphaDV01", 0.0))
-             for c, e in net_pos.items()}
-    exe = {c: list(v) for c, v in strat.items()}
-    changed: set[str] = set()
-    for r in subs:
-        if not r["substitutes"]:
-            continue
-        exe[r["code"]] = [0.0, 0.0]
-        changed.add(r["code"])
-        for s in r["substitutes"]:
-            e = exe.setdefault(s["code"], [0.0, 0.0])
-            e[0] += s["notional_mm"]
-            e[1] += s["dv01"]
-            changed.add(s["code"])
-
+    from .short_substitution import executable_positions
     rows = []
-    for code, (net, dv01) in exe.items():
-        s_net = strat.get(code, (0.0, 0.0))[0]
+    for code, e in executable_positions(net_pos, subs).items():
+        net, dv01, s_net = e["net"], e["dv01"], e["strat"]
         if abs(net) < 1e-6 and abs(s_net) < 1e-6:
             continue
         beta = net_pos.get(code, {}).get("Beta", 0.0)
         rows.append({"inst": code, "net": net, "dv01": dv01, "strat": s_net,
-                     "changed": code in changed,
-                     "color": TOKENS["cyan"] if code in changed
+                     "changed": e["changed"],
+                     "color": TOKENS["cyan"] if e["changed"]
                      else _net_pos_bar_color(beta, net - beta, net)})
     rows.sort(key=lambda r: str(r["inst"]).upper())
 
