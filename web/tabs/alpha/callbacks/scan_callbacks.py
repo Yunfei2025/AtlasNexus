@@ -69,7 +69,7 @@ def register_scan_callbacks(app) -> None:
                & ~df['ID'].astype(str).map(short_allowed))
         return df[~bad].copy() if bad.any() else df
 
-    def _render_candidates_from_df(df_input: pd.DataFrame):
+    def _render_candidates_from_df(df_input: pd.DataFrame, dismissed_core=None):
         df_input = _without_unshortable(_without_core(df_input))
         if df_input is None:
             return html.Div("No candidates found.", style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '6px 8px', 'fontStyle': 'italic'}), [], {}
@@ -443,6 +443,10 @@ def register_scan_callbacks(app) -> None:
         # a saved position the backtest is flat on (and takes the backtest's
         # direction); a backtest that cannot run leaves the saved row as-is.
         open_core_rows, n_core_flat = get_open_core_positions()
+        # Core names the user removed with × stay hidden for the session.
+        _dismissed = {(str(d.get('spread_type', '')), str(d.get('instrument', ''))) for d in (dismissed_core or [])}
+        open_core_rows = [r for r in open_core_rows
+                          if ('TenorSpread', str(r.get('ID') or r.get('instrument') or '')) not in _dismissed]
         open_core_cards = _signal_cards(open_core_rows) if open_core_rows else []
 
         sections = []
@@ -537,10 +541,11 @@ def register_scan_callbacks(app) -> None:
          State('seasonal-prefilter-min-consistency', 'value'),
          State('seasonal-prefilter-p-thresh', 'value'),
          State('alpha-trend-score-min', 'value'),
-         State('alpha-carry-min-bp', 'value')],
+         State('alpha-carry-min-bp', 'value'),
+         State('alpha-dismissed-core-store', 'data')],
         prevent_initial_call=True,
     )
-    def scan_candidates(n_clicks, core_categories, satellite_categories, zscore_thd, direction, seasonal_prefilter, seasonal_min_consistency, seasonal_p_thresh, trend_score_min, carry_min_bp):
+    def scan_candidates(n_clicks, core_categories, satellite_categories, zscore_thd, direction, seasonal_prefilter, seasonal_min_consistency, seasonal_p_thresh, trend_score_min, carry_min_bp, dismissed_core):
         categories = list(core_categories or []) + list(satellite_categories or [])
         if not n_clicks or not categories:
             return html.Div("Select spread categories and click Scan.", style={'color': THEME['text_sub']}), "", [], {}
@@ -830,7 +835,7 @@ def register_scan_callbacks(app) -> None:
                 if _fails_carry_gate.any():
                     df_all = df_all[~_fails_carry_gate].copy()
 
-        table_out, candidate_data, regime_store = _render_candidates_from_df(df_all)
+        table_out, candidate_data, regime_store = _render_candidates_from_df(df_all, dismissed_core)
         df_all = _without_unshortable(_without_core(df_all))
         style_counts = (
             df_all.get('style', pd.Series(dtype=str))
@@ -851,12 +856,14 @@ def register_scan_callbacks(app) -> None:
         [Output('alpha-candidates-table-container', 'children', allow_duplicate=True),
          Output('alpha-scan-status', 'children', allow_duplicate=True),
          Output('alpha-selected-candidates', 'data', allow_duplicate=True),
-         Output('alpha-regime-store', 'data', allow_duplicate=True)],
+         Output('alpha-regime-store', 'data', allow_duplicate=True),
+         Output('alpha-dismissed-core-store', 'data', allow_duplicate=True)],
         Input({'type': 'alpha-candidate-remove', 'stype': ALL, 'inst': ALL}, 'n_clicks'),
-        State('alpha-selected-candidates', 'data'),
+        [State('alpha-selected-candidates', 'data'),
+         State('alpha-dismissed-core-store', 'data')],
         prevent_initial_call=True,
     )
-    def remove_candidate(_, selected_candidates):
+    def remove_candidate(clicks, selected_candidates, dismissed_core):
         ctx = callback_context
         if not ctx.triggered:
             raise PreventUpdate
@@ -874,23 +881,25 @@ def register_scan_callbacks(app) -> None:
         if not stype or not inst:
             raise PreventUpdate
 
-        rows = list(selected_candidates or [])
-        if not rows:
+        # A real click, not a card re-render resetting n_clicks to 0.
+        if not any(nc for nc in clicks if nc):
             raise PreventUpdate
 
+        rows = list(selected_candidates or [])
         filtered = [
             r for r in rows
             if not (str(r.get('spread_type', '') or '') == stype and str(r.get('ID', '') or '') == inst)
         ]
 
-        if len(filtered) == len(rows):
-            raise PreventUpdate
+        # Open Positions (Core) cards are not in the scan store (they are
+        # recomputed on every render), so removal is remembered separately.
+        dismissed = list(dismissed_core or [])
+        entry = {'spread_type': stype, 'instrument': inst}
+        if entry not in dismissed:
+            dismissed.append(entry)
 
-        if filtered:
-            table_out, candidate_data, regime_store = _render_candidates_from_df(pd.DataFrame(filtered))
-            status = f"Removed {display_key(stype, inst)}. {len(filtered)} candidates remaining."
-            return table_out, status, candidate_data, regime_store
-
-        empty_div = html.Div("No candidates found.", style={'color': THEME['text_sub'], 'fontSize': '12px', 'padding': '6px 8px', 'fontStyle': 'italic'})
-        status = f"Removed {display_key(stype, inst)}. No candidates remaining."
-        return empty_div, status, [], {}
+        df = pd.DataFrame(filtered) if filtered else pd.DataFrame(
+            columns=['ID', 'spread_type', 'direction', 'regime', 'style', 'Zscore'])
+        table_out, candidate_data, regime_store = _render_candidates_from_df(df, dismissed)
+        status = f"Removed {display_key(stype, inst)}. {len(filtered)} scan candidates remaining."
+        return table_out, status, candidate_data, regime_store, dismissed
