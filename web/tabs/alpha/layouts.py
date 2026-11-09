@@ -915,8 +915,8 @@ def build_portfolio_backtest_panel(saved_selection: dict | None = None) -> html.
                             dcc.Dropdown(id='bt-port-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}, {'label': '10 Years', 'value': 2520}], value=504, clearable=False, style={'fontSize': '13px'}),
                         ]),
                         html.Div([
-                            html.Label("Initial Capital (MM)", style=_lbl),
-                            dcc.Input(id='bt-initial-capital', type='number', value=100, min=10, max=1000, step=10, style=_inp, className='no-spinner'),
+                            html.Label("Max Margin (MM)", style=_lbl),
+                            dcc.Input(id='bt-initial-capital', type='number', value=1000, min=10, max=100000, step=100, style=_inp, className='no-spinner'),
                         ]),
                         html.Div([
                             html.Label("Transaction Cost (bp)", style=_lbl),

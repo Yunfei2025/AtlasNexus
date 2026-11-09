@@ -1013,7 +1013,9 @@ def register_backtest_callbacks(app) -> None:
             return html.Div(msg, style={'color': THEME['warning'], 'padding': '20px'}), "Waiting for portfolio data...", None
 
         try:
-            capital = float(capital) if capital is not None else 10000000.0
+            # 'Max Margin (MM)' backtest setting: the netted-margin budget the
+            # book's gross notional (and so every MM P&L figure) is sized to.
+            margin_budget_mm = capital
             txn_cost_bp = float(txn_cost) if txn_cost is not None else 1.0
             lookback_days = int(period) if period is not None else 252
 
@@ -1294,6 +1296,40 @@ def register_backtest_callbacks(app) -> None:
                 if margin_ratio_per_notional > 0 else None
             )
 
+            # --- P&L in MM at the Portfolio tab's netted-margin budget ---------
+            # bp figures are bp of gross book notional (weights sum to 1), so
+            # MM = bp / 1e4 x N where N is the gross notional that ties up the
+            # budget (backtest 'Max Margin (MM)') in netted margin. With a
+            # saved portfolio snapshot, N is its own sized book (sum |notional_mm|)
+            # rescaled so its netted margin (sum margin_mm) equals the budget;
+            # without one (Default books) N falls back to budget / DV01-proxy ratio.
+            try:
+                _budget = float(str(margin_budget_mm).replace(',', ''))
+            except (TypeError, ValueError):
+                _budget = float('nan')
+            if not np.isfinite(_budget) or _budget <= 0:
+                _budget = 1000.0
+            _snap = {str(_i.get('ID')): _i for _i in optimized_data if _i.get('ID')}
+            _snap_notional = sum(abs(float(pd.to_numeric(_snap[_a].get('notional_mm'), errors='coerce') or 0.0))
+                                 for _a in valid_assets if _a in _snap and _a in weighted_equity)
+            _snap_margin = sum(float(pd.to_numeric(_snap[_a].get('margin_mm'), errors='coerce') or 0.0)
+                               for _a in valid_assets if _a in _snap and _a in weighted_equity)
+            if not is_default and _snap_notional > 0 and _snap_margin > 0:
+                _margin_scale = _budget / _snap_margin
+                _gross_n_mm = _snap_notional * _margin_scale
+                _mm_basis = 'saved portfolio snapshot (netted margin_mm), rescaled to budget'
+            elif margin_ratio_per_notional > 0:
+                _margin_scale = float('nan')
+                _gross_n_mm = _budget / margin_ratio_per_notional
+                _mm_basis = 'DV01-proxy margin ratio (no saved snapshot)'
+            else:
+                _margin_scale = float('nan')
+                _gross_n_mm = float('nan')
+                _mm_basis = 'unavailable'
+            _bp_to_mm = _gross_n_mm / 1e4
+            for _ts_row in trade_summaries:
+                _ts_row['Wtd PnL (MM)'] = round(float(weighted_equity[_ts_row['Asset']].iloc[-1]) * _bp_to_mm, 2)
+
             # --- Chart: per-trade weighted equity + portfolio total ---
             fig = go.Figure()
             _sorted_assets = sorted(weighted_equity, key=lambda a: -alloc_weights[a])
@@ -1302,14 +1338,14 @@ def register_backtest_callbacks(app) -> None:
                 _dir = item_lookup.get(_a, {}).get('direction', '')
                 _color = _TRACE_COLORS[_ci % len(_TRACE_COLORS)]
                 fig.add_trace(go.Scatter(
-                    x=_eq.index, y=_eq.values,
+                    x=_eq.index, y=_eq.values * _bp_to_mm,
                     mode='lines',
                     name=f"{_a} ({alloc_weights[_a]*100:.0f}% {_dir})",
                     line=dict(color=_color, width=1),
                     opacity=0.65,
                 ))
             fig.add_trace(go.Scatter(
-                x=portfolio_equity.index, y=portfolio_equity.values,
+                x=portfolio_equity.index, y=portfolio_equity.values * _bp_to_mm,
                 mode='lines', name='Portfolio Total',
                 line=dict(color=THEME['success'], width=2.5),
                 fill='tozeroy', fillcolor='rgba(0,204,150,0.07)',
@@ -1318,7 +1354,7 @@ def register_backtest_callbacks(app) -> None:
             fig.update_layout(
                 title=f'Portfolio Cumulative PnL — {len(weighted_equity)} trades (signal-driven, weighted by allocation)',
                 xaxis={'title': '', 'gridcolor': THEME['bg_card'], 'tickformat': '%b\n%Y'},
-                yaxis={'title': 'Weighted PnL (bp)', 'gridcolor': THEME['bg_card']},
+                yaxis={'title': f'PnL (MM) @ {_budget:,.0f}MM max margin', 'gridcolor': THEME['bg_card']},
                 template='plotly_dark', paper_bgcolor=THEME['bg_card'], plot_bgcolor=THEME['bg_card'],
                 height=420, margin={'l': 60, 'r': 180, 't': 50, 'b': 40},
                 legend=dict(orientation='v', yanchor='top', y=0.99, xanchor='left', x=1.01,
@@ -1336,13 +1372,13 @@ def register_backtest_callbacks(app) -> None:
             stats = html.Div([
                 html.Div([
                     html.Span("Total Return", style=label_style),
-                    html.Span(f"{total_pnl:+.1f} bp", style={**val_style, 'color': THEME['success'] if total_pnl > 0 else THEME['danger']}),
-                    html.Span(f"{total_pnl_pct:+.2f}% of notional", style=_sub_style),
+                    html.Span(f"{total_pnl * _bp_to_mm:+,.1f} MM", style={**val_style, 'color': THEME['success'] if total_pnl > 0 else THEME['danger']}),
+                    html.Span(f"{total_pnl_pct:+.2f}% of notional ({total_pnl:+.1f} bp) · {total_pnl * _bp_to_mm / _budget * 100:+.1f}% of max margin", style=_sub_style),
                 ], style=item_style),
                 html.Div([
                     html.Span("Avg Annual Return (ROA)", style=label_style),
                     html.Span(f"{roa_annual_pct:+.2f}%", style={**val_style, 'color': THEME['success'] if roa_annual_pct > 0 else THEME['danger']}),
-                    html.Span(f"{avg_pnl * 252.0:+.1f} bp/yr", style=_sub_style),
+                    html.Span(f"{avg_pnl * 252.0 * _bp_to_mm:+,.1f} MM/yr ({avg_pnl * 252.0:+.1f} bp/yr)", style=_sub_style),
                 ], style=item_style),
                 html.Div([
                     html.Span("Return on Margin (ROE)", style=label_style),
@@ -1360,22 +1396,22 @@ def register_backtest_callbacks(app) -> None:
                 html.Div([html.Span("Win Rate (daily)", style=label_style), html.Span(f"{win_rate:.1f}%",      style=val_style)], style=item_style),
                 html.Div([
                     html.Span("Max Drawdown", style=label_style),
-                    html.Span(f"-{max_drawdown_pct:.2f}%", style={**val_style, 'color': THEME['danger']}),
-                    html.Span(f"-{max_drawdown:.1f} bp", style=_sub_style),
+                    html.Span(f"-{max_drawdown * _bp_to_mm:,.1f} MM", style={**val_style, 'color': THEME['danger']}),
+                    html.Span(f"-{max_drawdown * _bp_to_mm:,.1f} MM ({max_drawdown:.1f} bp)", style=_sub_style),
                 ], style=item_style),
                 html.Div([html.Span("Annual Vol",       style=label_style), html.Span(f"{std_pnl * np.sqrt(252) / 100.0:.2f}%",    style=val_style)], style=item_style),
                 html.Div([html.Span("Trades loaded",    style=label_style), html.Span(f"{len(weighted_equity)}/{len(valid_assets)}", style=val_style)], style=item_style),
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '10px', 'marginBottom': '14px'})
 
             contrib_table = dash_table.DataTable(
-                columns=[{'name': c, 'id': c} for c in ['Asset', 'Direction', 'Input Dir', 'Style', 'Weight', '# Trades', 'Win Rate', 'Wtd PnL (bp)']],
-                data=sorted(trade_summaries, key=lambda x: -x['Wtd PnL (bp)']),
+                columns=[{'name': c, 'id': c} for c in ['Asset', 'Direction', 'Input Dir', 'Style', 'Weight', '# Trades', 'Win Rate', 'Wtd PnL (MM)']],
+                data=sorted(trade_summaries, key=lambda x: -x['Wtd PnL (MM)']),
                 page_size=15,
                 style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'], 'fontWeight': 'bold'},
                 style_cell={'backgroundColor': THEME['bg_card'], 'color': THEME['text_main'], 'textAlign': 'left', 'fontSize': '12px', 'padding': '6px 10px'},
                 style_data_conditional=[
-                    {'if': {'filter_query': '{Wtd PnL (bp)} > 0', 'column_id': 'Wtd PnL (bp)'}, 'color': THEME['success']},
-                    {'if': {'filter_query': '{Wtd PnL (bp)} < 0', 'column_id': 'Wtd PnL (bp)'}, 'color': THEME['danger']},
+                    {'if': {'filter_query': '{Wtd PnL (MM)} > 0', 'column_id': 'Wtd PnL (MM)'}, 'color': THEME['success']},
+                    {'if': {'filter_query': '{Wtd PnL (MM)} < 0', 'column_id': 'Wtd PnL (MM)'}, 'color': THEME['danger']},
                     {'if': {'filter_query': '{Direction} = "BUY"',  'column_id': 'Direction'}, 'color': THEME['success']},
                     {'if': {'filter_query': '{Direction} = "SELL"', 'column_id': 'Direction'}, 'color': THEME['danger']},
                 ],
@@ -1410,10 +1446,50 @@ def register_backtest_callbacks(app) -> None:
                 name: {'index': [d.strftime('%Y-%m-%d') for d in df_m.index],
                        'columns': list(df_m.columns),
                        'data': df_m.round(6).values.tolist()}
-                for name, df_m in (('Cumulative PnL (bp)', _eq_m.resample('ME').last().dropna(how='all')),
-                                   ('Position (weight)', _pos_m.resample('ME').last().dropna(how='all')))
+                for name, df_m in (('Position (weight)', _pos_m.resample('ME').last().dropna(how='all')),)
+            }
+            _eq_m_mm = _eq_m * _bp_to_mm
+            _month_end_cum = _eq_m_mm.resample('ME').last().dropna(how='all')
+            _month_end_chg = _month_end_cum.diff()
+            _month_end_chg.iloc[0] = _month_end_cum.iloc[0]
+            for _name, _df_m in (('Cumulative PnL (MM)', _month_end_cum),
+                                 ('Monthly PnL (MM)', _month_end_chg)):
+                monthly_export[_name] = {
+                    'index': [d.strftime('%Y-%m-%d') for d in _df_m.index],
+                    'columns': list(_df_m.columns),
+                    'data': _df_m.round(4).values.tolist(),
+                }
+            _alloc_rows = []
+            for _a in valid_assets:
+                if _a not in weighted_equity:
+                    continue
+                _it = item_lookup.get(_a, {})
+                _bp_i = float(weighted_equity[_a].iloc[-1])
+                _alloc_rows.append({
+                    'ID': _a,
+                    'spread_type': _it.get('spread_type', ''),
+                    'direction': _it.get('direction', 'N/A'),
+                    'weight': alloc_weights[_a],
+                    'notional_mm (scaled to budget)': (
+                        float(pd.to_numeric(_snap.get(_a, {}).get('notional_mm'), errors='coerce')) * _margin_scale
+                        if np.isfinite(_margin_scale) and _a in _snap else alloc_weights[_a] * _gross_n_mm),
+                    'PnL (MM)': round(_bp_i * _bp_to_mm, 3),
+                })
+            _alloc_rows.append({'ID': 'TOTAL', 'weight': 1.0,
+                                'PnL (MM)': round(total_pnl * _bp_to_mm, 3)})
+            mm_summary = {
+                'assumptions': [
+                    ['Max margin (MM) - backtest setting', _budget],
+                    ['Gross book notional N (MM)', _gross_n_mm],
+                    ['Basis', _mm_basis],
+                    ['Snapshot margin scale factor', _margin_scale],
+                    ['Formula', 'PnL_MM = bp / 10,000 x N'],
+                    ['Lookback (trading days)', lookback_days],
+                ],
+                'instruments': _alloc_rows,
             }
             store_data = {
+                'mm_summary': mm_summary,
                 'portfolio_source': source,
                 'equity_ts': portfolio_equity.to_json(orient='split', date_format='iso'),
                 'sharpe': sharpe,
@@ -1489,8 +1565,15 @@ def register_backtest_callbacks(app) -> None:
         if not n_clicks or not export:
             return no_update
 
+        mm_summary = (store_data or {}).get('mm_summary')
+
         def _write(buf):
             with pd.ExcelWriter(buf, engine='openpyxl') as xw:
+                if mm_summary:
+                    pd.DataFrame(mm_summary['assumptions'], columns=['Item', 'Value']).to_excel(
+                        xw, sheet_name='MM Assumptions', index=False)
+                    pd.DataFrame(mm_summary['instruments']).to_excel(
+                        xw, sheet_name='PnL by Instrument (MM)', index=False)
                 for sheet, d in export.items():
                     df = pd.DataFrame(d['data'], index=pd.to_datetime(d['index']), columns=d['columns'])
                     df.index.name = 'Month End'
