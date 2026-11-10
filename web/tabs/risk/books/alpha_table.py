@@ -18,7 +18,7 @@ from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
 from web.tabs.beta.data import THEME
 from web.tabs.beta.callbacks._common import _SUMMARY_ALPHA_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET, _ALPHA_POSITIONS_PARQUET, _load_cr_ts, _price_progress_bar, _dir_badge, _style_badge, _signed_value_style, _zscore_cell_style, _sortable_header, _apply_sort
 from .close_reminder import alpha_close_ticket, format_ticket
-from ..helpers import _persist_alpha_summary_rows, _alpha_progress_direction, _alpha_spread_pnl_bp, _coerce_float, _load_leg_data, _resolve_legs, _leg_volume_ratio, _row_key, normalize_risk_ticker
+from ..helpers import _compute_alpha_carry_mtm, _persist_alpha_summary_rows, _alpha_progress_direction, _alpha_spread_pnl_bp, _coerce_float, _load_leg_data, _resolve_legs, _leg_volume_ratio, _row_key, normalize_risk_ticker
 
 
 def register_alpha_book_table_callbacks(app):
@@ -199,25 +199,6 @@ def register_alpha_book_table_callbacks(app):
 
             return fallback
     
-        def _compute_carry_mtm(spread_type: str, instrument_id: str,
-                               open_date_str: str, volume_mm: float) -> float | None:
-            if _load_cr_ts is None or not open_date_str or not volume_mm:
-                return None
-            try:
-                cr_ts = _load_cr_ts(spread_type)
-                if cr_ts is None or instrument_id not in cr_ts.columns:
-                    return None
-                series = cr_ts[instrument_id].dropna()
-                series.index = pd.to_datetime(series.index, errors='coerce')
-                series = series[series.index.notna()]
-                open_dt = pd.to_datetime(open_date_str)
-                today   = pd.Timestamp.today().normalize()
-                mask = (series.index >= open_dt) & (series.index <= today)
-                carry_cum_pct = float(series[mask].sum()) / 90.0
-                return round(volume_mm * carry_cum_pct / 100.0, 4)
-            except Exception:
-                return None
-    
         # Load leg data once for all spread types (used by _resolve_legs below)
         _ld = None
     
@@ -386,7 +367,7 @@ def register_alpha_book_table_callbacks(app):
                         if mtm_spd_bp is not None and volume_mm_f is not None:
                             mtm_price_mm = round(mtm_spd_bp * duration * volume_mm_f / 10000.0, 4)
                         if volume_mm_f is not None:
-                            mtm_carry_mm = _compute_carry_mtm(spread_type, trade_id, open_date_str, volume_mm_f)
+                            mtm_carry_mm = _compute_alpha_carry_mtm(spread_type, trade_id, open_date_str, volume_mm_f, direction)
                         if mtm_price_mm is not None or mtm_carry_mm is not None:
                             mtm_total_mm = round((mtm_price_mm or 0.0) + (mtm_carry_mm or 0.0), 4)
                     except (ValueError, TypeError):

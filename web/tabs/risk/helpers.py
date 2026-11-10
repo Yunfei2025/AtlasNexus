@@ -162,19 +162,49 @@ def _row_key(row: dict, default: int = -1) -> int:
         return default
 
 
+def _alpha_sell_carry_series(spread_type: str, instrument_id: str) -> pd.Series | None:
+    """Stored SELL-side carry for a TenorSpread curve trade (``CarryRoll3mSell``), else None.
+
+    Only CGB/CDB slopes and flies have one: it differs from -BUY carry by the TRS spread, which is
+    charged on every leg whichever way the package is held. Cross-curve names have no SELL column.
+    """
+    if spread_type != 'TenorSpread':
+        return None
+    try:
+        data = pd.read_pickle(str(DIR_INPUT / 'Tenor-spds.pkl'))
+        sell = data.get('TenorSpread', {}).get('CarryRoll3mSell') if isinstance(data, dict) else None
+        if isinstance(sell, pd.DataFrame) and instrument_id in sell.columns:
+            s = pd.to_numeric(sell[instrument_id], errors='coerce').dropna()
+            return s if not s.empty else None
+    except Exception:
+        pass
+    return None
+
+
 def _compute_alpha_carry_mtm(
     spread_type: str,
     instrument_id: str,
     open_date_str: str,
     volume_mm: float | None,
+    direction: str = 'BUY',
 ) -> float | None:
+    """Cumulative carry+roll of an alpha position since its open date, in MM CNY.
+
+    The stored carry series are BUY-side. A SELL position earns the SELL carry: the stored
+    ``CarryRoll3mSell`` for TenorSpread curve trades, otherwise minus the BUY series.
+    """
     if _load_cr_ts is None or not open_date_str or not volume_mm:
         return None
     try:
-        cr_ts = _load_cr_ts(spread_type)
-        if cr_ts is None or instrument_id not in cr_ts.columns:
-            return None
-        series = cr_ts[instrument_id].dropna()
+        is_sell = str(direction or '').strip().upper() in ('SELL', 'SHORT')
+        series = _alpha_sell_carry_series(spread_type, instrument_id) if is_sell else None
+        if series is None:
+            cr_ts = _load_cr_ts(spread_type)
+            if cr_ts is None or instrument_id not in cr_ts.columns:
+                return None
+            series = cr_ts[instrument_id].dropna()
+            if is_sell:
+                series = -series
         series.index = pd.to_datetime(series.index, errors='coerce')
         series = series[series.index.notna()]
         open_dt = pd.to_datetime(open_date_str)
@@ -213,6 +243,7 @@ def _refresh_alpha_display_row(row: dict) -> dict:
         str(updated.get('ID', '')),
         str(updated.get('Open date', '')),
         volume_mm,
+        str(updated.get('Direction', '')),
     )
 
     mtm_total_mm = None
