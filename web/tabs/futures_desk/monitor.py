@@ -5,13 +5,12 @@ the walk-forward expected (pure logic, local files only)."""
 from __future__ import annotations
 
 import math
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
 
 from futures.backtest.costs import apply_costs, trade_stats
-from futures.backtest.live_bars import live_meta_for, load_live, with_live
+from futures.backtest.live_bars import china_now, live_meta_for, load_live, with_live
 from futures.backtest.minute_bars import load_minute_bars
 from futures.backtest.walkforward import (
     STRATEGIES, daily_pnl_of, load_walkforward, product_minute_bars, resample_bars,
@@ -160,7 +159,7 @@ def live_state(product, rec, now=None, live_dir=None):
     Same rules as the walk-forward (default parameters, its cost, flat at every close, its stop / target), with
     today's last bar left open. After the close it is the finished last session (file marked complete).
     None when no live bars have been fetched for today (and no finished session is on file)."""
-    now = now or datetime.now()
+    now = now or china_now()   # Beijing: the live files are stamped in exchange time
     contract, meta = live_meta_for(product, live_dir)
     if contract is None or not (meta.get('complete') or meta.get('date') == now.strftime('%Y-%m-%d')):
         return None

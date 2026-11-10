@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 
 from dash import ctx, dcc, html, no_update
 from dash.dependencies import Input, Output, State
@@ -11,7 +10,7 @@ from dash.exceptions import PreventUpdate
 
 import plotly.graph_objects as go
 
-from futures.backtest.live_bars import fetch_live_bars, fetch_lock
+from futures.backtest.live_bars import CLOSE_TIME, SESSION_START, china_now, fetch_live_bars, fetch_lock
 from web.tabs.beta.data import THEME
 from . import approvals
 from .monitor import live_state
@@ -31,7 +30,7 @@ def start_state(products, minutes):
     if minutes not in INTERVAL_CHOICES_MIN:
         return None, "Refresh every 5, 10 or 15 minutes."
     return {'running': True, 'products': list(products), 'minutes': int(minutes),
-            'started': datetime.now().strftime('%H:%M:%S')}, ''
+            'started': china_now().strftime('%H:%M:%S')}, ''
 
 
 def live_chart(r):
@@ -73,7 +72,7 @@ def live_chart(r):
 
 def live_view(rows, fetch, state, now=None):
     """Table of the live positions plus the fetch outcome."""
-    now = now or datetime.now()
+    now = now or china_now()   # fetched_at is Beijing time
     running = bool(state and state.get('running'))
     out = []
     if not rows:
@@ -111,6 +110,12 @@ def live_view(rows, fetch, state, now=None):
                                    'gap': '8px', 'marginTop': '8px'}))
     if fetch and fetch.get('skipped') and running:
         out.append(_note(f"Not fetched: {fetch['skipped']}.", _AMBER))
+    if fetch and running and fetch.get('session') == 'closed':
+        bj = fetch.get('now')
+        out.append(_note(f"Day session closed ({SESSION_START[:5]}-{CLOSE_TIME[:5]} Beijing"
+                         + (f"; now {bj:%a %H:%M} Beijing" if bj is not None else "")
+                         + "): showing the last finished session. Night sessions are not modelled; the desk's "
+                           "strategies are tested on day-session bars only.", _AMBER))
     for p, v in ((fetch or {}).get('products') or {}).items():
         if 'error' in v:
             out.append(_note(f"{p}: {v['error']}", _RED))

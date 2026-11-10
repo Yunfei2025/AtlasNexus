@@ -530,9 +530,9 @@ CODES = ['AU2612.SHF', 'IC2612.CFE', 'TL2612.CFE']
 
 def test_live_fetch_after_close_is_once_and_only_when_wind_enabled(tmp_path, monkeypatch):
     wind = _FakeWind(_wind_frame('2026-11-05', '09:00', '15:14'))
-    off = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 18, 0), wsi=wind, codes=CODES,
+    off = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 18, 0), wsi=wind, codes=CODES, closed_only=True,
                                     is_trading=lambda n: False, live_dir=tmp_path, wind_off=lambda: True)
-    assert off['skipped'] and wind.calls == []
+    assert off['skipped'] and wind.calls == []                     # the passive view respects FI_DISABLE_WIND
     kw = dict(wsi=wind, codes=CODES, is_trading=lambda n: False, live_dir=tmp_path, wind_off=lambda: False)
     first = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 18, 0), **kw)
     assert first['products']['AU']['rows'] > 300 and len(wind.calls) == 1
@@ -551,6 +551,23 @@ def test_live_fetch_after_close_is_once_and_only_when_wind_enabled(tmp_path, mon
     open_skip = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 6, 10, 0), closed_only=True,
                                           wsi=wind, codes=CODES, is_trading=lambda n: True, live_dir=tmp_path)
     assert open_skip['skipped'] and len(wind.calls) == 1
+
+
+def test_start_live_calls_wind_on_demand_despite_kill_switch(tmp_path):
+    """The daily console always sets FI_DISABLE_WIND; ▶ Start live is an explicit request and still fetches."""
+    wind = _FakeWind(_wind_frame('2026-11-05', '09:00', '10:30'))
+    r = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 10, 30), wsi=wind, codes=CODES,
+                                  live_dir=tmp_path, wind_off=lambda: True)
+    assert r['skipped'] is None and r['session'] == 'open' and r['products']['AU']['rows'] == 91
+
+
+def test_session_hours_are_beijing_day_session():
+    assert live_bars.in_day_session(datetime(2026, 11, 10, 10, 0))
+    assert not live_bars.in_day_session(datetime(2026, 11, 10, 22, 7))     # night session: not modelled
+    assert not live_bars.in_day_session(datetime(2026, 11, 14, 10, 0))     # Saturday
+    bj = live_bars.china_now()
+    utc = pd.Timestamp.now(tz='UTC').tz_localize(None).to_pydatetime()
+    assert abs((bj - utc).total_seconds() - 8 * 3600) < 120
 
 
 def test_live_fetch_only_asked_products(tmp_path):

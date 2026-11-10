@@ -2,9 +2,14 @@
 
 One small `wsi` call per product and refresh: only the minutes after the last stored bar are requested, and the
 result is merged into input/futures_desk/live/<contract>.parquet (today's bars only, replaced each day). Outside
-trading hours, or with FI_DISABLE_WIND set, nothing is requested. The desk reads these files as an overlay on
+trading hours nothing is requested. FI_DISABLE_WIND (set by the daily console) blocks only the passive view;
+▶ Start live is an explicit request and calls Wind on demand (in the isolated Wind worker). The desk reads these files as an overlay on
 top of the settled minute-bar cache; they never enter the cache, the walk-forward or the Monitor's forward
 statuses.
+
+All times are Beijing (exchange) time whatever the machine's clock: session hours, Wind bar timestamps and
+the live files. Only the day session is modelled (as in the minute-bar cache and the walk-forward); night
+sessions are not fetched.
 
 After the close the last session is fetched once (marked 'complete' in index.json) and then served from the
 file, so the Monitor can show the finished day without calling Wind again.
@@ -26,6 +31,18 @@ CLOSE_TIME = '15:15:00'   # after this a day session is over (CFFEX bond futures
 FIELDS = "open,high,low,close,volume"
 OVERLAP_MIN = 2   # re-request the last minutes: the newest bar is still forming when it was fetched
 fetch_lock = threading.Lock()
+EXCHANGE_TZ = 'Asia/Shanghai'
+
+
+def china_now():
+    """Current Beijing (exchange) time as a naive datetime, to compare with session times and bar stamps."""
+    return pd.Timestamp.now(tz=EXCHANGE_TZ).tz_localize(None).to_pydatetime()
+
+
+def in_day_session(now):
+    """True between SESSION_START and CLOSE_TIME on a weekday (Beijing time; holidays show up as no bars)."""
+    t = now.strftime('%H:%M:%S')
+    return now.weekday() < 5 and SESSION_START <= t < CLOSE_TIME
 
 
 def _dir(live_dir):
@@ -125,35 +142,42 @@ def _normalize(frame, day):
 
 
 def fetch_live_bars(products, now=None, wsi=None, codes=None, is_trading=None, live_dir=None,
-                    closed_only=False, wind_off=None):
+                    closed_only=False, wind_off=None, on_demand=None):
     """Fetch the day's minute bars of each product's main contract and merge them into the live files.
 
     Market open: today's bars, incrementally. Market closed: the last session once, then nothing (the file is
     marked complete). closed_only=True never fetches while the market is open (the Monitor shows the finished
-    day without Start). Returns {'skipped': reason or None, 'products': {product: {'contract', 'rows', 'new',
-    'last'} or {'error'}}}. `wsi`, `codes`, `is_trading` and `wind_off` can be injected (tests)."""
-    now = now or datetime.now()
+    day without Start). on_demand (default: not closed_only, i.e. the user pressed Start) calls Wind even when
+    FI_DISABLE_WIND is set; the passive view respects it. `now` defaults to Beijing time. Returns {'skipped': reason or None, 'products': {product: {'contract', 'rows', 'new',
+    'last'} or {'error'}}, 'session': 'open' | 'closed', 'now': Beijing time}. `wsi`, `codes`, `is_trading`
+    and `wind_off` can be injected (tests)."""
+    now = now or china_now()
+    on_demand = (not closed_only) if on_demand is None else bool(on_demand)
     if is_trading is None:
-        from data.providers.retrieve import _is_trading_hours as is_trading
+        is_trading = in_day_session
     t = now.strftime('%H:%M:%S')
     past_close = now.weekday() >= 5 or t >= CLOSE_TIME or t < SESSION_START
     open_now = bool(is_trading(now)) and not past_close
+    info = {'session': 'open' if open_now else 'closed', 'now': now}
     if open_now and closed_only:
-        return {'skipped': 'market open: press Start live for intraday updates', 'products': {}}
-    if not open_now:
+        return {'skipped': 'market open: press Start live for intraday updates', 'products': {}, **info}
+    if not on_demand:
         if wind_off is None:
             from data.providers.retrieve import _wind_disabled as wind_off
         if wind_off():
-            return {'skipped': 'Wind disabled', 'products': {}}
+            return {'skipped': 'Wind disabled', 'products': {}, **info}
     if wsi is None:
-        from data.providers.retrieve import _wsi as wsi
+        from data.providers.retrieve import _wsi
+
+        def wsi(*args):
+            return _wsi(*args, on_demand=on_demand)
     out = {}
     today = now.strftime('%Y-%m-%d')
     with fetch_lock:
         try:
             code_of = main_contract_codes(codes)
         except Exception as e:
-            return {'skipped': f'main contract lookup failed: {e}', 'products': {}}
+            return {'skipped': f'main contract lookup failed: {e}', 'products': {}, **info}
         index = load_index(live_dir)
         for prod in products:
             code = code_of.get(prod)
@@ -199,4 +223,4 @@ def fetch_live_bars(products, now=None, wsi=None, codes=None, is_trading=None, l
             except Exception as e:
                 out[prod] = {'error': str(e)}
         _save_index(index, live_dir)
-    return {'skipped': None, 'products': out}
+    return {'skipped': None, 'products': out, **info}
