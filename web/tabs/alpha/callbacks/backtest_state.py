@@ -98,19 +98,31 @@ def window_start(ts: pd.Series, period: Optional[int]) -> Optional[pd.Timestamp]
     return pd.Timestamp(ts.index[-int(period)])
 
 
-def run_instrument_backtest(spread_type: str, instrument: str, period: int = _PERIOD) -> Optional[dict]:
+def run_instrument_backtest(spread_type: str, instrument: str, period: int = _PERIOD,
+                            start=None, end=None) -> Optional[dict]:
     """Run the Backtest tab's individual monthly-style backtest for one instrument
     with its saved params (preset fills gaps). Single source of truth shared by
     the Candidates reconcile and the Portfolio backtest, so both hold the same
     position for the same name. Returns the engine result dict, or None if it
-    could not be run."""
+    could not be run. ``start``/``end`` (optional dates) select a custom window
+    instead of the trailing ``period`` rows; history before ``start`` still warms
+    up the signals."""
     from .backtest_tab import _run_monthly_style_switch_backtest, _allow_trend_style_for
     try:
         spread_ts = load_spread_timeseries(spread_type)
         if spread_ts is None or instrument not in spread_ts.columns:
             return None
         ts = spread_ts[instrument]
-        if len(ts.tail(period).dropna()) < 60:
+        custom = start is not None or end is not None
+        if custom:
+            ts = ts.copy()
+            ts.index = pd.to_datetime(ts.index)
+            if end is not None:
+                ts = ts.loc[:pd.Timestamp(end)]
+            win = ts.loc[pd.Timestamp(start):] if start is not None else ts
+            if len(win.dropna()) < 60:
+                return None
+        elif len(ts.tail(period).dropna()) < 60:
             return None
 
         params = dict(_TENOR_PRESET if spread_type == 'TenorSpread'
@@ -164,7 +176,7 @@ def run_instrument_backtest(spread_type: str, instrument: str, period: int = _PE
             carry_z_weight=float(params['carry_z_weight']),
             mr_lookback=int(params['mr_lookback']),
             allow_trend_style=_allow_trend_style_for(spread_type, instrument),
-            start_date=window_start(ts, period),
+            start_date=pd.Timestamp(start) if (custom and start is not None) else (None if custom else window_start(ts, period)),
         )
         return results if isinstance(results, dict) and 'error' not in results else None
     except Exception:

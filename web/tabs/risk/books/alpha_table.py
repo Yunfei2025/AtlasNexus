@@ -427,7 +427,9 @@ def register_alpha_book_table_callbacks(app):
                         'MtM Carry (MM CNY)':     f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
                         'MtM Value (MM CNY)':     f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
                         'Target Weight (%)':      f"{float(row.get('weight', 0) or 0) * 100:.2f}%",
-                        'RC (%)':                 f"{risk_contribution * 100:.2f}%" if risk_contribution is not None else '',
+                        # risk_contribution is already in percent (see Alpha Portfolio);
+                        # renormalized to the rows shown below.
+                        'RC (%)':                 f"{risk_contribution:.6f}%" if risk_contribution is not None else '',
                         'Weight (%)':             '',
                         '_entry_level':           f"{_entry_bp:.4f}" if _entry_bp is not None else '',
                         '_current_level':         f"{cp_bp:.4f}" if cp_bp is not None else '',
@@ -473,6 +475,19 @@ def register_alpha_book_table_callbacks(app):
     
             if not display_rows:
                 return _no_data("Alpha snapshot is empty.")
+
+            # The snapshot can hold only some of the optimised trades (or rows whose
+            # RC was missing), so rescale RC to sum to 100% across the rows shown.
+            _rc_vals = {}
+            for _i, r in enumerate(display_rows):
+                try:
+                    _rc_vals[_i] = float(str(r.get('RC (%)', '')).replace('%', '').strip())
+                except (ValueError, TypeError):
+                    pass
+            _rc_sum = sum(_rc_vals.values())
+            if _rc_sum > 0:
+                for _i, _v in _rc_vals.items():
+                    display_rows[_i]['RC (%)'] = f"{_v / _rc_sum * 100:.2f}%"
     
             _BOND_OUTRIGHT_TYPES = {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap'}
     
@@ -489,7 +504,6 @@ def register_alpha_book_table_callbacks(app):
                             pass
                 return total if has_any else None
     
-            _s_vol    = _sum_col('Volume (mm)',            _BOND_OUTRIGHT_TYPES)
             _s_tvol   = _sum_col('Capital (MM CNY)', _BOND_OUTRIGHT_TYPES)
             _s_margin = _sum_col('Margin (MM)')
             _s_dv01   = _sum_col('DV01 (k CNY/bp)')
@@ -501,7 +515,6 @@ def register_alpha_book_table_callbacks(app):
     
             total_row = {c: '' for c in display_rows[0].keys()}
             total_row['ID']                     = 'TOTAL'
-            total_row['Volume (mm)']            = f"{_s_vol:,.1f}"    if _s_vol    is not None else ''
             total_row['Capital (MM CNY)'] = f"{_s_tvol:,.1f}"   if _s_tvol   is not None else ''
             total_row['Margin (MM)']            = f"{_s_margin:,.2f}" if _s_margin is not None else ''
             total_row['DV01 (k CNY/bp)']        = f"{_s_dv01:.1f}"    if _s_dv01   is not None else ''
@@ -511,10 +524,6 @@ def register_alpha_book_table_callbacks(app):
             total_row['RC (%)']                 = f"{_s_rc:.2f}%"     if _s_rc     is not None else ''
             total_row['Weight (%)']             = f"{_s_wt:.2f}%"     if _s_wt     is not None else ''
             display_rows.append(total_row)
-    
-            _visible_cols = []
-            if col_vis.get('volume'):
-                _visible_cols.append('Volume (mm)')
     
             _today = pd.Timestamp.today().normalize()
             _alert_rows: list = []
@@ -600,7 +609,6 @@ def register_alpha_book_table_callbacks(app):
             _ALL_COLS = [
                 ('ID', 'left'), ('Leg 1', 'left'), ('Leg 2', 'left'), ('Leg 3', 'left'), ('Ratio (V2/V1)', 'right'), ('Ratio (V3/V1)', 'right'),
                 ('Style', 'left'), ('Direction', 'center'), ('Duration', 'right'),
-                ('Volume (mm)', 'right'),
                 ('Z-Score', 'right'), ('Progress', 'left'),
                 ('Capital (MM CNY)', 'right'), ('Target Volume Leg2 (MM CNY)', 'right'),
                 ('Target Volume Leg3 (MM CNY)', 'right'), ('Margin (MM)', 'right'),
@@ -609,9 +617,7 @@ def register_alpha_book_table_callbacks(app):
                 ('Stop (bp)', 'right'), ('Target (bp)', 'right'),
                 ('Target Weight (%)', 'right'), ('RC (%)', 'right'),
             ]
-            _cols = [(c, a) for c, a in _ALL_COLS
-                     if c != 'Volume (mm)' or c in _visible_cols]
-            _cols = [('__delete', 'center')] + _cols
+            _cols = [('__delete', 'center')] + list(_ALL_COLS)
     
             header_row = html.Tr([
                 (html.Th('', style={'padding': '7px 6px', 'width': '24px'}) if c == '__delete'

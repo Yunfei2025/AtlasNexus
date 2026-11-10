@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Dict, List
 
 from dash import dcc, html, dash_table
@@ -401,6 +402,16 @@ def build_candidates_layout() -> html.Div:
                                        'fontSize': '10px', 'fontWeight': '700', 'padding': '5px 14px',
                                        'cursor': 'pointer'},
                             ),
+                            html.Button(
+                                "➕ Add Selected Candidates to Pool",
+                                id='alpha-corr-add-pool-btn', n_clicks=0,
+                                style={'background': 'rgba(52,211,153,0.15)', 'color': THEME['success'],
+                                       'border': f"1px solid {THEME['success']}", 'borderRadius': '4px',
+                                       'fontSize': '10px', 'fontWeight': '700', 'padding': '5px 14px',
+                                       'cursor': 'pointer'},
+                            ),
+                            html.Span(id='alpha-corr-add-pool-status',
+                                      style={'fontSize': '10px', 'color': THEME['text_sub']}),
                         ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px', 'flexWrap': 'wrap'}),
                     ], style={'padding': '10px 14px', 'background': 'rgba(255,255,255,0.02)',
                               'borderBottom': '1px solid var(--border-strong)'}),
@@ -418,6 +429,9 @@ def build_candidates_layout() -> html.Div:
         dcc.Store(id='alpha-corr-pairs-store', data=[]),
         dcc.Store(id='alpha-corr-matrix-store', storage_type='memory', data={}),
         dcc.Store(id='alpha-curated-instruments-store', storage_type='memory', data=[]),
+        # Candidates proposed by the last Check Correlation; they only reach the
+        # Portfolio pool (curated store) when "Add Selected Candidates to Pool" is clicked.
+        dcc.Store(id='alpha-corr-proposed-store', storage_type='memory', data=[]),
         dcc.Store(id='alpha-book-positions-store', storage_type='memory', data=[]),
         dcc.Store(id='alpha-dismissed-core-store', storage_type='session', data=[]),
         dcc.Store(id='alpha-regime-store', storage_type='memory', data={}),
@@ -911,9 +925,37 @@ def build_portfolio_backtest_panel(saved_selection: dict | None = None) -> html.
                     html.H2("Backtest Settings", style=_hdr),
                     html.Div([
                         html.Div([
+                            html.Label("Date Mode", style=_lbl),
+                            dcc.RadioItems(
+                                id='bt-port-date-mode',
+                                options=[{'label': 'Preset', 'value': 'preset'},
+                                         {'label': 'Custom', 'value': 'custom'}],
+                                value='preset', inline=True,
+                                className='an-segmented',
+                                labelClassName='an-segmented__label',
+                                inputClassName='an-segmented__input',
+                            ),
+                        ]),
+                        html.Div([
                             html.Label("Backtest Period", style=_lbl),
                             dcc.Dropdown(id='bt-port-period', options=[{'label': '1 Year', 'value': 252}, {'label': '2 Years', 'value': 504}, {'label': '3 Years', 'value': 756}, {'label': '5 Years', 'value': 1260}, {'label': '10 Years', 'value': 2520}], value=504, clearable=False, style={'fontSize': '13px'}),
-                        ]),
+                        ], id='bt-port-period-container'),
+                        html.Div([
+                            html.Label("Backtest Dates", style=_lbl),
+                            dcc.DatePickerRange(
+                                id='bt-port-date-range',
+                                min_date_allowed=date(2015, 1, 1),
+                                max_date_allowed=date.today(),
+                                start_date=date.today() - timedelta(days=730),
+                                end_date=date.today(),
+                                display_format='YYYY-MM-DD',
+                                updatemode='bothdates',
+                                with_portal=False,
+                                style={'backgroundColor': 'var(--surface-input)', 'color': 'var(--text-primary)'},
+                            ),
+                        ], id='bt-port-dates-container',
+                            style={'display': 'none', 'gridColumn': '1 / -1',
+                                   'position': 'relative', 'zIndex': 999}),
                         html.Div([
                             html.Label("Max Margin (MM)", style=_lbl),
                             dcc.Input(id='bt-initial-capital', type='number', value=1000, min=10, max=100000, step=100, style=_inp, className='no-spinner'),

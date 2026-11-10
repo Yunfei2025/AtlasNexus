@@ -62,6 +62,8 @@ def register_risk_book_control_callbacks(app):
     
     def _col_pills_row(book: str, col_vis: dict):
         col_vis = col_vis or {}
+        if book == 'alpha':
+            return []  # the only pill (Volume) is Beta-only now
         label = html.Span("Columns", style={
             'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.07em',
             'textTransform': 'uppercase', 'color': THEME['text_sub'], 'marginRight': '4px',

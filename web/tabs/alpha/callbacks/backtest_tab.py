@@ -972,6 +972,30 @@ def register_backtest_callbacks(app) -> None:
         except Exception as e:
             return html.P(f"Error parsing portfolio data: {str(e)}", style={'color': 'var(--negative)'})
 
+    # Portfolio backtest date mode: show the preset dropdown or the calendar picker,
+    # and seed the picker from the preset so switching to Custom starts sensible.
+    @app.callback(
+        [Output('bt-port-period-container', 'style'),
+         Output('bt-port-dates-container', 'style')],
+        Input('bt-port-date-mode', 'value'),
+    )
+    def toggle_port_date_mode(mode):
+        dates_style = {'gridColumn': '1 / -1', 'position': 'relative', 'zIndex': 999}
+        if mode == 'custom':
+            return {'display': 'none'}, {**dates_style, 'display': 'block'}
+        return {'display': 'block'}, {**dates_style, 'display': 'none'}
+
+    @app.callback(
+        [Output('bt-port-date-range', 'start_date'),
+         Output('bt-port-date-range', 'end_date')],
+        Input('bt-port-period', 'value'),
+        prevent_initial_call=True,
+    )
+    def sync_port_dates_from_preset(period):
+        end = pd.Timestamp.today().normalize()
+        start = end - pd.tseries.offsets.BDay(int(period or 504))
+        return start.date(), end.date()
+
     # -------------------------------------------------------------------------
     # BACKTEST: Run Portfolio Backtest
     # -------------------------------------------------------------------------
@@ -986,6 +1010,9 @@ def register_backtest_callbacks(app) -> None:
          State('bt-initial-capital', 'value'),
          State('bt-txn-cost', 'value'),
          State('bt-port-period', 'value'),
+         State('bt-port-date-mode', 'value'),
+         State('bt-port-date-range', 'start_date'),
+         State('bt-port-date-range', 'end_date'),
          State('bt-entry-z', 'value'),
          State('bt-exit-z', 'value'),
          State('bt-stop-z', 'value'),
@@ -997,6 +1024,7 @@ def register_backtest_callbacks(app) -> None:
     )
     def run_portfolio_backtest(n_clicks, optimized_data, source, default_portfolio_data,
                                capital, txn_cost, period,
+                               date_mode, custom_start, custom_end,
                                entry_z, exit_z, stop_z, min_hold,
                                er_gate_on, er_max, er_window):
         if not n_clicks:
@@ -1018,6 +1046,19 @@ def register_backtest_callbacks(app) -> None:
             margin_budget_mm = capital
             txn_cost_bp = float(txn_cost) if txn_cost is not None else 1.0
             lookback_days = int(period) if period is not None else 252
+            # Custom mode: explicit calendar window instead of trailing N rows.
+            win_start = win_end = None
+            if date_mode == 'custom':
+                if not custom_start or not custom_end:
+                    return (html.Div("Pick both a start and an end date.",
+                                     style={'color': THEME['warning'], 'padding': '20px'}),
+                            "Date range incomplete", None)
+                win_start, win_end = pd.Timestamp(custom_start), pd.Timestamp(custom_end)
+                if win_start >= win_end:
+                    return (html.Div("Start date must be before end date.",
+                                     style={'color': THEME['warning'], 'padding': '20px'}),
+                            "Invalid date range", None)
+                lookback_days = max(int(np.busday_count(win_start.date(), win_end.date())), 1)
 
             asset_data = {}
             weights = {}
@@ -1111,7 +1152,9 @@ def register_backtest_callbacks(app) -> None:
                     pass
 
                 ts = asset_data[asset].sort_index()
-                if lookback_days < len(ts):
+                if win_start is not None:
+                    ts = ts.loc[win_start:win_end]
+                elif lookback_days < len(ts):
                     ts = ts.iloc[-lookback_days:]
                 is_yield_based = spread_type in YIELD_BASED_SPREAD_TYPES
                 ts_bt = -ts if is_yield_based else ts
@@ -1168,7 +1211,8 @@ def register_backtest_callbacks(app) -> None:
                     # frozen saved month_to_style), so a Core name holds the same
                     # position in every view. Window follows this run's lookback.
                     _inst_id = asset.split('|', 1)[1] if '|' in asset else asset
-                    res = run_instrument_backtest(spread_type, _inst_id, period=lookback_days)
+                    res = run_instrument_backtest(spread_type, _inst_id, period=lookback_days,
+                                                  start=win_start, end=win_end)
                     if res is None:
                         res = {'error': 'saved-state backtest failed'}
                     if 'error' not in res and isinstance(res.get('equity_ts'), pd.Series):

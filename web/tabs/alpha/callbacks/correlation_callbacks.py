@@ -8,7 +8,7 @@ import json as _json
 import numpy as np
 import pandas as pd
 
-from dash import dcc, html, callback_context
+from dash import dcc, html, callback_context, no_update
 from dash.dependencies import Input, Output, State, ALL
 from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
@@ -24,7 +24,7 @@ def register_correlation_callbacks(app) -> None:
         [Output('alpha-corr-results', 'children'),
          Output('alpha-corr-pairs-store', 'data'),
          Output('alpha-corr-matrix-store', 'data'),
-         Output('alpha-curated-instruments-store', 'data')],
+         Output('alpha-corr-proposed-store', 'data')],
         Input('alpha-corr-btn', 'n_clicks'),
         [State('alpha-spread-categories-core', 'value'),
          State('alpha-spread-categories-satellite', 'value'),
@@ -271,6 +271,25 @@ def register_correlation_callbacks(app) -> None:
             corr_matrix_store = corr_matrix
 
         return html.Div([core_seed_note, heatmap_div, warning_div]), [], corr_matrix_store.to_dict(), curated_instruments
+
+    @app.callback(
+        [Output('alpha-curated-instruments-store', 'data', allow_duplicate=True),
+         Output('alpha-corr-add-pool-status', 'children')],
+        Input('alpha-corr-add-pool-btn', 'n_clicks'),
+        [State('alpha-corr-proposed-store', 'data'),
+         State('alpha-curated-instruments-store', 'data')],
+        prevent_initial_call=True,
+    )
+    def add_candidates_to_pool(n_clicks, proposed, current):
+        if not n_clicks:
+            raise PreventUpdate
+        if not proposed:
+            return no_update, "⚠ No candidates yet. Run Check Correlation first."
+        current = current or []
+        have = {(e.get('spread_type'), e.get('instrument')) for e in current}
+        n_new = sum(1 for e in proposed if (e.get('spread_type'), e.get('instrument')) not in have)
+        return (_merge_curated_entries(current, proposed),
+                f"✓ {n_new} added to the Portfolio pool ({len(proposed) - n_new} already there).")
 
     @app.callback(
         [Output('alpha-add-instrument', 'options'),
