@@ -28,9 +28,8 @@ echo.
 REM -- 2. Dash server (separate window, auto-closes on exit) ------
 echo [2/3] Starting Dash server on port 8080...
 set FI_SHOW_LOG_WINDOW=0
-REM Runtime toggles: keep the web process in safe mode unless the user explicitly
-REM opts back in for Wind/data background tasks after confirming the environment is stable.
-set FI_DISABLE_WIND=1
+REM Runtime toggles: keep auto jobs off for web stability.
+REM Wind is enabled by default; set FI_DISABLE_WIND=1 only when troubleshooting.
 set FI_AUTO_INITIALISE=0
 set FI_AUTO_REFRESH=0
 set FI_AUTO_EOD=0

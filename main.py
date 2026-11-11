@@ -229,14 +229,12 @@ def run_atlasnexus_daily_app():
     """Run AtlasNexus Daily Console (new app, port 8080)."""
     logger.info("Initializing AtlasNexus Daily Console...")
     try:
-        # Force the web process into the safe offline mode. A parent shell or OS
-        # environment may still carry FI_DISABLE_WIND=0 / FI_AUTO_REFRESH=1 from
-        # earlier runs; the browser app should not inherit those dangerous values.
+        # Keep web-safe defaults for auto jobs. Do not force Wind off here so
+        # operators can use live Wind connectivity when available.
         os.environ["FI_AUTO_INITIALISE"] = "0"
         os.environ["FI_AUTO_REFRESH"] = "0"
         os.environ["FI_AUTO_EOD"] = "0"
-        os.environ["FI_DISABLE_WIND"] = "1"
-        logger.warning("FIRING web-safe defaults: FI_DISABLE_WIND=1, FI_AUTO_INITIALISE=0, FI_AUTO_REFRESH=0, FI_AUTO_EOD=0")
+        logger.warning("FIRING web-safe defaults: FI_AUTO_INITIALISE=0, FI_AUTO_REFRESH=0, FI_AUTO_EOD=0")
 
         from web.apps import atlasnexus_daily
         from web.core.scripts import run_initialise, start_periodic_refresh

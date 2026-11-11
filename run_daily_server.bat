@@ -1,7 +1,6 @@
 @echo off
 REM Supervisor: restarts the daily web app if it dies (e.g. a native Wind crash).
-REM Keep the web process in safe mode by default; override explicitly only if Wind is stable.
-set FI_DISABLE_WIND=1
+REM Wind is enabled by default; set FI_DISABLE_WIND=1 before launch only when needed.
 set FI_AUTO_INITIALISE=0
 set FI_AUTO_REFRESH=0
 set FI_AUTO_EOD=0
