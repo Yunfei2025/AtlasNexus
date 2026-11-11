@@ -422,11 +422,12 @@ def build_risk_layout():
                                     options=[
                                         {'label': 'Net', 'value': 'net'},
                                         {'label': 'Gross', 'value': 'gross'},
+                                        {'label': 'Substitute (executable)', 'value': 'substitute'},
                                     ],
                                     value='net',
                                     clearable=False,
                                     searchable=False,
-                                    style={'minWidth': '90px', 'fontSize': '11px'},
+                                    style={'minWidth': '170px', 'fontSize': '11px'},
                                 ),
                                 dcc.Dropdown(
                                     id='risk-dv01-book-filter',

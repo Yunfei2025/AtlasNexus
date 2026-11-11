@@ -134,6 +134,15 @@ def build_risk_positions() -> dict:
     kt_split = {b: {sd: {t: {c: 0.0 for c in _KT_COLS} for t in _TENOR_ORDER}
                     for sd in ('long', 'short')} for b in ('beta', 'alpha')}
 
+    # per-instrument ladder contribution: code_kt[code][(tenor, col)] -> MM/bp, so the
+    # Substitute ladder can lift a substituted short out of exactly where it was booked
+    code_kt: dict = {}
+
+    def _kt_code(code: str, tenor: str, col: str, val: float):
+        if code:
+            d = code_kt.setdefault(code, {})
+            d[(tenor, col)] = round(d.get((tenor, col), 0.0) + val, 4)
+
     def _kt_gross(book: str, tenor: str, col: str, val: float):
         side = kt_split[book]['long' if val > 0 else 'short'][tenor]
         side[col] = round(side[col] + val, 4)
@@ -206,6 +215,7 @@ def build_risk_positions() -> dict:
                 kt_grid[tenor][col] = round(kt_grid[tenor][col] + dv01_mm, 4)
                 kt_grid_beta[tenor][col] = round(kt_grid_beta[tenor][col] + dv01_mm, 4)
                 _kt_gross('beta', tenor, col, dv01_mm)
+                _kt_code(instrument, tenor, col, dv01_mm)
     except Exception:
         pass
 
@@ -342,21 +352,22 @@ def build_risk_positions() -> dict:
                 # and Swaps buckets — consistent with net positions.
                 if dv01_mm != 0.0:
 
-                    leg_entries: list[tuple[str, float, str]] = []
+                    leg_entries: list[tuple[str, float, str, str]] = []
                     if leg1 and leg1_dv01 != 0.0:
                         tenor1 = _irs_tenor_from_leg(leg1) or _dur_to_tenor(leg1_duration)
-                        leg_entries.append((tenor1, leg1_dv01, _leg_bucket(leg1, stype)))
+                        leg_entries.append((tenor1, leg1_dv01, _leg_bucket(leg1, stype), leg1))
                     if leg2 and leg2_dv01 != 0.0:
                         tenor2 = _irs_tenor_from_leg(leg2) or _dur_to_tenor(leg2_duration)
-                        leg_entries.append((tenor2, leg2_dv01, _leg_bucket(leg2, stype)))
+                        leg_entries.append((tenor2, leg2_dv01, _leg_bucket(leg2, stype), leg2))
                     if leg3 and leg3_dv01 != 0.0:
                         tenor3 = _irs_tenor_from_leg(leg3) or _dur_to_tenor(leg3_duration)
-                        leg_entries.append((tenor3, leg3_dv01, _leg_bucket(leg3, stype)))
+                        leg_entries.append((tenor3, leg3_dv01, _leg_bucket(leg3, stype), leg3))
                     if not leg_entries:
                         col = _ALPHA_COL.get(stype, 'Other')
-                        leg_entries.append((_dur_to_tenor(duration), dv01_mm * dir_sign, col))
+                        leg_entries.append((_dur_to_tenor(duration), dv01_mm * dir_sign, col, ''))
 
-                    for tenor, contrib, col in leg_entries:
+                    for tenor, contrib, col, _code in leg_entries:
+                        _kt_code(_code, tenor, col, contrib)
                         kt_grid[tenor][col] = round(kt_grid[tenor][col] + contrib, 4)
                         kt_grid_alpha[tenor][col] = round(kt_grid_alpha[tenor][col] + contrib, 4)
                         _kt_gross('alpha', tenor, col, contrib)
@@ -377,6 +388,7 @@ def build_risk_positions() -> dict:
         'net_pos': net_pos, 'gross_pos': gross_pos,
         'kt_grid': kt_grid, 'kt_grid_beta': kt_grid_beta, 'kt_grid_alpha': kt_grid_alpha,
         'kt_split': kt_split, 'tenor_order': _TENOR_ORDER, 'kt_cols': _KT_COLS,
+        'code_kt': code_kt, 'dur_to_tenor': _dur_to_tenor,
         'otr_cgb': _ld.get('otr_cgb', {}),
     }
 
@@ -568,7 +580,22 @@ def register_risk_dashboard_callbacks(app):
         else:
             kt_grid_view = kt_grid
 
-        if (dv01_view or 'net').lower() == 'gross':
+        if (dv01_view or 'net').lower() == 'substitute':
+            # Executable book: each substituted short leaves the ladder where it was
+            # booked and its substitute (pay FR007 / short CGB) enters at its own
+            # tenor. Combined book only -- the book filter is ignored, as in Net Position.
+            sub_grid = {t: dict(kt_grid[t]) for t in _TENOR_ORDER}
+            for r in _short_subs:
+                if not r['substitutes']:
+                    continue
+                for (t, c), v in _pos['code_kt'].get(r['code'], {}).items():
+                    sub_grid[t][c] = round(sub_grid[t][c] - v, 4)
+                for s in r['substitutes']:
+                    t = _pos['dur_to_tenor'](float(s['tenor']))
+                    c = 'Swaps' if s['kind'] == 'IRS' else 'Bonds'
+                    sub_grid[t][c] = round(sub_grid[t][c] + s['dv01'], 4)
+            dv01_fig = build_dv01_ladder_fig(sub_grid, _TENOR_ORDER)
+        elif (dv01_view or 'net').lower() == 'gross':
             def _kt_side(side):
                 books = ['beta'] if _dv01_mode == 'beta' else ['alpha'] if _dv01_mode == 'alpha' else ['beta', 'alpha']
                 return {t: {c: sum(kt_split[b][side][t][c] for b in books) for c in _KT_COLS} for t in _TENOR_ORDER}

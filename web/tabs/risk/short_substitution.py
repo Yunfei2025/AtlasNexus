@@ -129,7 +129,7 @@ def build_short_substitutions(net_pos: dict, otr_cgb: dict) -> list[dict]:
         for kind, sub_tenor, share in _SUBSTITUTE[tenor]:
             sub_code, sub_dur = _substitute_leg(kind, sub_tenor, otr_cgb, info)
             sub_dv01 = dv01 * share
-            subs.append(dict(code=sub_code,
+            subs.append(dict(code=sub_code, kind=kind, tenor=sub_tenor,
                              notional_mm=round(sub_dv01 * 1e4 / sub_dur / 10.0) * 10.0,
                              dv01=sub_dv01))
         rows.append(dict(code=code, bond=f'{issuer} {tenor}Y', net_mm=net, dv01=dv01, substitutes=subs,
