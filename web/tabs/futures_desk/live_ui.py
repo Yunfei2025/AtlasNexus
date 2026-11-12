@@ -10,10 +10,12 @@ from dash.exceptions import PreventUpdate
 
 import plotly.graph_objects as go
 
-from futures.backtest.live_bars import CLOSE_TIME, SESSION_START, china_now, fetch_live_bars, fetch_lock
+from futures.backtest.live_bars import (
+    CLOSE_TIME, NIGHT_END, NIGHT_START, SESSION_START, china_now, fetch_live_bars, fetch_lock, fetch_night_bars,
+)
 from web.tabs.beta.data import THEME
 from . import approvals
-from .monitor import live_state
+from .monitor import live_state, night_state
 from .pool import MAX_BOOK, select_book
 from .today import _AMBER, _GREEN, _RED, _TH, _note, _row, _table, _td, signal_cell
 
@@ -64,6 +66,7 @@ def live_chart(r):
         height=280, template=THEME['chart_template'], paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
         font={'color': '#e9eef8', 'size': 10}, margin=dict(l=52, r=12, t=26, b=30), xaxis_rangeslider_visible=False,
         title={'text': f"{r['product']} · {r['candidate']} · {r['contract']} · {r['day']:%m-%d}"
+                       + (" · night, display only" if r.get('night') else "")
                        + (" · closed" if r.get('closed') else ""), 'font': {'size': 11}, 'x': 0.01, 'y': 0.96},
         xaxis={'type': 'category', 'nticks': 8, 'gridcolor': 'rgba(100,140,200,0.12)', 'tickfont': {'size': 9}},
         yaxis={'gridcolor': 'rgba(100,140,200,0.12)', 'tickformat': ',.2f'})
@@ -86,7 +89,9 @@ def live_view(rows, fetch, state, now=None):
             late = running and not r['closed'] and age > 2 * state['minutes']
             pnl = r['day_return'] * 100
             body.append(_row([
-                _td(r['product'], left=True, bold=True), _td(r['candidate']), _td(r['contract']),
+                _td(r['product'], left=True, bold=True),
+                _td(r['candidate'] + (' · night' if r.get('night') else ''), _AMBER if r.get('night') else 'var(--text-secondary)'),
+                _td(r['contract']),
                 _td(f"{r['last_px']:,.2f}"),
                 signal_cell(r['position'], r['since']) if r['since'] is not None else _td('—'),
                 _td('—' if r['entry_px'] is None else f"{r['entry_px']:,.2f}"),
@@ -94,7 +99,7 @@ def live_view(rows, fetch, state, now=None):
                 _td('—' if r['target_px'] is None else f"{r['target_px']:,.2f}"),
                 _td(f"{pnl:+.2f}%", _GREEN if pnl > 0 else (_RED if pnl < 0 else 'var(--text-secondary)'), bold=True),
                 _td(str(r['round_trips'])),
-                _td(f"{r['day']:%m-%d} closed · to {r['as_of']:%H:%M}" if r['closed'] else
+                _td(f"{r['day']:%m-%d} {'night ' if r.get('night') else ''}closed · to {r['as_of']:%H:%M}" if r['closed'] else
                     f"{r['as_of']:%H:%M} · {age:.0f} min ago", _AMBER if late else 'var(--text-muted)'),
             ]))
         head = ["Product", "Strategy", "Contract", "Last", "Position", "Entry", "Stop at", "Target at",
@@ -114,8 +119,12 @@ def live_view(rows, fetch, state, now=None):
         bj = fetch.get('now')
         out.append(_note(f"Day session closed ({SESSION_START[:5]}-{CLOSE_TIME[:5]} Beijing"
                          + (f"; now {bj:%a %H:%M} Beijing" if bj is not None else "")
-                         + "): showing the last finished session. Night sessions are not modelled; the desk's "
-                           "strategies are tested on day-session bars only.", _AMBER))
+                         + "): showing the last finished day session.", _AMBER))
+    if any(r.get('night') for r in rows):
+        out.append(_note(f"Night rows ({NIGHT_START[:5]} onward; AU/AG to 02:30, AL/CU to 01:00, JM to 23:00) are "
+                         "display only: the strategies were walk-forward tested on day-session bars only, so a night "
+                         "replay runs on the night bars alone with no warm-up and is not evidence. It does not enter "
+                         "the Monitor statuses, losing streaks, z-scores or Today's book.", _AMBER))
     for p, v in ((fetch or {}).get('products') or {}).items():
         if 'error' in v:
             out.append(_note(f"{p}: {v['error']}", _RED))
@@ -177,6 +186,14 @@ def register_live_callbacks(app):
             return no_update
         fetch_lock.release()
         fetch = fetch_live_bars(products, closed_only=not running)
+        night_products = [p for p in products if p in NIGHT_END]
+        night_fetch = fetch_night_bars(night_products, closed_only=not running) if night_products else None
+        if night_fetch:
+            for p, v in (night_fetch.get('products') or {}).items():
+                if 'error' in v:
+                    fetch.setdefault('products', {})[f'{p} night'] = v
+            if night_fetch.get('skipped') and running:
+                fetch['skipped'] = fetch.get('skipped') or f"night: {night_fetch['skipped']}"
         approved = approvals.load_approved()
         rows = []
         for p in products:
@@ -187,4 +204,12 @@ def register_live_callbacks(app):
                 r = None
             if r:
                 rows.append(r)
+            if p in night_products and p in approved:
+                try:
+                    n = night_state(p, approved[p])
+                except Exception as e:
+                    fetch.setdefault('products', {})[f'{p} night'] = {'error': f'night position failed: {e}'}
+                    n = None
+                if n:
+                    rows.append(n)
         return live_view(rows, fetch, state)

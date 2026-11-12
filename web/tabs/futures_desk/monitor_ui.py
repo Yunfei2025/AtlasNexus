@@ -127,8 +127,8 @@ def register_monitor_callbacks(app):
                             style={'color': _RED, 'fontSize': '11px'}), []
         try:
             rows = monitor_rows(*p)
-            opts = [{'label': f"{r['product']} · {r['rec']['candidate']}", 'value': r['product']}
-                    for r in rows if r['current'] != 'halted']
+            opts = [{'label': f"{r['product']} · {r['rec']['candidate']}" + (' (halted)' if r['current'] == 'halted' else ''),
+                     'value': r['product']} for r in rows]   # halted ones too, so they can be removed
             return monitor_view(rows, p[0], p[1]), opts
         except Exception as e:
             return html.Div(f"Monitor unavailable: {e}", style={'color': _RED, 'fontSize': '11px'}), []
@@ -164,6 +164,24 @@ def register_monitor_callbacks(app):
         approvals.set_status(product, 'halted', 'halted manually')
         msg = f"{product} halted manually; it leaves today's book until re-approved in Research."
         return msg, {'t': time.time(), 'msg': msg}
+
+    @app.callback(
+        [Output('fd-mon-note', 'children', allow_duplicate=True),
+         Output('fd-data-stamp', 'data', allow_duplicate=True),
+         Output('fd-mon-pick', 'value', allow_duplicate=True)],
+        Input('fd-mon-remove', 'submit_n_clicks'), State('fd-mon-pick', 'value'), prevent_initial_call=True,
+    )
+    def fd_remove(n, product):
+        if not n:
+            return no_stamp(), no_stamp(), no_stamp()
+        if not product:
+            return "Pick a product to remove.", no_stamp(), no_stamp()
+        try:
+            approvals.remove(product)
+        except ValueError as e:
+            return str(e), no_stamp(), None
+        msg = f"{product} removed; re-approve it in Research to trade it again."
+        return msg, {'t': time.time(), 'msg': msg}, None
 
 
 def no_stamp():

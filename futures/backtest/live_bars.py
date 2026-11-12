@@ -8,8 +8,11 @@ top of the settled minute-bar cache; they never enter the cache, the walk-forwar
 statuses.
 
 All times are Beijing (exchange) time whatever the machine's clock: session hours, Wind bar timestamps and
-the live files. Only the day session is modelled (as in the minute-bar cache and the walk-forward); night
-sessions are not fetched.
+the live files. Only the day session is modelled (as in the minute-bar cache and the walk-forward). Night
+sessions (products in NIGHT_END) are fetched separately by fetch_night_bars into <contract>_night.parquet /
+index_night.json, for display only: no history exists for them, so they never enter the cache, the
+walk-forward, the Monitor statuses or the book. Every night fetched is also merged into
+night_history/<contract>.parquet so night history accumulates from now on (no backfill).
 
 After the close the last session is fetched once (marked 'complete' in index.json) and then served from the
 file, so the Monitor can show the finished day without calling Wind again.
@@ -223,4 +226,173 @@ def fetch_live_bars(products, now=None, wsi=None, codes=None, is_trading=None, l
             except Exception as e:
                 out[prod] = {'error': str(e)}
         _save_index(index, live_dir)
+    return {'skipped': None, 'products': out, **info}
+
+
+# ── Night session (display only) ─────────────────────────────────────────────────────────────────────────────
+NIGHT_START = '21:00:00'
+# Night session end (Beijing, the morning after the start day) by product; products absent here have no night session.
+NIGHT_END = {'AU': '02:30:00', 'AG': '02:30:00', 'AL': '01:00:00', 'CU': '01:00:00', 'JM': '23:00:00'}
+NIGHT_INDEX = 'index_night.json'
+
+
+def night_session(product, now):
+    """(day, start, end, open_now) of the night session that is open, or else the last finished one, for a
+    product with a night session (None otherwise). `day` is the evening it starts on (Beijing); Friday's
+    session runs into Saturday morning, and there is none starting on a Saturday or Sunday evening."""
+    end_t = NIGHT_END.get(product)
+    if end_t is None:
+        return None
+    d = now.date() if now.strftime('%H:%M:%S') >= '20:55:00' else now.date() - timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    start = datetime.combine(d, datetime.strptime(NIGHT_START, '%H:%M:%S').time())
+    end = datetime.combine(d, datetime.strptime(end_t, '%H:%M:%S').time())
+    if end <= start:
+        end += timedelta(days=1)
+    return d.strftime('%Y-%m-%d'), start, end, bool(start <= now < end)
+
+
+def _night_index(live_dir):
+    try:
+        with open(os.path.join(str(_dir(live_dir)), NIGHT_INDEX), encoding='utf-8') as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _save_night_index(index, live_dir):
+    d = str(_dir(live_dir))
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, NIGHT_INDEX + '.tmp'), 'w', encoding='utf-8') as fh:
+        json.dump(index, fh, indent=1, sort_keys=True)
+    os.replace(os.path.join(d, NIGHT_INDEX + '.tmp'), os.path.join(d, NIGHT_INDEX))
+
+
+NIGHT_HISTORY_DIR = 'night_history'
+
+
+def _archive_night(contract, merged, live_dir):
+    """Upsert a session's night bars into live/night_history/<contract>.parquet, which (unlike the per-session
+    live file) keeps every night fetched from now on, one row per minute. Never raises: the archive must not
+    break the display."""
+    try:
+        d = os.path.join(str(_dir(live_dir)), NIGHT_HISTORY_DIR)
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f'{contract}.parquet')
+        hist = pd.read_parquet(path) if os.path.exists(path) else None
+        both = merged if hist is None or hist.empty else pd.concat([hist, merged])
+        both = both[~both.index.duplicated(keep='last')].sort_index()
+        both.to_parquet(path + '.tmp', compression='zstd')
+        os.replace(path + '.tmp', path)
+    except Exception:
+        pass
+
+
+def load_night(contract, live_dir=None):
+    """(bars, meta) of a contract's night file, or (None, None)."""
+    path = os.path.join(str(_dir(live_dir)), f'{contract}_night.parquet')
+    meta = _night_index(live_dir).get(contract)
+    if not meta or not os.path.exists(path):
+        return None, None
+    return pd.read_parquet(path), meta
+
+
+def night_meta_for(product, live_dir=None):
+    """Most recently fetched night entry of a product as (contract, meta), or (None, None)."""
+    entries = [(c, m) for c, m in _night_index(live_dir).items() if m.get('product') == product]
+    return max(entries, key=lambda e: e[1].get('fetched_at', ''), default=(None, None))
+
+
+def _normalize_night(frame, start, end):
+    """Wind wsi frame -> minute bars inside the night session [start, end]."""
+    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+        return pd.DataFrame()
+    f = frame.copy()
+    f.columns = [str(c).lower() for c in f.columns]
+    f.index = pd.to_datetime(f.index, errors='coerce')
+    f = f[f.index.notna()].sort_index()
+    for c in ('open', 'high', 'low', 'close', 'volume'):
+        f[c] = pd.to_numeric(f.get(c), errors='coerce')
+    f = f.dropna(subset=['close'])
+    f = f[(f['close'] > 0) & (f.index >= pd.Timestamp(start)) & (f.index <= pd.Timestamp(end))]
+    f['volume'] = f['volume'].fillna(0.0)
+    f['hs_bp'] = float('nan')
+    return f[['open', 'high', 'low', 'close', 'volume', 'hs_bp']].astype({'hs_bp': 'float32'})
+
+
+def fetch_night_bars(products, now=None, wsi=None, codes=None, live_dir=None, closed_only=False, wind_off=None,
+                     on_demand=None):
+    """Night-session minute bars of each product that has one (NIGHT_END), merged into <contract>_night files.
+
+    Same rules as fetch_live_bars: while the session is open the bars are fetched incrementally (not when
+    closed_only); once it is over the finished session is fetched once and marked complete. Products without a
+    night session are left out of the result. Returns {'skipped', 'products', 'session', 'now'}."""
+    now = now or china_now()
+    on_demand = (not closed_only) if on_demand is None else bool(on_demand)
+    products = [p for p in products if p in NIGHT_END]
+    info = {'now': now}
+    if not products:
+        return {'skipped': None, 'products': {}, 'session': 'closed', **info}
+    open_any = any(night_session(p, now)[3] for p in products)
+    info['session'] = 'open' if open_any else 'closed'
+    if open_any and closed_only:
+        return {'skipped': 'night session open: press Start live for intraday updates', 'products': {}, **info}
+    if not on_demand:
+        if wind_off is None:
+            from data.providers.retrieve import _wind_disabled as wind_off
+        if wind_off():
+            return {'skipped': 'Wind disabled', 'products': {}, **info}
+    if wsi is None:
+        from data.providers.retrieve import _wsi
+
+        def wsi(*args):
+            return _wsi(*args, on_demand=on_demand)
+    out = {}
+    with fetch_lock:
+        try:
+            code_of = main_contract_codes(codes)
+        except Exception as e:
+            return {'skipped': f'main contract lookup failed: {e}', 'products': {}, **info}
+        index = _night_index(live_dir)
+        for prod in products:
+            code = code_of.get(prod)
+            if not code:
+                out[prod] = {'error': 'no main contract code on file'}
+                continue
+            contract = code.split('.')[0]
+            try:
+                day, start, end, open_now = night_session(prod, now)
+                old, meta = load_night(contract, live_dir)
+                same = old is not None and meta and meta.get('date') == day and not old.empty
+                if same and meta.get('complete') and not open_now:
+                    out[prod] = {'contract': contract, 'rows': int(len(old)), 'new': 0, 'last': old.index.max()}
+                    continue
+                if same:
+                    s_ = (old.index.max() - timedelta(minutes=OVERLAP_MIN)).strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    old, s_ = None, start.strftime('%Y-%m-%d %H:%M:%S')
+                e_ = min(now, end) if open_now else end + timedelta(minutes=1)
+                new = _normalize_night(wsi(code, FIELDS, s_, e_.strftime('%Y-%m-%d %H:%M:%S')), start, end)
+                if new.empty and old is None:
+                    out[prod] = {'error': 'Wind returned no night bars (not connected, a holiday, or the session '
+                                          'has not started)'}
+                    continue
+                merged = new if old is None else pd.concat([old, new])
+                merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+                d = str(_dir(live_dir))
+                os.makedirs(d, exist_ok=True)
+                tmp = os.path.join(d, f'{contract}_night.parquet.tmp')
+                merged.to_parquet(tmp, compression='zstd')
+                os.replace(tmp, os.path.join(d, f'{contract}_night.parquet'))
+                _archive_night(contract, merged, live_dir)
+                index = {c: m for c, m in index.items() if not (m.get('product') == prod and c != contract)}
+                index[contract] = {'product': prod, 'date': day, 'fetched_at': now.strftime('%Y-%m-%d %H:%M:%S'),
+                                   'last': str(merged.index.max()), 'rows': int(len(merged)),
+                                   'complete': bool(not open_now)}
+                out[prod] = {'contract': contract, 'rows': int(len(merged)), 'new': int(len(new)),
+                             'last': merged.index.max()}
+            except Exception as e:
+                out[prod] = {'error': str(e)}
+        _save_night_index(index, live_dir)
     return {'skipped': None, 'products': out, **info}

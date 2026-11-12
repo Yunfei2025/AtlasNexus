@@ -418,7 +418,7 @@ def main():
         from curves.utils.retrieve import retrieveFuturesDatabaseTS
         from curves.generators.futures_analytics import FuturesAnalyticsGenerator
         # fa_start / fa_end arrive as 'YYYY-MM-DD' strings (or None).
-        end_date = _dt.datetime.strptime(args.fa_end, "%Y-%m-%d").date() if args.fa_end else _dt.date.today()
+        end_date = _dt.datetime.strptime(args.fa_end, "%Y-%m-%cd ../d").date() if args.fa_end else _dt.date.today()
         start_date = _dt.datetime.strptime(args.fa_start, "%Y-%m-%d").date() if args.fa_start else (end_date - _rd(years=2))
         # Step 1: refresh DIR_DATA/futures-db.pkl with the full Wind analytics
         # history (irr / fytm / ctd / contract closes) over the requested window.

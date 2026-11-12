@@ -98,9 +98,17 @@ def build_futures_desk_layout():
             html.Button("Apply statuses", id='fd-mon-apply', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}, title=(
                 "Write the computed Watch / Halted statuses to the approvals file. Halted products leave today's "
                 "book and only return through a fresh walk-forward and approval.")),
-            html.Div([dcc.Dropdown(id='fd-mon-pick', placeholder="Halt a product now", clearable=True,
+            html.Div([dcc.Dropdown(id='fd-mon-pick', placeholder="Pick a product", clearable=True,
                                    style={'width': '200px', 'fontSize': '10px'}),
-                      html.Button("Halt now", id='fd-mon-halt-now', n_clicks=0, style=_btn)],
+                      html.Button("Halt now", id='fd-mon-halt-now', n_clicks=0, style=_btn, title=(
+                          "Keep the record but take the product out of today's book until it is re-approved.")),
+                      dcc.ConfirmDialogProvider(
+                          id='fd-mon-remove', message=(
+                              "Remove this product's approval completely? It leaves today's book and the Monitor, "
+                              "and only returns through a fresh walk-forward and approval in Research."),
+                          children=html.Button("Remove", style={**_btn, 'color': 'var(--accent-red, #f87171)'}, title=(
+                              "Delete the product's approval record (asks to confirm)."))),
+                      ],
                      style={'display': 'flex', 'gap': '8px', 'alignSelf': 'flex-end', 'alignItems': 'center'}),
             html.Div(id='fd-mon-note', style={'fontSize': '10px', 'color': 'var(--text-muted)', 'alignSelf': 'flex-end'}),
         ], style={**_card, 'display': 'flex', 'gap': '16px', 'alignItems': 'flex-start', 'padding': '12px 16px',

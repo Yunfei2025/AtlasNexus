@@ -702,3 +702,81 @@ def test_daily_candidates_on_the_continuous_series(tmp_path):
     wf = {'rows': {'SAR@30min': {'pooled': 0.9, 'se': 1.3}}, 'daily': d}
     assert 'best intraday: SAR@30min +0.90' in research.daily_vs_intraday(wf) and 'same dates' in research.daily_vs_intraday(wf)
     assert research.daily_table(wf) is not None and research.daily_table({'rows': {}}) is None
+
+
+# ── Night session (display only) ─────────────────────────────────────────────────────────────────────────────
+
+def _night_frame(day, start='21:01', end='02:30', base=800.0):
+    idx = pd.date_range(f'{day} {start}', pd.Timestamp(f'{day} 00:00') + pd.Timedelta(days=1, hours=2, minutes=30),
+                        freq='1min')
+    idx = idx[(idx <= pd.Timestamp(f'{day} 00:00') + pd.Timedelta(days=1) + pd.Timedelta(end + ':00'))]
+    c = base + np.sin(np.arange(len(idx)) / 20.0)
+    return pd.DataFrame({'OPEN': c, 'HIGH': c + 0.1, 'LOW': c - 0.1, 'CLOSE': c, 'VOLUME': 3.0}, index=idx)
+
+
+def test_night_session_windows():
+    ns = live_bars.night_session
+    assert ns('AU', datetime(2026, 11, 12, 21, 16))[:1] == ('2026-11-12',) and ns('AU', datetime(2026, 11, 12, 21, 16))[3]
+    assert ns('AU', datetime(2026, 11, 13, 1, 0))[0] == '2026-11-12' and ns('AU', datetime(2026, 11, 13, 1, 0))[3]   # after midnight
+    assert not ns('AU', datetime(2026, 11, 13, 3, 0))[3] and ns('AU', datetime(2026, 11, 13, 10, 0))[0] == '2026-11-12'
+    assert ns('AU', datetime(2026, 11, 14, 1, 0))[0] == '2026-11-13' and ns('AU', datetime(2026, 11, 14, 1, 0))[3]   # Friday night
+    assert ns('AU', datetime(2026, 11, 16, 10, 0))[0] == '2026-11-13'                                                # none on Sat / Sun evening
+    assert ns('JM', datetime(2026, 11, 12, 23, 30))[3] is False and ns('TL', datetime(2026, 11, 12, 21, 30)) is None
+
+
+def test_night_fetch_is_incremental_then_once_and_stays_out_of_the_day_files(tmp_path):
+    wind = _FakeWind(_night_frame('2026-11-12'))
+    kw = dict(wsi=wind, codes=CODES, live_dir=tmp_path, wind_off=lambda: False)
+    a = live_bars.fetch_night_bars(['AU', 'TL'], now=datetime(2026, 11, 12, 22, 0), **kw)
+    assert 'TL' not in a['products'] and a['session'] == 'open' and a['products']['AU']['rows'] > 55
+    first_calls = len(wind.calls)
+    b = live_bars.fetch_night_bars(['AU'], now=datetime(2026, 11, 12, 23, 0), **kw)
+    assert b['products']['AU']['new'] > 55 and wind.calls[-1][1] == '2026-11-12 21:58:00'   # last bar 22:00 minus the 2-min overlap, not the session start
+    live_bars.fetch_night_bars(['AU'], now=datetime(2026, 11, 13, 3, 0), **kw)            # session over: finished once
+    n = len(wind.calls)
+    again = live_bars.fetch_night_bars(['AU'], now=datetime(2026, 11, 13, 9, 0), **kw)
+    assert len(wind.calls) == n and again['products']['AU']['new'] == 0                   # served from the file
+    assert live_bars._night_index(tmp_path)['AU2612']['complete'] is True
+    assert live_bars.load_index(tmp_path) == {} and not (tmp_path / 'AU2612.parquet').exists()   # day files untouched
+    assert live_bars.load_night('AU2612', tmp_path)[0].index.max() <= pd.Timestamp('2026-11-13 02:30')
+    closed_only = live_bars.fetch_night_bars(['AU'], now=datetime(2026, 11, 13, 15, 0), closed_only=True,
+                                             wsi=wind, codes=CODES, live_dir=tmp_path, wind_off=lambda: True)
+    assert closed_only['skipped'] == 'Wind disabled'
+    assert first_calls == 1
+    # the archive keeps the night after the live file moves on to the next session
+    wind2 = _FakeWind(_night_frame('2026-11-13'))
+    live_bars.fetch_night_bars(['AU'], now=datetime(2026, 11, 14, 3, 0), wsi=wind2, codes=CODES, live_dir=tmp_path,
+                               wind_off=lambda: False)
+    arch = pd.read_parquet(tmp_path / 'night_history' / 'AU2612.parquet')
+    assert arch.index.min() < pd.Timestamp('2026-11-13 00:00') < pd.Timestamp('2026-11-13 21:00') < arch.index.max()
+    assert not arch.index.duplicated().any() and live_bars.load_night('AU2612', tmp_path)[0].index.min() > pd.Timestamp('2026-11-13 20:00')
+
+
+def test_night_state_is_one_session_across_midnight(tmp_path, monkeypatch):
+    wind = _FakeWind(_night_frame('2026-11-12'))
+    live_bars.fetch_night_bars(['AU'], now=datetime(2026, 11, 13, 3, 0), wsi=wind, codes=CODES, live_dir=tmp_path,
+                               wind_off=lambda: False)
+    monkeypatch.setattr(monitor, 'night_meta_for', lambda p, d=None: live_bars.night_meta_for(p, tmp_path))
+    monkeypatch.setattr(monitor, 'load_night', lambda c, d=None: live_bars.load_night(c, tmp_path))
+    monkeypatch.setattr(monitor, 'STRATEGIES', {'SAR': lambda df: df.assign(signal=1.0)})
+    rec = {'candidate': 'SAR@30min', 'cost_bp': 0.4, 'exits': None}
+    st = monitor.night_state('AU', rec, now=datetime(2026, 11, 13, 9, 0), live_dir=tmp_path)
+    assert st['night'] and st['closed'] and st['day'] == pd.Timestamp('2026-11-12') and st['position'] == 0
+    assert st['bars'].index.min() >= pd.Timestamp('2026-11-12 21:00') and st['bars'].index.max() <= pd.Timestamp('2026-11-13 02:30')
+    assert st['round_trips'] == 1                                  # one long held through midnight, closed at the end
+    assert monitor.night_state('TL', rec, now=datetime(2026, 11, 13, 9, 0), live_dir=tmp_path) is None
+    assert monitor.night_state('AU', rec, now=datetime(2026, 11, 14, 9, 0), live_dir=tmp_path) is None   # stale (other night)
+
+
+def test_live_view_labels_night_rows_display_only(tmp_path, monkeypatch):
+    wind = _FakeWind(_night_frame('2026-11-12'))
+    live_bars.fetch_night_bars(['AU'], now=datetime(2026, 11, 13, 3, 0), wsi=wind, codes=CODES, live_dir=tmp_path,
+                               wind_off=lambda: False)
+    monkeypatch.setattr(monitor, 'night_meta_for', lambda p, d=None: live_bars.night_meta_for(p, tmp_path))
+    monkeypatch.setattr(monitor, 'load_night', lambda c, d=None: live_bars.load_night(c, tmp_path))
+    monkeypatch.setattr(monitor, 'STRATEGIES', {'SAR': lambda df: df.assign(signal=1.0)})
+    st = monitor.night_state('AU', {'candidate': 'SAR@30min', 'cost_bp': 0.4, 'exits': None},
+                             now=datetime(2026, 11, 13, 9, 0), live_dir=tmp_path)
+    text = str(live_ui.live_view([st], None, {'running': False}, now=datetime(2026, 11, 13, 9, 0)))
+    assert 'night' in text and 'display only' in text and 'does not enter' in text
+    assert 'night, display only' in live_ui.live_chart(st).layout.title.text

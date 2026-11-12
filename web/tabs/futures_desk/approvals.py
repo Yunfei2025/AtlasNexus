@@ -58,6 +58,20 @@ def approve(product, candidate, wf, path=None):
     return data[product]
 
 
+def remove(product, path=None):
+    """Delete a product's approval record entirely (unlike a halt, nothing is kept). Returns the removed
+    record. It only returns through a fresh walk-forward and approve()."""
+    path = path or APPROVED_PATH
+    data = load_approved(path)
+    if product not in data:
+        raise ValueError(f"{product} is not approved")
+    rec = data.pop(product)
+    tmp = path.with_suffix('.json.tmp')
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+    tmp.replace(path)
+    return rec
+
+
 def set_status(product, status, reason, path=None):
     """Set an approved product's status ('approved' | 'watch' | 'halted'). A halted product only
     returns through a fresh walk-forward and approve()."""
