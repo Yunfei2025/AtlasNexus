@@ -442,7 +442,11 @@ def load_factor_rates(input_dir: Union[str, Path] = DIR_INPUT) -> pd.DataFrame:
     """Load factor-rates.pkl; regenerate if missing."""
     pkl_path = os.path.join(str(input_dir), 'factor-rates.pkl')
     if os.path.exists(pkl_path):
-        return pd.read_pickle(pkl_path)
+        try:
+            return pd.read_pickle(pkl_path)
+        except Exception as exc:
+            print(f"factor-rates.pkl read failed ({exc}); regenerating from source data")
+            return generate_factor_rates(input_dir, save=True)
     return generate_factor_rates(input_dir, save=True)
 
 
@@ -472,7 +476,12 @@ def update_factor_rates(
         print(f"factor-rates.pkl created ({fresh.shape[1]} factors, {len(fresh)} days)")
         return fresh, len(fresh)
 
-    existing = pd.read_pickle(pkl_path)
+    try:
+        existing = pd.read_pickle(pkl_path)
+    except Exception as exc:
+        print(f"factor-rates.pkl read failed ({exc}); rebuilding full cache")
+        fresh.to_pickle(pkl_path)
+        return fresh, len(fresh)
     if not isinstance(existing.index, pd.DatetimeIndex):
         existing.index = pd.to_datetime(existing.index)
     if not isinstance(fresh.index, pd.DatetimeIndex):
@@ -555,7 +564,11 @@ def load_factor_credit(input_dir: Union[str, Path] = DIR_INPUT) -> pd.DataFrame:
     """Load factor-credit.pkl; regenerate if missing."""
     pkl_path = os.path.join(str(input_dir), 'factor-credit.pkl')
     if os.path.exists(pkl_path):
-        return pd.read_pickle(pkl_path)
+        try:
+            return pd.read_pickle(pkl_path)
+        except Exception as exc:
+            print(f"factor-credit.pkl read failed ({exc}); regenerating from source data")
+            return generate_factor_credit(input_dir, save=True)
     return generate_factor_credit(input_dir, save=True)
 
 
@@ -579,7 +592,12 @@ def update_factor_credit(
         print(f"factor-credit.pkl created ({fresh.shape[1]} factors, {len(fresh)} days)")
         return fresh, len(fresh)
 
-    existing = pd.read_pickle(pkl_path)
+    try:
+        existing = pd.read_pickle(pkl_path)
+    except Exception as exc:
+        print(f"factor-credit.pkl read failed ({exc}); rebuilding full cache")
+        fresh.to_pickle(pkl_path)
+        return fresh, len(fresh)
     if not isinstance(existing.index, pd.DatetimeIndex):
         existing.index = pd.to_datetime(existing.index)
 

@@ -61,7 +61,7 @@ class FactorSelector:
             filtered_factors = self._apply_primary_filter(metrics)
             
             if filtered_factors.empty:
-                print(f"⚠️ No factors pass {self.config.filtering_method} filtering")
+                print(f"[WARN] No factors pass {self.config.filtering_method} filtering")
                 return []
             
             # Step 2: Check factor diversification (remove highly correlated factors)
@@ -74,7 +74,7 @@ class FactorSelector:
                 filtered_factors = self._apply_vif_filter(filtered_factors, train_factors)
             
             if filtered_factors.empty:
-                print("⚠️ No factors remain after filtering")
+                print("[WARN] No factors remain after filtering")
                 return []
             
             # Step 4: Select top N factors by IC t-stat (not raw IC_abs — see
@@ -85,11 +85,11 @@ class FactorSelector:
             
             vif_status = "with VIF" if self.config.use_vif_filtering else "without VIF"
             div_status = "with diversification" if self.config.use_factor_diversification else ""
-            print(f"✅ Selected {len(selected)} factors using {self.config.filtering_method} {vif_status} {div_status}")
+            print(f"[OK] Selected {len(selected)} factors using {self.config.filtering_method} {vif_status} {div_status}")
             return selected
             
         except Exception as e:
-            print(f"❌ Factor selection failed: {e}")
+            print(f"[ERROR] Factor selection failed: {e}")
             return []
     
     def _apply_diversification_filter(self, metrics: pd.DataFrame, 
@@ -139,12 +139,12 @@ class FactorSelector:
             
             n_removed = len(available_factors) - len(selected)
             if n_removed > 0:
-                print(f"📊 Diversification filter: removed {n_removed} correlated factors")
+                print(f"[INFO] Diversification filter: removed {n_removed} correlated factors")
             
             return metrics.loc[selected]
             
         except Exception as e:
-            print(f"⚠️ Diversification filter failed: {e}, skipping")
+            print(f"[WARN] Diversification filter failed: {e}, skipping")
             return metrics
     
     def _apply_primary_filter(self, metrics: pd.DataFrame) -> pd.DataFrame:
@@ -170,7 +170,7 @@ class FactorSelector:
     def _filter_by_ir(self, metrics: pd.DataFrame) -> pd.DataFrame:
         """Filter factors by IR threshold."""
         if 'IR' not in metrics.columns:
-            print("⚠️ IR column not found, falling back to IC filtering")
+            print("[WARN] IR column not found, falling back to IC filtering")
             return self._filter_by_ic(metrics)
         
         return metrics[metrics['IR'].abs() >= self.config.ir_threshold]
@@ -181,10 +181,10 @@ class FactorSelector:
         
         if 'IR' in metrics.columns:
             combined_filtered = ic_filtered[ic_filtered['IR'].abs() >= self.config.ir_threshold]
-            print(f"📊 Combined: {len(ic_filtered)} passed IC, {len(combined_filtered)} passed both")
+            print(f"[INFO] Combined: {len(ic_filtered)} passed IC, {len(combined_filtered)} passed both")
             return combined_filtered
         else:
-            print("⚠️ IR column not found, using IC filtering only")
+            print("[WARN] IR column not found, using IC filtering only")
             return ic_filtered
     
     def _filter_by_significance(self, metrics: pd.DataFrame) -> pd.DataFrame:
@@ -208,13 +208,13 @@ class FactorSelector:
             min_obs_filtered = metrics
 
         if len(min_obs_filtered) == 0:
-            print("⚠️ Insufficient data for significance testing, using IC filtering")
+            print("[WARN] Insufficient data for significance testing, using IC filtering")
             return self._filter_by_ic(metrics)
 
         # Preferred path: caller-supplied (possibly NW-adjusted) significance.
         if 'is_significant' in min_obs_filtered.columns:
             significant_factors = min_obs_filtered[min_obs_filtered['is_significant'].astype(bool)]
-            print(f"📊 Significance: {len(significant_factors)} factors with p < {self.config.confidence_level} "
+            print(f"[INFO] Significance: {len(significant_factors)} factors with p < {self.config.confidence_level} "
                   f"(caller-supplied p-value)")
             return significant_factors
 
@@ -233,10 +233,10 @@ class FactorSelector:
             significant_mask = t_stats.abs() > critical_t
             significant_factors = min_obs_filtered[significant_mask]
 
-            print(f"📊 Significance: {len(significant_factors)} factors with p < {self.config.confidence_level}")
+            print(f"[INFO] Significance: {len(significant_factors)} factors with p < {self.config.confidence_level}")
             return significant_factors
         else:
-            print("⚠️ Insufficient data for significance testing, using IC filtering")
+            print("[WARN] Insufficient data for significance testing, using IC filtering")
             return self._filter_by_ic(metrics)
     
     def _apply_vif_filter(self, metrics: pd.DataFrame, train_factors: pd.DataFrame) -> pd.DataFrame:
@@ -253,13 +253,13 @@ class FactorSelector:
                 return metrics
             
             factor_data = train_factors[available_factors]
-            print(f"🔍 VIF Analysis: Checking {len(available_factors)} factors...")
+            print(f"[INFO] VIF Analysis: Checking {len(available_factors)} factors...")
             
             # Calculate VIF
             vif_results = calculate_vif(factor_data)
             
             if vif_results.empty or 'VIF' not in vif_results.columns:
-                print("⚠️ VIF calculation failed, skipping VIF filtering")
+                print("[WARN] VIF calculation failed, skipping VIF filtering")
                 return metrics
             
             # Show VIF diagnostics
@@ -278,22 +278,22 @@ class FactorSelector:
                 vif_filtered = self._handle_restrictive_vif(metrics, factor_data)
             
             removed_count = len(metrics) - len(vif_filtered)
-            print(f"📊 VIF: {len(vif_filtered)} factors retained (removed {removed_count})")
+            print(f"[INFO] VIF: {len(vif_filtered)} factors retained (removed {removed_count})")
             
             return vif_filtered
             
         except Exception as e:
-            print(f"⚠️ VIF filtering failed: {e}, skipping VIF filtering")
+            print(f"[WARN] VIF filtering failed: {e}, skipping VIF filtering")
             return metrics
     
     def _show_vif_diagnostics(self, vif_results: pd.DataFrame) -> None:
         """Display VIF diagnostic information."""
-        print(f"📊 VIF Results (threshold: {self.config.vif_threshold}):")
+        print(f"[INFO] VIF Results (threshold: {self.config.vif_threshold}):")
         vif_sorted = vif_results.sort_values('VIF', ascending=False)
         
         for _, row in vif_sorted.head(5).iterrows():  # Show top 5
             vif_val = row['VIF']
-            status = "❌ HIGH" if vif_val > self.config.vif_threshold else "✅ OK"
+            status = "HIGH" if vif_val > self.config.vif_threshold else "OK"
             if np.isinf(vif_val):
                 print(f"   {row['Factor']}: INF {status}")
             else:
@@ -301,7 +301,7 @@ class FactorSelector:
     
     def _handle_restrictive_vif(self, metrics: pd.DataFrame, factor_data: pd.DataFrame) -> pd.DataFrame:
         """Handle overly restrictive VIF filtering with fallback strategies."""
-        print(f"🔄 VIF too restrictive, trying fallback threshold {self.config.vif_fallback_threshold}")
+        print(f"[INFO] VIF too restrictive, trying fallback threshold {self.config.vif_fallback_threshold}")
         
         # Try fallback threshold
         original_threshold = self.config.vif_threshold
@@ -319,7 +319,7 @@ class FactorSelector:
                 fallback_filtered = metrics[metrics.index.isin(low_vif_factors)]
                 
                 if len(fallback_filtered) > 1:
-                    print(f"✅ Fallback VIF threshold worked: {len(fallback_filtered)} factors")
+                    print(f"[OK] Fallback VIF threshold worked: {len(fallback_filtered)} factors")
                     return fallback_filtered
         
         finally:
@@ -327,7 +327,7 @@ class FactorSelector:
             self.config.vif_threshold = original_threshold
         
         # Ultimate fallback: skip VIF filtering
-        print("⚠️ VIF filtering still too restrictive, skipping VIF step")
+        print("[WARN] VIF filtering still too restrictive, skipping VIF step")
         return metrics
 
 

@@ -120,8 +120,28 @@ def build_stale_data_warning():
         _rates_path = os.path.join(str(DIR_INPUT), 'factor-rates.pkl')
         if not os.path.exists(_rates_path):
             return None
-        _rates_df = _pd.read_pickle(_rates_path)
-        _last_date = _rates_df.index.max()
+        _last_date = None
+
+        try:
+            _rates_df = _pd.read_pickle(_rates_path)
+
+            # Some cached files can carry a non-standard index representation.
+            # Normalize to a clean DatetimeIndex before taking the latest date.
+            _idx = _rates_df.index
+            if isinstance(_idx, _pd.MultiIndex):
+                _idx = _idx.get_level_values(0)
+            _dt_idx = _pd.to_datetime(_idx, errors='coerce')
+            _dt_idx = _dt_idx[~_pd.isna(_dt_idx)]
+            if len(_dt_idx) > 0:
+                _last_date = _dt_idx.max()
+        except Exception:
+            # Fallback for legacy/incompatible pickle payloads across pandas versions.
+            _mtime = os.path.getmtime(_rates_path)
+            _last_date = datetime.fromtimestamp(_mtime)
+
+        if _last_date is None:
+            return None
+
         _staleness_days = (_date.today() - _last_date.date()).days
         if _staleness_days <= 7:
             return None
@@ -144,8 +164,7 @@ def build_stale_data_warning():
             'padding': '12px 14px', 'marginBottom': '12px', 'fontSize': '11px',
             'lineHeight': '1.5',
         })
-    except Exception as _stale_exc:
-        print(f"Warning: could not check factor-rates.pkl staleness: {_stale_exc}")
+    except Exception:
         return None
 
 
@@ -286,6 +305,8 @@ def run_train(factors, current_cfg, end_date):
     else:
         results_new, latest_artifact = {}, existing_artifact
 
+    retrained_cached = []
+
     # Pull cached factor results from the saved artifact for display
     results = results_new.copy()
     if cached_factors and (latest_artifact or existing_artifact):
@@ -298,10 +319,40 @@ def run_train(factors, current_cfg, end_date):
         )
         results.update(cached_results)
 
+        # If a cached factor cannot be predicted from the saved artifact
+        # (e.g. feature schema drift), retrain it now instead of returning
+        # an empty result set to the UI.
+        retrain_needed = [f for f in cached_factors if f not in cached_results]
+        if retrain_needed:
+            retry_results, retry_artifact, _ = run_factor_backtest(
+                factors=retrain_needed,
+                strategy='FactorModel',
+                start_date=None,
+                end_date=end_date,
+                input_dir=DIR_INPUT,
+                save=True,
+                save_latest_only=True,
+                **current_cfg,
+            )
+            if retry_results:
+                results.update(retry_results)
+                retrained_cached = list(retry_results.keys())
+            if retry_artifact:
+                latest_artifact = retry_artifact
+
     mkey = (latest_artifact or {}).get('metadata', {}).get('train_end_date', '?')
     n_new = len(factors_to_train)
     n_cached = len(cached_factors)
-    if n_cached and n_new:
+    n_retrained = len(retrained_cached)
+    if n_retrained:
+        persist_note = (
+            f"saved model: {mkey} · {n_retrained} cached factor(s) retrained due feature drift"
+        )
+        header_note = (
+            f"⚡ Retrained {n_retrained} cached factor(s) due feature drift "
+            f"({', '.join(retrained_cached)})."
+        )
+    elif n_cached and n_new:
         persist_note = (
             f"saved model: {mkey} · "
             f"{n_new} newly trained + {n_cached} from cache"
