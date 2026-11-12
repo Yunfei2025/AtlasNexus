@@ -25,7 +25,7 @@ import pandas as pd
 from settings.paths import DIR_INPUT
 from web.tabs.beta.data import THEME
 
-_STATE_FILE = DIR_INPUT / 'ticket_book.json'   # {code: {holding, open_px, ticket_px}}
+_STATE_FILE = DIR_INPUT / 'ticket_book.json'   # {code: {holding, open_px, ticket_px, override}}
 _HISTORY_FILE = DIR_INPUT / 'ticket_holdings_history.pkl'   # one snapshot per day, latest edit wins
 _TOTAL = 'TOTAL'
 _MIN_TRADE_MM = 0.05
@@ -38,6 +38,8 @@ def _fmt(precision: int, signed: bool = False) -> Format:
 
 _COLUMNS = [
     {'name': 'Instrument', 'id': 'Instrument'},
+    # Executable instrument the user actually trades, e.g. a more liquid bond; defaults to Instrument.
+    {'name': 'Override', 'id': 'Override', 'type': 'text', 'editable': True},
     {'name': 'Holding (MM)', 'id': 'Holding', 'type': 'numeric', 'editable': True, 'format': _fmt(1, True)},
     {'name': 'Target (MM)', 'id': 'Target', 'type': 'numeric', 'format': _fmt(1, True)},
     {'name': 'To Trade (MM)', 'id': 'Trade', 'type': 'numeric', 'format': _fmt(1, True)},
@@ -54,13 +56,14 @@ def build_tickets_table() -> dash_table.DataTable:
         id='tickets-table', data=[], columns=_COLUMNS,
         style_cell={'textAlign': 'right', 'padding': '6px 10px', 'fontSize': '12px',
                     'backgroundColor': THEME['table_row_odd'], 'color': THEME['text_main'], 'border': 'none'},
-        style_cell_conditional=[{'if': {'column_id': 'Instrument'}, 'textAlign': 'left', 'fontWeight': '600'}],
+        style_cell_conditional=[{'if': {'column_id': 'Instrument'}, 'textAlign': 'left', 'fontWeight': '600'},
+                                {'if': {'column_id': 'Override'}, 'textAlign': 'left'}],
         style_header={'backgroundColor': THEME['table_header'], 'color': THEME['text_main'],
                       'fontWeight': 'bold', 'border': 'none'},
         style_data_conditional=[
             {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
             *[{'if': {'column_id': c}, 'backgroundColor': 'rgba(99,179,237,0.08)'}
-              for c in ('Holding', 'OpenPx', 'TicketPx')],
+              for c in ('Override', 'Holding', 'OpenPx', 'TicketPx')],
             {'if': {'filter_query': '{Trade} > 0', 'column_id': 'Trade'}, 'color': THEME['success'], 'fontWeight': 'bold'},
             {'if': {'filter_query': '{Trade} < 0', 'column_id': 'Trade'}, 'color': THEME['danger'], 'fontWeight': 'bold'},
             {'if': {'filter_query': '{Pnl} > 0', 'column_id': 'Pnl'}, 'color': THEME['success']},
@@ -125,6 +128,7 @@ def _derive(rows: list[dict]) -> list[dict]:
             total += r['Pnl']
         if _num(r.get('TicketPx')) is None:
             r['TicketPx'] = close
+        r['Override'] = str(r.get('Override') or '').strip() or r['Instrument']   # blank -> back to default
         out.append(r)
     out.append({'Instrument': _TOTAL, 'Pnl': round(total, 4)})
     return out
@@ -164,6 +168,7 @@ def _build_rows() -> list[dict]:
         st = state.get(c, {})
         rows.append({
             'Instrument': c,
+            'Override': st.get('override') or c,
             'Holding': _num(st.get('holding')),
             'Target': round(exe[c]['net'], 4) if c in exe else 0.0,
             'OpenPx': _num(st.get('open_px')),
@@ -181,6 +186,7 @@ def _trade_lines(rows: list[dict]) -> list[str]:
         trade = _num(r.get('Trade'))
         if code == _TOTAL or trade is None or abs(trade) < _MIN_TRADE_MM:
             continue
+        code = str(r.get('Override') or '').strip() or code   # trade the override when the user set one
         px = _num(r.get('TicketPx'))
         if str(code).upper().endswith('.IR'):
             verb = 'receive' if trade > 0 else 'pay'        # swap: buy = receive fixed
@@ -223,7 +229,9 @@ def register_risk_tickets_callbacks(app):
             if code in (None, _TOTAL):
                 continue
             close, tpx = _num(r.get('Close')), _num(r.get('TicketPx'))
+            ov = str(r.get('Override') or '').strip()
             entry = {'holding': _num(r.get('Holding')), 'open_px': _num(r.get('OpenPx')),
+                     'override': ov if ov and ov != code else None,   # only a real override is kept
                      # only a price the user changed is kept; otherwise it follows the latest close
                      'ticket_px': tpx if tpx is not None and (close is None or abs(tpx - close) > 1e-9) else None}
             if any(v is not None for v in entry.values()):

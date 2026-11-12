@@ -71,8 +71,12 @@ def register_correlation_callbacks(app) -> None:
         _dismissed = {(str(d.get('spread_type', '')), str(d.get('instrument', ''))) for d in (dismissed_core or [])}
         core_seed = [c for c in core_seed if ('TenorSpread', str(c.get('ID', ''))) not in _dismissed]
 
-        if all_candidates and len(all_candidates) > 0:
-            df_candidates = pd.DataFrame(all_candidates)
+        # Also build from the core alone when there are no scan candidates: Open
+        # Positions (Core) must always be in the matrix, and the cached full
+        # matrix used otherwise can lack some of them.
+        if (all_candidates and len(all_candidates) > 0) or core_seed:
+            df_candidates = (pd.DataFrame(all_candidates) if all_candidates
+                             else pd.DataFrame(columns=['ID', 'spread_type']))
             if 'ID' in df_candidates.columns and 'spread_type' in df_candidates.columns:
                 _ts_cache: dict[str, pd.DataFrame | None] = {}
                 all_spreads = {}
@@ -157,11 +161,17 @@ def register_correlation_callbacks(app) -> None:
         low_corr_pairs = rank_low_correlation_pairs(corr_matrix, top_n=target_count)
         high_corr = low_corr_pairs[low_corr_pairs['AbsCorr'] > max_corr]
 
+        # Only select when at least one scan candidate is in the matrix. With none
+        # (nothing scanned, all removed with x, or no price history) the selector
+        # falls back to arbitrary names from the cached full matrix that appear
+        # nowhere in the left panel; show just the locked core instead.
+        _cand_keys = {display_key(c.get('spread_type', ''), c.get('ID', ''))
+                      for c in (all_candidates or []) if c.get('ID') and c.get('spread_type')}
         diverse_keys = select_diverse_instruments(
-            corr_matrix, all_candidates or [], n=target_count,
+            corr_matrix, all_candidates, n=target_count,
             max_abs_corr=float(max_corr) if max_corr is not None else 1.0,
             locked=core_seed,
-        )
+        ) if _cand_keys & set(corr_matrix.columns) else []
         locked_in_matrix = [display_key(c['spread_type'], c['ID']) for c in core_seed
                             if display_key(c['spread_type'], c['ID']) in corr_matrix.columns]
         heatmap_assets = [k for k in (locked_in_matrix + diverse_keys) if k in corr_matrix.columns]

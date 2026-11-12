@@ -10,7 +10,7 @@ import json as _json
 import numpy as np
 import pandas as pd
 
-from dash import dcc, html, callback_context
+from dash import dcc, html, callback_context, no_update
 from dash.dependencies import Input, Output, State, ALL
 from dash.exceptions import PreventUpdate
 
@@ -525,6 +525,15 @@ def register_scan_callbacks(app) -> None:
                     _conf_f = float('nan')
                 regime_store[_key] = {'regime': _reg, 'score': _conf_f}
 
+        # The store feeds Check Correlation / Portfolio, so it must hold only the
+        # candidates the cards above actually show (top 20 per section; unmapped-
+        # style rows are not rendered). Otherwise the correlation matrix on the
+        # right picks instruments the left panel never displays.
+        _shown = {(str(r.get('spread_type', '') or ''), str(r.get('ID', '') or ''))
+                  for rows in (mr_rows, trend_rows, carry_rows, event_rows) for r in rows}
+        candidate_data = [r for r in candidate_data
+                          if (str(r.get('spread_type', '') or ''), str(r.get('ID', '') or '')) in _shown]
+
         return table_out, candidate_data, regime_store
 
     @app.callback(
@@ -857,13 +866,18 @@ def register_scan_callbacks(app) -> None:
          Output('alpha-scan-status', 'children', allow_duplicate=True),
          Output('alpha-selected-candidates', 'data', allow_duplicate=True),
          Output('alpha-regime-store', 'data', allow_duplicate=True),
-         Output('alpha-dismissed-core-store', 'data', allow_duplicate=True)],
+         Output('alpha-dismissed-core-store', 'data', allow_duplicate=True),
+         Output('alpha-corr-results', 'children', allow_duplicate=True),
+         Output('alpha-corr-matrix-store', 'data', allow_duplicate=True),
+         Output('alpha-corr-proposed-store', 'data', allow_duplicate=True)],
         Input({'type': 'alpha-candidate-remove', 'stype': ALL, 'inst': ALL}, 'n_clicks'),
         [State('alpha-selected-candidates', 'data'),
-         State('alpha-dismissed-core-store', 'data')],
+         State('alpha-dismissed-core-store', 'data'),
+         State('alpha-corr-matrix-store', 'data'),
+         State('alpha-corr-proposed-store', 'data')],
         prevent_initial_call=True,
     )
-    def remove_candidate(clicks, selected_candidates, dismissed_core):
+    def remove_candidate(clicks, selected_candidates, dismissed_core, matrix_data, proposed):
         ctx = callback_context
         if not ctx.triggered:
             raise PreventUpdate
@@ -902,4 +916,22 @@ def register_scan_callbacks(app) -> None:
             columns=['ID', 'spread_type', 'direction', 'regime', 'style', 'Zscore'])
         table_out, candidate_data, regime_store = _render_candidates_from_df(df, dismissed)
         status = f"Removed {display_key(stype, inst)}. {len(filtered)} scan candidates remaining."
-        return table_out, status, candidate_data, regime_store, dismissed
+
+        # The heatmap on the right was drawn by the last Check Correlation and
+        # would still show the removed instrument. Drop it from the matrix and
+        # proposed stores and replace the stale figure with a notice.
+        ck = display_key(stype, inst)
+        in_matrix = bool(matrix_data) and (ck in matrix_data or inst in matrix_data)
+        corr_out, matrix_out = no_update, no_update
+        if in_matrix:
+            matrix_out = {c: {r: v for r, v in col.items() if r not in (ck, inst)}
+                          for c, col in matrix_data.items() if c not in (ck, inst)}
+            corr_out = html.Div(
+                f"{ck} was removed. Click Check Correlation to rebuild the matrix.",
+                style={'color': THEME['text_sub'], 'fontSize': '12px', 'fontStyle': 'italic'})
+        proposed_out = no_update
+        if proposed and any(str(e.get('spread_type', '')) == stype and str(e.get('instrument', '')) == inst
+                            for e in proposed):
+            proposed_out = [e for e in proposed
+                            if not (str(e.get('spread_type', '')) == stype and str(e.get('instrument', '')) == inst)]
+        return table_out, status, candidate_data, regime_store, dismissed, corr_out, matrix_out, proposed_out

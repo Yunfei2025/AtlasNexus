@@ -361,17 +361,13 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     duration_s = pd.Series(duration_by_trade).reindex(returns.columns).fillna(1.0)
     price_returns = returns.mul(duration_s, axis='columns')
 
-    # Sign each column by the position direction (BUY = +1, SELL = -1 on the
-    # stored spread series) so the covariance -- and hence RC and the weights --
-    # reflect actual position P&L risk. Without this, a SELL trade positively
-    # correlated with a BUY trade showed positive RC although it hedges it.
-    # Missing/unknown direction is treated as BUY. vol_computed above is
-    # unsigned on purpose (it is a displayed spread volatility).
-    if 'direction' in df_candidates.columns:
-        _dir = (df_candidates.drop_duplicates('ID').set_index('ID')['direction']
-                .astype(str).str.strip().str.upper())
-        _sign = _dir.map({'BUY': 1.0, 'SELL': -1.0}).reindex(returns.columns).fillna(1.0)
-        price_returns = price_returns.mul(_sign, axis='columns')
+    # Direction is deliberately NOT applied here. Signing each column by BUY/SELL
+    # makes hedging trades carry negative marginal risk, so the equal-risk-
+    # contribution target (1/n) is unreachable: the hedge sits at min_w with RC
+    # ~0 or negative and the others absorb the rest (RC 31.6 / -1.4 in the
+    # Portfolio Allocation Results). Weights are solved on direction-agnostic
+    # risk, so RC is evenly split; consequently the RC column is not the
+    # signed P&L risk of the book.
 
     # Keep the table's Vol(BP) field as raw annualized spread volatility.  The
     # duration-adjusted price_returns below are used only for the risk-parity
@@ -432,6 +428,24 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     cov = cov_matrix.values
     n = len(cov)
 
+    # Floor negative correlations at 0 for the weight solve. With a negatively
+    # correlated pair a trade can have negative marginal risk, so no long-only
+    # weight gives it the 1/n share and RC comes out uneven (-0.7 ... 56.3).
+    # Equal risk contribution is only guaranteed to exist for non-negative
+    # correlations, so diversification between opposite-moving spreads is
+    # deliberately not credited. The clipped matrix can lose positive
+    # semi-definiteness; repair it by clipping eigenvalues and restoring the
+    # unit diagonal so volatilities are unchanged.
+    _vols = np.sqrt(np.clip(np.diag(cov), 1e-24, None))
+    _corr = np.clip(cov / np.outer(_vols, _vols), 0.0, 1.0)
+    np.fill_diagonal(_corr, 1.0)
+    _ev, _evec = np.linalg.eigh(_corr)
+    if _ev.min() < 1e-8:
+        _corr = (_evec * np.clip(_ev, 1e-8, None)) @ _evec.T
+        _d = np.sqrt(np.diag(_corr))
+        _corr = _corr / np.outer(_d, _d)
+    cov = _corr * np.outer(_vols, _vols)
+
     def _risk_contribution(w, cov):
         port_var = w.T @ cov @ w
         if port_var < 1e-12:
@@ -464,7 +478,8 @@ def _compute_risk_parity_weights(df_candidates: pd.DataFrame) -> Tuple[Dict[str,
     # target instead of letting the optimizer equalize risk properly. Keep a
     # small floor only to avoid near-zero/degenerate weights.
     min_w = 1.0 / (10 * n)
-    max_w = min(0.5, 1.0 - min_w * (n - 1))
+    # No 0.5 cap: with few trades one low-vol name needs >50% for equal risk.
+    max_w = 1.0 - min_w * (n - 1)
     bounds = [(min_w, max_w) for _ in range(n)]
     w_equal = np.ones(n) / n
 

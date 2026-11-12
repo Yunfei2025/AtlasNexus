@@ -17,7 +17,37 @@ from .backtest_state import latest_position, run_instrument_backtest, short_allo
 from .helpers import _load_alpha_book_positions
 
 
+_OPEN_CORE_CACHE: dict = {}
+_OPEN_CORE_CACHE_TTL_S = 120.0
+
+
 def get_open_core_positions() -> tuple[list[dict], int]:
+    """Cached wrapper around :func:`_compute_open_core_positions`.
+
+    The computation runs a backtest per Core name (~8s for ~10 names), and the
+    Candidates tab calls it on every scan, correlation check and candidate
+    removal -- none of which change the Core book. Cached for two minutes and
+    keyed on the saved positions, so saving new positions invalidates it.
+    Returns copies so callers can mutate the rows safely.
+    """
+    import copy
+    import time
+
+    try:
+        sig = repr(sorted((str(p.get('spread_type', '')), str(p.get('instrument', '')),
+                           str(p.get('direction', ''))) for p in _load_alpha_book_positions()))
+    except Exception:
+        sig = ''
+    now = time.time()
+    hit = _OPEN_CORE_CACHE.get('v')
+    if hit is not None and hit[0] == sig and now - hit[1] < _OPEN_CORE_CACHE_TTL_S:
+        return copy.deepcopy(hit[2])
+    out = _compute_open_core_positions()
+    _OPEN_CORE_CACHE['v'] = (sig, now, out)
+    return copy.deepcopy(out)
+
+
+def _compute_open_core_positions() -> tuple[list[dict], int]:
     """Return ``(open_rows, n_flat)`` for the Core book.
 
     The universe is the full seed membership plus the saved positions file
