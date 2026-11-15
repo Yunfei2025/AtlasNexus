@@ -21,6 +21,7 @@ from settings.futures import FuturesConfig
 from settings.paths import DIR_INPUT
 
 from . import approvals
+from .monitor import exit_levels
 
 # CNY per 1.0 move of the quoted price, per lot. Typed in from exchange contract specs, NOT read from
 # any data feed: verify before sizing real orders.
@@ -121,9 +122,12 @@ def intraday_state(product, candidate, exits=None):
     sig[np.r_[day[:-1] != day[1:], False]] = 0.0   # every close but the latest day's (still open)
     if exits:
         sig, _ = apply_exits(res, sig, exits)
+    since = sig.index[(sig != sig.shift()).to_numpy()][-1]
+    # entry = close of the bar where the current position was taken (the walk-forward's entry price)
+    entry_px = float(res['close'].loc[since]) if sig.iloc[-1] != 0 and 'close' in res else None
     return {
         'contract': name, 'last_price': float(bars['close'].iloc[-1]), 'last_time': bars.index[-1],
-        'signal': float(sig.iloc[-1]), 'since': sig.index[(sig != sig.shift()).to_numpy()][-1],
+        'signal': float(sig.iloc[-1]), 'since': since, 'entry_price': entry_px,
     }
 
 
@@ -163,6 +167,28 @@ def select_book(max_n=MAX_BOOK):
     return sel
 
 
+def size_position(product, exits, last_price, capital, risk_pct, stop_mult, close=None):
+    """Lots so that a stop-out costs risk_pct of capital. The stop distance is the approved strategy's own
+    stop when it has one, else stop_mult x the 20-day daily sigma. Shared by Today's book and the Monitor's
+    order tickets so both size the same position."""
+    exits = exits or {}
+    mult = CONTRACT_MULTIPLIER.get(product)
+    if mult is None:
+        raise ValueError("no contract multiplier on file")
+    if close is None:
+        close, _ = daily_panels()
+    sym = {product_of(s): s for s in close.columns}.get(product)
+    sigma = float(close[sym].dropna().pct_change().tail(20).std()) if sym else float('nan')
+    if exits.get('stop'):
+        stop_pts = exits['stop'] * last_price / 100 if exits['unit'] == 'pct' else exits['stop']
+    else:
+        stop_pts = stop_mult * sigma * last_price
+    ok = stop_pts > 0 and math.isfinite(stop_pts)
+    lots = int(capital * risk_pct / 100 // (stop_pts * mult)) if ok else 0
+    return {'stop_pts': stop_pts, 'stop_src': 'strategy' if exits.get('stop') else 'σ', 'lots': lots,
+            'daily_sigma': sigma, 'multiplier': mult}
+
+
 def build_book(capital, risk_pct, stop_mult, loss_limit_pct, today=None, max_n=MAX_BOOK):
     """Today's book: up to max_n approved products, least correlated by strategy P&L, each sized so a
     stop-out costs risk_pct of capital."""
@@ -181,8 +207,6 @@ def build_book(capital, risk_pct, stop_mult, loss_limit_pct, today=None, max_n=M
                     book['warnings'].append(f"{a} and {b} strategy P&L correlation {v:+.2f}")
 
     close, _ = daily_panels()
-    sym_of = {product_of(s): s for s in close.columns}
-    risk_budget = capital * risk_pct / 100
     last_bday = np.busday_offset(np.datetime64(today.date()), -1, roll='backward')
     for prod in chosen:
         a = approved[prod]
@@ -192,21 +216,20 @@ def build_book(capital, risk_pct, stop_mult, loss_limit_pct, today=None, max_n=M
         try:
             exits = a.get('exits') or {}
             st = intraday_state(prod, a['candidate'], exits or None)
-            sigma = float(close[sym_of[prod]].dropna().pct_change().tail(20).std())
-            if exits.get('stop'):   # the approved strategy's own stop sizes the position
-                stop_pts = exits['stop'] * st['last_price'] / 100 if exits['unit'] == 'pct' else exits['stop']
-            else:
-                stop_pts = stop_mult * sigma * st['last_price']
-            row['stop_src'] = 'strategy' if exits.get('stop') else 'σ'
-            mult = row['multiplier']
-            if mult is None:
-                raise ValueError("no contract multiplier on file")
-            lots = int(risk_budget // (stop_pts * mult)) if stop_pts > 0 else 0
+            sz = size_position(prod, exits, st['last_price'], capital, risk_pct, stop_mult, close=close)
+            sigma, stop_pts, lots, mult = sz['daily_sigma'], sz['stop_pts'], sz['lots'], sz['multiplier']
+            row['stop_src'] = sz['stop_src']
             direction = int(st['signal'])
+            entry_px = st['entry_price']
+            lv = exit_levels(entry_px, direction, exits)
+            stop_price = lv['stop']
+            if direction and stop_price is None and entry_px is not None:   # no strategy stop: σ stop from the entry
+                stop_price = entry_px - direction * stop_pts
             row.update(
                 contract=st['contract'], last_price=st['last_price'], last_time=st['last_time'],
                 signal=direction, since=st['since'], daily_sigma=sigma, stop_pts=stop_pts, lots=lots,
-                stop_price=st['last_price'] - direction * stop_pts if direction else None,
+                entry_price=entry_px if direction else None, stop_price=stop_price if direction else None,
+                target_price=lv['target'] if direction else None,
                 risk_cny=lots * stop_pts * mult, notional=lots * st['last_price'] * mult,
                 stale=np.datetime64(st['last_time'].date()) < last_bday,
             )

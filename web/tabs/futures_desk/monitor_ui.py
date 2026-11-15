@@ -114,7 +114,7 @@ def register_monitor_callbacks(app):
         return float(w), float(h), int(n)
 
     @app.callback(
-        [Output('fd-mon-container', 'children'), Output('fd-mon-pick', 'options')],
+        [Output('fd-mon-container', 'children'), Output('fd-mon-pick', 'options'), Output('fd-mon-health', 'data')],
         [Input('fd-data-stamp', 'data'), Input('fd-subtabs', 'value'), Input('fd-mon-watch', 'value'),
          Input('fd-mon-halt', 'value'), Input('fd-mon-losses', 'value')],
     )
@@ -124,14 +124,15 @@ def register_monitor_callbacks(app):
         p = _params(watch, halt, losses)
         if p is None:
             return html.Div("Watch σ must be positive and below Halt σ; losing days must be positive.",
-                            style={'color': _RED, 'fontSize': '11px'}), []
+                            style={'color': _RED, 'fontSize': '11px'}), [], {}
         try:
             rows = monitor_rows(*p)
             opts = [{'label': f"{r['product']} · {r['rec']['candidate']}" + (' (halted)' if r['current'] == 'halted' else ''),
                      'value': r['product']} for r in rows]   # halted ones too, so they can be removed
-            return monitor_view(rows, p[0], p[1]), opts
+            health = {r['product']: r['assessment']['status'] for r in rows if 'assessment' in r}
+            return monitor_view(rows, p[0], p[1]), opts, health
         except Exception as e:
-            return html.Div(f"Monitor unavailable: {e}", style={'color': _RED, 'fontSize': '11px'}), []
+            return html.Div(f"Monitor unavailable: {e}", style={'color': _RED, 'fontSize': '11px'}), [], {}
 
     @app.callback(
         [Output('fd-mon-note', 'children'), Output('fd-data-stamp', 'data', allow_duplicate=True)],

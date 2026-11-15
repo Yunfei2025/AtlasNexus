@@ -69,7 +69,7 @@ def book_view(book, capital, risk_pct, loss_limit_pct):
     for r in book['rows']:
         if 'error' in r:
             body.append(_row([_td(r['product'], left=True, bold=True), _td(r['candidate']),
-                              html.Td(f"unavailable: {r['error']}", colSpan=8,
+                              html.Td(f"unavailable: {r['error']}", colSpan=10,
                                       style={'padding': '5px 8px', 'fontSize': '10px', 'color': _RED})]))
             continue
         body.append(_row([
@@ -77,11 +77,13 @@ def book_view(book, capital, risk_pct, loss_limit_pct):
             _td(r['contract']), _td(f"{r['last_price']:,.2f}"),
             signal_cell(r['signal'], r['since']),
             _td(f"{r['stop_pts']:,.2f}" + (" σ" if r.get('stop_src') == 'σ' else "")),
+            _td('—' if r.get('entry_price') is None else f"{r['entry_price']:,.2f}"),
             _td('—' if r['stop_price'] is None else f"{r['stop_price']:,.2f}"),
+            _td('—' if r.get('target_price') is None else f"{r['target_price']:,.2f}"),
             _td(str(r['lots']), _AMBER if r['lots'] == 0 else 'var(--text-primary)', bold=True),
             _td(_cny(r['risk_cny'])), _td(_cny(r['notional'])),
         ]))
-    head = ["Product", "Strategy", "Contract", "Last", "Position", "Stop dist", "Stop at", "Lots", "Risk CNY", "Notional"]
+    head = ["Product", "Strategy", "Contract", "Last", "Position", "Stop dist", "Entry", "Stop at", "Target at", "Lots", "Risk CNY", "Notional"]
     live = [r for r in book['rows'] if 'error' not in r]
     ts = max((r['last_time'] for r in live), default=None)
     out = [_table(head, body, left=(0, 4)),
@@ -98,7 +100,8 @@ def book_view(book, capital, risk_pct, loss_limit_pct):
     for w in book['warnings']:
         out.append(_note(f"⚠ {w}", _AMBER))
     out.append(_note("Signal = the approved strategy at its default parameters on the latest bars; positions are "
-                     "closed before the close. Stop distance = the approved strategy's stop loss when it has one, "
+                     "closed before the close. Entry = close of the bar where the position was taken; stop / target levels are measured from it. "
+                     "Stop distance = the approved strategy's stop loss when it has one, "
                      "else stop multiple × 20-day daily σ. Lots = floor(risk "
                      "budget / (stop distance × multiplier)). Multipliers are typed in from exchange specs: verify "
                      "before trading."))

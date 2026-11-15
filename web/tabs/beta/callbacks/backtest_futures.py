@@ -236,11 +236,12 @@ def register_backtest_futures_callbacks(app):
          State('bf-strategy-selector', 'value'),
          State('bf-cost-bp', 'value'),
          State('bf-legacy', 'value'),
-         State('bf-stop', 'value'), State('bf-target', 'value'), State('bf-exit-unit', 'value')] +
+         State('bf-stop', 'value'), State('bf-target', 'value'), State('bf-exit-unit', 'value'),
+         State('bf-overnight', 'value')] +
         [State(pid, 'value') for pid in PARAM_IDS]
     )
     def bf_update_dashboard(n_clicks, local_symbol, drill, source, trading_mode, wind_code, start_date, end_date, tf,
-                            selected_strategies, cost_bp, legacy, stop, target, exit_unit, *param_values):
+                            selected_strategies, cost_bp, legacy, stop, target, exit_unit, overnight, *param_values):
         if ctx.triggered_id == 'bf-drill':
             # A walk-forward candidate was clicked: that strategy at default parameters, on that contract's
             # whole history, with the same cost and flat-at-close accounting the walk-forward used.
@@ -270,13 +271,14 @@ def register_backtest_futures_callbacks(app):
         cost_bp = 0.0 if legacy else (default_cost_bp(symbol) if cost_bp is None else float(cost_bp))
         out = _bf_dashboard(source, trading_mode, local_symbol, wind_code, start_date, end_date, tf,
                             selected_strategies, params, run_strategies, saved_best, cost_bp, legacy,
-                            None if legacy else normalize_exits(stop, target, exit_unit))
+                            None if legacy else normalize_exits(stop, target, exit_unit),
+                            overnight=bool(overnight) and not legacy)
         out = out if len(out) == 3 else (*out, no_update)
         return out
 
     def _bf_dashboard(source, trading_mode, local_symbol, wind_code, start_date, end_date, tf,
                       selected_strategies, params, run_strategies, saved_best=None, cost_bp=0.0, legacy=True,
-                      exits=None):
+                      exits=None, overnight=False):
         (ma_s, ma_l, boll_w, boll_std, boll_exit, vwap_w, mom_w, atr_ema_w, atr_w,
          sar_af, sar_max_af) = (params[pid] for pid in PARAM_IDS)
 
@@ -358,7 +360,7 @@ def register_backtest_futures_callbacks(app):
                     results['SAR'] = run_sar_strategy(df_resampled, sar_af, sar_max_af)
 
             if not legacy:
-                results = {name: apply_costs(res, cost_bp, flat_at_close=effective_tf != '1D', exits=exits)
+                results = {name: apply_costs(res, cost_bp, flat_at_close=effective_tf != '1D' and not overnight, exits=exits)
                            for name, res in results.items()}
 
             # Create Plotly Chart — 2 rows when strategies present, 1 row for default price view
@@ -491,7 +493,8 @@ def register_backtest_futures_callbacks(app):
 
             if strategy_metrics:
                 acct = ("Legacy accounting: no costs, positions held overnight." if legacy else
-                        f"Net of {cost_bp:.2f}bp per side" + (", flat at each close" if intraday else "") +
+                        f"Net of {cost_bp:.2f}bp per side" + ((", held overnight" if overnight else ", flat at each close")
+                                                          if intraday else "") +
                         (f" · {describe_exits(exits)}." if exits else "."))
                 strategy_table = html.Div(style={'overflowX': 'auto'}, children=[
                     html.Div(acct, style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '4px'}),

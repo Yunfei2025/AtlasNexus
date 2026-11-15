@@ -69,11 +69,32 @@ def build_futures_desk_layout():
                  style=_card),
     ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px', 'padding': '16px', 'margin': '10px'})
 
+    orders = html.Div([
+        html.Div([
+            html.Span("Orders: what to type into your app"),
+            html.Span(id='fd-clock', style={'fontSize': '11px', 'fontWeight': '500', 'color': 'var(--text-secondary)',
+                                            'marginLeft': 'auto'}),
+            html.Button("🔔 Enable alerts", id='fd-alerts-enable', n_clicks=0, style=_btn, title=(
+                "Browser notifications for new tickets and the flatten reminder (this browser only, nothing is "
+                "sent anywhere). The page must stay open.")),
+        ], style={**_head, 'display': 'flex', 'alignItems': 'center', 'gap': '12px', 'flexWrap': 'wrap'}),
+        html.Div([
+            html.Div(id='fd-flatten-banner', style={'display': 'none'}),
+            dcc.Loading(type='circle', color='var(--accent-blue)', style={'minHeight': '40px'},
+                        children=html.Div(id='fd-orders-container')),
+        ], style={'padding': '10px 16px 12px'}),
+        dcc.Store(id='fd-desk-clock', storage_type='memory'),
+        dcc.Store(id='fd-done-stamp', storage_type='memory'),
+        dcc.Store(id='fd-mon-health', storage_type='memory'),
+        dcc.Interval(id='fd-clock-tick', interval=15_000),
+    ], style={**_card, 'overflow': 'visible'})
+
     live = html.Div([
         html.Div("Live monitor (Wind minute bars; after the close the finished day is fetched once and saved)", style=_head),
         html.Div([
             html.Div([html.Label("Products (max 5)", style=_lbl),
                       dcc.Dropdown(id='fd-live-products', multi=True, placeholder="Pick approved products",
+                                   persistence=True, persistence_type='local',
                                    style={'minWidth': '280px', 'fontSize': '10px'})]),
             html.Div([html.Label("Refresh every", style=_lbl),
                       dcc.Dropdown(id='fd-live-minutes', options=[{'label': f'{m} min', 'value': m} for m in (5, 10, 15)],
@@ -90,33 +111,39 @@ def build_futures_desk_layout():
     ], style={**_card, 'overflow': 'visible'})
 
     monitor = html.Div([
+        orders,
         live,
-        html.Div([
-            _field("Watch below (σ)", 'fd-mon-watch', 1.0, 0.5),
-            _field("Halt below (σ)", 'fd-mon-halt', 2.0, 0.5),
-            _field("Halt after N losing days", 'fd-mon-losses', 5, 1),
-            html.Button("Apply statuses", id='fd-mon-apply', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}, title=(
-                "Write the computed Watch / Halted statuses to the approvals file. Halted products leave today's "
-                "book and only return through a fresh walk-forward and approval.")),
-            html.Div([dcc.Dropdown(id='fd-mon-pick', placeholder="Pick a product", clearable=True,
-                                   style={'width': '200px', 'fontSize': '10px'}),
-                      html.Button("Halt now", id='fd-mon-halt-now', n_clicks=0, style=_btn, title=(
-                          "Keep the record but take the product out of today's book until it is re-approved.")),
-                      dcc.ConfirmDialogProvider(
-                          id='fd-mon-remove', message=(
-                              "Remove this product's approval completely? It leaves today's book and the Monitor, "
-                              "and only returns through a fresh walk-forward and approval in Research."),
-                          children=html.Button("Remove", style={**_btn, 'color': 'var(--accent-red, #f87171)'}, title=(
-                              "Delete the product's approval record (asks to confirm)."))),
-                      ],
-                     style={'display': 'flex', 'gap': '8px', 'alignSelf': 'flex-end', 'alignItems': 'center'}),
-            html.Div(id='fd-mon-note', style={'fontSize': '10px', 'color': 'var(--text-muted)', 'alignSelf': 'flex-end'}),
-        ], style={**_card, 'display': 'flex', 'gap': '16px', 'alignItems': 'flex-start', 'padding': '12px 16px',
-                  'flexWrap': 'wrap', 'overflow': 'visible'}),
-        html.Div([html.Div("Approved strategies: forward paper P&L vs expected", style=_head),
-                  dcc.Loading(type='circle', color='var(--accent-blue)', style={'minHeight': '80px'},
-                              children=html.Div(id='fd-mon-container', style={'padding': '12px 16px'}))],
-                 style=_card),
+        html.Details([
+            html.Summary("Strategy health: forward paper P&L, statuses, halt / remove", style={
+                'cursor': 'pointer', 'fontSize': '12px', 'fontWeight': '600', 'color': 'var(--text-secondary)',
+                'padding': '6px 2px'}),
+            html.Div([
+                _field("Watch below (σ)", 'fd-mon-watch', 1.0, 0.5),
+                _field("Halt below (σ)", 'fd-mon-halt', 2.0, 0.5),
+                _field("Halt after N losing days", 'fd-mon-losses', 5, 1),
+                html.Button("Apply statuses", id='fd-mon-apply', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}, title=(
+                    "Write the computed Watch / Halted statuses to the approvals file. Halted products leave today's "
+                    "book and only return through a fresh walk-forward and approval.")),
+                html.Div([dcc.Dropdown(id='fd-mon-pick', placeholder="Pick a product", clearable=True,
+                                       style={'width': '200px', 'fontSize': '10px'}),
+                          html.Button("Halt now", id='fd-mon-halt-now', n_clicks=0, style=_btn, title=(
+                              "Keep the record but take the product out of today's book until it is re-approved.")),
+                          dcc.ConfirmDialogProvider(
+                              id='fd-mon-remove', message=(
+                                  "Remove this product's approval completely? It leaves today's book and the Monitor, "
+                                  "and only returns through a fresh walk-forward and approval in Research."),
+                              children=html.Button("Remove", style={**_btn, 'color': 'var(--accent-red, #f87171)'}, title=(
+                                  "Delete the product's approval record (asks to confirm)."))),
+                          ],
+                         style={'display': 'flex', 'gap': '8px', 'alignSelf': 'flex-end', 'alignItems': 'center'}),
+                html.Div(id='fd-mon-note', style={'fontSize': '10px', 'color': 'var(--text-muted)', 'alignSelf': 'flex-end'}),
+            ], style={**_card, 'display': 'flex', 'gap': '16px', 'alignItems': 'flex-start', 'padding': '12px 16px',
+                      'flexWrap': 'wrap', 'overflow': 'visible'}),
+            html.Div([html.Div("Approved strategies: forward paper P&L vs expected", style=_head),
+                      dcc.Loading(type='circle', color='var(--accent-blue)', style={'minHeight': '80px'},
+                                  children=html.Div(id='fd-mon-container', style={'padding': '12px 16px'}))],
+                     style={**_card, 'marginTop': '10px'}),
+        ]),
     ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px', 'padding': '16px', 'margin': '10px'})
 
     return html.Div([

@@ -966,6 +966,13 @@ def build_factor_backtest_layout():
                       "Backtest and to the walk-forward (stored with its result, the approval and the monitor)."),
                style={'display': 'flex', 'gap': '6px', 'marginBottom': '5px'}),
             dcc.Checklist(
+                id='bf-overnight',
+                options=[{'label': ' Hold overnight (intraday, with costs and exits)', 'value': 'on'}], value=[],
+                labelStyle={'fontSize': '10px', 'color': 'var(--text-muted)', 'cursor': 'pointer'},
+                inputStyle={"marginRight": "5px", "cursor": 'pointer'},
+                style={'marginBottom': '3px'},
+            ),
+            dcc.Checklist(
                 id='bf-legacy',
                 options=[{'label': ' Legacy (no cost, held overnight)', 'value': 'legacy'}], value=[],
                 labelStyle={'fontSize': '10px', 'color': 'var(--text-muted)', 'cursor': 'pointer'},

@@ -1,7 +1,9 @@
 """Multi-contract intraday strategy evaluation for one futures product.
 
 Every (strategy, bar size) candidate runs at default parameters on each contract's own main-contract
-days, flat at every close, net of costs. run_daily() adds daily-bar candidates (held overnight) for comparison. The result is the evidence the Futures Desk uses to approve a
+days, flat at every close, net of costs. Each row also carries an 'overnight' block: the same candidate, costs and
+exits with the position held through the close (an information-only comparison; the desk trades flat).
+run_daily() adds daily-bar candidates (held overnight) for comparison. The result is the evidence the Futures Desk uses to approve a
 strategy: Sharpe per contract and pooled, its standard error, win rate, payoff and expectancy.
 No parameters are tuned (see the alpha no-param-tuning finding): a candidate either holds up across
 contracts or it does not.
@@ -190,12 +192,13 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
 
     spans = {c: main_of.index[main_of == c] for c in contract}
 
-    def score(raw, ex):
-        """Row + daily P&L of one candidate (raw strategy output per contract) under exits `ex`."""
+    def score(raw, ex, flat=True):
+        """Row + daily P&L of one candidate (raw strategy output per contract) under exits `ex`. flat=False
+        holds the position through each close (the gap to the next open is then in the P&L)."""
         parts, stats = {}, []
         for c, r in raw.items():
             days = spans[c]
-            res = apply_costs(r, cost, flat_at_close=True, exits=ex)
+            res = apply_costs(r, cost, flat_at_close=flat, exits=ex)
             parts[c] = daily_pnl_of(res).reindex(days).fillna(0.0)
             stats.append(trade_stats(res[res.index.normalize().isin(days)], cost))
         series = pd.concat(parts.values()).sort_index()
@@ -212,6 +215,7 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
             'expectancy_bp': sum(st['expectancy_bp'] * st['trades'] for st in stats
                                  if not math.isnan(st['expectancy_bp'])) / wsum,
             'total_return': float(series.sum()),
+            'max_dd': float((series.cumsum().cummax() - series.cumsum()).max()), 'worst_day': float(series.min()),
             'passes': bool(pooled > 0 and n_tr >= MIN_TRADES and len(per_c) >= 2
                            and pos >= max(2, math.ceil(len(per_c) * 2 / 3))),
         }
@@ -237,6 +241,9 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
             best = max(range(len(scored)), key=lambda k: (-math.inf if math.isnan(scored[k][0]['pooled'])
                                                           else scored[k][0]['pooled']))
             rows[cand], pnl[cand] = scored[best]
+            ov, _ = score(raw, rows[cand]['exits'], flat=False)   # same exits, held overnight
+            rows[cand]['overnight'] = {k: ov[k] for k in ('pooled', 'se', 'per_contract', 'total_return', 'max_dd',
+                                                          'worst_day', 'trades', 'trades_per_day')}
             if search_exits:   # the no-exit result, to show how much the search added
                 rows[cand]['base_pooled'] = scored[0][0]['pooled']
         if progress:

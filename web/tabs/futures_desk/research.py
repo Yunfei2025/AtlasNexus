@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 from dash import ALL, ctx, html, no_update
 from dash.exceptions import PreventUpdate
 from dash.dependencies import Input, Output, State
@@ -53,6 +54,12 @@ def wf_table(wf, approved_candidate=None):
     head = [html.Th("Candidate", style={**_TH, 'textAlign': 'left'})] + (
             [html.Th("Stop / target", style={**_TH, 'textAlign': 'left'}), html.Th("No exits", style=_TH)]
             if searched else []) + [html.Th("Pooled", style=_TH), html.Th("± SE", style=_TH)] + [html.Th(c, style=_TH) for c in contracts] + [
+            html.Th("Overnight", style=_TH, title="Same candidate, costs and exits, but the position is held through "
+                    "each close. Information only: the desk trades flat at the close."),
+            html.Th("Δ vs flat", style=_TH, title="Overnight Sharpe minus flat Sharpe. Coloured only when the "
+                    "difference is larger than one standard error of the flat Sharpe."),
+            html.Th("Max DD flat → over", style=_TH, title="Largest peak-to-trough fall of cumulative return on "
+                    "notional, in %"),
             html.Th("Trades/d", style=_TH), html.Th("Win", style=_TH), html.Th("Payoff", style=_TH),
             html.Th("Exp bp", style=_TH), html.Th("Gate", style=_TH)]
     body = []
@@ -65,6 +72,7 @@ def wf_table(wf, approved_candidate=None):
                _cell(*_num(r['se'], '.2f', color=False))]
         for c in contracts:
             tds.append(_cell(*_num(r['per_contract'].get(c), '+.1f'), pick=(name, c)))
+        tds += _overnight_cells(r)
         tds += [_cell(f"{r['trades_per_day']:.1f}"),
                 _cell('—' if math.isnan(r['win']) else f"{r['win'] * 100:.0f}%"),
                 _cell(*_num(r['payoff'], '.2f', color=False)),
@@ -80,6 +88,7 @@ def wf_table(wf, approved_candidate=None):
                  style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '2px'}),
         html.Div(daily_vs_intraday(wf) + ".",
                  style={'fontSize': '10px', 'color': 'var(--text-primary)', 'marginBottom': '4px'}),
+        overnight_summary(wf, passing),
         html.Div(f"{n_pass} of {len(wf['rows'])} candidates pass" + (f" (best {MAX_SHOWN} shown)" if n_pass > MAX_SHOWN else "") + f". Gate: pooled Sharpe > 0, ≥ {g['min_trades']} trades, "
                  f"net-positive on at least 2/3 of contracts with ≥ {g['min_contract_days']} days. "
                  f"Sharpe per contract; contracts: {cdesc}. Click a candidate (or one contract's Sharpe) to chart it below.",
@@ -92,7 +101,87 @@ def wf_table(wf, approved_candidate=None):
                             style={'width': '100%', 'borderCollapse': 'collapse'}), style={'overflowX': 'auto'})
         if body else html.Div("No candidate passes the gates for this product. Use Controls > Run Backtest to "
                               "look at a strategy anyway.", style={'fontSize': '10px', 'color': _AMBER_TXT}),
+        overnight_by_contract(wf, passing, approved_candidate),
         daily_table(wf),
+    ])
+
+
+def _overnight_cells(r):
+    """Overnight Sharpe, its difference to the flat Sharpe and the drawdown pair for one candidate row."""
+    ov = r.get('overnight')
+    if not ov:
+        return [_cell('—', 'var(--text-muted)')] * 3
+    d = ov['pooled'] - r['pooled']
+    se = r['se']
+    big = not (math.isnan(d) or math.isnan(se)) and abs(d) > se
+    dcol = (_GREEN if d > 0 else _RED) if big else 'var(--text-muted)'
+    dd = f"{r['max_dd'] * 100:.1f} → {ov['max_dd'] * 100:.1f}%" if r.get('max_dd') is not None else '—'
+    return [_cell(*_num(ov['pooled'], '+.2f')),
+            _cell('—' if math.isnan(d) else f"{d:+.2f}", dcol, bold=big),
+            _cell(dd, _AMBER_TXT if r.get('max_dd') is not None and ov['max_dd'] > 1.25 * r['max_dd'] else
+                  'var(--text-secondary)')]
+
+
+def overnight_summary(wf, passing):
+    """One paragraph answering: does holding through the close help this product, or just add gap risk?"""
+    rows = [(k, r) for k, r in passing if r.get('overnight')]
+    note = {'fontSize': '10px', 'color': 'var(--text-primary)', 'marginBottom': '4px'}
+    if not rows:
+        return html.Div("Held overnight: this walk-forward was run before the comparison existed. Click ▶ Run "
+                        "walk-forward again to add it.", style={**note, 'color': _AMBER_TXT})
+    deltas = [r['overnight']['pooled'] - r['pooled'] for _, r in rows]
+    deltas = [d for d in deltas if not math.isnan(d)]
+    better = sum(d > 0 for d in deltas)
+    med = float(np.median(deltas)) if deltas else float('nan')
+    se = float(np.nanmedian([r['se'] for _, r in rows]))
+    pct = lambda vals: float(np.median(vals)) * 100
+    dd_f, dd_o = pct([r['max_dd'] for _, r in rows]), pct([r['overnight']['max_dd'] for _, r in rows])
+    wd_f, wd_o = pct([r['worst_day'] for _, r in rows]), pct([r['overnight']['worst_day'] for _, r in rows])
+    if math.isnan(med) or abs(med) <= se:
+        verdict = "The difference is inside one SE: no evidence that holding overnight changes the result."
+    elif med > 0:
+        verdict = ("Overnight looks better by more than one SE, but the stop / target cannot cap an overnight gap "
+                   "and the bars hold day sessions only (night-session moves are inside the gap).")
+    else:
+        verdict = "Holding overnight is worse by more than one SE: keep flat at the close."
+    worse = [w for w, bad in (("drawdown", dd_o > 1.25 * dd_f), ("worst day", wd_o < 1.25 * wd_f)) if bad]
+    if worse:
+        verdict += f" The {' and '.join(worse)} {'are' if len(worse) > 1 else 'is'} at least 25% larger overnight."
+    return html.Div(
+        f"Held overnight vs flat, {len(rows)} passing candidates: better on {better}, median Sharpe change "
+        f"{med:+.2f} (typical SE {se:.2f}); median max drawdown {dd_f:.1f}% → {dd_o:.1f}%, median worst day "
+        f"{wd_f:.1f}% → {wd_o:.1f}%. {verdict}", style=note)
+
+
+def overnight_by_contract(wf, passing, approved_candidate=None):
+    """Flat vs overnight Sharpe per contract for one candidate (the approved one, else the best), so the
+    question can be answered for a given contract."""
+    pick = next(((k, r) for k, r in passing if k == approved_candidate and r.get('overnight')), None) or \
+        next(((k, r) for k, r in passing if r.get('overnight')), None)
+    if pick is None:
+        return None
+    name, r = pick
+    g = wf['gates']
+    body = []
+    for c, flat in r['per_contract'].items():
+        over = r['overnight']['per_contract'].get(c)
+        d = None if over is None else over - flat
+        body.append(html.Tr([
+            _cell(c, left=True, bold=True), _cell(str(wf['contracts'][c]['days'])), _cell(*_num(flat, '+.1f')),
+            _cell(*_num(over, '+.1f')), _cell(*_num(d, '+.1f', color=False)),
+        ], style={'borderBottom': '1px solid rgba(255,255,255,0.04)'}))
+    if not body:
+        return None
+    head = ["Contract", "Days", "Flat", "Overnight", "Δ"]
+    return html.Div([
+        html.Div(f"Flat vs held overnight by contract: {name}", style={
+            'fontSize': '10px', 'fontWeight': '600', 'color': 'var(--text-primary)', 'margin': '10px 0 2px'}),
+        html.Div(f"Sharpe per contract over its main-contract days (contracts with ≥ {g['min_contract_days']} days). "
+                 "Held overnight keeps the strategy's position through each close, with the same cost and exits.",
+                 style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '4px'}),
+        html.Div(html.Table([html.Thead(html.Tr([html.Th(h, style={**_TH, 'textAlign': 'left' if i == 0 else 'right'})
+                                                 for i, h in enumerate(head)])), html.Tbody(body)],
+                            style={'width': 'auto', 'minWidth': '320px', 'borderCollapse': 'collapse'})),
     ])
 
 

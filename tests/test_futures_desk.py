@@ -86,7 +86,7 @@ def _fake_world(monkeypatch, approved, close, pnl):
     monkeypatch.setattr(pool, 'pnl_panel', lambda cands: pnl[list(cands)])
     monkeypatch.setattr(pool, 'intraday_state', lambda prod, cand, exits=None: {
         'contract': f'{prod}2612', 'last_price': 100.0, 'last_time': datetime(2026, 11, 4, 15, 30),
-        'signal': 1.0, 'since': pd.Timestamp('2026-11-04 10:00')})
+        'signal': 1.0, 'since': pd.Timestamp('2026-11-04 10:00'), 'entry_price': 98.0})
 
 
 def _close(symbols):
@@ -108,7 +108,7 @@ def test_book_sizes_each_product_to_the_same_risk(monkeypatch):
         sigma = close[{'AU': 'AU.SHF', 'TL': 'TL.CFE'}[r['product']]].pct_change().tail(20).std()
         per_lot = 0.5 * sigma * 100.0 * pool.CONTRACT_MULTIPLIER[r['product']]
         assert r['lots'] == int(25_000 // per_lot)
-        assert r['risk_cny'] <= 25_000 and r['stop_price'] == pytest.approx(100.0 - r['stop_pts'])
+        assert r['risk_cny'] <= 25_000 and r['stop_price'] == pytest.approx(98.0 - r['stop_pts'])
     assert book['risk_cny'] == pytest.approx(sum(r['risk_cny'] for r in book['rows']))
 
 
@@ -429,6 +429,17 @@ def test_book_sizes_with_the_approved_stop_when_set(monkeypatch):
     r = book['rows'][0]
     assert r['stop_src'] == 'strategy' and r['stop_pts'] == pytest.approx(0.5)   # 0.5% of 100
     assert r['lots'] == int(25_000 // (0.5 * pool.CONTRACT_MULTIPLIER['AU']))
+
+
+def test_book_levels_are_measured_from_the_entry_price(monkeypatch):
+    close = _close(['AU.SHF'])
+    pnl = pd.DataFrame({'AU': np.zeros(30)}, index=pd.bdate_range('2026-08-01', periods=30))
+    exits = {'stop': 0.5, 'target': 1.0, 'unit': 'pct'}
+    _fake_world(monkeypatch, {'AU': {'candidate': 'SAR@30min', 'exits': exits}}, close, pnl)
+    r = pool.build_book(10_000_000, 0.25, 0.5, 1.0, today=datetime(2026, 11, 5))['rows'][0]
+    # long entered at 98 (last is 100): stop 0.5% and target 1% of the entry, not of the last price
+    assert r['entry_price'] == 98.0
+    assert r['stop_price'] == pytest.approx(98 * 0.995) and r['target_price'] == pytest.approx(98 * 1.01)
 
 
 # ── Walk-forward stop / target search ─────────────────────────────────────────────────────────
@@ -780,3 +791,144 @@ def test_live_view_labels_night_rows_display_only(tmp_path, monkeypatch):
     text = str(live_ui.live_view([st], None, {'running': False}, now=datetime(2026, 11, 13, 9, 0)))
     assert 'night' in text and 'display only' in text and 'does not enter' in text
     assert 'night, display only' in live_ui.live_chart(st).layout.title.text
+
+
+# ── Monitor order tickets for manual trading ─────────────────────────────────────────────────────
+from web.tabs.futures_desk import actions, contracts, manual_log
+
+
+def test_contract_codes_and_tick_rounding_follow_the_exchange():
+    assert contracts.app_code('AL2612') == 'al2612'      # SHFE lower case
+    assert contracts.app_code('IM2612') == 'IM2612'      # CFFEX upper case
+    assert contracts.app_code('SA2612') == 'SA612'       # CZCE 3-digit month
+    assert contracts.price_fmt(22570.2035, 'AL') == '22,570'
+    assert contracts.price_fmt(6276.83, 'IM') == '6,276.8'
+    assert contracts.price_fmt(108.1234, 'T') == '108.125'
+    assert contracts.order_words(-1, False, 'AL') == ('Sell', 'Close today', '卖平今')   # SHFE needs 平今
+    assert contracts.order_words(-1, False, 'IM') == ('Sell', 'Close', '卖平')
+
+
+def _live_row(trades, closed=False, last=22700.0, product='AL', candidate='MA@30min'):
+    return {'product': product, 'contract': f'{product}2612', 'candidate': candidate, 'last_px': last,
+            'closed': closed, 'trades': trades}
+
+
+def _trade(entry_t, entry_px, direction=1, exit_t=None, exit_px=None, stop=None, target=None):
+    return {'direction': direction, 'entry_t': pd.Timestamp(entry_t), 'entry_px': entry_px, 'stop': stop,
+            'target': target, 'exit_t': None if exit_t is None else pd.Timestamp(exit_t), 'exit_px': exit_px}
+
+
+def test_open_ticket_is_provisional_until_its_bar_is_final_then_pending():
+    row = _live_row([_trade('2026-11-16 10:00', 22680.0, stop=22570.0)])
+    sizing = {'lots': 4, 'stop_pts': 110.0}
+    a = actions.product_actions(row, sizing, {}, now=pd.Timestamp('2026-11-16 10:20'))[0]
+    assert a['state'] == 'forming' and a['final_at'] == pd.Timestamp('2026-11-16 10:29')
+    a = actions.product_actions(row, sizing, {}, now=pd.Timestamp('2026-11-16 10:31'))[0]
+    assert a['state'] == 'pending'
+    assert a['ticket'] == 'al2612 · Buy Open 买开 · 4 lots · limit 22,710'   # last + 2 ticks of 5
+    assert a['drift_frac'] == pytest.approx(20 / 110)
+
+
+def test_bar_final_time_stops_at_the_lunch_break_and_the_close():
+    row = _live_row([_trade('2026-11-16 11:00', 22680.0), ], candidate='MA@1h')
+    assert actions.product_actions(row, {'lots': 1, 'stop_pts': 1}, {})[0]['final_at'] == pd.Timestamp('2026-11-16 11:30')
+    row = _live_row([_trade('2026-11-16 15:00', 22680.0)], candidate='MA@1h')
+    assert actions.product_actions(row, {'lots': 1, 'stop_pts': 1}, {})[0]['final_at'] == pd.Timestamp('2026-11-16 15:00')
+
+
+def test_ticket_states_follow_what_you_marked_done():
+    t = _trade('2026-11-16 10:00', 22680.0, exit_t='2026-11-16 11:00', exit_px=22700.0)
+    row = _live_row([t], closed=True)
+    sizing = {'lots': 4, 'stop_pts': 110.0}
+    op, cl = actions.product_actions(row, sizing, {})
+    assert (op['state'], cl['state']) == ('missed', 'missed')    # strategy round-tripped before you acted
+    log = {op['key']: {'done': True, 'lots': 3, 'fill': 22685.0}}
+    op, cl = actions.product_actions(row, sizing, log)
+    assert (op['state'], cl['state']) == ('done', 'pending') and cl['lots'] == 3
+    assert cl['ticket'].startswith('al2612 · Sell Close today 卖平今 · 3 lots')
+    assert op['slip_ticks'] == pytest.approx(1.0)
+    log[cl['key']] = {'done': True, 'fill': 22705.0}
+    acts = actions.product_actions(row, sizing, log)
+    assert actions.held_positions(acts) == {}
+    assert actions.your_pnl_cny(acts, {'AL': 22700.0}) == pytest.approx((22705 - 22685) * 3 * 5)
+
+
+def test_unsized_open_is_not_a_ticket_to_trade():
+    row = _live_row([_trade('2026-11-16 10:00', 22680.0)])
+    a = actions.product_actions(row, {'lots': 0, 'stop_pts': 110.0}, {}, now=pd.Timestamp('2026-11-16 11:00'))[0]
+    assert a['state'] == 'unsized'
+
+
+def test_stop_hit_close_is_never_provisional():
+    t = _trade('2026-11-16 10:00', 22680.0, exit_t='2026-11-16 10:30', exit_px=22570.0, stop=22570.0)
+    row = _live_row([t])
+    log = {actions.action_key('AL', t['entry_t'], 'open'): {'done': True, 'lots': 2}}
+    cl = actions.product_actions(row, {'lots': 2, 'stop_pts': 110.0}, log, now=pd.Timestamp('2026-11-16 10:35'))[1]
+    assert cl['state'] == 'pending'
+    held = actions.held_positions(actions.product_actions(row, {'lots': 2, 'stop_pts': 110.0}, log))
+    assert actions.flatten_items(held)[0] == {'product': 'AL', 'close': '15:00',
+                                              'text': 'al2612 · Sell Close today 卖平今 · 2 lots'}
+
+
+def test_manual_log_round_trip(tmp_path):
+    manual_log.set_done('2026-11-16', 'AL|10:00|open', True, lots=4, log_dir=str(tmp_path))
+    manual_log.set_fill('2026-11-16', 'AL|10:00|open', 22685, log_dir=str(tmp_path))
+    rec = manual_log.load_log('2026-11-16', log_dir=str(tmp_path))['AL|10:00|open']
+    assert rec['done'] and rec['lots'] == 4 and rec['fill'] == 22685.0
+    manual_log.set_done('2026-11-16', 'AL|10:00|open', False, log_dir=str(tmp_path))
+    rec = manual_log.load_log('2026-11-16', log_dir=str(tmp_path))['AL|10:00|open']
+    assert not rec['done'] and rec['fill'] == 22685.0
+
+
+# ── Held-overnight comparison in the walk-forward and Research ────────────────────────────────────
+from futures.backtest import walkforward as wfmod
+from web.tabs.futures_desk import research
+
+
+def _text(c):
+    if isinstance(c, (str, int, float)):
+        return str(c)
+    if c is None:
+        return ''
+    if isinstance(c, (list, tuple)):
+        return ' '.join(_text(x) for x in c)
+    return _text(getattr(c, 'children', None))
+
+
+def _wf_with_overnight(over_pooled, over_dd, over_wd, with_block=True):
+    row = {'pooled': 1.0, 'se': 1.3, 'passes': True, 'per_contract': {'AU2612': 2.0}, 'trades_per_day': 1.0,
+           'win': 0.5, 'payoff': 1.0, 'expectancy_bp': 1.0, 'exits': None, 'total_return': 0.1, 'max_dd': 0.05,
+           'worst_day': -0.02, 'trades': 50}
+    if with_block:
+        row['overnight'] = {'pooled': over_pooled, 'se': 1.3, 'per_contract': {'AU2612': over_pooled}, 'trades': 20,
+                            'total_return': 0.1, 'max_dd': over_dd, 'worst_day': over_wd, 'trades_per_day': 0.5}
+    return {'product': 'AU', 'run_at': 'x', 'cost_bp': 1.0, 'half_spread_bp': 0.5, 'fee_bp': 0.5, 'exits': None,
+            'days': 100, 'last_day': '2026-11-13', 'gates': {'min_contract_days': 15, 'min_trades': 30},
+            'contracts': {'AU2612': {'days': 40}}, 'rows': {'SAR@30min': row}, 'daily': None}
+
+
+def test_overnight_summary_calls_a_small_difference_noise_and_flags_bigger_gap_risk():
+    wf = _wf_with_overnight(1.1, 0.12, -0.05)
+    out = _text(research.wf_table(wf))
+    assert 'inside one SE' in out and 'drawdown and worst day are at least 25% larger overnight' in out
+    assert 'Flat vs held overnight by contract: SAR@30min' in out and 'AU2612' in out
+
+
+def test_overnight_summary_says_so_when_overnight_is_clearly_worse():
+    out = _text(research.wf_table(_wf_with_overnight(-1.0, 0.05, -0.02)))
+    assert 'worse by more than one SE' in out
+
+
+def test_overnight_summary_asks_for_a_rerun_on_an_old_walkforward():
+    out = _text(research.wf_table(_wf_with_overnight(0, 0, 0, with_block=False)))
+    assert 'run before the comparison existed' in out
+
+
+def test_walkforward_rows_carry_a_held_overnight_block(tmp_path):
+    _cache_contracts(tmp_path, contracts=('AU2604', 'AU2606'), days=22)
+    wf = wfmod.run_walkforward('AU', bar_dir=tmp_path, tick_dir=tmp_path / 'none')
+    assert wf['rows']
+    for r in wf['rows'].values():
+        ov = r['overnight']
+        assert set(ov) >= {'pooled', 'se', 'per_contract', 'max_dd', 'worst_day', 'total_return'}
+        assert r['max_dd'] >= 0 and r['worst_day'] <= 0
