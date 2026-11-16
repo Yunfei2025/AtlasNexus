@@ -64,3 +64,35 @@ def test_fit_enforces_the_cap_when_shrinking_does_not_shrink_the_netted_margin()
     out = _fit_notionals_to_margin(n, _netted_margin, cap, 10.0)
     assert _netted_margin(out) <= cap + 1e-9
     assert (out.abs() <= n.abs()).all() and (out % 10.0 == 0).all()
+
+
+from web.tabs.alpha.callbacks.portfolio import _floor_to_lot
+
+
+def test_small_weight_row_survives_when_scale_up_lifts_it_above_a_lot():
+    # CGB-10s30s case: weight 0.77% of 1000 = 7.7 MM (< 10 MM lot) but Step B scales ~15x.
+    sign = pd.Series([1.0, 1.0, -1.0])
+    mask = pd.Series([True, True, True])
+    raw = pd.Series([7.7, 130.0, 20.0])
+    unrounded = _scale_notionals_to_capital(raw, sign, mask, 1000.0, 10.0, floor_to_lot=False)
+    final = _floor_to_lot(unrounded, 10.0)
+    assert unrounded[0] > 10.0 and final[0] >= 10.0        # not zeroed
+    assert (final % 10.0 == 0).all()
+
+
+def test_row_still_under_one_lot_after_scaling_is_floored_to_zero():
+    out = _floor_to_lot(pd.Series([7.7, -7.7, 25.0, -25.0]), 10.0)
+    assert list(out) == [0.0, 0.0, 20.0, -20.0]
+
+
+from web.tabs.alpha.data.duration import _get_duration_mult, _tenor_to_duration
+
+
+@pytest.mark.parametrize('inst,tenor', [
+    ('CGB-10s30s', '30y'), ('CGB-10s20s', '20y'), ('CDB-5s10s', '10y'), ('CGB-2s5s', '5y'),
+    ('CGB-30s10s', '30y'),                      # reversed ID order: still the long tenor
+    ('CDBCGB-10y', '10y'),                      # single tenor
+    ('CGB-5s10s20s', '10y'), ('CDB-1s2s5s', '2y'), ('CGB-10s20s30s', '20y'),   # fly: belly
+])
+def test_tenorspread_duration_is_leg1_long_tenor_or_fly_belly(inst, tenor):
+    assert _get_duration_mult(inst, 'TenorSpread') == _tenor_to_duration(tenor)

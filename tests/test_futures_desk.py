@@ -1,4 +1,5 @@
 import numpy as np
+import shutil
 import pandas as pd
 import pytest
 
@@ -75,7 +76,7 @@ def test_walkforward_roundtrip(tmp_path):
 
 
 # ── Today: book sizing and selection ────────────────────────────────────────────────────────────
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from web.tabs.futures_desk import pool, pool_corr
 
@@ -84,7 +85,7 @@ def _fake_world(monkeypatch, approved, close, pnl):
     monkeypatch.setattr(pool.approvals, 'load_approved', lambda path=None: approved)
     monkeypatch.setattr(pool, 'daily_panels', lambda: (close, close))
     monkeypatch.setattr(pool, 'pnl_panel', lambda cands: pnl[list(cands)])
-    monkeypatch.setattr(pool, 'intraday_state', lambda prod, cand, exits=None: {
+    monkeypatch.setattr(pool, 'intraday_state', lambda prod, cand, exits=None, **kw: {
         'contract': f'{prod}2612', 'last_price': 100.0, 'last_time': datetime(2026, 11, 4, 15, 30),
         'signal': 1.0, 'since': pd.Timestamp('2026-11-04 10:00'), 'entry_price': 98.0})
 
@@ -552,7 +553,7 @@ def test_live_fetch_after_close_is_once_and_only_when_wind_enabled(tmp_path, mon
     sat = live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 6, 8, 0), **kw)        # before the next open: still Thursday's file
     assert len(wind.calls) == 1 and again['products']['AU']['new'] == 0 and sat['products']['AU']['new'] == 0
     hist = _wind_frame('2026-11-03', '09:00', '14:59').rename(columns=str.lower).assign(hs_bp=np.float32('nan'))
-    monkeypatch.setattr(monitor, 'load_minute_bars', lambda c: hist)
+    monkeypatch.setattr(monitor, 'load_minute_bars', lambda c, **kw: hist)
     monkeypatch.setattr(monitor, 'load_live', lambda c, d=None: live_bars.load_live(c, tmp_path))
     monkeypatch.setattr(monitor, 'live_meta_for', lambda p, d=None: live_bars.live_meta_for(p, tmp_path))
     monkeypatch.setattr(monitor, 'STRATEGIES', {'SAR': lambda df: df.assign(signal=1.0)})
@@ -652,7 +653,7 @@ def test_live_state_position_stop_and_day_return(tmp_path, monkeypatch):
     live.loc[pd.Timestamp('2026-11-05 10:35'), 'low'] -= 3.0     # a dip inside the 10:30 bar: low ~3% under
     live_bars.fetch_live_bars(['AU'], now=datetime(2026, 11, 5, 11, 0), codes=CODES, is_trading=lambda n: True,
                               wsi=_FakeWind(live.rename(columns=str.upper)), live_dir=tmp_path)
-    monkeypatch.setattr(monitor, 'load_minute_bars', lambda c: hist)
+    monkeypatch.setattr(monitor, 'load_minute_bars', lambda c, **kw: hist)
     monkeypatch.setattr(monitor, 'load_live', lambda c, d=None: live_bars.load_live(c, tmp_path))
     monkeypatch.setattr(monitor, 'live_meta_for', lambda p, d=None: live_bars.live_meta_for(p, tmp_path))
 
@@ -932,3 +933,489 @@ def test_walkforward_rows_carry_a_held_overnight_block(tmp_path):
         ov = r['overnight']
         assert set(ov) >= {'pooled', 'se', 'per_contract', 'max_dd', 'worst_day', 'total_return'}
         assert r['max_dd'] >= 0 and r['worst_day'] <= 0
+
+
+# ── Night session joined to the trading day ──────────────────────────────────────────────────────────────────
+from futures.backtest import night as night_mod
+
+
+def _night_bars(day, base=800.0):
+    f = _night_frame(day, base=base)
+    f.columns = [c.lower() for c in f.columns]
+    f['hs_bp'] = np.float32('nan')
+    return f
+
+
+def test_night_joins_the_next_trade_day_and_friday_goes_to_monday():
+    days = pd.DatetimeIndex(['2026-11-12', '2026-11-13', '2026-11-16'])
+    nights = pd.concat([_night_bars('2026-11-12'), _night_bars('2026-11-13')])
+    sh = night_mod.night_to_trade_day(nights, days)
+    assert set(sh.index.normalize().unique()) == {pd.Timestamp('2026-11-13'), pd.Timestamp('2026-11-16')}   # Thu night -> Fri, Fri night -> Mon
+    assert (sh.index - sh.index.normalize()).max() <= pd.Timedelta(hours=5, minutes=30) and sh.index.is_monotonic_increasing
+    # the newest night has no later day session yet: dropped
+    assert night_mod.night_to_trade_day(_night_bars('2026-11-16'), days).empty
+    day = pd.DataFrame({'open': 1.0, 'high': 1.0, 'low': 1.0, 'close': 1.0, 'volume': 1.0, 'hs_bp': 0.3},
+                       index=pd.date_range('2026-11-13 09:00', periods=10, freq='1min'))
+    both = night_mod.with_night(day, _night_bars('2026-11-12'))
+    assert both.index.min() < pd.Timestamp('2026-11-13 06:00') and both.index.max() == day.index.max()
+    assert list(night_mod.night_trade_days(both)) == [pd.Timestamp('2026-11-13')]
+    assert night_mod.with_night(day, None) is day
+
+
+def test_backfill_night_fetches_each_night_once_and_never_touches_the_live_files(tmp_path):
+    class Wind:
+        def __init__(self): self.calls = []
+        def __call__(self, code, fields, s, e, *a):
+            self.calls.append((code, s))
+            return _night_frame(s[:10])
+    wind = Wind()
+    kw = dict(products=['AU'], days=3, now=datetime(2026, 11, 16, 12, 0), wsi=wind, codes=CODES, live_dir=tmp_path)
+    r = live_bars.backfill_night(**kw)
+    assert r['fetched'] == 3 and len(wind.calls) == 3 and r['nights'] == ['2026-11-13', '2026-11-12', '2026-11-11']
+    again = live_bars.backfill_night(**kw)
+    assert again['fetched'] == 0 and again['skipped'] == 3 and len(wind.calls) == 3          # repeat costs nothing
+    assert live_bars._night_index(tmp_path) == {} and not (tmp_path / 'AU2612_night.parquet').exists()
+    assert night_mod.load_night_history('AU2612', tmp_path).index.normalize().nunique() >= 3
+    assert live_bars.backfill_night(wind_off=lambda: True, now=datetime(2026, 11, 16), live_dir=tmp_path)['errors']
+
+
+def test_night_walkforward_is_separate_gated_and_compares_on_the_same_days(tmp_path):
+    ticks, bars, live = tmp_path / 'ticks', tmp_path / 'bars', tmp_path / 'live'
+    ticks.mkdir()
+    _cache_contracts(bars)
+    first = pd.bdate_range('2026-01-05', periods=25)
+    nights = pd.concat([_night_bars(str(d.date())) for d in first[:10]])
+    (live / 'night_history').mkdir(parents=True)
+    nights.to_parquet(live / 'night_history' / 'AU2604.parquet')
+    day = walkforward.run_walkforward('AU', tick_dir=ticks, bar_dir=bars)
+    nt = walkforward.run_walkforward('AU', tick_dir=ticks, bar_dir=bars, night=True, live_dir=live)
+    assert day['session'] == 'day' and nt['session'] == 'night+day' and nt['night_days'] >= 8
+    assert not any(r['passes'] for r in nt['rows'].values())            # < MIN_NIGHT_DAYS nights can never pass
+    cmp_ = next(iter(nt['rows'].values()))['night_cmp']
+    assert cmp_['days'] == nt['night_days'] or cmp_['days'] <= nt['night_days']
+    out = tmp_path / 'out'
+    walkforward.save_walkforward(day, out); walkforward.save_walkforward(nt, out)
+    assert walkforward.load_walkforward('AU', out)['session'] == 'day'
+    assert walkforward.load_walkforward('AU', out, night=True)['session'] == 'night+day'
+    with pytest.raises(ValueError):
+        walkforward.run_walkforward('TL', tick_dir=ticks, bar_dir=bars, night=True)
+
+
+def test_night_bars_live_in_the_cached_file_and_the_default_load_is_day_only(tmp_path):
+    ticks, bars, live = tmp_path / 'ticks', tmp_path / 'bars', tmp_path / 'live'
+    ticks.mkdir()
+    _cache_contracts(bars)
+    day_before = pd.read_parquet(bars / 'AU2604.parquet')
+    first = pd.bdate_range('2026-01-05', periods=25)
+    (live / 'night_history').mkdir(parents=True)
+    pd.concat([_night_bars(str(d.date())) for d in first[:10]]).to_parquet(live / 'night_history' / 'AU2604.parquet')
+    both = minute_bars.load_minute_bars('AU2604', ticks, bars, night=True, live_dir=live)
+    assert len(both) > len(day_before) and night_mod.night_trade_days(both).size == 10
+    assert len(pd.read_parquet(bars / 'AU2604.parquet')) == len(both)                         # one cached file holds both
+    day = minute_bars.load_minute_bars('AU2604', ticks, bars, live_dir=live)
+    pd.testing.assert_frame_equal(day, day_before)                                            # default = exactly the old day bars
+    # unchanged night history: no rewrite; a new night re-joins without any tick file
+    mt = (bars / 'AU2604.parquet').stat().st_mtime_ns
+    minute_bars.load_minute_bars('AU2604', ticks, bars, night=True, live_dir=live)
+    assert (bars / 'AU2604.parquet').stat().st_mtime_ns == mt
+    pd.concat([_night_bars(str(d.date())) for d in first[:12]]).to_parquet(live / 'night_history' / 'AU2604.parquet')
+    again = minute_bars.load_minute_bars('AU2604', ticks, bars, night=True, live_dir=live)
+    assert night_mod.night_trade_days(again).size == 12 and len(minute_bars.load_minute_bars('AU2604', ticks, bars, live_dir=live)) == len(day_before)
+
+
+# ── Force-approving a night + day candidate ──────────────────────────────────────────────────────────────────
+def _night_wf(passes_ex=True, passes=False, night_days=6):
+    row = {'pooled': 1.2, 'se': 1.3, 'per_contract': {'AU2612': 1.0}, 'trades': 40, 'win': 0.5, 'payoff': 1.2,
+           'expectancy_bp': 2.0, 'exits': None, 'passes': passes, 'passes_ex_night': passes_ex}
+    return {'rows': {'SAR@30min': row}, 'session': 'night+day', 'night_days': night_days, 'cost_bp': 0.4,
+            'run_at': 'now', 'last_day': '2026-11-13', 'exits': None, 'daily_pnl': {'SAR@30min': {'2026-11-12': 0.001}},
+            'gates': {'min_night_days': 60}}
+
+
+def test_force_approve_only_overrides_the_night_days_gate(tmp_path):
+    path = tmp_path / 'approved.json'
+    with pytest.raises(ValueError, match='Force approve'):
+        approvals.approve('AU', 'SAR@30min', _night_wf(), path)
+    with pytest.raises(ValueError, match='day gates'):
+        approvals.approve('AU', 'SAR@30min', _night_wf(passes_ex=False), path, force=True)
+    rec = approvals.approve('AU', 'SAR@30min', _night_wf(), path, force=True)
+    assert rec['session'] == 'night+day' and rec['forced'] is True and rec['night_days'] == 6
+    day = _night_wf(); day['session'] = 'day'
+    assert approvals.approve('AU', 'SAR@30min', {**day, 'rows': {'SAR@30min': {**day['rows']['SAR@30min'], 'passes': True}}}, path)['session'] == 'day'
+
+
+def test_night_day_strategy_is_replayed_on_joined_bars_with_real_night_times(tmp_path, monkeypatch):
+    ticks, bars, live = tmp_path / 'ticks', tmp_path / 'bars', tmp_path / 'live'
+    ticks.mkdir()
+    _cache_contracts(bars, contracts=('AU2612',), days=12)
+    (live / 'night_history').mkdir(parents=True)
+    first = pd.bdate_range('2026-01-05', periods=12)
+    pd.concat([_night_bars(str(d.date())) for d in first[:6]]).to_parquet(live / 'night_history' / 'AU2612.parquet')
+    monkeypatch.setattr(minute_bars, 'BAR_DIR', bars)
+    monkeypatch.setattr(minute_bars, 'TICK_DIR', ticks)
+    monkeypatch.setattr(walkforward.minute_bars, 'BAR_DIR', bars)
+    joined = minute_bars.load_minute_bars('AU2612', ticks, bars, night=True, live_dir=live)
+    days = pd.DatetimeIndex(sorted(set(joined.index[(joined.index - joined.index.normalize()) >= night_mod.DAY_OPEN].normalize())))
+    # a night stamp goes back to 21:00 + offset of the previous trade date; a day stamp is unchanged
+    assert night_mod.unshift(pd.Timestamp('2026-01-07 00:00'), days) == pd.Timestamp('2026-01-06 21:00')
+    assert night_mod.unshift(pd.Timestamp('2026-01-12 02:00'), days) == pd.Timestamp('2026-01-09 23:00')   # Fri night -> Mon
+    assert night_mod.unshift(pd.Timestamp('2026-01-07 10:00'), days) == pd.Timestamp('2026-01-07 10:00')
+    rec = {'candidate': 'SAR@30min', 'cost_bp': 0.4, 'exits': None, 'session': 'night+day'}
+    assert monitor.is_night_day(rec) and not monitor.is_night_day({'candidate': 'SAR@30min'})
+    st = monitor._session_state('AU', 'AU2612', rec, joined, pd.Timestamp('2026-01-07'), True, '2026-01-07 15:00:00')
+    st = monitor._unshifted(st, joined)
+    assert st['session'] == 'night+day' and st['bars'].index.min() == pd.Timestamp('2026-01-06 21:00')
+    assert all(t['entry_t'] >= pd.Timestamp('2026-01-06 21:00') for t in st['trades'])
+
+
+def test_night_led_state_is_the_coming_trade_day_with_real_times(tmp_path, monkeypatch):
+    bars_dir, live = tmp_path / 'bars', tmp_path / 'live'
+    _cache_contracts(bars_dir, contracts=('AU2612',), days=12)
+    monkeypatch.setattr(minute_bars, 'BAR_DIR', bars_dir)
+    monkeypatch.setattr(minute_bars, 'TICK_DIR', tmp_path / 'ticks')
+    last_day = pd.bdate_range('2026-01-05', periods=12)[-1]                     # Mon 2026-01-19
+    eve = last_day + pd.offsets.BDay(0)
+    wind = _FakeWind(_night_frame(str(last_day.date()), base=500.0))
+    live_bars.fetch_night_bars(['AU'], now=datetime.combine(last_day.date(), datetime.min.time()) + timedelta(hours=23, minutes=30),
+                               wsi=wind, codes=CODES, live_dir=live, wind_off=lambda: False)
+    monkeypatch.setattr(monitor, 'STRATEGIES', {'SAR': lambda df: df.assign(signal=1.0)})
+    rec = {'candidate': 'SAR@30min', 'cost_bp': 0.4, 'exits': None, 'session': 'night+day'}
+    now = datetime.combine(last_day.date(), datetime.min.time()) + timedelta(hours=23, minutes=30)
+    st = monitor.night_led_state('AU', rec, now=now, live_dir=live)
+    assert st['day'] == last_day + pd.offsets.BDay(1) and st['position'] == 1 and not st['closed']
+    assert st['bars'].index.min() >= pd.Timestamp(f'{last_day:%Y-%m-%d} 21:00')          # real evening time, not 00:00 of the trade day
+    assert st['trades'] and st['trades'][0]['entry_t'] >= pd.Timestamp(f'{last_day:%Y-%m-%d} 21:00')
+    assert monitor.night_led_state('AU', rec, now=now.replace(hour=12), live_dir=live) is None           # day session hours
+    assert monitor.night_led_state('TL', rec, now=now, live_dir=live) is None
+
+
+@pytest.fixture(autouse=True)
+def _no_real_bar_cache_for_night_contracts(request, monkeypatch):
+    """The night fetch picks its contract by volume from the real bar cache; tests pin the contract list instead."""
+    if 'roll' not in request.node.name:
+        monkeypatch.setattr(live_bars, 'night_contract_of', lambda product, night_date, dvol=None: None)
+
+
+def test_night_roll_goes_to_the_contract_that_is_main_on_the_next_day(tmp_path, monkeypatch):
+    days = pd.bdate_range('2026-11-02', periods=10)
+    dvol = pd.DataFrame({'AL2612': [900.0] * 6 + [100.0] * 4, 'AL2701': [100.0] * 6 + [900.0] * 4}, index=days)
+    assert night_mod.main_after(dvol, '2026-11-02') == 'AL2612'                 # night of Mon 11-02 belongs to Tue 11-03
+    assert night_mod.main_after(dvol, '2026-11-09') == 'AL2701'                 # after the roll
+    assert night_mod.main_after(dvol, '2026-12-31') == 'AL2701'                 # tonight: last known main
+    assert night_mod.main_after(None, '2026-11-02') is None and night_mod.main_after(dvol.iloc[0:0], '2026-11-02') is None
+
+    class Wind:
+        def __init__(self): self.calls = []
+        def __call__(self, code, fields, s, e, *a):
+            self.calls.append((code, s[:10]))
+            return _night_frame(s[:10])
+    wind = Wind()
+    monkeypatch.setattr(night_mod, 'daily_volume', lambda product, *a, **k: dvol)
+    live_bars.backfill_night(products=['AL'], days=4, now=datetime(2026, 11, 12, 12, 0), wsi=wind,
+                             codes=['AL2612.SHF'], live_dir=tmp_path)          # the list still says AL2612
+    by_night = dict((d, c) for c, d in wind.calls)
+    assert by_night['2026-11-06'] == 'AL2612.SHF' and by_night['2026-11-09'] == 'AL2701.SHF'   # Fri night -> Mon (volume main AL2612 until 11-09)
+    assert night_mod.load_night_history('AL2701', tmp_path) is not None
+
+
+@pytest.fixture(autouse=True)
+def _slice_dir_in_tmp(tmp_path_factory, monkeypatch):
+    monkeypatch.setattr(minute_bars, 'SLICE_DIR', tmp_path_factory.mktemp('slice'))
+
+
+def test_monitor_slice_is_append_only_and_stands_in_for_a_missing_cache(tmp_path, monkeypatch):
+    bars = tmp_path / 'bars'
+    _cache_contracts(bars, contracts=('AU2604', 'AU2606'), days=40)
+    monkeypatch.setattr(minute_bars, 'BAR_DIR', bars)
+    approved = {'AU': {'wf_last_day': '2026-02-20', 'candidate': 'SAR@30min'}}
+    r = minute_bars.export_monitor_slice(approved)
+    n1 = sorted(p.name for p in (minute_bars.SLICE_DIR / 'AU2604').iterdir())
+    assert r['written'] > 10 and n1 and len(n1) <= 40
+    again = minute_bars.export_monitor_slice(approved)
+    assert again['written'] == 0 and again['removed'] == 0                                 # nothing changes -> nothing rewritten
+    # a computer with no cache: the slice answers load / list / index / last bar time
+    full = minute_bars.load_minute_bars('AU2604')
+    shutil.rmtree(bars)
+    got = minute_bars.load_minute_bars('AU2604')
+    assert got.index.min() >= full.index.min() and got.index.max() == full.index.max()
+    pd.testing.assert_frame_equal(got, full.loc[got.index.min():])
+    assert 'AU2604' in minute_bars.list_contracts('AU') and minute_bars.last_bar_time('AU') >= full.index.max()
+    assert minute_bars.load_minute_bars('XX2612') is None
+
+
+def test_monitor_replay_on_the_slice_matches_the_full_cache(tmp_path, monkeypatch):
+    bars = tmp_path / 'bars'
+    _cache_contracts(bars, contracts=('AU2604',), days=60)
+    monkeypatch.setattr(minute_bars, 'BAR_DIR', bars)
+    monkeypatch.setattr(walkforward.minute_bars, 'BAR_DIR', bars)
+    rec = {'candidate': 'SAR@30min', 'cost_bp': 0.4, 'exits': None, 'wf_last_day': '2026-02-27'}
+    full = monitor.forward_replay('AU', rec)
+    minute_bars.export_monitor_slice({'AU': rec})
+    shutil.rmtree(bars)
+    sliced = monitor.forward_replay('AU', rec)
+    assert len(full['series']) > 5
+    pd.testing.assert_series_equal(sliced['series'], full['series'])
+    assert sliced['trades'] == full['trades']
+
+
+@pytest.fixture(autouse=True)
+def _portfolio_in_tmp(tmp_path_factory, monkeypatch):
+    d = tmp_path_factory.mktemp('pf')
+    monkeypatch.setattr(approvals, 'PORTFOLIO_PATH', d / 'portfolio.json')
+    monkeypatch.setattr(approvals, 'APPROVED_PATH', d / 'approved.json')   # never touch the real approvals
+    monkeypatch.setattr(approvals, 'DAILY_PATH', d / 'approved_daily.json')
+
+
+def test_portfolio_is_explicit_and_edited_without_touching_approvals(monkeypatch):
+    close = _close(['AU.SHF', 'TL.CFE', 'IC.CFE'])
+    approved = {p: {'candidate': 'SAR@30min', 'status': 'approved', 'pooled_sharpe': 1.0} for p in ('AU', 'TL', 'IC')}
+    pnl = pd.DataFrame(np.random.default_rng(1).normal(size=(60, 3)), columns=['AU', 'TL', 'IC'],
+                       index=pd.bdate_range('2026-08-01', periods=60))
+    _fake_world(monkeypatch, approved, close, pnl)
+    assert pool.select_book()['chosen'] == ['AU', 'TL', 'IC'] and approvals.load_portfolio() is None   # nothing saved: legacy
+    gone = []
+    monkeypatch.setattr(approvals, 'remove', lambda p, path=None: gone.append(p))
+    assert pool.remove_from_portfolio('TL') == ['AU', 'IC'] and gone == ['TL']                         # first edit saves the list; the approval is deleted too
+    assert approvals.load_portfolio() == ['AU', 'IC']
+    sel = pool.select_book()
+    assert sel['chosen'] == ['AU', 'IC'] and sel['explicit'] and sel['excluded'] == []
+    book = pool.build_book(10_000_000, 0.25, 0.5, 1.0, today=datetime(2026, 11, 5))
+    assert [r['product'] for r in book['rows']] == ['AU', 'IC']
+    assert pool.add_to_portfolio('TL') == ['AU', 'IC', 'TL']
+    for bad, msg in (('TL', 'already'), ('ZZ', 'no approved strategy')):
+        with pytest.raises(ValueError, match=msg):
+            pool.add_to_portfolio(bad)
+    with pytest.raises(ValueError, match='not in the portfolio'):
+        pool.remove_from_portfolio('ZZ')
+    approved['IC']['status'] = 'halted'                                                                # a halted member stops trading
+    assert pool.select_book()['chosen'] == ['AU', 'TL'] and pool.select_book()['halted'] == ['IC']
+    del approved['AU']                                                                                 # a removed approval is reported
+    sel = pool.select_book()
+    assert sel['chosen'] == ['TL'] and 'AU' in sel['missing']
+    for p in ('A1', 'A2', 'A3', 'A4', 'A5'):
+        approved[p] = {'candidate': 'SAR@30min', 'status': 'approved', 'pooled_sharpe': 1.0}
+    approvals.save_portfolio(['TL', 'A1', 'A2', 'A3', 'A4'])
+    with pytest.raises(ValueError, match='at most 5'):
+        pool.add_to_portfolio('A5')
+    with pytest.raises(ValueError, match='halted'):
+        pool.add_to_portfolio('IC')
+
+
+def test_approving_puts_the_product_in_the_portfolio(monkeypatch):
+    from web.tabs.futures_desk import research
+    close = _close(['AU.SHF', 'TL.CFE'])
+    approved = {p: {'candidate': 'SAR@30min', 'status': 'approved', 'pooled_sharpe': 1.0} for p in ('AU', 'TL')}
+    _fake_world(monkeypatch, approved, close, pd.DataFrame())
+    approvals.save_portfolio(['AU'])
+    assert 'Added to the Portfolio (AU, TL)' in research.portfolio_message('TL')
+    assert 'Already in the Portfolio' in research.portfolio_message('TL')                 # re-approving a member changes only its strategy
+    approvals.save_portfolio(['A1', 'A2', 'A3', 'A4', 'A5'])
+    assert 'Not added to the Portfolio' in research.portfolio_message('AU') and approvals.load_portfolio() == ['A1', 'A2', 'A3', 'A4', 'A5']
+
+
+def test_monitor_follows_the_portfolio_only(monkeypatch):
+    monkeypatch.setattr(approvals, 'load_approved', lambda path=None: {'AU': {'candidate': 'SAR@30min'}, 'TL': {'candidate': 'SAR@30min'}})
+    seen = []
+    monkeypatch.setattr(monitor, 'export_monitor_slice', lambda a: seen.append(sorted(a)))
+    monkeypatch.setattr(monitor, 'evidence_moments', lambda p, r: (_ for _ in ()).throw(ValueError('stop')))
+    approvals.save_portfolio(['AU'])
+    assert [r['product'] for r in monitor.monitor_rows()] == ['AU'] and seen == [[]]
+
+
+def test_night_day_row_renders_in_the_live_monitor_and_makes_tickets(tmp_path, monkeypatch):
+    from web.tabs.futures_desk import live_ui
+    bars_dir, live = tmp_path / 'bars', tmp_path / 'live'
+    _cache_contracts(bars_dir, contracts=('AU2612',), days=12)
+    monkeypatch.setattr(minute_bars, 'BAR_DIR', bars_dir)
+    monkeypatch.setattr(minute_bars, 'TICK_DIR', tmp_path / 'ticks')
+    last_day = pd.bdate_range('2026-01-05', periods=12)[-1]
+    now = datetime.combine(last_day.date(), datetime.min.time()) + timedelta(hours=23, minutes=30)
+    live_bars.fetch_night_bars(['AU'], now=now, wsi=_FakeWind(_night_frame(str(last_day.date()), base=500.0)),
+                               codes=CODES, live_dir=live, wind_off=lambda: False)
+    monkeypatch.setattr(monitor, 'STRATEGIES', {'SAR': lambda df: df.assign(signal=1.0)})
+    rec = {'candidate': 'SAR@30min', 'cost_bp': 0.4, 'exits': None, 'session': 'night+day'}
+    row = monitor.night_led_state('AU', rec, now=now, live_dir=live)
+    fig = live_ui.live_chart(row)
+    assert 'night + day' in fig.layout.title.text and fig.data[0].x[0].startswith('21:')      # starts at the evening open
+    assert live_ui.live_view([row], {}, None, now=now) is not None
+    acts = live_ui.product_actions(row, {'lots': 2, 'stop_pts': 5.0}, {}, now=now)
+    assert acts and acts[0]['kind'] == 'open' and acts[0]['time'] >= pd.Timestamp(f'{last_day:%Y-%m-%d} 21:00')
+    assert acts[0]['state'] in ('pending', 'forming') and 'AU' in acts[0]['ticket'].upper()
+
+
+def test_halt_streak_is_judged_against_the_strategys_own_backtest():
+    mean, std = 0.001, 0.01
+    s8 = _days([0.01] * 6 + [-0.0001] * 8)
+    plain = monitor.assess(s8, mean, std, halt_losses=5)
+    assert plain['status'] == 'halted' and plain['halt_at'] == 5
+    own = monitor.assess(s8, mean, std, halt_losses=5, max_streak=8)            # its backtest lost 8 in a row once
+    assert own['status'] == 'watch' and own['halt_at'] == 9 and "longest run was 8" in own['reasons'][0]
+    assert monitor.assess(_days([0.01] * 6 + [-0.0001] * 9), mean, std, halt_losses=5, max_streak=8)['status'] == 'halted'
+    assert monitor.assess(s8.iloc[:-3], mean, std, halt_losses=5, max_streak=8)['status'] == 'ok'     # 5 in a row: below its watch line (7)
+    assert monitor.assess(s8, mean, std, halt_losses=5, max_streak=3)['halt_at'] == 5                 # never below the user's number
+    assert monitor.longest_losing_run(_days([-1, -1, 0, -1, 1, -1])) == 3
+    assert approvals._longest_losing_run(pd.Series([-1.0, -1.0, 0.0, -1.0, 1.0, -1.0])) == 3
+
+
+def test_clicking_a_walk_forward_candidate_resolves_its_walk_forward(tmp_path, monkeypatch):
+    from web.tabs.futures_desk import research
+    walkforward.save_walkforward({'product': 'AU', 'rows': {'SAR@30min': {}}, 'cost_bp': 0.4, 'exits': None}, tmp_path)
+    monkeypatch.setattr(research, 'DESK_DIR', tmp_path)
+    monkeypatch.setattr(research, 'list_contracts', lambda p: ['AU2612'])
+    bars = pd.DataFrame({'close': [1.0, 2.0]}, index=pd.to_datetime(['2026-01-05 09:00', '2026-01-06 09:00']))
+    monkeypatch.setattr(research, 'load_minute_bars', lambda c: bars)
+    p = research.drill_payload('SAR@30min', 'AU2612', 'AU2612', 'local', None)     # the default wf_dir: this raised NameError
+    assert p['cand'] == 'SAR@30min' and p['contract'] == 'AU2612' and p['cost_bp'] == 0.4
+
+
+# ── Daily strategies approved next to the intraday one ───────────────────────────────────────────────────────
+from web.tabs.futures_desk import actions as fd_actions, daily as fd_daily, live_ui as fd_live
+
+
+def _daily_frame(n=40, seed=3):
+    rng = np.random.default_rng(seed)
+    idx = pd.bdate_range('2026-01-05', periods=n)
+    c = 800 * np.exp(np.cumsum(rng.normal(0, 0.008, n)))
+    return pd.DataFrame({'open': c * 0.999, 'high': c * 1.004, 'low': c * 0.996, 'close': c, 'volume': 1000.0}, index=idx)
+
+
+def _daily_world(tmp_path, monkeypatch, series_days=36, total=40):
+    """The continuous daily series (AU.SHF) stops `total - series_days` days before today, as the real file lags."""
+    d = _daily_frame(total)
+    path = tmp_path / 'dailyK.pkl'
+    pickle.dump({'AU.SHF': d.iloc[:series_days].rename(columns=str.title)}, open(path, 'wb'))
+    monkeypatch.setattr(walkforward, 'DAILY_FILE', path)
+    monkeypatch.setattr(live_bars, 'LIVE_DIR', tmp_path / 'live')
+    monkeypatch.setattr(fd_daily, 'LIVE_DIR', tmp_path / 'live')
+    monkeypatch.setattr(fd_daily, 'main_contract_codes', lambda: {'AU': 'AU2612.SHF'})
+    return d
+
+
+def _minutes_of(d, upto):
+    """Fake Wind minute bars of the continuous code for the days of `d` after `upto` (3 bars a day)."""
+    rows = []
+    for day, r in d[d.index > upto].iterrows():
+        for k, (o, c) in enumerate(((r['open'], r['high']), (r['low'], r['close']))):
+            rows.append((day + pd.Timedelta(hours=9 + 5 * k, minutes=30), o, max(o, c), min(o, c), c, 500.0))
+    f = pd.DataFrame(rows, columns=['index', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME']).set_index('index')
+    return f
+
+
+def test_daily_series_gets_its_tail_from_the_continuous_code_not_from_contract_bars(tmp_path, monkeypatch):
+    d = _daily_world(tmp_path, monkeypatch)
+    calls = []
+
+    def wsi(code, fields, s, e, *a):
+        calls.append((code, s[:10]))
+        return _minutes_of(d, d.index[35])
+    now = datetime.combine(d.index[-1].date(), datetime.min.time()) + timedelta(hours=14, minutes=30)
+    assert fd_daily.daily_symbol('AU') == 'AU.SHF'
+    assert fd_daily.extended_daily('AU', live_dir=tmp_path / 'live').index.max() == d.index[35]            # no tail yet
+    r = fd_daily.fetch_tail('AU', now=now, wsi=wsi, live_dir=tmp_path / 'live')
+    assert r['rows'] == 4 and calls == [('AU.SHF', str((d.index[35] + pd.Timedelta(days=1)).date()))]       # the continuous code, one call
+    ext = fd_daily.extended_daily('AU', live_dir=tmp_path / 'live')
+    pd.testing.assert_frame_equal(ext[['open', 'high', 'low', 'close']], d[['open', 'high', 'low', 'close']], check_freq=False)
+    # the Live monitor's rule: while the session is open nothing is fetched unless it is running
+    skipped = fd_daily.fetch_tail('AU', now=now, wsi=wsi, live_dir=tmp_path / 'live', closed_only=True)
+    assert 'Start live' in skipped['skipped'] and len(calls) == 1
+    assert fd_daily.fetch_tail('AU', now=now, wsi=lambda *a: pd.DataFrame(), live_dir=tmp_path / 'live')['error']
+    assert fd_daily.fetch_tail('ZZ', now=now, wsi=wsi, live_dir=tmp_path / 'live')['error']
+
+
+def test_daily_signal_is_provisional_on_the_forming_bar_and_stale_without_the_tail(tmp_path, monkeypatch):
+    d = _daily_world(tmp_path, monkeypatch)
+    monkeypatch.setattr(fd_daily, 'STRATEGIES', {'ATR': lambda df: df.assign(signal=(df['close'] > df['close'].shift()).astype(float))})
+    rec = {'candidate': 'ATR@1D', 'cost_bp': 0.4, 'exits': None, 'wf_last_day': str(d.index[30].date())}
+    live = tmp_path / 'live'
+    now = datetime.combine(d.index[-1].date(), datetime.min.time()) + timedelta(hours=14, minutes=30)
+    stale = fd_daily.daily_state('AU', rec, now=now, live_dir=live)
+    assert stale['day'] == d.index[35] and not stale['fresh']                                             # the series ends days ago
+    fd_daily.fetch_tail('AU', now=now, wsi=lambda *a: _minutes_of(d, d.index[35]), live_dir=live)
+    st = fd_daily.daily_state('AU', rec, now=now, live_dir=live)
+    assert st['daily'] and st['key'] == 'AU|1D' and st['day'] == d.index[-1] and st['fresh'] and not st['closed']
+    assert st['contract'] == 'AU2612' and st['symbol'] == 'AU.SHF' and st['last_px'] == pytest.approx(d['close'].iloc[-1])
+    assert st['final_at'].strftime('%H:%M') == '14:55' and st['close_at'].strftime('%H:%M') == '15:00'
+    assert st['position'] == int(d['close'].iloc[-1] > d['close'].iloc[-2]) and st['held'] == int(d['close'].iloc[-2] > d['close'].iloc[-3])
+    assert len(st['bars']) == 40 and fd_daily.daily_state('AU', rec, now=now + timedelta(hours=1), live_dir=live)['closed']
+    f = fd_daily.forward_replay_daily('AU', rec, live_dir=live)
+    assert len(f['series']) == 9                                                                            # the days after wf_last_day
+
+
+def test_daily_tickets_close_the_old_side_open_the_new_one_and_follow_the_clock(tmp_path):
+    close_t = pd.Timestamp('2026-11-17 15:00')
+    row = {'product': 'AU', 'contract': 'AU2612', 'last_px': 800.0, 'held': 1, 'position': -1, 'closed': False,
+           'close_at': close_t, 'final_at': close_t - pd.Timedelta(minutes=5)}
+    sizing = {'lots': 2, 'stop_pts': 8.0}
+    acts = fd_actions.daily_actions(row, sizing, {}, now=datetime(2026, 11, 17, 14, 20))
+    assert [(a['kind'], a['direction'], a['state'], a['lots']) for a in acts] == [('close', -1, 'forming', 2), ('open', -1, 'forming', 2)]
+    assert acts[1]['stop'] == pytest.approx(808.0) and all(a['daily'] for a in acts) and acts[0]['key'] == 'AU1D|15:00|close'
+    late = fd_actions.daily_actions(row, sizing, {}, now=datetime(2026, 11, 17, 14, 56))
+    assert {a['state'] for a in late} == {'pending'}
+    done = fd_actions.daily_actions(row, sizing, {'AU1D|15:00|close': {'done': True, 'lots': 3, 'fill': 799.0}}, now=datetime(2026, 11, 17, 14, 56))
+    assert done[0]['state'] == 'done' and done[0]['lots'] == 3 and done[0]['slip_ticks'] is not None
+    assert {a['state'] for a in fd_actions.daily_actions(dict(row, closed=True), sizing, {}, now=datetime(2026, 11, 17, 15, 30))} == {'missed'}
+    assert fd_actions.daily_actions(dict(row, held=-1), sizing, {}) == []                    # nothing to change
+    assert [a['kind'] for a in fd_actions.daily_actions(dict(row, held=0), sizing, {}, now=datetime(2026, 11, 17, 14, 20))] == ['open']
+    assert [(x['kind'], x['state']) for x in fd_actions.daily_actions(row, {'lots': 0, 'stop_pts': 8.0}, {}, now=datetime(2026, 11, 17, 14, 20))] == [('open', 'unsized')]
+    # a layered strategy (ATR) holds 1..6 units of a position sized for 6: adds and cuts are partial tickets
+    atr = dict(row, max_units=6.0, held=1, position=1, held_units=2.0, units=4.0)
+    add = fd_actions.daily_actions(atr, {'lots': 12, 'stop_pts': 8.0}, {}, now=datetime(2026, 11, 17, 14, 20))
+    assert [(x['kind'], x['direction'], x['lots']) for x in add] == [('open', 1, 4)]                       # 4 -> 8 lots: buy 4 more
+    cut = fd_actions.daily_actions(dict(atr, held_units=6.0, units=3.0), {'lots': 12, 'stop_pts': 8.0}, {}, now=datetime(2026, 11, 17, 14, 20))
+    assert [(x['kind'], x['direction'], x['lots']) for x in cut] == [('close', -1, 6)]                     # 12 -> 6 lots: sell 6
+    flip = fd_actions.daily_actions(dict(atr, held_units=2.0, units=-6.0, held=1, position=-1), {'lots': 12, 'stop_pts': 8.0}, {}, now=datetime(2026, 11, 17, 14, 20))
+    assert [(x['kind'], x['direction'], x['lots']) for x in flip] == [('close', -1, 4), ('open', -1, 12)]
+    assert fd_actions.daily_actions(dict(atr, held_units=2.0, units=2.0), {'lots': 12, 'stop_pts': 8.0}, {}) == []
+
+
+def test_daily_approval_gate_store_portfolio_and_monitor(tmp_path, monkeypatch):
+    d = _daily_world(tmp_path, monkeypatch)
+    monkeypatch.setattr(walkforward, 'STRATEGIES', {**walkforward.STRATEGIES, 'ATR': lambda df: df.assign(signal=(df['close'] > df['close'].shift()).astype(float))})
+    monkeypatch.setattr(fd_daily, 'STRATEGIES', walkforward.STRATEGIES)
+    dd = {'start': '2026-01-05', 'end': str(d.index[35].date()), 'exits': None, 'min_trades': 5,
+          'rows': {'ATR@1D': {'pooled': 0.8, 'se': 0.5, 'days': 20, 'recent': 1.0, 'recent_se': 1.0, 'recent_days': 20, 'trades': 9,
+                              'win': 0.5, 'payoff': 1.2, 'expectancy_bp': 5.0, 'years_positive': 1, 'years': 1},
+                   'MA@1D': {'pooled': -0.2, 'se': 0.5, 'days': 20, 'trades': 9}, 'SAR@1D': {'pooled': 0.9, 'se': 0.5, 'days': 20, 'trades': 2}}}
+    wf = {'daily': dd, 'cost_bp': 0.4, 'run_at': 'now'}
+    for c, msg in (('MA@1D', 'Sharpe'), ('SAR@1D', 'trades'), ('XX@1D', 'not in')):
+        with pytest.raises(ValueError, match=msg):
+            approvals.approve_daily('AU', c, wf)
+    assert approvals.daily_gate(dd, 'ATR@1D') == (True, '')
+    rec = approvals.approve_daily('AU', 'ATR@1D', wf)
+    assert rec['session'] == 'daily' and rec['wf_last_day'] == dd['end'] and rec['max_streak'] is not None and rec['daily_std'] is not None
+    assert approvals.load_approved_daily()['AU']['candidate'] == 'ATR@1D'
+    # the portfolio holds the daily strategy under its own key, next to an intraday one
+    monkeypatch.setattr(approvals, 'load_approved', lambda path=None: {'AU': {'candidate': 'SAR@30min', 'status': 'approved', 'pooled_sharpe': 1.0}})
+    approvals.save_portfolio(['AU'])
+    assert pool.add_to_portfolio('AU', daily=True) == ['AU', 'AU|1D']
+    with pytest.raises(ValueError, match='already'):
+        pool.add_to_portfolio('AU', daily=True)
+    sel = pool.select_book()
+    assert sel['chosen'] == ['AU'] and sel['daily'] == ['AU'] and sel['missing'] == []
+    # the Monitor tracks it with its own series, key and longest-run threshold
+    rows = {r['key']: r for r in monitor.monitor_rows()}
+    assert set(rows) == {'AU', 'AU|1D'} or set(rows) == {'AU|1D'} or 'AU|1D' in rows
+    r = rows['AU|1D']
+    assert r.get('daily') and ('assessment' in r or 'error' in r)
+    if 'assessment' in r:
+        assert r['assessment']['halt_at'] >= 5
+    # removing the key deletes the daily approval and leaves the intraday one
+    assert pool.remove_from_portfolio('AU|1D') == ['AU'] and approvals.load_approved_daily() == {}
+
+
+def test_live_views_show_a_daily_row_with_its_own_sizing_and_no_flatten_reminder(tmp_path, monkeypatch):
+    close_t = pd.Timestamp('2026-11-17 15:00')
+    row = {'product': 'AU', 'key': 'AU|1D', 'daily': True, 'contract': 'AU2612', 'candidate': 'ATR@1D', 'day': pd.Timestamp('2026-11-17'),
+           'closed': False, 'held': 1, 'position': -1, 'since': pd.Timestamp('2026-11-17'), 'entry_px': 800.0, 'last_px': 800.0,
+           'as_of': pd.Timestamp('2026-11-17 14:20'), 'fetched_at': pd.Timestamp('2026-11-17 14:21'), 'day_return': 0.001,
+           'round_trips': 1, 'stop_px': None, 'target_px': None, 'exited_at': None, 'trades': [], 'close_at': close_t,
+           'final_at': close_t - pd.Timedelta(minutes=5),
+           'bars': pd.DataFrame({'open': [800.0], 'high': [801.0], 'low': [799.0], 'close': [800.5]}, index=[pd.Timestamp('2026-11-17 14:00')])}
+    monkeypatch.setattr(fd_live, 'size_position', lambda p, e, px, cap, risk, mult: {'lots': 2, 'stop_pts': 8.0})
+    monkeypatch.setattr(fd_live.manual_log, 'load_log', lambda day: {})
+    table, orders, clock = fd_live.desk_views([row], {}, None, {}, {}, 1_000_000, 0.25, 0.5, 1.0, now=datetime(2026, 11, 17, 14, 20))
+    assert table is not None and 'daily' in str(table) and 'AU1D|15:00|close' in str(orders)
+    assert clock['flatten'] == [] and clock['bars'] == []                      # a daily position is held overnight
+    assert clock['pending'] == []                                              # still provisional (forming)
+    _, _, clock2 = fd_live.desk_views([row], {}, None, {}, {}, 1_000_000, 0.25, 0.5, 1.0, now=datetime(2026, 11, 17, 14, 58))
+    assert {p['key'] for p in clock2['pending']} == {'AU1D|15:00|close', 'AU1D|15:00|open'}

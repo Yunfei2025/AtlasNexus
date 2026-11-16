@@ -17,9 +17,12 @@ from futures.backtest.live_bars import (
 )
 from web.tabs.beta.data import THEME
 from . import approvals, manual_log
-from .actions import FLATTEN_WARN_MIN, LIMIT_TICKS, flatten_items, held_positions, product_actions, tf_minutes, your_pnl_cny
+from .actions import (
+    FLATTEN_WARN_MIN, LIMIT_TICKS, daily_actions, flatten_items, held_positions, product_actions, tf_minutes, your_pnl_cny,
+)
 from .contracts import app_code, price_fmt
-from .monitor import live_state, night_state
+from .daily import daily_state, fetch_tail
+from .monitor import is_night_day, live_state, night_led_state, night_state
 from .pool import CONTRACT_MULTIPLIER, MAX_BOOK, select_book, size_position
 from .today import _AMBER, _GREEN, _RED, _TH, _note, _row, _table, _td, signal_cell
 
@@ -42,7 +45,7 @@ def start_state(products, minutes):
 def live_chart(r):
     """Today's bars of the strategy's bar size with each position's entry / exit and its stop and target."""
     b = r['bars']
-    lab = lambda t: f"{t:%H:%M}"
+    lab = (lambda t: f"{t:%m-%d}") if r.get('daily') else (lambda t: f"{t:%H:%M}")
     fig = go.Figure(go.Candlestick(
         x=[lab(t) for t in b.index], open=b['open'], high=b['high'], low=b['low'], close=b['close'],
         increasing_line_color=_GREEN, decreasing_line_color=_RED, showlegend=False))
@@ -71,6 +74,8 @@ def live_chart(r):
         font={'color': '#e9eef8', 'size': 10}, margin=dict(l=52, r=12, t=26, b=30), xaxis_rangeslider_visible=False,
         title={'text': f"{r['product']} · {r['candidate']} · {r['contract']} · {r['day']:%m-%d}"
                        + (" · night, display only" if r.get('night') else "")
+                       + (" · night + day" if r.get('session') == 'night+day' else "")
+                       + (" · daily" if r.get('daily') else "")
                        + (" · closed" if r.get('closed') else ""), 'font': {'size': 11}, 'x': 0.01, 'y': 0.96},
         xaxis={'type': 'category', 'nticks': 8, 'gridcolor': 'rgba(100,140,200,0.12)', 'tickfont': {'size': 9}},
         yaxis={'gridcolor': 'rgba(100,140,200,0.12)', 'tickformat': ',.2f'})
@@ -211,16 +216,18 @@ def live_view(rows, fetch, state, now=None, sizing=None, health=None, stored=Non
             age = (now - r['fetched_at']).total_seconds() / 60
             late = running and not r['closed'] and age > 2 * state['minutes']
             pnl = r['day_return'] * 100
-            sz = (sizing or {}).get(r['product'])
+            sz = (sizing or {}).get(r.get('key', r['product']))
             lots = sz['lots'] if sz else None
             pnl_cny = (r['day_return'] * lots * r['last_px'] * CONTRACT_MULTIPLIER.get(r['product'], 0)
                        if lots else None)
-            badge = None if r.get('night') else health_badge(r['product'], health, (stored or {}).get(r['product']))
+            badge = None if r.get('night') else health_badge(r.get('key', r['product']), health, (stored or {}).get(r.get('key', r['product'])))
             body.append(_row([
                 html.Td([r['product'], badge] if badge else r['product'],
                         style={'padding': '5px 8px', 'fontSize': '10px', 'fontWeight': '600',
                                'color': 'var(--text-secondary)', 'whiteSpace': 'nowrap', 'textAlign': 'left'}),
-                _td(r['candidate'] + (' · night' if r.get('night') else ''), _AMBER if r.get('night') else 'var(--text-secondary)'),
+                _td(r['candidate'] + (' · night' if r.get('night') else '') + (' · night+day' if r.get('session') == 'night+day' else '')
+                    + (f" · daily (holding {r['held']:+d})" if r.get('daily') else ''),
+                    _AMBER if r.get('night') else 'var(--text-secondary)'),
                 _td(r['contract']),
                 _td(price_fmt(r['last_px'], r['product'])),
                 signal_cell(r['position'], r['since']) if r['since'] is not None else _td('—'),
@@ -264,7 +271,7 @@ def live_view(rows, fetch, state, now=None, sizing=None, health=None, stored=Non
                      "net of its cost and with its stop / target; while the market is open the latest bar is still "
                      "forming. Paper P&L as a return on notional, not your fills. Open market: Wind is called only "
                      "for the products listed, only while running, and only for the minutes since the last fetch. "
-                     "After the close the finished session is fetched once and saved in input/futures_desk/live; "
+                     "After the close the finished session is fetched once and saved in database/futures_desk/live; "
                      "later views read that file."))
     return html.Div(out)
 
@@ -279,6 +286,10 @@ def register_live_callbacks(app):
         """Approved products; an empty pick is filled with today's book so ▶ Start live is one click."""
         opts = [{'label': f"{p} · {a['candidate']}", 'value': p}
                 for p, a in approvals.load_approved().items() if a.get('status', 'approved') != 'halted']
+        seen = {o['value'] for o in opts}
+        opts += [{'label': f"{p} · {a['candidate']} (daily)", 'value': p}
+                 for p, a in approvals.load_approved_daily().items()
+                 if a.get('status', 'approved') != 'halted' and p not in seen]
         valid = {o['value'] for o in opts}
         keep = [p for p in (current or []) if p in valid]
         if keep:
@@ -305,6 +316,18 @@ def register_live_callbacks(app):
         return state, False, state['minutes'] * 60_000, (
             f"Running: {', '.join(state['products'])} every {state['minutes']} min.")
 
+    @app.callback(Output('fd-backfill-note', 'children'), Input('fd-night-backfill', 'n_clicks'),
+                  prevent_initial_call=True)
+    def fd_night_backfill(_n):
+        from futures.backtest.live_bars import backfill_night
+        try:
+            r = backfill_night(days=7)
+        except Exception as e:
+            return f"Backfill failed: {e}"
+        errs = r['errors']
+        return (f"{r['fetched']} night(s) fetched, {r['skipped']} already on file"
+                + (f", {len(errs)} problem(s): {'; '.join(f'{k}: {v}' for k, v in list(errs.items())[:2])}" if errs else "") + ".")
+
     @app.callback(
         [Output('fd-live-container', 'children'), Output('fd-orders-container', 'children'),
          Output('fd-desk-clock', 'data')],
@@ -321,13 +344,16 @@ def register_live_callbacks(app):
             raise PreventUpdate
         refetch = ctx.triggered_id not in ('fd-done-stamp', 'fd-mon-health')
         running = bool(state and state.get('running'))
+        daily_members = []
+        try:
+            sel = select_book()
+            daily_members = sel['daily']
+        except Exception:
+            sel = None
         if state and state.get('products'):
             products = state['products']
         else:
-            try:
-                products = select_book()['chosen']
-            except Exception:
-                products = []
+            products = ((sel['chosen'] if sel else []) + [p for p in daily_members if sel and p not in sel['chosen']])
         if not products:
             return live_view([], None, state), orders_view({}, {}, 0.0, 0.0, running), {}
         night_products = [p for p in products if p in NIGHT_END]
@@ -337,6 +363,13 @@ def register_live_callbacks(app):
             fetch_lock.release()
             fetch = fetch_live_bars(products, closed_only=not running)
             night_fetch = fetch_night_bars(night_products, closed_only=not running) if night_products else None
+            for p in daily_members:   # the continuous series' tail (days the file lacks + today's forming bar)
+                if p in approvals.load_approved_daily():
+                    tl = fetch_tail(p, closed_only=not running)
+                    if 'error' in tl:
+                        fetch.setdefault('products', {})[f'{p} daily'] = {'error': tl['error']}
+                    elif tl.get('skipped') and running:
+                        fetch['skipped'] = fetch.get('skipped') or f"{p} daily: {tl['skipped']}"
         else:
             fetch, night_fetch = {}, None
         if night_fetch:
@@ -346,16 +379,23 @@ def register_live_callbacks(app):
             if night_fetch.get('skipped') and running:
                 fetch['skipped'] = fetch.get('skipped') or f"night: {night_fetch['skipped']}"
         approved = approvals.load_approved()
+        approved_daily = approvals.load_approved_daily()
         rows = []
         for p in products:
+            if p in daily_members and p in approved_daily:
+                try:
+                    rows.append(daily_state(p, approved_daily[p]))
+                except Exception as e:
+                    fetch.setdefault('products', {})[f'{p} daily'] = {'error': f'daily position failed: {e}'}
             try:
-                r = live_state(p, approved[p]) if p in approved else None
+                r = ((night_led_state(p, approved[p]) if is_night_day(approved[p]) else None)
+                     or live_state(p, approved[p])) if p in approved else None
             except Exception as e:
                 fetch.setdefault('products', {})[p] = {'error': f'live position failed: {e}'}
                 r = None
             if r:
                 rows.append(r)
-            if p in night_products and p in approved:
+            if p in night_products and p in approved and not is_night_day(approved[p]):   # integrated ones trade the night
                 try:
                     n = night_state(p, approved[p])
                 except Exception as e:
@@ -426,30 +466,37 @@ def desk_views(rows, fetch, state, approved, health, capital, risk_pct, stop_mul
         if r.get('night'):
             continue
         p = r['product']
-        rec = approved.get(p, {})
+        key = r.get('key', p)   # a product can have an intraday and a daily row: they are sized separately
+        rec = {} if r.get('daily') else approved.get(p, {})
         if sized:
             try:
-                sizing[p] = size_position(p, rec.get('exits'), r['last_px'], capital, risk_pct, stop_mult)
+                sizing[key] = size_position(p, rec.get('exits'), r['last_px'], capital, risk_pct, stop_mult)
             except Exception:
-                sizing[p] = None
+                sizing[key] = None
         day = f"{r['day']:%Y-%m-%d}"
         log = manual_log.load_log(day)
+        naive_now = now.replace(tzinfo=None) if hasattr(now, 'tzinfo') else now
         actions_by_day.setdefault(day, []).extend(
-            product_actions(r, sizing.get(p), log, now=now.replace(tzinfo=None) if hasattr(now, 'tzinfo') else now))
-        last_px[p] = r['last_px']
-        if not r.get('closed'):
-            bars.add(tf_minutes(r['candidate']))
+            (daily_actions(r, sizing.get(key), log, now=naive_now) if r.get('fresh', True) else []) if r.get('daily')
+            else product_actions(r, sizing.get(key), log, now=naive_now))
+        if not r.get('daily'):
+            last_px[p] = r['last_px']
+            if not r.get('closed'):
+                bars.add(tf_minutes(r['candidate']))
     all_acts = [a for lst in actions_by_day.values() for a in lst]
-    held = held_positions(all_acts)
-    pnl = your_pnl_cny(all_acts, last_px)
+    intraday = [a for a in all_acts if not a.get('daily')]   # daily positions are held overnight: no flatten, no day P&L
+    held = held_positions(intraday)
+    pnl = your_pnl_cny(intraday, last_px)
     limit_cny = capital * loss_limit / 100 if sized else 0.0
     stored = {p: a.get('status') for p, a in approved.items()}
+    stored.update({f'{p}|1D': a.get('status') for p, a in approvals.load_approved_daily().items()})
     table = live_view(rows, fetch, state, now=now, sizing=sizing, health=health, stored=stored)
     if not sized:
         table = html.Div([_note("Set capital, risk, stop and loss limit in Today to size the tickets.", _RED), table])
     orders = orders_view(actions_by_day, held, pnl, limit_cny, running)
     clock = {
         'flatten': flatten_items(held), 'warn_min': FLATTEN_WARN_MIN, 'bars': sorted(bars),
+        'night_ends': sorted({NIGHT_END[r['product']] for r in rows if r.get('session') == 'night+day' and r['product'] in NIGHT_END}),
         'pending': [{'key': a['key'], 'text': a['ticket']} for a in all_acts if a['state'] == 'pending'],
     }
     return table, orders, clock
@@ -466,8 +513,20 @@ function(n, data) {
     const left = x => { x = Math.max(0, Math.ceil(x)); return x >= 60 ? Math.floor(x / 60) + 'h ' + pad(x % 60) + 'm' : x + 'm'; };
     const parse = s => { const p = s.split(':'); return +p[0] * 60 + +p[1]; };
     const open = wd >= 1 && wd <= 5 && now >= 9 * 60 && now < 15 * 60 + 15 && !(now >= 11 * 60 + 30 && now < 13 * 60);
+    // night + day strategies are working from 21:00 until their night session ends (Friday's runs into Saturday)
+    const nEnds = (data.night_ends || []).map(parse);
+    const nEnd = nEnds.length ? Math.max.apply(null, nEnds) : null;
+    const nightOpen = nEnd !== null && ((wd >= 1 && wd <= 5 && now >= 21 * 60) || (wd >= 2 && wd <= 6 && now < nEnd));
     const parts = ['Beijing ' + pad(h) + ':' + pad(m)];
-    if (open) {
+    if (nightOpen) {
+        const cap = 24 * 60 + nEnd;   // the same scale as t: minutes since the evening's midnight
+        const t = now >= 21 * 60 ? now : now + 24 * 60;
+        (data.bars || []).forEach(b => {
+            const nxt = Math.min(Math.ceil((t + 1 + 1e-6) / b) * b - 1, cap);
+            parts.push('next ' + (b >= 60 ? (b / 60) + 'h' : b + 'min') + ' bar final ' + hm(nxt % 1440) + ' (in ' + left(nxt - t) + ')');
+        });
+        parts.push('night session ends ' + hm(nEnd) + ' (in ' + left(cap - t) + ')');
+    } else if (open) {
         const closes = (data.flatten || []).map(f => parse(f.close));
         const close = closes.length ? Math.min.apply(null, closes) : 15 * 60;
         const cap = now < 11 * 60 + 30 ? 11 * 60 + 30 : close;

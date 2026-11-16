@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Futures Desk layout: Today / Research / Monitor."""
+"""Futures Desk layout: Portfolio (value "today") / Research / Monitor / Volatility."""
 
 from __future__ import annotations
 
 from dash import dcc, html
 
 from web.tabs.beta.layouts.backtest import build_factor_backtest_layout, build_pool_correlation_card
+from web.tabs.volatility import build_volatility_layout
 from web.tabs.ui.styles import summary_subtabs_style, summary_subtabs_colors
 
-SUBTABS = [("Today", "today"), ("Research", "research"), ("Monitor", "monitor")]
+SUBTABS = [("Portfolio", "today"), ("Research", "research"), ("Monitor", "monitor"), ("Volatility", "volatility")]
 
 
 def _placeholder(title, lines):
@@ -45,8 +46,8 @@ def build_futures_desk_layout():
             "Re-read the local data files and recompute the screen, book and heat map. Nothing is fetched: "
             "daily and intraday files are updated by your other data apps.")),
         html.Button("⇪ Sync bar cache", id='fd-sync', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}, title=(
-            "Write 1-minute bars of every intraday tick file to input/futures_desk/bars (~0.2 MB per contract), "
-            "so another computer that shares input/ can run Research, Today and Monitor without database/futures. "
+            "Write 1-minute bars of every intraday tick file to database/futures_desk/bars (~0.2 MB per contract), "
+            "so another computer that shares database/ can run Research, Today and Monitor without the tick files in database/futures. "
             "Only contracts whose tick file changed are rebuilt.")),
         html.Div(id='fd-today-status', style={'fontSize': '10px', 'color': 'var(--text-muted)', 'alignSelf': 'flex-end'}),
     ], style={**_card, 'display': 'flex', 'gap': '16px', 'alignItems': 'flex-start', 'padding': '12px 16px',
@@ -56,7 +57,16 @@ def build_futures_desk_layout():
         dcc.Store(id='fd-data-stamp'),
         controls,
         html.Div([
-            html.Div([html.Div("Today's book", style=_head),
+            html.Div([html.Div("Portfolio", style=_head),
+                      html.Div([
+                          dcc.Dropdown(id='fd-pf-pick', placeholder="Approved strategy to add", clearable=True,
+                                       style={'width': '260px', 'fontSize': '10px'}),
+                          html.Button("＋ Add to portfolio", id='fd-pf-add', n_clicks=0, style=_btn, title=(
+                              "Approve a candidate in Research first; then add its product here. The portfolio is "
+                              "what Today sizes and the Monitor's orders trade.")),
+                          html.Div(id='fd-pf-note', style={'fontSize': '10px', 'color': 'var(--text-muted)'}),
+                      ], style={'display': 'flex', 'gap': '10px', 'alignItems': 'center', 'flexWrap': 'wrap',
+                                'padding': '10px 16px 0'}),
                       dcc.Loading(type='circle', color='var(--accent-blue)', style={'minHeight': '80px'},
                                   children=html.Div(id='fd-book-container', style={'padding': '12px 16px'}))],
                      style={**_card, 'minWidth': '0'}),
@@ -101,6 +111,11 @@ def build_futures_desk_layout():
                                    value=15, clearable=False, style={'width': '100px', 'fontSize': '10px'})]),
             html.Button("▶ Start live", id='fd-live-start', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}),
             html.Button("■ Stop", id='fd-live-stop', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}),
+            html.Button("⇣ Backfill 7 nights", id='fd-night-backfill', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}, title=(
+                "Fetch the last 7 finished night sessions (AU, AG, AL, CU, JM) once, one Wind request per product per "
+                "night, into live/night_history. Nights already on file are skipped, so repeating costs nothing. "
+                "Research > include night session reads this history.")),
+            html.Div(id='fd-backfill-note', style={'fontSize': '10px', 'color': 'var(--text-muted)', 'alignSelf': 'flex-end'}),
             html.Div(id='fd-live-note', style={'fontSize': '10px', 'color': 'var(--text-muted)', 'alignSelf': 'flex-end'}),
         ], style={'display': 'flex', 'gap': '16px', 'alignItems': 'flex-start', 'flexWrap': 'wrap',
                   'padding': '12px 16px'}),
@@ -120,7 +135,7 @@ def build_futures_desk_layout():
             html.Div([
                 _field("Watch below (σ)", 'fd-mon-watch', 1.0, 0.5),
                 _field("Halt below (σ)", 'fd-mon-halt', 2.0, 0.5),
-                _field("Halt after N losing days", 'fd-mon-losses', 5, 1),
+                _field("Halt after N losing days (min)", 'fd-mon-losses', 5, 1),
                 html.Button("Apply statuses", id='fd-mon-apply', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}, title=(
                     "Write the computed Watch / Halted statuses to the approvals file. Halted products leave today's "
                     "book and only return through a fresh walk-forward and approval.")),
@@ -128,18 +143,12 @@ def build_futures_desk_layout():
                                        style={'width': '200px', 'fontSize': '10px'}),
                           html.Button("Halt now", id='fd-mon-halt-now', n_clicks=0, style=_btn, title=(
                               "Keep the record but take the product out of today's book until it is re-approved.")),
-                          dcc.ConfirmDialogProvider(
-                              id='fd-mon-remove', message=(
-                                  "Remove this product's approval completely? It leaves today's book and the Monitor, "
-                                  "and only returns through a fresh walk-forward and approval in Research."),
-                              children=html.Button("Remove", style={**_btn, 'color': 'var(--accent-red, #f87171)'}, title=(
-                                  "Delete the product's approval record (asks to confirm)."))),
                           ],
                          style={'display': 'flex', 'gap': '8px', 'alignSelf': 'flex-end', 'alignItems': 'center'}),
                 html.Div(id='fd-mon-note', style={'fontSize': '10px', 'color': 'var(--text-muted)', 'alignSelf': 'flex-end'}),
             ], style={**_card, 'display': 'flex', 'gap': '16px', 'alignItems': 'flex-start', 'padding': '12px 16px',
                       'flexWrap': 'wrap', 'overflow': 'visible'}),
-            html.Div([html.Div("Approved strategies: forward paper P&L vs expected", style=_head),
+            html.Div([html.Div("Portfolio strategies: forward paper P&L vs expected", style=_head),
                       dcc.Loading(type='circle', color='var(--accent-blue)', style={'minHeight': '80px'},
                                   children=html.Div(id='fd-mon-container', style={'padding': '12px 16px'}))],
                      style={**_card, 'marginTop': '10px'}),
@@ -158,5 +167,6 @@ def build_futures_desk_layout():
             html.Div(id="fd-today-div", children=today, style={"display": "none"}),
             html.Div(id="fd-research-div", children=build_factor_backtest_layout(), style={"display": "block"}),
             html.Div(id="fd-monitor-div", children=monitor, style={"display": "none"}),
+            html.Div(id="fd-volatility-div", children=build_volatility_layout(), style={"display": "none"}),
         ], style={"position": "relative"}),
     ], className="an-tab-pane")

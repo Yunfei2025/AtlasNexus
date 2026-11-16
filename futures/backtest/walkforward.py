@@ -22,6 +22,8 @@ from settings.paths import DIR_INPUT
 from .costs import DEFAULT_FEE_BP, FEE_BP, apply_costs, normalize_exits, product_of, trade_stats
 from .data_loader import load_raw_file
 from . import minute_bars
+from . import night as night_mod
+from .live_bars import NIGHT_END
 from .minute_bars import MIN_ROWS, list_contracts, load_index, load_minute_bars, resample_minute_bars
 from .strategies import (
     run_atr_band_strategy, run_bollinger_strategy, run_demark_strategy, run_intraday_momentum_strategy,
@@ -44,6 +46,15 @@ STRATEGIES = {
     'SAR': lambda d: run_sar_strategy(d, _P['bf-sar-af'], _P['bf-sar-max-af']),
     'DeMark': lambda d: run_demark_strategy(d),
 }
+# Strategies whose signal is a number of units, not just a side: ATR stacks three layers (1 + 2 + 3), so its
+# position is -6..+6 units. A sized position is the maximum, one unit = 1 / max of it.
+MAX_UNITS = {'ATR': 6.0}
+
+
+def max_units(strategy):
+    return MAX_UNITS.get(str(strategy).split('@')[0], 1.0)
+
+
 # Walk-forward strategy name -> the Research strategy selector's value
 PANEL_STRATEGY = {'Mom': 'Momentum'}
 TIMEFRAMES = ['15min', '30min', '1h']
@@ -55,6 +66,7 @@ MIN_DAILY_TRADES = 30
 # Approval gates (shown in the UI next to the table)
 MIN_CONTRACT_DAYS = 15   # a contract with fewer main-contract days is too short to judge
 MIN_TRADES = 30
+MIN_NIGHT_DAYS = 60      # a night+day run needs at least this many trade days with a night session to pass
 # Stop / target levels tried per candidate when searching exits (% of the entry price; None = off)
 EXIT_STOPS = [None, 0.3, 0.5, 1.0]
 EXIT_TARGETS = [None, 0.5, 1.0]
@@ -89,9 +101,10 @@ def load_ticks(path):
 resample_bars = resample_minute_bars  # minute bars -> 15min / 30min / 1h, identical to resampling the ticks
 
 
-def product_minute_bars(product, latest=None, tick_dir=None, bar_dir=None):
+def product_minute_bars(product, latest=None, tick_dir=None, bar_dir=None, night=False, live_dir=None):
     """{contract: minute bars} for a product from the tick files or the bar cache. latest=N keeps only the
-    N contracts with the most recent data."""
+    N contracts with the most recent data. night=True returns night + day bars (the cached files hold both,
+    see minute_bars.load_minute_bars); the default is the day session only."""
     names = list_contracts(product, tick_dir, bar_dir)
     if latest:
         idx = load_index(bar_dir)
@@ -102,7 +115,7 @@ def product_minute_bars(product, latest=None, tick_dir=None, bar_dir=None):
         names = sorted(names, key=recency, reverse=True)[:latest]
     out = {}
     for c in names:
-        b = load_minute_bars(c, tick_dir, bar_dir)
+        b = load_minute_bars(c, tick_dir, bar_dir, night=bool(night and product in NIGHT_END), live_dir=live_dir)
         if b is not None and len(b) >= MIN_ROWS:
             out[c] = b
     return out
@@ -125,11 +138,9 @@ def _sharpe_se(x):
     return float(ANN * math.sqrt((1 + 0.5 * (s / ANN) ** 2) / n)) if n > 4 and not math.isnan(s) else float('nan')
 
 
-def run_daily(product, cost_bp, recent_from=None, exits=None, path=None):
-    """Daily-bar candidates for `product` on its continuous daily series (held overnight, net of cost_bp per
-    side). Each row has the full-history Sharpe and the Sharpe since `recent_from` (the intraday run's first
-    day), so the two can be compared over the same dates. None when the series is missing.
-    Roll gaps of the continuous series are not adjusted."""
+def load_daily_df(product, path=None):
+    """The product's continuous daily bars (open / high / low / close / volume), or None when the series is
+    missing. The series is the main contract's own prices, rolls not adjusted."""
     try:
         raw = load_raw_file(str(path or DAILY_FILE)) or {}
     except Exception:
@@ -144,7 +155,25 @@ def run_daily(product, cost_bp, recent_from=None, exits=None, path=None):
     for c in ('open', 'high', 'low', 'close', 'volume'):
         df[c] = pd.to_numeric(df.get(c), errors='coerce')
     df = df.dropna(subset=['close'])
-    df = df[df['close'] > 0]
+    return df[df['close'] > 0]
+
+
+def daily_pnl(product, strategy, cost_bp, exits=None, path=None):
+    """Daily net P&L (return on notional) of one daily-bar strategy on the continuous series, held overnight."""
+    df = load_daily_df(product, path)
+    if df is None:
+        raise ValueError(f"no daily series for {product}")
+    return daily_pnl_of(apply_costs(STRATEGIES[strategy](df), cost_bp, flat_at_close=False, exits=exits))
+
+
+def run_daily(product, cost_bp, recent_from=None, exits=None, path=None):
+    """Daily-bar candidates for `product` on its continuous daily series (held overnight, net of cost_bp per
+    side). Each row has the full-history Sharpe and the Sharpe since `recent_from` (the intraday run's first
+    day), so the two can be compared over the same dates. None when the series is missing.
+    Roll gaps of the continuous series are not adjusted."""
+    df = load_daily_df(product, path)
+    if df is None:
+        return None
     rows = {}
     for sname in DAILY_STRATEGIES:
         try:
@@ -168,12 +197,19 @@ def run_daily(product, cost_bp, recent_from=None, exits=None, path=None):
 
 
 def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress=None, exits=None,
-                    search_exits=False):
+                    search_exits=False, night=False, live_dir=None):
     """Evaluate all candidates for `product` across every contract (tick files or the minute-bar cache).
     exits: one stop loss / profit target applied to every candidate (costs.normalize_exits).
     search_exits: instead, try EXIT_GRID (incl. no exits) per candidate and keep the best pooled Sharpe;
-    each row then carries its chosen 'exits' and its no-exit Sharpe 'base_pooled'."""
-    contract = product_minute_bars(product, tick_dir=tick_dir, bar_dir=bar_dir)
+    each row then carries its chosen 'exits' and its no-exit Sharpe 'base_pooled'.
+    night: run on night + day sessions (night bars joined to their trade date, flat at the 15:00 close). The
+    result is marked session='night+day', counts the trade days that really had a night session, and each row
+    carries 'night_cmp': this candidate's P&L on those days with and without the night session. A candidate
+    cannot pass with fewer than MIN_NIGHT_DAYS such days: the other days are plain day sessions and would
+    vouch for a night strategy that was barely tested."""
+    if night and product not in NIGHT_END:
+        raise ValueError(f"{product} has no night session")
+    contract = product_minute_bars(product, tick_dir=tick_dir, bar_dir=bar_dir, night=night, live_dir=live_dir)
     if not contract:
         raise ValueError(f"no intraday data for {product} (no tick files and no cached minute bars)")
     if progress:
@@ -191,6 +227,13 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
     cost = half_spread + fee if cost_bp is None else float(cost_bp)
 
     spans = {c: main_of.index[main_of == c] for c in contract}
+    night_days = pd.DatetimeIndex([])
+    if night:
+        night_days = pd.DatetimeIndex(sorted({d for c, b in contract.items()
+                                             for d in night_mod.night_trade_days(b).intersection(spans[c])}))
+        base = run_walkforward(product, cost_bp, tick_dir, bar_dir, None, exits, search_exits)
+        if progress:
+            progress(f"{len(night_days)} trade days with a night session; day-only baseline done")
 
     def score(raw, ex, flat=True):
         """Row + daily P&L of one candidate (raw strategy output per contract) under exits `ex`. flat=False
@@ -217,8 +260,11 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
             'total_return': float(series.sum()),
             'max_dd': float((series.cumsum().cummax() - series.cumsum()).max()), 'worst_day': float(series.min()),
             'passes': bool(pooled > 0 and n_tr >= MIN_TRADES and len(per_c) >= 2
-                           and pos >= max(2, math.ceil(len(per_c) * 2 / 3))),
+                           and pos >= max(2, math.ceil(len(per_c) * 2 / 3))
+                           and (not night or len(night_days) >= MIN_NIGHT_DAYS)),
         }
+        row['passes_ex_night'] = bool(pooled > 0 and n_tr >= MIN_TRADES and len(per_c) >= 2
+                                      and pos >= max(2, math.ceil(len(per_c) * 2 / 3)))
         return row, series
 
     grid = EXIT_GRID if search_exits else [exits]
@@ -244,6 +290,14 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
             ov, _ = score(raw, rows[cand]['exits'], flat=False)   # same exits, held overnight
             rows[cand]['overnight'] = {k: ov[k] for k in ('pooled', 'se', 'per_contract', 'total_return', 'max_dd',
                                                           'worst_day', 'trades', 'trades_per_day')}
+            if night:
+                with_n = pnl[cand].reindex(night_days).dropna()
+                day_only = pd.Series((base['daily_pnl'].get(cand) or {}), dtype=float)
+                day_only.index = pd.to_datetime(day_only.index)
+                day_only = day_only.reindex(with_n.index).dropna()
+                rows[cand]['night_cmp'] = {'days': int(len(with_n)), 'with_night': float(with_n.sum()),
+                                           'day_only': float(day_only.sum()),
+                                           'day_pooled': (base['rows'].get(cand) or {}).get('pooled')}
             if search_exits:   # the no-exit result, to show how much the search added
                 rows[cand]['base_pooled'] = scored[0][0]['pooled']
         if progress:
@@ -258,17 +312,23 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
                           'start': str(spans[c].min().date()) if len(spans[c]) else None,
                           'end': str(spans[c].max().date()) if len(spans[c]) else None}
                       for c in contract},
-        'gates': {'min_contract_days': MIN_CONTRACT_DAYS, 'min_trades': MIN_TRADES},
+        'gates': {'min_contract_days': MIN_CONTRACT_DAYS, 'min_trades': MIN_TRADES, 'min_night_days': MIN_NIGHT_DAYS},
+        'session': 'night+day' if night else 'day', 'night_days': int(len(night_days)),
         'rows': rows,
         'daily': run_daily(product, cost, main_of.index.min(), exits if isinstance(exits, dict) else None),
         'daily_pnl': {k: {str(d.date()): float(v) for d, v in s.items()} for k, s in pnl.items()},
     }
 
 
+def _wf_name(product, night=False):
+    return f'wf_{product}_night.json' if night else f'wf_{product}.json'
+
+
 def save_walkforward(result, out_dir):
-    """Persist a run so the tab can show the last result without recomputing."""
+    """Persist a run so the tab can show the last result without recomputing. A night+day run goes to its own
+    file: wf_<product>.json stays the day-session evidence the approvals and the Monitor read."""
     os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(str(out_dir), f"wf_{result['product']}.json")
+    path = os.path.join(str(out_dir), _wf_name(result['product'], result.get('session') == 'night+day'))
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as fh:
         json.dump(result, fh, ensure_ascii=False, allow_nan=True)
@@ -276,9 +336,9 @@ def save_walkforward(result, out_dir):
     return path
 
 
-def load_walkforward(product, out_dir):
+def load_walkforward(product, out_dir, night=False):
     try:
-        with open(os.path.join(str(out_dir), f'wf_{product}.json'), encoding='utf-8') as fh:
+        with open(os.path.join(str(out_dir), _wf_name(product, night)), encoding='utf-8') as fh:
             return json.load(fh)
     except Exception:
         return None

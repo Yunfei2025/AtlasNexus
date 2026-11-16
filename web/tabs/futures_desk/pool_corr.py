@@ -28,6 +28,8 @@ def _pnl_candidates():
     out = {}
     for path in sorted(glob.glob(str(approvals.DESK_DIR / 'wf_*.json'))):
         prod = os.path.basename(path)[3:-5]
+        if prod.endswith('_night'):   # night + day preview runs are not day-session evidence
+            continue
         rows = (load_walkforward(prod, approvals.DESK_DIR) or {}).get('rows') or {}
         if not rows:
             continue

@@ -20,7 +20,7 @@ from futures.backtest.walkforward import STRATEGIES, load_walkforward, product_m
 from settings.futures import FuturesConfig
 from settings.paths import DIR_INPUT
 
-from . import approvals
+from . import approvals, daily
 from .monitor import exit_levels
 
 # CNY per 1.0 move of the quoted price, per lot. Typed in from exchange contract specs, NOT read from
@@ -78,6 +78,7 @@ def screen_rows(today=None):
     tick_dir = minute_bars.TICK_DIR
     with_ticks = ({re.match(r'[A-Z]+', f).group() for f in os.listdir(tick_dir) if re.fullmatch(r'[A-Z]+\d{3,4}\.pkl', f)}
                   if os.path.isdir(tick_dir) else set())
+    members = set(portfolio_members())
     rows = []
     for sym in close.columns:
         prod = product_of(sym)
@@ -97,15 +98,16 @@ def screen_rows(today=None):
             'status': (a or {}).get('status', 'approved') if a else None,
             'candidate': a['candidate'] if a else None,
             'pooled_sharpe': a['pooled_sharpe'] if a else None,
+            'in_portfolio': prod in members,
         })
     return rows
 
 
-def intraday_state(product, candidate, exits=None):
+def intraday_state(product, candidate, exits=None, night=False):
     """Main contract (most traded on the latest day), its last price and the approved strategy's current
     position on the latest minute bars (tick files or the shared bar cache): flat at every earlier close,
     and after its stop / target if one is set (stays flat until the signal changes)."""
-    contracts = product_minute_bars(product, latest=2)
+    contracts = product_minute_bars(product, latest=2, night=night)
     if not contracts:
         raise ValueError(f"no intraday data for {product}")
 
@@ -123,6 +125,9 @@ def intraday_state(product, candidate, exits=None):
     if exits:
         sig, _ = apply_exits(res, sig, exits)
     since = sig.index[(sig != sig.shift()).to_numpy()][-1]
+    if night:
+        from futures.backtest import night as night_mod
+        since = night_mod.unshift(since, pd.DatetimeIndex(sorted(set(bars.index[(bars.index - bars.index.normalize()) >= night_mod.DAY_OPEN].normalize()))))
     # entry = close of the bar where the current position was taken (the walk-forward's entry price)
     entry_px = float(res['close'].loc[since]) if sig.iloc[-1] != 0 and 'close' in res else None
     return {
@@ -146,25 +151,92 @@ def pnl_panel(candidates):
 
 
 def select_book(max_n=MAX_BOOK):
-    """Who is in today's book: approved products that are not halted (Watch still trades), at most max_n,
-    the least correlated by strategy P&L. Returns the approvals, the chosen / excluded / halted products and
-    the strategy-P&L correlation matrix among the chosen (None with fewer than 2 products with P&L)."""
+    """Who is in the portfolio book. With a saved portfolio (approvals.load_portfolio): exactly its members that
+    are still approved and not halted (Watch still trades), in the order added; members that lost their
+    approval are reported in 'missing'. Without one: every approved, non-halted product, at most max_n, the
+    least correlated by strategy P&L. Returns the approvals, the chosen / excluded / halted / missing products
+    and the strategy-P&L correlation matrix among the chosen (None with fewer than 2 products with P&L)."""
     stored = approvals.load_approved()
     approved = {p: a for p, a in stored.items() if a.get('status', 'approved') != 'halted'}
-    sel = {'approved': approved, 'chosen': list(approved), 'excluded': [], 'corr': None,
-           'halted': [p for p, a in stored.items() if a.get('status') == 'halted'], 'candidates': {}}
+    members = approvals.load_portfolio()
+    explicit = members is not None
+    stored_d = approvals.load_approved_daily()
+    approved_d = {p: a for p, a in stored_d.items() if a.get('status', 'approved') != 'halted'}
+    intraday_keys = [k for k in (members or []) if not is_daily_key(k)]
+    daily_keys = [k for k in (members or []) if is_daily_key(k)]
+    chosen = [p for p in intraday_keys if p in approved] if explicit else list(approved)
+    sel = {'approved': approved, 'chosen': chosen, 'excluded': [], 'corr': None, 'explicit': explicit,
+           'halted': [p for p, a in stored.items() if a.get('status') == 'halted'], 'candidates': {},
+           'missing': [p for p in intraday_keys if p not in approved] + [k for k in daily_keys if k[:-3] not in approved_d],
+           'daily': [k[:-3] for k in daily_keys if k[:-3] in approved_d] if explicit else list(approved_d),
+           'approved_daily': approved_d,
+           'halted_daily': [p for p, a in stored_d.items() if a.get('status') == 'halted']}
     if not approved:
         return sel
     sel['candidates'] = {p: a['candidate'] for p, a in approved.items()}
     panel = pnl_panel(sel['candidates'])
     corr = panel.corr(min_periods=20) if panel.shape[1] > 1 else None
-    if len(sel['chosen']) > max_n:
+    if not explicit and len(sel['chosen']) > max_n:
         sub = corr.reindex(index=sel['chosen'], columns=sel['chosen']).fillna(1.0) if corr is not None else None
         sel['chosen'] = least_correlated(sub, max_n)[0] if sub is not None else sel['chosen'][:max_n]
         sel['excluded'] = [p for p in approved if p not in sel['chosen']]
     if corr is not None:
         sel['corr'] = corr.reindex(index=sel['chosen'], columns=sel['chosen'])
     return sel
+
+
+DAILY_SUFFIX = '|1D'
+
+
+def is_daily_key(key):
+    return str(key).endswith(DAILY_SUFFIX)
+
+
+def daily_key(product):
+    return f'{product}{DAILY_SUFFIX}'
+
+
+def portfolio_members():
+    """The saved portfolio, or (none saved yet) what the book would trade today."""
+    members = approvals.load_portfolio()
+    return members if members is not None else select_book()['chosen']
+
+
+def add_to_portfolio(product, max_n=MAX_BOOK, daily=False):
+    """Put an approved product's strategy (its intraday one, or with daily=True its daily one) into the
+    portfolio. Returns the new member list. Refuses a strategy that is not approved, is halted, or would take the
+    portfolio past max_n distinct products (live data is fetched for at most that many)."""
+    stored = approvals.load_approved_daily() if daily else approvals.load_approved()
+    kind = 'daily strategy' if daily else 'strategy'
+    if product not in stored:
+        raise ValueError(f"{product} has no approved {kind}: approve a candidate in Research first")
+    if stored[product].get('status') == 'halted':
+        raise ValueError(f"{product} is halted: re-approve it in Research first")
+    members = portfolio_members()
+    key = daily_key(product) if daily else product
+    if key in members:
+        raise ValueError(f"{key} is already in the portfolio")
+    products = {k[:-len(DAILY_SUFFIX)] if is_daily_key(k) else k for k in members}
+    if product not in products and len(products) >= max_n:
+        raise ValueError(f"the portfolio holds at most {max_n} products: remove one first")
+    approvals.save_portfolio(members + [key])
+    return members + [key]
+
+
+def remove_from_portfolio(product):
+    """Drop a strategy (a product, or a daily key 'IM|1D'): it leaves the portfolio and its approval record is
+    deleted, so the Monitor stops tracking it too. It only comes back through approve() in Research. Returns the
+    new member list."""
+    members = portfolio_members()
+    if product not in members:
+        raise ValueError(f"{product} is not in the portfolio")
+    members = [p for p in members if p != product]
+    approvals.save_portfolio(members)
+    try:
+        approvals.remove_daily(product[:-len(DAILY_SUFFIX)]) if is_daily_key(product) else approvals.remove(product)
+    except ValueError:   # already gone
+        pass
+    return members
 
 
 def size_position(product, exits, last_price, capital, risk_pct, stop_mult, close=None):
@@ -196,8 +268,9 @@ def build_book(capital, risk_pct, stop_mult, loss_limit_pct, today=None, max_n=M
     sel = select_book(max_n)
     approved, chosen = sel['approved'], sel['chosen']
     book = {'rows': [], 'excluded': sel['excluded'], 'warnings': [], 'corr': sel['corr'],
-            'approved_n': len(approved), 'halted': sel['halted']}
-    if not approved:
+            'approved_n': len(approved) + len(sel['approved_daily']), 'halted': sel['halted'] + [daily_key(p) for p in sel['halted_daily']],
+            'missing': sel['missing'], 'explicit': sel['explicit']}
+    if not approved and not sel['daily']:
         return book
     if sel['corr'] is not None:
         for i, a in enumerate(chosen):
@@ -215,7 +288,7 @@ def build_book(capital, risk_pct, stop_mult, loss_limit_pct, today=None, max_n=M
             book['warnings'].append(f"{prod} is on Watch: {a.get('status_reason', '')}")
         try:
             exits = a.get('exits') or {}
-            st = intraday_state(prod, a['candidate'], exits or None)
+            st = intraday_state(prod, a['candidate'], exits or None, night=a.get('session') == 'night+day')
             sz = size_position(prod, exits, st['last_price'], capital, risk_pct, stop_mult, close=close)
             sigma, stop_pts, lots, mult = sz['daily_sigma'], sz['stop_pts'], sz['lots'], sz['multiplier']
             row['stop_src'] = sz['stop_src']
@@ -239,6 +312,38 @@ def build_book(capital, risk_pct, stop_mult, loss_limit_pct, today=None, max_n=M
             if row['stale']:
                 book['warnings'].append(f"{prod}: latest intraday data is {st['last_time']:%Y-%m-%d %H:%M}, "
                                         f"older than the last trading day")
+        except Exception as e:
+            row['error'] = str(e)
+        book['rows'].append(row)
+
+    for prod in sel['daily']:   # daily strategies: signal on today's forming bar, own risk budget, held overnight
+        a = sel['approved_daily'][prod]
+        row = {'product': prod, 'key': daily_key(prod), 'daily': True, 'candidate': a['candidate'],
+               'multiplier': CONTRACT_MULTIPLIER.get(prod)}
+        if a.get('status') == 'watch':
+            book['warnings'].append(f"{prod} daily is on Watch: {a.get('status_reason', '')}")
+        try:
+            st = daily.daily_state(prod, a)
+            sz = size_position(prod, {}, st['last_px'], capital, risk_pct, stop_mult, close=close)
+            stop_pts, lots, mult = sz['stop_pts'], sz['lots'], sz['multiplier']
+            direction, entry_px = st['position'], st['entry_px']
+            row.update(
+                contract=st['contract'], last_price=st['last_px'], last_time=st['as_of'], signal=direction,
+                held=st['held'], since=st['since'], daily_sigma=sz['daily_sigma'], stop_pts=stop_pts, lots=lots,
+                stop_src='σ', entry_price=entry_px if direction else None,
+                stop_price=entry_px - direction * stop_pts if direction and entry_px is not None else None,
+                target_price=None, risk_cny=lots * stop_pts * mult, notional=lots * st['last_px'] * mult,
+                stale=not st['fresh'])
+            if lots == 0:
+                book['warnings'].append(f"{prod} daily: one lot risks {stop_pts * mult / capital * 100:.2f}% of capital "
+                                        f"at this stop, above the {risk_pct:g}% budget: no position")
+            if not st['fresh']:
+                book['warnings'].append(f"{prod} daily: the series ends {st['day']:%Y-%m-%d}: start the Live monitor (or wait for "
+                                        f"your data app) to bring in the latest days; no tickets until then")
+            intra = next((r for r in book['rows'] if r['product'] == prod and not r.get('daily') and 'error' not in r), None)
+            if intra and intra['signal'] and direction and intra['signal'] != direction:
+                book['warnings'].append(f"{prod}: intraday is {'long' if intra['signal'] > 0 else 'short'} but daily is "
+                                        f"{'long' if direction > 0 else 'short'}: they net out on the same contract at your broker")
         except Exception as e:
             row['error'] = str(e)
         book['rows'].append(row)

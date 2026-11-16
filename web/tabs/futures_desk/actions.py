@@ -16,6 +16,7 @@ Pure logic: rows come from monitor.live_state, sizing from pool.size_position, t
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from .contracts import app_code, day_close, order_words, price_fmt, round_tick, tick_of
@@ -122,6 +123,69 @@ def product_actions(row, sizing, log, now=None):
         c['ticket'] = _ticket(-d, False, c_lots, contract, prod, c['limit'])
         c['slip_ticks'] = -d * (c['fill'] - t['exit_px']) / tick if (c['fill'] is not None and tick) else None
         out.append(c)
+    return out
+
+
+def daily_actions(row, sizing, log, now=None):
+    """Tickets for a daily strategy's change of position at today's close (daily.daily_state rows).
+
+    The position held now was decided at yesterday's close; the strategy wants `units` at today's close
+    (one unit = 1 / max_units of the sized lots; a plain strategy is 1 unit). The change gives a Close ticket for
+    what comes off and an Open ticket for what goes on: a side change closes the old side and opens the new one,
+    adding units opens more, cutting units closes some. To trade in the last minutes before the close. They are
+    'forming' (provisional: the daily bar is still moving) until `final_at`, 'pending' from then, 'done' once
+    ticked, and 'missed' when the day closes without them."""
+    prod, contract, last = row['product'], row['contract'], row['last_px']
+    tick = tick_of(prod)
+    full = sizing['lots'] if sizing else 0
+    umax = float(row.get('max_units') or 1.0)
+    held_u = float(row.get('held_units', row['held']))
+    target_u = float(row.get('units', row['position']))
+    to_lots = lambda u: int(round(full * abs(u) / umax))
+    held_l, target_l = int(np.sign(held_u)) * to_lots(held_u), int(np.sign(target_u)) * to_lots(target_u)
+    steps = []   # (kind, side of the position, lots)
+    if full == 0:   # one lot risks more than the budget: nothing to trade, but a new side is shown as unsized
+        if target_u != 0 and np.sign(target_u) != np.sign(held_u):
+            steps.append(('open', int(np.sign(target_u)), 0))
+    elif held_l == target_l:
+        return []
+    elif held_l * target_l < 0 or target_l == 0:
+        steps.append(('close', int(np.sign(held_u)), abs(held_l)))
+        if target_l:
+            steps.append(('open', int(np.sign(target_u)), abs(target_l)))
+    elif abs(target_l) > abs(held_l):
+        steps.append(('open', int(np.sign(target_u)), abs(target_l) - abs(held_l)))
+    else:
+        steps.append(('close', int(np.sign(held_u)), abs(held_l) - abs(target_l)))
+    close_t = pd.Timestamp(row['close_at'])
+    final = pd.Timestamp(row['final_at'])
+    out = []
+    for kind, d, n_plan in steps:
+        if d == 0 or (n_plan == 0 and not (kind == 'open' and full == 0)):
+            continue
+        key = action_key(f"{prod}1D", close_t, kind)
+        lg = log.get(key, {})
+        done = bool(lg.get('done'))
+        n = int(lg.get('lots', n_plan)) if done else n_plan
+        if done:
+            state = 'done'
+        elif row.get('closed'):
+            state = 'missed'
+        elif kind == 'open' and n == 0:
+            state = 'unsized'
+        elif now is not None and pd.Timestamp(now) < final:
+            state = 'forming'
+        else:
+            state = 'pending'
+        order_dir = d if kind == 'open' else -d
+        limit = round_tick(last + order_dir * LIMIT_TICKS * (tick or 0), prod)
+        stop = round_tick(last - d * sizing['stop_pts'], prod) if kind == 'open' and sizing and sizing.get('stop_pts') else None
+        a = {'key': key, 'product': prod, 'contract': contract, 'kind': kind, 'time': close_t, 'direction': order_dir,
+             'lots': n, 'signal_px': last, 'state': state, 'stop': stop, 'target': None, 'fill': lg.get('fill'),
+             'done_at': lg.get('at'), 'final_at': final, 'limit': limit, 'daily': True,
+             'ticket': _ticket(order_dir, kind == 'open', n, contract, prod, limit)}
+        a['slip_ticks'] = order_dir * (a['fill'] - last) / tick if (a['fill'] is not None and tick) else None
+        out.append(a)
     return out
 
 

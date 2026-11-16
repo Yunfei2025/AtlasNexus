@@ -13,23 +13,30 @@ from futures.backtest.costs import apply_costs, trade_stats
 from futures.backtest.live_bars import (
     china_now, live_meta_for, load_live, load_night, night_meta_for, night_session, with_live,
 )
-from futures.backtest.minute_bars import load_minute_bars
+from futures.backtest import night as night_mod
+from futures.backtest.minute_bars import export_monitor_slice, load_minute_bars
 from futures.backtest.walkforward import (
     STRATEGIES, daily_pnl_of, load_walkforward, product_minute_bars, resample_bars,
 )
 
 from . import approvals
+from . import daily as daily_mod
 
 HAIRCUT = 0.5          # expected mean = this share of the walk-forward mean (selection bias)
 MIN_FORWARD_DAYS = 5   # fewer forward days than this is too early for a band verdict
 BAND_HORIZON = 20      # the expected cone is drawn at least this many days ahead
 
 
+def is_night_day(rec):
+    """True for a strategy approved on night + day bars (approvals.approve with a night + day walk-forward)."""
+    return (rec or {}).get('session') == 'night+day'
+
+
 def forward_replay(product, rec):
     """Daily net P&L of the approved strategy on each main-contract day after rec['wf_last_day'], from the
     tick files or the shared minute-bar cache. Returns {'series', 'trades', 'win'} (empty before any
     forward day)."""
-    contract = product_minute_bars(product, latest=3)
+    contract = product_minute_bars(product, latest=3, night=is_night_day(rec))
     empty = {'series': pd.Series(dtype=float), 'trades': 0, 'win': float('nan')}
     if not contract:
         return empty
@@ -92,28 +99,56 @@ def losing_streak(series):
     return n
 
 
-def assess(series, mean, std, watch_sig=1.0, halt_sig=2.0, halt_losses=5):
+def longest_losing_run(series):
+    """Longest run of consecutive losing days anywhere in `series` (flat days neither extend nor break it)."""
+    best = cur = 0
+    for v in series[series != 0]:
+        cur = cur + 1 if v < 0 else 0
+        best = max(best, cur)
+    return best
+
+
+def evidence_streak(product, rec):
+    """The approved strategy's own longest losing run in its walk-forward, up to the approval's last day (None
+    when the run is not on file). A stop-heavy strategy with a low win rate has long losing runs by design, so
+    the Monitor judges its forward streak against this, not against one number for every strategy."""
+    if rec.get('max_streak') is not None:
+        return int(rec['max_streak'])
+    wf = load_walkforward(product, approvals.DESK_DIR, night=is_night_day(rec)) or {}
+    s = pd.Series(((wf.get('daily_pnl') or {}).get(rec['candidate'])) or {}, dtype=float)
+    s = s[s.index <= rec['wf_last_day']]
+    return longest_losing_run(s) if len(s) else None
+
+
+def assess(series, mean, std, watch_sig=1.0, halt_sig=2.0, halt_losses=5, max_streak=None):
     """Compare forward P&L with the expected path (haircut mean, walk-forward std).
-    Returns status 'early' | 'ok' | 'watch' | 'halted' with the reasons and the z-score."""
+    Returns status 'early' | 'ok' | 'watch' | 'halted' with the reasons and the z-score.
+
+    A losing streak halts at `halt_losses` days, or, when the strategy's own walk-forward lost more days in a row
+    than that (max_streak), only once it beats that run; it watches two days earlier (at least 2)."""
     n = len(series)
     streak = losing_streak(series)
+    halt_at = max(halt_losses, (max_streak or 0) + 1)
+    watch_at = max(halt_at - 2, 2)
+    own = f" (its walk-forward's longest run was {max_streak})" if max_streak and halt_at > halt_losses else ""
     z = None
     if n and mean is not None and std:
         z = float((series.sum() - HAIRCUT * mean * n) / (std * math.sqrt(n)))
     reasons = []
     if z is not None and z <= -halt_sig:
         reasons.append(f"P&L {z:+.1f}σ below the expected path")
-    if streak >= halt_losses:
-        reasons.append(f"{streak} losing days in a row")
+    if streak >= halt_at:
+        reasons.append(f"{streak} losing days in a row{own}")
     if reasons:
-        return {'status': 'halted', 'z': z, 'streak': streak, 'reasons': reasons}
+        return {'status': 'halted', 'z': z, 'streak': streak, 'reasons': reasons, 'halt_at': halt_at}
     if z is not None and z <= -watch_sig:
         reasons.append(f"P&L {z:+.1f}σ below the expected path")
-    if streak >= max(halt_losses - 2, 2):
-        reasons.append(f"{streak} losing days in a row")
+    if streak >= watch_at:
+        reasons.append(f"{streak} losing days in a row{own}")
     if reasons:
-        return {'status': 'watch', 'z': z, 'streak': streak, 'reasons': reasons}
-    return {'status': 'early' if n < MIN_FORWARD_DAYS else 'ok', 'z': z, 'streak': streak, 'reasons': []}
+        return {'status': 'watch', 'z': z, 'streak': streak, 'reasons': reasons, 'halt_at': halt_at}
+    return {'status': 'early' if n < MIN_FORWARD_DAYS else 'ok', 'z': z, 'streak': streak, 'reasons': [],
+            'halt_at': halt_at}
 
 
 def band(mean, std, n_days, k):
@@ -126,13 +161,35 @@ def band(mean, std, n_days, k):
 def monitor_rows(watch_sig=1.0, halt_sig=2.0, halt_losses=5):
     """One entry per approved/watch/halted product with its forward replay and assessment."""
     out = []
-    for prod, rec in approvals.load_approved().items():
-        row = {'product': prod, 'rec': rec, 'current': rec.get('status', 'approved')}
+    approved = approvals.load_approved()
+    members = approvals.load_portfolio()   # the Monitor follows the portfolio; no saved portfolio = every approval
+    if members is not None:
+        approved = {p: r for p, r in approved.items() if p in members}
+    try:   # keep the small bar slice (what a computer without the full cache shows) current
+        export_monitor_slice({p: r for p, r in approved.items() if r.get('wf_last_day')})
+    except Exception:
+        pass
+    for prod, rec in approved.items():
+        row = {'product': prod, 'key': prod, 'rec': rec, 'current': rec.get('status', 'approved')}
         try:
             mean, std = evidence_moments(prod, rec)
             fwd = with_finished_live_day(prod, rec, forward_replay(prod, rec))
             row.update(fwd=fwd, mean=mean, std=std,
-                       **{'assessment': assess(fwd['series'], mean, std, watch_sig, halt_sig, halt_losses)})
+                       **{'assessment': assess(fwd['series'], mean, std, watch_sig, halt_sig, halt_losses,
+                                               max_streak=evidence_streak(prod, rec))})
+        except Exception as e:
+            row['error'] = str(e)
+        out.append(row)
+    keys = None if members is None else {k[:-3] for k in members if k.endswith('|1D')}
+    for prod, rec in approvals.load_approved_daily().items():   # daily strategies: their own series, held overnight
+        if keys is not None and prod not in keys:
+            continue
+        row = {'product': prod, 'key': f'{prod}|1D', 'daily': True, 'rec': rec, 'current': rec.get('status', 'approved')}
+        try:
+            fwd = daily_mod.forward_replay_daily(prod, rec)
+            row.update(fwd=fwd, mean=rec.get('daily_mean'), std=rec.get('daily_std'),
+                       **{'assessment': assess(fwd['series'], rec.get('daily_mean'), rec.get('daily_std'), watch_sig,
+                                               halt_sig, halt_losses, max_streak=rec.get('max_streak'))})
         except Exception as e:
             row['error'] = str(e)
         out.append(row)
@@ -188,8 +245,55 @@ def live_state(product, rec, now=None, live_dir=None):
     day = pd.Timestamp(meta['date'])
     closed = bool(meta.get('complete'))
     live, _ = load_live(contract, live_dir)
-    bars = with_live(load_minute_bars(contract), live)
+    if is_night_day(rec):
+        bars = with_live(load_minute_bars(contract, night=True, live_dir=live_dir), live)
+        bars = night_mod.with_night(bars, night_mod.load_night_history(contract, live_dir))   # tonight's night joins today
+        return _unshifted(_session_state(product, contract, rec, bars, day, closed, meta['fetched_at']), bars)
+    bars = with_live(load_minute_bars(contract, live_dir=live_dir), live)
     return _session_state(product, contract, rec, bars, day, closed, meta['fetched_at'])
+
+
+def _unshifted(st, bars, extra_days=()):
+    """A session state computed on a night + day frame with its night stamps put back to real exchange time."""
+    if st is None:
+        return None
+    days = pd.DatetimeIndex(sorted(set(bars.index[(bars.index - bars.index.normalize()) >= night_mod.DAY_OPEN].normalize())
+                                   | {pd.Timestamp(d) for d in extra_days}))
+    un = lambda t: night_mod.unshift(t, days)
+    st['bars'] = st['bars'].set_axis([un(t) for t in st['bars'].index])
+    st['trades'] = [dict(t, entry_t=un(t['entry_t']), exit_t=un(t['exit_t'])) for t in st['trades']]
+    st.update(as_of=un(st['as_of']), since=un(st['since']), exited_at=un(st['exited_at']), session='night+day')
+    return st
+
+
+def night_led_state(product, rec, now=None, live_dir=None):
+    """The next trade day's session while only its night part has traded (20:55 to 08:55): a night + day
+    strategy is already working then, so its position, signals and tickets belong to that coming day. Built on
+    the cached night + day bars plus the live night file stamped onto the coming trade date. None outside that
+    window, for a product without a night session, or without a night file for tonight."""
+    now = now or china_now()
+    win = night_session(product, now)
+    t = now.strftime('%H:%M:%S')
+    if win is None or not (t >= '20:55:00' or t < '08:55:00'):
+        return None
+    contract, meta = night_meta_for(product, live_dir)
+    if contract is None or meta.get('date') != win[0]:
+        return None
+    live_night, _ = load_night(contract, live_dir)
+    if live_night is None or live_night.empty:
+        return None
+    from curves.utils.cn_calendar import is_cn_workday
+    day = pd.Timestamp(win[0]) + pd.Timedelta(days=1)
+    while not is_cn_workday(day.date()):
+        day += pd.Timedelta(days=1)
+    hist = load_minute_bars(contract, night=True, live_dir=live_dir)
+    live_day, live_meta = load_live(contract, live_dir)
+    if live_day is not None and live_meta and pd.Timestamp(live_meta['date']) < day:   # today's day session, not cached yet
+        hist = night_mod.with_night(with_live(hist, live_day), night_mod.load_night_history(contract, live_dir))
+    bars = pd.concat([hist, night_mod.restamp_onto(live_night, day).reindex(columns=hist.columns)])
+    bars = bars[~bars.index.duplicated(keep='last')].sort_index()
+    st = _session_state(product, contract, rec, bars, day, False, meta['fetched_at'])
+    return _unshifted(st, bars, extra_days=[win[0]])
 
 
 def _session_state(product, contract, rec, bars, day, closed, fetched_at):

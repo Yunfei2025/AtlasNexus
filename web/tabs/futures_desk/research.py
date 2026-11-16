@@ -11,12 +11,14 @@ from dash.exceptions import PreventUpdate
 from dash.dependencies import Input, Output, State
 
 from futures.backtest.costs import describe_exits, normalize_exits, product_of
+from futures.backtest.live_bars import NIGHT_END
 from futures.backtest.minute_bars import list_contracts, load_minute_bars
 from futures.backtest.walkforward import (
     PANEL_STRATEGY, load_walkforward, run_walkforward, save_walkforward,
 )
 
-from .approvals import DESK_DIR, approve, candidate_exits, load_approved
+from .approvals import DESK_DIR, approve, approve_daily, candidate_exits, daily_gate, load_approved, load_approved_daily
+from .pool import add_to_portfolio
 
 _TH = {'padding': '5px 8px', 'textAlign': 'right', 'fontSize': '8px', 'color': 'var(--text-muted)',
        'textTransform': 'uppercase', 'letterSpacing': '0.05em', 'whiteSpace': 'nowrap'}
@@ -42,6 +44,7 @@ def _cell(txt, color='var(--text-secondary)', left=False, bold=False, pick=None)
 
 
 MAX_SHOWN = 10
+MIN_SHOWN_NIGHT = 5   # the night table shows at least this many candidates, passing or not
 
 
 def wf_table(wf, approved_candidate=None):
@@ -103,6 +106,45 @@ def wf_table(wf, approved_candidate=None):
                               "look at a strategy anyway.", style={'fontSize': '10px', 'color': _AMBER_TXT}),
         overnight_by_contract(wf, passing, approved_candidate),
         daily_table(wf),
+    ])
+
+
+def night_table(wf):
+    """A night + day run: every candidate (none can pass yet), the day-only result next to it and both P&Ls on the
+    trade days that really had a night session. Information only: it cannot be approved."""
+    g = wf['gates']
+    n, need = wf.get('night_days', 0), g.get('min_night_days', 0)
+    head = ["Candidate", "Day only", "Night + day", "± SE", "Night days", "P&L day only", "P&L with night", "Δ P&L", "Gate"]
+    ranked = sorted(wf['rows'].items(), key=lambda kv: -(-9 if math.isnan(kv[1]['pooled']) else kv[1]['pooled']))
+    # the candidates that pass, best first, topped up with the best of the rest so at least MIN_SHOWN_NIGHT show
+    rows = [kv for kv in ranked if kv[1]['passes']]
+    rows += [kv for kv in ranked if not kv[1]['passes']][:max(0, MIN_SHOWN_NIGHT - len(rows))]
+    rows = rows[:MAX_SHOWN]
+    body = []
+    for name, r in rows:
+        c = r.get('night_cmp') or {}
+        delta = None if not c else c['with_night'] - c['day_only']
+        body.append(html.Tr([
+            _cell(name, left=True, bold=True), _cell(*_num(c.get('day_pooled'), '+.2f')), _cell(*_num(r['pooled'], '+.2f')),
+            _cell(*_num(r['se'], '.2f', color=False)), _cell(str(c.get('days', '—'))),
+            _cell(*_num(None if not c else c['day_only'] * 100, '+.2f')),
+            _cell(*_num(None if not c else c['with_night'] * 100, '+.2f')),
+            _cell(*_num(None if delta is None else delta * 100, '+.2f')),
+            _cell('pass', _GREEN) if r['passes'] else
+            _cell(f"needs {need} night days" if r.get('passes_ex_night') else "fails the day gates", _AMBER_TXT)],
+            style={'borderBottom': '1px solid rgba(255,255,255,0.04)'}))
+    return html.Div([
+        html.Div(f"{wf['product']} · night + day session · {wf['days']} days to {wf['last_day']} · run {wf['run_at']}",
+                 style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '2px'}),
+        html.Div(f"Only {n} of {wf['days']} trade days have a night session on file; at least {need} are needed before "
+                 f"a candidate can pass. The best {len(rows)} are shown (top 5 when fewer pass); the Gate column says why one does not pass. The P&L columns compare the two sessions on those days only (% of "
+                 "notional, summed). The night history is being collected from the live fetch plus the 7-night "
+                 "backfill, so read this as a preview. Night + day runs cannot be approved: Today, the Monitor and "
+                 "the book trade the day session only.",
+                 style={'fontSize': '10px', 'color': _AMBER_TXT, 'marginBottom': '6px'}),
+        html.Div(html.Table([html.Thead(html.Tr([html.Th(h, style={**_TH, 'textAlign': 'left' if i == 0 else 'right'})
+                                                 for i, h in enumerate(head)])), html.Tbody(body)],
+                            style={'width': '100%', 'borderCollapse': 'collapse'}), style={'overflowX': 'auto'}),
     ])
 
 
@@ -202,7 +244,7 @@ def daily_table(wf):
     dd = wf.get('daily')
     if not dd or not dd.get('rows'):
         return None
-    head = ["Candidate", "Same dates", "± SE", "Days", "Full history", "± SE", "Years", "Trades", "Win", "Payoff", "Exp bp"]
+    head = ["Candidate", "Same dates", "± SE", "Days", "Full history", "± SE", "Years", "Trades", "Win", "Payoff", "Exp bp", "Gate"]
     body = []
     for name, r in sorted(dd['rows'].items(), key=lambda kv: -(kv[1]['recent'] if not math.isnan(kv[1]['recent']) else -9)):
         body.append(html.Tr([
@@ -214,14 +256,17 @@ def daily_table(wf):
             _cell(str(r['trades'])),
             _cell('—' if r['win'] is None or math.isnan(r['win']) else f"{r['win'] * 100:.0f}%"),
             _cell(*_num(r['payoff'], '.2f', color=False)), _cell(*_num(r['expectancy_bp'], '+.1f')),
+            _cell('pass', _GREEN) if daily_gate(dd, name)[0] else _cell('—', 'var(--text-muted)'),
         ], style={'borderBottom': '1px solid rgba(255,255,255,0.04)'}))
     return html.Div([
         html.Div("Daily strategies (held overnight)", style={'fontSize': '10px', 'fontWeight': '600',
                                                            'color': 'var(--text-primary)', 'margin': '10px 0 2px'}),
         html.Div(f"Continuous daily series {dd['start']} to {dd['end']}, default parameters, same cost per side, no "
                  f"stop / target. 'Same dates' = Sharpe over the days of the intraday run above (the fair comparison, "
-                 f"but a short sample: see ± SE); 'Full history' uses all years. Daily positions carry overnight gap "
-                 f"risk and are research-only (not approvable). Rolls of the continuous series are not adjusted.",
+                 f"but a short sample: see ± SE); 'Full history' uses all years. Gate = full-history Sharpe above 0 on at "
+                 f"least {dd.get('min_trades', 30)} trades: a candidate that passes can be approved next to the product's "
+                 f"intraday strategy (pick it below). It is traded near the close and held overnight, so it carries "
+                 f"gap risk the stop cannot cap. Rolls of the continuous series are not adjusted.",
                  style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '4px'}),
         html.Div(html.Table([html.Thead(html.Tr([html.Th(h, style={**_TH, 'textAlign': 'left' if i == 0 else 'right'})
                                                  for i, h in enumerate(head)])), html.Tbody(body)],
@@ -229,25 +274,52 @@ def daily_table(wf):
     ])
 
 
+def portfolio_message(product, daily=False):
+    """Approving puts the product in the Portfolio; says what happened (a full portfolio does not undo the approval)."""
+    try:
+        members = add_to_portfolio(product, daily=daily)
+        return f" Added to the Portfolio ({', '.join(members)})."
+    except ValueError as e:
+        return " Already in the Portfolio." if 'already' in str(e) else f" Not added to the Portfolio: {e}."
+
+
 def approved_note(product):
     a = load_approved().get(product) if product else None
-    if not a:
+    d = load_approved_daily().get(product) if product else None
+    if not a and not d:
         return f"{product or '—'}: not approved."
+    night = (f" · night + day, {a.get('night_days', 0)} night days" + (" (forced)" if a.get('forced') else "")
+             if a and a.get('session') == 'night+day' else "")
+    daily = (f" · daily: {d['candidate']} (full history {d['pooled_sharpe']:+.2f} ± {d['sharpe_se']:.2f}, "
+             f"{d['years_positive']}/{d['years']} years +)" if d else "")
+    if not a:
+        return f"{product}: no intraday strategy" + daily
     return (f"{product}: approved {a['candidate']} on {a['approved_at']} · pooled Sharpe {a['pooled_sharpe']:+.2f} "
-            f"± {a['sharpe_se']:.2f} · cost {a['cost_bp']:.2f}bp")
+            f"± {a['sharpe_se']:.2f} · cost {a['cost_bp']:.2f}bp" + night + daily)
+
+
+def _night_pick_options(wf):
+    """Night + day candidates that pass every day gate (the night-days gate can be forced), best first."""
+    ok = sorted(((k, r) for k, r in wf['rows'].items() if r.get('passes_ex_night')), key=lambda kv: -kv[1]['pooled'])
+    return [{'label': f"{k}" + (f" · {describe_exits(r['exits'])}" if r.get('exits') else '') +
+                      f" · pooled {r['pooled']:+.2f} ± {r['se']:.2f}", 'value': k} for k, r in ok]
 
 
 def _pick_options(wf):
     passing = sorted(((k, r) for k, r in wf['rows'].items() if r['passes']), key=lambda kv: -kv[1]['pooled'])
-    return [{'label': f"{k}" + (f" · {describe_exits(r['exits'])}" if r.get('exits') else '') +
+    opts = [{'label': f"{k}" + (f" · {describe_exits(r['exits'])}" if r.get('exits') else '') +
                       f" · pooled {r['pooled']:+.2f} ± {r['se']:.2f}", 'value': k} for k, r in passing]
+    dd = wf.get('daily') or {}
+    daily = sorted(((k, r) for k, r in (dd.get('rows') or {}).items() if daily_gate(dd, k)[0]), key=lambda kv: -kv[1]['pooled'])
+    return opts + [{'label': f"{k} · daily, held overnight · full history {r['pooled']:+.2f} ± {r['se']:.2f}", 'value': k}
+                   for k, r in daily]
 
 
 def drill_payload(candidate, contract, selected, source, wind_code, wf_dir=None):
     """What the Research chart needs to show one walk-forward candidate: the strategy and bar size, the
     contract's full date range, and the walk-forward's cost. None when there is no data for the contract."""
     product = product_of(candidate_product(selected, source, wind_code))
-    wf = load_walkforward(product, wf_dir or approvals.DESK_DIR)
+    wf = load_walkforward(product, wf_dir or DESK_DIR)
     if wf is None or candidate not in wf['rows']:
         return None
     contract = contract or (selected if product_of(selected) == product and selected in list_contracts(product)
@@ -284,18 +356,34 @@ def register_research_callbacks(app):
     @app.callback(
         [Output('bf-wf-container', 'children'), Output('bf-wf-pick', 'options'),
          Output('bf-wf-pick', 'value'), Output('bf-wf-approved-note', 'children')],
-        [Input('bf-wf-run', 'n_clicks'), Input('bf-local-symbol', 'value'), Input('bf-wind-code', 'value')],
+        [Input('bf-wf-run', 'n_clicks'), Input('bf-local-symbol', 'value'), Input('bf-wind-code', 'value'),
+         Input('bf-wf-night', 'value')],
         [State('bf-data-source', 'value'), State('bf-trading-mode', 'value'),
          State('bf-stop', 'value'), State('bf-target', 'value'), State('bf-exit-unit', 'value'),
          State('bf-wf-search', 'value')],
     )
-    def bf_walkforward(_n, local_symbol, wind_code, source, mode, stop, target, unit, search):
+    def bf_walkforward(_n, local_symbol, wind_code, night, source, mode, stop, target, unit, search):
         product = product_of(wind_code if source == 'wind' else local_symbol)
         note = approved_note(product)
         hint = lambda t: html.Div(t, style={'fontSize': '10px', 'color': 'var(--text-muted)'})
         if not product:
             return hint("Select a symbol."), [], None, note
         running = ctx.triggered_id == 'bf-wf-run'
+        night = bool(night) and product in NIGHT_END
+        if night:
+            try:
+                if running:
+                    wf = run_walkforward(product, exits=normalize_exits(stop, target, unit),
+                                         search_exits=bool(search), night=True)
+                    save_walkforward(wf, DESK_DIR)
+                else:
+                    wf = load_walkforward(product, DESK_DIR, night=True)
+            except Exception as e:
+                return hint(f"Walk-forward failed: {e}"), [], None, note
+            if wf is None:
+                return hint(f"No night + day walk-forward for {product} yet. Click ▶ Run walk-forward."), [], None, note
+            opts = _night_pick_options(wf)
+            return night_table(wf), opts, (opts[0]['value'] if opts else None), note
         if running and mode != 'intraday':
             return hint("Walk-forward needs intraday contracts: switch Mode to Intraday."), [], None, note
         if running:
@@ -320,16 +408,47 @@ def register_research_callbacks(app):
          Output('bf-wf-container', 'children', allow_duplicate=True)],
         Input('bf-wf-approve', 'n_clicks'),
         [State('bf-wf-pick', 'value'), State('bf-local-symbol', 'value'), State('bf-wind-code', 'value'),
-         State('bf-data-source', 'value')],
+         State('bf-data-source', 'value'), State('bf-wf-night', 'value')],
         prevent_initial_call=True,
     )
-    def bf_approve(_n, candidate, local_symbol, wind_code, source):
+    def bf_approve(_n, candidate, local_symbol, wind_code, source, night):
         product = product_of(wind_code if source == 'wind' else local_symbol)
-        wf = load_walkforward(product, DESK_DIR) if product else None
+        night = bool(night) and product in NIGHT_END   # the table on screen decides which run is approved
+        wf = load_walkforward(product, DESK_DIR, night=night) if product else None
         if not candidate or wf is None:
             return "Run the walk-forward and pick a passing candidate first.", no_update, no_update
+        daily = bool(candidate) and candidate.endswith('@1D')
         try:
-            approve(product, candidate, wf)
+            (approve_daily if daily else approve)(product, candidate, wf)
         except ValueError as e:
             return str(e), no_update, no_update
-        return f"Approved {candidate} for {product}.", approved_note(product), wf_table(wf, candidate)
+        return (f"Approved {candidate} for {product}" + (" as its daily strategy." if daily else ".")
+                + portfolio_message(product, daily=daily), approved_note(product),
+                night_table(wf) if night else wf_table(wf, candidate))
+
+
+    @app.callback(
+        [Output('bf-wf-approve-note', 'children', allow_duplicate=True),
+         Output('bf-wf-approved-note', 'children', allow_duplicate=True),
+         Output('bf-wf-container', 'children', allow_duplicate=True)],
+        Input('bf-wf-force', 'submit_n_clicks'),
+        [State('bf-wf-pick', 'value'), State('bf-local-symbol', 'value'), State('bf-wind-code', 'value'),
+         State('bf-data-source', 'value'), State('bf-wf-night', 'value')],
+        prevent_initial_call=True,
+    )
+    def bf_force_approve(_n, candidate, local_symbol, wind_code, source, night):
+        product = product_of(wind_code if source == 'wind' else local_symbol)
+        if not night or product not in NIGHT_END:
+            return "Force approve is for the night + day table: tick 'include night session' first.", no_update, no_update
+        wf = load_walkforward(product, DESK_DIR, night=True) if product else None
+        if not candidate or wf is None:
+            return "Run the night + day walk-forward and pick a candidate first.", no_update, no_update
+        try:
+            approve(product, candidate, wf, force=True)
+        except ValueError as e:
+            return str(e), no_update, no_update
+        return (f"Force-approved {candidate} for {product} on night + day bars." + portfolio_message(product),
+                approved_note(product),
+                night_table(wf))
+
+

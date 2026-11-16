@@ -67,8 +67,12 @@ def _get_duration_mult(
         Fly        (3 tenors): duration of the middle tenor.
 
     TenorSpread (CGB-*, CDB-*)
-        Pair (2 tenors): duration of the shorter (first) tenor.
-        Fly  (3 tenors): duration of the middle (belly) tenor.
+        Pair (2 tenors): duration of the LONGER tenor (= Leg 1, the leg
+        ``notional_mm`` is quoted in; the other leg is sized by the DV01-neutral
+        ratio, and the residual DV01 is treated as zero).
+        Fly  (3 tenors): duration of the middle (belly) tenor (= Leg 1).
+        Risk parity runs on Δspread x this duration, i.e. the price-change risk of
+        the spread, independent of the order the tenors are written in the ID.
 
     TBondCurve / TBondSwap / CBondCurve / CBondSwap
         Bond IDs. Look up ttm from snapshot; duration ≈ ttm × 0.92.
@@ -117,14 +121,16 @@ def _get_duration_mult(
         # and the s-suffix fallback here (tenors_s[1] for a 2-leg ID).
         tenors_my = re.findall(r'\d+(?:\.\d+)?[mMyY]', tenor_part)
         if tenors_my:
-            idx = 1 if len(tenors_my) >= 2 else 0
+            if len(tenors_my) == 2:  # pair: the longer tenor, whatever the ID order
+                return max(_tenor_to_duration(t.lower()) for t in tenors_my)
+            idx = 1 if len(tenors_my) >= 3 else 0
             return _tenor_to_duration(tenors_my[idx].lower())
         # Fall back to 's' suffix: treat Ns as Ny (N years)
         tenors_s = re.findall(r'(\d+(?:\.\d+)?)s', tenor_part, re.IGNORECASE)
         if len(tenors_s) >= 3:
             return _tenor_to_duration(tenors_s[1] + 'y')  # belly, for flies
-        if len(tenors_s) == 2:
-            return _tenor_to_duration(tenors_s[1] + 'y')  # second (longer) leg
+        if len(tenors_s) == 2:  # pair: the longer tenor, whatever the ID order
+            return max(_tenor_to_duration(t + 'y') for t in tenors_s)
         if tenors_s:
             return _tenor_to_duration(tenors_s[0] + 'y')
         return 1.0

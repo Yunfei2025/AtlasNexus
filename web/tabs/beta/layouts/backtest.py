@@ -1027,8 +1027,12 @@ def build_factor_backtest_layout():
         html.Div([
             html.Span("Walk-forward & Approval", style=_title),
             html.Span("all contracts · default params · net of costs · flat at close", style=_badge),
+            dcc.Checklist(id='bf-wf-night', options=[{'label': ' include night session', 'value': 'on'}],
+                          value=[], style={'marginLeft': 'auto'}, persistence=True, persistence_type='local',
+                          labelStyle={'fontSize': '10px', 'color': 'var(--text-muted)', 'cursor': 'pointer'},
+                          inputStyle={'marginRight': '4px', 'cursor': 'pointer'}),
             dcc.Checklist(id='bf-wf-search', options=[{'label': ' search stop / target', 'value': 'on'}],
-                          value=['on'], style={'marginLeft': 'auto'},
+                          value=['on'],
                           labelStyle={'fontSize': '10px', 'color': 'var(--text-muted)', 'cursor': 'pointer'},
                           inputStyle={'marginRight': '4px', 'cursor': 'pointer'}),
             html.Button("▶ Run walk-forward", id='bf-wf-run', n_clicks=0, title=(
@@ -1044,7 +1048,18 @@ def build_factor_backtest_layout():
             html.Div([
                 dcc.Dropdown(id='bf-wf-pick', placeholder="Candidate to approve (only those passing the gates)",
                              clearable=False, style={'flex': 1, 'fontSize': '10px'}),
-                html.Button("✔ Approve", id='bf-wf-approve', n_clicks=0, style=_btn),
+                html.Button("✔ Approve", id='bf-wf-approve', n_clicks=0, style=_btn, title=(
+                    "Approve this candidate and put the product in the Portfolio (replacing its earlier strategy, "
+                    "if any). Take it out again in the Portfolio tab.")),
+                dcc.ConfirmDialogProvider(
+                    id='bf-wf-force', message=(
+                        "Force-approve this night + day candidate? It has fewer night-session days than the gate "
+                        "needs, so the night part is barely tested. It still has to pass every day gate. The "
+                        "approval is recorded as forced, and Today, the Monitor and the orders will trade it on "
+                        "night + day bars."),
+                    children=html.Button("⚠ Force approve (night + day)", style=_btn, title=(
+                        "Only for the night + day table (tick 'include night session'): approves a candidate "
+                        "that passes every day gate but has too few night days.")))
             ], style={'display': 'flex', 'gap': '8px', 'alignItems': 'center', 'marginTop': '10px'}),
             html.Div(id='bf-wf-approve-note', style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginTop': '4px'}),
         ], style={'padding': '10px 16px 12px'}),

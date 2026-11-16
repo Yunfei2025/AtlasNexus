@@ -70,10 +70,7 @@ from web.tabs.beta import (
 from web.tabs.risk import build_risk_layout, register_risk_callbacks
 from web.tabs.futures_desk import build_futures_desk_layout, register_futures_desk_callbacks
 
-from web.tabs.volatility import (
-    build_volatility_layout,
-    register_volatility_callbacks,
-)
+from web.tabs.volatility import register_volatility_callbacks
 
 from web.tabs.market import (
     build_trend_layout,
@@ -547,7 +544,6 @@ def build_tabs_panel():
                     dcc.Tab(label="Backtest",   value="backtest",   className="an-subtab", selected_className="an-subtab--selected an-subtab--amber"),
                     dcc.Tab(label="Spread",     value="spreads",    className="an-subtab", selected_className="an-subtab--selected an-subtab--amber"),
                     dcc.Tab(label="Pairs",      value="pairs",      className="an-subtab", selected_className="an-subtab--selected an-subtab--amber"),
-                    dcc.Tab(label="Volatility", value="volatility", className="an-subtab", selected_className="an-subtab--selected an-subtab--amber"),
                 ],
                 style={**summary_subtabs_style, "marginTop": "8px"},
                 colors={**summary_subtabs_colors, "primary": "#f39c12"},
@@ -558,7 +554,6 @@ def build_tabs_panel():
                 html.Div(id="alpha-backtest-div",   children=build_backtest_layout(),   style={"display": "none"}),
                 html.Div(id="alpha-spreads-div",    children=build_spreads_layout(),    style={"display": "none"}),
                 html.Div(id="alpha-pairs-div",      children=build_pairs_layout(),      style={"display": "none"}),
-                html.Div(id="alpha-volatility-div", children=build_volatility_layout(), style={"display": "none"}),
             ], style={"position": "relative"}),
         ],
         className="an-tab-pane",
@@ -1193,8 +1188,8 @@ def _switch_an_tabs_current(active):
 
 _make_tab_switcher(
     "fd-subtabs",
-    ["fd-today-div", "fd-research-div", "fd-monitor-div"],
-    ["today",        "research",        "monitor"],
+    ["fd-today-div", "fd-research-div", "fd-monitor-div", "fd-volatility-div"],
+    ["today",        "research",        "monitor",        "volatility"],
 )
 _make_tab_switcher(
     "an-beta-subtabs",
@@ -1221,9 +1216,9 @@ _make_tab_switcher(
 _make_tab_switcher(
     "an-alpha-subtabs",
     ["alpha-candidates-div", "alpha-portfolio-div", "alpha-backtest-div",
-     "alpha-spreads-div",    "alpha-pairs-div",     "alpha-volatility-div"],
+     "alpha-spreads-div",    "alpha-pairs-div"],
     ["candidates",           "portfolio",           "backtest",
-     "spreads",              "pairs",               "volatility"],
+     "spreads",              "pairs"],
 )
 
 

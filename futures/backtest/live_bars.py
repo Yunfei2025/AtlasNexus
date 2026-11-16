@@ -1,7 +1,7 @@
 """Live 1-minute bars for the Futures Desk Monitor, fetched from Wind only for the products asked for.
 
 One small `wsi` call per product and refresh: only the minutes after the last stored bar are requested, and the
-result is merged into input/futures_desk/live/<contract>.parquet (today's bars only, replaced each day). Outside
+result is merged into database/futures_desk/live/<contract>.parquet (today's bars only, replaced each day). Outside
 trading hours nothing is requested. FI_DISABLE_WIND (set by the daily console) blocks only the passive view;
 ▶ Start live is an explicit request and calls Wind on demand (in the isolated Wind worker). The desk reads these files as an overlay on
 top of the settled minute-bar cache; they never enter the cache, the walk-forward or the Monitor's forward
@@ -26,9 +26,9 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from settings.paths import DIR_INPUT
+from settings.paths import DIR_DATA
 
-LIVE_DIR = DIR_INPUT / 'futures_desk' / 'live'
+LIVE_DIR = DIR_DATA / 'futures_desk' / 'live'   # time series grow daily: kept out of the input repo
 SESSION_START = '08:55:00'
 CLOSE_TIME = '15:15:00'   # after this a day session is over (CFFEX bond futures close 15:15)
 FIELDS = "open,high,low,close,volume"
@@ -236,6 +236,22 @@ NIGHT_END = {'AU': '02:30:00', 'AG': '02:30:00', 'AL': '01:00:00', 'CU': '01:00:
 NIGHT_INDEX = 'index_night.json'
 
 
+def night_contract_of(product, night_date, dvol=None):
+    """Contract a night session belongs to by the volume rule (night.main_after); None when the bar cache has no
+    volume for the product, so the caller falls back to the main-contract list. The list can lead or trail the
+    volume-based main contract around a roll, which put a night on the wrong contract."""
+    try:
+        from .night import daily_volume, main_after
+        return main_after(dvol if dvol is not None else daily_volume(product), night_date)
+    except Exception:
+        return None
+
+
+def _night_code(code, contract):
+    """`code` (e.g. 'AL2612.SHF') re-pointed at `contract`, keeping the exchange suffix."""
+    return f"{contract}.{code.split('.')[1]}" if contract and '.' in code else code
+
+
 def night_session(product, now):
     """(day, start, end, open_now) of the night session that is open, or else the last finished one, for a
     product with a night session (None otherwise). `day` is the evening it starts on (Beijing); Friday's
@@ -360,9 +376,10 @@ def fetch_night_bars(products, now=None, wsi=None, codes=None, live_dir=None, cl
             if not code:
                 out[prod] = {'error': 'no main contract code on file'}
                 continue
-            contract = code.split('.')[0]
             try:
                 day, start, end, open_now = night_session(prod, now)
+                code = _night_code(code, night_contract_of(prod, day))
+                contract = code.split('.')[0]
                 old, meta = load_night(contract, live_dir)
                 same = old is not None and meta and meta.get('date') == day and not old.empty
                 if same and meta.get('complete') and not open_now:
@@ -396,3 +413,73 @@ def fetch_night_bars(products, now=None, wsi=None, codes=None, live_dir=None, cl
                 out[prod] = {'error': str(e)}
         _save_night_index(index, live_dir)
     return {'skipped': None, 'products': out, **info}
+
+
+def backfill_night(products=None, days=7, now=None, wsi=None, codes=None, live_dir=None, wind_off=None):
+    """Fetch the last `days` finished night sessions once and add them to night_history/<contract>.parquet.
+
+    One Wind request per product per night, and a night already archived (>= MIN_NIGHT_BARS minute bars in its
+    window) is skipped, so a repeat run costs nothing. Only the archive is written: the live night file and its
+    index (the Monitor's display) are untouched. The contract is today's main contract for every night, which is
+    right unless the product rolled inside the window. Returns {'nights': [...], 'fetched': n, 'skipped': n,
+    'errors': {...}}."""
+    from curves.utils.cn_calendar import is_cn_workday
+    from .night import MIN_NIGHT_BARS
+    now = now or china_now()
+    products = [p for p in (products or list(NIGHT_END)) if p in NIGHT_END]
+    if wsi is None:
+        if wind_off is None:
+            from data.providers.retrieve import _wind_disabled as wind_off
+        if wind_off():
+            return {'nights': [], 'fetched': 0, 'skipped': 0, 'errors': {'wind': 'Wind disabled'}}
+        from data.providers.retrieve import _wsi
+
+        def wsi(*args):
+            return _wsi(*args, on_demand=True)
+    code_of = main_contract_codes(codes)
+    nights, d = [], now.date()
+    while len(nights) < days and (now.date() - d).days < 4 * days + 10:
+        nxt = d + timedelta(days=1)
+        runs = is_cn_workday(d) and (is_cn_workday(nxt) or (d.weekday() == 4 and is_cn_workday(d + timedelta(days=3))))
+        if runs and datetime.combine(d, datetime.min.time()) + timedelta(days=1, hours=3) <= now:
+            nights.append(d)
+        d -= timedelta(days=1)
+    out = {'nights': [str(n) for n in nights], 'fetched': 0, 'skipped': 0, 'errors': {}}
+    dvols = {}
+    for prod in products:   # volume per contract once per product: it decides which contract each night belongs to
+        try:
+            from .night import daily_volume
+            dvols[prod] = daily_volume(prod)
+        except Exception:
+            dvols[prod] = None
+    with fetch_lock:
+        for d in sorted(nights):
+            for prod in products:
+                code = code_of.get(prod)
+                if not code:
+                    out['errors'][prod] = 'no main contract code on file'
+                    continue
+                _, start, end, _ = night_session(prod, datetime.combine(d, datetime.min.time()) + timedelta(hours=22))
+                try:
+                    code = _night_code(code, night_contract_of(prod, d, dvols.get(prod)))
+                    contract = code.split('.')[0]
+                    from .night import load_night_history
+                    hist = load_night_history(contract, live_dir)
+                    if hist is not None and len(hist.loc[start:end]) >= MIN_NIGHT_BARS:
+                        out['skipped'] += 1
+                        continue
+                    new = _normalize_night(wsi(code, FIELDS, start.strftime('%Y-%m-%d %H:%M:%S'),
+                                               (end + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S')), start, end)
+                    if new.empty:
+                        out['errors'][f'{prod} {d}'] = 'no night bars (holiday, or Wind not connected)'
+                        continue
+                    _archive_night(contract, new, live_dir)
+                    out['fetched'] += 1
+                except Exception as e:
+                    out['errors'][f'{prod} {d}'] = str(e)
+    return out
+
+
+if __name__ == '__main__':
+    import sys
+    print(backfill_night(days=int(sys.argv[1]) if len(sys.argv) > 1 else 7))

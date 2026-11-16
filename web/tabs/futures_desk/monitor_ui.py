@@ -49,7 +49,7 @@ def _figure(row, watch_sig, halt_sig):
     fig.update_layout(
         height=210, template=THEME['chart_template'], paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
         font={'color': '#e9eef8', 'size': 10}, margin=dict(l=44, r=8, t=26, b=30), showlegend=False,
-        title={'text': f"{row['product']} · {row['rec']['candidate']}", 'font': {'size': 11}, 'x': 0.01, 'y': 0.96},
+        title={'text': f"{row['product']} · {row['rec']['candidate']}" + (' · daily' if row.get('daily') else ''), 'font': {'size': 11}, 'x': 0.01, 'y': 0.96},
         xaxis={'title': {'text': 'forward trading day', 'font': {'size': 9}}, 'gridcolor': 'rgba(100,140,200,0.12)', 'rangemode': 'tozero'},
         yaxis={'title': {'text': 'return on notional, %', 'font': {'size': 9}}, 'gridcolor': 'rgba(100,140,200,0.12)', 'zeroline': True},
     )
@@ -82,7 +82,7 @@ def monitor_view(rows, watch_sig, halt_sig):
             _td(f"{rec['wf_last_day']}"), _td(str(n)),
             _td(f"{ret:+.2f}%", _GREEN if ret > 0 else (_RED if ret < 0 else 'var(--text-secondary)')),
             _td(f"{exp:+.2f}%"), _td('—' if a['z'] is None else f"{a['z']:+.1f}"),
-            _td(str(a['streak']), _AMBER if a['streak'] >= 3 else 'var(--text-secondary)'),
+            _td(f"{a['streak']} / {a['halt_at']}", _AMBER if a['streak'] >= max(a['halt_at'] - 2, 2) else 'var(--text-secondary)'),
             _td(str(fwd['trades'])), _td(comp[0], comp[1], bold=True), _td(cur[0], cur[1], bold=True),
         ]))
         for why in a['reasons']:
@@ -91,13 +91,13 @@ def monitor_view(rows, watch_sig, halt_sig):
             notes.append(_note(f"{prod} is halted ({rec.get('status_reason', '')}, {rec.get('status_at', '')}); "
                                "re-run the walk-forward and approve again in Research to resume.", _RED))
         graphs.append(dcc.Graph(figure=_figure(r, watch_sig, halt_sig), config={'displayModeBar': False}))
-    head = ["Product", "Strategy", "Evidence to", "Fwd days", "Fwd return", "Expected", "z", "Losing streak",
+    head = ["Product", "Strategy", "Evidence to", "Fwd days", "Fwd return", "Expected", "z", "Losing streak / halts at",
             "Round trips", "Computed", "Stored"]
     return html.Div([
         _table(head, body), *notes,
         html.Div(graphs, style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(340px, 1fr))',
                                 'gap': '8px', 'marginTop': '10px'}),
-        _note(f"Paper replay of each approved strategy (default parameters, its approved cost, flat at the close) "
+        _note(f"Paper replay of each approved strategy (default parameters, its approved cost; intraday ones flat at the close, daily ones held overnight) "
               f"on the local contract files for the trading days after its walk-forward ended; it is not your "
               f"actual fills. Expected path = {HAIRCUT:g} × the walk-forward's mean daily return (haircut for "
               f"selection bias); bands = ±σ·√days from the walk-forward's daily volatility. With fewer than "
@@ -128,8 +128,8 @@ def register_monitor_callbacks(app):
         try:
             rows = monitor_rows(*p)
             opts = [{'label': f"{r['product']} · {r['rec']['candidate']}" + (' (halted)' if r['current'] == 'halted' else ''),
-                     'value': r['product']} for r in rows]   # halted ones too, so they can be removed
-            health = {r['product']: r['assessment']['status'] for r in rows if 'assessment' in r}
+                     'value': r['key']} for r in rows]   # halted ones too, so they can be seen
+            health = {r['key']: r['assessment']['status'] for r in rows if 'assessment' in r}
             return monitor_view(rows, p[0], p[1]), opts, health
         except Exception as e:
             return html.Div(f"Monitor unavailable: {e}", style={'color': _RED, 'fontSize': '11px'}), [], {}
@@ -149,8 +149,8 @@ def register_monitor_callbacks(app):
             new = computed_to_applied(r['current'], r['assessment']['status'])
             if new != r['current']:
                 reason = '; '.join(r['assessment']['reasons']) or 'back within the band'
-                approvals.set_status(r['product'], new, reason)
-                changed.append(f"{r['product']} → {new}")
+                set_status(r['key'], new, reason)
+                changed.append(f"{r['product']}{' daily' if r.get('daily') else ''} → {new}")
         msg = "Applied: " + (', '.join(changed) if changed else "no status changes") + "."
         return msg, {'t': time.time(), 'msg': msg}
 
@@ -162,27 +162,16 @@ def register_monitor_callbacks(app):
     def fd_halt_now(_n, product):
         if not product:
             return "Pick a product to halt.", no_stamp()
-        approvals.set_status(product, 'halted', 'halted manually')
+        set_status(product, 'halted', 'halted manually')
         msg = f"{product} halted manually; it leaves today's book until re-approved in Research."
         return msg, {'t': time.time(), 'msg': msg}
 
-    @app.callback(
-        [Output('fd-mon-note', 'children', allow_duplicate=True),
-         Output('fd-data-stamp', 'data', allow_duplicate=True),
-         Output('fd-mon-pick', 'value', allow_duplicate=True)],
-        Input('fd-mon-remove', 'submit_n_clicks'), State('fd-mon-pick', 'value'), prevent_initial_call=True,
-    )
-    def fd_remove(n, product):
-        if not n:
-            return no_stamp(), no_stamp(), no_stamp()
-        if not product:
-            return "Pick a product to remove.", no_stamp(), no_stamp()
-        try:
-            approvals.remove(product)
-        except ValueError as e:
-            return str(e), no_stamp(), None
-        msg = f"{product} removed; re-approve it in Research to trade it again."
-        return msg, {'t': time.time(), 'msg': msg}, None
+
+def set_status(key, status, reason):
+    """Store a status for an intraday approval (key 'IM') or a daily one (key 'IM|1D')."""
+    if key.endswith('|1D'):
+        return approvals.set_status_daily(key[:-3], status, reason)
+    return approvals.set_status(key, status, reason)
 
 
 def no_stamp():

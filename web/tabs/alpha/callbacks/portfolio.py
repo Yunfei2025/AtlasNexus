@@ -139,10 +139,14 @@ def _upsert_snapshot(new_df: pd.DataFrame, parquet_path: str, id_cols: list[str]
 
 def _scale_notionals_to_capital(
     notional: pd.Series, direction_sign: pd.Series, mask: pd.Series,
-    total_capital_mm: float, lot_mm: float,
+    total_capital_mm: float, lot_mm: float, floor_to_lot: bool = True,
 ) -> pd.Series:
     """Step B: scale the masked (bond/swap/tenor) magnitudes so their net signed
     notional (sum of magnitude x BUY/SELL sign) equals ``total_capital_mm``.
+
+    With ``floor_to_lot=False`` the scaled magnitudes stay unrounded; the caller
+    floors once at the very end. Flooring before this scale-up zeroed any row whose
+    pre-scale size was under one lot, even when its scaled size was far above it.
 
     Returns the magnitudes only -- BUY +/SELL - is applied afterwards. The scale
     divides by abs(net): when SELLs outweigh BUYs the net is negative, and a
@@ -152,8 +156,15 @@ def _scale_notionals_to_capital(
     raw_signed = (notional[mask] * direction_sign[mask]).sum()
     if mask.any() and abs(raw_signed) > 1e-6:
         scale = total_capital_mm / abs(raw_signed)
-        out[mask] = np.floor(notional[mask] * scale / lot_mm) * lot_mm
+        scaled = notional[mask] * scale
+        out[mask] = np.floor(scaled / lot_mm) * lot_mm if floor_to_lot else scaled
     return out
+
+
+def _floor_to_lot(notional: pd.Series, lot_mm: float) -> pd.Series:
+    """Final sizing step: round magnitudes DOWN to the lot (toward zero for SELLs);
+    a row whose final size is under one lot goes to 0."""
+    return np.sign(notional) * np.floor(notional.abs() / lot_mm + 1e-9) * lot_mm
 
 
 def netted_trs_margin_by_leg(
@@ -626,7 +637,10 @@ def register_portfolio_callbacks(app) -> None:
             _lot_mm = min(10.0, max(0.1, round(total_capital_mm / max(n_trades, 1) / 5, 1)))
 
             # Step A: initial unsigned notional from weights
-            df_scored['notional_mm'] = np.floor(df_scored['weight'] * total_capital_mm / _lot_mm) * _lot_mm
+            # Kept unrounded: Steps B/E rescale it, and the minimum-lot floor is
+            # applied once after the margin fit (flooring here zeroed small-weight,
+            # long-duration rows such as CGB-10s30s that scale well above a lot).
+            df_scored['notional_mm'] = df_scored['weight'] * total_capital_mm
 
             # Step B: capital constraint for bond/swap/tenor spreads
             _CAPITAL_TYPES = {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap', 'TenorSpread', 'BondCurve', 'BondSwap'}
@@ -637,6 +651,7 @@ def register_portfolio_callbacks(app) -> None:
             )
             df_scored['notional_mm'] = _scale_notionals_to_capital(
                 df_scored['notional_mm'], _direction_sign, _is_bond, total_capital_mm, _lot_mm,
+                floor_to_lot=False,
             )
 
             # Step C: apply direction sign to all notionals
@@ -675,7 +690,7 @@ def register_portfolio_callbacks(app) -> None:
             _single_side_dv01 = max(_buy_dv01, _sell_dv01) if (_buy_dv01 > 0 and _sell_dv01 > 0) else (_buy_dv01 + _sell_dv01)
             if _single_side_dv01 > 1e-6 and _dv01_budget_k > 0:
                 _dv01_scale = _dv01_budget_k / _single_side_dv01
-                df_scored['notional_mm'] = np.floor(df_scored['notional_mm'] * _dv01_scale / _lot_mm) * _lot_mm
+                df_scored['notional_mm'] = df_scored['notional_mm'] * _dv01_scale
                 df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)
 
             # Step F: Resolve underlying instrument legs for each trade
@@ -876,6 +891,9 @@ def register_portfolio_callbacks(app) -> None:
             _fitted_notional = _fit_notionals_to_margin(
                 df_scored['notional_mm'], lambda n: _portfolio_financing(n)[2], total_capital_mm, _lot_mm,
             )
+            # Single minimum-lot floor (rows under one lot -> 0). Flooring only
+            # shrinks magnitudes, so the margin cap the fit enforced still holds.
+            _fitted_notional = _floor_to_lot(_fitted_notional, _lot_mm)
             if not _fitted_notional.equals(df_scored['notional_mm']):
                 df_scored['notional_mm'] = _fitted_notional
                 df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)
