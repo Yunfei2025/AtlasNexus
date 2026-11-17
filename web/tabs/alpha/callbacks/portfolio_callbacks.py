@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from dash import dcc, html, callback_context
+from dash import dcc, html, callback_context, ctx, no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
@@ -17,13 +17,21 @@ from .helpers import _ALPHA_CORR_COLORSCALE, _get_upstream_regime, _load_alpha_b
 
 def register_portfolio_callbacks(app) -> None:
     @app.callback(
-        Output('alpha-book-positions-store', 'data'),
-        Input('an-alpha-subtabs', 'value'),
+        [Output('alpha-book-positions-store', 'data'),
+         Output('alpha-refresh-positions-status', 'children')],
+        [Input('an-alpha-subtabs', 'value'),
+         Input('alpha-refresh-positions-btn', 'n_clicks')],
     )
-    def refresh_positions_store(active_subtab):
-        if active_subtab != 'portfolio':
+    def refresh_positions_store(active_subtab, _refresh_clicks):
+        # Runs on entering the Portfolio subtab and on the Refresh Saved Positions button, which
+        # re-reads the parquet so a portfolio file updated elsewhere shows up without a restart.
+        clicked = ctx.triggered_id == 'alpha-refresh-positions-btn'
+        if active_subtab != 'portfolio' and not clicked:
             raise PreventUpdate
-        return _load_alpha_book_positions()
+        positions = _load_alpha_book_positions()
+        status = (f"✓ {len(positions)} saved position(s) loaded at {pd.Timestamp.now():%H:%M:%S}"
+                  if clicked else no_update)
+        return positions, status
 
     @app.callback(
         [Output('alpha-curated-table-div', 'children'),

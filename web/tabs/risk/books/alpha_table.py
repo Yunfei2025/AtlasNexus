@@ -559,6 +559,11 @@ def register_alpha_book_table_callbacks(app):
                     if _sl is not None and _pnl_dir <= -abs(_sl):
                         _alert_rows.append((_tid, f"Stop loss hit  (Δ={_pnl_dir:+.1f} bp, stop=−{abs(_sl):.1f} bp)", 'stop'))
                         _alert_ids['stop'].add(_tid)
+                    elif _tp is not None and _tp <= 0:
+                        # Target 0 = the spread is already at/inside the exit level (|z| <= exit_z),
+                        # i.e. nothing left to capture -- close signal, not a missing target.
+                        _alert_rows.append((_tid, "At target: spread already inside the exit band (0 bp to go)", 'target'))
+                        _alert_ids['target'].add(_tid)
                     elif _tp is not None and _pnl_dir >= abs(_tp):
                         _alert_rows.append((_tid, f"Target reached (Δ={_pnl_dir:+.1f} bp, target=+{abs(_tp):.1f} bp)", 'target'))
                         _alert_ids['target'].add(_tid)
@@ -685,6 +690,13 @@ def register_alpha_book_table_callbacks(app):
                         signed = None
                     return html.Td(val, style={**base_style, **_signed_value_style(signed)})
                 if col == 'Target (bp)':
+                    try:
+                        _at_target = val not in ('', None) and float(str(val).replace(',', '')) <= 0
+                    except (TypeError, ValueError):
+                        _at_target = False
+                    if _at_target:   # 0 bp to go: already at the exit level, not a missing target
+                        return html.Td('at target', title='Spread already inside the exit band (0 bp to go)',
+                                       style={**base_style, 'color': '#34d399', 'fontStyle': 'italic'})
                     return html.Td(val, style={**base_style, 'color': '#34d399'})
                 if col == 'Stop (bp)':
                     return html.Td(val, style={**base_style, 'color': '#f87171'})

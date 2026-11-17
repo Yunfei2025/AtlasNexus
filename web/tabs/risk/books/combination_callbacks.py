@@ -7,6 +7,7 @@ from dash import dcc, html
 from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 
+from settings.general import DEFAULT_TOTAL_CAPITAL_BN, DEFAULT_ALPHA_MARGIN_SHARE
 from web.tabs.beta.data import THEME
 from .combination import build_combination, MAX_MARGIN_UTILIZATION
 
@@ -27,6 +28,7 @@ def _stat(value: str, label: str, color: str, border: bool = True) -> html.Div:
 
 
 def _metric_card(title: str, metrics: dict, accent: str, pnl_mm: float,
+                  cap_mm: float = 0.0, base_label: str = 'Capital base',
                   margin_ann_return: Optional[float] = None, extra=None) -> html.Div:
     def row(label, value):
         return html.Div([
@@ -57,7 +59,8 @@ def _metric_card(title: str, metrics: dict, accent: str, pnl_mm: float,
         row('Ann. Vol', f"{metrics['vol'] * 100:.2f}%"),
         row('Ann. Return', f"{metrics['ann_return'] * 100:+.2f}%"),
     ] + margin_row + [
-        row('Total Return', f"{metrics['total_return'] * 100:+.2f}%"),
+        row(base_label, f"{cap_mm:,.0f} MM"),
+        row(f'Total Return (PnL / {base_label.lower()})', f"{(pnl_mm / cap_mm * 100) if cap_mm else float('nan'):+.2f}%"),
         row('Total PnL (net of cost)', f"{pnl_mm:+,.1f} MM"),
         row('Max Drawdown', f"{metrics['max_drawdown'] * 100:.2f}%"),
     ] + ([extra] if extra is not None else []), style={
@@ -78,9 +81,12 @@ def register_combination_callbacks(app):
          Input('summary-combo-alpha-margin-share', 'value'),
          Input('summary-combo-refresh', 'n_clicks'),
          Input('summary-combo-run', 'n_clicks')],
-        [State('summary-combo-window', 'value')],
+        [State('summary-combo-window', 'value'),
+         State('summary-combo-dates', 'start_date'),
+         State('summary-combo-dates', 'end_date')],
     )
-    def _render_combination(total_capital_bn, alpha_margin_share_pct, _refresh_clicks, _run_clicks, window):
+    def _render_combination(total_capital_bn, alpha_margin_share_pct, _refresh_clicks, _run_clicks, window,
+                            start_date=None, end_date=None):
         # Imported here, not at module scope: both loaders touch the
         # filesystem, and the saved files can be rewritten by the Alpha /
         # Multi-Asset tabs while this session is open -- re-reading on every
@@ -94,24 +100,33 @@ def register_combination_callbacks(app):
         # UI input is BN CNY (billions); build_combination and everything it
         # returns (beta_notional_mm, alpha_margin_mm, pnl_*_mm, ...) works in
         # MM CNY, so convert once here at the boundary.
-        total_capital = (float(total_capital_bn) if total_capital_bn else 0.0) * 1000.0
+        # An empty/invalid input (None) used to become 0 capital, which zeroed every
+        # card's MM figure; fall back to the default instead.
+        try:
+            cap_bn = float(total_capital_bn)
+        except (TypeError, ValueError):
+            cap_bn = 0.0
+        if cap_bn <= 0:
+            cap_bn = DEFAULT_TOTAL_CAPITAL_BN
+        total_capital = cap_bn * 1000.0
         window = window or 'MAX'
 
-        # Margin share is a fixed, explicit split (default 10%, set on the
+        # Margin share is a fixed, explicit split (default 20%, set on the
         # input itself) -- NOT auto-recomputed to the max-Sharpe point.
         # Auto-optimizing here used to mean switching the backtest window
         # silently changed the split too (a different window has different
         # realized vol/correlation, and because alpha is margined a small
         # shift in optimal margin share is a much larger shift in notional
         # weight), making "the split changed" indistinguishable from "the
-        # window changed". A cleared input falls back to the same fixed 10%
+        # window changed". A cleared input falls back to the same fixed default
         # default rather than re-optimizing. The max-Sharpe/risk-parity
         # points for the current window are still surfaced in "Suggested
         # Splits" below for reference -- they're just not auto-applied.
-        margin_share = float(alpha_margin_share_pct) / 100.0 if alpha_margin_share_pct is not None else 0.10
+        margin_share = float(alpha_margin_share_pct) / 100.0 if alpha_margin_share_pct is not None else DEFAULT_ALPHA_MARGIN_SHARE
 
         result = build_combination(beta_result, alpha_result, total_capital, margin_share,
-                                    max_margin_utilization=MAX_MARGIN_UTILIZATION, window=window)
+                                    max_margin_utilization=MAX_MARGIN_UTILIZATION, window=window,
+                                    start_date=start_date or None, end_date=end_date or None)
 
         if 'error' in result:
             strip = html.Span(result['error'], style={'color': THEME['warning'], 'fontSize': '12px'})
@@ -141,23 +156,10 @@ def register_combination_callbacks(app):
                 f"= {combined['total_return'] * 100:+.1f}%",
             ),
             html.Div(
-                ("Beta and Combined Sharpe are over cash (FR007 on the beta capital), as in the Beta "
-                 "backtest's 'Sharpe (vs cash)'; Alpha is a spread P&L, already an excess return."
+                ("Sharpe: Beta & Combined over cash (FR007); Alpha is already an excess return."
                  if result.get('beta_benchmark') != 'none' else
-                 "FR007 was unavailable: Beta and Combined Sharpe are NOT over cash and include the "
-                 "cash income of idle capital."),
+                 "FR007 unavailable: Beta & Combined Sharpe are not over cash."),
                 style={'marginTop': '3px'},
-            ),
-            html.Div(
-                f"Alpha's return-blend weight ({w:.2f}) is its usable margin ÷ its margin ratio "
-                f"({result['margin_ratio'] * 100:.1f}%).",
-                style={'marginTop': '3px'},
-            ),
-            html.Div(
-                f"Return adds linearly; Sharpe/vol don't (correlation {corr:+.2f} → "
-                f"{div_ratio:.2f}x diversification benefit shrinks combined vol below "
-                f"the weighted-average of the two books' vols).",
-                style={'marginTop': '3px', 'fontStyle': 'italic'},
             ),
         ])
 
@@ -343,30 +345,27 @@ def register_combination_callbacks(app):
                   'border': f'1px solid {THEME["table_header"]}', 'flex': '1', 'minWidth': '170px'})
 
         worst_corr_note = (
-            f" Worst {corr_window}d window seen: {worst_corr:+.2f}"
-            f"{' (≥ flag)' if worst_corr >= corr_flag else ''}."
+            f" · worst {corr_window}d corr {worst_corr:+.2f}"
+            f"{' (≥ flag)' if worst_corr >= corr_flag else ''}"
             if worst_corr is not None else ""
         )
         overlap = html.Div(
-            f"Overlapping window: {result['start']:%Y-%m-%d} → {result['end']:%Y-%m-%d} "
-            f"({result['n_days']} days). Correlation {corr:+.2f}, diversification ratio "
-            f"{div_ratio:.2f}x (weighted-average standalone vol ÷ realised combined vol; "
-            f">1 means the books genuinely offset each other)." + worst_corr_note +
-            " The Diversification Frontier is fit on this same window only — expect it to "
-            "reshape materially when the window changes (realized correlation is a noisy "
-            "estimate on finite daily samples, and its effect is amplified at higher margin "
-            "share since alpha's notional weight grows fast with margin share). Treat its "
-            "curve as \"what this sample says\", not a fixed reference.",
+            f"Window {result['start']:%Y-%m-%d} → {result['end']:%Y-%m-%d} ({result['n_days']}d) · "
+            f"correlation {corr:+.2f} · diversification {div_ratio:.2f}x" + worst_corr_note +
+            " · The frontier is fit on this window only.",
             style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '10px'},
         )
 
         body = html.Div([
             # Row 1: per-book metrics + capital allocation + suggested splits (5 cards)
             html.Div([
-                _metric_card('Beta Book', result['beta'], THEME['accent'], result['pnl_beta_mm']),
+                _metric_card('Beta Book', result['beta'], THEME['accent'], result['pnl_beta_mm'],
+                              cap_mm=result['beta_notional_mm']),
                 _metric_card('Alpha Book', result['alpha'], THEME['warning'], result['pnl_alpha_mm'],
+                              cap_mm=result['alpha_margin_mm'], base_label='Margin',
                               margin_ann_return=result['alpha_margin_metrics']['ann_return']),
-                _metric_card('Combined', combined, THEME['success'], result['pnl_combined_mm']),
+                _metric_card('Combined', combined, THEME['success'], result['pnl_combined_mm'],
+                              cap_mm=result['total_capital_mm']),
                 alloc_card,
                 reco,
             ], style={'display': 'flex', 'gap': '10px', 'flexWrap': 'wrap', 'marginBottom': '14px'}),
@@ -386,10 +385,8 @@ def register_combination_callbacks(app):
         alpha_notional_mm = result.get('alpha_notional_mm')
         if margin_ratio is not None and alpha_notional_mm is not None:
             margin_hint = (
-                f"DV01-based estimate: this book's margin ratio is ~{margin_ratio * 100:.2f}% of "
-                f"notional, so {alpha_margin_mm:,.0f}MM margin implies ~{alpha_notional_mm:,.0f}MM "
-                f"notional deployed. Single-leg proxy with a fitted 2.5x netting correction — see "
-                f"estimate_margin_mm, treat as approximate."
+                f"Alpha margin ratio ≈ {margin_ratio * 100:.1f}% (approximate): "
+                f"{alpha_margin_mm:,.0f} MM margin ≈ {alpha_notional_mm:,.0f} MM notional."
             )
         else:
             margin_hint = ""

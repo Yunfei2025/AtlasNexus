@@ -512,6 +512,17 @@ def build_portfolio_layout() -> html.Div:
                                'border': 'none', 'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700',
                                'cursor': 'pointer', 'alignSelf': 'flex-end'},
                     ),
+                    html.Button(
+                        "↻ Refresh Saved Positions", id='alpha-refresh-positions-btn', n_clicks=0,
+                        title="Reload saved positions from alpha_book_positions.parquet "
+                              "(use after the portfolio file was updated elsewhere).",
+                        style={'padding': '7px 14px', 'background': 'transparent', 'color': THEME['accent'],
+                               'border': f'1px solid {THEME["accent"]}', 'borderRadius': '4px', 'fontSize': '11px',
+                               'fontWeight': '700', 'cursor': 'pointer', 'alignSelf': 'flex-end'},
+                    ),
+                    html.Span(id='alpha-refresh-positions-status',
+                              style={'color': THEME['text_sub'], 'fontSize': '10px', 'alignSelf': 'flex-end',
+                                     'paddingBottom': '9px'}),
                 ], style={'display': 'flex', 'gap': '10px', 'alignItems': 'flex-end', 'flexWrap': 'wrap'}),
 
                 # Candidates + Saved (left, stacked) | Correlation matrix (right, fixed ~1/2 width)

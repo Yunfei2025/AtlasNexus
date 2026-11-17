@@ -63,7 +63,7 @@ def build_multiasset_portfolio_layout():
         last_run_data = {}
 
     initial_n_clicks = 0
-    initial_capital = DEFAULT_BETA_CAPITAL_BN  # 90% of the 20BN total (see settings.general)
+    initial_capital = DEFAULT_BETA_CAPITAL_BN  # 80% of the 10BN total (see settings.general)
     initial_unit = 'billion'
 
     # Capital settings of the last run. The asset pool itself is not restored: it is always

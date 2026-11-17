@@ -254,6 +254,8 @@ def build_combination(
     alpha_margin_share: float,
     max_margin_utilization: float = MAX_MARGIN_UTILIZATION,
     window: str = 'MAX',
+    start_date: Optional[Any] = None,
+    end_date: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Align both books and analyse the combined portfolio.
 
@@ -328,7 +330,22 @@ def build_combination(
     h_beta, beta_benchmark = _beta_cash_hurdle(beta_result, common)
 
     years = WINDOW_YEARS.get(window, None)
-    if years is not None:
+    if start_date is not None or end_date is not None:
+        # User-defined window: overrides the preset. Either bound may be open.
+        lo = pd.Timestamp(start_date) if start_date is not None else common.min()
+        hi = pd.Timestamp(end_date) if end_date is not None else common.max()
+        if lo > hi:
+            return {'error': f'Start date {lo:%Y-%m-%d} is after end date {hi:%Y-%m-%d}.'}
+        windowed = common[(common >= lo) & (common <= hi)]
+        if len(windowed) < 60:
+            return {'error': (f"Only {len(windowed)} overlapping days between {lo:%Y-%m-%d} and "
+                              f"{hi:%Y-%m-%d} — need at least 60 to compare. Pick a wider range.")}
+        window = f"{windowed.min():%Y-%m-%d} → {windowed.max():%Y-%m-%d}"
+        common = windowed
+        r_beta = r_beta.reindex(common)
+        r_alpha = r_alpha.reindex(common)
+        h_beta = h_beta.reindex(common)
+    elif years is not None:
         cutoff = common.max() - pd.Timedelta(days=int(years * 365.25))
         windowed = common[common >= cutoff]
         if len(windowed) < 60:
@@ -435,9 +452,12 @@ def build_combination(
     # usage, which equals total_return on the whole capital pool since
     # combined returns are the same capital-weighted blend used for
     # m_combined above.
-    pnl_beta_mm = m_beta['total_return'] * beta_notional_mm
-    pnl_alpha_mm = m_alpha_margin['total_return'] * alpha_margin_allocated_mm
-    pnl_combined_mm = m_combined['total_return'] * total_capital_mm
+    # P&L is the SUM of daily P&L on a fixed capital base (the books hold fixed notional;
+    # they don't compound), not total_return (a daily-compounded figure that overstates a
+    # fixed-capital P&L and makes beta + alpha != combined).
+    pnl_beta_mm = float(r_beta.sum()) * beta_notional_mm
+    pnl_alpha_mm = float((r_alpha * util / margin_ratio).sum()) * alpha_margin_allocated_mm
+    pnl_combined_mm = pnl_beta_mm + pnl_alpha_mm
 
     return {
         'n_days': int(len(common)),
@@ -471,6 +491,7 @@ def build_combination(
         'pnl_beta_mm': pnl_beta_mm,
         'pnl_alpha_mm': pnl_alpha_mm,
         'pnl_combined_mm': pnl_combined_mm,
+        'pnl_check_mm': float(r_combined.sum()) * total_capital_mm,
         'window': window,
         'beta_benchmark': beta_benchmark,
         'returns': {'beta': r_beta, 'alpha': r_alpha, 'combined': r_combined},

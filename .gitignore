@@ -42,3 +42,7 @@ derivatives/vol/vol_strategy_analysis.html
 input/
 database/
 runs/
+
+# Futures Desk state shared between computers (tools/desk_sync.py)
+!desk_share/
+!desk_share/**/*.parquet

@@ -1715,3 +1715,20 @@ details.seasonal-gate summary::-webkit-details-marker { display: none; }
 .js-plotly-plot .plotly .modebar-btn path { fill: var(--text-muted) !important; }
 .js-plotly-plot .plotly .modebar-btn:hover path { fill: var(--text-primary) !important; }
 .DayPicker { background: var(--an-navy-700) !important; }
+
+/* ── Summary > Books combination controls: compact one-row date range ───────
+   Dash 4 date picker. The global rules above force the wrapper to display:block
+   with full-width children (right for DatePickerSingle, but it stacks a range
+   picker's start/end in a column), so override them here with higher specificity. */
+.combo-dates .dash-datepicker-input-wrapper {
+  display: flex !important; flex-direction: row !important; align-items: center !important;
+  flex-wrap: nowrap !important; gap: 2px; height: 34px; box-sizing: border-box;
+  width: auto !important;
+}
+.combo-dates .dash-datepicker-input-wrapper > div {
+  display: block !important; width: auto !important; flex: 0 0 auto;
+}
+.combo-dates .dash-datepicker-input {
+  width: 92px !important; height: 32px; box-sizing: border-box !important;
+  padding: 0 6px !important; font-size: 12px !important; text-align: center;
+}

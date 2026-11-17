@@ -1,0 +1,128 @@
+{
+  "IM": {
+    "strategy": "Boll",
+    "timeframe": "30min",
+    "candidate": "Boll@30min",
+    "approved_at": "2026-11-17 10:13",
+    "cost_bp": 1.8262361764907837,
+    "exits": {
+      "stop": 0.5,
+      "target": null,
+      "unit": "pct"
+    },
+    "wf_run_at": "2026-11-17 10:13",
+    "wf_last_day": "2026-11-16",
+    "pooled_sharpe": 1.706304904606482,
+    "sharpe_se": 1.3266911069088339,
+    "per_contract": {
+      "IM2603": 2.198141191362361,
+      "IM2609": 1.2827204499871239,
+      "IM2612": 1.7493953939565954
+    },
+    "trades": 176,
+    "win": 0.375,
+    "payoff": 2.355746260076382,
+    "expectancy_bp": 10.572845494491508,
+    "status": "approved",
+    "session": "day",
+    "daily_mean": 0.001292236671548962,
+    "daily_std": 0.012022248281862278,
+    "max_streak": 8
+  },
+  "TL": {
+    "strategy": "Boll",
+    "timeframe": "15min",
+    "candidate": "Boll@15min",
+    "approved_at": "2026-11-17 10:14",
+    "cost_bp": 0.48731141090393065,
+    "exits": {
+      "stop": null,
+      "target": 0.5,
+      "unit": "pct"
+    },
+    "wf_run_at": "2026-11-17 10:14",
+    "wf_last_day": "2026-11-16",
+    "pooled_sharpe": 1.5666702123777547,
+    "sharpe_se": 1.2907240618339808,
+    "per_contract": {
+      "TL2603": 4.52838216777353,
+      "TL2609": 2.2304038514206113,
+      "TL2612": -2.303642262919626
+    },
+    "trades": 249,
+    "win": 0.5502008032128514,
+    "payoff": 0.9932311284678491,
+    "expectancy_bp": 1.4505461664489188,
+    "status": "approved",
+    "session": "day",
+    "daily_mean": 0.00023762236542485568,
+    "daily_std": 0.0024077422800050986,
+    "max_streak": 6
+  },
+  "JM": {
+    "strategy": "Mom",
+    "timeframe": "30min",
+    "candidate": "Mom@30min",
+    "approved_at": "2026-11-17 10:16",
+    "cost_bp": 2.346381187438965,
+    "exits": {
+      "stop": 1.0,
+      "target": 0.5,
+      "unit": "pct"
+    },
+    "wf_run_at": "2026-11-16 09:25",
+    "wf_last_day": "2026-11-13",
+    "pooled_sharpe": 2.5571113495820765,
+    "sharpe_se": 1.4177430473272405,
+    "per_contract": {
+      "JM2605": 2.4339388986107546,
+      "JM2609": 1.4705826707366578,
+      "JM2701": 3.232302894833524
+    },
+    "trades": 87,
+    "win": 0.5747126436781609,
+    "payoff": 1.2783565102204795,
+    "expectancy_bp": 8.906041370200883,
+    "status": "approved",
+    "session": "night+day",
+    "night_days": 6,
+    "forced": true,
+    "daily_mean": 0.000610098897013761,
+    "daily_std": 0.003787484554203004,
+    "max_streak": 3
+  },
+  "AU": {
+    "strategy": "SAR",
+    "timeframe": "30min",
+    "candidate": "SAR@30min",
+    "approved_at": "2026-11-17 10:17",
+    "cost_bp": 0.3754037082195282,
+    "exits": {
+      "stop": 0.5,
+      "target": 0.5,
+      "unit": "pct"
+    },
+    "wf_run_at": "2026-11-17 10:17",
+    "wf_last_day": "2026-11-16",
+    "pooled_sharpe": 3.468028114387216,
+    "sharpe_se": 1.3385668369905566,
+    "per_contract": {
+      "AU2602": 7.136791241016281,
+      "AU2604": 3.786103109433846,
+      "AU2608": 10.577389254785045,
+      "AU2610": -1.5007226968968606,
+      "AU2612": 2.41442333838869
+    },
+    "trades": 184,
+    "win": 0.532608695652174,
+    "payoff": 1.4638422994020408,
+    "expectancy_bp": 8.395572355896253,
+    "status": "approved",
+    "session": "night+day",
+    "night_days": 7,
+    "forced": true,
+    "daily_mean": 0.0010727675788089657,
+    "daily_std": 0.004910472697138877,
+    "max_streak": 5
+  }
+}

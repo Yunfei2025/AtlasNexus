@@ -86,6 +86,7 @@ def register_risk_book_interaction_callbacks(app):
         [
             Output('summary-refresh-status', 'children', allow_duplicate=True),
             Output('summary-refresh-btn', 'n_clicks', allow_duplicate=True),
+            Output('summary-alpha-rows-store', 'data', allow_duplicate=True),
         ],
         Input({'type': 'alpha-row-delete', 'row': ALL}, 'n_clicks'),
         State('summary-alpha-rows-store', 'data'),
@@ -100,10 +101,13 @@ def register_risk_book_interaction_callbacks(app):
         updated_rows = [r for r in rows if _row_key(r, -1) != row_idx]
         try:
             _persist_alpha_summary_rows(updated_rows)
+            # Also update the rows store: the refresh click below fires
+            # _persist_books_snapshots_on_refresh, which re-saves the rows in this store with
+            # prune=False. Left stale it still holds the deleted row and writes it straight back.
             return (f"Position removed at {datetime.now().strftime('%H:%M:%S')}",
-                    (refresh_clicks or 0) + 1)
+                    (refresh_clicks or 0) + 1, updated_rows)
         except Exception as exc:
-            return f"Delete failed: {exc}", dash.no_update
+            return f"Delete failed: {exc}", dash.no_update, dash.no_update
     
     # ── Alpha Book: Open date — click cell to open calendar, pick to apply ────
     # The highlight on the clicked date button is pure CSS (className toggle,

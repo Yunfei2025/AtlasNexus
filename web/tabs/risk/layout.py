@@ -11,6 +11,18 @@ from .tickets import build_tickets_table
 from settings.general import DEFAULT_TOTAL_CAPITAL_BN, DEFAULT_ALPHA_MARGIN_SHARE
 
 
+_COMBO_FIELD = {'backgroundColor': THEME['bg_input'], 'border': f'1px solid {THEME["table_header"]}',
+                'borderRadius': '4px', 'padding': '0 9px', 'height': '34px', 'boxSizing': 'border-box',
+                'color': THEME['text_main'], 'fontSize': '13px'}
+_COMBO_GROUP = {'display': 'flex', 'flexDirection': 'column', 'gap': '5px'}
+
+
+def _combo_label(text):
+    return html.Label(text, style={'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
+                                   'textTransform': 'uppercase', 'color': THEME['text_sub'],
+                                   'whiteSpace': 'nowrap'})
+
+
 def build_risk_layout():
     """Build the layout for the Risk/Summary tab.
 
@@ -185,92 +197,57 @@ def build_risk_layout():
                     'fontSize': '10px', 'color': THEME['text_sub'], 'marginBottom': '14px',
                     'paddingBottom': '10px', 'borderBottom': f'1px solid {THEME["table_header"]}'}),
 
-                # --- Controls: total capital + alpha margin share (plain inputs, no slider) ---
+                # --- Controls: one aligned row of labelled fields; help text lives in the
+                # tooltips (title=) and the hint line below, not under each field. Alpha's
+                # margin share is NOT auto-optimised (a fixed split, so changing the window
+                # changes only the measured performance, not the split itself).
                 html.Div([
                     html.Div([
-                        html.Label("Total Capital (BN CNY)", style={
-                            'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
-                            'textTransform': 'uppercase', 'color': THEME['text_sub'],
-                            'display': 'block', 'marginBottom': '6px'}),
-                        # Input is BN CNY (billions); converted to the MM CNY
-                        # build_combination works in right where it's read
-                        # (see _render_combination) -- nothing downstream of
-                        # that conversion point needs to know the UI's unit.
+                        _combo_label("Total Capital (BN CNY)"),
                         dcc.Input(id='summary-combo-total-capital', type='number',
                                   value=DEFAULT_TOTAL_CAPITAL_BN, min=0.001, step=1, debounce=True,
-                                  style={'width': '140px', 'backgroundColor': THEME['bg_input'],
-                                         'border': f'1px solid {THEME["table_header"]}',
-                                         'borderRadius': '4px', 'padding': '7px 9px',
-                                         'color': THEME['text_main'], 'fontSize': '13px'}),
-                        html.Div("Split beta notional : alpha margin (Beta is unlevered; Alpha is "
-                                 "margined, so its capital footprint is margin, not notional).",
-                                 style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '260px'}),
-                    ]),
+                                  style={**_COMBO_FIELD, 'width': '120px'}),
+                    ], style=_COMBO_GROUP, title="Split into beta notional (unlevered) and alpha margin."),
                     html.Div([
-                        html.Label("Alpha Margin Share of Capital (%)", style={
-                            'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
-                            'textTransform': 'uppercase', 'color': THEME['text_sub'],
-                            'display': 'block', 'marginBottom': '6px'}),
-                        # Fixed default (not None/"auto") -- an auto max-Sharpe
-                        # default silently re-optimizes the split every time
-                        # the backtest window changes (a different window
-                        # gives different realized vol/correlation, and
-                        # because alpha is margined a small shift in the
-                        # optimal margin share is a much larger shift in its
-                        # notional weight -- see w = ms*util/margin_ratio).
-                        # That made the split look like it "changed" 10% ->
-                        # 50% just from picking a different window, when
-                        # nothing about the actual allocation had changed.
-                        # Pinning a fixed value here means changing the
-                        # window only changes the *performance measured at
-                        # this split*, not the split itself.
+                        _combo_label("Alpha Margin Share (%)"),
                         dcc.Input(id='summary-combo-alpha-margin-share', type='number',
                                   value=DEFAULT_ALPHA_MARGIN_SHARE * 100, min=0, max=100, step=5, debounce=True,
-                                  style={'width': '90px', 'backgroundColor': THEME['bg_input'],
-                                         'border': f'1px solid {THEME["table_header"]}',
-                                         'borderRadius': '4px', 'padding': '7px 9px',
-                                         'color': THEME['text_main'], 'fontSize': '13px'}),
-                        html.Div("Beta takes the remainder as notional. Alpha's own notional is "
-                                 "derived from its margin ratio. Fixed at this split across "
-                                 "windows -- see \"Suggested Splits\" below for the max-Sharpe/"
-                                 "risk-parity points at the currently selected window, and set "
-                                 "this explicitly rather than leaving it on auto.",
-                                 style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '240px'}),
-                    ]),
+                                  style={**_COMBO_FIELD, 'width': '120px'}),
+                    ], style=_COMBO_GROUP,
+                       title="Beta gets the rest as notional. Fixed across windows."),
                     html.Div([
-                        html.Label("Backtest Window", style={
-                            'fontSize': '10px', 'fontWeight': '600', 'letterSpacing': '.05em',
-                            'textTransform': 'uppercase', 'color': THEME['text_sub'],
-                            'display': 'block', 'marginBottom': '6px'}),
-                        html.Div([
-                            dcc.Dropdown(
-                                id='summary-combo-window',
-                                options=[
-                                    {'label': '1Y', 'value': '1Y'},
-                                    {'label': '2Y', 'value': '2Y'},
-                                    {'label': '5Y', 'value': '5Y'},
-                                    {'label': '10Y', 'value': '10Y'},
-                                    {'label': 'Max', 'value': 'MAX'},
-                                ],
-                                value='MAX', clearable=False, searchable=False,
-                                style={'width': '110px', 'fontSize': '13px', 'color': '#111'},
-                            ),
-                            html.Button("Run Analysis", id='summary-combo-run', n_clicks=0,
-                                        style={'fontSize': '11px', 'padding': '7px 14px',
-                                               'backgroundColor': THEME['bg_input'],
-                                               'color': THEME['text_main'],
-                                               'border': f'1px solid {THEME["accent"]}',
-                                               'borderRadius': '4px', 'cursor': 'pointer',
-                                               'marginLeft': '10px', 'whiteSpace': 'nowrap'}),
-                        ], style={'display': 'flex', 'alignItems': 'center'}),
-                        html.Div("Trims both books' saved backtests to the trailing window "
-                                 "before recomputing Sharpe/vol/PnL below.",
-                                 style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginTop': '5px', 'maxWidth': '220px'}),
-                    ]),
-                    html.Div(id='summary-combo-margin-hint',
-                             style={'fontSize': '10px', 'color': THEME['text_sub'], 'flex': '1', 'minWidth': '200px', 'alignSelf': 'center'}),
-                ], style={'display': 'flex', 'alignItems': 'flex-start', 'gap': '28px',
-                          'flexWrap': 'wrap', 'marginBottom': '16px'}),
+                        _combo_label("Backtest Window"),
+                        dcc.Dropdown(
+                            id='summary-combo-window',
+                            options=[{'label': '1Y', 'value': '1Y'}, {'label': '2Y', 'value': '2Y'},
+                                     {'label': '5Y', 'value': '5Y'}, {'label': '10Y', 'value': '10Y'},
+                                     {'label': 'Max', 'value': 'MAX'}],
+                            value='MAX', clearable=False, searchable=False,
+                            style={'width': '100px', 'fontSize': '13px', 'color': '#111'},
+                        ),
+                    ], style=_COMBO_GROUP),
+                    html.Div([
+                        _combo_label("Custom Dates"),
+                        html.Div(
+                            dcc.DatePickerRange(
+                                id='summary-combo-dates', display_format='YYYY-MM-DD',
+                                start_date=None, end_date=None, clearable=True,
+                                start_date_placeholder_text='Start', end_date_placeholder_text='End',
+                                style={'fontSize': '12px'}),
+                            className='combo-dates'),
+                    ], style=_COMBO_GROUP, title="Overrides the Backtest Window. Clear to go back."),
+                    html.Button("Run Analysis", id='summary-combo-run', n_clicks=0,
+                                style={'fontSize': '12px', 'padding': '8px 16px', 'height': '34px',
+                                       'backgroundColor': THEME['bg_input'], 'color': THEME['text_main'],
+                                       'border': f'1px solid {THEME["accent"]}', 'borderRadius': '4px',
+                                       'cursor': 'pointer', 'whiteSpace': 'nowrap'}),
+                ], style={'display': 'flex', 'alignItems': 'flex-end', 'gap': '18px',
+                          'flexWrap': 'wrap', 'padding': '12px 14px', 'marginBottom': '8px',
+                          'backgroundColor': THEME['bg_main'], 'borderRadius': '6px',
+                          'border': f'1px solid {THEME["table_header"]}'}),
+                html.Div(id='summary-combo-margin-hint',
+                         style={'fontSize': '10px', 'color': THEME['text_sub'], 'marginBottom': '16px'}),
+
 
                 # --- Rendered analysis: metric cards, frontier, equity curves ---
                 dcc.Loading(id='summary-combo-loading', type='circle', color=THEME['accent'],
