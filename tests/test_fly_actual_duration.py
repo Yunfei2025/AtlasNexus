@@ -12,6 +12,7 @@ _DUR = {'240203.IB': 2.2242, '260206.IB': 0.7620, '260208.IB': 4.5357,        # 
 @pytest.fixture(autouse=True)
 def _bond_durations(monkeypatch):
     monkeypatch.setattr(legs, '_bond_modified_durations', lambda: dict(_DUR))
+    monkeypatch.setattr(legs, '_bond_dirty_prices', lambda: {})
 
 
 def test_wings_each_take_half_the_belly_dv01_on_the_actual_bonds():
@@ -46,3 +47,37 @@ def test_two_leg_bond_duration_and_ratio_use_the_actual_bond_duration():
     assert helpers._leg_duration_years('260015.IB', 'TenorSpread', 'CGB-2s5s', 0.0, {}) == pytest.approx(4.5434)
     ratio = helpers._leg_volume_ratio('260015.IB', '260018.IB', 'TenorSpread', 'CGB-2s5s', 0.0, {})
     assert ratio == pytest.approx(_DUR['260015.IB'] / _DUR['260018.IB'])        # DV01-neutral on the real bonds
+
+
+def test_bond_dv01_duration_is_price_weighted(monkeypatch):
+    monkeypatch.setattr(legs, '_bond_dirty_prices', lambda: {'260015.IB': 103.0})
+    assert legs.actual_leg_duration('260015.IB') == pytest.approx(4.5434 * 1.03)
+    assert legs.actual_leg_duration('260018.IB') == pytest.approx(1.8474)       # no price -> plain mod. duration
+
+
+def test_bond_curve_hedge_skips_7y_bucket():
+    assert legs.bond_curve_hedge_tenor(6.92) == '10Y'     # e.g. CDB 240210 (7.5y left)
+    assert legs.bond_curve_hedge_tenor(8.4) == '10Y'
+    assert legs.bond_curve_hedge_tenor(4.5) == '5Y'
+    assert legs.bond_curve_hedge_tenor(5.9) == '5Y'
+    assert legs.bond_curve_hedge_tenor(6.4) == '10Y'     # was 7Y
+    assert legs.bond_curve_hedge_tenor(1.8) == '2Y'
+    ld = {'otr_cdb': {'5Y': 'A5', '7Y': 'A7', '10Y': 'A10'}, 'otr_cgb': {}}
+    assert legs.resolve_legs('CBondCurve', 'X.IB', 6.92, ld) == ('X.IB', 'A10')
+    assert helpers._resolve_legs('CBondCurve', 'X.IB', 6.92, ld) == ('X.IB', 'A10')
+
+
+def test_dv01_neutral_lots_minimises_residual_on_10mm_grid():
+    # small trades never shrink more than 20%: 30MM stays 30MM (leg2 = 20MM)
+    assert legs.dv01_neutral_lots(30.0, 0.83) == 30.0
+    # 2060MM x 0.8318: 2060 -> 1713.5 (0.65 lot off); searching down to 2010 finds a closer pair
+    big = legs.dv01_neutral_lots(2060.0, 0.8318)
+    assert 2010.0 <= big <= 2060.0
+    assert abs(big / 10 * 0.8318 - round(big / 10 * 0.8318)) <= abs(206 * 0.8318 - round(206 * 0.8318))
+    n1 = legs.dv01_neutral_lots(60.0, 0.83)
+    n2 = round(n1 * 0.83 / 10) * 10
+    assert n1 <= 60.0 and n1 % 10 == 0
+    assert abs(n1 * 0.83 - n2) <= abs(60.0 * 0.83 - round(60 * 0.83 / 10) * 10) + 1e-9
+    assert legs.dv01_neutral_lots(-60.0, 0.83) == -n1                         # sign kept
+    assert legs.dv01_neutral_lots(5.0, 0.83) == 5.0                           # under one lot: unchanged
+    assert legs.dv01_neutral_lots(10.0, 0.4) == 10.0                          # leg2 floored at one lot

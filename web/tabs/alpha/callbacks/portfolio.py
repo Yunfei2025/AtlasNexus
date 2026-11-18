@@ -25,6 +25,7 @@ from ..data import (
     _get_duration_mult, has_saved_state, resolve_legs, resolve_legs3, fly_leg_dv01_ratios, _load_leg_data,
 )
 from ..data.duration import _tenor_to_duration
+from ..data.legs import dv01_neutral_lots
 from ..scoring import _compute_risk_parity_weights
 from .core_positions import mr_stop_target_bp
 
@@ -894,6 +895,24 @@ def register_portfolio_callbacks(app) -> None:
             # Single minimum-lot floor (rows under one lot -> 0). Flooring only
             # shrinks magnitudes, so the margin cap the fit enforced still holds.
             _fitted_notional = _floor_to_lot(_fitted_notional, _lot_mm)
+            # 2-leg trades: both legs trade in 10MM lots, so pick the leg-1 lot
+            # count (at or just below the fitted size) whose rounded leg 2
+            # leaves the smallest residual DV01 -- see dv01_neutral_lots. Only
+            # when the book itself is on the 10MM grid (small books use a finer
+            # lot; see _lot_mm). Flies keep their size.
+            if _lot_mm >= 10.0 - 1e-9:
+                _r2 = pd.to_numeric(df_scored['ratio_v2_v1'], errors='coerce')
+                _r3 = pd.to_numeric(df_scored.get('ratio_v3_v1'), errors='coerce')
+                _two_leg = (
+                    _r2.notna() & (_r3.isna() if _r3 is not None else True)
+                    & df_scored['Leg1'].astype(str).str.len().gt(0)
+                    & df_scored['Leg2'].astype(str).str.len().gt(0)
+                )
+                _fitted_notional = _fitted_notional.copy()
+                for _i in df_scored.index[_two_leg]:
+                    _fitted_notional.at[_i] = dv01_neutral_lots(
+                        float(_fitted_notional.at[_i]), float(_r2.at[_i]), lot=10.0,
+                    )
             if not _fitted_notional.equals(df_scored['notional_mm']):
                 df_scored['notional_mm'] = _fitted_notional
                 df_scored['DV01_k'] = (df_scored['notional_mm'].abs() * df_scored['_duration'] / 10_000 * 1_000).round(1)

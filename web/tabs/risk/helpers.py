@@ -813,11 +813,11 @@ def _resolve_legs(stype: str, tid: str, duration: float, ld: dict) -> tuple:
                 return (cgb_leg, irs_leg)
         return ('', '')
 
-    elif stype == 'TBondCurve':
-        return (tid, _nearest_otr(duration, otr_cgb))
-
-    elif stype == 'CBondCurve':
-        return (tid, _nearest_otr(duration, otr_cdb))
+    elif stype in ('TBondCurve', 'CBondCurve'):
+        # Same hedge-bucket rule as the Alpha resolver (7Y region -> 10Y OTR).
+        from web.tabs.alpha.data.legs import bond_curve_hedge_tenor
+        otr = otr_cgb if stype == 'TBondCurve' else otr_cdb
+        return (tid, otr.get(bond_curve_hedge_tenor(duration), ''))
 
     elif stype == 'TBondSwap':
         return (tid, _duration_to_fr007_tenor(duration))

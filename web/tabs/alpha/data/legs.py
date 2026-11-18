@@ -326,12 +326,12 @@ def resolve_legs(stype: str, tid: str, duration: float = 0.0, ld: Optional[dict]
 
     # Bond-Curve: leg1 is the bond, leg2 is the current OTR for the nearest
     # supported tenor category.  The OTR categories intentionally jump from
-    # 5Y to 10Y; do not use the legacy 7Y cvref column here.
+    # 5Y to 10Y (7Y is hard to borrow / illiquid): see bond_curve_hedge_tenor.
     if stype == 'TBondCurve':
-        return (tid, otr_cgb.get(_t_label(duration), ''))
+        return (tid, otr_cgb.get(bond_curve_hedge_tenor(duration), ''))
 
     elif stype == 'CBondCurve':
-        return (tid, otr_cdb.get(_t_label(duration), ''))
+        return (tid, otr_cdb.get(bond_curve_hedge_tenor(duration), ''))
 
     # Bond-Swap: leg1 is the bond, leg2 is FR007 IRS with matching tenor
     elif stype == 'TBondSwap':
@@ -491,12 +491,12 @@ def fly_leg_tenor_years(stype: str, tid: str) -> Optional[tuple[float, float, fl
 
 
 _BOND_INFO_TYPES = ('TBond', 'CBond', 'LBond', 'MNote')
-_BOND_DUR_CACHE: dict = {}          # file path -> (mtime, {code: modified duration})
+_BOND_DUR_CACHE: dict = {}          # (file path, column) -> (mtime, {code: value})
 
 
-def _bond_modified_durations() -> dict:
-    """{bond code: modified duration (years)} from the {TBond,CBond,LBond,MNote}-InstrumentInfo
-    files, re-read only when a file changes."""
+def _bond_info_column(col_name: str) -> dict:
+    """{bond code: positive float} for one {TBond,CBond,LBond,MNote}-InstrumentInfo
+    column, re-read only when a file changes."""
     from settings.paths import DIR_INPUT
     out: dict = {}
     for btype in _BOND_INFO_TYPES:
@@ -505,29 +505,45 @@ def _bond_modified_durations() -> dict:
             mtime = path.stat().st_mtime
         except OSError:
             continue
-        hit = _BOND_DUR_CACHE.get(str(path))
+        key = (str(path), col_name)
+        hit = _BOND_DUR_CACHE.get(key)
         if hit is None or hit[0] != mtime:
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter('ignore')
                     info = pd.read_pickle(path)
-                col = pd.to_numeric(info['修正久期'], errors='coerce')
+                col = pd.to_numeric(info[col_name], errors='coerce')
                 hit = (mtime, {str(k): float(v) for k, v in col.items() if pd.notna(v) and v > 0})
             except Exception:
                 hit = (mtime, {})
-            _BOND_DUR_CACHE[str(path)] = hit
+            _BOND_DUR_CACHE[key] = hit
         out.update(hit[1])
     return out
 
 
+def _bond_modified_durations() -> dict:
+    """{bond code: modified duration (years)} from InstrumentInfo."""
+    return _bond_info_column('修正久期')
+
+
+def _bond_dirty_prices() -> dict:
+    """{bond code: dirty close price per 100 face} from InstrumentInfo."""
+    return _bond_info_column('收盘价:元（全价）')
+
+
 def actual_leg_duration(code: str) -> Optional[float]:
-    """DV01 duration (years) of a resolved trade leg, from the instrument itself:
-    a bond's modified duration, or a FR007 swap's annuity duration. None when the
-    leg is neither (curve labels, blanks) or the bond is not in InstrumentInfo.
+    """DV01 duration (years) of a resolved trade leg, from the instrument itself,
+    such that DV01 per 1 face/notional = duration / 10_000:
+      - bond: modified duration x dirty price / 100 (a bond at 106 has 6% more
+        DV01 per face than one at par with the same modified duration);
+      - FR007 swap: annuity duration (par notional).
+    None when the leg is neither (curve labels, blanks) or the bond is not in
+    InstrumentInfo. A bond without a dirty price keeps its plain modified duration.
 
     The old `0.92 x years` proxy is off by -4% to -7% on short bonds and by +14% /
     +25% on the 20Y / 30Y CGBs, which is what made fly and slope hedge ratios (and
-    so the leg volumes) miss DV01 neutrality.
+    so the leg volumes) miss DV01 neutrality. Ignoring price left a further
+    ~3% DV01 mismatch on e.g. CDB 240210 (106.1) vs 260205 (103.2).
     """
     c = str(code or '').strip().upper()
     m = re.match(r'^(?:FR007S|SHI3MS)(\d+[MY])\.IR$', c)
@@ -535,8 +551,60 @@ def actual_leg_duration(code: str) -> Optional[float]:
         from .duration import _tenor_to_duration
         return float(_tenor_to_duration(m.group(1).lower()))
     if c.endswith('.IB'):
-        return _bond_modified_durations().get(c)
+        md = _bond_modified_durations().get(c)
+        if md is None:
+            return None
+        px = _bond_dirty_prices().get(c)
+        return md * px / 100.0 if px else md
     return None
+
+
+#: Bond-vs-curve hedge buckets. 7Y is deliberately absent: off-the-run 7Y-ish
+#: bonds are hard to borrow and illiquid to sell, so a bond whose duration falls
+#: in the 7Y region is hedged with the 10Y on-the-run bond instead.
+def bond_curve_hedge_tenor(duration: float) -> str:
+    """OTR tenor label used as leg 2 of a TBondCurve/CBondCurve trade.
+
+    Same nearest-tenor rule as the generic resolver (1/2/5/7/10/20/30), except
+    the 7Y bucket (duration ~6.5-8.5) maps to 10Y. Shared by the Alpha and Risk
+    resolvers so both pick the same hedge bond.
+    """
+    t_map = {1: '1Y', 2: '2Y', 5: '5Y', 7: '7Y', 10: '10Y', 20: '20Y', 30: '30Y'}
+    n = float(duration or 0.0)
+    ni = int(round(n))
+    label = t_map[ni] if ni in t_map else min(t_map.values(), key=lambda v: abs(int(v[:-1]) - n))
+    return '10Y' if label == '7Y' else label
+
+
+def dv01_neutral_lots(
+    leg1_notional: float, ratio: float, lot: float = 10.0, max_shrink_lots: int = 5,
+    max_shrink_frac: float = 0.2,
+) -> float:
+    """Leg-1 notional (same sign) on the ``lot`` grid that makes the 2-leg trade's
+    residual DV01 smallest once leg 2 is also rounded to the lot.
+
+    ``ratio`` = DV01-neutral Volume(leg2)/Volume(leg1). Leg 2 is taken as
+    round(leg1 * ratio / lot) * lot (the same rounding Risk uses for the leg-2
+    target volume), floored at one lot. Only sizes at or below the input are
+    tried (at most ``max_shrink_lots`` lots and ``max_shrink_frac`` of the size
+    fewer, never below one lot), so a
+    margin/DV01 cap the input already satisfied still holds. Ties keep the
+    larger size. Returns the input unchanged when it is under one lot or the
+    ratio is unusable.
+    """
+    n = abs(float(leg1_notional))
+    if not (ratio and np.isfinite(ratio) and ratio > 0) or n < lot - 1e-9:
+        return leg1_notional
+    sign = 1.0 if leg1_notional >= 0 else -1.0
+    top = int(np.floor(n / lot + 1e-9))
+    shrink = min(int(max_shrink_lots), int(np.floor(top * max_shrink_frac + 1e-9)))
+    best_n1, best_resid = top, None
+    for n1 in range(top, max(1, top - shrink) - 1, -1):
+        n2 = max(1, int(round(n1 * ratio)))
+        resid = abs(n1 * ratio - n2)          # residual DV01 in leg-1 lots
+        if best_resid is None or resid < best_resid - 1e-9:
+            best_n1, best_resid = n1, resid
+    return sign * best_n1 * lot
 
 
 def fly_leg_durations(
