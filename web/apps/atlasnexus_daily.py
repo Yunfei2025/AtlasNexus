@@ -1222,6 +1222,48 @@ _make_tab_switcher(
 )
 
 
+# Backward compatibility for stale browser sessions that still post
+# pre-refactor callback output signatures. These can occur when the server
+# restarts while an old dashboard page remains open.
+@app.callback(
+    [
+        Output("fd-today-div", "style", allow_duplicate=True),
+        Output("fd-research-div", "style", allow_duplicate=True),
+        Output("fd-monitor-div", "style", allow_duplicate=True),
+    ],
+    Input("fd-subtabs", "value"),
+    prevent_initial_call=True,
+)
+def _legacy_switch_fd_subtabs(active):
+    base = {"boxSizing": "border-box"}
+    keys = ("today", "research", "monitor")
+    return tuple(
+        {**base, "display": "block"} if active == key else {**base, "display": "none"}
+        for key in keys
+    )
+
+
+@app.callback(
+    [
+        Output("alpha-candidates-div", "style", allow_duplicate=True),
+        Output("alpha-portfolio-div", "style", allow_duplicate=True),
+        Output("alpha-backtest-div", "style", allow_duplicate=True),
+        Output("alpha-spreads-div", "style", allow_duplicate=True),
+        Output("alpha-pairs-div", "style", allow_duplicate=True),
+        Output("alpha-volatility-div", "style", allow_duplicate=True),
+    ],
+    Input("an-alpha-subtabs", "value"),
+    prevent_initial_call=True,
+)
+def _legacy_switch_alpha_subtabs(active):
+    base = {"boxSizing": "border-box"}
+    keys = ("candidates", "portfolio", "backtest", "spreads", "pairs", "volatility")
+    return tuple(
+        {**base, "display": "block"} if active == key else {**base, "display": "none"}
+        for key in keys
+    )
+
+
 _LOG_LEVEL_RE = re.compile(r"^(DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL):\s*(.*)$")
 _LOG_LEVEL_COLOR = {
     "INFO": "#4a9eff", "DEBUG": "#6b7fa0",

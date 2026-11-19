@@ -6,6 +6,7 @@ Internally dispatches to per-section register_* functions in this package.
 """
 
 from .candidates import register_candidate_callbacks
+from .portfolio_callbacks import register_portfolio_callbacks as register_saved_positions_callbacks
 from .portfolio import register_portfolio_callbacks
 from .backtest_tab import register_backtest_callbacks
 
@@ -13,6 +14,7 @@ from .backtest_tab import register_backtest_callbacks
 def register_alpha_callbacks(app) -> None:
     """Register every callback used by the Alpha Book tabs."""
     register_candidate_callbacks(app)
+    register_saved_positions_callbacks(app)
     register_portfolio_callbacks(app)
     register_backtest_callbacks(app)
 
@@ -20,6 +22,7 @@ def register_alpha_callbacks(app) -> None:
 __all__ = [
     "register_alpha_callbacks",
     "register_candidate_callbacks",
+    "register_saved_positions_callbacks",
     "register_portfolio_callbacks",
     "register_backtest_callbacks",
 ]
