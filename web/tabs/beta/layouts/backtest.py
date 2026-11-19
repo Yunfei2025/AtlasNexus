@@ -621,6 +621,37 @@ def build_risk_factor_backtest_layout():
                                 ]),
                             ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(2, minmax(0, 1fr))', 'gap': '8px'}),
 
+                            # Execution realism + credit mean-reversion routing.
+                            html.Div([
+                                html.Div([
+                                    html.Label("Exec delay (d)", style=_lbl),
+                                    dcc.Input(id='rfbt-fm-execdelay', type='number', value=0, min=0, max=5,
+                                              step=1, style={**_inp}, className='no-spinner'),
+                                ]),
+                                html.Div([
+                                    html.Label("Cost (bp/unit)", style=_lbl),
+                                    dcc.Input(id='rfbt-fm-costbp', type='number', value=0, min=0, max=10,
+                                              step=0.1, style={**_inp}, className='no-spinner'),
+                                ]),
+                                html.Div([
+                                    html.Label("Credit MR blend", style=_lbl),
+                                    dcc.Dropdown(
+                                        id='rfbt-fm-mrblend',
+                                        options=[{'label': 'On (50/50)', 'value': 'on'},
+                                                 {'label': 'Off',        'value': 'off'}],
+                                        value='on', clearable=False, style={'fontSize': '13px'},
+                                    ),
+                                ]),
+                            ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(3, minmax(0, 1fr))',
+                                      'gap': '8px', 'marginTop': '8px'}),
+                            html.Div(
+                                "Delay 0 / cost 0 = trade the next day's move, gross (historical). Use "
+                                "delay 2 + cost 0.5 to judge mean-reverting spreads honestly. MR blend "
+                                "mixes a slow 250d z-score reversion rule into the credit factors (CDB/LGB/MTN/NCD).",
+                                style={'fontSize': '10px', 'color': 'var(--text-muted)',
+                                       'marginTop': '6px', 'lineHeight': '1.4'},
+                            ),
+
                             # Tilt-only parameters — shown when sizing mode is 'tilt'.
                             html.Div(id='rfbt-fm-tilt-params', children=[
                                 html.Div([

@@ -42,8 +42,15 @@ def rfbt_hash(params: RfbtCacheParams) -> str:
     return _stable_hash(params)
 
 
+# Bump when walk-forward / sizing code changes the output for unchanged params,
+# so runs cached by older code are not served. v2 (2026-11-19): walk-forward
+# warm-up + LGB mean-reversion blend.
+_CODE_VERSION = 7   # v3: causal rolling_icir; v4: MR blend on all credit, 250d window; v5: FX/CMDL discrete; v6: calendar-month windows; v7: training cutoff = no data after previous month-end
+
+
 def make_cache_params(factor_val, start_date, end_date, kwargs) -> RfbtCacheParams:
-    kwargs_repr = json.dumps(kwargs, sort_keys=True, default=str)
+    kwargs_repr = json.dumps({**kwargs, '_code_version': _CODE_VERSION},
+                             sort_keys=True, default=str)
     return RfbtCacheParams(
         factor=factor_val, start_date=start_date, end_date=end_date,
         kwargs_repr=kwargs_repr,

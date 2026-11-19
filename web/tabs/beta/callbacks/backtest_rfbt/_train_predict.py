@@ -206,20 +206,23 @@ def run_predict(factors, current_cfg, end_date):
     saved_cfg = latest_artifact.get('metadata', {}).get('config', {})
     if not _config_matches(saved_cfg, current_cfg):
         raise SavedModelParamsMismatch()
-    smooth_days = int(saved_cfg.get('signal_smooth_days', 1))
-
-    # ── Split: factors already in artifact vs newly selected ──
-    artifact_factors = {k for k in latest_artifact if k != 'metadata'}
-    covered_factors = [f for f in factors if f in artifact_factors]
-    missing_factors = [f for f in factors if f not in artifact_factors]
+    # ── Split: factors with this month's full model vs not ──
+    # A factor counts as covered only if the current month's file holds its full
+    # multi-horizon ensemble (older files hold the 1-day model only and cannot
+    # reproduce the backtest's positions).
+    from multiasset.factor_model import has_horizon_models, build_live_factor_results
+    covered_factors = [f for f in factors if has_horizon_models(latest_artifact.get(f))]
+    missing_factors = [f for f in factors if f not in covered_factors]
 
     if missing_factors:
         raise FactorsNotInSavedModel(missing_factors)
 
-    # Predict covered factors from saved artifact (fast, no retrain)
-    results = _build_results_from_saved_artifact(
-        latest_artifact, smooth_days, factors, factor_subset=covered_factors
-    )
+    # Live positions = the backtest's positions: each saved monthly model predicts its
+    # own month, then the shared sizing runs (multiasset.factor_model.build_live_factor_results).
+    results, _live_info = build_live_factor_results(covered_factors)
+    _stale = [f for f in covered_factors if not _live_info.get(f, {}).get('covers_latest')]
+    if _stale:
+        raise FactorsNotInSavedModel(_stale)
     active_artifact = latest_artifact  # passed to _build_top_drivers
 
     # (branch kept for legacy compatibility — missing_factors is always empty here now)
@@ -283,7 +286,9 @@ def run_train(factors, current_cfg, end_date):
     if existing_artifact and _config_matches(
         existing_artifact.get('metadata', {}).get('config', {}), current_cfg
     ):
-        artifact_factors = {k for k in existing_artifact if k != 'metadata'}
+        from multiasset.factor_model import has_horizon_models
+        artifact_factors = {k for k, v in existing_artifact.items()
+                            if k != 'metadata' and has_horizon_models(v)}
         factors_to_train = [f for f in factors if f not in artifact_factors]
         cached_factors = [f for f in factors if f in artifact_factors]
     else:
@@ -314,9 +319,8 @@ def run_train(factors, current_cfg, end_date):
         smooth_days = int(
             (art.get('metadata') or {}).get('config', {}).get('signal_smooth_days', 1)
         )
-        cached_results = _build_results_from_saved_artifact(
-            art, smooth_days, factors, factor_subset=cached_factors
-        )
+        from multiasset.factor_model import build_live_factor_results as _blfr
+        cached_results, _ = _blfr(cached_factors)
         results.update(cached_results)
 
         # If a cached factor cannot be predicted from the saved artifact
@@ -339,6 +343,16 @@ def run_train(factors, current_cfg, end_date):
                 retrained_cached = list(retry_results.keys())
             if retry_artifact:
                 latest_artifact = retry_artifact
+
+    # Show every factor at its LIVE position (saved monthly models through the latest
+    # data day), not the walk-forward's last row, which stops at the training cutoff.
+    try:
+        from multiasset.factor_model import build_live_factor_results as _blfr_all
+        _live_all, _ = _blfr_all(factors)
+        for _f, _df in _live_all.items():
+            results[_f] = _df
+    except Exception as _e:
+        print(f"Warning: live rebuild after train failed ({_e}); showing walk-forward rows")
 
     mkey = (latest_artifact or {}).get('metadata', {}).get('train_end_date', '?')
     n_new = len(factors_to_train)

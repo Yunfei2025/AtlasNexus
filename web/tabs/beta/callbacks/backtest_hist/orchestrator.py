@@ -32,7 +32,7 @@ from settings.paths import DIR_INPUT
 
 from ...data import SELECTED_FACTOR_POOL, get_assets_from_factors, FACTOR_TO_ASSET_MAP, selected_factors
 from ._signals import (
-    load_factor_signal_series, factor_signal_asof,
+    load_factor_signal_series, factor_signal_asof, extend_with_live_positions,
     build_trend_factor_by_asset, trend_sign_asof,
 )
 from ._pnl import compute_turnover_and_tx_cost
@@ -127,6 +127,24 @@ def run_historical_allocation(
         raise BacktestInputError("No risk factor data available", "No data", themed=False)
 
     trend_factor_by_asset = build_trend_factor_by_asset(FACTOR_TO_ASSET_MAP)
+
+    # Factor Model Scaling: a pool factor whose saved positions stop before its latest
+    # data (factor-backtest.pkl ends at the month-start training cutoff) is extended with
+    # the live rebuild, so the current month is sized daily like every other month
+    # instead of holding the month-start position.
+    if alloc_mode == 'factor_scaling':
+        _stale = [f for f in _all_selected_factors()
+                  if f in risk_factors.columns
+                  and (f not in factor_signal_series or factor_signal_series[f].empty
+                       or factor_signal_series[f].index.max() < risk_factors[f].dropna().index.max())]
+        if _stale:
+            _added = extend_with_live_positions(factor_signal_series, _stale, input_dir)
+            if _added:
+                print(f"  factor_scaling: extended saved positions with the live rebuild: "
+                      f"{', '.join(f'{f} +{n}d' for f, n in _added)}")
+            _missing = [f for f in _stale if f not in dict(_added)]
+            if _missing:
+                print(f"  factor_scaling: saved positions forward-filled (no live models; run Train): {_missing}")
 
     def _factor_signal_asof(factor_code, asof_date):
         return factor_signal_asof(factor_signal_series, factor_code, asof_date)
@@ -738,6 +756,13 @@ def run_historical_allocation(
     }
 
     df_history = pd.DataFrame(history_data)
+    # Daily net positions actually held (million CNY) for the allocation chart. The book is
+    # re-sized every trading day (factor positions x monthly budgets, DV01 target, caps);
+    # df_history keeps the month-start samples for the holdings/report consumers.
+    df_alloc_daily = _pos_daily.drop(columns=['Total']).round(3)
+    df_alloc_daily = df_alloc_daily.loc[:, (df_alloc_daily != 0).any(axis=0)]
+    df_alloc_daily.insert(0, 'Date', df_alloc_daily.index)
+    df_alloc_daily = df_alloc_daily.reset_index(drop=True)
     df_pnl = cumulative_m.reset_index(drop=True)
     # Unrounded copy for NAV/Sharpe/drawdown — the rounding below is for
     # display only. Computing metrics on whole-million P&L quantised a
@@ -945,6 +970,7 @@ def run_historical_allocation(
 
     return {
         'df_history': df_history,
+        'df_alloc_daily': df_alloc_daily,
         'df_pnl': df_pnl,
         'nav_series': nav_series,
         'nav_net_series': nav_net_series,

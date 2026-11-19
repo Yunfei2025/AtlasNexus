@@ -87,8 +87,11 @@ def register_backtest_hist_callbacks(app):
             err_fig = error_figure(str(e))
             return err_fig, err_fig, None, html.Div(f"Error: {str(e)}", style={'color': THEME['danger']}), None
 
+        _alloc_df = result.get('df_alloc_daily')
+        if _alloc_df is None or _alloc_df.empty:
+            _alloc_df = result['df_history']
         fig_alloc = build_allocation_figure(
-            result['df_history'], result['all_assets_ever'],
+            _alloc_df, set(result['all_assets_ever']) | (set(_alloc_df.columns) - {'Date'}),
             result['display_start'], result['display_end'],
         )
         # Futures / swap overlay legs have their own P&L columns; chart them too,
@@ -150,7 +153,7 @@ def register_backtest_hist_callbacks(app):
         if not results_payload or 'equity_series' not in results_payload:
             return "Run the historical analysis first — nothing to save."
         try:
-            from multiasset.storage import save_backtest_result
+            from multiasset.storage import save_backtest_result, describe_last_save
             save_backtest_result(
                 equity_series=results_payload['equity_series'],
                 sharpe=results_payload.get('sharpe', 0.0),
@@ -161,8 +164,9 @@ def register_backtest_hist_callbacks(app):
                 start_date=results_payload.get('start_date'),
                 end_date=results_payload.get('end_date'),
                 cash_benchmark=results_payload.get('cash_benchmark'),
+                alloc_mode=results_payload.get('alloc_mode'),
             )
-            return f"✅ Saved at {pd.Timestamp.now().strftime('%H:%M:%S')}"
+            return f"✅ Saved at {pd.Timestamp.now().strftime('%H:%M:%S')} — {describe_last_save()}"
         except Exception as e:
             traceback.print_exc()
             return f"⚠️ Save failed: {e}"

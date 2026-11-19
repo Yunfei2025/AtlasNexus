@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import glob
 import os
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -48,6 +49,7 @@ from multiasset.factor_backtest import (
     _is_yield_factor,
     get_factor_duration,
     compute_metrics,
+    merge_factor_frames,
 )
 
 
@@ -166,8 +168,17 @@ class FactorModelConfig:
     turnover_threshold: float = 0.10
     # tx cost is read from settings.fixed_income.FACTOR_TX_COST_BP (flat notional bp)
     # ── Walk-forward purge / embargo (doc §4.2) ─────────────────────────────
-    purge_days: int = 5                      # purge around train/test boundary
-    embargo_days: int = 10                   # extra train-side gap before each test window
+    # Training cutoff rule (user, 2026-11-19): a window's model may use NO data later than
+    # the end of the previous month. That includes the labels: a training row dated s with
+    # horizon H is used only if the H-day return it is trained on had finished before the
+    # test month began (label end < test_start), checked per horizon in the walk-forward.
+    # So the November model trains on rows through Oct 30 for H=1, ~Oct 24 for H=5 and
+    # ~Oct 2 for H=20, and the backtest (run any time later) sees exactly what a live
+    # month-start training on Nov 1 sees. The old extra buffers (purge 5d, embargo 10d,
+    # which stopped training ~Oct 21 and still let H=20 labels reach into November) are off
+    # by default; set them >0 to add a safety gap on top.
+    purge_days: int = 0                      # extra calendar days before each test window (0 = none)
+    embargo_days: int = 0                    # extra train-side gap before each test window (0 = none)
     # ── Fix 1: Multi-horizon ensemble ───────────────────────────────────────
     # Train separate models for each prediction horizon and blend by IC weight.
     # H=20 strongly upweights momentum features, capturing sustained trends.
@@ -289,6 +300,39 @@ class FactorModelConfig:
     dd_governor_loss_bp: float = 8.0              # trigger: trailing window P&L worse than -loss_bp (in return-space bp, i.e. 8.0 = -0.08%)
     dd_governor_scale: float = 0.4                # position multiplier once triggered (0.4 = cut to 40%)
     dd_governor_cooldown_days: int = 10           # days position stays scaled down after trigger, even if the losing streak stops
+    # ── Walk-forward warm-up (2026-11-19) ────────────────────────────────────
+    # The rolling realised-vol (vol_scale_window) and ICIR (icir_window) inputs to
+    # sizing need history of PREDICTIONS, which only exist from the first test
+    # window. Starting the walk-forward at start_date left a 2y UI run flat for
+    # ~4.4 months (CRDL.LGB: first non-zero position 2025-03-31 vs a 2024-11-19
+    # start). The walk-forward now starts warmup_months earlier and the output is
+    # trimmed back to start_date, so positions are live from day one. 0 = old behaviour.
+    warmup_months: int = 6
+    # ── Mean-reversion blend for credit spreads (2026-11-19) ─────────────────
+    # Credit spread factors (CRDL/CRSL/CRCV x CDB/LGB/MTN/NCD) are range-bound: since
+    # 2021 their variance ratios are VR20 0.3-0.9, VR60 0.15-0.9, VR120 0.1-0.6 (LGB
+    # and NCD-slope strongest), and the trend-oriented model earns little or loses
+    # (credit sleeve, tenor-floored as the book holds it, lag-2 + 0.5bp, 2021-07+:
+    # NCD 0.74, LGB 0.47, CDB -0.43, MTN -0.46). position = (1-w)*model + w*MR,
+    # MR = clip(z_W/2, +-1) smoothed 5d. Same sleeve test, blend W=250:
+    # NCD 1.55, LGB 0.84, CDB 0.52, MTN 0.66 (pure MR250: 1.81/0.92/0.67/0.81). Sharpe
+    # rises monotonically W=60 -> 120 -> 250 on all four universes, so W is a family
+    # setting, not a per-spread fit. Pure MR is better in-sample but is one regime
+    # (5 years) and no model diversification, so the blend (w=0.5) is the default;
+    # set mr_blend_weight toward 1.0 to lean on MR. Trend rules lose on NCD (-1.6).
+    # Gross lag-1 Sharpe of fast MR (60d: 3+ on LGB) is mostly next-day bounce.
+    mr_blend: bool = True
+    mr_blend_weight: float = 0.5
+    mr_window: int = 250
+    mr_z_scale: float = 2.0
+    mr_smooth_days: int = 5
+    # ── Execution realism for the factor-level backtest (default OFF) ────────
+    # exec_delay_days: extra days between signal and execution (0 = trade the
+    # next day's move, the historical convention). cost_bp: cost per unit of
+    # |position change|, in bp of factor notional. Both default to the old,
+    # gross, lag-1 behaviour; set them to judge mean-reverting spreads honestly.
+    exec_delay_days: int = 0
+    cost_bp: float = 0.0
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1064,10 +1108,19 @@ def rolling_icir(
         computing the rolling IC once per distinct horizon, then stitching
         the results back together.
 
-    The series is **not** shifted here — callers that use it for sizing must
-    ``.shift(1)`` so that only past information drives today's position.
-    Mirrors the dashboard IC block (backtest_rfbt.py) so both paths agree
-    when ``horizon`` is left at its default.
+    Causality (fixed 2026-11-19): the pair (prediction_s, H-day forward return
+    from s) is only fully known at s+H. The H-day IC is therefore lagged by H-1
+    days here, so that with the caller's ``.shift(1)`` the sizing gate only
+    ever sees pairs that were complete at the position's own close. Before the
+    fix the H>1 IC was un-lagged, so for the LGB ensemble (H ~ 11-12) the gate
+    saw up to ~H days of returns that had not happened yet (small effect on
+    LGB, positions moved <= 0.02; tests/test_rolling_icir_causal.py). H=1 is
+    unchanged.
+
+    The series is still **not** shifted by the final day here — callers that use
+    it for sizing must ``.shift(1)`` so that only past information drives
+    today's position. The diagnostics that grade IC (``rolling_spearman_ic``,
+    ``mean_ic_at_effective_horizon``) are unaffected: they are not used for sizing.
     """
     if horizon is None or (np.isscalar(horizon) and int(horizon) <= 1):
         actual_fwd = daily_returns.shift(-1).reindex(predicted_return.index)
@@ -1075,7 +1128,7 @@ def rolling_icir(
     elif np.isscalar(horizon):
         H = int(horizon)
         actual_fwd = daily_returns.rolling(H).sum().shift(-H).reindex(predicted_return.index)
-        ic = rolling_spearman_ic(predicted_return, actual_fwd, window)
+        ic = rolling_spearman_ic(predicted_return, actual_fwd, window).shift(H - 1)
     else:
         # Per-date horizon series: compute once per distinct rounded horizon
         # (there are only ever len(cfg.target_horizons) distinct values in
@@ -1085,7 +1138,7 @@ def rolling_icir(
         for H in sorted(horizon_rounded.dropna().unique()):
             H = int(H)
             actual_fwd_H = daily_returns.rolling(H).sum().shift(-H).reindex(predicted_return.index)
-            ic_H = rolling_spearman_ic(predicted_return, actual_fwd_H, window)
+            ic_H = rolling_spearman_ic(predicted_return, actual_fwd_H, window).shift(H - 1)
             mask = horizon_rounded == H
             ic.loc[mask] = ic_H.loc[mask]
     ic_mean = ic.rolling(window, min_periods=max(window // 2, 10)).mean()
@@ -1520,6 +1573,75 @@ def apply_trend_floor(
     return pos, eligible.fillna(False)
 
 
+# Credit-spread universes that are range-bound (variance ratio < 1) and so get
+# the mean-reversion blend (all four credit universes). A family rule keyed on the universe, see
+# FactorModelConfig.mr_blend.
+_MR_BLEND_PREFIXES: frozenset = frozenset({'CRDL', 'CRSL', 'CRCV'})
+_MR_BLEND_UNIVERSES: frozenset = frozenset({'CDB', 'LGB', 'MTN', 'NCD'})
+
+
+def _has_mr_blend(factor_code: str) -> bool:
+    prefix, _, universe = factor_code.partition('.')
+    return prefix in _MR_BLEND_PREFIXES and universe in _MR_BLEND_UNIVERSES
+
+
+def mean_reversion_position(level: pd.Series, cfg: FactorModelConfig) -> pd.Series:
+    """Causal slow mean-reversion position in [-1, 1] for a yield/spread factor.
+
+    Long (bet the level falls) when the level is high vs its trailing mean:
+    ``clip(z / mr_z_scale, ±1)`` smoothed over ``mr_smooth_days``. Uses only data
+    up to day t, so it is applied with the same shift(1) as every other position.
+    """
+    lvl = level.dropna()
+    roll = lvl.rolling(cfg.mr_window)
+    z = (lvl - roll.mean()) / roll.std().replace(0, np.nan)
+    pos = (z / cfg.mr_z_scale).clip(-1.0, 1.0)
+    if cfg.mr_smooth_days > 1:
+        pos = pos.rolling(cfg.mr_smooth_days, min_periods=1).mean()
+    return pos
+
+
+def apply_mr_blend(
+    position: pd.Series,
+    level: pd.Series,
+    factor_code: str,
+    cfg: FactorModelConfig,
+) -> pd.Series:
+    """Blend the model position with the slow mean-reversion rule (LGB credit).
+
+    No-op unless ``cfg.mr_blend`` and the factor is in the routed family. Where the
+    MR rule is not yet defined (first ``mr_window`` days) the model position is used.
+    Shared by the walk-forward backtest and the saved-model predict path so the live
+    signal is sized like the backtest it was validated against.
+    """
+    if not cfg.mr_blend or cfg.mr_blend_weight <= 0 or not _has_mr_blend(factor_code):
+        return position
+    mr = mean_reversion_position(level, cfg).reindex(position.index)
+    w = float(cfg.mr_blend_weight)
+    blended = (1.0 - w) * position + w * mr
+    return blended.where(mr.notna(), position)
+
+
+def apply_execution_model(
+    position: pd.Series,
+    returns: pd.Series,
+    cfg: FactorModelConfig,
+) -> pd.Series:
+    """Strategy returns with optional execution delay and per-unit trading cost.
+
+    Defaults (``exec_delay_days=0``, ``cost_bp=0``) reproduce the historical
+    ``position.shift(1) * returns``. With a delay d the position decided on day t is
+    only held from the close of t+d; each change in the executed position is charged
+    ``cost_bp`` per unit of |change|.
+    """
+    d = max(int(cfg.exec_delay_days), 0)
+    executed = position.shift(d) if d else position
+    gross = executed.shift(1) * returns
+    if cfg.cost_bp > 0:
+        gross = gross - executed.diff().abs().fillna(0.0) * cfg.cost_bp / 1e4
+    return gross
+
+
 # Per-factor sizing overrides, applied when the caller has not explicitly
 # chosen a sizing_mode. Keyed by exact factor code (not prefix) because this
 # is a property of the individual market, not the factor family.
@@ -1566,10 +1688,37 @@ _FOREIGN_RATE_DISCRETE: Dict[str, Dict] = {
 }
 _FACTOR_SIZING_OVERRIDES: Dict[str, Dict] = dict(_FOREIGN_RATE_DISCRETE)
 
+# FX (FXDL.*) and commodity (CMDL.*) factors: 'discrete' sizing, by FAMILY prefix
+# so new pairs/contracts are covered automatically (2026-11-19). Both families are
+# near-random-walks (variance ratios ~1, daily rank-IC 0.03-0.05); with continuous
+# sizing the ICIR confidence gate (made causal the same day, see rolling_icir) and
+# the drawdown governor leave positions near zero or whipsawed. Walk-forward
+# 2017-07..2026-11, gross lag-1, equal-risk pooled book, continuous -> discrete:
+#   FX (7 pairs)       0.09 -> 0.63   (2017-21 0.42 -> 0.43, 2022-26 -0.23 -> 0.80);
+#                      all 7 positive at lag-2 + 0.5bp; USDCNY -0.01 -> 0.17
+#   CMDL (9 long-hist) 0.20 -> 0.45   (2017-21 0.93 -> 0.72, 2022-26 -0.50 -> 0.18);
+#                      12/19 half-years better, median +0.37. Weaker evidence: AU, AL,
+#                      RB, SC are worse net of cost; LC (3y) -0.77, EC (3y) +1.14.
+# Alternative for FX (icir_confidence_floor_weight 0.75, governor off) scored 0.60
+# pooled (0.80 / 0.42) -- same conclusion, more parameters, so discrete was chosen.
+# Rejected for CMDL: horizons [1,5] (-1.11), [5,20] (0.24), stretch-tail (0.23),
+# no macro composites (-0.02; macro composites stay ON, 13/19 half-years). Plain
+# buy-and-hold of the 9 contracts scores 0.60 over the sample (a decade of commodity
+# strength); that is regime drift, not a signal, so no long bias was added.
+_FAMILY_SIZING_OVERRIDES: Dict[str, Dict] = {
+    'FXDL': {'sizing_mode': 'discrete'},
+    'CMDL': {'sizing_mode': 'discrete'},
+}
+
 
 def factor_sizing_override(factor_code: str) -> Dict:
-    """Return the per-factor sizing override dict, or {} if none is defined."""
-    return dict(_FACTOR_SIZING_OVERRIDES.get(factor_code, {}))
+    """Return the per-factor sizing override dict, or {} if none is defined.
+
+    An exact factor-code entry wins; otherwise the factor family's (code prefix)
+    override applies."""
+    if factor_code in _FACTOR_SIZING_OVERRIDES:
+        return dict(_FACTOR_SIZING_OVERRIDES[factor_code])
+    return dict(_FAMILY_SIZING_OVERRIDES.get(factor_code.split('.')[0], {}))
 
 
 def _compute_target_returns(
@@ -1591,6 +1740,170 @@ def _compute_target_returns(
         return _yield_to_return(level, mod_dur, factor_code)
     else:
         return _price_to_return(level)
+
+
+def _resolve_factor_cfg(factor_code: str, config: Optional[FactorModelConfig]) -> FactorModelConfig:
+    """The config a factor is actually run with: the caller's (or the default) plus
+    the factor's sizing override. Shared by the backtest and the live rebuild so both
+    size every factor identically."""
+    if config is None:
+        # No explicit config: apply this factor's sizing override (if any) on
+        # top of the defaults. An explicitly-passed config always wins, so a
+        # UI selection is never silently overridden.
+        cfg = FactorModelConfig()
+        override = factor_sizing_override(factor_code)
+        if override:
+            cfg = dataclasses.replace(cfg, **override)
+            print(f"  [{factor_code}] sizing override: {override}")
+        return cfg
+    cfg = config
+    # Callers (the Factor-tab Train action, run_factor_backtest) always pass an
+    # explicit config whose sizing_mode is just the class default, which would
+    # silently bypass the override and size the backtest differently from the
+    # saved-artifact predict path (which applies it). So apply the override unless
+    # the caller chose a NON-default mode. Limitation: an explicit pick of the
+    # default mode itself is indistinguishable from "unset" and is overridden.
+    if cfg.sizing_mode == FactorModelConfig().sizing_mode:
+        override = factor_sizing_override(factor_code)
+        if override:
+            cfg = dataclasses.replace(cfg, **override)
+            print(f"  [{factor_code}] sizing override: {override}")
+    return cfg
+
+
+def blend_horizon_predictions(
+    features: pd.DataFrame,
+    horizon_models: List[Dict],
+) -> Optional[pd.DataFrame]:
+    """IC-weighted blend of the per-horizon model predictions over ``features``.
+
+    ``horizon_models``: entries ``{'H', 'weight', 'trained_model', 'selected_factors'}``.
+    Returns a frame with ``predicted_return``, ``n_features`` and ``effective_horizon``
+    (the IC-weighted mean horizon of the models that produced a prediction), or None
+    if no model could predict. The ONE implementation used by the walk-forward and by
+    the live rebuild, so the two cannot drift apart.
+
+    Effective horizon (Fix 5): lets the IC diagnostic and the ICIR sizing gate grade
+    what the ensemble actually predicts instead of always next-day accuracy, which
+    under-credits the model whenever longer horizons dominate the blend.
+    """
+    preds_list, weights, horizons_used, best_selected = [], [], [], []
+    for hm in horizon_models:
+        p = _predict_ic_model(features, hm['trained_model'])
+        if p.empty:
+            continue
+        preds_list.append(p)
+        weights.append(float(hm['weight']))
+        horizons_used.append(int(hm['H']))
+        if len(hm['selected_factors']) > len(best_selected):
+            best_selected = hm['selected_factors']
+    if not preds_list:
+        return None
+    total_w = sum(weights)
+    preds = sum(p * (w / total_w) for p, w in zip(preds_list, weights))
+    eff = sum(h * w for h, w in zip(horizons_used, weights)) / total_w
+    return pd.DataFrame({
+        'predicted_return': preds,
+        'n_features': len(best_selected),
+        'effective_horizon': eff,
+    })
+
+
+def _finalize_factor_result(
+    factor_code: str,
+    factor_levels: pd.DataFrame,
+    pred_full: pd.DataFrame,
+    cfg: FactorModelConfig,
+    ts: Optional[pd.Timestamp] = None,
+) -> pd.DataFrame:
+    """Predictions -> positions -> P&L. Shared by the walk-forward backtest and the
+    live rebuild (``build_live_factor_results``): same sizing, trend floor, credit
+    mean-reversion blend and execution model, so a live position IS the backtest's
+    position. ``ts`` trims warm-up rows (None keeps everything)."""
+    daily_returns = _compute_target_returns(factor_code, factor_levels)
+
+    # Build result DataFrame
+    level = factor_levels[factor_code].dropna()
+    if not isinstance(level.index, pd.DatetimeIndex):
+        level.index = pd.to_datetime(level.index)
+
+    result = pd.DataFrame({'level': level})
+    result = result.loc[result.index.intersection(pred_full.index)]
+
+    result['predicted_return'] = pred_full['predicted_return']
+    result['n_features'] = pred_full['n_features']
+    result['effective_horizon'] = pred_full['effective_horizon']
+
+    # Actual daily returns (for PnL, always use 1-day returns). Price-only —
+    # no carry, no funding of any kind (see _yield_to_return / _yield_carry
+    # and module docstring). 'returns_gross_of_funding' is kept as an alias
+    # of 'returns' for callers that still read that column name; the book-
+    # level funding hurdle (Sharpe only) lives in multiasset/book/funding.py.
+    result['returns'] = daily_returns.reindex(result.index)
+    result['returns_gross_of_funding'] = result['returns']
+
+    # Long-only flag comes from factor metadata, not string inspection.
+    _long_only = _is_long_only(factor_code)
+    pos = build_position_series(result['predicted_return'], result['returns'], cfg,
+                                long_only=_long_only,
+                                effective_horizon=result['effective_horizon'])
+
+    # Confirmed-trend floor (IRDL): bull floor, and its mirror in a confirmed
+    # sell-off, so the model cannot sit flat or counter-trend while yields have
+    # moved the same way on both the 60d and 120d horizons. See apply_trend_floor.
+    if _has_trend_floor(factor_code) and cfg.long_floor > 0:
+        pos['position'], _eligible = apply_trend_floor(pos['position'], factor_levels[factor_code], cfg)
+        result['floor_eligible'] = _eligible.reindex(result.index).fillna(False)
+    else:
+        result['floor_eligible'] = False
+
+    # Mean-reversion blend for range-bound credit spreads (LGB) — see apply_mr_blend.
+    result['position_model'] = pos['position']
+    if cfg.mr_blend and _has_mr_blend(factor_code):
+        pos['position'] = apply_mr_blend(pos['position'], factor_levels[factor_code], factor_code, cfg)
+        pos['signal'] = np.sign(pos['position']).fillna(0).astype(int)
+        pos['turnover'] = pos['position'].diff().abs().fillna(pos['position'].abs())
+
+    result['signal'] = pos['signal']
+    # Position stays in [-1, 1] (the canonical scale shared with portfolio snapshot).
+    # bucket_position {0…2}/{-2…2} display levels are applied only at the UI layer.
+    result['position'] = pos['position']
+    result['turnover'] = pos['turnover']
+
+    # PnL. Transaction cost is NOT deducted — by design (see
+    # factor_tx_cost_per_unit): no cost of any kind is modelled at the
+    # factor level, including funding — see _yield_carry / module docstring
+    # and docs/plans/beta_book_exposure_vs_capital.md Step 3. Funding is
+    # instead applied only as a Sharpe-step hurdle at the BOOK level (never
+    # netted into any factor-level return series) — see
+    # multiasset/book/funding.py.
+    #
+    # 'strategy_returns', 'strategy_returns_gross' and
+    # 'strategy_returns_gross_of_funding' are therefore all identical (no
+    # transaction cost, no funding netting). All three columns are kept so
+    # callers that read any one of them don't need special-casing, and so a
+    # real per-leg tx-cost model can be reintroduced later (see
+    # factor_tx_cost_per_unit docstring) without restructuring this block
+    # again.
+    # Optional execution delay / per-unit cost (cfg.exec_delay_days, cfg.cost_bp;
+    # both default to 0 = the historical gross, lag-1 convention). 'strategy_returns'
+    # is net of them; the *_gross columns never include cost but do include the delay.
+    _net = apply_execution_model(pos['position'], result['returns'], cfg)
+    if cfg.cost_bp > 0:
+        _gross = apply_execution_model(
+            pos['position'], result['returns'], dataclasses.replace(cfg, cost_bp=0.0))
+    else:
+        _gross = _net
+    result['strategy_returns_gross'] = _gross
+    result['strategy_returns_gross_of_funding'] = _gross
+    result['strategy_returns'] = _net
+
+    # Trim the warm-up windows (see warmup_months) back to the requested start.
+    if ts is not None:
+        result = result.loc[result.index >= ts]
+    result['cumulative_returns'] = (1 + result['strategy_returns'].fillna(0)).cumprod()
+
+    return result
 
 
 def run_factor_model_backtest(
@@ -1623,31 +1936,7 @@ def run_factor_model_backtest(
         Columns: signal, returns, strategy_returns, cumulative_returns,
                  predicted_return, n_features
     """
-    if config is None:
-        # No explicit config: apply this factor's sizing override (if any) on
-        # top of the defaults. An explicitly-passed config always wins, so a
-        # UI selection is never silently overridden.
-        cfg = FactorModelConfig()
-        override = factor_sizing_override(factor_code)
-        if override:
-            import dataclasses as _dc
-            cfg = _dc.replace(cfg, **override)
-            print(f"  [{factor_code}] sizing override: {override}")
-    else:
-        cfg = config
-        # Callers (the Factor-tab Train action, run_factor_backtest) always pass
-        # an explicit config whose sizing_mode is just the class default, which
-        # would silently bypass the override and size the backtest differently
-        # from the saved-artifact predict path (which applies it). So apply the
-        # override unless the caller chose a NON-default mode. Limitation: an
-        # explicit pick of the default mode itself is indistinguishable from
-        # "unset" and is overridden for these factors.
-        if cfg.sizing_mode == FactorModelConfig().sizing_mode:
-            override = factor_sizing_override(factor_code)
-            if override:
-                import dataclasses as _dc
-                cfg = _dc.replace(cfg, **override)
-                print(f"  [{factor_code}] sizing override: {override}")
+    cfg = _resolve_factor_cfg(factor_code, config)
 
     # Ensure DatetimeIndex
     if not isinstance(factor_levels.index, pd.DatetimeIndex):
@@ -1702,25 +1991,42 @@ def run_factor_model_backtest(
     # Generate test windows.  Purge the last (H + purge_days) calendar days
     # before each test set so the forward-return window of the final training
     # sample cannot overlap the test period (doc §4.2 — Lopéz de Prado purging).
-    purge_gap = pd.Timedelta(days=1 + cfg.purge_days + H_min)
+    purge_gap = pd.Timedelta(days=1 + cfg.purge_days)       # rows strictly before the test month
     periods = []
+    # Start the walk-forward warmup_months early so the rolling vol / ICIR inputs to
+    # sizing are populated by start_date; output is trimmed back to ts below.
     cursor = ts
+    if cfg.warmup_months > 0:
+        cursor = max(ts - relativedelta(months=cfg.warmup_months), factor_levels.index.min())
+    # Calendar-month windows (2026-11-19): every test window starts on the 1st and
+    # covers the whole month, so "train at the month start on data through last
+    # month, predict the whole month" is literally what runs. Before this, windows
+    # were anchored on each factor's first-data day-of-month (IRDL.CN: the 4th,
+    # CMDL: the 22nd), so month-start training did not match the backtest and the
+    # saved monthly files mixed windows of different months.
+    cursor = pd.Timestamp(cursor.year, cursor.month, 1)
     while cursor <= te:
-        period_end = min(cursor + relativedelta(months=test_months) - pd.Timedelta(days=1), te)
+        window_end = cursor + relativedelta(months=test_months) - pd.Timedelta(days=1)
+        period_end = min(window_end, te)
         train_start = cursor - relativedelta(months=train_months)
         train_end = cursor - purge_gap
-        periods.append((train_start, train_end, cursor, period_end))
-        cursor = period_end + pd.Timedelta(days=1)
+        periods.append((train_start, train_end, cursor, period_end, window_end))
+        cursor = window_end + pd.Timedelta(days=1)
 
     if not periods:
         print(f"  [{factor_code}] No valid walk-forward periods")
         return pd.DataFrame()
 
+    # Calendar date on which each row's H-day label finishes (position-based, like the
+    # forward returns themselves). Used to enforce the training cutoff rule per horizon.
+    _ridx = daily_returns.index
+    label_end_by_H = {H: pd.Series(_ridx, index=_ridx).shift(-H) for H in horizons}
+
     # Walk-forward loop
     all_predictions = []
     selector = FactorSelector(cfg)
 
-    for train_start, train_end, test_start, test_end in periods:
+    for train_start, train_end, test_start, test_end, window_end in periods:
         # ── Slice train / test ──────────────────────────────────────────────
         train_mask = (all_features.index >= train_start) & (all_features.index <= train_end)
         test_mask  = (all_features.index >= test_start)  & (all_features.index <= test_end)
@@ -1744,7 +2050,11 @@ def run_factor_model_backtest(
             embargo_cut = test_start - pd.Timedelta(days=cfg.embargo_days)
             train_feat = train_feat.loc[train_feat.index < embargo_cut]
 
-        if len(train_feat) < cfg.min_observations or len(test_feat) == 0:
+        # A window with no test rows yet (e.g. the 1st of the month falls on a
+        # weekend, or the month has just started) is still TRAINED when models are
+        # being saved, so the live month's model exists on day one.
+        has_test = len(test_feat) > 0
+        if len(train_feat) < cfg.min_observations or (not has_test and models_by_month is None):
             continue
 
         # Forward-fill then zero-fill NaN in features
@@ -1769,14 +2079,14 @@ def run_factor_model_backtest(
         # ── Fix 1: Multi-horizon ensemble ────────────────────────────────────
         # Train one IC-weighted model per horizon; blend predictions by mean
         # |IC| of the selected features — longer horizons win during trends.
-        preds_list:    List[pd.Series] = []
-        weights_list:  List[float]     = []
-        horizons_used: List[int]       = []
-        best_selected: List[str]       = []
+        hmodels: List[Dict] = []     # one entry per horizon that trained successfully
 
         for H in horizons:
             # Align training forward returns to the training feature window
             train_fwd_H = all_fwd_by_H[H].reindex(train_feat.index)
+            # Training cutoff rule: only rows whose H-day label finished BEFORE the test
+            # month started (NaT = label not yet realised -> excluded).
+            train_fwd_H = train_fwd_H.where(label_end_by_H[H].reindex(train_feat.index) < test_start)
             common_H    = train_fwd_H.dropna().index
             if len(common_H) < cfg.min_observations:
                 continue
@@ -1819,63 +2129,48 @@ def run_factor_model_backtest(
             if 'error' in trained_H:
                 continue
 
-            # Persist artifact keyed to the first (shortest) horizon.
-            # Key by the last calendar day of the TEST window's month, not
-            # train_end's month. train_end is purge-adjusted and falls in the
-            # month *before* the test window, so using test_start gives the
-            # correct month-end label even when the June cursor is skipped due
-            # to data lag (e.g. May test window → key 20260531).
-            if H == horizons[0] and models_by_month is not None:
-                import calendar as _cal
-                _last_day = _cal.monthrange(test_start.year, test_start.month)[1]
-                month_key = test_start.replace(day=_last_day).strftime('%Y%m%d')
-                if month_key not in models_by_month:
-                    models_by_month[month_key] = {}
-                models_by_month[month_key][factor_code] = {
-                    'trained_model': {
-                        'coefficients': trained_H['coefficients'],
-                        'scaling_factor': trained_H['scaling_factor'],
-                        'scaler': trained_H['scaler'],
-                        'feature_names': trained_H['feature_names'],
-                    },
-                    'selected_factors': selected_H,
-                }
-
-            preds_H = _predict_ic_model(test_feat, trained_H)
-            if preds_H.empty:
-                continue
-
             mean_ic_H = float(
                 metrics_H.loc[[f for f in selected_H if f in metrics_H.index], 'IC_abs'].mean()
             ) if selected_H else 0.01
-            preds_list.append(preds_H)
-            weights_list.append(max(mean_ic_H if not np.isnan(mean_ic_H) else 0.0, 0.01))
-            horizons_used.append(H)
-            if len(selected_H) > len(best_selected):
-                best_selected = selected_H
+            hmodels.append({
+                'H': int(H),
+                # IC-weighted blend weight of this horizon (see blend_horizon_predictions)
+                'weight': max(mean_ic_H if not np.isnan(mean_ic_H) else 0.0, 0.01),
+                'trained_model': {
+                    'coefficients': trained_H['coefficients'],
+                    'scaling_factor': trained_H['scaling_factor'],
+                    'scaler': trained_H['scaler'],
+                    'feature_names': trained_H['feature_names'],
+                },
+                'selected_factors': selected_H,
+                # last calendar day of data (label end) this horizon's model trained on
+                'data_through': label_end_by_H[H].reindex(common_H).max().strftime('%Y-%m-%d'),
+            })
 
-        if not preds_list:
+        # Persist the monthly artifact: EVERY horizon model + its blend weight and the
+        # window it applies to, so the live path can rebuild exactly the predictions
+        # this walk-forward produced (rebuild_live_predictions). Keyed by the last
+        # calendar day of the TEST window's month (the November window -> 20261130).
+        # Legacy keys (trained_model / selected_factors = shortest horizon) are kept
+        # for older readers. Warm-up windows before start_date are not persisted.
+        if hmodels and models_by_month is not None and window_end >= ts:
+            import calendar as _cal
+            _last_day = _cal.monthrange(test_start.year, test_start.month)[1]
+            month_key = test_start.replace(day=_last_day).strftime('%Y%m%d')
+            models_by_month.setdefault(month_key, {})[factor_code] = {
+                'trained_model': hmodels[0]['trained_model'],
+                'selected_factors': hmodels[0]['selected_factors'],
+                'horizon_models': hmodels,
+                'window_start': test_start.strftime('%Y-%m-%d'),
+                'window_end': window_end.strftime('%Y-%m-%d'),
+                'data_through': max(h['data_through'] for h in hmodels),
+            }
+
+        if not has_test:
             continue
-
-        # IC-weighted blend of horizon predictions
-        total_w = sum(weights_list)
-        preds   = sum(p * (w / total_w) for p, w in zip(preds_list, weights_list))
-
-        # Effective horizon for this test window: the IC-weighted average of
-        # the horizons that contributed to the blend (Fix 5 — see
-        # ``_compute_target_returns``/rolling_icir callers). Lets the IC
-        # diagnostic and ICIR sizing gate track *what the ensemble actually
-        # predicts* instead of always grading next-day (H=1) accuracy, which
-        # under-credits the model whenever longer horizons dominate the blend
-        # (e.g. during a confirmed trend).
-        eff_horizon_val = sum(h * w for h, w in zip(horizons_used, weights_list)) / total_w
-
-        pred_df = pd.DataFrame({
-            'predicted_return': preds,
-            'n_features':       len(best_selected),
-            'effective_horizon': eff_horizon_val,
-        })
-        all_predictions.append(pred_df)
+        blended = blend_horizon_predictions(test_feat, hmodels)
+        if blended is not None:
+            all_predictions.append(blended)
 
     if not all_predictions:
         print(f"  [{factor_code}] No predictions generated")
@@ -1886,73 +2181,17 @@ def run_factor_model_backtest(
     # Remove duplicate indices (overlapping windows)
     pred_full = pred_full[~pred_full.index.duplicated(keep='first')]
 
-    # Build result DataFrame
-    level = factor_levels[factor_code].dropna()
-    if not isinstance(level.index, pd.DatetimeIndex):
-        level.index = pd.to_datetime(level.index)
-
-    result = pd.DataFrame({'level': level})
-    result = result.loc[result.index.intersection(pred_full.index)]
-
-    result['predicted_return'] = pred_full['predicted_return']
-    result['n_features'] = pred_full['n_features']
-    result['effective_horizon'] = pred_full['effective_horizon']
-
-    # Actual daily returns (for PnL, always use 1-day returns). Price-only —
-    # no carry, no funding of any kind (see _yield_to_return / _yield_carry
-    # and module docstring). 'returns_gross_of_funding' is kept as an alias
-    # of 'returns' for callers that still read that column name; the book-
-    # level funding hurdle (Sharpe only) lives in multiasset/book/funding.py.
-    result['returns'] = daily_returns.reindex(result.index)
-    result['returns_gross_of_funding'] = result['returns']
-
-    # Long-only flag comes from factor metadata, not string inspection.
-    _long_only = _is_long_only(factor_code)
-    pos = build_position_series(result['predicted_return'], result['returns'], cfg,
-                                long_only=_long_only,
-                                effective_horizon=result['effective_horizon'])
-
-    # Confirmed-trend floor (IRDL): bull floor, and its mirror in a confirmed
-    # sell-off, so the model cannot sit flat or counter-trend while yields have
-    # moved the same way on both the 60d and 120d horizons. See apply_trend_floor.
-    if _has_trend_floor(factor_code) and cfg.long_floor > 0:
-        pos['position'], _eligible = apply_trend_floor(pos['position'], factor_levels[factor_code], cfg)
-        result['floor_eligible'] = _eligible.reindex(result.index).fillna(False)
-    else:
-        result['floor_eligible'] = False
-
-    result['signal'] = pos['signal']
-    # Position stays in [-1, 1] (the canonical scale shared with portfolio snapshot).
-    # bucket_position {0…2}/{-2…2} display levels are applied only at the UI layer.
-    result['position'] = pos['position']
-    result['turnover'] = pos['turnover']
-
-    # PnL. Transaction cost is NOT deducted — by design (see
-    # factor_tx_cost_per_unit): no cost of any kind is modelled at the
-    # factor level, including funding — see _yield_carry / module docstring
-    # and docs/plans/beta_book_exposure_vs_capital.md Step 3. Funding is
-    # instead applied only as a Sharpe-step hurdle at the BOOK level (never
-    # netted into any factor-level return series) — see
-    # multiasset/book/funding.py.
-    #
-    # 'strategy_returns', 'strategy_returns_gross' and
-    # 'strategy_returns_gross_of_funding' are therefore all identical (no
-    # transaction cost, no funding netting). All three columns are kept so
-    # callers that read any one of them don't need special-casing, and so a
-    # real per-leg tx-cost model can be reintroduced later (see
-    # factor_tx_cost_per_unit docstring) without restructuring this block
-    # again.
-    result['strategy_returns_gross'] = pos['position'].shift(1) * result['returns']
-    result['strategy_returns_gross_of_funding'] = result['strategy_returns_gross']
-    result['strategy_returns'] = result['strategy_returns_gross']
-    result['cumulative_returns'] = (1 + result['strategy_returns'].fillna(0)).cumprod()
-
-    return result
+    return _finalize_factor_result(factor_code, factor_levels, pred_full, cfg, ts)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  5. Batch runner (mirrors run_factor_backtest in factor_backtest.py)
 # ═══════════════════════════════════════════════════════════════════════════
+
+# Monthly model files kept for the live rebuild (rebuild_live_predictions): enough
+# history for the 60-day vol/ICIR windows, the drawdown governor and slow signals.
+LIVE_MODEL_MONTHS = 14
+
 
 def run_factor_model_batch(
     factors: List[str],
@@ -2067,14 +2306,10 @@ def save_factor_model_results(
         existing['FactorModel'] = {}
 
     for factor_code, new_df in results.items():
-        prev_df = existing['FactorModel'].get(factor_code)
-        if prev_df is not None and not prev_df.empty:
-            # Concat and keep latest rows for overlapping dates
-            merged = pd.concat([prev_df, new_df])
-            merged = merged[~merged.index.duplicated(keep='last')]
-            existing['FactorModel'][factor_code] = merged.sort_index()
-        else:
-            existing['FactorModel'][factor_code] = new_df
+        # Incremental: union of dates, the new run wins on overlapping dates, and
+        # cumulative_returns is rebuilt over the merged index (see merge_factor_frames).
+        existing['FactorModel'][factor_code] = merge_factor_frames(
+            existing['FactorModel'].get(factor_code), new_df)
 
     pd.to_pickle(existing, pkl_path)
     print(f"Saved factor-backtest.pkl  (strategy=FactorModel, "
@@ -2089,8 +2324,10 @@ def save_factor_model_results(
     # When save_latest_only=True we only persist the most-recent month,
     # keeping the models/ folder lean for daily-signal use.
     if save_latest_only and models_by_month:
-        latest_key = max(models_by_month)
-        months_to_save = {latest_key: models_by_month[latest_key]}
+        # The live rebuild needs the recent monthly models (sizing history), not just
+        # the newest one, so 'latest only' keeps the last LIVE_MODEL_MONTHS months.
+        keep = sorted(models_by_month)[-LIVE_MODEL_MONTHS:]
+        months_to_save = {k: models_by_month[k] for k in keep}
     else:
         months_to_save = models_by_month
 
@@ -2145,18 +2382,21 @@ def save_factor_model_results(
 # ═══════════════════════════════════════════════════════════════════════════
 
 def current_month_model_key() -> str:
-    """Return the model key for the current month's training cutoff.
+    """Key of the model that applies to TODAY: the one whose test window is the
+    current calendar month, i.e. YYYYMMDD = last calendar day of the current month
+    (November 2026 -> 20261130).
 
-    The convention is YYYYMMDD = last calendar day of the previous month.
-    The training loop keys each period by the last day of its TEST window's
-    month (test_start month-end). When end_date is the first of the current
-    month, the last surviving test window starts on the first of the previous
-    month, so its month-end equals last day of previous month — matching here.
+    Design (user, 2026-11-19): at each month start the model is trained on data up
+    to the end of the previous month and used to predict the WHOLE current month.
+    The training loop keys each window by the month-end of its test window, so the
+    November window (trained through October) is ``20261130``. Until 2026-11-19 this
+    returned the last day of the PREVIOUS month, which loaded the October window's
+    model (trained through ~September), a month stale.
     """
-    from datetime import date, timedelta
-    first_of_month = date.today().replace(day=1)
-    last_of_prev_month = first_of_month - timedelta(days=1)
-    return last_of_prev_month.strftime('%Y%m%d')
+    import calendar
+    from datetime import date
+    t = date.today()
+    return date(t.year, t.month, calendar.monthrange(t.year, t.month)[1]).strftime('%Y%m%d')
 
 
 def current_month_model_path(models_dir: Union[str, Path] = DIR_MODELS) -> str:
@@ -2183,6 +2423,131 @@ def load_current_month_model(
     except Exception as e:
         print(f"Warning: could not load {path}: {e}")
         return None, month_key
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  6b. Live rebuild = the backtest's own positions (monthly-model design)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def list_model_months(models_dir: Union[str, Path] = DIR_MODELS) -> List[str]:
+    """Month keys (YYYYMMDD) of the saved monthly model files, oldest first.
+
+    Only CALENDAR MONTH-END keys count: a key is the month-end of its test window, so a
+    mid-month key (e.g. 20260507, left behind by older manual saves, when windows were
+    anchored on each factor's first-data day) is not a monthly window and must not take a
+    slot among the most recent files the live rebuild reads."""
+    import calendar
+    keys = []
+    for p in glob.glob(os.path.join(str(models_dir), 'factor_model_*.joblib')):
+        k = os.path.basename(p)[len('factor_model_'):-len('.joblib')]
+        if len(k) == 8 and k.isdigit():
+            y, m, d = int(k[:4]), int(k[4:6]), int(k[6:])
+            if 1 <= m <= 12 and d == calendar.monthrange(y, m)[1]:
+                keys.append(k)
+    return sorted(keys)
+
+
+def has_horizon_models(entry: Optional[Dict]) -> bool:
+    """True if a saved factor entry carries the full multi-horizon ensemble (the format
+    the live rebuild needs). Older files only hold the 1-day model."""
+    return bool(entry) and bool(entry.get('horizon_models')) and bool(entry.get('window_start'))
+
+
+def rebuild_live_predictions(
+    factor_code: str,
+    factor_levels: pd.DataFrame,
+    artifacts: Dict[str, Dict],
+    cfg: FactorModelConfig,
+    input_dir: Union[str, Path] = DIR_INPUT,
+) -> Tuple[Optional[pd.DataFrame], Dict]:
+    """Rebuild this factor's out-of-sample predictions from saved monthly models.
+
+    Each month's model predicts ONLY its own calendar-month window (the window it was
+    trained for), exactly as in the walk-forward; the windows are concatenated. Returns
+    ``(pred_frame, info)`` where info reports ``windows`` used, ``legacy_months`` skipped
+    (old-format files), ``last_window_end`` and ``covers_latest`` (the newest data day
+    falls inside a rebuilt window).
+    """
+    feats = build_features(
+        factor_code, factor_levels, input_dir,
+        stretch_tail=cfg.stretch_tail_features, stretch_tail_z=cfg.stretch_tail_z,
+        macro_growth=cfg.macro_growth_features, macro_liquidity=cfg.macro_liquidity_features,
+        macro_composites=cfg.macro_composite_features, bond_futures=cfg.bond_futures_features,
+    )
+    parts, windows, legacy = [], [], []
+    for key in sorted(artifacts):
+        entry = artifacts[key].get(factor_code)
+        if entry is None:
+            continue
+        if not has_horizon_models(entry):
+            legacy.append(key)
+            continue
+        ws, we = pd.Timestamp(entry['window_start']), pd.Timestamp(entry['window_end'])
+        test_feat = feats.loc[(feats.index >= ws) & (feats.index <= we)].copy()
+        if test_feat.empty:
+            continue
+        blended = blend_horizon_predictions(test_feat.ffill().fillna(0), entry['horizon_models'])
+        if blended is None:
+            continue
+        parts.append(blended)
+        windows.append((ws, we))
+    latest = factor_levels[factor_code].dropna().index.max()
+    info = {
+        'windows': len(parts), 'legacy_months': legacy,
+        'last_window_end': windows[-1][1] if windows else None,
+        'covers_latest': bool(windows) and windows[-1][0] <= latest <= windows[-1][1],
+    }
+    if not parts:
+        return None, info
+    pred = pd.concat(parts).sort_index()
+    return pred[~pred.index.duplicated(keep='last')], info
+
+
+def build_live_factor_results(
+    factors: List[str],
+    input_dir: Union[str, Path] = DIR_INPUT,
+    models_dir: Union[str, Path] = DIR_MODELS,
+    config: Optional[FactorModelConfig] = None,
+    months_back: int = 14,
+) -> Tuple[Dict[str, pd.DataFrame], Dict[str, Dict]]:
+    """Live positions that ARE the backtest's: saved monthly models -> predictions ->
+    the shared ``_finalize_factor_result`` (same sizing, trend floor, credit blend,
+    family overrides). Predicts through the latest data day (no label lag).
+
+    Returns ``(results, info)``; a factor whose newest window does not cover the latest
+    data day (current month not trained) is still returned if it has history, but
+    ``info[f]['covers_latest']`` is False so the caller can ask for a Train.
+    """
+    factor_levels = load_factor_rates(input_dir)
+    if not isinstance(factor_levels.index, pd.DatetimeIndex):
+        factor_levels.index = pd.to_datetime(factor_levels.index)
+    factor_levels = factor_levels.sort_index()
+
+    keys = list_model_months(models_dir)[-months_back:]
+    artifacts = {}
+    for k in keys:
+        try:
+            artifacts[k] = joblib.load(os.path.join(str(models_dir), f'factor_model_{k}.joblib'))
+        except Exception as e:
+            print(f"Warning: could not load factor_model_{k}.joblib: {e}")
+
+    results: Dict[str, pd.DataFrame] = {}
+    info: Dict[str, Dict] = {}
+    for f in factors:
+        if f not in factor_levels.columns:
+            continue
+        cfg = _resolve_factor_cfg(f, config)
+        try:
+            pred, inf = rebuild_live_predictions(f, factor_levels, artifacts, cfg, input_dir)
+        except Exception as e:
+            print(f"Warning: live rebuild failed for {f}: {e}")
+            continue
+        info[f] = inf
+        if pred is None:
+            continue
+        results[f] = _finalize_factor_result(f, factor_levels, pred, cfg, ts=None)
+    return results, info
+
 
 
 def load_latest_factor_model(

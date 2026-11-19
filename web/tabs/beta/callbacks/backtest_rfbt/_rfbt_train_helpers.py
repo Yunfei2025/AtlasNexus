@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from dash import html, dcc
@@ -288,6 +289,7 @@ def _build_results_from_saved_artifact(
         build_features, _compute_target_returns, _predict_ic_model,
         build_position_series, FactorModelConfig,
         factor_sizing_override, _is_long_only, _has_trend_floor, apply_trend_floor,
+        _has_mr_blend, apply_mr_blend,
     )
 
     base_size_cfg = FactorModelConfig(
@@ -355,6 +357,12 @@ def _build_results_from_saved_artifact(
             # live signal is sized like the backtest it was validated against.
             if _has_trend_floor(factor) and size_cfg.long_floor > 0:
                 pos['position'], _ = apply_trend_floor(pos['position'], factor_levels[factor], size_cfg)
+            # Mean-reversion blend for range-bound credit spreads (LGB) — same
+            # rule as the walk-forward backtest (see apply_mr_blend).
+            if _has_mr_blend(factor) and size_cfg.mr_blend:
+                pos['position'] = apply_mr_blend(pos['position'], factor_levels[factor], factor, size_cfg)
+                pos['signal'] = np.sign(pos['position']).fillna(0).astype(int)
+                pos['turnover'] = pos['position'].diff().abs().fillna(pos['position'].abs())
             result['signal'] = pos['signal']
             result['position'] = pos['position']
             result['turnover'] = pos['turnover']

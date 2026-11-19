@@ -46,6 +46,54 @@ def load_factor_signal_series(input_dir=DIR_INPUT) -> dict:
     return factor_signal_series
 
 
+def extend_with_live_positions(factor_signal_series: dict, factors, input_dir=DIR_INPUT) -> list:
+    """Extend each factor's saved position series past its last date with the live
+    rebuild from the saved monthly models (multiasset.factor_model.build_live_factor_results).
+
+    factor-backtest.pkl is written by Train at the month start, so it ends at the training
+    cutoff; without this the book would forward-fill the month-start position through the
+    whole current month. The live rebuild uses the same monthly models and the same sizing
+    as the walk-forward, so the appended rows are exactly what the backtest would produce.
+    Mutates ``factor_signal_series`` in place; returns [(factor, n_days_added)]. Silently
+    adds nothing when no new-format monthly models exist (run Train once to create them).
+    """
+    import os
+    from multiasset.factor_model import build_live_factor_results
+    factors = [f for f in factors if f]
+    if not factors:
+        return []
+    try:
+        live, _info = build_live_factor_results(
+            factors, input_dir=input_dir, models_dir=os.path.join(str(input_dir), 'models'))
+    except Exception as e:
+        print(f"  Warning: live position rebuild failed ({e}); saved positions are forward-filled")
+        return []
+    added = []
+    for f, df in live.items():
+        s_live = df['position'].dropna()
+        if s_live.empty:
+            continue
+        s = factor_signal_series.get(f)
+        if s is None or s.empty:
+            factor_signal_series[f] = s_live.sort_index()
+            added.append((f, len(s_live)))
+            continue
+        # The month of the latest data is taken entirely from the live rebuild: Train writes
+        # rows only up to its month-start cutoff, and rows after it in the saved file are
+        # leftovers of older runs (older code), which would otherwise stay in place.
+        if _info.get(f, {}).get('covers_latest'):
+            month_start = pd.Timestamp(s_live.index.max().year, s_live.index.max().month, 1)
+            tail = s_live.loc[s_live.index >= month_start]
+            base = s.loc[s.index < month_start]
+        else:
+            tail = s_live.loc[s_live.index > s.index.max()]
+            base = s
+        if len(tail):
+            factor_signal_series[f] = pd.concat([base, tail]).sort_index()
+            added.append((f, len(tail)))
+    return added
+
+
 def factor_signal_asof(factor_signal_series: dict, factor_code: str,
                        asof_date) -> float | None:
     """Most-recent FactorModel position for `factor_code` on/before `asof_date`.

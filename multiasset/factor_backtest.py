@@ -983,7 +983,8 @@ def run_factor_backtest(
 
         if strategy not in existing:
             existing[strategy] = {}
-        existing[strategy].update(results)
+        for _f, _df in results.items():          # incremental: new run wins on overlapping dates
+            existing[strategy][_f] = merge_factor_frames(existing[strategy].get(_f), _df)
 
         pd.to_pickle(existing, pkl_path)
         print(f"Saved factor-backtest.pkl  (strategy={strategy}, "
@@ -991,6 +992,22 @@ def run_factor_backtest(
 
     # Non-FactorModel strategies have no model artifact / trained-model concept
     return results, None, None
+
+
+def merge_factor_frames(prev: Optional[pd.DataFrame], new: pd.DataFrame) -> pd.DataFrame:
+    """Splice a new factor backtest frame onto the saved one: union of dates, the NEW run wins
+    on overlapping dates, sorted. ``cumulative_returns`` is rebuilt from ``strategy_returns``
+    over the merged index: each run's own cumulative curve restarts at 1.0, so concatenating
+    them would leave a jump at every splice."""
+    if prev is None or prev.empty:
+        return new
+    if new is None or new.empty:
+        return prev
+    merged = pd.concat([prev, new])
+    merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+    if 'strategy_returns' in merged.columns and 'cumulative_returns' in merged.columns:
+        merged['cumulative_returns'] = (1 + merged['strategy_returns'].fillna(0)).cumprod()
+    return merged
 
 
 def load_factor_backtest(

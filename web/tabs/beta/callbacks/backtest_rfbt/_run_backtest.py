@@ -27,7 +27,8 @@ def resolve_date_range(period_years, custom_start, custom_end) -> Tuple[str, str
 
 
 def build_factor_model_kwargs(fm_train, fm_ic, fm_topn, fm_sizing, fm_possmooth,
-                               fm_tiltbase, fm_tiltamp) -> Dict:
+                               fm_tiltbase, fm_tiltamp, fm_execdelay=0, fm_costbp=0,
+                               fm_mrblend='on') -> Dict:
     from multiasset.factor_model import FactorModelConfig
     defaults = FactorModelConfig()
 
@@ -35,7 +36,10 @@ def build_factor_model_kwargs(fm_train, fm_ic, fm_topn, fm_sizing, fm_possmooth,
               'ic_threshold': float(fm_ic or 0.05),
               'top_n': int(fm_topn or 8),
               'sizing_mode': fm_sizing or defaults.sizing_mode,
-              'position_smooth_window': int(fm_possmooth or 10)}
+              'position_smooth_window': int(fm_possmooth or 10),
+              'exec_delay_days': int(fm_execdelay or 0),
+              'cost_bp': float(fm_costbp or 0.0),
+              'mr_blend': (fm_mrblend or 'on') == 'on'}
     if (fm_sizing or defaults.sizing_mode) == 'tilt':
         # tilt_base is a policy input; 0.0 is a legitimate tilt_amp (pure
         # baseline, no model lean), so don't use `or` here.

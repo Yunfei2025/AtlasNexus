@@ -57,12 +57,14 @@ def warning_figure(title: str, annotation_text: str | None = None, themed: bool 
 
 def build_allocation_figure(df_history, all_assets_ever, display_start, display_end) -> go.Figure:
     fig_alloc = go.Figure()
+    # Daily positions (hundreds of points) as lines; markers only for a short monthly series.
+    _mode = 'lines+markers' if len(df_history) <= 60 else 'lines'
     for asset_name in sorted(all_assets_ever):
         if asset_name in df_history.columns:
             fig_alloc.add_trace(go.Scatter(
                 x=df_history['Date'],
                 y=df_history[asset_name].fillna(0),
-                mode='lines+markers',
+                mode=_mode,
                 name=asset_name,
                 stackgroup='one'
             ))

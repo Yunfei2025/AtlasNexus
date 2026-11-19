@@ -64,7 +64,10 @@ def register_backtest_rfbt_callbacks(app):
          State('rfbt-fm-sizing', 'value'),
          State('rfbt-fm-possmooth', 'value'),
          State('rfbt-fm-tiltbase', 'value'),
-         State('rfbt-fm-tiltamp', 'value')],
+         State('rfbt-fm-tiltamp', 'value'),
+         State('rfbt-fm-execdelay', 'value'),
+         State('rfbt-fm-costbp', 'value'),
+         State('rfbt-fm-mrblend', 'value')],
         prevent_initial_call=True,
     )
     def run_risk_factor_backtest(
@@ -73,7 +76,7 @@ def register_backtest_rfbt_callbacks(app):
         ma_short, ma_long, boll_window, boll_std,
         mom_window, zscore_window, zscore_entry, zscore_exit,
         fm_train, fm_ic, fm_topn, fm_sizing, fm_possmooth,
-        fm_tiltbase, fm_tiltamp,
+        fm_tiltbase, fm_tiltamp, fm_execdelay=0, fm_costbp=0, fm_mrblend='on',
     ):
         if not n_clicks or not factor_val:
             raise dash.exceptions.PreventUpdate
@@ -87,6 +90,7 @@ def register_backtest_rfbt_callbacks(app):
         try:
             kwargs = build_factor_model_kwargs(
                 fm_train, fm_ic, fm_topn, fm_sizing, fm_possmooth, fm_tiltbase, fm_tiltamp,
+                fm_execdelay, fm_costbp, fm_mrblend,
             )
             results, models_by_month, from_cache = run_rfbt_backtest(
                 factor_val, start_date, end_date, kwargs,
