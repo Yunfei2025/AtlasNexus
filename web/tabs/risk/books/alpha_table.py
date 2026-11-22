@@ -15,10 +15,86 @@ from settings.paths import DIR_INPUT
 from .swap_close import freshest_daily_closes, swap_spread_close_bp, zscore_from_close
 from web.tabs.alpha.data.legs import fly_leg_dv01_ratios
 from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
+from web.tabs.alpha.data.duration import get_breakeven_3m_bp, get_carry_roll_3m_bp
 from web.tabs.beta.data import THEME
 from web.tabs.beta.callbacks._common import _SUMMARY_ALPHA_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET, _ALPHA_POSITIONS_PARQUET, _load_cr_ts, _price_progress_bar, _dir_badge, _style_badge, _signed_value_style, _zscore_cell_style, _sortable_header, _apply_sort
 from .close_reminder import alpha_close_ticket, format_ticket
 from ..helpers import _compute_alpha_carry_mtm, _persist_alpha_summary_rows, _alpha_progress_direction, _alpha_spread_pnl_bp, _coerce_float, _load_leg_data, _resolve_legs, _leg_volume_ratio, _row_key, normalize_risk_ticker
+
+
+_BAR_STOP = '#ef4444'
+_BAR_TARGET = '#34d399'
+_BAR_NOW = 'var(--accent-amber)'
+
+
+def _stop_target_bar(entry: float, cur: float, stop: float, target: float, direction: str) -> html.Div:
+    """Progress bar in profit terms, the same for BUY and SELL: red STOP tick on the left, green TARGET
+    tick on the right, amber NOW tick in between. Position = favourable move since entry (bp), so the amber
+    tick is left of the middle when losing, right when winning, and sits OUTSIDE the red / green ticks when
+    the spread is already past the stop / target (the bar widens to fit it). The fill runs from the entry
+    (zero) to now: green = profit, red = loss. ``direction`` is the progress direction
+    (``_alpha_progress_direction``): 'BUY' gains when the spread rises, 'SELL' when it falls."""
+    sign = 1.0 if direction == 'BUY' else -1.0
+    pnl = sign * (cur - entry)                    # favourable move in bp, 0 = entry
+    stop_x = -abs(entry - stop)                   # stop and target as favourable distances from entry
+    tgt_x = abs(target - entry)
+    lo, hi = min(stop_x, pnl, 0.0), max(tgt_x, pnl, 0.0)
+    pad = ((hi - lo) or 1.0) * 0.07               # keep the end ticks inside the bar
+    lo, hi = lo - pad, hi + pad
+    pos = lambda x: (x - lo) / (hi - lo) * 100.0
+    fill_color = 'rgba(52,211,153,0.5)' if pnl >= 0 else 'rgba(239,68,68,0.5)'
+    tick = lambda x, color, w, grow: html.Div(style={
+        'position': 'absolute', 'top': f'-{grow}px', 'bottom': f'-{grow}px', 'left': f'{pos(x):.1f}%',
+        'width': f'{w}px', 'background': color, 'borderRadius': '1px', 'transform': 'translateX(-50%)'})
+    return html.Div(style={
+        'position': 'relative', 'height': '6px', 'background': 'var(--surface-input)',
+        'borderRadius': '3px', 'minWidth': '110px',
+    }, title=f"stop {stop_x:+.1f} bp · now {pnl:+.1f} bp · target {tgt_x:+.1f} bp  (vs entry, in profit terms)", children=[
+        html.Div(style={'position': 'absolute', 'top': '0', 'bottom': '0', 'left': f'{pos(min(0.0, pnl)):.1f}%',
+                        'width': f'{abs(pos(pnl) - pos(0.0)):.1f}%', 'background': fill_color, 'borderRadius': '3px'}),
+        tick(stop_x, _BAR_STOP, 2, 2),
+        tick(tgt_x, _BAR_TARGET, 2, 2),
+        tick(pnl, _BAR_NOW, 3, 3),
+    ])
+
+
+def _progress_legend() -> html.Div:
+    """Two-line key for the Progress column and the row colours, shown above the Alpha table."""
+    sub = {'color': THEME['text_sub'], 'fontSize': '11px'}
+
+    def tick(color, label):
+        return html.Span([
+            html.Span(style={'display': 'inline-block', 'width': '3px', 'height': '11px', 'background': color,
+                             'borderRadius': '1px', 'margin': '0 5px -2px 0'}), label,
+        ], style={'marginRight': '16px', 'whiteSpace': 'nowrap'})
+
+    def swatch(bg, label):
+        return html.Span([
+            html.Span(style={'display': 'inline-block', 'width': '12px', 'height': '10px', 'background': bg,
+                             'borderRadius': '2px', 'margin': '0 5px -1px 0'}), label,
+        ], style={'marginRight': '16px', 'whiteSpace': 'nowrap'})
+
+    return html.Div([
+        html.Div([
+            html.Span("Progress", style={'color': THEME['text_main'], 'fontWeight': '600', 'marginRight': '10px'}),
+            tick(_BAR_STOP, 'stop (left)'),
+            tick(_BAR_TARGET, 'target (right)'),
+            tick(_BAR_NOW, 'now'),
+            swatch('rgba(52,211,153,0.5)', 'profit since entry'),
+            swatch('rgba(239,68,68,0.5)', 'loss'),
+            html.Span("now outside the ticks = past stop / target", style={'whiteSpace': 'nowrap'}),
+        ], style={**sub, 'marginBottom': '4px'}),
+        html.Div([
+            html.Span("Row", style={'color': THEME['text_main'], 'fontWeight': '600', 'marginRight': '10px'}),
+            swatch('rgba(239,85,59,0.45)', 'stop hit'),
+            swatch('rgba(0,204,150,0.45)', 'target reached'),
+            swatch('rgba(255,165,0,0.35)', 'review: held 21d+ or signal says close'),
+        ], style={**sub, 'marginBottom': '4px'}),
+        html.Div([
+            html.Span("Stop / Target", style={'color': THEME['text_main'], 'fontWeight': '600', 'marginRight': '10px'}),
+            html.Span("levels in bp, like Open / Close:  BUY → stop above, target below   ·   SELL → stop below, target above"),
+        ], style=sub),
+    ], style={'padding': '6px 2px', 'marginBottom': '8px'})
 
 
 def register_alpha_book_table_callbacks(app):
@@ -150,6 +226,25 @@ def register_alpha_book_table_callbacks(app):
             except (TypeError, ValueError, KeyError):
                 return fallback
     
+        _cvpx_act_cache: dict = {}
+
+        def _bond_close_spread_bp(spread_type: str, leg1: str, leg2: str) -> float | None:
+            """(y1 - y2) in bp on the latest day both legs have a close yield (within the last 5 rows)."""
+            prefix = 'TBond' if spread_type == 'TBondCurve' else 'CBond'
+            if prefix not in _cvpx_act_cache:
+                try:
+                    _a = pd.read_pickle(str(DIR_INPUT / f'{prefix}-cvpx.pkl'))['ytm_act'].apply(pd.to_numeric, errors='coerce')
+                    _cvpx_act_cache[prefix] = _a.iloc[-5:]
+                except Exception:
+                    _cvpx_act_cache[prefix] = None
+            _a = _cvpx_act_cache[prefix]
+            if _a is None or leg1 not in _a.columns or leg2 not in _a.columns:
+                return None
+            _both = _a[[leg1, leg2]].dropna()
+            if _both.empty:
+                return None
+            return round(float(_both.iloc[-1][leg1] - _both.iloc[-1][leg2]) * 100.0, 4)
+
         def _resolve_alpha_close_price_bp(
             spread_type: str,
             trade_id: str,
@@ -160,8 +255,12 @@ def register_alpha_book_table_callbacks(app):
         ) -> float | None:
             nonlocal _irs_close_yield_df
     
-            # BondCurve close price should be the live leg1-leg2 close yield spread in bp.
+            # BondCurve close price = leg1 - leg2 on the latest CLOSE yields (ytm_act in {T,C}Bond-cvpx.pkl),
+            # not the live bid/offer mids; the snapshot's 'CloseYield' column below is only the fallback.
             if spread_type in {'TBondCurve', 'CBondCurve'} and leg1 and leg2:
+                _close_bp = _bond_close_spread_bp(spread_type, leg1, leg2)
+                if _close_bp is not None:
+                    return _close_bp
                 if spread_type not in _alpha_spread_cache:
                     try:
                         _alpha_spread_cache[spread_type] = _load_alpha_spread_data(spread_type)
@@ -259,7 +358,11 @@ def register_alpha_book_table_callbacks(app):
                     spread_val = row.get('spread', None)
                     zscore_val = _resolve_alpha_metric(spread_type, trade_id, 'Zscore', fallback=_coerce_float(row.get('Zscore')))
                     carry_roll_val = _resolve_alpha_metric(spread_type, trade_id, 'carry_roll', fallback=_coerce_float(row.get('carry_roll')))
-                    breakeven_val = _resolve_alpha_metric(spread_type, trade_id, 'breakeven_3m', fallback=_coerce_float(row.get('breakeven_3m')))
+                    # The snapshot has no breakeven column and saved rows rarely carry one (only the
+                    # Candidates scan computes it), so derive it from the snapshot's carry+roll.
+                    breakeven_val = get_breakeven_3m_bp(spread_type, trade_id, str(row.get('direction', '') or ''))
+                    if breakeven_val is None:
+                        breakeven_val = _resolve_alpha_metric(spread_type, trade_id, 'breakeven_3m', fallback=_coerce_float(row.get('breakeven_3m')))
                     # Size is the magnitude; the sign comes from DIRECTION (BUY +,
                     # SELL -), never from the stored notional_mm -- older snapshots
                     # stored it flipped for the whole book. Leg 2 is the opposite
@@ -339,10 +442,16 @@ def register_alpha_book_table_callbacks(app):
                     # Carry+Roll is shown as a 3m value in the table.
                     # Use the live spread-based annual proxy when available and convert annual -> quarterly.
                     # This keeps borrow-cost drag out of the displayed carry for bond shorts.
-                    carry_roll_3m_val = None
-                    base_annual_bp = cp_bp if cp_bp is not None else carry_roll_val
-                    if base_annual_bp is not None:
-                        carry_roll_3m_val = base_annual_bp / 4.0
+                    # What the POSITION earns over 3 months, from the snapshot's carry+roll (the
+                    # same figure the Candidates cards use). The old spread-level/4 proxy had the
+                    # wrong sign for slopes (CGB-10s30s showed +11.5 when BUY earns -5.3).
+                    carry_roll_3m_val = get_carry_roll_3m_bp(spread_type, trade_id, str(row.get('direction', '') or ''))
+                    if carry_roll_3m_val is None:      # no snapshot row: legacy proxy, BUY-side then flipped for SELL
+                        _base_annual_bp = cp_bp if cp_bp is not None else carry_roll_val
+                        if _base_annual_bp is not None:
+                            carry_roll_3m_val = _base_annual_bp / 4.0
+                            if str(row.get('direction', '')).strip().upper() == 'SELL':
+                                carry_roll_3m_val = -carry_roll_3m_val
     
                     # No open price yet (newly added, or added before this existed): default it to
                     # the latest close and today's date. Saved below, so it stays fixed; the user
@@ -419,10 +528,15 @@ def register_alpha_book_table_callbacks(app):
                         'Progress':               '',
                         'Capital (MM CNY)':       f"{_dir_sign * notional:,.1f}",
                         'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",
-                        'Carry+Roll (3m,bp)':     _fmt1(-carry_roll_3m_val if str(row.get('direction', '')).strip().upper() == 'SELL' else carry_roll_3m_val),
+                        'Carry+Roll (3m,bp)':     _fmt1(carry_roll_3m_val),
                         'Breakeven (3m,bp)':      _fmt1(breakeven_val),
-                        'Stop (bp)':              _fmt1(row.get('stop_loss')),
-                        'Target (bp)':            _fmt1(row.get('profit_target')),
+                        # Stop / Target are LEVELS in the same units as Open / Close: a BUY profits when the
+                        # spread falls (stop above entry, target below), a SELL the reverse. The saved
+                        # distances stay in _stop_dist / _target_dist for the exit alerts.
+                        'Stop (bp)':              _fmt1(stop_level) if stop_level is not None else _fmt1(row.get('stop_loss')),
+                        'Target (bp)':            _fmt1(target_level) if target_level is not None else _fmt1(row.get('profit_target')),
+                        '_stop_dist':             _fmt1(row.get('stop_loss')),
+                        '_target_dist':           _fmt1(row.get('profit_target')),
                         'MTM spd (bp)':           f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else '',
                         'MtM Carry (MM CNY)':     f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
                         'MtM Value (MM CNY)':     f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
@@ -535,8 +649,10 @@ def register_alpha_book_table_callbacks(app):
                 _dir  = _alpha_progress_direction(r.get('Spread Type', ''), r.get('Direction', ''))
                 _op_s = str(r.get('Open price (bp)', '') or '').strip()
                 _cp_s = str(r.get('Close Price (bp)', '') or '').strip()
-                _sl_s = str(r.get('Stop (bp)', '') or '').strip()
-                _tp_s = str(r.get('Target (bp)', '') or '').strip()
+                # distances from entry (hidden fields); rows from an older saved display only have them
+                # in the Stop / Target columns
+                _sl_s = str(r['_stop_dist'] if '_stop_dist' in r else r.get('Stop (bp)', '') or '').strip()
+                _tp_s = str(r['_target_dist'] if '_target_dist' in r else r.get('Target (bp)', '') or '').strip()
                 _od_s = str(r.get('Open date', '') or '').strip()
                 try:
                     _op = float(_op_s) if _op_s else None
@@ -614,7 +730,7 @@ def register_alpha_book_table_callbacks(app):
             _ALL_COLS = [
                 ('ID', 'left'), ('Leg 1', 'left'), ('Leg 2', 'left'), ('Leg 3', 'left'), ('Ratio (V2/V1)', 'right'), ('Ratio (V3/V1)', 'right'),
                 ('Style', 'left'), ('Direction', 'center'), ('Duration', 'right'),
-                ('Z-Score', 'right'), ('Progress', 'left'),
+                ('Close Price (bp)', 'right'), ('Z-Score', 'right'), ('Progress', 'left'),
                 ('Capital (MM CNY)', 'right'), ('Target Volume Leg2 (MM CNY)', 'right'),
                 ('Target Volume Leg3 (MM CNY)', 'right'), ('Margin (MM)', 'right'),
                 ('DV01 (k CNY/bp)', 'right'),
@@ -691,7 +807,8 @@ def register_alpha_book_table_callbacks(app):
                     return html.Td(val, style={**base_style, **_signed_value_style(signed)})
                 if col == 'Target (bp)':
                     try:
-                        _at_target = val not in ('', None) and float(str(val).replace(',', '')) <= 0
+                        _td = row['_target_dist'] if '_target_dist' in row else val
+                        _at_target = _td not in ('', None) and float(str(_td).replace(',', '')) <= 0
                     except (TypeError, ValueError):
                         _at_target = False
                     if _at_target:   # 0 bp to go: already at the exit level, not a missing target
@@ -709,8 +826,8 @@ def register_alpha_book_table_callbacks(app):
                     except (TypeError, ValueError):
                         return html.Td('', style=base_style)
                     direction = _alpha_progress_direction(row.get('Spread Type', ''), row.get('Direction', ''))
-                    return html.Td(_price_progress_bar(entry, cur, target, stop, direction),
-                                    style={**base_style, 'minWidth': '90px'})
+                    return html.Td(_stop_target_bar(entry, cur, stop, target, direction),
+                                    style={**base_style, 'minWidth': '110px'})
                 if col == '__delete':
                     return html.Td(
                         html.Button('×', id={'type': 'alpha-row-delete', 'row': row_idx}, n_clicks=0, style={
@@ -815,6 +932,7 @@ def register_alpha_book_table_callbacks(app):
                 ], style={'display': 'flex', 'alignItems': 'center', 'gap': '10px',
                           'marginBottom': '10px', 'flexWrap': 'wrap', 'position': 'relative', 'zIndex': '1001'}),
                 *([_reminder_banner] if _reminder_banner else []),
+                _progress_legend(),
                 table,
             ], id='summary-alpha-table-wrapper')
             status = f"Alpha snapshot from {ts[:19]} ({source_label})"

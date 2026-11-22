@@ -61,6 +61,8 @@ from .duration import (
     _get_tenor_yields_for_spread,
     _get_current_fr007_bp,
     _get_ttm_display,
+    get_breakeven_3m_bp,
+    get_carry_roll_3m_bp,
     get_bondswap_reference_series,
 )
 from .legs import (

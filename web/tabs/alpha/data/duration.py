@@ -516,3 +516,79 @@ def _get_ttm_display(spread_type: str, instrument: str) -> Optional[float]:
         return None
 
     return None
+
+
+def _snapshot_buy_carry_3m_bp(spread_type: str, instrument: str) -> Optional[float]:
+    """BUY-side carry+roll (bp per 3 months) from the alpha snapshot, on one basis for every type.
+
+    The snapshot's ``carry_roll`` is stored on ``carry_basis_days`` (TenorSpread annual = 360, bond
+    curves 90; the other types carry no column and are already ~3m), so it is rebased to 90 days
+    here. The Candidates scan converts TenorSpread the same way.
+    """
+    snap = load_spread_data(spread_type)
+    if not isinstance(snap, pd.DataFrame) or instrument not in snap.index or 'carry_roll' not in snap.columns:
+        return None
+    cr = pd.to_numeric(snap.at[instrument, 'carry_roll'], errors='coerce')
+    if pd.isna(cr):
+        return None
+    basis = 90.0
+    if 'carry_basis_days' in snap.columns:
+        b = pd.to_numeric(snap.at[instrument, 'carry_basis_days'], errors='coerce')
+        if pd.notna(b) and b > 0:
+            basis = float(b)
+    if spread_type == 'TenorSpread':
+        basis = max(basis, 360.0)            # stored annual even if the basis column is missing
+    return float(cr) * 90.0 / basis
+
+
+def _tenor_sell_carry_3m_bp(instrument: str) -> Optional[float]:
+    """Latest stored SELL-side carry+roll (bp per 3m) of a CGB/CDB slope or fly, else None.
+
+    ``Tenor-spds.pkl`` ``CarryRoll3mSell`` differs from -BUY carry by the TRS spread charged on every
+    leg; it is the series the Books MtM carry uses for SELL positions (risk/helpers.py).
+    """
+    try:
+        data = _load_pickle_safe(_get_input_dir() / 'Tenor-spds.pkl')
+        sell = data.get('TenorSpread', {}).get('CarryRoll3mSell') if isinstance(data, dict) else None
+        if isinstance(sell, pd.DataFrame) and instrument in sell.columns:
+            s = pd.to_numeric(sell[instrument], errors='coerce').dropna()
+            if not s.empty:
+                return float(s.iloc[-1]) * 100.0          # 3m % -> bp
+    except Exception:
+        pass
+    return None
+
+
+def get_carry_roll_3m_bp(spread_type: str, instrument: str, direction: str = '') -> Optional[float]:
+    """Carry+roll the POSITION earns over 3 months, bp: BUY as stored; SELL = the stored SELL series
+    for TenorSpread curve trades, otherwise minus the BUY carry. None if unavailable."""
+    try:
+        buy = _snapshot_buy_carry_3m_bp(spread_type, instrument)
+        if buy is None:
+            return None
+        if str(direction or '').strip().upper() in ('SELL', 'SHORT'):
+            if spread_type == 'TenorSpread':
+                sell = _tenor_sell_carry_3m_bp(instrument)
+                if sell is not None:
+                    return sell
+            return -buy
+        return buy
+    except Exception:
+        return None
+
+
+def get_breakeven_3m_bp(spread_type: str, instrument: str, direction: str = '') -> Optional[float]:
+    """Breakeven (bp of yield move) that offsets one quarter of NEGATIVE carry+roll.
+
+    Same rule as the Candidates scan (scan_callbacks.py): ``-cr / TTM(years)`` where ``cr`` is the
+    position's 3-month carry+roll (``get_carry_roll_3m_bp``) and only when ``cr < 0``. None when the
+    position earns positive carry (nothing to break even on) or the snapshot row / TTM is missing.
+    """
+    try:
+        cr_3m = get_carry_roll_3m_bp(spread_type, instrument, direction)
+        ttm = _get_ttm_display(spread_type, instrument)
+        if cr_3m is None or cr_3m >= 0 or ttm is None or not float(ttm) > 0:
+            return None
+        return round(-cr_3m / float(ttm), 4)
+    except Exception:
+        return None

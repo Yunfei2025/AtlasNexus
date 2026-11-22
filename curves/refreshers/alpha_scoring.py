@@ -216,11 +216,13 @@ def _add_momentum_ma_zscore(
 		out["level_zscore"] = out.get("Zscore", np.nan)
 		out["momentum_zscore"] = np.nan
 		out["momentum_ma"] = np.nan
+		out["momentum_sigma"] = np.nan
 		return out
 
 	out["level_zscore"] = pd.to_numeric(out.get("Zscore"), errors="coerce")
 	zscores: list[float] = []
 	mas: list[float] = []
+	sigmas: list[float] = []
 	keys = (out["spread_type"].astype(str) + "|" + out["ID"].astype(str)).to_numpy()
 	spreads = pd.to_numeric(out.get("spread", pd.Series(np.nan, index=out.index)), errors="coerce").to_numpy()
 	for key, spread_now in zip(keys, spreads):
@@ -228,12 +230,14 @@ def _add_momentum_ma_zscore(
 		if not isinstance(s, pd.Series):
 			zscores.append(np.nan)
 			mas.append(np.nan)
+			sigmas.append(np.nan)
 			continue
 		s_enriched = _append_snapshot_spread_to_series(s, spread_now)
 		s_clean = pd.to_numeric(s_enriched, errors="coerce").dropna()
 		if len(s_clean) < max(ma_window + 2, z_window):
 			zscores.append(np.nan)
 			mas.append(np.nan)
+			sigmas.append(np.nan)
 			continue
 		ma = s_clean.rolling(ma_window).mean()
 		momentum = s_clean.diff(ma_window)
@@ -244,12 +248,16 @@ def _add_momentum_ma_zscore(
 		if pd.isna(last_ma) or pd.isna(last_sigma) or float(last_sigma) <= 0:
 			zscores.append(np.nan)
 			mas.append(float(last_ma) if pd.notna(last_ma) else np.nan)
+			sigmas.append(np.nan)
 			continue
 		zscores.append(float(momentum.iloc[-1] / last_sigma))
 		mas.append(float(last_ma))
+		sigmas.append(float(last_sigma))
 
 	out["momentum_zscore"] = zscores
 	out["momentum_ma"] = mas
+	# The sigma momentum_zscore is measured in (series units): stop / target distances in z are scaled by it.
+	out["momentum_sigma"] = sigmas
 	# The Candidates card's Z-score field is the strategy-relevant measure for
 	# Momentum/Carry rows; level_zscore remains available for diagnostics.
 	out["Zscore"] = out["momentum_zscore"]

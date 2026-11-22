@@ -9,17 +9,24 @@ broker lines such as ``bid 2600006.IB 200MM @ 1.8300``.
 
 Yield-quoted instruments only (cash bonds, FR007 swaps, curve labels): P&L is
 holding x duration x (open yield - close yield), so a long gains when yield falls.
+
+Execution model: the order is always To Trade = Target - Holding, recomputed from what is actually held, so an
+unfilled remainder carries over by itself. The limit is a WORST price: a buy limit is a yield no lower than the
+close (price no higher), a sell limit a yield no higher than the close. Max/day (MM, typed by judgement) caps
+today's size for thin bonds; the rest shows as Left. Age / Filled % show how long and how far a trade has run.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 
 import dash
 from dash import dash_table
 from dash.dash_table.Format import Format, Scheme, Sign
 from dash.dependencies import Input, Output, State
+import numpy as np
 import pandas as pd
 
 from settings.paths import DIR_INPUT
@@ -29,6 +36,7 @@ _STATE_FILE = DIR_INPUT / 'ticket_book.json'   # {code: {holding, open_px, ticke
 _HISTORY_FILE = DIR_INPUT / 'ticket_holdings_history.pkl'   # one snapshot per day, latest edit wins
 _TOTAL = 'TOTAL'
 _MIN_TRADE_MM = 0.05
+_TOL_BP = 0.0   # slippage tolerance on the limit (bp of yield); 0 = no worse than the close
 
 
 def _fmt(precision: int, signed: bool = False) -> Format:
@@ -43,10 +51,17 @@ _COLUMNS = [
     {'name': 'Holding (MM)', 'id': 'Holding', 'type': 'numeric', 'editable': True, 'format': _fmt(1, True)},
     {'name': 'Target (MM)', 'id': 'Target', 'type': 'numeric', 'format': _fmt(1, True)},
     {'name': 'To Trade (MM)', 'id': 'Trade', 'type': 'numeric', 'format': _fmt(1, True)},
+    # Liquidity cap per day, typed by judgement; blank = no cap.
+    {'name': 'Max/day (MM)', 'id': 'MaxDay', 'type': 'numeric', 'editable': True, 'format': _fmt(1)},
+    {'name': 'Today (MM)', 'id': 'Today', 'type': 'numeric', 'format': _fmt(1, True)},
+    {'name': 'Left (MM)', 'id': 'Left', 'type': 'numeric', 'format': _fmt(1, True)},
+    {'name': 'Side', 'id': 'Side', 'type': 'text'},
+    {'name': 'Limit, worst (%)', 'id': 'TicketPx', 'type': 'numeric', 'editable': True, 'format': _fmt(4)},
+    {'name': 'Age (bd)', 'id': 'Age', 'type': 'numeric', 'format': _fmt(0)},
+    {'name': 'Filled (%)', 'id': 'Filled', 'type': 'numeric', 'format': _fmt(0)},
     {'name': 'Open Px (%)', 'id': 'OpenPx', 'type': 'numeric', 'editable': True, 'format': _fmt(4)},
     {'name': 'Close Px (%)', 'id': 'Close', 'type': 'numeric', 'format': _fmt(4)},
     {'name': 'PnL (MM)', 'id': 'Pnl', 'type': 'numeric', 'format': _fmt(4, True)},
-    {'name': 'Ticket Px (%)', 'id': 'TicketPx', 'type': 'numeric', 'editable': True, 'format': _fmt(4)},
 ]
 
 
@@ -63,9 +78,10 @@ def build_tickets_table() -> dash_table.DataTable:
         style_data_conditional=[
             {'if': {'row_index': 'odd'}, 'backgroundColor': THEME['bg_card']},
             *[{'if': {'column_id': c}, 'backgroundColor': 'rgba(99,179,237,0.08)'}
-              for c in ('Override', 'Holding', 'OpenPx', 'TicketPx')],
-            {'if': {'filter_query': '{Trade} > 0', 'column_id': 'Trade'}, 'color': THEME['success'], 'fontWeight': 'bold'},
-            {'if': {'filter_query': '{Trade} < 0', 'column_id': 'Trade'}, 'color': THEME['danger'], 'fontWeight': 'bold'},
+              for c in ('Override', 'Holding', 'MaxDay', 'OpenPx', 'TicketPx')],
+            *[c for col in ('Trade', 'Today') for c in (
+                {'if': {'filter_query': f'{{{col}}} > 0', 'column_id': col}, 'color': THEME['success'], 'fontWeight': 'bold'},
+                {'if': {'filter_query': f'{{{col}}} < 0', 'column_id': col}, 'color': THEME['danger'], 'fontWeight': 'bold'})],
             {'if': {'filter_query': '{Pnl} > 0', 'column_id': 'Pnl'}, 'color': THEME['success']},
             {'if': {'filter_query': '{Pnl} < 0', 'column_id': 'Pnl'}, 'color': THEME['danger']},
             {'if': {'filter_query': f'{{Instrument}} = "{_TOTAL}"'}, 'backgroundColor': THEME['table_header'],
@@ -92,9 +108,10 @@ def _save_history(rows: list[dict]) -> None:
     """Replace today's holdings snapshot in the history pickle (long format, one row per held instrument)."""
     today = pd.Timestamp.today().normalize()
     snap = pd.DataFrame([{
-        'date': today, 'instrument': r['Instrument'], 'holding_mm': _num(r.get('Holding')),
+        'date': today, 'instrument': r['Instrument'], 'holding_mm': _num(r.get('Holding')) or 0.0,
         'target_mm': _num(r.get('Target')), 'open_px': _num(r.get('OpenPx')), 'close_px': _num(r.get('Close')),
-    } for r in rows if r.get('Instrument') != _TOTAL and _num(r.get('Holding')) is not None])
+    } for r in rows if r.get('Instrument') != _TOTAL
+        and (_num(r.get('Holding')) is not None or abs(_num(r.get('Target')) or 0.0) >= _MIN_TRADE_MM)])
     try:
         hist = pd.read_pickle(_HISTORY_FILE)
         hist = hist[hist['date'] != today]
@@ -113,8 +130,46 @@ def _num(v):
         return None
 
 
+def _verb(code: str, trade: float) -> str:
+    """Broker verb for a signed trade: swaps receive/pay fixed, everything else bid/offer."""
+    if str(code).upper().endswith('.IR'):
+        return 'receive' if trade > 0 else 'pay'        # swap: buy = receive fixed
+    return 'bid' if trade > 0 else 'offer'
+
+
+def _run_stats(code: str, hold: float, tgt: float, hist: pd.DataFrame) -> tuple:
+    """(age in business days, filled %) of the trade now open on ``code``; (None, None) when nothing to trade.
+
+    The open run is the unbroken stretch of snapshots (plus today's live state) with |target - holding| above
+    the minimum. Age counts business days since the run's first snapshot. Filled is the move in holding since
+    the run began, as a share of the distance the run had to cover: (hold - base) / (target - base), where base
+    is the holding at the last snapshot before the run (the earliest known holding when the run is the whole history).
+    """
+    if abs(tgt - hold) < _MIN_TRADE_MM:
+        return None, None
+    today = pd.Timestamp.today().normalize()
+    h = hist[(hist['instrument'] == code) & (hist['date'] < today)].sort_values('date') if len(hist) else hist
+    pts = [(r.date, r.holding_mm, r.target_mm) for r in h.itertuples()]
+    start = len(pts)
+    while start > 0 and abs((pts[start - 1][2] or 0.0) - pts[start - 1][1]) >= _MIN_TRADE_MM:
+        start -= 1
+    if start < len(pts):
+        first_date = pts[start][0]
+        base = pts[start - 1][1] if start > 0 else pts[start][1]
+    else:
+        first_date, base = today, hold
+    age = int(np.busday_count(first_date.date(), today.date()))
+    span = tgt - base
+    filled = max(0.0, min(100.0, 100.0 * (hold - base) / span)) if abs(span) >= _MIN_TRADE_MM else None
+    return age, filled
+
+
 def _derive(rows: list[dict]) -> list[dict]:
-    """Fill Trade / Pnl, default Ticket Px to the close, and append the TOTAL row."""
+    """Fill Trade / Today / Left / Side / Limit / Age / Filled / Pnl and append the TOTAL row."""
+    try:
+        hist = pd.read_pickle(_HISTORY_FILE)
+    except Exception:
+        hist = pd.DataFrame()
     out, total = [], 0.0
     for r in rows:
         if r.get('Instrument') == _TOTAL:
@@ -122,11 +177,21 @@ def _derive(rows: list[dict]) -> list[dict]:
         hold, tgt = _num(r.get('Holding')), _num(r.get('Target')) or 0.0
         op, close, dur = _num(r.get('OpenPx')), _num(r.get('Close')), _num(r.get('_dur'))
         r['Trade'] = round(tgt - (hold or 0.0), 4)
+        cap = _num(r.get('MaxDay'))
+        trade = r['Trade']
+        live = abs(trade) >= _MIN_TRADE_MM
+        r['Today'] = round(math.copysign(min(abs(trade), cap), trade), 4) if live and cap and cap > 0 else trade
+        r['Left'] = round(trade - r['Today'], 4)
+        r['Side'] = _verb(r['Instrument'], trade).upper() if live else ''
+        r['Age'], r['Filled'] = _run_stats(r['Instrument'], hold or 0.0, tgt, hist)
         r['Pnl'] = (round(hold * dur * (op - close) / 100.0, 4)
                     if None not in (hold, dur, op, close) else None)
         if r['Pnl'] is not None:
             total += r['Pnl']
-        if _num(r.get('TicketPx')) is None:
+        if _num(r.get('TicketPx')) is None and close is not None:
+            # worst acceptable yield: a buyer accepts a lower yield, a seller a higher one, by _TOL_BP
+            r['TicketPx'] = round(close - math.copysign(_TOL_BP / 100.0, trade), 6) if live else close
+        elif _num(r.get('TicketPx')) is None:
             r['TicketPx'] = close
         r['Override'] = str(r.get('Override') or '').strip() or r['Instrument']   # blank -> back to default
         out.append(r)
@@ -171,6 +236,7 @@ def _build_rows() -> list[dict]:
             'Override': st.get('override') or c,
             'Holding': _num(st.get('holding')),
             'Target': round(exe[c]['net'], 4) if c in exe else 0.0,
+            'MaxDay': _num(st.get('max_day')),
             'OpenPx': _num(st.get('open_px')),
             'Close': marks[c]['close'],
             'TicketPx': _num(st.get('ticket_px')),
@@ -183,15 +249,12 @@ def _trade_lines(rows: list[dict]) -> list[str]:
     lines = []
     for r in rows:
         code = r.get('Instrument')
-        trade = _num(r.get('Trade'))
+        trade = _num(r.get('Today'))     # today's slice: the delta capped by Max/day
         if code == _TOTAL or trade is None or abs(trade) < _MIN_TRADE_MM:
             continue
         code = str(r.get('Override') or '').strip() or code   # trade the override when the user set one
         px = _num(r.get('TicketPx'))
-        if str(code).upper().endswith('.IR'):
-            verb = 'receive' if trade > 0 else 'pay'        # swap: buy = receive fixed
-        else:
-            verb = 'bid' if trade > 0 else 'offer'
+        verb = _verb(code, trade)
         lines.append(f"{verb} {code} {abs(trade):g}MM @ {f'{px:.4f}' if px is not None else 'N/A'}")
     return lines
 
@@ -232,6 +295,7 @@ def register_risk_tickets_callbacks(app):
             ov = str(r.get('Override') or '').strip()
             entry = {'holding': _num(r.get('Holding')), 'open_px': _num(r.get('OpenPx')),
                      'override': ov if ov and ov != code else None,   # only a real override is kept
+                     'max_day': _num(r.get('MaxDay')),
                      # only a price the user changed is kept; otherwise it follows the latest close
                      'ticket_px': tpx if tpx is not None and (close is None or abs(tpx - close) > 1e-9) else None}
             if any(v is not None for v in entry.values()):
@@ -255,4 +319,5 @@ def register_risk_tickets_callbacks(app):
         lines = _trade_lines(rows or [])
         if not lines:
             return '', 'Nothing to trade: holdings already match targets.'
-        return '\n'.join(lines), f"{len(lines)} tickets"
+        left = sum(1 for r in rows if (_num(r.get('Left')) or 0.0) and abs(_num(r.get('Left'))) >= _MIN_TRADE_MM)
+        return '\n'.join(lines), f"{len(lines)} tickets" + (f" · {left} capped by Max/day, remainder carries over" if left else "")

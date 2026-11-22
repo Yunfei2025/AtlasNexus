@@ -763,13 +763,25 @@ def register_scan_callbacks(app) -> None:
 
         _spread_v = pd.to_numeric(df_all.get('spread', pd.Series(dtype=float)), errors='coerce')
         _mean_v = pd.to_numeric(df_all.get('mean', pd.Series(dtype=float)), errors='coerce')
-        _risk_vol = (
-            pd.to_numeric(df_all['risk_vol_63d'], errors='coerce').abs()
-            if 'risk_vol_63d' in df_all.columns
-            else pd.Series(np.nan, index=df_all.index, dtype=float)
+        # Stop / target are z-score distances, so they must be scaled by the SAME sigma the displayed
+        # Zscore is measured in (fixed 2026-11-21; they used risk_vol_63d, the std of DAILY changes, which
+        # is ~4x smaller than the level sigma and made stops ~1-2 days of noise):
+        #   * level Zscore (MR, and Momentum/Carry rows without a momentum z): ewm_vol, else the OU vol;
+        #   * Momentum rows whose Zscore is the momentum z-score: the EWMA std of the 20d change
+        #     (momentum_sigma, written by alpha_scoring._add_momentum_ma_zscore; older artifacts lack it).
+        # ewm_vol / momentum_sigma are raw series units (%): x100 for the types whose spread is shown in bp.
+        _scale_v = (
+            df_all['spread_type'].isin(_PCT_TYPES).map({True: 100.0, False: 1.0}).astype(float)
+            if 'spread_type' in df_all.columns else pd.Series(1.0, index=df_all.index)
         )
-        _ou_vol = pd.to_numeric(df_all.get('vol', pd.Series(dtype=float)), errors='coerce').abs()
-        _vol_v = _risk_vol.where(_risk_vol.gt(0) & _risk_vol.notna(), _ou_vol)
+        _numcol = lambda c: pd.to_numeric(df_all[c], errors='coerce') if c in df_all.columns \
+            else pd.Series(np.nan, index=df_all.index, dtype=float)
+        _ewm_v = _numcol('ewm_vol').abs() * _scale_v
+        _ou_vol = _numcol('vol').abs()                      # already in display units (scaled above)
+        _vol_v = _ewm_v.where(_ewm_v.gt(0) & _ewm_v.notna(), _ou_vol)
+        _mom_sig = _numcol('momentum_sigma').abs() * _scale_v
+        _z_is_mom = _numcol('momentum_zscore').notna() & (_numcol('Zscore') - _numcol('momentum_zscore')).abs().lt(1e-9)
+        _vol_v = _vol_v.where(~(_z_is_mom & _mom_sig.gt(0)), _mom_sig)
         _style_v = df_all.get('style', pd.Series(dtype=str)).astype(str).str.strip().str.lower()
         _is_mr_v = _style_v.eq('meanreversion')
         _dist_v = (_spread_v - _mean_v).abs()

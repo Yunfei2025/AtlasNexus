@@ -137,9 +137,14 @@ class AlphaSnapshotPaths:
 	def bond_newissue_spds(self) -> Path:
 		return self.dir_input / "BondNewIssue-spds.pkl"
 
+	def bond_cvpx(self, prefix: str) -> Path:
+		return self.dir_input / f"{prefix}-cvpx.pkl"
+
 	@property
 	def source_pickles(self) -> tuple[Path, ...]:
 		return (
+			self.bond_cvpx("TBond"),
+			self.bond_cvpx("CBond"),
 			self.tbond_spds,
 			self.cbond_spds,
 			self.irs_pxspds,
@@ -243,6 +248,92 @@ def _append_snapshot_spread_to_series(
 from web.tabs.alpha.data.constants import _build_tenor_spread_timeseries
 
 
+_CLOSE_SPREAD_MAX_AGE_ROWS: int = 5    # a bond whose last close is older than this many trading days gets no score
+
+
+def _bond_curve_close_spreads(cvpx_path: Path) -> pd.DataFrame:
+	"""Latest CLOSE bond-vs-curve residual per bond: ytm_act - ytm_quo from {prefix}-cvpx.pkl.
+
+	Same series (and the same model-jump suppression) that the BondCurve OU mean/vol are
+	fitted on (StatRefresher.refresh_bonds_and_swaps -> statAnalysis_BC), so
+	(close_spread - mean) / vol is the score on the most recent close. Each bond takes its
+	own last valid close within the last _CLOSE_SPREAD_MAX_AGE_ROWS rows; older -> dropped.
+	Columns: close_spread (%), close_date. Empty frame if the file cannot be read.
+	"""
+	try:
+		from curves.generators.stat import _suppress_model_jumps
+		px = _read_pickle(cvpx_path)
+		act = px["ytm_act"].apply(pd.to_numeric, errors="coerce")
+		quo = px["ytm_quo"].apply(pd.to_numeric, errors="coerce")
+	except Exception as exc:
+		print(f"WARN: close BondCurve spreads unavailable ({cvpx_path.name}: {exc})")
+		return pd.DataFrame(columns=["close_spread", "close_date"])
+	act.index = pd.to_datetime(act.index)
+	quo.index = pd.to_datetime(quo.index)
+	act = act[~act.index.duplicated(keep="last")].sort_index()
+	quo = quo[~quo.index.duplicated(keep="last")].sort_index()
+	cols = act.columns.intersection(quo.columns)
+	quo = _suppress_model_jumps(quo[cols], act[cols])
+	spread = (act[cols] - quo.reindex(index=act.index)).iloc[-_CLOSE_SPREAD_MAX_AGE_ROWS:]
+	last_date = spread.apply(lambda s: s.last_valid_index())
+	last_date = last_date.dropna()
+	out = pd.DataFrame({
+		"close_spread": [float(spread.at[d, b]) for b, d in last_date.items()],
+		"close_date": [pd.Timestamp(d).strftime("%Y-%m-%d") for d in last_date.values],
+	}, index=last_date.index)
+	out.index = out.index.astype(str)
+	return out
+
+
+def _irs_close_fixings(cnbd_data: object) -> pd.DataFrame:
+	"""Daily IRS close fixings (%) from database-px.pkl ('IRS' / 'SwapTS'), DatetimeIndex."""
+	irs = None
+	if isinstance(cnbd_data, dict):
+		irs = cnbd_data.get("IRS", cnbd_data.get("SwapTS"))
+	if not isinstance(irs, pd.DataFrame) or irs.empty:
+		return pd.DataFrame()
+	irs = irs.apply(pd.to_numeric, errors="coerce")
+	irs.index = pd.to_datetime(irs.index)
+	return irs[~irs.index.duplicated(keep="last")].sort_index()
+
+
+def _bond_swap_close_spreads(cvpx_path: Path, prefix: str, irs_close: pd.DataFrame) -> pd.DataFrame:
+	"""Latest CLOSE bond-vs-swap spread per bond: ytm_act - IRS(TTM), the series the BondSwap
+	OU stats are fitted on (curves.calibration.stat.statAnalysis_BS: FR007 anchors, linear in
+	TTM, flat beyond 5Y). Per bond: its last close within _CLOSE_SPREAD_MAX_AGE_ROWS rows on a
+	date that also has an IRS close. Columns: close_spread (%), close_date."""
+	empty = pd.DataFrame(columns=["close_spread", "close_date"])
+	try:
+		from curves.calibration.stat import ANCHORS, TERMS
+		from curves.utils.loader import loadInstrumentDefinition
+		act = _read_pickle(cvpx_path)["ytm_act"].apply(pd.to_numeric, errors="coerce")
+		mat = pd.to_datetime(loadInstrumentDefinition(prefix)["Def"]["到期日期"], errors="coerce")
+	except Exception as exc:
+		print(f"WARN: close BondSwap spreads unavailable ({prefix}: {exc})")
+		return empty
+	if irs_close.empty or not set(ANCHORS).issubset(irs_close.columns):
+		return empty
+	act.index = pd.to_datetime(act.index)
+	act = act[~act.index.duplicated(keep="last")].sort_index()
+	act = act.loc[act.index.isin(irs_close.index)].iloc[-_CLOSE_SPREAD_MAX_AGE_ROWS:]
+	act = act.loc[:, act.columns.intersection(mat.dropna().index)]
+	rows: Dict[str, dict] = {}
+	for b in act.columns:
+		s = act[b].dropna()
+		if s.empty:
+			continue
+		d = s.index[-1]
+		key = irs_close.loc[d, ANCHORS]
+		key.index = TERMS
+		key = key.dropna()
+		if len(key) < 2:
+			continue
+		ttm = (mat[b] - d).days / 365
+		y_irs = float(np.interp(ttm, key.index.to_numpy(float), key.to_numpy(float))) if ttm <= TERMS[-1] else float(key.iloc[-1])
+		rows[str(b)] = {"close_spread": float(s.iloc[-1]) - y_irs, "close_date": d.strftime("%Y-%m-%d")}
+	return pd.DataFrame.from_dict(rows, orient="index") if rows else empty
+
+
 def _with_swap_ts_alias(cnbd_data: object) -> object:
 	"""Give a raw database-px.pkl dict the 'SwapTS' key the tenor-spread builder reads.
 
@@ -274,6 +365,8 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 	cbond_spdrt = _read_pickle(paths.cbond_spdsrt)
 	irs_spdrt = _read_pickle(paths.irs_spdsrt)
 	cnbd_data = _read_pickle(paths.cnbd_data)
+
+	irs_close = _irs_close_fixings(cnbd_data)
 
 	tenor_spd: dict[str, pd.Series] = {}
 	try:
@@ -354,6 +447,19 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 			if df_bc.empty:
 				continue
 			df_bc = _ensure_numeric(df_bc, ["Zscore", "spread", "mean", "vol", "ewm_vol", "Carry(3m,bp)", "Roll(3m,bp)"])
+			# Score on the most recent CLOSE, not the realtime quote (user, 2026-11-21). The
+			# realtime 'spread' mixes the live bond mid with the affine curve in {prefix}-rtquo.pkl,
+			# which is only as fresh as the last intraday refresh (it was 4 weeks stale, flipping
+			# 240210.IB from -1.1 to +1.8 sigma). The live level stays available as 'spread_rt' and
+			# via get_realtime_spread_bp (the card's realtime chip). OTR/OFR pair rows ('|' IDs)
+			# already come from close series and are left as they are.
+			_plain = ~df_bc.index.astype(str).str.contains("|", regex=False)
+			df_bc["spread_rt"] = df_bc["spread"] if "spread" in df_bc.columns else np.nan
+			_close = _bond_curve_close_spreads(paths.bond_cvpx(prefix))
+			_cs = pd.to_numeric(_close["close_spread"], errors="coerce").reindex(df_bc.index.astype(str))
+			_cs.index = df_bc.index
+			df_bc.loc[_plain, "spread"] = _cs[_plain]
+			df_bc["close_date"] = _close["close_date"].reindex(df_bc.index.astype(str)).to_numpy()
 			# Prefer ewm_vol (EWMA(60), matches the backtest engines' entry-signal
 			# scale) over the static full-sample 'vol' so a live snapshot z-score
 			# and a historical backtest z-score agree on what "extreme" means
@@ -391,6 +497,13 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 			return None
 		df_rt = _normalize_index(df_rt)
 		df_rt = _ensure_numeric(df_rt, ["Zscore", "spread", "mean", "vol", "ewm_vol"])
+		# Score on the most recent CLOSE (bond close ytm - IRS close at TTM), not the realtime
+		# bond/IRS mids; see the BondCurve block. Bonds with no recent close get no score.
+		df_rt["spread_rt"] = df_rt["spread"] if "spread" in df_rt.columns else np.nan
+		_close = _bond_swap_close_spreads(paths.bond_cvpx(prefix), prefix, irs_close)
+		df_rt["spread"] = pd.to_numeric(_close["close_spread"], errors="coerce").reindex(df_rt.index.astype(str)).to_numpy()
+		df_rt["close_date"] = _close["close_date"].reindex(df_rt.index.astype(str)).to_numpy()
+		df_rt["Zscore"] = np.nan
 		if {"spread", "mean", "vol"}.issubset(df_rt.columns):
 			_df_spread = pd.to_numeric(df_rt["spread"], errors="coerce")
 			_df_mean = pd.to_numeric(df_rt["mean"], errors="coerce")
@@ -432,12 +545,37 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 		df_irs = df_irs[~df_irs.index.astype(str).str.endswith(".IR")].copy()
 		df_irs = df_irs[_exclude_swapspread_butterflies(df_irs.index)].copy()
 		df_irs = _ensure_numeric(df_irs, ["Zscore", "spread", "QtPx", "mean", "vol", "ewm_vol", "Carry(3m,bp)", "Roll(3m,bp)"])
-		# Swap-spread opportunities and their z-scores must be based on the
-		# current executable mid quote. The realtime refresh also carries the
-		# model/curve ``spread`` value, which can diverge materially from QtPx.
-		# Use QtPx for the visible signal so the current price and z-score share
-		# the same series definition.
-		if "QtPx" in df_irs.columns:
+		# Score on the most recent CLOSE (user, 2026-11-21): the spread is built from the IRS
+		# close fixings in database-px.pkl with the same irsSpreads() the EOD stats are fitted on
+		# (IRS-pxspds.pkl), and mean/vol/carry come from that EOD file, not from IRS-spdsrt.pkl,
+		# whose copy is only as fresh as the last intraday refresh. The live quote stays as
+		# 'spread_rt' (= QtPx).
+		_close_ok = False
+		try:
+			from curves.calibration.irscurves import irsSpreads
+			from settings.fixed_income import IRSConfig
+			_fix = irs_close[[c for c in IRSConfig.IRS_LIST if c in irs_close.columns]]
+			_spd = irsSpreads(_fix).iloc[-_CLOSE_SPREAD_MAX_AGE_ROWS:]
+			_last = _spd.apply(lambda s: s.last_valid_index()).dropna()
+			_close_spread = pd.Series({k: float(_spd.at[d, k]) for k, d in _last.items()})
+			_close_date = pd.Series({k: pd.Timestamp(d).strftime("%Y-%m-%d") for k, d in _last.items()})
+			df_irs["spread_rt"] = df_irs["QtPx"] if "QtPx" in df_irs.columns else df_irs.get("spread")
+			df_irs["spread"] = _close_spread.reindex(df_irs.index.astype(str)).to_numpy()
+			df_irs["close_date"] = _close_date.reindex(df_irs.index.astype(str)).to_numpy()
+			_stat_eod = irs_pxspd.get("StatInfo") if isinstance(irs_pxspd, dict) else None
+			if isinstance(_stat_eod, pd.DataFrame):
+				_stat_eod = _normalize_legacy_repo_obj(_stat_eod)
+				for _c in ("mean", "vol", "ewm_vol", "stationary", "halflife"):
+					if _c in _stat_eod.columns:
+						_v = _stat_eod[_c].reindex(df_irs.index)
+						df_irs[_c] = _v.where(_v.notna(), df_irs[_c]) if _c in df_irs.columns else _v
+			_vol = pd.to_numeric(df_irs.get("ewm_vol"), errors="coerce")
+			_vol = _vol.where(_vol.notna(), pd.to_numeric(df_irs["vol"], errors="coerce")).replace(0, np.nan)
+			df_irs["Zscore"] = (df_irs["spread"] - pd.to_numeric(df_irs["mean"], errors="coerce")) / _vol
+			_close_ok = True
+		except Exception as exc:
+			print(f"WARN: close SwapSpread scores unavailable, using realtime quotes: {exc}")
+		if "QtPx" in df_irs.columns and not _close_ok:
 			df_irs["spread"] = pd.to_numeric(df_irs["QtPx"], errors="coerce")
 			if {"mean", "vol"}.issubset(df_irs.columns):
 				# Prefer ewm_vol (matches the backtest engines' EWMA entry-signal
@@ -459,6 +597,13 @@ def build_alpha_spreads_snapshot(dir_input: str | Path = DIR_INPUT) -> Dict[str,
 			df_irs["roll_3m_bp"] = -pd.to_numeric(df_irs["Roll(3m,bp)"], errors="coerce")
 		if "Carry(3m,bp)" in df_irs.columns and "Roll(3m,bp)" in df_irs.columns:
 			df_irs["carry_roll"] = -(df_irs["Carry(3m,bp)"] + df_irs["Roll(3m,bp)"])
+		# Prefer the EOD close carry+roll (IRS-pxspds CarryRoll3m: BUY-side, %, -> bp); the
+		# split carry/roll columns above stay from the realtime file (no close split exists).
+		_cr_hist = irs_pxspd.get("CarryRoll3m") if isinstance(irs_pxspd, dict) else None
+		if isinstance(_cr_hist, pd.DataFrame) and not _cr_hist.empty:
+			_cr = pd.to_numeric(_last_values(_cr_hist.apply(pd.to_numeric, errors="coerce")), errors="coerce") * 100.0
+			_cr = _cr.reindex(df_irs.index)
+			df_irs["carry_roll"] = _cr.where(_cr.notna(), df_irs["carry_roll"]) if "carry_roll" in df_irs.columns else _cr
 		df_irs["spread_type"] = "SwapSpread"
 		df_irs["category"] = "Swap-Spread"
 		# Merge stationary from historical StatInfo (not present in real-time spreads)

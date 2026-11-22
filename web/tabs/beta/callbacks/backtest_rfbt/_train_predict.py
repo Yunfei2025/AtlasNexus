@@ -267,9 +267,20 @@ def run_predict(factors, current_cfg, end_date):
             f"saved model: {latest_month_key} · "
             f"all {n_cached} factor(s) from cache (no new factors)"
         )
+        # latest_month_key = month-end of the TEST window (the month predicted),
+        # not the training end. Training end comes from each horizon model's
+        # 'data_through'.
+        _thru = [
+            hm.get('data_through')
+            for f in covered_factors
+            for hm in (latest_artifact.get(f, {}).get('horizon_models') or [])
+            if hm.get('data_through')
+        ]
+        _train_txt = f"trained on data through {max(_thru)}" if _thru else "trained on prior months' data"
+        _pred_month = f"{latest_month_key[:4]}-{latest_month_key[4:6]}"
         header_note = (
-            f"🔮 Predicted from saved model through {latest_month_key} "
-            f"(no retrain — all {n_cached} factors already trained)."
+            f"🔮 Predicted from saved model for {_pred_month} ({_train_txt}; "
+            f"no retrain — all {n_cached} factors already trained)."
         )
 
     return results, active_artifact, persist_note, header_note

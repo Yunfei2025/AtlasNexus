@@ -24,7 +24,7 @@ from ..data import (
     load_spread_data, load_spread_timeseries, display_key,
     _get_duration_mult, has_saved_state, resolve_legs, resolve_legs3, fly_leg_dv01_ratios, _load_leg_data,
 )
-from ..data.duration import _tenor_to_duration
+from ..data.duration import _tenor_to_duration, get_breakeven_3m_bp, get_carry_roll_3m_bp
 from ..data.legs import dv01_neutral_lots
 from ..scoring import _compute_risk_parity_weights
 from .core_positions import mr_stop_target_bp
@@ -461,7 +461,7 @@ def register_portfolio_callbacks(app) -> None:
                 median_score = df_curated['score'].median() if len(df_curated) > 0 and 'score' in df_curated.columns else 0.01
                 extra_rows = []
                 _snap_cache: Dict[str, Any] = {}
-                _snap_cols = ['Zscore', 'spread', 'vol', 'halflife', 'stationary',
+                _snap_cols = ['Zscore', 'spread', 'vol', 'ewm_vol', 'halflife', 'stationary',
                               'carry_roll', 'mean', 'reg_slope_per_day',
                               'expected_return_H', 'risk', 'direction', 'style',
                               'score', 'ttm_used', 'category']
@@ -488,20 +488,21 @@ def register_portfolio_callbacks(app) -> None:
                                 inst_row['Zscore'] = float(_entry_z)
                         inst_row.setdefault('score', median_score)
                         inst_row.setdefault('direction', 'N/A')
-                        # Snap carry_roll is BUY-side raw; flip for SELL so it matches
-                        # the convention stored in alpha-selected-candidates.
+                        # carry_roll is stored BUY-side (the table flips it for SELL at display) and
+                        # in bp per 3 months, like the scanned rows. The snapshot holds TenorSpread
+                        # annual, so these pool-built rows showed 4x the scan's CR(3m); rebase here.
+                        # (The old SELL flip at this point never applied -- direction is still 'N/A'
+                        # until the user override below -- and would double-flip with the display flip.)
                         _inst_dir = str(inst_row.get('direction', '') or '').strip().upper()
-                        if _inst_dir == 'SELL' and 'carry_roll' in inst_row:
-                            try:
-                                inst_row['carry_roll'] = -float(inst_row['carry_roll'])
-                            except (TypeError, ValueError):
-                                pass
+                        _cr_buy_3m = get_carry_roll_3m_bp(stype, inst, 'BUY')
+                        if _cr_buy_3m is not None:
+                            inst_row['carry_roll'] = _cr_buy_3m
                         # Snapshot 'spread'/'mean'/'vol' are stored in raw yield %
                         # for these types (see curves.refreshers.alpha_snapshot);
                         # scale to bp here to match the scanned-candidates path
                         # (web/tabs/alpha/callbacks/scan_callbacks.py _PCT_TYPES).
                         if stype in {'TBondCurve', 'CBondCurve', 'TBondSwap', 'CBondSwap', 'TenorSpread', 'SwapSpread'}:
-                            for _col in ('spread', 'mean', 'vol'):
+                            for _col in ('spread', 'mean', 'vol', 'ewm_vol'):
                                 if _col in inst_row:
                                     _v = pd.to_numeric(inst_row[_col], errors='coerce')
                                     if pd.notna(_v):
@@ -513,7 +514,11 @@ def register_portfolio_callbacks(app) -> None:
                         if 'stop_loss' not in inst_row or 'profit_target' not in inst_row:
                             _spread_c = pd.to_numeric(inst_row.get('spread'), errors='coerce')
                             _mean_c = pd.to_numeric(inst_row.get('mean'), errors='coerce')
-                            _vol_c = pd.to_numeric(inst_row.get('vol'), errors='coerce')
+                            # sigma of the Zscore: the EWMA level vol (as in alpha_snapshot), else the OU vol --
+                            # the same one the scan now uses, so both paths give one stop / target.
+                            _vol_c = pd.to_numeric(inst_row.get('ewm_vol'), errors='coerce')
+                            if pd.isna(_vol_c) or abs(_vol_c) <= 0:
+                                _vol_c = pd.to_numeric(inst_row.get('vol'), errors='coerce')
                             _z_c = pd.to_numeric(inst_row.get('Zscore'), errors='coerce')
                             if pd.notna(_spread_c) and pd.notna(_mean_c) and pd.notna(_vol_c):
                                 _dist_c = abs(_spread_c - _mean_c)
@@ -973,6 +978,21 @@ def register_portfolio_callbacks(app) -> None:
                     ),
                 ], style={'flexBasis': '100%'}))
 
+            # Breakeven (3m): only the Candidates scan computes it, so every row built from
+            # the pool / saved book arrived without one and the b/e column was empty. Fill
+            # missing values from the snapshot with the scan's rule (get_breakeven_3m_bp);
+            # scanned rows that already carry one keep it.
+            if 'breakeven_3m' not in df_scored.columns:
+                df_scored['breakeven_3m'] = np.nan
+            _be_have = pd.to_numeric(df_scored['breakeven_3m'], errors='coerce')
+            df_scored['breakeven_3m'] = _be_have
+            for _i in df_scored.index[_be_have.isna()]:
+                _be = get_breakeven_3m_bp(
+                    str(df_scored.at[_i, 'spread_type']), str(df_scored.at[_i, 'ID']),
+                    str(df_scored.at[_i, 'direction']) if 'direction' in df_scored.columns else '')
+                if _be is not None:
+                    df_scored.at[_i, 'breakeven_3m'] = _be
+
             # Core (TenorSpread) names with saved params: derive Stop/Target from
             # those params (stop_z / exit_z) instead of the generic scan formula.
             # Mean-reverting names only; others keep the generic values.
@@ -1069,6 +1089,28 @@ def register_portfolio_callbacks(app) -> None:
                     pd.to_numeric(df_display.loc[_sell, 'carry_roll'], errors='coerce')
                     .multiply(-1).round(1)
                 )
+                # SELL slopes/flies earn the stored SELL carry series, not just -BUY (the TRS spread
+                # is charged on every leg); same figure as Books > Alpha.
+                for _i in df_display.index[_sell]:
+                    _cr_pos = get_carry_roll_3m_bp(
+                        str(df_display.at[_i, 'spread_type']) if 'spread_type' in df_display.columns else str(df_scored.at[_i, 'spread_type']),
+                        str(df_display.at[_i, 'ID']), 'SELL')
+                    if _cr_pos is not None:
+                        df_display.at[_i, 'carry_roll'] = round(_cr_pos, 1)
+
+            # Stop / Target are saved and scored as DISTANCES (bp) from entry; the table shows them as LEVELS
+            # (same units as the spread column, measured from today's spread) so they sit on the right side:
+            # BUY profits when the spread falls (stop above, target below), SELL the reverse. A trade with no
+            # direction yet is treated as a BUY, as the Books table does.
+            if {'spread', 'stop_loss', 'profit_target'}.issubset(df_display.columns):
+                _sp_l = pd.to_numeric(df_display['spread'], errors='coerce')
+                _sell_l = (df_display['direction'].astype(str).str.strip().str.upper().isin(['SELL', 'SHORT'])
+                           if 'direction' in df_display.columns else pd.Series(False, index=df_display.index))
+                _sgn_l = _sell_l.map({True: -1.0, False: 1.0}).astype(float)
+                _sl_d = pd.to_numeric(df_display['stop_loss'], errors='coerce')
+                _tp_d = pd.to_numeric(df_display['profit_target'], errors='coerce')
+                df_display['stop_loss'] = (_sp_l + _sgn_l * _sl_d).round(1)
+                df_display['profit_target'] = (_sp_l - _sgn_l * _tp_d).round(1)
 
             # Mark held rows (a saved position being resized, not a brand-new
             # trade) in the ID column, then remember their row_index within
