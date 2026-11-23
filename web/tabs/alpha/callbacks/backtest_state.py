@@ -77,6 +77,69 @@ def carry_needs_negate(spread_type: str, instrument: str) -> bool:
     return bool(re.search(r'\d+s\d+', instrument, re.IGNORECASE))  # XsYs; cross-curve -> False
 
 
+def mr_exit_stop_z(spread_type: str, instrument: str) -> tuple[float, float]:
+    """(exit_z, stop_z) the backtest uses for this name: saved params over the spread-type preset.
+
+    Cheap (no backtest run); lets Books place mean-reverting target/stop as z-levels around today's mean.
+    """
+    params = (_TENOR_PRESET if spread_type == 'TenorSpread'
+              else _SWAP_PRESET if spread_type == 'SwapSpread' else _DEFAULT_PRESET)
+    exit_z, stop_z = float(params['exit_z']), float(params['stop_z'])
+    try:
+        saved = load_instrument_params(spread_type, instrument) or {}
+        if saved.get('exit_z') is not None:
+            exit_z = float(saved['exit_z'])
+        if saved.get('stop_z') is not None:
+            stop_z = float(saved['stop_z'])
+    except Exception:
+        pass
+    return exit_z, stop_z
+
+
+def trend_trailing_stop_bp(spread_type: str, instrument: str, direction: str, open_date) -> Optional[dict]:
+    """Trailing-stop level (bp) the backtest would hold for an open TREND trade, else None.
+
+    Mirrors engine_monthly's trend exit: the trade closes once the price retreats ``trailing_mult`` x vol
+    from its best level since entry, vol = std of daily changes over ``vol_window``. Trend trades have no
+    price target (they exit on a trend-state flip). LONG/BUY is the profit-when-spread-falls side for
+    yield-based spreads (the engine negates their series), profit-when-it-rises for price-based ones.
+    Returns {'level', 'extreme', 'vol', 'mult', 'days_held', 'min_hold'} (bp) or None if unavailable.
+    """
+    try:
+        ts_df = load_spread_timeseries(spread_type)
+        if ts_df is None or instrument not in ts_df.columns:
+            return None
+        ts = pd.to_numeric(ts_df[instrument], errors='coerce').dropna()
+        ts.index = pd.to_datetime(ts.index)
+        od = pd.to_datetime(open_date, errors='coerce')
+        if pd.isna(od) or len(ts) < 30:
+            return None
+        params = dict(_TENOR_PRESET if spread_type == 'TenorSpread'
+                      else _SWAP_PRESET if spread_type == 'SwapSpread' else _DEFAULT_PRESET)
+        saved = load_instrument_params(spread_type, instrument) or {}
+        for k in ('trailing_mult', 'vol_window', 'min_hold'):
+            if saved.get(k) is not None:
+                params[k] = saved[k]
+        mult, vw = float(params['trailing_mult']), int(params['vol_window'])
+        vol = ts.diff().rolling(vw).std().iloc[-1]
+        if not np.isfinite(vol) or vol <= 0:
+            return None
+        since = ts.loc[od.normalize():]
+        if since.empty:
+            return None
+        buy = str(direction).strip().upper() == 'BUY'
+        falls_is_profit = buy if spread_type in YIELD_BASED_SPREAD_TYPES else not buy
+        if falls_is_profit:
+            extreme = float(since.min()); level = extreme + mult * float(vol)
+        else:
+            extreme = float(since.max()); level = extreme - mult * float(vol)
+        scale = 100.0 if spread_type in {'TBondCurve', 'CBondCurve', 'SwapSpread', 'TenorSpread', 'TermBasis'} else 1.0
+        return {'level': level * scale, 'extreme': extreme * scale, 'vol': float(vol) * scale, 'mult': mult,
+                'days_held': int((ts.index[-1] - od.normalize()).days), 'min_hold': int(params['min_hold'])}
+    except Exception:
+        return None
+
+
 def latest_position(results) -> str:
     """'BUY'/'SELL'/'FLAT' for a backtest result dict's open trade on the last date."""
     open_trade = results.get('open_trade') if isinstance(results, dict) else None

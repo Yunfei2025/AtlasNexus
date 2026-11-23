@@ -509,6 +509,19 @@ def register_alpha_book_table_callbacks(app):
 
                     # Stop/Target are shown exactly as saved by Alpha > Portfolio (Run Optimization);
                     # there is deliberately no second formula here. A blank means that run saved none.
+                    # Trend / momentum rows: if the saved snapshot has no stop/target (or only one), fill
+                    # from live sigma exactly as the Portfolio run does (2 sigma stop, 2 sigma mirror target).
+                    # Depends only on sigma, so it does not go stale like a mean-reverting level.
+                    if (_stop_mag is None or _target_mag is None) and str(row.get('style', '') or '').strip().lower() not in {
+                            'meanreversion', 'mean-reverting', 'mean_reverting'}:
+                        _sg_live = _resolve_alpha_metric(spread_type, trade_id, 'ewm_vol', scale_to_bp=True)
+                        if not _sg_live:
+                            _sg_live = _resolve_alpha_metric(spread_type, trade_id, 'vol', scale_to_bp=True)
+                        if _sg_live:
+                            if _stop_mag is None:
+                                _stop_mag = 2.0 * abs(float(_sg_live))
+                            if _target_mag is None:
+                                _target_mag = 2.0 * abs(float(_sg_live))
                     stop_level = target_level = None
                     # Open price is seeded with the spread when the trade was added to the
                     # portfolio; older rows without one fall back to the current close.
@@ -526,7 +539,41 @@ def register_alpha_book_table_callbacks(app):
                                 target_level = _entry_bp + _tp_mag if _progress_direction == 'BUY' else _entry_bp - _tp_mag
                     except (ValueError, TypeError):
                         pass
-    
+
+                    # Mean-reverting rows: target and stop are z-levels around TODAY's mean and sigma
+                    # (as the backtest exits: |z| <= exit_z / |z| >= stop_z), so they follow the drift.
+                    # The stop may only tighten: never looser than entry +/- its saved distance.
+                    # _stop_mag/_target_mag are rewritten as distances from entry for the exit alerts.
+                    if str(row.get('style', '') or '').strip().lower() in {'meanreversion', 'mean-reverting', 'mean_reverting'}:
+                        _mean_bp = _resolve_alpha_metric(spread_type, trade_id, 'mean', scale_to_bp=True)
+                        _sig_bp = _resolve_alpha_metric(spread_type, trade_id, 'ewm_vol', scale_to_bp=True)
+                        if not _sig_bp:
+                            _sig_bp = _resolve_alpha_metric(spread_type, trade_id, 'vol', scale_to_bp=True)
+                        if _mean_bp is not None and _sig_bp and _entry_bp is not None:
+                            from web.tabs.alpha.callbacks.backtest_state import mr_exit_stop_z
+                            _ez, _sz = mr_exit_stop_z(spread_type, trade_id)
+                            _sg = abs(float(_sig_bp))
+                            _buy = _alpha_progress_direction(spread_type, _direction_u) == 'SELL'   # BUY profits as spread falls
+                            target_level = _mean_bp + _ez * _sg if _buy else _mean_bp - _ez * _sg
+                            _dyn_stop = _mean_bp + _sz * _sg if _buy else _mean_bp - _sz * _sg
+                            if stop_level is not None:      # saved entry stop: dynamic stop can only tighten it
+                                stop_level = min(stop_level, _dyn_stop) if _buy else max(stop_level, _dyn_stop)
+                            else:
+                                stop_level = _dyn_stop
+                            _target_mag = max((_entry_bp - target_level) if _buy else (target_level - _entry_bp), 0.0)
+                            _stop_mag = max((stop_level - _entry_bp) if _buy else (_entry_bp - stop_level), 0.0)
+
+                    # Trend / momentum rows: the backtest's exit is a trailing stop off the best price since
+                    # entry (trailing_mult x daily-change vol) and a trend-state flip -- no price target.
+                    # Show that stop; leave Target blank. The 2-sigma fill above stays only as a fallback.
+                    elif True:
+                        from web.tabs.alpha.callbacks.backtest_state import trend_trailing_stop_bp
+                        _tr = trend_trailing_stop_bp(spread_type, trade_id, _direction_u, open_date_str)
+                        if _tr is not None:
+                            stop_level = _tr['level']
+                            target_level = None
+                            _stop_mag = _target_mag = None   # levels only: alerts read the shown Stop level
+
                     display_rows.append({
                         '__row_key':              str(_row_idx),
                         'ID':                     trade_id,
