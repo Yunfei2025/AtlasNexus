@@ -409,10 +409,42 @@ def _load_bond_refs(btypes):
     term_ref = {}
     factors = {}
     for btype in btypes:
-        ref = _load_pickle(os.path.join(DIR_INPUT,f"{btype}-cvref.pkl"))
-        bond_ref[btype] = ref["RefBond"].iloc[-1]
-        term_ref[btype] = round(ref["RefTerm"].iloc[-1], 2)
-        factors[btype] = ref["Factors"]
+        ref_path = pathlib.Path(DIR_INPUT) / f"{btype}-cvref.pkl"
+        ref = _load_pickle_optional(ref_path)
+
+        bond_ref[btype] = "N/A"
+        term_ref[btype] = np.nan
+        factors[btype] = pd.DataFrame()
+
+        if not isinstance(ref, dict):
+            logger.debug("No usable cvref payload at %s", ref_path)
+            continue
+
+        ref_bond = ref.get("RefBond")
+        if isinstance(ref_bond, pd.DataFrame) and not ref_bond.empty:
+            try:
+                bond_ref[btype] = ref_bond.iloc[-1]
+            except Exception:
+                pass
+
+        ref_term = ref.get("RefTerm")
+        if isinstance(ref_term, pd.DataFrame) and not ref_term.empty:
+            try:
+                term_ref[btype] = round(ref_term.iloc[-1], 2)
+            except Exception:
+                pass
+
+        ref_factors = ref.get("Factors")
+        if isinstance(ref_factors, pd.DataFrame):
+            factors[btype] = ref_factors
+
+        missing = [key for key in ("RefBond", "RefTerm", "Factors") if key not in ref]
+        if missing:
+            logger.debug(
+                "Partial cvref %s; missing optional fields: %s",
+                ref_path.name,
+                ", ".join(missing),
+            )
     return bond_ref, term_ref, factors
 
 def _load_fixing_ts(spread_ts):

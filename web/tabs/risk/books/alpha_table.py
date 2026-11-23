@@ -18,6 +18,7 @@ from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
 from web.tabs.alpha.data.duration import get_breakeven_3m_bp, get_carry_roll_3m_bp
 from web.tabs.beta.data import THEME
 from web.tabs.beta.callbacks._common import _SUMMARY_ALPHA_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET, _ALPHA_POSITIONS_PARQUET, _load_cr_ts, _price_progress_bar, _dir_badge, _style_badge, _signed_value_style, _zscore_cell_style, _sortable_header, _apply_sort
+_SUMMARY_ALPHA_PARQUAT = _SUMMARY_ALPHA_PARQUET
 from .close_reminder import alpha_close_ticket, format_ticket
 from ..helpers import _compute_alpha_carry_mtm, _persist_alpha_summary_rows, _alpha_progress_direction, _alpha_spread_pnl_bp, _coerce_float, _load_leg_data, _resolve_legs, _leg_volume_ratio, _row_key, normalize_risk_ticker
 
@@ -318,9 +319,9 @@ def register_alpha_book_table_callbacks(app):
             # Run Optimization action.  A display export is intentionally only
             # a fallback: using it first makes Summary keep rendering an older
             # table after a newly added allocation has been saved.
-            if _os.path.exists(_SUMMARY_ALPHA_PARQUET):
+            if _os.path.exists(_SUMMARY_ALPHA_PARQUAT):
                 _saved_rows = []
-                df = pd.read_parquet(_SUMMARY_ALPHA_PARQUET)
+                df = pd.read_parquet(_SUMMARY_ALPHA_PARQUAT)
                 ts = df['_timestamp'].iloc[-1] if '_timestamp' in df.columns else "unknown"
                 source_label = 'saved alpha snapshot'
                 pos = _load_positions()
@@ -340,6 +341,17 @@ def register_alpha_book_table_callbacks(app):
                     return f"{f:.1f}" if pd.notna(f) else ''
                 except (TypeError, ValueError):
                     return ''
+
+            def _first_numeric(_row: dict, keys: tuple[str, ...]) -> float | None:
+                for key in keys:
+                    raw = _row.get(key)
+                    if raw in (None, '', 'N/A'):
+                        continue
+                    try:
+                        return float(str(raw).replace(',', '').replace('%', ''))
+                    except (TypeError, ValueError):
+                        continue
+                return None
     
             if not _saved_rows:
                 display_rows = []
@@ -485,8 +497,30 @@ def register_alpha_book_table_callbacks(app):
                     # Stop/Target are stored as bp *distances* from entry, signed by
                     # direction (BUY: stop below entry, target above; SELL: reversed).
                     _direction_u = str(row.get('direction', '')).strip().upper()
-                    _stop_mag   = row.get('stop_loss')
-                    _target_mag = row.get('profit_target')
+                    _stop_mag = _first_numeric(row, (
+                        'stop_loss', 'stop', 'stop_bp', 'stopLoss', '_stop_dist', 'Stop (bp)'
+                    ))
+                    _target_mag = _first_numeric(row, (
+                        'profit_target', 'target', 'target_bp', 'profitTarget', '_target_dist', 'Target (bp)'
+                    ))
+
+                    # Legacy snapshots can miss stop/target fields entirely.
+                    # Reconstruct reasonable bp distances so Summary columns are not blank.
+                    if _stop_mag is None or _target_mag is None:
+                        _spread_f = _first_numeric(row, ('spread', 'Spread', 'Close Price (bp)'))
+                        _mean_f = _first_numeric(row, ('mean', 'Mean'))
+                        _vol_f = _first_numeric(row, ('ewm_vol', 'vol', 'Vol(BP)'))
+                        _z_f = _first_numeric(row, ('Zscore', 'Z-Score'))
+                        _style = str(row.get('style', '') or row.get('Style', '')).strip().lower()
+                        if _vol_f is not None:
+                            _vol_abs = abs(_vol_f)
+                            if _stop_mag is None:
+                                _stop_mag = 2.0 * _vol_abs
+                            if _target_mag is None:
+                                if _spread_f is not None and _mean_f is not None and _style in {'meanreversion', 'mean-reverting', 'mean_reverting'}:
+                                    _target_mag = abs(_spread_f - _mean_f)
+                                elif _z_f is not None:
+                                    _target_mag = abs(_z_f) * _vol_abs
                     stop_level = target_level = None
                     # Open price is seeded with the spread when the trade was added to the
                     # portfolio; older rows without one fall back to the current close.
@@ -494,8 +528,8 @@ def register_alpha_book_table_callbacks(app):
                     if _entry_bp is None and spread_val is not None and pd.notna(spread_val):
                         _entry_bp = float(spread_val)
                     try:
-                        _sl_mag = float(_stop_mag) if _stop_mag not in (None, '') else None
-                        _tp_mag = float(_target_mag) if _target_mag not in (None, '') else None
+                        _sl_mag = float(_stop_mag) if _stop_mag is not None else None
+                        _tp_mag = float(_target_mag) if _target_mag is not None else None
                         _progress_direction = _alpha_progress_direction(spread_type, _direction_u)
                         if _entry_bp is not None:
                             if _sl_mag is not None:
@@ -533,10 +567,10 @@ def register_alpha_book_table_callbacks(app):
                         # Stop / Target are LEVELS in the same units as Open / Close: a BUY profits when the
                         # spread falls (stop above entry, target below), a SELL the reverse. The saved
                         # distances stay in _stop_dist / _target_dist for the exit alerts.
-                        'Stop (bp)':              _fmt1(stop_level) if stop_level is not None else _fmt1(row.get('stop_loss')),
-                        'Target (bp)':            _fmt1(target_level) if target_level is not None else _fmt1(row.get('profit_target')),
-                        '_stop_dist':             _fmt1(row.get('stop_loss')),
-                        '_target_dist':           _fmt1(row.get('profit_target')),
+                        'Stop (bp)':              _fmt1(stop_level) if stop_level is not None else _fmt1(_stop_mag),
+                        'Target (bp)':            _fmt1(target_level) if target_level is not None else _fmt1(_target_mag),
+                        '_stop_dist':             _fmt1(_stop_mag),
+                        '_target_dist':           _fmt1(_target_mag),
                         'MTM spd (bp)':           f"{mtm_spd_bp:,.4f}" if mtm_spd_bp is not None else '',
                         'MtM Carry (MM CNY)':     f"{mtm_carry_mm:,.4f}" if mtm_carry_mm is not None else '',
                         'MtM Value (MM CNY)':     f"{mtm_total_mm:,.4f}" if mtm_total_mm is not None else '',
@@ -646,21 +680,35 @@ def register_alpha_book_table_callbacks(app):
                 if r.get('ID') == 'TOTAL':
                     continue
                 _tid  = r.get('ID', '')
-                _dir  = _alpha_progress_direction(r.get('Spread Type', ''), r.get('Direction', ''))
+                _direction_actual = str(r.get('Direction', '')).strip().upper()
                 _op_s = str(r.get('Open price (bp)', '') or '').strip()
                 _cp_s = str(r.get('Close Price (bp)', '') or '').strip()
-                # distances from entry (hidden fields); rows from an older saved display only have them
-                # in the Stop / Target columns
-                _sl_s = str(r['_stop_dist'] if '_stop_dist' in r else r.get('Stop (bp)', '') or '').strip()
-                _tp_s = str(r['_target_dist'] if '_target_dist' in r else r.get('Target (bp)', '') or '').strip()
+                _stop_level_s = str(r.get('_stop_level', '') or r.get('Stop (bp)', '') or '').strip()
+                _target_level_s = str(r.get('_target_level', '') or r.get('Target (bp)', '') or '').strip()
+                _stop_dist_s = str(r.get('_stop_dist', '') or '').strip()
+                _target_dist_s = str(r.get('_target_dist', '') or '').strip()
                 _od_s = str(r.get('Open date', '') or '').strip()
                 try:
                     _op = float(_op_s) if _op_s else None
                     _cp = float(_cp_s) if _cp_s else None
-                    _sl = float(_sl_s) if _sl_s else None
-                    _tp = float(_tp_s) if _tp_s else None
-                except (ValueError, TypeError):
-                    _op = _cp = _sl = _tp = None
+                    _stop_level = float(_stop_level_s) if _stop_level_s else None
+                    _target_level = float(_target_level_s) if _target_level_s else None
+                    _stop_dist = float(_stop_dist_s) if _stop_dist_s else None
+                    _target_dist = float(_target_dist_s) if _target_dist_s else None
+                except (TypeError, ValueError):
+                    _op = _cp = _stop_level = _target_level = None
+                    _stop_dist = _target_dist = None
+
+                # Older display snapshots may contain only Stop/Target distance fields.
+                # Reconstruct absolute levels once so the alert never compares a target
+                # price (for example 6.8 bp) against the profit-distance 6.8 bp.
+                if _op is not None:
+                    if _stop_level is None and _stop_dist is not None:
+                        _stop_level = (_op + abs(_stop_dist) if _direction_actual == 'BUY'
+                                       else _op - abs(_stop_dist))
+                    if _target_level is None and _target_dist is not None:
+                        _target_level = (_op - abs(_target_dist) if _direction_actual == 'BUY'
+                                         else _op + abs(_target_dist))
                 _days = None
                 if _od_s:
                     try:
@@ -671,17 +719,23 @@ def register_alpha_book_table_callbacks(app):
                         pass
                 if _op is not None and _cp is not None:
                     _spd_chg = _cp - _op
-                    _pnl_dir = _spd_chg if _dir == 'BUY' else -_spd_chg
-                    if _sl is not None and _pnl_dir <= -abs(_sl):
-                        _alert_rows.append((_tid, f"Stop loss hit  (Δ={_pnl_dir:+.1f} bp, stop=−{abs(_sl):.1f} bp)", 'stop'))
+                    _pnl_dir = -_spd_chg if _direction_actual == 'BUY' else _spd_chg
+
+                    _stop_hit = (
+                        _stop_level is not None
+                        and ((_direction_actual == 'BUY' and _cp >= _stop_level)
+                             or (_direction_actual == 'SELL' and _cp <= _stop_level))
+                    )
+                    _target_hit = (
+                        _target_level is not None
+                        and ((_direction_actual == 'BUY' and _cp <= _target_level)
+                             or (_direction_actual == 'SELL' and _cp >= _target_level))
+                    )
+                    if _stop_hit:
+                        _alert_rows.append((_tid, f"Stop loss hit (Δ={_pnl_dir:+.1f} bp, stop level={_stop_level:+.1f} bp)", 'stop'))
                         _alert_ids['stop'].add(_tid)
-                    elif _tp is not None and _tp <= 0:
-                        # Target 0 = the spread is already at/inside the exit level (|z| <= exit_z),
-                        # i.e. nothing left to capture -- close signal, not a missing target.
-                        _alert_rows.append((_tid, "At target: spread already inside the exit band (0 bp to go)", 'target'))
-                        _alert_ids['target'].add(_tid)
-                    elif _tp is not None and _pnl_dir >= abs(_tp):
-                        _alert_rows.append((_tid, f"Target reached (Δ={_pnl_dir:+.1f} bp, target=+{abs(_tp):.1f} bp)", 'target'))
+                    elif _target_hit:
+                        _alert_rows.append((_tid, f"Target reached (Δ={_pnl_dir:+.1f} bp, target level={_target_level:+.1f} bp)", 'target'))
                         _alert_ids['target'].add(_tid)
                 # Signal-based exit for Core names with saved params: the backtest
                 # (same params the signal uses) has closed a trade opened on/after
@@ -730,12 +784,12 @@ def register_alpha_book_table_callbacks(app):
             _ALL_COLS = [
                 ('ID', 'left'), ('Leg 1', 'left'), ('Leg 2', 'left'), ('Leg 3', 'left'), ('Ratio (V2/V1)', 'right'), ('Ratio (V3/V1)', 'right'),
                 ('Style', 'left'), ('Direction', 'center'), ('Duration', 'right'),
-                ('Close Price (bp)', 'right'), ('Z-Score', 'right'), ('Progress', 'left'),
+                ('Close Price (bp)', 'right'), ('Stop (bp)', 'right'), ('Target (bp)', 'right'),
+                ('Z-Score', 'right'), ('Progress', 'left'),
                 ('Capital (MM CNY)', 'right'), ('Target Volume Leg2 (MM CNY)', 'right'),
                 ('Target Volume Leg3 (MM CNY)', 'right'), ('Margin (MM)', 'right'),
                 ('DV01 (k CNY/bp)', 'right'),
                 ('Carry+Roll (3m,bp)', 'right'), ('Breakeven (3m,bp)', 'right'),
-                ('Stop (bp)', 'right'), ('Target (bp)', 'right'),
                 ('Target Weight (%)', 'right'), ('RC (%)', 'right'),
             ]
             _cols = [('__delete', 'center')] + list(_ALL_COLS)

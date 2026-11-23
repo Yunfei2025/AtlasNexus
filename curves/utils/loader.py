@@ -71,7 +71,26 @@ def _read_pickle_compat(file_path, label=None, *, allow_pickle_fallback=False):
         pass
 
     display = label or file_path
-    print(f"Warning: Error loading {display} with pd.read_pickle: {first_err}")
+    err_lower = first_err.lower()
+    corrupt_markers = (
+        "ran out of input",
+        "unexpected end of file",
+        "invalid load key",
+        "truncated",
+        "eoferror",
+    )
+    if any(marker in err_lower for marker in corrupt_markers):
+        quarantined = file_path + '.corrupted'
+        try:
+            if os.path.exists(file_path) and not os.path.exists(quarantined):
+                os.replace(file_path, quarantined)
+                print(f"Warning: {display} is corrupted ({first_err}); moved to {os.path.basename(quarantined)}.")
+            else:
+                print(f"Warning: {display} is corrupted ({first_err}).")
+        except Exception:
+            print(f"Warning: {display} is corrupted ({first_err}).")
+    else:
+        print(f"Warning: Error loading {display} with pd.read_pickle: {first_err}")
     raise LegacyPickleCompatibilityError(label or file_path)
 
 def loadWorkday(start,end,update=False):
@@ -135,9 +154,16 @@ def loadCNBDTS():
         env_key = alias_map.get(key, key)
         env[env_key] = _coerce_date_index(frame)
     file_path = os.path.join(DIR_INPUT, 'TBond-cvref.pkl')
-    # Direct load to avoid unnecessary rewrite
-    ref = _read_pickle_compat(file_path)
-    env['Factors'] = _coerce_date_index(ref['Factors'])
+    # Direct load to avoid unnecessary rewrite.
+    # If the file is corrupted, keep startup alive with empty Factors and let
+    # the refresh/EOD pipeline rebuild the reference file.
+    try:
+        ref = _read_pickle_compat(file_path)
+        factors = ref.get('Factors') if isinstance(ref, dict) else None
+        env['Factors'] = _coerce_date_index(factors if isinstance(factors, pd.DataFrame) else pd.DataFrame())
+    except LegacyPickleCompatibilityError:
+        print("Warning: TBond-cvref.pkl unavailable; using empty Factors. Run `python main.py refresh` to rebuild.")
+        env['Factors'] = pd.DataFrame()
     return env
 
 def loadInstrumentDefinition(btype):
@@ -155,7 +181,20 @@ def loadInstrumentDefinition(btype):
 
 def loadRefData(btype):
     """Load reference data using pandas read_pickle for better compatibility"""
-    return _read_pickle_compat(os.path.join(DIR_INPUT, btype+'-cvref.pkl'), f"{btype}-cvref.pkl")
+    path = os.path.join(DIR_INPUT, btype + '-cvref.pkl')
+    try:
+        return _read_pickle_compat(path, f"{btype}-cvref.pkl")
+    except LegacyPickleCompatibilityError:
+        print(
+            f"Warning: {btype}-cvref.pkl is unavailable/corrupted; "
+            f"refresh will rebuild references from live data."
+        )
+        return {
+            'RefBond': pd.DataFrame(),
+            'RefSpot': pd.DataFrame(),
+            'RefTerm': pd.DataFrame(),
+            'Factors': pd.DataFrame(),
+        }
     
 def loadStatData(btype):
     env_st = {}
