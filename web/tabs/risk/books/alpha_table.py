@@ -691,24 +691,31 @@ def register_alpha_book_table_callbacks(app):
                 try:
                     _op = float(_op_s) if _op_s else None
                     _cp = float(_cp_s) if _cp_s else None
-                    _stop_level = float(_stop_level_s) if _stop_level_s else None
-                    _target_level = float(_target_level_s) if _target_level_s else None
                     _stop_dist = float(_stop_dist_s) if _stop_dist_s else None
                     _target_dist = float(_target_dist_s) if _target_dist_s else None
+                    _saved_stop_level = float(_stop_level_s) if _stop_level_s else None
+                    _saved_target_level = float(_target_level_s) if _target_level_s else None
                 except (TypeError, ValueError):
-                    _op = _cp = _stop_level = _target_level = None
-                    _stop_dist = _target_dist = None
+                    _op = _cp = _stop_dist = _target_dist = None
+                    _saved_stop_level = _saved_target_level = None
 
-                # Older display snapshots may contain only Stop/Target distance fields.
-                # Reconstruct absolute levels once so the alert never compares a target
-                # price (for example 6.8 bp) against the profit-distance 6.8 bp.
+                # Recompute absolute levels from the entry and distance fields.
+                # This deliberately ignores stale hidden *_level values in display
+                # snapshots; 6.8 can be a profit-distance, not an absolute spread level.
+                _stop_level = None
+                _target_level = None
                 if _op is not None:
-                    if _stop_level is None and _stop_dist is not None:
+                    if _stop_dist is not None:
                         _stop_level = (_op + abs(_stop_dist) if _direction_actual == 'BUY'
                                        else _op - abs(_stop_dist))
-                    if _target_level is None and _target_dist is not None:
+                    elif _saved_stop_level is not None:
+                        _stop_level = _saved_stop_level
+
+                    if _target_dist is not None:
                         _target_level = (_op - abs(_target_dist) if _direction_actual == 'BUY'
                                          else _op + abs(_target_dist))
+                    elif _saved_target_level is not None:
+                        _target_level = _saved_target_level
                 _days = None
                 if _od_s:
                     try:
