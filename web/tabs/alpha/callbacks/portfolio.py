@@ -511,27 +511,31 @@ def register_portfolio_callbacks(app) -> None:
                         # path (scan_callbacks.py); curated instruments added
                         # directly never go through it, so derive them here from
                         # the same MR/trend formula.
-                        if 'stop_loss' not in inst_row or 'profit_target' not in inst_row:
+                        # A key that is present but NaN (snapshot rows carry the columns) counts as missing,
+                        # and a row without spread/mean still gets the vol-based stop/target: this is the ONLY
+                        # place curated rows get them, and Books > Alpha reads them as saved.
+                        _need_sl = pd.isna(pd.to_numeric(inst_row.get('stop_loss'), errors='coerce'))
+                        _need_tp = pd.isna(pd.to_numeric(inst_row.get('profit_target'), errors='coerce'))
+                        if _need_sl or _need_tp:
                             _spread_c = pd.to_numeric(inst_row.get('spread'), errors='coerce')
                             _mean_c = pd.to_numeric(inst_row.get('mean'), errors='coerce')
                             # sigma of the Zscore: the EWMA level vol (as in alpha_snapshot), else the OU vol --
-                            # the same one the scan now uses, so both paths give one stop / target.
+                            # the same one the scan uses, so both paths give one stop / target.
                             _vol_c = pd.to_numeric(inst_row.get('ewm_vol'), errors='coerce')
                             if pd.isna(_vol_c) or abs(_vol_c) <= 0:
                                 _vol_c = pd.to_numeric(inst_row.get('vol'), errors='coerce')
-                            _z_c = pd.to_numeric(inst_row.get('Zscore'), errors='coerce')
-                            if pd.notna(_spread_c) and pd.notna(_mean_c) and pd.notna(_vol_c):
-                                _dist_c = abs(_spread_c - _mean_c)
+                            if pd.notna(_vol_c) and abs(_vol_c) > 0:
                                 _vol_c_abs = abs(_vol_c)
-                                _is_mr_c = str(inst_row.get('style', '') or '').strip().lower() == 'meanreversion'
-                                if _is_mr_c:
-                                    inst_row.setdefault('stop_loss', round(_dist_c + 1.5 * _vol_c_abs, 4))
-                                    inst_row.setdefault('profit_target', round(_dist_c, 4))
-                                elif pd.notna(_z_c):
-                                    _dir_sign_c = -1.0 if _inst_dir == 'SELL' else 1.0
-                                    _trend_target_c = abs(_dir_sign_c * ZSCORE_ENTRY_THRESHOLD - _z_c) * _vol_c_abs
-                                    inst_row.setdefault('stop_loss', round(2.0 * _vol_c_abs, 4))
-                                    inst_row.setdefault('profit_target', round(_trend_target_c, 4))
+                                _is_mr_c = str(inst_row.get('style', '') or '').strip().lower() in {'meanreversion', 'mean-reverting', 'mean_reverting'}
+                                if _is_mr_c and pd.notna(_spread_c) and pd.notna(_mean_c):
+                                    _dist_c = abs(_spread_c - _mean_c)
+                                    _sl_c, _tp_c = _dist_c + 1.5 * _vol_c_abs, _dist_c
+                                else:
+                                    _sl_c, _tp_c = 2.0 * _vol_c_abs, 2.0 * _vol_c_abs   # trend / no level: mirror
+                                if _need_sl:
+                                    inst_row['stop_loss'] = round(_sl_c, 4)
+                                if _need_tp:
+                                    inst_row['profit_target'] = round(_tp_c, 4)
                         extra_rows.append(inst_row)
                 if extra_rows:
                     df_curated = pd.concat([df_curated, pd.DataFrame(extra_rows)], ignore_index=True)

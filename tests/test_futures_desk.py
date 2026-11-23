@@ -1419,3 +1419,21 @@ def test_live_views_show_a_daily_row_with_its_own_sizing_and_no_flatten_reminder
     assert clock['pending'] == []                                              # still provisional (forming)
     _, _, clock2 = fd_live.desk_views([row], {}, None, {}, {}, 1_000_000, 0.25, 0.5, 1.0, now=datetime(2026, 11, 17, 14, 58))
     assert {p['key'] for p in clock2['pending']} == {'AU1D|15:00|close', 'AU1D|15:00|open'}
+
+
+def test_continuous_momentum_carries_the_position_through_the_close():
+    from futures.backtest.strategies import run_intraday_momentum_strategy
+    idx = pd.DatetimeIndex([d + pd.Timedelta(hours=h) for d in pd.bdate_range('2026-01-05', periods=20) for h in (0, 1, 2)])
+    px, base = [], 100.0
+    for d in range(20):
+        step = 2.0 if 15 <= d <= 17 else 0.1                      # a few days that move far more than the 3-day average
+        px += [base, base + step, base + 2 * step]
+        base += 2 * step
+    px = np.array(px)
+    bars = pd.DataFrame({'open': px, 'high': px, 'low': px, 'close': px, 'volume': 1.0}, index=idx)
+    flat = run_intraday_momentum_strategy(bars, 3, 3)
+    cont = run_intraday_momentum_strategy(bars, 3, 3, continuous=True)
+    day = idx.normalize()
+    last = np.r_[day[:-1] != day[1:], True]
+    assert (flat['signal'][last] == 0).all()                       # reset at every date's last bar
+    assert (cont['signal'][last] != 0).any()                       # carried through a close

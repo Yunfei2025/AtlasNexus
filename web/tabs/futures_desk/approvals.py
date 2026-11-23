@@ -175,7 +175,8 @@ def approve(product, candidate, wf, path=None, force=False):
         'trades': row['trades'], 'win': row['win'], 'payoff': row['payoff'],
         'expectancy_bp': row['expectancy_bp'], 'status': 'approved',
         'session': 'night+day' if night else 'day',
-        **({'night_days': wf.get('night_days'), 'forced': not row['passes']} if night else {}),
+        **({'night_days': wf.get('night_days'), 'forced': not row['passes'],
+            'continuous': bool(wf.get('continuous'))} if night else {}),
         'daily_mean': float(pnl.mean()) if len(pnl) else None, 'daily_std': float(pnl.std()) if len(pnl) > 1 else None,
         'max_streak': _longest_losing_run(pnl),
     }

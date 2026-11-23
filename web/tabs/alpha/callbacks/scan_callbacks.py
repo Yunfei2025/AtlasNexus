@@ -790,7 +790,7 @@ def register_scan_callbacks(app) -> None:
         _dir_sign_v = pd.Series(1.0, index=df_all.index, dtype=float)
         _dir_sign_v[_dir_v.eq('SELL')] = -1.0
 
-        _trend_target_bp = (_dir_sign_v * ZSCORE_ENTRY_THRESHOLD - _z_v).abs() * _vol_v
+        _trend_target_bp = 2.0 * _vol_v   # mirror the stop (1:1); the old |dir*2 - z| pointed at the wrong side of z
 
         df_all['stop_loss'] = np.where(_is_mr_v, (_dist_v + 1.5 * _vol_v).round(4), (2.0 * _vol_v).round(4))
         df_all['profit_target'] = np.where(_is_mr_v, _dist_v.round(4), _trend_target_bp.round(4))

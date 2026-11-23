@@ -465,7 +465,8 @@ def backfill_night(products=None, days=7, now=None, wsi=None, codes=None, live_d
                     contract = code.split('.')[0]
                     from .night import load_night_history
                     hist = load_night_history(contract, live_dir)
-                    if hist is not None and len(hist.loc[start:end]) >= MIN_NIGHT_BARS:
+                    full = max(MIN_NIGHT_BARS, int(0.85 * ((end - start).total_seconds() / 60 + 1)))   # a night cut short (live stopped early) is re-fetched
+                    if hist is not None and len(hist.loc[start:end]) >= full:
                         out['skipped'] += 1
                         continue
                     new = _normalize_night(wsi(code, FIELDS, start.strftime('%Y-%m-%d %H:%M:%S'),

@@ -348,9 +348,12 @@ def register_alpha_book_table_callbacks(app):
                     if raw in (None, '', 'N/A'):
                         continue
                     try:
-                        return float(str(raw).replace(',', '').replace('%', ''))
+                        _f = float(str(raw).replace(',', '').replace('%', ''))
                     except (TypeError, ValueError):
                         continue
+                    if _f != _f:  # NaN (parquet null) counts as missing so the fallback runs
+                        continue
+                    return _f
                 return None
     
             if not _saved_rows:
@@ -504,23 +507,8 @@ def register_alpha_book_table_callbacks(app):
                         'profit_target', 'target', 'target_bp', 'profitTarget', '_target_dist', 'Target (bp)'
                     ))
 
-                    # Legacy snapshots can miss stop/target fields entirely.
-                    # Reconstruct reasonable bp distances so Summary columns are not blank.
-                    if _stop_mag is None or _target_mag is None:
-                        _spread_f = _first_numeric(row, ('spread', 'Spread', 'Close Price (bp)'))
-                        _mean_f = _first_numeric(row, ('mean', 'Mean'))
-                        _vol_f = _first_numeric(row, ('ewm_vol', 'vol', 'Vol(BP)'))
-                        _z_f = _first_numeric(row, ('Zscore', 'Z-Score'))
-                        _style = str(row.get('style', '') or row.get('Style', '')).strip().lower()
-                        if _vol_f is not None:
-                            _vol_abs = abs(_vol_f)
-                            if _stop_mag is None:
-                                _stop_mag = 2.0 * _vol_abs
-                            if _target_mag is None:
-                                if _spread_f is not None and _mean_f is not None and _style in {'meanreversion', 'mean-reverting', 'mean_reverting'}:
-                                    _target_mag = abs(_spread_f - _mean_f)
-                                elif _z_f is not None:
-                                    _target_mag = abs(_z_f) * _vol_abs
+                    # Stop/Target are shown exactly as saved by Alpha > Portfolio (Run Optimization);
+                    # there is deliberately no second formula here. A blank means that run saved none.
                     stop_level = target_level = None
                     # Open price is seeded with the spread when the trade was added to the
                     # portfolio; older rows without one fall back to the current close.
@@ -558,7 +546,7 @@ def register_alpha_book_table_callbacks(app):
                         'Volume (mm)':            volume_str,
                         'Open date':              open_date_str,
                         'Z-Score':                f"{zscore_val:.2f}" if zscore_val is not None else '',
-                        'Close Price (bp)':       f"{cp_bp:.4f}" if cp_bp is not None else 'N/A',
+                        'Close Price (bp)':       f"{cp_bp:.2f}" if cp_bp is not None else 'N/A',
                         'Progress':               '',
                         'Capital (MM CNY)':       f"{_dir_sign * notional:,.1f}",
                         'DV01 (k CNY/bp)':        f"{dv01_k:.1f}",

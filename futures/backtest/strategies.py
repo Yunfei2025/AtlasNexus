@@ -202,8 +202,8 @@ def run_bollinger_strategy(data, window, num_std, exit_at_ma=False):
     return _finalize_strategy(df)
 
 
-def run_vwap_strategy(data, window):
-    """VWAP strategy: close all positions at end of day"""
+def run_vwap_strategy(data, window, continuous=False):
+    """VWAP strategy: close all positions at end of day (continuous=True: the position runs through the close)"""
     df = data.copy()
     p = df['close']
     v = df['volume']
@@ -212,15 +212,20 @@ def run_vwap_strategy(data, window):
     df['signal'] = np.where(df['close'] > df['vwap'], 1, -1)
     df.iloc[:window, df.columns.get_loc('signal')] = 0
     
-    dates = df.index.date
-    is_last_bar_of_day = np.r_[dates[:-1] != dates[1:], True]
-    df.loc[is_last_bar_of_day, 'signal'] = 0
+    if not continuous:
+        dates = df.index.date
+        is_last_bar_of_day = np.r_[dates[:-1] != dates[1:], True]
+        df.loc[is_last_bar_of_day, 'signal'] = 0
     
     return _finalize_strategy(df)
 
 
-def run_intraday_momentum_strategy(data, window=14, vwap_window=20):
-    """Intraday momentum strategy + VWAP exit"""
+def run_intraday_momentum_strategy(data, window=14, vwap_window=20, continuous=False):
+    """Intraday momentum strategy + VWAP exit.
+
+    continuous=True treats night + day as one series: each trade date's offsets are measured from the previous
+    trade date's last close (so the overnight gap counts) instead of from the date's first bar, and the position
+    is not reset on the date's last bar."""
     df = data.copy()
     if df.index.name != 'datetime':
         df.index.name = 'datetime'
@@ -233,6 +238,9 @@ def run_intraday_momentum_strategy(data, window=14, vwap_window=20):
     df['date'] = df.index.date
     df['time_str'] = df.index.strftime('%H:%M')
     df['day_open'] = df.groupby('date')['open'].transform('first')
+    if continuous:
+        prev_close = df.groupby('date')['close'].last().shift(1)
+        df['day_open'] = df['date'].map(prev_close).fillna(df['day_open'])
     df['offset'] = (df['close'] / df['day_open'] - 1).abs()
     
     pivot_offset = df.pivot_table(index='date', columns='time_str', values='offset')
@@ -263,7 +271,7 @@ def run_intraday_momentum_strategy(data, window=14, vwap_window=20):
         l = lower_arr[i]
         vwap = vwap_arr[i]
         
-        if is_last_bar[i]:
+        if is_last_bar[i] and not continuous:
             position = 0
             signals.append(0)
             continue

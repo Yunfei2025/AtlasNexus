@@ -16,7 +16,7 @@ from futures.backtest.costs import apply_exits, default_cost_bp, product_of
 from futures.backtest.data_loader import load_raw_file
 from futures.backtest import minute_bars
 from futures.backtest.minute_bars import last_bar_time
-from futures.backtest.walkforward import STRATEGIES, load_walkforward, product_minute_bars, resample_bars
+from futures.backtest.walkforward import STRATEGIES, load_walkforward, product_minute_bars, resample_bars, CONTINUOUS_STRATEGIES
 from settings.futures import FuturesConfig
 from settings.paths import DIR_INPUT
 
@@ -103,7 +103,7 @@ def screen_rows(today=None):
     return rows
 
 
-def intraday_state(product, candidate, exits=None, night=False):
+def intraday_state(product, candidate, exits=None, night=False, continuous=False):
     """Main contract (most traded on the latest day), its last price and the approved strategy's current
     position on the latest minute bars (tick files or the shared bar cache): flat at every earlier close,
     and after its stop / target if one is set (stays flat until the signal changes)."""
@@ -118,10 +118,11 @@ def intraday_state(product, candidate, exits=None, night=False):
 
     name, bars = max(contracts.items(), key=recency)
     strategy, timeframe = candidate.split('@')
-    res = STRATEGIES[strategy](resample_bars(bars, timeframe))
+    res = ((CONTINUOUS_STRATEGIES.get(strategy) if continuous else None) or STRATEGIES[strategy])(resample_bars(bars, timeframe))
     sig = res['signal'].astype(float)
     day = sig.index.normalize()
-    sig[np.r_[day[:-1] != day[1:], False]] = 0.0   # every close but the latest day's (still open)
+    if not continuous:
+        sig[np.r_[day[:-1] != day[1:], False]] = 0.0   # every close but the latest day's (still open)
     if exits:
         sig, _ = apply_exits(res, sig, exits)
     since = sig.index[(sig != sig.shift()).to_numpy()][-1]
@@ -288,7 +289,7 @@ def build_book(capital, risk_pct, stop_mult, loss_limit_pct, today=None, max_n=M
             book['warnings'].append(f"{prod} is on Watch: {a.get('status_reason', '')}")
         try:
             exits = a.get('exits') or {}
-            st = intraday_state(prod, a['candidate'], exits or None, night=a.get('session') == 'night+day')
+            st = intraday_state(prod, a['candidate'], exits or None, night=a.get('session') == 'night+day', continuous=bool(a.get('continuous')))
             sz = size_position(prod, exits, st['last_price'], capital, risk_pct, stop_mult, close=close)
             sigma, stop_pts, lots, mult = sz['daily_sigma'], sz['stop_pts'], sz['lots'], sz['multiplier']
             row['stop_src'] = sz['stop_src']

@@ -16,7 +16,7 @@ from futures.backtest.live_bars import (
 from futures.backtest import night as night_mod
 from futures.backtest.minute_bars import export_monitor_slice, load_minute_bars
 from futures.backtest.walkforward import (
-    STRATEGIES, daily_pnl_of, load_walkforward, product_minute_bars, resample_bars,
+    CONTINUOUS_STRATEGIES, STRATEGIES, _P, daily_pnl_of, load_walkforward, product_minute_bars, resample_bars,
 )
 
 from . import approvals
@@ -30,6 +30,16 @@ BAND_HORIZON = 20      # the expected cone is drawn at least this many days ahea
 def is_night_day(rec):
     """True for a strategy approved on night + day bars (approvals.approve with a night + day walk-forward)."""
     return (rec or {}).get('session') == 'night+day'
+
+
+def is_continuous(rec):
+    """True for a night + day approval from a continuous run: the position is carried through every close."""
+    return bool((rec or {}).get('continuous'))
+
+
+def strategy_of(strategy, rec):
+    """The approved strategy's function: its continuous form for a continuous approval, else the plain one."""
+    return CONTINUOUS_STRATEGIES.get(strategy) or STRATEGIES[strategy] if is_continuous(rec) else STRATEGIES[strategy]
 
 
 def forward_replay(product, rec):
@@ -49,8 +59,8 @@ def forward_replay(product, rec):
     parts, stats = [], []
     for c in main_of.unique():
         days = main_of.index[main_of == c]
-        res = apply_costs(STRATEGIES[strategy](resample_bars(contract[c], timeframe)), rec['cost_bp'],
-                          flat_at_close=True, exits=rec.get('exits'))
+        res = apply_costs(strategy_of(strategy, rec)(resample_bars(contract[c], timeframe)), rec['cost_bp'],
+                          flat_at_close=not is_continuous(rec), exits=rec.get('exits'))
         parts.append(daily_pnl_of(res).reindex(days).fillna(0.0))
         stats.append(trade_stats(res[res.index.normalize().isin(days)], rec['cost_bp']))
     n_tr = sum(s['trades'] for s in stats)
@@ -296,11 +306,25 @@ def night_led_state(product, rec, now=None, live_dir=None):
     return _unshifted(st, bars, extra_days=[win[0]])
 
 
+def night_lookback(strategy, bars, day):
+    """(nights present, nights needed) among the trade dates before `day` that a night + day strategy looks back
+    over, or None when its lookback is not a plain run of dates. Momentum averages each time slot's offset over
+    the previous bf-mom-window dates and is undefined (flat) if any of those dates has no night bars."""
+    if strategy != 'Mom':
+        return None
+    need = int(_P['bf-mom-window'])
+    dates = bars.index.normalize()
+    prior = sorted(d for d in dates.unique() if d < day)[-need:]
+    night = set(dates[(bars.index - dates) < pd.Timedelta(hours=8)])   # night bars are stamped 00:00-05:30
+    return sum(d in night for d in prior), need
+
+
 def _session_state(product, contract, rec, bars, day, closed, fetched_at):
     """live_state's replay of the strategy over `bars`, reporting the session on calendar `day` of that frame."""
     strategy, timeframe = rec['candidate'].split('@')
-    raw = STRATEGIES[strategy](resample_bars(bars, timeframe))
-    res = apply_costs(raw, rec['cost_bp'], flat_at_close=True, exits=rec.get('exits'), final_bar_is_close=closed)
+    raw = strategy_of(strategy, rec)(resample_bars(bars, timeframe))
+    res = apply_costs(raw, rec['cost_bp'], flat_at_close=not is_continuous(rec), exits=rec.get('exits'),
+                      final_bar_is_close=closed)
     today = res[res.index.normalize() == day]
     if today.empty:
         return None
@@ -325,6 +349,7 @@ def _session_state(product, contract, rec, bars, day, closed, fetched_at):
         'day_return': float(today['strategy_returns'].sum()), 'round_trips': trade_stats(today, rec['cost_bp'])['trades'],
         'stop_px': levels['stop'], 'target_px': levels['target'], 'exited_at': exited,
         'bars': today[['open', 'high', 'low', 'close']], 'trades': day_trades(today, ex),
+        'lookback': night_lookback(strategy, bars, day) if rec.get('session') == 'night+day' else None,
     }
 
 

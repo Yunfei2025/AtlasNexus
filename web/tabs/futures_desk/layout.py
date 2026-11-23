@@ -111,7 +111,7 @@ def build_futures_desk_layout():
                                    value=15, clearable=False, style={'width': '100px', 'fontSize': '10px'})]),
             html.Button("▶ Start live", id='fd-live-start', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}),
             html.Button("■ Stop", id='fd-live-stop', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}),
-            html.Button("⇣ Backfill 7 nights", id='fd-night-backfill', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}, title=(
+            html.Button("⇣ Backfill 10 nights", id='fd-night-backfill', n_clicks=0, style={**_btn, 'alignSelf': 'flex-end'}, title=(
                 "Fetch the last 7 finished night sessions (AU, AG, AL, CU, JM) once, one Wind request per product per "
                 "night, into live/night_history. Nights already on file are skipped, so repeating costs nothing. "
                 "Research > include night session reads this history.")),

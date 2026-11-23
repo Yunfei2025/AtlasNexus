@@ -259,6 +259,12 @@ def live_view(rows, fetch, state, now=None, sizing=None, health=None, stored=Non
         out.append(_note(f"Day session closed ({SESSION_START[:5]}-{CLOSE_TIME[:5]} Beijing"
                          + (f"; now {bj:%a %H:%M} Beijing" if bj is not None else "")
                          + "): showing the last finished day session.", _AMBER))
+    for r in rows:
+        lb = r.get('lookback')
+        if lb and lb[0] < lb[1] and r['position'] == 0:
+            out.append(_note(f"{r['product']}: night history incomplete ({lb[0]} of the last {lb[1]} trade days have night "
+                             "bars), so the strategy cannot compute its bands and stays flat through the night. "
+                             "Press Backfill nights.", _AMBER))
     if any(r.get('night') for r in rows):
         out.append(_note(f"Night rows ({NIGHT_START[:5]} onward; AU/AG to 02:30, AL/CU to 01:00, JM to 23:00) are "
                          "display only: the strategies were walk-forward tested on day-session bars only, so a night "
@@ -321,7 +327,7 @@ def register_live_callbacks(app):
     def fd_night_backfill(_n):
         from futures.backtest.live_bars import backfill_night
         try:
-            r = backfill_night(days=7)
+            r = backfill_night(days=10)
         except Exception as e:
             return f"Backfill failed: {e}"
         errs = r['errors']

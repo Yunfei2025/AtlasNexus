@@ -46,6 +46,19 @@ STRATEGIES = {
     'SAR': lambda d: run_sar_strategy(d, _P['bf-sar-af'], _P['bf-sar-max-af']),
     'DeMark': lambda d: run_demark_strategy(d),
 }
+# Variants that treat night + day as one continuous series (no reset at the close); every other strategy already
+# runs through the close. Used by night + day runs and approvals marked continuous.
+CONTINUOUS_STRATEGIES = {
+    'VWAP': lambda d: run_vwap_strategy(d, _P['bf-vwap-window'], continuous=True),
+    'Mom': lambda d: run_intraday_momentum_strategy(d, _P['bf-mom-window'], _P['bf-vwap-window'], continuous=True),
+}
+
+
+def strategy_fn(name, continuous=False):
+    """The strategy function `name`, in its continuous (position carried through every close) form if asked."""
+    return (CONTINUOUS_STRATEGIES if continuous else {}).get(name) or STRATEGIES[name]
+
+
 # Strategies whose signal is a number of units, not just a side: ATR stacks three layers (1 + 2 + 3), so its
 # position is -6..+6 units. A sized position is the maximum, one unit = 1 / max of it.
 MAX_UNITS = {'ATR': 6.0}
@@ -197,7 +210,7 @@ def run_daily(product, cost_bp, recent_from=None, exits=None, path=None):
 
 
 def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress=None, exits=None,
-                    search_exits=False, night=False, live_dir=None):
+                    search_exits=False, night=False, live_dir=None, continuous=False):
     """Evaluate all candidates for `product` across every contract (tick files or the minute-bar cache).
     exits: one stop loss / profit target applied to every candidate (costs.normalize_exits).
     search_exits: instead, try EXIT_GRID (incl. no exits) per candidate and keep the best pooled Sharpe;
@@ -235,7 +248,7 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
         if progress:
             progress(f"{len(night_days)} trade days with a night session; day-only baseline done")
 
-    def score(raw, ex, flat=True):
+    def score(raw, ex, flat=not (night and continuous)):
         """Row + daily P&L of one candidate (raw strategy output per contract) under exits `ex`. flat=False
         holds the position through each close (the gap to the next open is then in the P&L)."""
         parts, stats = {}, []
@@ -278,7 +291,7 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
                 if len(b) < 50 or len(spans[c]) == 0:
                     continue
                 try:
-                    raw[c] = fn(b)   # the strategy's signals do not depend on the exits: compute once
+                    raw[c] = strategy_fn(sname, night and continuous)(b)   # the strategy's signals do not depend on the exits: compute once
                 except Exception:
                     continue
             if not raw:
@@ -313,7 +326,7 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
                           'end': str(spans[c].max().date()) if len(spans[c]) else None}
                       for c in contract},
         'gates': {'min_contract_days': MIN_CONTRACT_DAYS, 'min_trades': MIN_TRADES, 'min_night_days': MIN_NIGHT_DAYS},
-        'session': 'night+day' if night else 'day', 'night_days': int(len(night_days)),
+        'session': 'night+day' if night else 'day', 'night_days': int(len(night_days)), 'continuous': bool(night and continuous),
         'rows': rows,
         'daily': run_daily(product, cost, main_of.index.min(), exits if isinstance(exits, dict) else None),
         'daily_pnl': {k: {str(d.date()): float(v) for d, v in s.items()} for k, s in pnl.items()},
