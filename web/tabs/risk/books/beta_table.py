@@ -232,15 +232,17 @@ def register_beta_book_table_callbacks(app):
                 open_date_str  = str(saved.get('open_date', ''))
                 volume_str     = str(saved.get('volume', ''))
     
+                # Duration is shown for any row that carries one (Rates and Credit
+                # bonds); only the yield-based price/MtM columns below are Rates-only.
                 _dur = None
-                if is_rates:
-                    _dur_raw = row.get('Duration', None)
-                    try:
-                        _dur = float(str(_dur_raw).replace(',', '')) if _dur_raw not in (None, '', 'N/A') else None
-                        duration_str = f"{_dur:.2f}" if _dur is not None else ''
-                    except (ValueError, TypeError):
-                        duration_str = ''
-                else:
+                _dur_raw = row.get('Duration', None)
+                try:
+                    _dur = float(str(_dur_raw).replace(',', '')) if _dur_raw not in (None, '', 'N/A') else None
+                    if _dur is not None and _dur != _dur:   # NaN (FX/commodity rows)
+                        _dur = None
+                    duration_str = f"{_dur:.2f}" if _dur is not None else ''
+                except (ValueError, TypeError):
+                    _dur = None
                     duration_str = ''
     
                 try:

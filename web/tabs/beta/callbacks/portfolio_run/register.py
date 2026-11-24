@@ -21,7 +21,7 @@ from multiasset.config import RiskModelConfig
 from settings.paths import DIR_INPUT
 
 from ...data import THEME, ALLOCATION_RESULTS, get_assets_from_factors
-from .._common import _SUMMARY_BETA_PARQUET, _SUMMARY_BETA_DISPLAY_PARQUET, _upsert_snapshot
+from .._common import _SUMMARY_BETA_PARQUET, _SUMMARY_BETA_DISPLAY_PARQUET, _upsert_snapshot, _clear_beta_tombstones
 from ._risk_budget_panel import build_risk_budget_rows, build_risk_budget_header
 from ._run_analysis import (
     backtest_factor_pool, build_risk_budgets, run_optimization, apply_factor_scaling,
@@ -301,6 +301,9 @@ def register_portfolio_run_callbacks(app):
             merged = _snap
             merged.to_parquet(_SUMMARY_BETA_PARQUET, index=False)
             print(f"✓ Beta snapshot saved → {_SUMMARY_BETA_PARQUET} ({len(merged)} rows)")
+            _cleared = _clear_beta_tombstones(merged)
+            if _cleared:
+                print(f"✓ Cleared hidden-row markers for re-added positions: {_cleared}")
             # The Books tab reads the render-ready display cache BEFORE the
             # canonical snapshot, so a stale cache keeps showing the previous
             # run's instruments (e.g. a rolled-over bond code). Drop it; the

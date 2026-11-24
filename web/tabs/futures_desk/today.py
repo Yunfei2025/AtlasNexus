@@ -45,14 +45,17 @@ _BADGE = {1: ('▲ LONG', '52,211,153', _GREEN), -1: ('▼ SHORT', '248,113,113'
 
 def signal_cell(direction, since):
     label, rgb, color = _BADGE[int(direction)]
-    stamp = f"{since:%m-%d}" if (since.hour, since.minute) == (0, 0) else f"{since:%m-%d %H:%M}"   # a daily signal has no time
+    if since is None:   # no signal change in the session yet: show the state without a "since" stamp
+        stamp = None
+    else:
+        stamp = f"{since:%m-%d}" if (since.hour, since.minute) == (0, 0) else f"{since:%m-%d %H:%M}"   # a daily signal has no time
     return html.Td([
         html.Span(label, className='fd-signal', style={
             'display': 'inline-block', 'minWidth': '64px', 'textAlign': 'center', 'padding': '3px 10px',
             'borderRadius': '4px', 'fontSize': '11px', 'fontWeight': '700', 'letterSpacing': '0.05em',
             'color': color, 'background': f'rgba({rgb},0.18)', 'border': f'1px solid rgba({rgb},0.65)'}),
-        html.Span(f"since {stamp}", style={'marginLeft': '8px', 'fontSize': '9px',
-                                                       'color': 'var(--text-muted)'}),
+        html.Span(f"since {stamp}" if stamp else "no change yet", style={'marginLeft': '8px', 'fontSize': '9px',
+                                                                         'color': 'var(--text-muted)'}),
     ], style={'padding': '5px 8px', 'textAlign': 'left', 'whiteSpace': 'nowrap'})
 
 

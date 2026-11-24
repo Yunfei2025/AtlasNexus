@@ -285,3 +285,30 @@ def _get_beta_close_prices() -> dict[str, float]:
         }
     except Exception:
         return {}
+
+
+def _clear_beta_tombstones(snapshot: pd.DataFrame) -> list:
+    """Drop 'deleted' markers for rows present in a freshly saved Beta snapshot.
+
+    A × click on the Books table hides a row via a (Asset Name, Instrument)
+    tombstone in beta_book_user.parquet. Adding a new run to the portfolio is a
+    newer decision, so instruments it holds must show again. Returns the cleared keys.
+    """
+    import os
+    if not os.path.exists(_BETA_BOOK_USER_PARQUET) or snapshot is None or snapshot.empty:
+        return []
+    try:
+        udf = pd.read_parquet(_BETA_BOOK_USER_PARQUET)
+        if 'deleted' not in udf.columns:
+            return []
+        fresh = {(str(r.get('Asset Name', '')), str(r.get('Instrument', '')))
+                 for _, r in snapshot.iterrows()
+                 if str(r.get('Asset Type', '')) not in ('', 'TOTAL')}
+        key = list(zip(udf['asset_name'].astype(str), udf['instrument'].astype(str)))
+        drop = udf['deleted'].astype(str).str.lower().isin(['true', '1', 'yes']) & \
+            pd.Series([k in fresh for k in key], index=udf.index)
+        if drop.any():
+            udf.loc[~drop].to_parquet(_BETA_BOOK_USER_PARQUET, index=False)
+        return [k for k, d in zip(key, drop) if d]
+    except Exception:
+        return []

@@ -230,7 +230,7 @@ def live_view(rows, fetch, state, now=None, sizing=None, health=None, stored=Non
                     _AMBER if r.get('night') else 'var(--text-secondary)'),
                 _td(r['contract']),
                 _td(price_fmt(r['last_px'], r['product'])),
-                signal_cell(r['position'], r['since']) if r['since'] is not None else _td('—'),
+                signal_cell(r['position'], r['since']),
                 _td(price_fmt(r['entry_px'], r['product'])),
                 _td(price_fmt(r['stop_px'], r['product'])),
                 _td(price_fmt(r['target_px'], r['product'])),
