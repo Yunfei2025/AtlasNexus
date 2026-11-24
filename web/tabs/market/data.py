@@ -51,6 +51,19 @@ THEME = {
 _ROW_KEY_COL = "__row_key"
 
 
+def _safe_read_pickle(path: str | os.PathLike) -> Any:
+    """Read pickle with a compatibility fallback for older pandas payloads."""
+    try:
+        return pd.read_pickle(str(path))
+    except Exception:
+        try:
+            from curves.utils.file import _DatetimeCompatUnpickler
+            with open(path, "rb") as f:
+                return _DatetimeCompatUnpickler(f).load()
+        except Exception:
+            return None
+
+
 def _with_row_keys_df(df: pd.DataFrame) -> pd.DataFrame:
     """Return a copy of *df* with a stable hidden row key column."""
     if _ROW_KEY_COL in df.columns:
@@ -282,7 +295,9 @@ def _load_money_market() -> pd.DataFrame:
 def _load_bond_futures() -> pd.DataFrame:
     """Front-month T/TL/TF/TS futures with CTD, IRR, and Zscore from pickles."""
     try:
-        inst = pd.read_pickle(str(DIR_INPUT / "futures-InstrumentInfo.pkl"))
+        inst = _safe_read_pickle(DIR_INPUT / "futures-InstrumentInfo.pkl")
+        if not isinstance(inst, dict):
+            return pd.DataFrame()
         defs: pd.DataFrame = inst.get("Def", pd.DataFrame())
         if defs.empty:
             return pd.DataFrame()
@@ -348,6 +363,21 @@ def _load_on_the_run_bonds() -> pd.DataFrame:
     cgb_ids = _select_on_the_run_bonds("TBond", tenors)
     cdb_ids = _select_on_the_run_bonds("CBond", tenors)
 
+    # If turnover-based OTR selection has no candidates (e.g. stale/missing
+    # turnover in InstrumentInfo), fall back to current reference-bond picks
+    # so the panel stays populated instead of showing all blanks.
+    if not any(isinstance(cgb_ids.get(t), str) and cgb_ids.get(t) != "—" for t in tenors) or \
+       not any(isinstance(cdb_ids.get(t), str) and cdb_ids.get(t) != "—" for t in tenors):
+        ref_df = _load_bond_table(tenors)
+        if not ref_df.empty:
+            for _, row in ref_df.iterrows():
+                tenor = str(row.get("Tenor", ""))
+                if tenor in tenors:
+                    if cgb_ids.get(tenor, "—") in (None, "", "—"):
+                        cgb_ids[tenor] = row.get("CGB", "—")
+                    if cdb_ids.get(tenor, "—") in (None, "", "—"):
+                        cdb_ids[tenor] = row.get("CDB", "—")
+
     try:
         cgb_bc = pd.read_pickle(str(DIR_INPUT / "TBond-spdsrt.pkl")).get("BondCurve", pd.DataFrame())
     except Exception:
@@ -411,9 +441,8 @@ def _select_on_the_run_bonds(btype: str, tenors: list[str]) -> dict[str, Any]:
     longer reverts the pick. Switching forward to an even newer bond is
     still allowed and expected (that's a real roll, not noise).
     """
-    try:
-        bond_info = pd.read_pickle(str(DIR_INPUT / f"{btype}-InstrumentInfo.pkl"))
-    except Exception:
+    bond_info = _safe_read_pickle(DIR_INPUT / f"{btype}-InstrumentInfo.pkl")
+    if bond_info is None:
         return {}
 
     if not isinstance(bond_info, pd.DataFrame) or bond_info.empty:
@@ -514,14 +543,14 @@ def _load_bond_table(tenors: list[str]) -> pd.DataFrame:
     tenor_cols = [f"Term near {t}" for t in tenors]
 
     rows = []
+    cgb_ref = _safe_read_pickle(DIR_INPUT / "TBond-cvref.pkl")
     try:
-        cgb_ref  = pd.read_pickle(str(DIR_INPUT / "TBond-cvref.pkl"))
         cgb_last = cgb_ref.get("RefBond", pd.DataFrame()).iloc[-1] if isinstance(cgb_ref, dict) else pd.Series()
     except Exception:
         cgb_last = pd.Series()
 
+    cdb_ref = _safe_read_pickle(DIR_INPUT / "CBond-cvref.pkl")
     try:
-        cdb_ref  = pd.read_pickle(str(DIR_INPUT / "CBond-cvref.pkl"))
         cdb_last = cdb_ref.get("RefBond", pd.DataFrame()).iloc[-1] if isinstance(cdb_ref, dict) else pd.Series()
     except Exception:
         cdb_last = pd.Series()

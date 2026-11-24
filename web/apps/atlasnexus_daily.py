@@ -751,13 +751,24 @@ def _header_status(n, job_id):
 
     # ---- Wind connectivity ----
     try:
-        from data.providers.retrieve import _WIND_AVAILABLE
-        if _WIND_AVAILABLE is True:
-            wind_cls, wind_dot, wind_txt = "ok",    "dot", "Wind \u2713"
-        elif _WIND_AVAILABLE is False:
-            wind_cls, wind_dot, wind_txt = "warn",  "dot", "Wind offline"
+        from data.providers import retrieve as wind_rt
+
+        wind_disabled = wind_rt._wind_disabled()
+        wind_can_connect = (wind_rt._is_trading_hours() or wind_rt.ALLOW_NONTRADING_RETRIEVAL) and not wind_disabled
+
+        # _WIND_AVAILABLE can be stale (e.g. app started outside trading hours
+        # and then moved into trading hours). Probe once when we can connect.
+        if wind_can_connect and wind_rt._WIND_AVAILABLE is not True:
+            wind_rt._wind_start("Header status probe")
+
+        if wind_disabled:
+            wind_cls, wind_dot, wind_txt = "warn", "dot", "Wind disabled"
+        elif wind_rt._WIND_AVAILABLE is True:
+            wind_cls, wind_dot, wind_txt = "ok", "dot", "Wind \u2713"
+        elif wind_can_connect:
+            wind_cls, wind_dot, wind_txt = "warn", "dot", "Wind offline"
         else:
-            wind_cls, wind_dot, wind_txt = "idle",  "dot", "Wind \u2014"
+            wind_cls, wind_dot, wind_txt = "idle", "dot", "Wind \u2014"
     except Exception:
         wind_cls, wind_dot, wind_txt = "idle", "dot", "Wind ?"
 
