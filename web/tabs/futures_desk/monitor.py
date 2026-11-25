@@ -78,7 +78,7 @@ def with_finished_live_day(product, rec, fwd):
         live = live_state(product, rec)
     except Exception:
         return fwd
-    if not live or not live.get('closed'):
+    if not live or not live.get('closed') or live.get('gap'):   # a day replayed across a history gap is not evidence
         return fwd
     day = pd.Timestamp(live['day']).normalize()
     series = fwd['series']
@@ -256,11 +256,35 @@ def live_state(product, rec, now=None, live_dir=None):
     closed = bool(meta.get('complete'))
     live, _ = load_live(contract, live_dir)
     if is_night_day(rec):
-        bars = with_live(load_minute_bars(contract, night=True, live_dir=live_dir), live)
+        hist = load_minute_bars(contract, night=True, live_dir=live_dir)
+        bars = with_live(hist, live)
         bars = night_mod.with_night(bars, night_mod.load_night_history(contract, live_dir))   # tonight's night joins today
-        return _unshifted(_session_state(product, contract, rec, bars, day, closed, meta['fetched_at']), bars)
-    bars = with_live(load_minute_bars(contract, live_dir=live_dir), live)
-    return _session_state(product, contract, rec, bars, day, closed, meta['fetched_at'])
+        st = _unshifted(_session_state(product, contract, rec, bars, day, closed, meta['fetched_at']), bars)
+    else:
+        hist = load_minute_bars(contract, live_dir=live_dir)
+        st = _session_state(product, contract, rec, with_live(hist, live), day, closed, meta['fetched_at'])
+    return _with_gap(st, hist, day)
+
+
+def history_gap(hist, day):
+    """(last settled day, [missing trade days]) between the bar history and the live `day`. The walk-forward always
+    sees consecutive sessions; a replay that jumps from a stale cache straight to today's live bars computes its
+    bands / averages across the gap and trades signals the backtest would not have traded."""
+    if hist is None or hist.empty:
+        return None, []
+    dates = hist.index[(hist.index - hist.index.normalize()) >= night_mod.DAY_OPEN].normalize()
+    dates = dates[dates < pd.Timestamp(day).normalize()]
+    if not len(dates):
+        return None, []
+    last = dates.max()
+    return last, night_mod.trade_days_between(last, day)
+
+
+def _with_gap(st, hist, day):
+    if st is not None:
+        last, missing = history_gap(hist, day)
+        st['gap'] = {'last': last, 'missing': missing} if missing else None
+    return st
 
 
 def _unshifted(st, bars, extra_days=()):
@@ -303,7 +327,7 @@ def night_led_state(product, rec, now=None, live_dir=None):
     bars = pd.concat([hist, night_mod.restamp_onto(live_night, day).reindex(columns=hist.columns)])
     bars = bars[~bars.index.duplicated(keep='last')].sort_index()
     st = _session_state(product, contract, rec, bars, day, False, meta['fetched_at'])
-    return _unshifted(st, bars, extra_days=[win[0]])
+    return _with_gap(_unshifted(st, bars, extra_days=[win[0]]), hist, day)
 
 
 def night_lookback(strategy, bars, day):

@@ -86,12 +86,18 @@ def approve_daily(product, candidate, wf, path=None):
     row = dd['rows'][candidate]
     strategy, timeframe = candidate.split('@')
     units = max_units(strategy)
-    pnl = daily_pnl(product, strategy, wf['cost_bp'], dd.get('exits')) / units   # return on the full position
+    # A daily strategy holds overnight: its cost is the daily run's (spread + ordinary close fee), not the intraday
+    # cost_bp of the walk-forward (open + close-today). Older daily results carry neither: fall back to it.
+    hs = dd.get('half_spread_bp')
+    cost = dd.get('cost_bp', wf['cost_bp'])
+    pnl = (daily_pnl(product, strategy, hs, dd.get('exits'), fees=product) if hs is not None
+           else daily_pnl(product, strategy, cost, dd.get('exits'))) / units   # return on the full position
     path = path or DAILY_PATH
     data = _read(path)
     data[product] = {
         'strategy': strategy, 'timeframe': timeframe, 'candidate': candidate, 'session': 'daily',
-        'approved_at': datetime.now().strftime('%Y-%m-%d %H:%M'), 'cost_bp': wf['cost_bp'], 'exits': dd.get('exits'),
+        'approved_at': datetime.now().strftime('%Y-%m-%d %H:%M'), 'cost_bp': cost, 'half_spread_bp': hs,
+        'exits': dd.get('exits'),
         'wf_run_at': wf['run_at'], 'wf_last_day': dd['end'], 'series_start': dd['start'],
         'pooled_sharpe': row['pooled'], 'sharpe_se': row['se'], 'recent_sharpe': row['recent'], 'days': row['days'],
         'years_positive': row['years_positive'], 'years': row['years'], 'trades': row['trades'], 'win': row['win'],

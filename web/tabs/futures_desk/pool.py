@@ -23,14 +23,7 @@ from settings.paths import DIR_INPUT
 from . import approvals, daily
 from .monitor import exit_levels
 
-# CNY per 1.0 move of the quoted price, per lot. Typed in from exchange contract specs, NOT read from
-# any data feed: verify before sizing real orders.
-CONTRACT_MULTIPLIER = {
-    'IF': 300, 'IH': 300, 'IC': 200, 'IM': 200,
-    'T': 10000, 'TF': 10000, 'TS': 20000, 'TL': 10000,
-    'AU': 1000, 'AG': 15, 'CU': 5, 'AL': 5, 'ZN': 5, 'RB': 10,
-    'LC': 1, 'SA': 20, 'SC': 1000, 'JM': 60, 'EC': 50,
-}
+from futures.backtest.costs import CONTRACT_MULTIPLIER   # noqa: E402  (re-exported: live_ui / actions import it from here)
 MAX_BOOK = 5
 PNL_CORR_WARN = 0.5
 

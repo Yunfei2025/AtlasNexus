@@ -14,7 +14,7 @@ numpy==2.3.1                 # Vector & array operations
 pandas==3.0.2                # DataFrames; latest stable
 scipy==1.17.1                # Scientific computing (optimize, special functions)
 python-dateutil==2.9.0.post0 # Date utilities for pandas
-pyarrow==19.0.0              # Parquet I/O, Arrow columnar format
+pyarrow==24.0.0              # Parquet I/O, Arrow columnar format
 
 # ── Visualisation ──
 matplotlib==3.10.8           # Plotting; 3.10+ for Python 3.13

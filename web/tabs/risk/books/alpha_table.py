@@ -15,6 +15,7 @@ from settings.paths import DIR_INPUT
 from .swap_close import freshest_daily_closes, swap_spread_close_bp, zscore_from_close
 from web.tabs.alpha.data.legs import fly_leg_dv01_ratios
 from web.tabs.alpha.data import load_spread_data as _load_alpha_spread_data
+from web.tabs.alpha.data.loaders import display_key as _alpha_display_key
 from web.tabs.alpha.data.duration import get_breakeven_3m_bp, get_carry_roll_3m_bp
 from web.tabs.beta.data import THEME
 from web.tabs.beta.callbacks._common import _SUMMARY_ALPHA_PARQUET, _SUMMARY_ALPHA_DISPLAY_PARQUET, _ALPHA_POSITIONS_PARQUET, _load_cr_ts, _price_progress_bar, _dir_badge, _style_badge, _signed_value_style, _zscore_cell_style, _sortable_header, _apply_sort
@@ -57,6 +58,14 @@ def _stop_target_bar(entry: float, cur: float, stop: float, target: float, direc
         tick(tgt_x, _BAR_TARGET, 2, 2),
         tick(pnl, _BAR_NOW, 3, 3),
     ])
+
+
+def _display_id(spread_type: str, trade_id: str) -> str:
+    """Label shown for a row: bond-curve trades read '<bond>-OTR' as everywhere else in Alpha. The stored ID
+    (positions file, edits, alerts) stays the bare bond code."""
+    if spread_type in ('TBondCurve', 'CBondCurve') and trade_id and not str(trade_id).endswith('-OTR'):
+        return _alpha_display_key(spread_type, str(trade_id))
+    return trade_id
 
 
 def _progress_legend() -> html.Div:
@@ -549,6 +558,14 @@ def register_alpha_book_table_callbacks(app):
                         _sig_bp = _resolve_alpha_metric(spread_type, trade_id, 'ewm_vol', scale_to_bp=True)
                         if not _sig_bp:
                             _sig_bp = _resolve_alpha_metric(spread_type, trade_id, 'vol', scale_to_bp=True)
+                        # Bond-curve rows: mean / sigma / z are on the signal series (the bond's residual
+                        # to the fitted curve), but Open / Close are the leg1 - leg2 yield spread vs the
+                        # hedge bond. Shift the mean by today's gap between the two so the levels sit on the
+                        # Close column's scale: the bp still to go is the residual's.
+                        if spread_type in ('TBondCurve', 'CBondCurve') and _mean_bp is not None and cp_bp is not None:
+                            _sig_now = _resolve_alpha_metric(spread_type, trade_id, 'spread', scale_to_bp=True)
+                            if _sig_now is not None:
+                                _mean_bp += cp_bp - _sig_now
                         if _mean_bp is not None and _sig_bp and _entry_bp is not None:
                             from web.tabs.alpha.callbacks.backtest_state import mr_exit_stop_z
                             _ez, _sz = mr_exit_stop_z(spread_type, trade_id)
@@ -777,7 +794,10 @@ def register_alpha_book_table_callbacks(app):
                         _alert_rows.append((_tid, f"Stop loss hit (Δ={_pnl_dir:+.1f} bp, stop level={_stop_level:+.1f} bp)", 'stop'))
                         _alert_ids['stop'].add(_tid)
                     elif _target_hit:
-                        _alert_rows.append((_tid, f"Target reached (Δ={_pnl_dir:+.1f} bp, target level={_target_level:+.1f} bp)", 'target'))
+                        _zs = str(r.get('Z-Score', '') or '').strip()
+                        _why = (f", z={_zs} already past the exit level" if _zs and _target_dist == 0 else '')
+                        _shown_target = r.get('_target_level') or _target_level
+                        _alert_rows.append((_tid, f"Target reached (Δ={_pnl_dir:+.1f} bp, target level={float(_shown_target):+.1f} bp{_why})", 'target'))
                         _alert_ids['target'].add(_tid)
                 # Signal-based exit for Core names with saved params: the backtest
                 # (same params the signal uses) has closed a trade opened on/after
@@ -876,7 +896,8 @@ def register_alpha_book_table_callbacks(app):
                 val = row.get(col, '')
                 base_style = {'padding': '5px 10px', 'textAlign': align, 'color': THEME['text_main']}
                 if col == 'ID':
-                    return html.Td(val, style={**base_style, 'fontWeight': '600', 'whiteSpace': 'nowrap'})
+                    return html.Td(_display_id(row.get('Spread Type', ''), val),
+                                   style={**base_style, 'fontWeight': '600', 'whiteSpace': 'nowrap'})
                 if col in ('Leg 1', 'Leg 2', 'Leg 3'):
                     return html.Td(val, style={**base_style, 'color': THEME['text_sub'], 'fontSize': '9px'})
                 if col == 'Style':
@@ -975,7 +996,8 @@ def register_alpha_book_table_callbacks(app):
                     _st = _sev_style[_sev]
                     _children = [
                         html.Span(f"{_st['icon']} ", style={'fontSize': '13px'}),
-                        html.Span(_tid, style={'fontWeight': 'bold', 'color': _st['color'], 'marginRight': '6px'}),
+                        html.Span(_display_id(_rows_by_id.get(_tid, {}).get('Spread Type', ''), _tid),
+                                  style={'fontWeight': 'bold', 'color': _st['color'], 'marginRight': '6px'}),
                         html.Span(_msg, style={'color': THEME['text_main']}),
                     ]
                     # A close alert (stop / target / signal) comes with the legs to trade. Long-hold is a

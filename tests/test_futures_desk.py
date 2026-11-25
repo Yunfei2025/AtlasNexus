@@ -1437,3 +1437,44 @@ def test_continuous_momentum_carries_the_position_through_the_close():
     last = np.r_[day[:-1] != day[1:], True]
     assert (flat['signal'][last] == 0).all()                       # reset at every date's last bar
     assert (cont['signal'][last] != 0).any()                       # carried through a close
+
+
+def test_night_never_glued_onto_a_later_day_across_a_gap():
+    # Mon 11-23 night belongs to Tue 11-24; with Tue's day session missing it must be dropped, not put on Wed
+    days = pd.DatetimeIndex(['2026-11-20', '2026-11-23', '2026-11-25'])
+    nights = pd.concat([_night_bars('2026-11-23', base=780.0), _night_bars('2026-11-24', base=790.0)])
+    sh = night_mod.night_to_trade_day(nights, days)
+    assert set(sh.index.normalize().unique()) == {pd.Timestamp('2026-11-25')}
+    assert len(sh) == len(_night_bars('2026-11-24')) and sh['close'].iloc[0] == _night_bars('2026-11-24', base=790.0)['close'].iloc[0]
+    # unshift goes back to the previous trading day by calendar, not to the previous date in the frame
+    assert night_mod.unshift(pd.Timestamp('2026-11-25 00:00'), days) == pd.Timestamp('2026-11-24 21:00')
+
+
+def test_history_gap_flags_missing_trade_days_before_the_live_day():
+    from web.tabs.futures_desk import monitor
+    idx = pd.date_range('2026-11-20 09:30', periods=5, freq='1min')
+    hist = pd.DataFrame({'close': 1.0}, index=idx)
+    last, missing = monitor.history_gap(hist, pd.Timestamp('2026-11-25'))
+    assert last == pd.Timestamp('2026-11-20') and missing == [pd.Timestamp('2026-11-23'), pd.Timestamp('2026-11-24')]
+    assert monitor.history_gap(hist, pd.Timestamp('2026-11-23'))[1] == []   # Fri -> Mon: no gap
+
+
+def test_fee_bp_uses_open_plus_close_today_and_month_rules():
+    from futures.backtest.costs import fee_bp
+    assert fee_bp('IF2612') == pytest.approx((0.23 + 2.3) / 2)                     # CFFEX index: close-today 10x
+    assert fee_bp('AG2612', 9000) == pytest.approx(1.0) and fee_bp('AG2702', 9000) == pytest.approx(0.1)   # Jun / Dec dearer
+    assert fee_bp('AU2702', 750) == pytest.approx(10 / 2 / (750 * 1000) * 1e4)   # per-lot fee, close-today free
+    assert fee_bp('CU2701', overnight=True) == pytest.approx(0.5)                 # held overnight: ordinary close fee
+    assert fee_bp('XX2701') == 0.5                                                # unknown product: default
+
+
+def test_fee_by_holding_period_charges_close_today_only_for_same_day_round_trips():
+    from futures.backtest.costs import apply_costs
+    idx = pd.to_datetime(['2026-11-23 10:00', '2026-11-23 11:00', '2026-11-23 14:00', '2026-11-24 10:00'])
+    px = pd.Series(1000.0, index=idx)
+    def run(sig):
+        res = pd.DataFrame({'open': px, 'high': px, 'low': px, 'close': px, 'signal': sig}, index=idx)
+        return -apply_costs(res, 0.0, flat_at_close=False, fees='IF2612')['strategy_returns'].sum() * 1e4
+    assert run([1, 0, 0, 0]) == pytest.approx(0.23 + 2.3)    # opened and closed the same day: close-today fee
+    assert run([0, 0, 1, 0]) == pytest.approx(0.23 + 0.23)   # closed the next day: ordinary close fee
+    assert run([1, -1, 0, 0]) == pytest.approx(0.23 + 2.3 + 0.23 + 2.3)   # a reversal closes and opens

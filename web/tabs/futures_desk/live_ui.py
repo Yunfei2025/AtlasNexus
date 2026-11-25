@@ -235,7 +235,9 @@ def live_view(rows, fetch, state, now=None, sizing=None, health=None, stored=Non
                 _td(price_fmt(r['stop_px'], r['product'])),
                 _td(price_fmt(r['target_px'], r['product'])),
                 _td('—' if lots is None or r.get('night') else str(lots)),
-                _td(f"{pnl:+.2f}%", _GREEN if pnl > 0 else (_RED if pnl < 0 else 'var(--text-secondary)'), bold=True),
+                _td(f"{pnl:+.2f}%" + (' ⚠' if r.get('gap') else ''),
+                    _AMBER if r.get('gap') else (_GREEN if pnl > 0 else (_RED if pnl < 0 else 'var(--text-secondary)')),
+                    bold=True),
                 _td('—' if pnl_cny is None or r.get('night') else f"{pnl_cny:+,.0f}"),
                 _td(str(r['round_trips'])),
                 _td(f"{r['day']:%m-%d} {'night ' if r.get('night') else ''}closed · to {r['as_of']:%H:%M}" if r['closed'] else
@@ -245,6 +247,14 @@ def live_view(rows, fetch, state, now=None, sizing=None, health=None, stored=Non
                 "Today (net)", "Paper CNY", "Round trips", "Bars to · fetched"]
         out.append(_table(head, body, left=(0, 4)))
         for r in rows:
+            g = r.get('gap')
+            if g:
+                out.append(_note(f"⚠ {r['product']}: the bar cache ends {g['last']:%m-%d} and is missing "
+                                 f"{', '.join(f'{d:%m-%d}' for d in g['missing'])}, so today's signals are replayed "
+                                 f"across that gap and differ from what the Research backtest would trade (its bands "
+                                 f"and averages need the previous sessions). Today (net) is not evidence and is kept "
+                                 f"out of the Monitor statuses. Update the tick files and Sync bar cache to fix it.",
+                                 _AMBER))
             if r['exited_at'] is not None:
                 out.append(_note(f"{r['product']}: stop / target hit at {r['exited_at']:%H:%M}; flat until the "
                                  f"strategy's signal changes.", _AMBER))

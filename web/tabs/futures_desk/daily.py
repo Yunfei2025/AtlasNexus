@@ -134,7 +134,11 @@ def daily_replay(product, rec, live_dir=None):
     if df is None:
         raise ValueError(f"no daily series for {product}")
     strategy = rec['candidate'].split('@')[0]
-    res = apply_costs(STRATEGIES[strategy](df), rec['cost_bp'], flat_at_close=False, exits=rec.get('exits'))
+    if rec.get('half_spread_bp') is not None:   # spread + exchange fee by holding period (overnight close fee)
+        res = apply_costs(STRATEGIES[strategy](df), rec['half_spread_bp'], flat_at_close=False, exits=rec.get('exits'),
+                          fees=product)
+    else:   # approvals from before the fee schedule: their single per-side cost
+        res = apply_costs(STRATEGIES[strategy](df), rec['cost_bp'], flat_at_close=False, exits=rec.get('exits'))
     return df, res
 
 

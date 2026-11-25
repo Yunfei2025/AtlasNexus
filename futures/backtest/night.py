@@ -75,18 +75,51 @@ def strip_night(bars):
     return bars[(bars.index - bars.index.normalize()) >= DAY_OPEN]
 
 
+def is_trade_day(d):
+    """True for a Chinese exchange trading day: a weekday that is not a public holiday (make-up Saturdays do not
+    trade)."""
+    from curves.utils.cn_calendar import is_cn_workday
+    d = pd.Timestamp(d)
+    return d.weekday() < 5 and bool(is_cn_workday(d.date()))
+
+
+def next_trade_day(d):
+    d = pd.Timestamp(d).normalize() + pd.Timedelta(days=1)
+    while not is_trade_day(d):
+        d += pd.Timedelta(days=1)
+    return d
+
+
+def prev_trade_day(d):
+    d = pd.Timestamp(d).normalize() - pd.Timedelta(days=1)
+    while not is_trade_day(d):
+        d -= pd.Timedelta(days=1)
+    return d
+
+
+def trade_days_between(a, b):
+    """Trading days strictly between dates a and b."""
+    out, d = [], pd.Timestamp(a).normalize()
+    while True:
+        d = next_trade_day(d)
+        if d >= pd.Timestamp(b).normalize():
+            return out
+        out.append(d)
+
+
 def night_to_trade_day(night, trade_days):
-    """Re-stamp night bars onto their trade date (see module doc). `trade_days` is the sorted index of day-session
-    dates; a night's trade date is the first one after the evening it started. Nights with no later trade day yet
-    (the newest one) have no day session to join and are dropped."""
+    """Re-stamp night bars onto their trade date (see module doc). A night's trade date is the next exchange
+    trading day after the evening it started (calendar, not the next date present in `trade_days`); nights whose
+    trade date is not in `trade_days` (tonight's, or one whose day session is missing from the frame) are
+    dropped, so a gap in the day bars never glues an older night onto a later day."""
     if night is None or night.empty:
         return night
     start_day = (night.index - NIGHT_SHIFT_BACK).normalize()
-    pos = pd.DatetimeIndex(trade_days).sort_values().searchsorted(start_day, side='right')
-    days = pd.DatetimeIndex(trade_days).sort_values()
-    ok = pos < len(days)
+    trade_of = {e: next_trade_day(e) for e in start_day.unique()}
+    target = pd.DatetimeIndex([trade_of[e] for e in start_day])
+    ok = target.isin(pd.DatetimeIndex(trade_days))
     out = night[ok].copy()
-    out.index = days[pos[ok]] + (night.index[ok] - (start_day[ok] + NIGHT_OPEN))
+    out.index = target[ok] + (night.index[ok] - (start_day[ok] + NIGHT_OPEN))
     return out.sort_index()
 
 
@@ -113,9 +146,8 @@ def restamp_onto(night, trade_day):
 
 def unshift(ts, days):
     """Real exchange time of a stamp taken from a night + day frame: a day-session stamp is returned as is, a
-    night one (clock time before 08:00 on its trade date) goes back to 21:00 + offset on the previous trade
-    date. `days` is the sorted DatetimeIndex of the frame's day-session dates (the trade date itself may be
-    missing, e.g. tonight's)."""
+    night one (clock time before 08:00 on its trade date) goes back to 21:00 + offset on the previous exchange
+    trading day (calendar). `days` is kept for the callers' signature and not needed."""
     if ts is None or (not isinstance(ts, pd.Timestamp) and pd.isna(ts)):
         return ts
     ts = pd.Timestamp(ts)
@@ -123,9 +155,7 @@ def unshift(ts, days):
     off = ts - d
     if off >= DAY_OPEN:
         return ts
-    i = days.searchsorted(d)
-    prev = days[i - 1] if i > 0 else d - pd.Timedelta(days=1)
-    return prev + NIGHT_OPEN + off
+    return prev_trade_day(d) + NIGHT_OPEN + off
 
 
 def night_trade_days(bars):

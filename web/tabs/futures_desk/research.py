@@ -87,7 +87,9 @@ def wf_table(wf, approved_candidate=None):
     return html.Div([
         html.Div(f"{wf['product']} · {wf['days']} days to {wf['last_day']} · {describe_exits(wf.get('exits'))} · "
                  f"cost {wf['cost_bp']:.2f}bp/side "
-                 f"(half-spread {wf['half_spread_bp']:.2f} + fee {wf['fee_bp']:.2f}) · run {wf['run_at']}",
+                 f"(half-spread {wf['half_spread_bp']:.2f} + exchange fee {wf['fee_bp']:.2f}, open + close-today"
+                 + (f", {wf['cost_contract']}" if wf.get('cost_contract') else '') + ")"
+                 + _cost_range(wf) + f" · run {wf['run_at']}",
                  style={'fontSize': '9px', 'color': 'var(--text-muted)', 'marginBottom': '2px'}),
         html.Div(daily_vs_intraday(wf) + ".",
                  style={'fontSize': '10px', 'color': 'var(--text-primary)', 'marginBottom': '4px'}),
@@ -107,6 +109,14 @@ def wf_table(wf, approved_candidate=None):
         overnight_by_contract(wf, passing, approved_candidate),
         daily_table(wf),
     ])
+
+
+def _cost_range(wf):
+    """' · other contracts a-b bp' when the exchange fee differs by delivery month, else ''."""
+    by = wf.get('cost_by_contract') or {}
+    if len(set(round(v, 2) for v in by.values())) < 2:
+        return ''
+    return f" · by contract {min(by.values()):.2f}-{max(by.values()):.2f}bp"
 
 
 def night_table(wf):
@@ -145,6 +155,7 @@ def night_table(wf):
         html.Div(html.Table([html.Thead(html.Tr([html.Th(h, style={**_TH, 'textAlign': 'left' if i == 0 else 'right'})
                                                  for i, h in enumerate(head)])), html.Tbody(body)],
                             style={'width': '100%', 'borderCollapse': 'collapse'}), style={'overflowX': 'auto'}),
+        daily_table(wf),   # daily candidates run on the continuous daily series: the session choice does not change them
     ])
 
 
@@ -299,19 +310,24 @@ def approved_note(product):
 
 
 def _night_pick_options(wf):
-    """Night + day candidates that pass every day gate (the night-days gate can be forced), best first."""
+    """Night + day candidates that pass every day gate (the night-days gate can be forced), best first, then the
+    daily candidates that pass their own gate."""
     ok = sorted(((k, r) for k, r in wf['rows'].items() if r.get('passes_ex_night')), key=lambda kv: -kv[1]['pooled'])
     return [{'label': f"{k}" + (f" · {describe_exits(r['exits'])}" if r.get('exits') else '') +
-                      f" · pooled {r['pooled']:+.2f} ± {r['se']:.2f}", 'value': k} for k, r in ok]
+                      f" · pooled {r['pooled']:+.2f} ± {r['se']:.2f}", 'value': k} for k, r in ok] + _daily_pick_options(wf)
 
 
 def _pick_options(wf):
     passing = sorted(((k, r) for k, r in wf['rows'].items() if r['passes']), key=lambda kv: -kv[1]['pooled'])
     opts = [{'label': f"{k}" + (f" · {describe_exits(r['exits'])}" if r.get('exits') else '') +
                       f" · pooled {r['pooled']:+.2f} ± {r['se']:.2f}", 'value': k} for k, r in passing]
+    return opts + _daily_pick_options(wf)
+
+
+def _daily_pick_options(wf):
     dd = wf.get('daily') or {}
     daily = sorted(((k, r) for k, r in (dd.get('rows') or {}).items() if daily_gate(dd, k)[0]), key=lambda kv: -kv[1]['pooled'])
-    return opts + [{'label': f"{k} · daily, held overnight · full history {r['pooled']:+.2f} ± {r['se']:.2f}", 'value': k}
+    return [{'label': f"{k} · daily, held overnight · full history {r['pooled']:+.2f} ± {r['se']:.2f}", 'value': k}
                    for k, r in daily]
 
 
@@ -443,6 +459,8 @@ def register_research_callbacks(app):
         wf = load_walkforward(product, DESK_DIR, night=True) if product else None
         if not candidate or wf is None:
             return "Run the night + day walk-forward and pick a candidate first.", no_update, no_update
+        if candidate.endswith('@1D'):
+            return ("A daily strategy has its own gate and needs no force: use Approve.", no_update, no_update)
         try:
             approve(product, candidate, wf, force=True)
         except ValueError as e:

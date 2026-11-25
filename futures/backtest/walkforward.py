@@ -19,7 +19,7 @@ import pandas as pd
 
 from settings.paths import DIR_INPUT
 
-from .costs import DEFAULT_FEE_BP, FEE_BP, apply_costs, normalize_exits, product_of, trade_stats
+from .costs import apply_costs, fee_bp, normalize_exits, product_of, trade_stats
 from .data_loader import load_raw_file
 from . import minute_bars
 from . import night as night_mod
@@ -171,33 +171,39 @@ def load_daily_df(product, path=None):
     return df[df['close'] > 0]
 
 
-def daily_pnl(product, strategy, cost_bp, exits=None, path=None):
-    """Daily net P&L (return on notional) of one daily-bar strategy on the continuous series, held overnight."""
+def daily_pnl(product, strategy, cost_bp, exits=None, path=None, fees=None):
+    """Daily net P&L (return on notional) of one daily-bar strategy on the continuous series, held overnight.
+    fees=product: cost_bp is the half-spread and the exchange fee is charged by holding period."""
     df = load_daily_df(product, path)
     if df is None:
         raise ValueError(f"no daily series for {product}")
-    return daily_pnl_of(apply_costs(STRATEGIES[strategy](df), cost_bp, flat_at_close=False, exits=exits))
+    return daily_pnl_of(apply_costs(STRATEGIES[strategy](df), cost_bp, flat_at_close=False, exits=exits, fees=fees))
 
 
-def run_daily(product, cost_bp, recent_from=None, exits=None, path=None):
-    """Daily-bar candidates for `product` on its continuous daily series (held overnight, net of cost_bp per
-    side). Each row has the full-history Sharpe and the Sharpe since `recent_from` (the intraday run's first
-    day), so the two can be compared over the same dates. None when the series is missing.
+def run_daily(product, cost_bp, recent_from=None, exits=None, path=None, half_spread=None):
+    """Daily-bar candidates for `product` on its continuous daily series (held overnight). With `half_spread`
+    the cost is that spread per side plus the exchange fee charged by holding period (a daily trade closes on a
+    later day, so the ordinary close fee, not close-today); without it cost_bp per side is the whole cost.
+    Each row has the full-history Sharpe and the Sharpe since `recent_from` (the intraday run's first day), so
+    the two can be compared over the same dates. None when the series is missing.
     Roll gaps of the continuous series are not adjusted."""
     df = load_daily_df(product, path)
     if df is None:
         return None
+    spread, fees = (cost_bp, None) if half_spread is None else (half_spread, product)
+    per_side = cost_bp if half_spread is None else half_spread + fee_bp(product, float(df['close'].iloc[-1]),
+                                                                        overnight=True)
     rows = {}
     for sname in DAILY_STRATEGIES:
         try:
-            res = apply_costs(STRATEGIES[sname](df), cost_bp, flat_at_close=False, exits=exits)
+            res = apply_costs(STRATEGIES[sname](df), spread, flat_at_close=False, exits=exits, fees=fees)
         except Exception:
             continue
         pnl = daily_pnl_of(res)
         recent = pnl[pnl.index >= pd.Timestamp(recent_from)] if recent_from is not None else pnl
         yearly = pnl.groupby(pnl.index.year).agg(['sum', 'size'])
         yearly = yearly[yearly['size'] >= 100]
-        st = trade_stats(res, cost_bp)
+        st = trade_stats(res, per_side)
         rows[f'{sname}@1D'] = {
             'pooled': _sharpe(pnl), 'se': _sharpe_se(pnl), 'days': int(len(pnl)),
             'recent': _sharpe(recent), 'recent_se': _sharpe_se(recent), 'recent_days': int(len(recent)),
@@ -206,7 +212,9 @@ def run_daily(product, cost_bp, recent_from=None, exits=None, path=None):
             'total_return': float(pnl.sum()),
         }
     return {'start': str(df.index.min().date()), 'end': str(df.index.max().date()), 'exits': exits,
-            'min_trades': MIN_DAILY_TRADES, 'rows': rows}
+            'min_trades': MIN_DAILY_TRADES, 'rows': rows,
+            # overnight cost per side today (spread + ordinary close fee); half_spread_bp set = fee by holding period
+            'cost_bp': per_side, 'half_spread_bp': half_spread}
 
 
 def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress=None, exits=None,
@@ -236,10 +244,17 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
     hs = pd.concat([b.loc[b.index.normalize().isin(main_of.index[main_of == c]), 'hs_bp']
                     for c, b in contract.items()]).dropna()
     half_spread = float(hs.median()) if len(hs) else 1.0
-    fee = FEE_BP.get(product, DEFAULT_FEE_BP)
-    cost = half_spread + fee if cost_bp is None else float(cost_bp)
-
     spans = {c: main_of.index[main_of == c] for c in contract}
+    # Exchange fee per contract (some products charge differently by delivery month), per-lot fees converted at the
+    # contract's median close over its main-contract days. An explicit cost_bp overrides everything.
+    px = {c: float(b.loc[b.index.normalize().isin(spans[c]), 'close'].median()) if len(spans[c]) else float(b['close'].median())
+          for c, b in contract.items()}
+    fees = {c: fee_bp(c, px[c]) for c in contract}
+    costs = {c: (half_spread + fees[c]) if cost_bp is None else float(cost_bp) for c in contract}
+    latest = max(contract, key=lambda c: (spans[c].max() if len(spans[c]) else pd.Timestamp.min, c))
+    fee = fees[latest]                 # what trading the current contract costs: the figure approvals carry forward
+    cost = costs[latest]
+
     night_days = pd.DatetimeIndex([])
     if night:
         night_days = pd.DatetimeIndex(sorted({d for c, b in contract.items()
@@ -254,9 +269,14 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
         parts, stats = {}, []
         for c, r in raw.items():
             days = spans[c]
-            res = apply_costs(r, cost, flat_at_close=flat, exits=ex)
+            # flat at every close: each round trip is open + close-today, a fixed per-side cost. Held through the
+            # close: the fee depends on when each position is closed (close-today vs ordinary close).
+            if flat or cost_bp is not None:   # an explicit cost_bp is the whole cost either way
+                res = apply_costs(r, costs[c], flat_at_close=flat, exits=ex)
+            else:
+                res = apply_costs(r, half_spread, flat_at_close=False, exits=ex, fees=c)
             parts[c] = daily_pnl_of(res).reindex(days).fillna(0.0)
-            stats.append(trade_stats(res[res.index.normalize().isin(days)], cost))
+            stats.append(trade_stats(res[res.index.normalize().isin(days)], costs[c]))
         series = pd.concat(parts.values()).sort_index()
         n_tr = sum(st['trades'] for st in stats)
         wsum = n_tr or 1
@@ -318,7 +338,8 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
 
     return {
         'product': product, 'run_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
-        'cost_bp': cost, 'half_spread_bp': half_spread, 'fee_bp': fee,
+        'cost_bp': cost, 'half_spread_bp': half_spread, 'fee_bp': fee, 'cost_contract': latest,
+        'cost_by_contract': {c: round(v, 4) for c, v in costs.items()},
         'exits': 'search' if search_exits else exits, 'exit_grid': EXIT_GRID if search_exits else None,
         'days': int(len(main_of)), 'last_day': str(main_of.index.max().date()),
         'contracts': {c: {'days': int(len(spans[c])),
@@ -328,7 +349,9 @@ def run_walkforward(product, cost_bp=None, tick_dir=None, bar_dir=None, progress
         'gates': {'min_contract_days': MIN_CONTRACT_DAYS, 'min_trades': MIN_TRADES, 'min_night_days': MIN_NIGHT_DAYS},
         'session': 'night+day' if night else 'day', 'night_days': int(len(night_days)), 'continuous': bool(night and continuous),
         'rows': rows,
-        'daily': run_daily(product, cost, main_of.index.min(), exits if isinstance(exits, dict) else None),
+        # daily candidates hold overnight: the ordinary close fee applies, not the close-today one
+        'daily': run_daily(product, cost, main_of.index.min(), exits if isinstance(exits, dict) else None,
+                           half_spread=None if cost_bp is not None else half_spread),
         'daily_pnl': {k: {str(d.date()): float(v) for d, v in s.items()} for k, s in pnl.items()},
     }
 
